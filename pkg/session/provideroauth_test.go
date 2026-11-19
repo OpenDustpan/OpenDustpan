@@ -108,7 +108,13 @@ func TestBindProvidersOAuth(t *testing.T) {
 
 	ctx := t.Context()
 	store := &memoryProviders{err: nil, issuers: map[string]string{}}
-	hub := session.Provider{ID: "hub", Issuer: "", UserinfoURL: "https://api.hub.example/user", SubjectClaim: "id"}
+	hub := session.Provider{
+		ID:           "hub",
+		Issuer:       "",
+		UserinfoURL:  "https://api.hub.example/user",
+		SubjectClaim: "id",
+		DirectoryURL: "",
+	}
 
 	if err := session.BindProviders(ctx, store, []session.Provider{hub}, time.Now()); err != nil {
 		t.Fatalf("first binding: %v", err)

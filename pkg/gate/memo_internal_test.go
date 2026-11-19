@@ -73,6 +73,7 @@ func TestSnapshotMemo(t *testing.T) {
 		fences:     nil,
 		kindReader: nil,
 		isDev:      nil,
+		breakGlass: nil,
 		now:        nil,
 		log:        nil,
 	}

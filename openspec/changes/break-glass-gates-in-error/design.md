@@ -81,7 +81,7 @@ S-->P
 
 - Invariant: One use only
 - Invariant: Expiry 15 minutes after issue
-- `consume`: pre: The pass exists, is unused and is not expired. Post: The pass is used once; a second consume is refused.
+- `consume`: pre: The pass exists, is unused and is not expired. Post: The pass is used once and is returned; a second consume is refused. The caller checks the key and the window of the returned pass again, and fails closed with gate.unavailable on a mismatch.
 
 ## Failure modes
 

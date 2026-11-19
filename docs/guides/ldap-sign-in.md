@@ -44,7 +44,10 @@ The password of the service account comes only from the variable
 configuration file takes it, because a process list shows each flag. The
 file must be readable by its owner only. The server clears the variable
 `DUSTPAN_LDAP_BIND_PASSWORD` after it reads it, so a child process does not
-get the password.
+get the password. The server keeps each space of the password. From the
+file, it ignores one line ending at the end of the file. The server
+refuses a password with a control character or a hidden character, such as
+a byte order mark, and a password that is not valid UTF-8.
 
 The sign-in needs a public URL with HTTPS. The server checks each setting
 when it starts, and does not start with a setting that is not valid. Only a
@@ -267,6 +270,52 @@ The bytes `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10` give the text
 
 The server refuses the sign-in when the entry has no value or two values of
 the subject attribute, or when the value is binary or has the wrong form.
+
+## Directory binding
+
+The server records the directory URL of each LDAP provider ID at its first
+start. A later start that gives a recorded provider ID another URL stops
+before it serves. The error names the provider ID, the recorded URL and
+the URL in the configuration. The URL is part of the identity of each
+person, because the subject of a person is `<provider ID>:<subject>`
+and does not hold the directory.
+
+The server compares the URLs in this form:
+
+- The scheme and the host have lowercase letters. The server changes only
+  the letters A to Z. A host name with another letter keeps it, so
+  `BÜCHER.example` and `bücher.example` are different directories. An IPv6
+  zone keeps its case, so `[fe80::1%25eth0]` and `[fe80::1%25ETH0]` are
+  different directories.
+- A trailing dot after the host is removed.
+- An IP address has its canonical form, so `[::1]` and `[0:0::1]` are the
+  same address.
+- The port is a number. The server removes the default port: 636 for
+  `ldaps` and 389 for `ldap`. So `ldaps://h`, `ldaps://h:636` and
+  `ldaps://h:0636` are the same directory. An empty port, as in `ldaps://h:`,
+  is the default port.
+- A slash after the host is removed.
+- The server refuses port 0 and a port above 65535.
+- `ldap` and `ldaps` are different. A URL with another port is different.
+
+A host name with one label, for example `dc1`, is resolved through the search
+list of the resolver. So `dc1` and `dc1.` are the same directory only when
+they resolve to the same host. The IPv4-mapped IPv6 form of an address, for
+example `[::ffff:10.0.0.1]`, and the IPv4 form `10.0.0.1` are different
+directories.
+
+The server does not translate host names. An internationalized host name
+and its punycode form, for example `bücher.example` and
+`xn--bcher-kva.example`, count as different directories. Write the host in
+the form that you used at the first start.
+
+The server refuses a URL that has user information, a path other than `/`, a
+query, a fragment, or a scheme other than `ldap` or `ldaps`. The error does
+not show the URL.
+
+If the URL changed by mistake, set `--ldap-url` back to the recorded URL.
+Use a new `--ldap-provider` only when you move to another directory. Each
+person then gets a new principal with no grant.
 
 ## Disabled persons
 

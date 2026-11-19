@@ -128,6 +128,9 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 		Units: facts, Subjects: principalSubjects{principals: principals},
 		Fences:     namespaceFences{namespaces: namespaces},
 		KindReader: kindReader, IsDev: principal.IsDevSubject, Now: cfg.now, Log: log,
+		// No pass store is wired here, so a break-glass fails closed with
+		// ErrUnavailable.
+		BreakGlass: nil,
 	})
 	if err != nil {
 		return none, fmt.Errorf("gate service: %w", err)

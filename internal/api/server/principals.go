@@ -80,7 +80,9 @@ const noWorkingBreakGlassMessage = "The change leaves too few working break-glas
 // /api/server/principals/{id}/enable clears it.
 // TemporaryAdministrator is true for a temporary administrator that still
 // works, with its fixed expiry in TemporaryExpiresAt, so the console shows
-// a banner for it. Both stay empty for every other principal.
+// a banner for it. A true flag with a null expiry means that the server could
+// not read the temporary administrator records after a committed write, and
+// marked each person to be safe. Both stay empty for every other principal.
 //
 // Contract: never remove or rename these fields. The console and the
 // clients read only this API, and they update on their own schedule.
@@ -98,8 +100,10 @@ type principalResponse struct {
 	Namespace  string `json:"namespace"`
 	GroupCount int64  `json:"groupCount"`
 	// TemporaryAdministrator and TemporaryExpiresAt name a working
-	// temporary administrator and its fixed expiry. A null expiry means
-	// the principal is no temporary administrator.
+	// temporary administrator and its fixed expiry. A true flag with a null
+	// expiry means that the server could not read the records and marked the
+	// person to be safe. A false flag means the principal is no temporary
+	// administrator.
 	TemporaryAdministrator bool    `json:"temporaryAdministrator"`
 	TemporaryExpiresAt     *string `json:"temporaryExpiresAt"`
 }
@@ -216,7 +220,7 @@ func principalOf(p principal.Principal) principalResponse {
 // per principal. Only persons are marked: only a person holds a record. A
 // failed read returns the error, so the handler answers 500.
 func (h *Handler) markTempAdmin(ctx context.Context, body any) (any, error) {
-	if h.tempAdmins == nil {
+	if h.tempAdmins == nil || !holdsPrincipals(body) {
 		return body, nil
 	}
 
@@ -244,6 +248,17 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) (any, error) {
 		return markTempAdminMembers(v, mark), nil
 	default:
 		return body, nil
+	}
+}
+
+// holdsPrincipals reports whether body is a body that carries principals, so
+// that the read of the records is for a body that needs it.
+func holdsPrincipals(body any) bool {
+	switch body.(type) {
+	case principalResponse, principalListResponse, memberResponse, memberListResponse:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -428,7 +443,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 			return
 		}
 
-		h.writePrincipalResult(w, r, res)
+		h.writePrincipalResult(w, r, res, readResult)
 	}
 }
 
@@ -442,7 +457,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 		if err == nil {
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, committedWrite)
 
 			return
 		}
@@ -476,10 +491,23 @@ func (h *Handler) runPrincipalOp(
 	return op(w, r, h.principals, c.e, c.p)
 }
 
+// resultKind says whether a result follows a read or a committed write.
+type resultKind int
+
+const (
+	// readResult follows a read: nothing was stored.
+	readResult resultKind = iota
+	// committedWrite follows a write that the store has committed.
+	committedWrite
+)
+
 // writePrincipalResult writes the status and the body of a success. A body
 // that holds principals carries the banner flag of each working temporary
-// administrator. A failed flag read answers 500 with the usual error body.
-func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult) {
+// administrator. kind says whether the result follows a committed write.
+// A failed flag read answers 500 with the usual error body
+// for a read. After a committed write it answers the stored principal, each
+// person marked (fail closed), and logs a warning.
+func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult, kind resultKind) {
 	if res.body == nil {
 		w.WriteHeader(res.status)
 
@@ -488,12 +516,53 @@ func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, r
 
 	marked, err := h.markTempAdmin(r.Context(), res.body)
 	if err != nil {
-		h.writeError(r.Context(), w, err)
+		// A read cannot have stored anything: it answers the error. The
+		// caller says whether the result follows a committed write.
+		if kind == readResult {
+			h.writeError(r.Context(), w, err)
 
-		return
+			return
+		}
+
+		// The write is stored, so the answer must match the stored state.
+		// Fail closed: each person of the body is marked as a temporary
+		// administrator, the safe direction for a banner. The log holds the
+		// error type only: the text of a store error can hold driver text.
+		h.logger.WarnContext(r.Context(), "the temporary administrator read failed after a principal write",
+			slog.String("principal", res.object), slog.String("cause", causeType(err)))
+
+		marked = markAllTempAdmin(res.body)
 	}
 
 	h.writeJSON(r.Context(), w, res.status, marked)
+}
+
+// markAllTempAdmin sets the banner flag on each person of a body that holds
+// principals, with no expiry time. It is the fail-closed answer when the read
+// of the records failed: it never hides a temporary administrator.
+func markAllTempAdmin(body any) any {
+	mark := func(res principalResponse) principalResponse {
+		if res.Kind == string(principal.KindPerson) {
+			res.TemporaryAdministrator = true
+		}
+
+		return res
+	}
+
+	switch v := body.(type) {
+	case principalResponse:
+		return mark(v)
+	case principalListResponse:
+		return markTempAdminPage(v, mark)
+	case memberResponse:
+		v.Principal = mark(v.Principal)
+
+		return v
+	case memberListResponse:
+		return markTempAdminMembers(v, mark)
+	default:
+		return body
+	}
 }
 
 // ok returns the result of a success.

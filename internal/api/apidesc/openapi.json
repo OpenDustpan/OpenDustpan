@@ -2824,6 +2824,7 @@
           "stack.other-secrets-provider",
           "stack.resource-not-found",
           "stack.reveal-path-too-long",
+          "stack.state-too-complex",
           "state-version.budget-too-small",
           "state-version.busy",
           "state-version.checksum-mismatch",
@@ -2833,6 +2834,7 @@
           "state-version.resource-not-found",
           "state-version.reveal-path-too-long",
           "state-version.stale-serial",
+          "state-version.too-complex",
           "state-version.too-large",
           "state-version.upload-denied",
           "store.failover-setting-invalid",
@@ -2851,6 +2853,7 @@
           "token.not-found",
           "token.outside-reach",
           "token.requires-sign-in",
+          "token.unknown-kind",
           "token.unsupported",
           "token.wrong-kind",
           "trigger.cycle",
@@ -4759,6 +4762,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "batchPauseMillis": {
+            "format": "int64",
+            "type": "integer"
+          },
           "intervalSeconds": {
             "format": "int64",
             "type": "integer"
@@ -4770,13 +4777,19 @@
           "maxRows": {
             "format": "int64",
             "type": "integer"
+          },
+          "maxRunSeconds": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "ageSeconds",
+          "batchPauseMillis",
           "intervalSeconds",
           "maxEndedLocks",
-          "maxRows"
+          "maxRows",
+          "maxRunSeconds"
         ],
         "type": "object"
       },
@@ -20617,13 +20630,12 @@
             }
           },
           {
-            "description": "Lists the units as they were at this time, in Unix milliseconds. It takes no filter and no page token.",
+            "description": "Lists the units as they were at this time, an RFC 3339 time with Z or an offset, for example 2026-10-18T09:30:00Z. It takes no filter and no page token.",
             "in": "query",
             "name": "at",
             "required": false,
             "schema": {
-              "format": "int64",
-              "type": "integer"
+              "type": "string"
             }
           },
           {

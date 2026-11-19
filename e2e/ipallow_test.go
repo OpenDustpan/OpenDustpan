@@ -428,6 +428,8 @@ func checkIPAllowlistInstallationList(ctx context.Context, t *testing.T, env *e2
 func patchInstallationList(ctx context.Context, t *testing.T, env *e2e.Env, body string) {
 	t.Helper()
 
+	env.PrepareFreshAdmin(ctx, t)
+
 	resp, _ := settingsRead(ctx, t, env, settingsRoute)
 
 	// A change that widens the installation list needs a fresh sign-in, which

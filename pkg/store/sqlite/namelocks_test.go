@@ -36,6 +36,12 @@ func TestNameLockConformance(t *testing.T) {
 
 				placeNameLocks(t, s, nameCount{scope: scope, name: name, sub: sub}, offset)
 			},
+			SetTimes: func(t *testing.T, scope, name, sub string, lastFailure, lockedUntil, lastLockEnd time.Duration) {
+				t.Helper()
+
+				setNameLockTimes(t, s, nameCount{scope: scope, name: name, sub: sub},
+					[3]time.Duration{lastFailure, lockedUntil, lastLockEnd})
+			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
 
@@ -160,5 +166,39 @@ func placeNameLocks(t *testing.T, s *sqlite.Store, k nameCount, offset time.Dura
 
 	if rows != 1 {
 		t.Fatalf("the update of the name count %s, %s, %s changed %d rows; want 1", k.scope, k.name, k.sub, rows)
+	}
+}
+
+// setNameLockTimes sets the three time columns of one name count of s, the
+// count that k names, each to the time of the clock of the store plus its
+// offset: the last failure, the end of the lock and the end of the last
+// lock. An offset of authgatetest.NoTime stores 0.
+func setNameLockTimes(t *testing.T, s *sqlite.Store, k nameCount, offsets [3]time.Duration) {
+	t.Helper()
+
+	now, err := s.DatabaseNow(t.Context())
+	if err != nil {
+		t.Fatalf("read the clock of the store: %v", err)
+	}
+
+	var at [3]int64
+
+	for i, o := range offsets {
+		if o != authgatetest.NoTime {
+			at[i] = now.UnixMilli() + o.Milliseconds()
+		}
+	}
+
+	res, err := sqlite.DB(s).ExecContext(t.Context(), `UPDATE name_locks SET
+		last_failure_ms = ?, locked_until_ms = ?, last_lock_end_ms = ?
+		WHERE scope = ? AND name = ? AND sub = ?`,
+		at[0], at[1], at[2], k.scope, k.name, k.sub)
+	if err != nil {
+		t.Fatalf("set the times of the name count: %v", err)
+	}
+
+	if rows, rowsErr := res.RowsAffected(); rowsErr != nil || rows != 1 {
+		t.Fatalf("the update of the name count %s, %s, %s changed %d rows, %v; want 1",
+			k.scope, k.name, k.sub, rows, rowsErr)
 	}
 }

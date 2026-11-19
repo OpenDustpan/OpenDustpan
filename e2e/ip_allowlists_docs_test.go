@@ -51,6 +51,10 @@ func ipAllowlistsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	checkReady(ctx, t, env)
 
+	// The page changes the list with a fresh sign-in. Make that person before
+	// the read, so that a restart of the server binary cannot move the revision.
+	env.PrepareFreshAdmin(ctx, t)
+
 	resp, doc := settingsRead(ctx, t, env, settingsRoute)
 	etag := resp.Header.Get("ETag")
 

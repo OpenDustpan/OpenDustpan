@@ -35,13 +35,17 @@ const (
 var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, namespacePath+"/units"): apidesc.Name("listUnits", tagUnits).
 		On(apidesc.KindNamespace).
-		WithQuery(append(slices.Clone(unitPageQuery),
+		WithQuery(append(
+			slices.Clone(unitPageQuery),
 			apidesc.StringParam("label", "Keeps the units with this label, as key=value. All label values must match.").
 				Repeat(),
 			apidesc.StringParam("reference", "Keeps the unit with this reference in the namespace.").Repeat(),
 			apidesc.StringParam("state", "Keeps the units in this state. One of the states must match.").Repeat(),
-			apidesc.IntegerParam("at", "Lists the units as they were at this time, in Unix milliseconds. "+
-				"It takes no filter and no page token."),
+			apidesc.StringParam(
+				"at",
+				"Lists the units as they were at this time, an RFC 3339 time with Z or an offset, "+
+					"for example 2026-10-18T09:30:00Z. It takes no filter and no page token.",
+			),
 		)...).
 		WithBodies(apidesc.NoBody, unitList),
 	apidesc.Pattern(http.MethodGet, namespacePath+"/deleted-units"): apidesc.Name("listDeletedUnits", tagUnits).
