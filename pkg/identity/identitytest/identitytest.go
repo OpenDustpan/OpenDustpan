@@ -155,6 +155,11 @@ func RunObjectSensitive(t *testing.T) {
 		t.Parallel()
 		testListWithinAuthorize(t)
 	})
+
+	t.Run("a list that leaves out a namespace lists none of its objects", func(t *testing.T) {
+		t.Parallel()
+		testListLeavesOutNamespace(t)
+	})
 }
 
 // ListCheck is one case of CheckListWithinAuthorize: the authorizer, the
@@ -169,8 +174,9 @@ type ListCheck struct {
 
 // CheckListWithinAuthorize fails the test unless Authorize allows the
 // principal of c the action of c on each object that ListObjects lists for
-// them, both called with ctx. For a scope that covers every object, it checks
-// each object of c.Every. Run it against each Authorizer and each decorator,
+// them, both called with ctx. For a scope that covers every object, with or
+// without left-out namespaces, it checks each object of c.Every that the scope
+// holds (Scope.Contains). Run it against each Authorizer and each decorator,
 // with the grants of the test, so a list never shows an object that a
 // check of that object denies.
 func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
@@ -184,8 +190,14 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 	}
 
 	listed := slices.Concat(scope.Namespaces, scope.Collections, scope.Units, scope.Principals)
-	if scope.CoversEveryObject() {
-		listed = append(listed, every...)
+
+	// Contains covers the every-object case with or without left-out
+	// namespaces: an object of a namespace that the scope leaves out is not
+	// listed, so Authorize may deny it.
+	for i := range every {
+		if scope.Contains(every[i]) {
+			listed = append(listed, every[i])
+		}
 	}
 
 	for i := range listed {
@@ -886,5 +898,72 @@ func testListWithinAuthorize(t *testing.T) {
 				Authorizer: under, Principal: alice, Action: action, Every: testObjects(t),
 			})
 		}
+	}
+}
+
+// leaveOut is an Authorizer whose scope covers every object except the
+// objects of the namespace except. Next decides Authorize.
+type leaveOut struct {
+	next   identity.Authorizer
+	except namespace.Name
+}
+
+func (l leaveOut) Authorize(ctx context.Context, p identity.Principal, a identity.Action, o identity.Object) error {
+	return l.next.Authorize(ctx, p, a, o)
+}
+
+func (l leaveOut) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Every(l.except), nil
+}
+
+// testListLeavesOutNamespace checks that a scope with a left-out namespace
+// holds none of the objects of that namespace, holds the objects of another
+// namespace, and that CheckListWithinAuthorize runs on that scope.
+func testListLeavesOutNamespace(t *testing.T) {
+	t.Helper()
+
+	acme, beta := namespace.Name("acme"), namespace.Name("beta")
+
+	unitIn := func(ns namespace.Name) identity.Object {
+		obj, err := identity.UnitObject("pulumi", ns, "web/prod")
+		if err != nil {
+			t.Fatalf("unit object: %v", err)
+		}
+
+		return obj
+	}
+
+	// Alice may read acme and its units; nothing else.
+	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{
+		identity.ActionNamespaceRead: {identity.NamespaceObject(acme).String()},
+		identity.ActionUnitRead:      {identity.NamespaceObject(acme).String()},
+	})
+	under := leaveOut{next: authz, except: beta}
+	alice := identity.Principal{
+		Subject: aliceSubject, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	every := []identity.Object{
+		identity.NamespaceObject(acme), unitIn(acme), identity.NamespaceObject(beta), unitIn(beta),
+	}
+
+	scope, err := under.ListObjects(t.Context(), alice, identity.ActionUnitRead)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	for i := range every {
+		obj := every[i]
+		want := obj.Namespace() != beta
+		if got := scope.Contains(obj); got != want {
+			t.Fatalf("scope holds %q = %t, want %t", obj.String(), got, want)
+		}
+	}
+
+	for _, action := range []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead} {
+		CheckListWithinAuthorize(t.Context(), t, ListCheck{
+			Authorizer: under, Principal: alice, Action: action, Every: every,
+		})
 	}
 }
