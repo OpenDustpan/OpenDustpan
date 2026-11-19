@@ -178,3 +178,111 @@ func TestImageTrialCommand(t *testing.T) {
 		t.Fatalf("dev did not keep its data in the directory dev of the volume: %v", err)
 	}
 }
+
+// lineIndex answers the index of the first line that holds want, or -1.
+func lineIndex(lines []string, want string) int {
+	for i, line := range lines {
+		if strings.Contains(line, want) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// TestImageDockerfileChecksVersion reads the Dockerfile and checks that the Go
+// stage tests VERSION against the allowlist before it runs go build, and that
+// the message names the build argument. The allowlist is the one of the image
+// scripts. The test reads the file only: the image smoke test runs the build.
+func TestImageDockerfileChecksVersion(t *testing.T) {
+	t.Parallel()
+
+	lines := dockerfileLines(t)
+
+	check := lineIndex(lines, `[!0-9A-Za-z._+-]`)
+	build := lineIndex(lines, "go build -trimpath")
+
+	if check < 0 {
+		t.Fatal("the Dockerfile has no test of VERSION against the allowlist of letters, digits, dot, plus and dash")
+	}
+
+	if build < 0 || check > build {
+		t.Fatalf("the VERSION test is at line %d and go build at line %d: the test must come first", check+1, build+1)
+	}
+
+	for _, want := range []string{`case "${VERSION}" in`, `-gt 64`, "build argument VERSION must be", "exit 1"} {
+		if lineIndex(lines[:build], want) < 0 {
+			t.Errorf("the Dockerfile has no %q before go build", want)
+		}
+	}
+}
+
+// TestImageDockerfileRefusesPlaceholderPin reads the Dockerfile and checks that
+// the console stage tests CONSOLE_SHA256 for 64 zeros before the download, and
+// that the message names the Dockerfile pin and the two build arguments.
+func TestImageDockerfileRefusesPlaceholderPin(t *testing.T) {
+	t.Parallel()
+
+	lines := dockerfileLines(t)
+
+	stage := lineIndex(lines, "AS console")
+	download := lineIndex(lines[stage+1:], "curl -fsSL")
+	zeros := strings.Repeat("0", 64)
+
+	if stage < 0 || download < 0 {
+		t.Fatal("the Dockerfile has no console stage with a curl download")
+	}
+
+	download += stage + 1
+
+	test := lineIndex(lines[stage+1:download], `case "${CONSOLE_SHA256}" in`)
+	if test < 0 {
+		t.Fatal("the console stage has no test of CONSOLE_SHA256 before the download")
+	}
+
+	// The default of the argument is the placeholder, so the zeros appear on
+	// the ARG line too; the refusal needs its own pattern line.
+	body := strings.Join(lines[stage+1+test:download], "\n")
+	for _, want := range []string{zeros + ")", "Pin the console tag and SHA-256 in the Dockerfile", "CONSOLE_URL", "CONSOLE_SHA256", "exit 1"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the placeholder test of the console stage has no %q before the download", want)
+		}
+	}
+}
+
+// TestReleaseWorkflowStampsTheImage reads the release workflow and checks that
+// the docker buildx build line passes the tag as the build argument VERSION and
+// holds no console pin of its own: the Dockerfile is the one source of the pin.
+func TestReleaseWorkflowStampsTheImage(t *testing.T) {
+	t.Parallel()
+
+	root, err := os.OpenRoot("..")
+	if err != nil {
+		t.Fatalf("open the repository: %v", err)
+	}
+
+	raw, readErr := root.ReadFile(".github/workflows/release.yml")
+	if closeErr := root.Close(); readErr != nil || closeErr != nil {
+		t.Fatalf("read the release workflow: %v %v", readErr, closeErr)
+	}
+
+	var build string
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if strings.Contains(line, "docker buildx build") {
+			build = line
+		}
+	}
+
+	if build == "" {
+		t.Fatal("the release workflow has no docker buildx build line")
+	}
+
+	if !strings.Contains(build, `--build-arg VERSION="${TAG}"`) {
+		t.Errorf("the docker buildx build line does not pass the tag as VERSION: %s", build)
+	}
+
+	if strings.Contains(build, strings.Repeat("0", 64)) {
+		t.Errorf("the docker buildx build line holds the placeholder console pin: %s", build)
+	}
+}
