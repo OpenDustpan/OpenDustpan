@@ -316,6 +316,13 @@ func (s *Service) Revoke(ctx context.Context, caller identity.Principal, e audit
 		return fmt.Errorf("revoke access token %q: %w", id, err)
 	}
 
+	// Defense in depth: the store decode and the store revoke refuse an
+	// unknown kind too. This check stays so that a store adapter that skips
+	// them never lets a revoke act on a row of an unknown kind.
+	if !t.Kind.Valid() {
+		return fmt.Errorf("revoke access token %q: %w: %q", id, ErrUnknownKind, string(t.Kind))
+	}
+
 	if err := s.authorizeRevoke(ctx, caller, scope, t); err != nil {
 		return fmt.Errorf("revoke access token %q: %w", id, err)
 	}

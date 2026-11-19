@@ -303,6 +303,7 @@ change is 900 seconds by default. Set the window to `0` to turn the check off.
 | `token.not-found` | `404` | The token is unknown, or it belongs to another person. |
 | `token.ended` | `409` | The token is revoked, replaced or not active. |
 | `token.already-exists` | `409` | The name or the secret is already used. |
+| `token.unknown-kind` | `409` | The stored token has a kind that this version does not know. A revoke fails and the token stays as it is. The token never signs in. |
 | `token.wrong-kind` | `400` | The route is for the other kind of token. |
 | `request.invalid-query` | `400` | A `status`, `limit` or `cursor` value is not valid. |
 | `request.body-invalid` | `400` | The body is not valid, or the policy holds `disableBreakGlass`. |
