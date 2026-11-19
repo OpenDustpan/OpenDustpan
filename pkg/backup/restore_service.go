@@ -247,6 +247,7 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		now:          now,
 		logger:       cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
 		runner:       nil,
+		decide:       nil,
 
 		accessSetting: cfg.AccessSetting, accessSettingStatic: cfg.AccessSettingStatic,
 	}

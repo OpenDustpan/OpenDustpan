@@ -770,7 +770,8 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 	}
 
 	out, err := json.Marshal(restoreSwapResult{
-		DroppedTempAdmins: kept.DroppedTempAdmins, ExpiredUpdateLeases: kept.ExpiredUpdateLeases, KeepAccessTables: d.KeepAccessTables, Widened: d.Widened,
+		DroppedTempAdmins: kept.DroppedTempAdmins, ExpiredUpdateLeases: kept.ExpiredUpdateLeases,
+		KeepAccessTables: d.KeepAccessTables, Widened: d.Widened,
 		KeepSettingKeys: keys, SettingBefore: d.SettingBefore, SettingAfter: d.SettingAfter,
 		SettingStatic: d.SettingStatic,
 	})
@@ -788,7 +789,7 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
 	out, err := parseRestoreSwap(result)
 	if err != nil {
-		return KeepAccessResult{DroppedTempAdmins: 0}, err
+		return KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}, err
 	}
 
 	return KeepAccessResult{DroppedTempAdmins: out.DroppedTempAdmins, ExpiredUpdateLeases: out.ExpiredUpdateLeases}, nil

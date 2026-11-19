@@ -903,6 +903,7 @@ func clearStaleWorkCopy(path string) error {
 			return fmt.Errorf("check stale work copy: %w", backup.ErrExportRead)
 		case !info.Mode().IsRegular():
 			return fmt.Errorf("stale work copy is not a regular file: %w", backup.ErrCorrupt)
+		default:
 		}
 
 		if rmErr := os.Remove(name); rmErr != nil {

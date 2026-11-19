@@ -1182,15 +1182,16 @@ func newRestoreAuditServices(
 		AfterApply:   nil,
 		Admit:        nil,
 
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
-		AccessSetting:   nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)

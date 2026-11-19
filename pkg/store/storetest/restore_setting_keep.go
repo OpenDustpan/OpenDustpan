@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
@@ -65,75 +66,128 @@ func settingKeepCases() []settingKeepCase {
 
 	unlisted := backup.SwapDecision{
 		KeepAccessTables: true, Widened: false, KeepSettingKeys: []string{"settings.freshAuthSeconds"},
-		SettingBefore: "", SettingAfter: "",
+		SettingBefore: "", SettingAfter: "", SettingStatic: false,
 	}
 
 	// The decisions below break the rule of the decision: the swap keeps or
 	// widens the access tables and does not keep the setting row. The store
 	// refuses each of them alone, whatever the service decided.
 	keepsNoKey := backup.SwapDecision{
-		KeepAccessTables: true, Widened: false, KeepSettingKeys: nil, SettingBefore: "", SettingAfter: "",
+		KeepAccessTables: true,
+		Widened:          false,
+		KeepSettingKeys:  nil,
+		SettingBefore:    "",
+		SettingAfter:     "",
+		SettingStatic:    false,
 	}
 	widensNoKey := backup.SwapDecision{
-		KeepAccessTables: false, Widened: true, KeepSettingKeys: nil, SettingBefore: "", SettingAfter: "",
+		KeepAccessTables: false,
+		Widened:          true,
+		KeepSettingKeys:  nil,
+		SettingBefore:    "",
+		SettingAfter:     "",
+		SettingStatic:    false,
 	}
 	keptAndWidened := backup.SwapDecision{
 		KeepAccessTables: true, Widened: true, KeepSettingKeys: backup.KeptSettingKeys(), SettingBefore: "",
-		SettingAfter: "",
+		SettingAfter: "", SettingStatic: false,
 	}
 
 	return []settingKeepCase{
 		{
 			name: "a backup row TRUE is recorded as the effective false", backupValue: "TRUE", rawBackup: true,
-			liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+			absentBackup: false, liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
 		},
 		{
 			name: "a backup row 1 is recorded as the effective false", backupValue: "1", rawBackup: true,
-			liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+			absentBackup: false, liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
 		},
 		{
 			name: "a long backup row is recorded as the effective false", backupValue: strings.Repeat("x", 3000),
-			rawBackup: true, liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+			rawBackup: true, absentBackup: false, liveValue: "false", decision: backup.PlainSwap(false),
+			want: "false", wantErr: nil,
 		},
 		{
-			name: "a backup with no row is recorded as the effective false", absentBackup: true,
-			liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+			name: "a backup with no row is recorded as the effective false", backupValue: "", rawBackup: false,
+			absentBackup: true, liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
 		},
 		{
-			name: "a swap that keeps the access tables without the setting key is refused", backupValue: "true",
-			liveValue: "false", decision: keepsNoKey, want: "false", wantErr: backup.ErrCorrupt,
+			name:         "a swap that keeps the access tables without the setting key is refused",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     keepsNoKey,
+			want:         "false",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      backup.ErrCorrupt,
 		},
 		{
-			name: "a swap that widens the access tables without the setting key is refused", backupValue: "true",
-			liveValue: "false", decision: widensNoKey, want: "false", wantErr: backup.ErrCorrupt,
+			name:         "a swap that widens the access tables without the setting key is refused",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     widensNoKey,
+			want:         "false",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      backup.ErrCorrupt,
 		},
 		{
-			name: "a swap that is both kept and widened is refused", backupValue: "true",
-			liveValue: "false", decision: keptAndWidened, want: "false", wantErr: backup.ErrCorrupt,
+			name:         "a swap that is both kept and widened is refused",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     keptAndWidened,
+			want:         "false",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      backup.ErrCorrupt,
 		},
 		{
-			name: "a backup with true keeps the live false when the key is kept", backupValue: "true",
-			liveValue: "false", decision: kept(true), want: "false", wantErr: nil,
+			name:         "a backup with true keeps the live false when the key is kept",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     kept(true),
+			want:         "false",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      nil,
 		},
 		{
 			name: "a backup with true keeps the absent live row when the key is kept", backupValue: "true",
-			liveValue: "", decision: kept(true), want: "false", wantErr: nil,
+			liveValue: "", decision: kept(true), want: "false", rawBackup: false, absentBackup: false, wantErr: nil,
 		},
 		{
-			name: "a backup with true keeps the live false when the access tables are replaced", backupValue: "true",
-			liveValue: "false", decision: kept(false), want: "false", wantErr: nil,
+			name:         "a backup with true keeps the live false when the access tables are replaced",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     kept(false),
+			want:         "false",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      nil,
 		},
 		{
 			name: "a backup with false keeps the live true when the key is kept", backupValue: "false",
-			liveValue: "true", decision: kept(true), want: "true", wantErr: nil,
+			liveValue: "true", decision: kept(true), want: "true", rawBackup: false, absentBackup: false, wantErr: nil,
 		},
 		{
-			name: "a backup with true takes the value when no key is kept", backupValue: "true",
-			liveValue: "false", decision: backup.PlainSwap(false), want: "true", wantErr: nil,
+			name:         "a backup with true takes the value when no key is kept",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     backup.PlainSwap(false),
+			want:         "true",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      nil,
 		},
 		{
-			name: "a key that is not on the list is refused and changes nothing", backupValue: "true",
-			liveValue: "false", decision: unlisted, want: "false", wantErr: backup.ErrCorrupt,
+			name:         "a key that is not on the list is refused and changes nothing",
+			backupValue:  "true",
+			liveValue:    "false",
+			decision:     unlisted,
+			want:         "false",
+			rawBackup:    false,
+			absentBackup: false,
+			wantErr:      backup.ErrCorrupt,
 		},
 	}
 }
@@ -172,13 +226,7 @@ func runSettingKeepCase(t *testing.T, newStore RestoreFactory, tc *settingKeepCa
 
 		src = store
 
-		switch {
-		case tc.absentBackup:
-		case tc.rawBackup:
-			setRawRestoreAccessSetting(t, src.SettingPorts().Store, tc.backupValue)
-		default:
-			setRestoreAccessSetting(t, src.SettingPorts().Store, tc.backupValue)
-		}
+		seedBackupSetting(t, src.SettingPorts().Store, tc)
 	})
 
 	dst, ok := r.dst.(settingKeepStore)
@@ -209,6 +257,21 @@ func runSettingKeepCase(t *testing.T, newStore RestoreFactory, tc *settingKeepCa
 
 	if tc.wantErr == nil {
 		checkSwapRecord(t, r.dst.DurableOperationsPort(), swap.Operation, tc.decision, tc.want)
+	}
+}
+
+// seedBackupSetting writes the row of the restore access setting that the
+// backup of tc holds: none, text that the declaration refuses, or a value that
+// the settings service accepts.
+func seedBackupSetting(t *testing.T, store setting.Store, tc *settingKeepCase) {
+	t.Helper()
+
+	switch {
+	case tc.absentBackup:
+	case tc.rawBackup:
+		setRawRestoreAccessSetting(t, store, tc.backupValue)
+	default:
+		setRestoreAccessSetting(t, store, tc.backupValue)
 	}
 }
 
@@ -404,11 +467,22 @@ func setRawRestoreAccessSetting(t *testing.T, store setting.Store, value string)
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
 	}
+	entry.Action = string(identity.ActionServerManageSettings)
 
-	_, err = store.Update(t.Context(), setting.InstallationScope(), namespace.Fence{}, setting.ChangeInput{
-		Registry: reg, Static: nil, Patch: setting.Patch{{Key: backup.SettingRestoreAccessTables, Value: value}},
-		Entry: entry, IfMatch: current.Revision, Fresh: true, AtMs: 1,
-	})
+	_, err = store.Update(
+		t.Context(),
+		setting.InstallationScope(),
+		namespace.Fence{Namespace: "", FailoverVersion: 0},
+		setting.ChangeInput{
+			Registry: reg,
+			Static:   nil,
+			Patch:    setting.Patch{{Key: backup.SettingRestoreAccessTables, Value: value, Delete: false}},
+			Entry:    entry,
+			IfMatch:  current.Revision,
+			Fresh:    true,
+			AtMs:     1,
+		},
+	)
 	if err != nil {
 		t.Fatalf("store the raw restore access setting row: %v", err)
 	}

@@ -961,24 +961,33 @@ func (s *Store) removeEndedAreas(ctx context.Context, id backup.RestoreID) ([]ba
 			return dropped, pathErr
 		}
 
-		if removeErr := removeSnapshotErr(path); removeErr != nil {
-			return dropped, fmt.Errorf("remove staging area %s: %w", a, removeErr)
-		}
-
-		// A swap that stopped before its rename leaves a work copy.
-		work, workErr := workCopyPath(path)
-		if workErr != nil {
-			return dropped, workErr
-		}
-
-		if removeErr := removeSnapshotErr(work); removeErr != nil {
-			return dropped, fmt.Errorf("remove work copy of staging area %s: %w", a, removeErr)
+		if removeErr := removeAreaFiles(a, path); removeErr != nil {
+			return dropped, removeErr
 		}
 
 		dropped = append(dropped, a)
 	}
 
 	return dropped, nil
+}
+
+// removeAreaFiles removes the staging file at path of area a, and the work
+// copy that a swap leaves when it stops before its rename.
+func removeAreaFiles(a backup.StagingArea, path string) error {
+	if err := removeSnapshotErr(path); err != nil {
+		return fmt.Errorf("remove staging area %s: %w", a, err)
+	}
+
+	work, err := workCopyPath(path)
+	if err != nil {
+		return err
+	}
+
+	if err = removeSnapshotErr(work); err != nil {
+		return fmt.Errorf("remove work copy of staging area %s: %w", a, err)
+	}
+
+	return nil
 }
 
 // ListRestoreAreas implements backup.RestoreStaging.

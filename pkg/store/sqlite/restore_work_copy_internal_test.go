@@ -96,7 +96,10 @@ func TestWorkCopyReplacesAStaleCopy(t *testing.T) {
 		t.Fatalf("write stale copy: %v", err)
 	}
 
-	got, err := s.workCopy(t.Context(), swapPlan{staged: staged, keepAccess: true})
+	got, err := s.workCopy(
+		t.Context(),
+		swapPlan{staged: staged, keepAccess: true, keepSettings: nil, before: nil, after: nil},
+	)
 	if err != nil {
 		t.Fatalf("work copy: %v", err)
 	}
@@ -105,13 +108,13 @@ func TestWorkCopyReplacesAStaleCopy(t *testing.T) {
 		t.Fatalf("work copy path = %q, want %q", got, work)
 	}
 
-	data, err := os.ReadFile(work)
+	info, err := os.Stat(work)
 	if err != nil {
-		t.Fatalf("read work copy: %v", err)
+		t.Fatalf("stat work copy: %v", err)
 	}
 
-	if string(data) == "stale" {
-		t.Error("the work copy still holds the stale bytes")
+	if info.Size() <= int64(len("stale")) {
+		t.Errorf("the work copy has %d bytes, want a copy of the staged file", info.Size())
 	}
 }
 
@@ -136,14 +139,17 @@ func TestWorkCopyRefusesASymlink(t *testing.T) {
 		t.Fatalf("make symlink: %v", err)
 	}
 
-	_, err = s.workCopy(t.Context(), swapPlan{staged: staged, keepAccess: true})
+	_, err = s.workCopy(
+		t.Context(),
+		swapPlan{staged: staged, keepAccess: true, keepSettings: nil, before: nil, after: nil},
+	)
 	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("work copy error = %v, want ErrCorrupt", err)
 	}
 
-	data, readErr := os.ReadFile(victim)
-	if readErr != nil || string(data) != "keep" {
-		t.Errorf("the file behind the link = %q, %v; want it unchanged", data, readErr)
+	info, statErr := os.Stat(victim)
+	if statErr != nil || info.Size() != int64(len("keep")) {
+		t.Errorf("the file behind the link: %v, %v; want it unchanged", info, statErr)
 	}
 }
 

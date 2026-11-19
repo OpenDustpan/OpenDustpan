@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
 )
@@ -62,15 +63,28 @@ func TestStepSwapRefusesAnInvalidDecision(t *testing.T) {
 
 			live := &applyRecorder{RestoreLive: nil, applied: 0}
 			svc := &RestoreService{
-				live: live, logger: slog.New(slog.DiscardHandler),
-				decide: func(context.Context, restoreInput) SwapDecision { return tc.decision },
+				live: live, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil,
+				leases: nil, target: nil, key: nil, installation: "", afterApply: nil, admit: nil,
+				allowDev: false, devHint: "", lease: 0, lockWait: 0, now: nil,
+				logger: slog.New(slog.DiscardHandler), runner: nil, accessSetting: nil,
+				accessSettingStatic: nil,
+				decide:              func(context.Context, restoreInput) SwapDecision { return tc.decision },
 			}
 
-			op := durable.Operation{Steps: []durable.StepRecord{{
-				Name: RestoreStepStage, Result: []byte(`{"area":"` + area.String() + `"}`),
-			}}}
+			var op durable.Operation
 
-			_, err = svc.stepSwap(t.Context(), durable.StepContext{Operation: op}, restoreInput{ID: id})
+			op.Steps = []durable.StepRecord{{
+				Name: RestoreStepStage, Result: []byte(`{"area":"` + area.String() + `"}`), DoneAt: time.Time{},
+			}}
+
+			var (
+				sc durable.StepContext
+				in restoreInput
+			)
+
+			sc.Operation, in.ID = op, id
+
+			_, err = svc.stepSwap(t.Context(), sc, in)
 			if !errors.Is(err, ErrCorrupt) {
 				t.Fatalf("stepSwap error = %v, want ErrCorrupt", err)
 			}

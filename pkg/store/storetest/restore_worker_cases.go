@@ -283,7 +283,8 @@ func (r *workerRig) service(t *testing.T, w workerService) *backup.RestoreServic
 		Leases: r.st, Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
 		AllowDevBackups: false, AllowDevHint: "", Owner: w.owner, Lease: r.lease,
 		CleanupLockWait: w.lockWait, RetryBase: time.Millisecond, Now: nil, Logger: nil,
-		AccessSetting: nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("restore service of %s: %v", w.owner, err)
