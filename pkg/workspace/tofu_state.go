@@ -120,7 +120,48 @@ func decodeState(state []byte) (any, error) {
 		return nil, fmt.Errorf("decode state: %w", err)
 	}
 
+	if !withinDepth(doc, 0) {
+		return nil, fmt.Errorf("decode state: %w", ErrStateTooDeep)
+	}
+
 	return doc, nil
+}
+
+// maxStateDepth bounds the nesting of a stored state that a read walks. Each
+// marker path holds its whole prefix, so the memory of a read grows with the
+// depth of each value. Real states nest far less.
+const maxStateDepth = 64
+
+// ErrStateTooDeep reports a state that nests deeper than maxStateDepth. A
+// read refuses it, so a deep document cannot exhaust the memory of the
+// server.
+var ErrStateTooDeep = errors.New("state nests too deeply")
+
+// withinDepth reports whether v nests at most maxStateDepth levels. It stops
+// at the first value past the bound, so its own recursion stays bounded.
+func withinDepth(v any, depth int) bool {
+	if depth > maxStateDepth {
+		return false
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for _, elem := range typed {
+			if !withinDepth(elem, depth+1) {
+				return false
+			}
+		}
+	case []any:
+		for _, elem := range typed {
+			if !withinDepth(elem, depth+1) {
+				return false
+			}
+		}
+	default:
+		// A scalar adds no level.
+	}
+
+	return true
 }
 
 // IsClientEncrypted reports whether state is exactly the encryption envelope
