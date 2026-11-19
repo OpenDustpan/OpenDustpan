@@ -152,7 +152,7 @@ func (s getFailStore) Get(ctx context.Context, key blob.Key) (io.ReadCloser, err
 		return nil, s.err
 	}
 
-	return s.Store.Get(ctx, key) //nolint:wrapcheck // The test store passes the error of the store.
+	return s.Store.Get(ctx, key)
 }
 
 // TestRestoreStartRefusesAPointerThatCannotBeRead proves that a start for a

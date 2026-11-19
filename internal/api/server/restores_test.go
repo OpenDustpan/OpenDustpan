@@ -1560,7 +1560,7 @@ func (s getFailTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, er
 		return nil, errTargetDown
 	}
 
-	return s.Store.Get(ctx, key) //nolint:wrapcheck // The test store passes the error of the store.
+	return s.Store.Get(ctx, key)
 }
 
 // TestStartRestoreUnreadablePointerIsRefused proves that a start for a backup
@@ -1588,13 +1588,7 @@ func TestStartRestoreUnreadablePointerIsRefused(t *testing.T) {
 			t.Parallel()
 
 			stores := openBackupDeps(t)
-
-			if tc.pointer != "" {
-				key := blob.Key("backups/" + id + "/live.json")
-				if err := stores.target.Put(t.Context(), key, strings.NewReader(tc.pointer)); err != nil {
-					t.Fatalf("put pointer: %v", err)
-				}
-			}
+			putLivePointer(t, stores, id, tc.pointer)
 
 			var target blob.Store = stores.target
 			if tc.failGet {
@@ -1618,6 +1612,21 @@ func TestStartRestoreUnreadablePointerIsRefused(t *testing.T) {
 	}
 }
 
+// putLivePointer stores data as the live pointer of backup id in the target
+// of stores. Empty data stores nothing.
+func putLivePointer(t *testing.T, stores backupStores, id, data string) {
+	t.Helper()
+
+	if data == "" {
+		return
+	}
+
+	key := blob.Key("backups/" + id + "/live.json")
+	if err := stores.target.Put(t.Context(), key, strings.NewReader(data)); err != nil {
+		t.Fatalf("put pointer: %v", err)
+	}
+}
+
 // TestFailedBackupAnswersWithItsState proves that the check of a backup that
 // ended with an error answers 200 with complete false and a text that says
 // so, and that a start for it answers 409 with the same text and makes no
@@ -1627,10 +1636,12 @@ func TestFailedBackupAnswersWithItsState(t *testing.T) {
 
 	handler := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
-	status, body := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+testBackupID.String()+"/check", "")
+	status, body := serveRestore(
+		t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+testBackupID.String()+"/check", "",
+	)
 	if status != http.StatusOK || !strings.Contains(body, `"complete":false`) ||
 		!strings.Contains(body, "ended with an error") || strings.Contains(body, "corrupt") {
-		t.Fatalf("GET check answers %d %s, want 200 complete false that says the backup ended with an error", status, body)
+		t.Fatalf("GET check answers %d %s, want 200 complete false and the text ended with an error", status, body)
 	}
 
 	_, before := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
