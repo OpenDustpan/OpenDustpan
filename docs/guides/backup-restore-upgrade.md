@@ -504,6 +504,8 @@ The command prints the binary version, the schema version of the database and th
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
 
+`serve` and `dev` refuse a SQLite database file that the group or others can access. They check the database file, `<path>-wal` and `<path>-shm`. A database that an earlier build made can have mode 0644, for example the file `/data/dustpan.db` of the container image. Stop the server, then run `chmod 600` on each of the three files that exist, for example `chmod 600 /data/dustpan.db /data/dustpan.db-wal /data/dustpan.db-shm`. The server does not change a mode itself.
+
 `serve` refuses a database that records a schema version below 168, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
 
 The database records the SHA-256 of each migration. Until the first tag, a change to the schema edits the baseline in place. A build with another version of the baseline refuses the database at start, and names both values. `serve` says to restore a backup of the same build, or to set `--database` to a new database. It never offers a reset. An untagged build has no upgrade path. The upgrade check cannot see an edit of the baseline, because the name of the file does not change. For a dev data directory, run `opendustpan dev reset`, as the [dev server guide](dev-server.md#start-again-after-a-schema-change) shows.

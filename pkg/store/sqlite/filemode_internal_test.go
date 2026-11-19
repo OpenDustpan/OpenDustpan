@@ -217,9 +217,17 @@ func TestSwapDatabaseRefusesWideStagedFile(t *testing.T) {
 	staged := filepath.Join(dir, "staged.db")
 	writeMode(t, staged, 0o644)
 
+	liveConn := st.conn
+
 	st.mu.Lock()
 	err := st.swapDatabaseLocked(t.Context(), staged)
 	st.mu.Unlock()
+
+	// A refused swap leaves the live connection untouched: it is not closed
+	// and not reopened.
+	if st.conn != liveConn {
+		t.Fatal("refused swap replaced the live connection")
+	}
 
 	if !errors.Is(err, ErrFileMode) {
 		t.Fatalf("swapDatabaseLocked = %v, want ErrFileMode", err)

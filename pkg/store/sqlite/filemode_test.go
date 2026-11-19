@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -138,17 +139,22 @@ func TestCheckFileMode(t *testing.T) {
 	wide := filepath.Join(dir, "wide.db")
 	chmodFile(t, wide, 0o644)
 
-	if err := sqlite.CheckFileMode(wide); !errors.Is(err, sqlite.ErrFileMode) {
+	err := sqlite.CheckFileMode(wide)
+	if err == nil || !errors.Is(err, sqlite.ErrFileMode) {
 		t.Fatalf("wide file = %v, want ErrFileMode", err)
+	}
+
+	if want := "run chmod 600 " + wide; !strings.Contains(err.Error(), want) {
+		t.Fatalf("wide file error = %q, want it to hold %q", err, want)
 	}
 
 	// A link to a wide file is followed, so the link cannot hide the mode.
 	link := filepath.Join(dir, "link.db")
-	if err := os.Symlink(wide, link); err != nil {
-		t.Fatalf("symlink: %v", err)
+	if linkErr := os.Symlink(wide, link); linkErr != nil {
+		t.Fatalf("symlink: %v", linkErr)
 	}
 
-	if err := sqlite.CheckFileMode(link); !errors.Is(err, sqlite.ErrFileMode) {
+	if err = sqlite.CheckFileMode(link); !errors.Is(err, sqlite.ErrFileMode) {
 		t.Fatalf("link to wide file = %v, want ErrFileMode", err)
 	}
 
@@ -156,7 +162,28 @@ func TestCheckFileMode(t *testing.T) {
 	chmodFile(t, narrow, 0o600)
 	chmodFile(t, narrow+"-wal", 0o644)
 
-	if err := sqlite.CheckFileMode(narrow); !errors.Is(err, sqlite.ErrFileMode) {
+	if err = sqlite.CheckFileMode(narrow); !errors.Is(err, sqlite.ErrFileMode) {
 		t.Fatalf("wide wal = %v, want ErrFileMode", err)
+	}
+}
+
+// TestCheckFileModeNotRegular requires a text for a file that is not regular
+// that names the failure and gives no chmod command.
+func TestCheckFileModeNotRegular(t *testing.T) {
+	t.Parallel()
+
+	notFile := filepath.Join(t.TempDir(), "dir.db")
+	if err := os.Mkdir(notFile, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := sqlite.CheckFileMode(notFile)
+	if err == nil || !errors.Is(err, sqlite.ErrFileMode) {
+		t.Fatalf("directory = %v, want ErrFileMode", err)
+	}
+
+	if !strings.Contains(err.Error(), "is not a regular file: replace it with the database file or remove it") ||
+		strings.Contains(err.Error(), "chmod") {
+		t.Fatalf("directory error = %q", err)
 	}
 }

@@ -12,7 +12,7 @@ import (
 // token hash and state of the installation, so only the owner may read it.
 // The store refuses such a file and changes nothing: the operator decides
 // what to do with the mode.
-var ErrFileMode = errors.New("database file allows group or other access")
+var ErrFileMode = errors.New("database file is not private to the owner")
 
 const (
 	// databaseFileMode lets only the owner read and write a database file.
@@ -55,6 +55,11 @@ func databaseFiles(path string) []string {
 
 // checkPrivateFiles checks each file in names. It follows no symbolic link at
 // the last element, so a link in place of a file fails.
+//
+// Limit: the check is path-based (Lstat), not fstat on the descriptor that
+// SQLite opens, because database/sql gives no descriptor. A process that can
+// write to the directory can change a file between the check and the open.
+// The directory permissions are the layer that stops it.
 func checkPrivateFiles(names ...string) error {
 	for _, name := range names {
 		info, err := os.Lstat(name)
@@ -67,11 +72,15 @@ func checkPrivateFiles(names ...string) error {
 		}
 
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%w: %q is not a regular file", ErrFileMode, name)
+			return fmt.Errorf(
+				"%w: %q is not a regular file: replace it with the database file or remove it", ErrFileMode, name,
+			)
 		}
 
 		if perm := info.Mode().Perm(); perm&groupOtherBits != 0 {
-			return fmt.Errorf("%w %q (mode %04o): run chmod 600 on the file", ErrFileMode, name, perm)
+			return fmt.Errorf(
+				"%w: group or other users can access %q (mode %04o): run chmod 600 %s", ErrFileMode, name, perm, name,
+			)
 		}
 	}
 

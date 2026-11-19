@@ -761,6 +761,15 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 // already copied the control tables into the staged file, so the rename
 // keeps the live control rows with no further copy.
 func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
+	// Defense in depth: snapshotPath makes the staged file with mode 0600 and
+	// openDatabase checks the live file after the move. This check stays so
+	// that a staged file with a wider mode never becomes the live database.
+	// It runs before the connection closes, so a refused swap leaves the live
+	// connection untouched.
+	if err := checkPrivateFiles(databaseFiles(temp)...); err != nil {
+		return err
+	}
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -770,13 +779,6 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 			reopenErr := s.reopenDatabase(ctx)
 			return errors.Join(fmt.Errorf("remove write-ahead log: %w", err), reopenErr)
 		}
-	}
-
-	// Defense in depth: snapshotPath makes the staged file with mode 0600 and
-	// openDatabase checks the live file after the move. This check stays so
-	// that a staged file with a wider mode never becomes the live database.
-	if err := checkPrivateFiles(databaseFiles(temp)...); err != nil {
-		return errors.Join(err, s.reopenDatabase(ctx))
 	}
 
 	if err := os.Rename(temp, s.path); err != nil {
