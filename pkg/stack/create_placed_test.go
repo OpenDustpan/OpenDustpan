@@ -54,6 +54,12 @@ func (r *placedRecorder) CreateStackPlaced(context.Context, stack.Stack, stack.P
 	return nil
 }
 
+func (r *placedRecorder) GetStack(context.Context, stack.Ref) (stack.Stack, error) {
+	var st stack.Stack
+
+	return st, nil
+}
+
 func (r *placedRecorder) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -168,7 +174,7 @@ func permissiveService(t *testing.T) (*stack.Service, stack.Ref) {
 func recordingPlacedService(t *testing.T) (*stack.Service, *placedRecorder, stack.Ref) {
 	t.Helper()
 
-	inner := wrapCrashSQL(t, nil)
+	inner, _ := openCrashSQL(t, nil)
 
 	ns := namespace.Namespace{
 		ID: namespace.NewID(), CreatedAt: time.Unix(1, 0), Name: "acme", PrimaryInstallation: "eu-west",

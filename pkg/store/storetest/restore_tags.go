@@ -42,7 +42,7 @@ func testRestoreStagingRefusesHostileTagValues(t *testing.T, newStore RestoreFac
 		{"a value of 257 bytes", strings.Repeat("v", 257), true},
 		{"a value of 100 KiB", strings.Repeat("v", 100<<10), true},
 		{"a value with a NUL", "a\x00b", true},
-		{"a value with U+202E", "a‮b", true},
+		{"a value with U+202E", "a\u202eb", true},
 		{"a value with an escape", "a\x1bb", true},
 		{"a value with a carriage return", "a\rb", true},
 	}

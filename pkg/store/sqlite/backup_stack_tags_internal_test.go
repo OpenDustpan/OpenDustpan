@@ -21,7 +21,7 @@ func TestCheckStagedStackTags(t *testing.T) {
 		t.Parallel()
 
 		s := openInternalTemplated(t)
-		seedStackTag(t, s, "SELECT 'a' || char(10) || 'b' || char(9) || 'c'")
+		seedStackTag(t, s, "a\nb\tc")
 
 		if err := checkStagedStackTags(t.Context(), s.conn); err != nil {
 			t.Fatalf("check = %v, want nil", err)
@@ -29,21 +29,21 @@ func TestCheckStagedStackTags(t *testing.T) {
 	})
 
 	hostile := map[string]string{
-		"a value that is not UTF-8": "SELECT CAST(x'61ff62' AS TEXT)",
-		"a value with a NUL":        "SELECT 'a' || char(0) || 'b'",
-		"a value with U+202E":       "SELECT 'a' || char(8238) || 'b'",
-		"a value with an escape":    "SELECT 'a' || char(27) || 'b'",
-		"a value with a CR":         "SELECT 'a' || char(13) || 'b'",
-		"a value of 257 bytes":      "SELECT '" + strings.Repeat("v", 257) + "'",
-		"a value of 100 KiB":        "SELECT '" + strings.Repeat("v", 100<<10) + "'",
+		"a value that is not UTF-8": "a\xffb",
+		"a value with a NUL":        "a\x00b",
+		"a value with U+202E":       "a\u202eb",
+		"a value with an escape":    "a\x1bb",
+		"a value with a CR":         "a\rb",
+		"a value of 257 bytes":      strings.Repeat("v", 257),
+		"a value of 100 KiB":        strings.Repeat("v", 100<<10),
 	}
 
-	for name, valueSQL := range hostile {
+	for name, value := range hostile {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			s := openInternalTemplated(t)
-			seedStackTag(t, s, valueSQL)
+			seedStackTag(t, s, value)
 
 			err := checkStagedStackTags(t.Context(), s.conn)
 			if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, stack.ErrInvalidTags) {
@@ -58,9 +58,9 @@ func TestCheckStagedStackTags(t *testing.T) {
 }
 
 // seedStackTag makes the namespace acme, a stack in it and one tag row whose
-// value is the single result of valueSQL, written by SQL as a changed backup
-// would write it.
-func seedStackTag(t *testing.T, s *Store, valueSQL string) {
+// value is value, written as bytes so that a changed backup can bring in text
+// that is not UTF-8.
+func seedStackTag(t *testing.T, s *Store, value string) {
 	t.Helper()
 
 	seedDriftNamespace(t, s)
@@ -72,9 +72,9 @@ VALUES ('acme', 'web', 'prod', 'stk-1', 0, 1, 1)`
 		t.Fatalf("insert the stack: %v", err)
 	}
 
-	tagSQL := `INSERT INTO stack_tags (stack_id, name, value) SELECT 'stk-1', 'k', (` + valueSQL + `)`
+	const tagSQL = `INSERT INTO stack_tags (stack_id, name, value) VALUES ('stk-1', 'k', CAST(? AS TEXT))`
 
-	if _, err := s.conn.ExecContext(t.Context(), tagSQL); err != nil {
+	if _, err := s.conn.ExecContext(t.Context(), tagSQL, []byte(value)); err != nil {
 		t.Fatalf("insert the tag: %v", err)
 	}
 }

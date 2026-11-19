@@ -1382,14 +1382,27 @@ func classifyNamespace(err error) (failure, bool) {
 	return unmatched(), false
 }
 
-// classifyStack maps the errors of the stacks. ok is false for any other
-// error.
-func classifyStack(err error) (failure, bool) {
+// classifyStackInput maps the errors of a name or a tag set that is not valid.
+// ok is false for any other error.
+func classifyStackInput(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, stack.ErrInvalidName):
 		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName), true
 	case errors.Is(err, stack.ErrInvalidTags):
 		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidTags), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyStack maps the errors of the stacks. ok is false for any other
+// error.
+func classifyStack(err error) (failure, bool) {
+	if f, ok := classifyStackInput(err); ok {
+		return f, true
+	}
+
+	switch {
 	case errors.Is(err, stack.ErrNotFound):
 		return coded(http.StatusNotFound, err.Error(), errcode.StackNotFound), true
 	case errors.Is(err, stack.ErrNoState):

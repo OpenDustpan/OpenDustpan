@@ -223,8 +223,10 @@ func TestCreatePlacedPassesValidTagsToTheStore(t *testing.T) {
 		Entry:        zeroEntry(),
 	}
 
-	// The recording store keeps nothing, so the read after the create may fail.
-	_, _ = svc.CreatePlaced(t.Context(), ref, map[string]string{"pulumi:description": "a\nb\tc"}, placement)
+	_, err := svc.CreatePlaced(t.Context(), ref, map[string]string{"pulumi:description": "a\nb\tc"}, placement)
+	if err != nil {
+		t.Fatalf("CreatePlaced with valid tags: %v", err)
+	}
 
 	if rec.count() != 1 {
 		t.Fatalf("store creates = %d, want 1", rec.count())
