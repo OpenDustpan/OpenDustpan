@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 
 ## What Changes
 
-- A new script `scripts/release-upload.sh <version> <dir>` checks the set again with `scripts/release-verify.sh` and with `sha256sum --check --strict`, refuses when a release for the tag exists, and creates one draft release with the four archives and `SHA256SUMS`. It never publishes.
+- A new script `scripts/release-upload.sh <version> <dir>` checks the set again with `scripts/release-verify.sh`, with a shape allowlist (the five names, exactly one line for each archive and no other line) and with `sha256sum --check --strict`, also when `release-verify.sh` is replaced by a script that passes, refuses when a release for the tag exists, and creates one draft release with the four archives and `SHA256SUMS`. It never publishes.
 - The tag workflow gets three changes (a workflow patch, see "Workflow patch" in `design.md`): the jobs `archives-build` and `archives-verify` before the image job, the job `release-draft` after it, and a `permissions` block for each job in place of the block for the whole file.
 - `make release-record-check` passes `VERSION` through the environment, so that a quote in the value cannot end the shell quoting.
 - A test path with no tag: the tests of the new script run in the Go job of every pull request. They build the archives of a test version in a copy of the work tree and run the new script with a fake `gh`. A second test reads `release.yml` and checks its structure.
