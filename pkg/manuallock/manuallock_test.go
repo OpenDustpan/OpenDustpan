@@ -1341,3 +1341,97 @@ func TestNamespaceLockForWithNoLock(t *testing.T) {
 		t.Fatalf("NamespaceLockFor with no lock = %v, want ErrNotLocked", err)
 	}
 }
+
+// TestBulkPathServiceHostile sends the hostile input of a bulk item straight to
+// the lock service, as if the handler had passed it. The bulk handler calls
+// Lock and Unlock for each item, so each guard here must stop its input alone.
+// Each case writes nothing to the store.
+func TestBulkPathServiceHostile(t *testing.T) {
+	t.Parallel()
+
+	unit := manuallock.UnitTarget(webUnit())
+	sibling := manuallock.UnitTarget(collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "api"})
+
+	cases := []struct {
+		name  string
+		authz manuallock.Authorizer
+		who   identity.Principal
+		run   func(s *manuallock.Service, p identity.Principal) error
+		want  error
+	}{
+		{
+			name: "lock by a reader with no unit:lock", authz: allowOnly(identity.ActionUnitRead), who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				_, err := s.Lock(t.Context(), p, unit, "r", entry())
+				return err
+			},
+			want: identity.ErrDenied,
+		},
+		{
+			name: "unlock by a reader with no unit:lock", authz: allowOnly(identity.ActionUnitRead), who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				return s.Unlock(t.Context(), p, unit, entry())
+			},
+			want: identity.ErrDenied,
+		},
+		{
+			name: "lock with a grant on a sibling unit only", authz: siblingOnly{ok: sibling.String()}, who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				_, err := s.Lock(t.Context(), p, unit, "r", entry())
+				return err
+			},
+			want: identity.ErrDenied,
+		},
+		{
+			name: "unlock with an empty subject", authz: allowAll(), who: person(""),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				return s.Unlock(t.Context(), p, unit, entry())
+			},
+			want: manuallock.ErrNotHolder,
+		},
+		{
+			name: "lock with a blank reason", authz: allowAll(), who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				_, err := s.Lock(t.Context(), p, unit, "  ", entry())
+				return err
+			},
+			want: manuallock.ErrReasonRequired,
+		},
+		{
+			name: "lock of a target that names nothing", authz: allowAll(), who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				_, err := s.Lock(t.Context(), p, zeroTarget(), "r", entry())
+				return err
+			},
+			want: manuallock.ErrInvalidTarget,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+
+			err := tc.run(newServiceWith(t, store, tc.authz), tc.who)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+
+			if len(store.put) != 0 || len(store.removed) != 0 || store.forced != 0 {
+				t.Fatalf("the store was written: puts %d, removals %v, forced %d", len(store.put), store.removed, store.forced)
+			}
+		})
+	}
+}
+
+// siblingOnly allows every action on the object ok and denies it on any other.
+type siblingOnly struct{ ok string }
+
+func (s siblingOnly) Authorize(_ context.Context, _ identity.Principal, action identity.Action, obj identity.Object) error {
+	if obj.String() == s.ok {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s on %s", identity.ErrDenied, action, obj)
+}

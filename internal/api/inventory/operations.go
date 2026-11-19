@@ -108,6 +108,13 @@ var operationLabels = map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodPut, namespacePath+"/lock"): apidesc.Name("lockNamespace", tagLocks).
 		On(apidesc.KindNamespace).
 		WithBodies(lockRequestBody, manualLockBody),
+	apidesc.Pattern(http.MethodPost, namespacePath+"/unit-locks/bulk-lock"): apidesc.Name(
+		"bulkLockUnits", tagLocks,
+	).On(apidesc.KindNamespace).WithBodies(bulkLockRequestBody, bulkLockResultBody),
+	apidesc.Pattern(http.MethodPost, namespacePath+"/unit-locks/bulk-unlock"): apidesc.Name(
+		"bulkUnlockUnits", tagLocks,
+	).On(apidesc.KindNamespace).WithBodies(bulkUnlockRequestBody, bulkLockResultBody),
+
 	apidesc.Pattern(http.MethodGet, namespacePath+"/lock"): apidesc.Name("getNamespaceLock", tagLocks).
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, manualLockBody),
@@ -182,7 +189,15 @@ var (
 	placementRuleBody = apidesc.Typed[placementRuleEntry]("PlacementRule")
 	lockRequestBody   = apidesc.Typed[lockRequest]("LockRequest")
 	manualLockBody    = apidesc.Typed[lockEntryDocument]("ManualLock")
-	viewBody          = apidesc.Typed[viewDocument]("View", viewNames...)
+	// The bodies of the bulk lock routes.
+	bulkLockRequestBody = apidesc.Typed[bulkLockBody]("BulkLockUnitsRequest",
+		apidesc.Named[bulkItem]("BulkLockUnit"))
+	bulkUnlockRequestBody = apidesc.Typed[bulkUnlockBody]("BulkUnlockUnitsRequest",
+		apidesc.Named[bulkItem]("BulkLockUnit"))
+	bulkLockResultBody = apidesc.Typed[bulkResponse]("BulkLockUnitsResult",
+		apidesc.Named[bulkResult]("BulkLockUnitsItem"), apidesc.Named[bulkError]("BulkLockUnitsError"),
+		apidesc.Named[lockEntryDocument]("ManualLock"))
+	viewBody = apidesc.Typed[viewDocument]("View", viewNames...)
 	// outputSharingBody is the output sharing setting of a namespace.
 	outputSharingBody = apidesc.Typed[outputSharingDocument]("OutputSharing")
 	viewNames         = []apidesc.Declaration{

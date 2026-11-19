@@ -5,6 +5,8 @@ package errcode
 const (
 	// LockAlreadyLocked means that the object already has a manual lock.
 	LockAlreadyLocked = "lock.already-locked"
+	// LockBulkSize means that a bulk lock call names no unit, or more units than the limit.
+	LockBulkSize = "lock.bulk-size"
 	// LockChanged means that the manual lock changed during the removal.
 	LockChanged = "lock.changed"
 	// LockInvalidTarget means that the lock request names no unit, no collection and no namespace.
@@ -25,6 +27,7 @@ const (
 func lockSpecs() []Spec {
 	return []Spec{
 		{Code: LockAlreadyLocked, Meaning: "the object already has a manual lock", Args: nil},
+		{Code: LockBulkSize, Meaning: "a bulk lock call names no unit, or more units than the limit", Args: nil},
 		{Code: LockChanged, Meaning: "the manual lock changed during the removal", Args: nil},
 		{
 			Code:    LockInvalidTarget,

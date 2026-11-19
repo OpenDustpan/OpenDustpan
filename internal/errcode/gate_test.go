@@ -41,7 +41,7 @@ func gated() []errcodetest.Adapter {
 			// runner protocol has its own codes and its own versions.
 			Skip: []string{"writeMaintenanceHTTPBackend", "writeMaintenanceRunner"},
 		},
-		api("inventory", nil, nil),
+		api("inventory", []string{"bulkError"}, nil),
 		api("issuer", nil, nil),
 		api("jobs", nil, nil),
 		api("notifications", nil, nil),

@@ -1,4 +1,5 @@
 lock.already-locked
+lock.bulk-size
 lock.changed
 lock.invalid-target
 lock.locked holder:identifier since:time lockedKind:identifier locked:identifier refusedKind:identifier refused:identifier

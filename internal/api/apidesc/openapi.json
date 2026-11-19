@@ -654,6 +654,94 @@
         ],
         "type": "object"
       },
+      "BulkLockUnit": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "BulkLockUnitsError": {
+        "properties": {
+          "code": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "errorCode",
+          "message"
+        ],
+        "type": "object"
+      },
+      "BulkLockUnitsItem": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/BulkLockUnitsError"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lock": {
+            "$ref": "#/components/schemas/ManualLock"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "BulkLockUnitsRequest": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/BulkLockUnit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "reason",
+          "units"
+        ],
+        "type": "object"
+      },
+      "BulkLockUnitsResult": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BulkLockUnitsItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
       "BulkUnitSettingsError": {
         "properties": {
           "code": {
@@ -753,6 +841,20 @@
         "required": [
           "id",
           "version"
+        ],
+        "type": "object"
+      },
+      "BulkUnlockUnitsRequest": {
+        "properties": {
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/BulkLockUnit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "units"
         ],
         "type": "object"
       },
@@ -2510,6 +2612,7 @@
           "local-user.sign-in-failed",
           "local-user.unavailable",
           "lock.already-locked",
+          "lock.bulk-size",
           "lock.changed",
           "lock.invalid-target",
           "lock.locked",
@@ -20282,6 +20385,118 @@
           },
           {
             "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/unit-locks/bulk-lock": {
+      "post": {
+        "operationId": "bulkLockUnits",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkLockUnitsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkLockUnitsResult"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "locks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/unit-locks/bulk-unlock": {
+      "post": {
+        "operationId": "bulkUnlockUnits",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkUnlockUnitsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkLockUnitsResult"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "locks"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
             "object": "namespace"
           }
         ]

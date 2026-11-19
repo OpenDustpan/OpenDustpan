@@ -96,6 +96,16 @@ func bulkUnitRef(i int) string { return fmt.Sprintf("pulumi:acme/web/bulk-%03d",
 func newBulkFixture(t *testing.T, authz identity.Authorizer, n int, withRecords bool) bulkFixture {
 	t.Helper()
 
+	return newBulkFixtureWith(t, authz, n, withRecords, func(r coreinventory.Reader) coreinventory.Reader { return r })
+}
+
+// newBulkFixtureWith is newBulkFixture with a wrapper around the unit reader.
+func newBulkFixtureWith(
+	t *testing.T, authz identity.Authorizer, n int, withRecords bool,
+	wrap func(coreinventory.Reader) coreinventory.Reader,
+) bulkFixture {
+	t.Helper()
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -131,12 +141,13 @@ func newBulkFixture(t *testing.T, authz identity.Authorizer, n int, withRecords 
 	}
 
 	records := idempotencytest.NewMemory()
+	store.records = records
 
 	cfg := apiinventory.Config{
 		Placements: nil, OutputSharing: nil, Outputs: nil, Views: nil, Namespaces: nsSvc,
-		Units: &memReader{
+		Units: wrap(&memReader{
 			entries: map[namespace.Name][]coreinventory.Entry{"acme": entries, "globex": {other}}, err: nil,
-		},
+		}),
 		Deleted: &memDeleted{entries: nil}, History: nil, Lifecycles: testLifecycles(),
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: locks, Records: nil,
 		Moves: nil, Authenticator: subjectAuthenticator{}, Authorizer: authz, Audit: orTestAudit(auditStore),
@@ -238,7 +249,7 @@ func wantOK(t *testing.T, r *bulkResultDoc) {
 	t.Helper()
 
 	if r.Status != "ok" || r.Error != nil {
-		t.Fatalf("result %+v: want ok", r)
+		t.Fatalf("result %+v err=%+v: want ok", r, r.Error)
 	}
 }
 
@@ -382,19 +393,6 @@ func TestBulkLockDenied(t *testing.T) {
 	}
 	f := newBulkFixture(t, authz, 3, true)
 
-	// The single call on the same unit gives the status that the item must give.
-	single := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
-		"/api/inventory/unit-lock?unit="+bulkUnitRef(1), strings.NewReader(`{"reason":"x"}`))
-	req.Header.Set("Authorization", "token alice-token")
-	f.handler.ServeHTTP(single, req)
-
-	if single.Code != http.StatusForbidden {
-		t.Fatalf("single lock = %d, want 403", single.Code)
-	}
-
-	before := len(f.audit.denied())
-
 	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...)))
 
 	wantOK(t, &got.Results[0])
@@ -405,8 +403,19 @@ func TestBulkLockDenied(t *testing.T) {
 		t.Fatal("the denied item has no error code")
 	}
 
-	if after := len(f.audit.denied()); after != before+1 {
-		t.Fatalf("denied audit entries = %d, want %d", after, before+1)
+	if n := len(f.audit.denied()); n != 1 {
+		t.Fatalf("denied audit entries = %d, want 1", n)
+	}
+
+	// The single call on the same unit gives the status that the item gave.
+	single := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
+		"/api/inventory/unit-lock?unit="+bulkUnitRef(1), strings.NewReader(`{"reason":"x"}`))
+	req.Header.Set("Authorization", "token alice-token")
+	f.handler.ServeHTTP(single, req)
+
+	if single.Code != http.StatusForbidden {
+		t.Fatalf("single lock = %d, want 403", single.Code)
 	}
 
 	if _, err := f.store.GetLock(t.Context(), mustUnit(t, 1)); !errors.Is(err, manuallock.ErrNotLocked) {
@@ -774,7 +783,7 @@ func TestBulkLockRouteNeedsTheNamespace(t *testing.T) {
 
 	for _, path := range []string{bulkLockPath, bulkUnlockPath} {
 		authz := bulkAuthz{
-			deny:   map[string]bool{grant(identity.ActionNamespaceRead, "namespace:acme"): true},
+			deny:   map[string]bool{grant(identity.ActionNamespaceRead, "acme"): true},
 			onLock: nil, n: &atomic.Int64{},
 		}
 		f := newBulkFixture(t, authz, 2, true)
@@ -788,5 +797,46 @@ func TestBulkLockRouteNeedsTheNamespace(t *testing.T) {
 		if rec.Code != http.StatusForbidden || f.held() != 0 {
 			t.Fatalf("%s: %d, locks = %d; want 403 and none", path, rec.Code, f.held())
 		}
+	}
+}
+
+// lookupLog is a unit reader that keeps the IDs that the handler looks up.
+type lookupLog struct {
+	coreinventory.Reader
+
+	mu  sync.Mutex
+	ids []string
+}
+
+func (l *lookupLog) GetUnit(ctx context.Context, id string) (coreinventory.Entry, error) {
+	l.mu.Lock()
+	l.ids = append(l.ids, id)
+	l.mu.Unlock()
+
+	return l.Reader.GetUnit(ctx, id)
+}
+
+// TestBulkLockIDCheckBeforeLookup: an ID with a path part, a query part, a
+// space, a control byte or more than 100 characters never reaches the unit
+// lookup. The check is its own layer: the lookup would answer not found too.
+func TestBulkLockIDCheckBeforeLookup(t *testing.T) {
+	t.Parallel()
+
+	log := &lookupLog{Reader: nil, mu: sync.Mutex{}, ids: nil}
+	f := newBulkFixtureWith(t, plainAuthz(), 1, true, func(r coreinventory.Reader) coreinventory.Reader {
+		log.Reader = r
+
+		return log
+	})
+
+	bad := []string{"a/b", "a?b=1", "a b", "a\tb", "-lead", ".lead", strings.Repeat("x", 101), ""}
+	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, bad...)))
+
+	for i := range got.Results {
+		wantError(t, &got.Results[i], http.StatusNotFound, "lock.target-not-found")
+	}
+
+	if len(log.ids) != 0 {
+		t.Fatalf("the unit lookup saw %q: an invalid ID must stop before it", log.ids)
 	}
 }
