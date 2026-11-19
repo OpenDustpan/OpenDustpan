@@ -292,7 +292,7 @@ func TestBreakGlassEngineFailureStillRefuses(t *testing.T) {
 
 	err := st.Issue(
 		t.Context(),
-		bgPass(t, "alice", gate.OperationApply, bgUnit(t, "web", "ws-test-web"), time.Now()),
+		bgPass(t, "alice", gate.OperationApply, bgUnit(t, "web", "ws-test-web"), bgNow()),
 	)
 	if err != nil {
 		t.Fatal(err)
