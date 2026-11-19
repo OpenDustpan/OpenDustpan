@@ -7,3 +7,4 @@ stack.not-found
 stack.other-secrets-provider
 stack.resource-not-found
 stack.reveal-path-too-long maxBytes:quantity
+stack.state-too-complex

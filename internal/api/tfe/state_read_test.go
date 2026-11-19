@@ -1,6 +1,7 @@
 package tfe_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -511,5 +513,82 @@ func TestResourcePageSizeErrorNamesTheParameter(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("page[size]=%s: body = %s, want %s", size, body, want)
 		}
+	}
+}
+
+// TestGetStateResourceRefusesHostileStates is the hostile table of the handler
+// layer: a state that nests past the bound, or that holds tiny leaves at the
+// bound, answers 413 with its code and no value.
+func TestGetStateResourceRefusesHostileStates(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{"sv-deep123", "sv-tiny123"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			body := resourceBody(
+				t, "/api/v2/state-versions/"+id+"/resources/terraform_data.smoke", http.StatusRequestEntityTooLarge,
+			)
+
+			if !strings.Contains(body, errcode.StateVersionTooComplex) {
+				t.Fatalf("body %.200s, want the code %s", body, errcode.StateVersionTooComplex)
+			}
+		})
+	}
+}
+
+// TestStateReadPastTheBoundLogsAWarning proves that a masked read that the
+// bound refuses writes one warning with the state version, and no value.
+func TestStateReadPastTheBoundLogsAWarning(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	handler := loggedTFEHandler(t, stubWorkspaces{}, &buf)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, stateRequest(t, "/api/v2/state-versions/sv-deep123/resources/terraform_data.smoke"))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("log has %d lines, want 1: %q", len(lines), buf.String())
+	}
+
+	var entry map[string]any
+
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("log line %q: %v", lines[0], err)
+	}
+
+	if entry["level"] != "WARN" || entry["msg"] != "state is too deep or too large for a masked read" ||
+		entry["state_version"] != "sv-deep123" {
+		t.Fatalf("log entry %v, want a warning for sv-deep123", entry)
+	}
+}
+
+// TestStateDiffPastTheBoundLogsBothVersions proves that the diff route logs
+// the two state versions when the bound refuses one of them, and answers 413.
+func TestStateDiffPastTheBoundLogsBothVersions(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	handler := loggedTFEHandler(t, stubWorkspaces{}, &buf)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, stateRequest(t, "/api/v2/state-versions/sv-test123/diff?from=sv-deep123"))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	line := buf.String()
+	if !strings.Contains(line, `"from_state_version":"sv-deep123"`) ||
+		!strings.Contains(line, `"to_state_version":"sv-test123"`) {
+		t.Fatalf("log %q misses a state version", line)
 	}
 }
