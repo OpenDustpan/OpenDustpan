@@ -54,6 +54,12 @@ func TestSignInProviderRoutesRefuseAHostileIssuer(t *testing.T) {
 					t.Errorf("%s = %d %s, want 400", tc.method, rec.Code, rec.Body.String())
 				}
 
+				// The text of ErrIssuer shows that the handler refused the issuer
+				// before the session layer, which words its refusal another way.
+				if !strings.Contains(rec.Body.String(), "no user information, no query and no fragment") {
+					t.Errorf("%s: the answer %s is not the refusal of the handler", tc.method, rec.Body.String())
+				}
+
 				if strings.Contains(rec.Body.String(), "pw@") || strings.Contains(rec.Body.String(), "evil.example") {
 					t.Errorf("%s: the answer holds the issuer: %s", tc.method, rec.Body.String())
 				}

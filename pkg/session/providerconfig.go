@@ -226,6 +226,10 @@ func CheckIssuer(issuer string) error {
 
 // issuerBytesAllowed reports whether each byte of s is a printable ASCII
 // character that is not a space, a back slash, a query mark or a fragment mark.
+//
+// Defense in depth: the host and the path checks refuse these bytes too. This
+// check stays so that a change of those checks cannot let a control or a
+// non-ASCII character through. It does not rely on them.
 func issuerBytesAllowed(s string) bool {
 	for i := range len(s) {
 		c := s[i]

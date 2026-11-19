@@ -111,3 +111,21 @@ func TestOIDCIssuerFlagRefusesAHostileIssuer(t *testing.T) {
 		})
 	}
 }
+
+// TestLDAPSubjectFlagRefusesASpaceItself sends a subject with a space at its
+// start or its end to the flag check alone. The refusal names the space, so
+// the test fails when the flag check does not refuse the space and only the
+// allowlist of ldapauth does.
+func TestLDAPSubjectFlagRefusesASpaceItself(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{" uid", "uid ", " entryUUID", "entryUUID ", " "} {
+		l := completeLDAP()
+		l.subject = subject
+
+		err := l.checkSubject()
+		if !errors.Is(err, ldapauth.ErrSubjectAttribute) || !strings.Contains(err.Error(), "space at its start") {
+			t.Errorf("checkSubject(%q) = %v, want ErrSubjectAttribute about the space", subject, err)
+		}
+	}
+}

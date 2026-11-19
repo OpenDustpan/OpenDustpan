@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/ldapauth"
+	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -53,6 +54,12 @@ func TestNewServerRefusesAHostileLDAPSubject(t *testing.T) {
 			if !errors.Is(err, ldapauth.ErrSubjectAttribute) {
 				t.Fatalf("NewServer error = %v, want ErrSubjectAttribute", err)
 			}
+
+			// The refusal of a space comes from checkLDAPSubject itself, not
+			// from the allowlist of ldapauth.
+			if strings.Contains(name, "space") && !strings.Contains(err.Error(), "space at its start") {
+				t.Fatalf("NewServer error = %v, want one about the space", err)
+			}
 		})
 	}
 }
@@ -91,6 +98,12 @@ func TestNewServerRefusesAHostileOIDCIssuer(t *testing.T) {
 			_, err := dustpan.NewServer(opts...)
 			if !errors.Is(err, session.ErrIssuer) {
 				t.Fatalf("NewServer with the issuer %q = %v, want ErrIssuer", issuer, err)
+			}
+
+			// The guard of NewServer runs before the client is made: the
+			// refusal does not come from the client.
+			if errors.Is(err, oauth.ErrConfig) {
+				t.Fatalf("NewServer with the issuer %q = %v, want the refusal before the sign-in client", issuer, err)
 			}
 
 			if strings.Contains(err.Error(), "pw@") {
