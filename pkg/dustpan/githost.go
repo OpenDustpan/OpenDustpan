@@ -6,9 +6,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/netip"
 
+	"opendustpan.org/opendustpan/internal/api/githubwebhook"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -136,24 +139,40 @@ func WithGitHostRootCAs(pool *x509.CertPool) Option {
 	return func(o *settings) { o.gitHost.cas = pool }
 }
 
-// newGitHostParts returns the Git host service and the middleware of the
-// Idempotency-Key header that its routes and the settings route use. The
-// service is nil when no Git host store is set. The middleware is nil when no
-// idempotency store is set.
-func newGitHostParts(cfg *settings, deps installationDeps) (*forge.Service, *idempotent.Middleware, error) {
+// gitHostParts holds what newGitHostParts builds.
+type gitHostParts struct {
+	// service is the Git host service, or nil when no Git host store is set.
+	service *forge.Service
+	// idem is the middleware of the Idempotency-Key header that the Git host
+	// routes and the settings route use, or nil when no idempotency store is set.
+	idem *idempotent.Middleware
+	// webhook takes the deliveries of the webhook, or is nil with no service.
+	webhook http.Handler
+}
+
+// newGitHostParts returns the Git host service, the middleware of the
+// Idempotency-Key header and the handler of the webhook deliveries.
+func newGitHostParts(cfg *settings, deps installationDeps) (gitHostParts, error) {
+	none := gitHostParts{service: nil, idem: nil, webhook: nil}
+
 	svc, err := newGitHostService(cfg, deps)
 	if err != nil {
-		return nil, nil, err
+		return none, err
 	}
 
 	// The middleware does not depend on the Git host service: the settings
 	// route needs it with no Git host store set.
 	idem, err := idempotencyMiddleware(cfg)
 	if err != nil {
-		return nil, nil, err
+		return none, err
 	}
 
-	return svc, idem, nil
+	webhook, err := newGitHostWebhookHandler(cfg, svc, deps.observed)
+	if err != nil {
+		return none, err
+	}
+
+	return gitHostParts{service: svc, idem: idem, webhook: webhook}, nil
 }
 
 // newGitHostService returns the Git host service, or nil when no Git host store
@@ -215,8 +234,11 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 	}
 
 	svc, err := forge.NewService(forge.Config{
-		Store: cfg.gitHost.store, Namespaces: gitHostNamespaces{deps.services.namespaces}, Secrets: secrets, Audit: entries,
-		Openers: []forge.Opener{opener},
+		Store:      cfg.gitHost.store,
+		Namespaces: gitHostNamespaces{deps.services.namespaces},
+		Secrets:    secrets,
+		Audit:      entries,
+		Openers:    []forge.Opener{opener},
 		CheckURL: func(raw string) error {
 			return rules.CheckURL(raw, egress.HTTPSOnly)
 		},
@@ -231,6 +253,38 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 	}
 
 	return svc, nil
+}
+
+// newGitHostWebhookHandler returns the handler of the deliveries of the Git
+// host webhook, or nil when no Git host service is set. The handler counts the
+// rejects on observed, and writes a limited audit entry for each reject
+// through the limiter that the other adapters share.
+func newGitHostWebhookHandler(
+	cfg *settings, svc *forge.Service, observed *metrics.ServerMetrics,
+) (http.Handler, error) {
+	if svc == nil {
+		return nil, nil //nolint:nilnil // No webhook route: no Git host store is set.
+	}
+
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
+	handler, err := githubwebhook.NewHandler(githubwebhook.Config{
+		Receiver:       svc,
+		Audit:          entries,
+		Limiter:        cfg.denialLimiter,
+		OnRejected:     observed.ObserveGitHostEventRejected,
+		OnAuditFailure: observed.IncAuditAppendFailure,
+		Logger:         cfg.logger,
+		Now:            cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("git host webhook: %w", err)
+	}
+
+	return handler, nil
 }
 
 // gitHostNamespaces gives the namespace service the port that the Git host

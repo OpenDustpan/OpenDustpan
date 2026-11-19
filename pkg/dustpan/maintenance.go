@@ -36,6 +36,9 @@ const (
 	// shapeRunner renders {"code":"unavailable","message":"..."} as a runner
 	// expects, and so retries after the Retry-After time.
 	shapeRunner
+	// shapeWebhook renders 503 with Retry-After and no body. A Git host
+	// shows the status of a delivery and reads no body.
+	shapeWebhook
 )
 
 // withMaintenance refuses tool calls with 503 while the installation is in
@@ -159,6 +162,8 @@ func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, 
 		writeMaintenanceHTTPBackend(w, message)
 	case shapeRunner:
 		writeMaintenanceRunner(ctx, w, logger, message)
+	case shapeWebhook:
+		writeMaintenanceWebhook(w)
 	default:
 		// Unreachable: every call site passes a valid shape. Refuse
 		// rather than serve, and log the programmer error.
@@ -226,8 +231,10 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		path == "/api/dustpan/v1/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == maintenanceAPIPath || strings.HasPrefix(path, maintenanceAPIPath+"/"):
 		return shapePulumi, false
-	case strings.HasPrefix(path, "/runner/v1/"):
-		return shapeRunner, true
+	case strings.HasPrefix(path, "/runner/v1/"), strings.HasPrefix(path, "/webhooks/"):
+		// A delivery of a Git host webhook writes an audit entry, so it waits
+		// like every other write.
+		return writerShape(path), true
 	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, v1Prefix):
 		// The backup and restore routes under v1Prefix stay gated like the
 		// other tool-neutral routes. The gate does not read maintenance
@@ -244,6 +251,23 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		// The console files: the console shows the approval.
 		return shapePulumi, false
 	}
+}
+
+// writeMaintenanceWebhook answers 503 with Retry-After and no body.
+func writeMaintenanceWebhook(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Retry-After", maintenanceRetryAfter)
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
+// writerShape returns the shape of a refusal for the runner protocol and for
+// the deliveries of a Git host webhook.
+func writerShape(path string) errorShape {
+	if strings.HasPrefix(path, "/webhooks/") {
+		return shapeWebhook
+	}
+
+	return shapeRunner
 }
 
 // maintenancePulumiError is the error body the Pulumi CLI expects, as in the

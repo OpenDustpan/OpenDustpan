@@ -125,6 +125,7 @@ type hostOpener struct {
 
 func (o *hostOpener) Kind() forge.Kind { return forge.KindGitHub }
 
+//nolint:ireturn // The port is the interface.
 func (o *hostOpener) Events() forge.Events { return nil }
 
 //nolint:ireturn // The port is the interface.
@@ -278,7 +279,13 @@ func newHostEnvWrapped(
 	rules := egress.Rules{Allow: nil, LoopbackForTests: false}
 
 	svc, err := forge.NewService(forge.Config{
-		Store: wrap(st.GitHost()), Namespaces: hostNamespaces{svc: nss}, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
+		Store: wrap(
+			st.GitHost(),
+		),
+		Namespaces: hostNamespaces{svc: nss},
+		Secrets:    hostSealer{},
+		Audit:      st,
+		Openers:    []forge.Opener{opener},
 		CheckURL: func(raw string) error {
 			if env.refuseAddress.Load() {
 				return errHostAddress
@@ -293,7 +300,9 @@ func newHostEnvWrapped(
 
 			env.refused = append(env.refused, reason)
 		},
-		CheckLimits: limits, Logger: nil, Now: nil,
+		CheckLimits: limits,
+		Logger:      nil,
+		Now:         nil,
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)
@@ -429,6 +438,11 @@ func (e *hostEnv) do(t *testing.T, c hostCall) hostResponse {
 // session with a recent sign-in.
 func needsFreshHostSession(method, target string) bool {
 	path, _, _ := strings.Cut(target, "?")
+
+	if method == http.MethodPost {
+		// The confirm of a rotation changes the registration like a put does.
+		return strings.HasPrefix(path, "/api/dustpan/v1/git-host-apps/") && strings.HasSuffix(path, "/confirm-rotation")
+	}
 
 	return (method == http.MethodPut || method == http.MethodDelete) &&
 		(strings.HasPrefix(path, "/api/dustpan/v1/git-host-apps/") || strings.HasPrefix(path, hostInstallationsPath))

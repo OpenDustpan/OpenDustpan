@@ -116,6 +116,7 @@ type ServerMetrics struct {
 	blobWait  *Counter
 	signin    *Counter
 	gitHost   *Counter
+	gitEvent  *Counter
 	claimSkip *Counter
 }
 
@@ -178,6 +179,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		blobWait:  newBlobDeleteWaitCounter(reg),
 		signin:    newSignInCounterErrors(reg),
 		gitHost:   newGitHostRefusedCounter(reg),
+		gitEvent:  newGitHostEventRejectedCounter(reg),
 		claimSkip: newClaimPollSkippedCounter(reg),
 	}
 
@@ -734,6 +736,55 @@ func (m *ServerMetrics) ObserveGitHostRefused(reason string) {
 	}
 
 	m.gitHost.Inc(reason)
+}
+
+// Reasons of dustpan_git_host_event_rejected_total. Each one is a class of
+// refusal: none names a hook ID, an installation or a repository.
+const (
+	GitHostEventUnknownHook     = "unknown-hook"
+	GitHostEventNoRegistration  = "no-registration"
+	GitHostEventSignature       = "signature"
+	GitHostEventTooLarge        = "too-large"
+	GitHostEventMalformed       = "malformed"
+	GitHostEventUnsupported     = "unsupported"
+	GitHostEventDuplicate       = "duplicate"
+	GitHostEventNotAssigned     = "not-assigned"
+	GitHostEventNotPrimary      = "not-primary"
+	GitHostEventSecretNotOpened = "secret-not-opened"
+	GitHostEventReceiptsFull    = "receipts-full"
+	// GitHostEventOther counts any other reason, so the label set stays fixed.
+	GitHostEventOther = "other"
+)
+
+// maxGitHostEventRejectedReasons holds one series for each reason.
+const maxGitHostEventRejectedReasons = 12
+
+// newGitHostEventRejectedCounter creates dustpan_git_host_event_rejected_total
+// in reg.
+func newGitHostEventRejectedCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_git_host_event_rejected_total",
+		"Deliveries of Git host events that the server refused, by reason.",
+		[]string{labelReason},
+		maxGitHostEventRejectedReasons,
+	)
+}
+
+// ObserveGitHostEventRejected counts one refused delivery of a Git host event
+// for reason: one of the GitHostEvent constants. Any other value counts as
+// GitHostEventOther. No label holds a hook ID, an installation or a
+// repository. The sender gets the same answer for every reason, so this
+// counter and the audit entry are the only places where an operator reads it.
+func (m *ServerMetrics) ObserveGitHostEventRejected(reason string) {
+	switch reason {
+	case GitHostEventUnknownHook, GitHostEventNoRegistration, GitHostEventSignature, GitHostEventTooLarge,
+		GitHostEventMalformed, GitHostEventUnsupported, GitHostEventDuplicate, GitHostEventNotAssigned,
+		GitHostEventNotPrimary, GitHostEventSecretNotOpened, GitHostEventReceiptsFull:
+	default:
+		reason = GitHostEventOther
+	}
+
+	m.gitEvent.Inc(reason)
 }
 
 // newClaimPollSkippedCounter creates dustpan_job_claim_poll_skipped_total in
