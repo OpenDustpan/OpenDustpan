@@ -1,13 +1,13 @@
 package postgres_test
 
 import (
-	"opendustpan.org/opendustpan/pkg/idempotency"
-	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"os"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/manuallock/manuallocktest"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 func TestManualLockConformance(t *testing.T) {

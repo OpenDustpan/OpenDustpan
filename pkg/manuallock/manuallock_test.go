@@ -1368,14 +1368,18 @@ func TestBulkPathServiceHostile(t *testing.T) {
 			want: identity.ErrDenied,
 		},
 		{
-			name: "unlock by a reader with no unit:lock", authz: allowOnly(identity.ActionUnitRead), who: person("alice"),
+			name:  "unlock by a reader with no unit:lock",
+			authz: allowOnly(identity.ActionUnitRead),
+			who:   person("alice"),
 			run: func(s *manuallock.Service, p identity.Principal) error {
 				return s.Unlock(t.Context(), p, unit, entry())
 			},
 			want: identity.ErrDenied,
 		},
 		{
-			name: "lock with a grant on a sibling unit only", authz: siblingOnly{ok: sibling.String()}, who: person("alice"),
+			name:  "lock with a grant on a sibling unit only",
+			authz: siblingOnly{ok: sibling.String()},
+			who:   person("alice"),
 			run: func(s *manuallock.Service, p identity.Principal) error {
 				_, err := s.Lock(t.Context(), p, unit, "r", entry())
 				return err
@@ -1419,7 +1423,12 @@ func TestBulkPathServiceHostile(t *testing.T) {
 			}
 
 			if len(store.put) != 0 || len(store.removed) != 0 || store.forced != 0 {
-				t.Fatalf("the store was written: puts %d, removals %v, forced %d", len(store.put), store.removed, store.forced)
+				t.Fatalf(
+					"the store was written: puts %d, removals %v, forced %d",
+					len(store.put),
+					store.removed,
+					store.forced,
+				)
 			}
 		})
 	}
@@ -1428,7 +1437,12 @@ func TestBulkPathServiceHostile(t *testing.T) {
 // siblingOnly allows every action on the object ok and denies it on any other.
 type siblingOnly struct{ ok string }
 
-func (s siblingOnly) Authorize(_ context.Context, _ identity.Principal, action identity.Action, obj identity.Object) error {
+func (s siblingOnly) Authorize(
+	_ context.Context,
+	_ identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
 	if obj.String() == s.ok {
 		return nil
 	}

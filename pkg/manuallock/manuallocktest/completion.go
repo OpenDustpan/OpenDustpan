@@ -2,7 +2,7 @@ package manuallocktest
 
 import (
 	"errors"
-	"net/http"
+	"fmt"
 	"testing"
 	"time"
 
@@ -43,16 +43,26 @@ func RunCompletion(t *testing.T, newStore Factory, records Records) {
 	}
 }
 
+// statusOK is the status of the stored answer.
+const statusOK = 200
+
+// errWrongResult reports a result that is not the lock of the holder that the case expects.
+var errWrongResult = errors.New("the store passed the wrong result")
+
 // completionBody is the body that the cases store as the answer.
 const completionBody = `{"stored":true}`
 
 // begin starts the pending record of a request and returns the ref, the
 // material and the Completion that names the record. holder is what the
 // answer builder reads from the result, so a case checks what the store passes.
-func begin(t *testing.T, r idempotency.Store, key string, wantHolder string) (idempotency.Ref, []byte, *idempotency.Completion) {
+func begin(
+	t *testing.T,
+	r idempotency.Store,
+	key, wantHolder string,
+) (idempotency.Ref, []byte, *idempotency.Completion) {
 	t.Helper()
 
-	ref := idempotency.Ref{Principal: alice, Method: http.MethodPost, Path: "/locks/bulk-lock", Key: idempotency.Key(key)}
+	ref := idempotency.Ref{Principal: alice, Method: "POST", Path: "/locks/bulk-lock", Key: idempotency.Key(key)}
 	material := []byte("body-" + key)
 
 	started, err := r.Begin(t.Context(), ref, material, time.Now())
@@ -63,10 +73,10 @@ func begin(t *testing.T, r idempotency.Store, key string, wantHolder string) (id
 	c := idempotency.NewCompletion(ref, started.Token, func(result any) (idempotency.Answer, error) {
 		l, ok := result.(manuallock.Lock)
 		if !ok || l.Holder != wantHolder {
-			return idempotency.Answer{}, errors.New("the store passed the wrong result: want the lock of " + wantHolder)
+			return idempotency.Answer{}, fmt.Errorf("%w: want the lock of %s", errWrongResult, wantHolder)
 		}
 
-		return idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: []byte(completionBody)}, nil
+		return idempotency.Answer{Status: statusOK, Headers: nil, Body: []byte(completionBody)}, nil
 	})
 
 	return ref, material, c
@@ -82,7 +92,7 @@ func wantReplay(t *testing.T, r idempotency.Store, ref idempotency.Ref, material
 		t.Fatalf("second Begin = %+v, %v, want Replayed: the store kept no answer", res, err)
 	}
 
-	if res.Answer.Status != http.StatusOK || string(res.Answer.Body) != completionBody {
+	if res.Answer.Status != statusOK || string(res.Answer.Body) != completionBody {
 		t.Fatalf("stored answer = %+v, want status 200 and %s", res.Answer, completionBody)
 	}
 }
@@ -95,7 +105,12 @@ func testCompletionPut(t *testing.T, s Store, r idempotency.Store) {
 	ref, material, c := begin(t, r, "put", alice)
 
 	l := manuallock.Lock{Since: now(), Target: target, Holder: alice, Reason: testReason}
-	if err := s.PutLock(idempotency.WithCompletion(t.Context(), c), l, f.ns.Fence(), lockAudit(f.ns.Fence())); err != nil {
+	if err := s.PutLock(
+		idempotency.WithCompletion(t.Context(), c),
+		l,
+		f.ns.Fence(),
+		lockAudit(f.ns.Fence()),
+	); err != nil {
 		t.Fatalf("PutLock: %v", err)
 	}
 
