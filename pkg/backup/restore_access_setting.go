@@ -19,6 +19,11 @@ import (
 // authentication.
 const SettingRestoreAccessTables = "restore.replace-access-tables"
 
+// RestoreAccessSettingDefault is the effective text of the restore access
+// setting when no row stores it. A store records it as the value after a swap
+// whose restored settings hold no row for the key.
+const RestoreAccessSettingDefault = "false"
+
 // ErrRestoreAccessSetting reports a stored value of the restore access setting
 // that is not true or false.
 var ErrRestoreAccessSetting = errors.New("invalid restore access setting")
@@ -56,7 +61,7 @@ func RestoreAccessSettingDeclarations() []setting.Declaration {
 	return []setting.Declaration{
 		{
 			Key: SettingRestoreAccessTables, Level: setting.LevelInstallation, Kind: setting.KindBool,
-			Default: "false", Secret: false, Database: true,
+			Default: RestoreAccessSettingDefault, Secret: false, Database: true,
 			StaticCredentialHost: false, Apply: setting.ApplyLive,
 			Check: func(value string) error {
 				_, err := newRestoreAccessSetting(value)
@@ -197,10 +202,11 @@ func settingModeText(d SwapDecision) string {
 // settingAuditEntry returns the setting-change entry of a restore that took a
 // new value of the restore access setting from its backup, or false when the
 // swap kept the live row or the value is the same. The entry has the form of a
-// change by the settings API: the key, the old and the new value.
-func (s *RestoreService) settingAuditEntry(
-	ctx context.Context, op durable.Operation, in restoreInput,
-) (audit.Entry, bool) {
+// change by the settings API: the key, the old and the new value. It reads
+// both values from the record of the swap step, which the store wrote in the
+// swap transaction, and never reads the live setting, so a change after the
+// swap, or an error of a read, cannot change or drop the entry.
+func (s *RestoreService) settingAuditEntry(op durable.Operation, in restoreInput) (audit.Entry, bool) {
 	var none audit.Entry
 
 	rec, ok := op.Step(RestoreStepSwap)
@@ -209,12 +215,8 @@ func (s *RestoreService) settingAuditEntry(
 	}
 
 	d, err := DecodeRestoreSwapDecision(rec.Result)
-	if err != nil || len(d.KeepSettingKeys) > 0 || s.accessSetting == nil {
-		return none, false
-	}
-
-	after, err := s.accessSetting(ctx)
-	if err != nil || d.SettingBefore == "" || after == d.SettingBefore {
+	if err != nil || len(d.KeepSettingKeys) > 0 || d.SettingBefore == "" || d.SettingAfter == "" ||
+		d.SettingAfter == d.SettingBefore {
 		return none, false
 	}
 
@@ -223,7 +225,7 @@ func (s *RestoreService) settingAuditEntry(
 	entry.Action = string(identity.ActionServerManageSettings)
 	entry.Reason = "restore " + in.ID.String() + " took the value from backup " + in.BackupID.String()
 	entry.Changes = []audit.Change{{
-		Key: SettingRestoreAccessTables, Old: &old, New: after, Layer: "database", TakesEffect: "",
+		Key: SettingRestoreAccessTables, Old: &old, New: d.SettingAfter, Layer: "database", TakesEffect: "",
 	}}
 
 	return entry, true

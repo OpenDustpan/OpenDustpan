@@ -118,3 +118,43 @@ func writeStagedSettingRows(ctx context.Context, tx *sql.Tx, rows []liveSettingR
 
 	return nil
 }
+
+// stagedSettingText returns the text of the restore access setting in the
+// staged file of tx, or the default when the file has no row for the key.
+func stagedSettingText(ctx context.Context, tx *sql.Tx) (string, error) {
+	var value string
+
+	err := tx.QueryRowContext(
+		ctx, `SELECT value FROM main.settings WHERE scope_id = ? AND key = ?`,
+		serverScopeID, backup.SettingRestoreAccessTables,
+	).Scan(&value)
+
+	switch {
+	case err == nil:
+		return value, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return backup.RestoreAccessSettingDefault, nil
+	default:
+		return "", fmt.Errorf("read staged setting row: %w", backup.ErrExportRead)
+	}
+}
+
+// withStagedSetting returns d with the value of the restore access setting
+// after the swap, read from the file that becomes live, in the transaction
+// that records the step. A swap that keeps the live row records no value.
+func withStagedSetting(ctx context.Context, tx *sql.Tx, d backup.SwapDecision) (backup.SwapDecision, error) {
+	d.SettingAfter = ""
+
+	if len(d.KeepSettingKeys) > 0 {
+		return d, nil
+	}
+
+	value, err := stagedSettingText(ctx, tx)
+	if err != nil {
+		return d, err
+	}
+
+	d.SettingAfter = value
+
+	return d, nil
+}

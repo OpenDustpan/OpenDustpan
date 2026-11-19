@@ -39,6 +39,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // The paths of the restore routes.
@@ -222,7 +223,7 @@ func (h *Handler) startRestore(
 	h.appendServerChange(r, p, serverChange{
 		at:      time.Now().UTC(),
 		action:  identity.ActionServerRestore,
-		object:  restoreAuditObject(id.String(), req.BackupID, callerAccess),
+		object:  restoreAuditObject(id.String(), req.BackupID, callerAccess, h.requestSettingText(ctx)),
 		outcome: audit.OutcomeSuccess,
 	})
 
@@ -256,13 +257,37 @@ func canReplaceAccess(
 	return true
 }
 
+// requestSettingText says what the server read of the restore access setting
+// at the request. It is a fact about the request. The swap can see another
+// value, and the entry of the swap records that one. A value that is not true
+// or false is not copied into the entry.
+func (h *Handler) requestSettingText(ctx context.Context) string {
+	if h.settings == nil {
+		return backup.SettingRestoreAccessTables + " was not read at the request: the server keeps no settings"
+	}
+
+	item, err := h.settings.Effective(ctx, setting.InstallationScope(), backup.SettingRestoreAccessTables)
+	if err != nil {
+		return backup.SettingRestoreAccessTables + " was not read at the request: the read failed"
+	}
+
+	switch item.Value {
+	case "true", "false":
+		return backup.SettingRestoreAccessTables + " was " + item.Value + " at the request"
+	default:
+		return backup.SettingRestoreAccessTables + " had a value at the request that is not true or false"
+	}
+}
+
 // restoreAuditObject names the request of one restore for its audit entry. It
-// records that the server accepted the request and whether the caller holds
-// server:restore-access. It does not claim what the swap does to the access
-// tables: a caller without the action replaces them when the restore access
-// setting is on at the swap, and the entry of the swap records the result.
-func restoreAuditObject(restoreID, backupID, callerAccess string) string {
-	return "restore " + restoreID + " of backup " + backupID + " requested (" + callerAccess + ")"
+// records that the server accepted the request, whether the caller holds
+// server:restore-access, and the value of the restore access setting that the
+// server read at the request. It does not claim what the swap does to the
+// access tables: a caller without the action replaces them when the setting is
+// on at the swap, and the entry of the swap records the value at the swap.
+func restoreAuditObject(restoreID, backupID, callerAccess, settingAtRequest string) string {
+	return "restore " + restoreID + " of backup " + backupID + " requested (" + callerAccess + "); " +
+		settingAtRequest + "; the swap entry records the value at the swap"
 }
 
 // parseStartRestoreRequest decodes the start body: the whole body must be one

@@ -72,6 +72,11 @@ type Store struct {
 	// open and prove that the claim of the restore stays renewable. Nil in
 	// production.
 	swapHook func(ctx context.Context)
+	// swapAfterKeepHook, when set, runs in the swap transaction after the
+	// keeps of the live rows. A non-nil error fails the swap, and the
+	// transaction rolls back. Tests set it to prove that a retry of a swap
+	// starts again from the staged schema. Nil in production.
+	swapAfterKeepHook func(ctx context.Context) error
 	// betweenProfileReads, when set, runs once in the next read of a profile
 	// revision, between the read of the profile and the read of the revision,
 	// inside the snapshot. Tests run a restore swap there. Nil in production.
@@ -252,6 +257,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		stagingSchema:       "",
 		keepAccessHook:      nil,
 		swapHook:            nil,
+		swapAfterKeepHook:   nil,
 		betweenProfileReads: atomic.Pointer[func()]{},
 		snapshotBegin:       snapshotBeginQuery(live),
 		beforeLockDelete:    nil,
@@ -271,15 +277,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		now:                 time.Now,
 	}
 
-	for _, opt := range opts {
-		opt(s)
-	}
-
-	if s.tracer != nil {
-		cfg.ConnConfig.Tracer = s.tracer
-	}
-
-	cfg.AfterRelease, cfg.BeforeClose = s.marks.afterRelease, s.marks.beforeClose
+	s.applyOptions(cfg, opts)
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -1734,4 +1732,18 @@ func recordMigration(ctx context.Context, tx pgx.Tx, m migrate.Migration) error 
 	}
 
 	return nil
+}
+
+// applyOptions applies opts to s, and sets the tracer and the long-mark
+// callbacks of s on the pool configuration cfg.
+func (s *Store) applyOptions(cfg *pgxpool.Config, opts []Option) {
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	if s.tracer != nil {
+		cfg.ConnConfig.Tracer = s.tracer
+	}
+
+	cfg.AfterRelease, cfg.BeforeClose = s.marks.afterRelease, s.marks.beforeClose
 }

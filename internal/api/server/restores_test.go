@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -972,14 +973,101 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			checkAccessModeAuditEntry(t, tc.deny, tc.want)
+			checkAccessModeAuditEntry(t, tc.deny, nil, tc.want)
 		})
 	}
 }
 
+// TestStartRestoreAuditEntryNamesTheSettingAtTheRequest proves that the start
+// entry names the value of the restore access setting that the server read at
+// the request, labeled as the value at the request and not as the swap.
+func TestStartRestoreAuditEntryNamesTheSettingAtTheRequest(t *testing.T) {
+	t.Parallel()
+
+	const tail = "; the swap entry records the value at the swap"
+
+	for _, tc := range []struct {
+		name string
+		// set is the value of the setting; "" builds no settings service and
+		// "default" leaves the row absent.
+		set  string
+		want string
+	}{
+		{
+			name: "no settings service", set: "",
+			want: "restore.replace-access-tables was not read at the request: the server keeps no settings" + tail,
+		},
+		{name: "the default", set: "default", want: "restore.replace-access-tables was false at the request" + tail},
+		{name: "on", set: "true", want: "restore.replace-access-tables was true at the request" + tail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var svc *setting.Service
+			if tc.set != "" {
+				svc = restoreSettingServiceOf(t, tc.set)
+			}
+
+			checkSettingAtRequestEntry(t, svc, tc.want)
+		})
+	}
+}
+
+// checkSettingAtRequestEntry starts a restore on a handler with the settings
+// service svc and proves that the start entry holds want.
+func checkSettingAtRequestEntry(t *testing.T, svc *setting.Service, want string) {
+	t.Helper()
+
+	checkAccessModeAuditEntry(t, map[identity.Action]bool{}, svc, want)
+}
+
+// restoreSettingServiceOf returns a settings service over a new store with the
+// declaration of the restore access setting, with value set through a patch
+// with a fresh authentication. "default" sets nothing.
+func restoreSettingServiceOf(t *testing.T, value string) *setting.Service {
+	t.Helper()
+
+	reg, err := setting.NewRegistry(backup.RestoreAccessSettingDeclarations())
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	st := openBackupDeps(t).registry
+	svc := setting.NewService(
+		st.SettingStore(),
+		reg,
+		nil,
+		st,
+		func() time.Time { return time.UnixMilli(1_700_000_000_000) },
+	)
+
+	if value == "default" {
+		return svc
+	}
+
+	entry := audit.Entry{
+		At: time.UnixMilli(1), Namespace: audit.ServerScope, Subject: "alice", IDPSubject: "", TokenID: "",
+		Action: "", Object: audit.ServerScope.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+
+	patch := setting.Patch{{Key: backup.SettingRestoreAccessTables, Value: value, Delete: false}}
+
+	_, err = svc.Patch(
+		t.Context(), setting.InstallationScope(), patch, setting.PatchRequest{Entry: entry, IfMatch: 0, Fresh: true},
+	)
+	if err != nil {
+		t.Fatalf("set the restore access setting: %v", err)
+	}
+
+	return svc
+}
+
 // checkAccessModeAuditEntry starts a restore with deny controlling
 // server:restore-access and proves the restore audit entry names want.
-func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want string) {
+func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, settings *setting.Service, want string) {
 	t.Helper()
 
 	stores := openBackupDeps(t)
@@ -1044,7 +1132,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
-		Settings:         nil,
+		Settings:         settings,
 		GitHost:          nil,
 		Idempotency:      nil,
 		Workers:          nil,

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -167,6 +168,7 @@ func TestRestoreSettingChangeEntry(t *testing.T) {
 
 			box := &settingBox{mu: sync.Mutex{}, text: tc.before}
 			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AccessSetting = box.read })
+			setup.live.backupSetting = tc.next
 			// The swap takes the value of the backup.
 			setup.live.swapHook = func(int) error {
 				box.set(tc.next)
@@ -183,6 +185,132 @@ func TestRestoreSettingChangeEntry(t *testing.T) {
 				t.Fatalf("setting-change entries = %+v, want none", found)
 			}
 		})
+	}
+}
+
+// afterSwapReader returns a reader of the setting that answers before at its
+// first call, the read of the decision, and then runs later: the reads after
+// the swap. A change entry that does not depend on a later read gives the
+// same entry whatever later does.
+func afterSwapReader(before string, later func() (string, error)) func(context.Context) (string, error) {
+	var calls atomic.Int32
+
+	return func(context.Context) (string, error) {
+		if calls.Add(1) == 1 {
+			return before, nil
+		}
+
+		return later()
+	}
+}
+
+// TestRestoreSettingChangeEntryComesFromTheSwapRecord proves that the entry of
+// a taken value comes from the record of the swap and not from a read after
+// the swap: a read error, a change by a patch between the swap and the
+// after-apply step, and a value set back to the old one leave the entry that
+// the record gives.
+func TestRestoreSettingChangeEntryComesFromTheSwapRecord(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		later func() (string, error)
+	}{
+		{name: "a read error after the swap", later: func() (string, error) { return "", errAccessSettingRead }},
+		{name: "a patch changes the value after the swap", later: func() (string, error) { return "maybe", nil }},
+		{name: "a patch sets the value back to the old one", later: func() (string, error) { return "false", nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			read := afterSwapReader("false", tc.later)
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AccessSetting = read })
+			setup.live.backupSetting = "true"
+
+			runStartedRestore(t, setup, false)
+
+			checkSettingChange(t, settingChangeEntries(setup), "false", "true")
+		})
+	}
+}
+
+// TestRestoreSwapRecordHostileDecode proves the decoder of the swap record
+// refuses a record that shows a swap that took the restore setting while it
+// kept or widened the access tables, and a record that is both kept and
+// widened. Each case sends the bytes to the decoder alone.
+func TestRestoreSwapRecordHostileDecode(t *testing.T) {
+	t.Parallel()
+
+	const (
+		head = `{"droppedTempAdmins":0,`
+		tail = `"settingBefore":"false","settingAfter":""}`
+	)
+
+	for _, tc := range []struct {
+		name, record string
+	}{
+		{"kept and widened", head + `"keepAccessTables":true,"widened":true,"keepSettingKeys":["restore.replace-access-tables"],` + tail},
+		{"kept without the setting key", head + `"keepAccessTables":true,"widened":false,"keepSettingKeys":[],` + tail},
+		{"widened without the setting key", head + `"keepAccessTables":false,"widened":true,"keepSettingKeys":[],` + tail},
+		{"kept with another key", head + `"keepAccessTables":true,"widened":false,"keepSettingKeys":["other"],` + tail},
+		{"kept with a null key list", head + `"keepAccessTables":true,"widened":false,"keepSettingKeys":null,` + tail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := backup.DecodeRestoreSwapDecision([]byte(tc.record)); !errors.Is(err, backup.ErrCorrupt) {
+				t.Fatalf("decode %s = %v, want ErrCorrupt", tc.name, err)
+			}
+
+			if _, err := backup.DecodeRestoreSwap([]byte(tc.record)); !errors.Is(err, backup.ErrCorrupt) {
+				t.Fatalf("decode kept result of %s = %v, want ErrCorrupt", tc.name, err)
+			}
+		})
+	}
+
+	for _, ok := range []string{
+		head + `"keepAccessTables":false,"widened":false,"keepSettingKeys":[],` + tail,
+		head + `"keepAccessTables":true,"widened":false,"keepSettingKeys":["restore.replace-access-tables"],` + tail,
+		head + `"keepAccessTables":false,"widened":true,"keepSettingKeys":["restore.replace-access-tables"],` + tail,
+	} {
+		if _, err := backup.DecodeRestoreSwapDecision([]byte(ok)); err != nil {
+			t.Fatalf("decode %s = %v, want nil", ok, err)
+		}
+	}
+}
+
+// decisionOf returns a decision with the three fields that the rule checks.
+func decisionOf(keepAccess, widened bool, keys []string) backup.SwapDecision {
+	return backup.SwapDecision{
+		KeepAccessTables: keepAccess, Widened: widened, KeepSettingKeys: keys, SettingBefore: "", SettingAfter: "",
+	}
+}
+
+// TestValidateSwapDecisionHostile proves the check of the store layer: it
+// refuses a decision that is both kept and widened, and one that keeps or
+// widens the access tables without the live row of each kept setting key.
+func TestValidateSwapDecisionHostile(t *testing.T) {
+	t.Parallel()
+
+	keys := backup.KeptSettingKeys()
+
+	for _, tc := range []struct {
+		name string
+		d    backup.SwapDecision
+		ok   bool
+	}{
+		{"plain replace", backup.PlainSwap(false), true},
+		{"plain keep", backup.PlainSwap(true), true},
+		{"widened with the key", decisionOf(false, true, keys), true},
+		{"kept and widened", decisionOf(true, true, keys), false},
+		{"kept without the key", decisionOf(true, false, nil), false},
+		{"widened without the key", decisionOf(false, true, nil), false},
+		{"widened with another key", decisionOf(false, true, []string{"x"}), false},
+	} {
+		err := backup.ValidateSwapDecision(tc.d)
+		if tc.ok && err != nil || !tc.ok && !errors.Is(err, backup.ErrCorrupt) {
+			t.Fatalf("%s: error = %v, want ok %v", tc.name, err, tc.ok)
+		}
 	}
 }
 

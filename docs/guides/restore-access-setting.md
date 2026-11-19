@@ -78,8 +78,12 @@ A restore reads the setting once, at the start of the swap, and records the
 decision in the same transaction as the swap. A change after that read does not
 change the running restore. If the swap step runs again before it commits, it
 reads the setting again, and the record always names the swap that happened.
-The restore entry in the audit log says what the swap did to the access tables
-and to the setting. When the setting is on and the caller did not hold
+The entry that the server writes when it accepts the request names the value
+of the setting that the server read at the request. It does not say what the
+swap did. The restore entry in the audit log says what the swap did to the
+access tables and to the setting. The server writes the setting-change entry of
+a value that the swap took from the backup from the record of the swap, so a
+change of the setting after the swap does not change that entry. When the setting is on and the caller did not hold
 `server:restore-access`, the entry says that the restore replaced the access
 tables because the setting is on. The restore still refuses a result with fewer
 than two working break-glass paths.

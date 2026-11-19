@@ -459,11 +459,20 @@ func (l *restoreServiceLive) ApplyRestoreArea(
 		return backup.KeepAccessResult{}, err
 	}
 
+	// Like a store: the value after the swap is the value of the backup when
+	// the swap kept no setting row. The store records it in the swap step.
 	l.mu.Lock()
+	recorded := d
+
+	recorded.SettingAfter = ""
+	if len(d.KeepSettingKeys) == 0 {
+		recorded.SettingAfter = l.backupSetting
+	}
+
 	l.decisions = append(l.decisions, d)
 	l.mu.Unlock()
 
-	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept, d))
+	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept, recorded))
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging.

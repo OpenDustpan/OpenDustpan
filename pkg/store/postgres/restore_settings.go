@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -43,4 +44,45 @@ func keepLiveSettings(ctx context.Context, tx pgx.Tx, live, staging string, keys
 	}
 
 	return nil
+}
+
+// swappedSettingText returns the text of the restore access setting in the
+// live schema of tx, or the default when the schema has no row for the key.
+func swappedSettingText(ctx context.Context, tx pgx.Tx) (string, error) {
+	var value string
+
+	err := tx.QueryRow(
+		ctx, `SELECT value FROM settings WHERE scope_id = $1 AND key = $2`,
+		serverScopeID, backup.SettingRestoreAccessTables,
+	).Scan(&value)
+
+	switch {
+	case err == nil:
+		return value, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return backup.RestoreAccessSettingDefault, nil
+	default:
+		return "", fmt.Errorf("read swapped setting row: %w", backup.ErrExportRead)
+	}
+}
+
+// withSwappedSetting returns d with the value of the restore access setting
+// after the swap, read from the live schema in the swap transaction, after the
+// swap and before the step record. A swap that keeps the live row records no
+// value.
+func withSwappedSetting(ctx context.Context, tx pgx.Tx, d backup.SwapDecision) (backup.SwapDecision, error) {
+	d.SettingAfter = ""
+
+	if len(d.KeepSettingKeys) > 0 {
+		return d, nil
+	}
+
+	value, err := swappedSettingText(ctx, tx)
+	if err != nil {
+		return d, err
+	}
+
+	d.SettingAfter = value
+
+	return d, nil
 }

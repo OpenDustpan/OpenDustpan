@@ -810,6 +810,13 @@ func (s *Store) dropAreas(ctx context.Context, drop func(backup.StagingArea) boo
 func (s *Store) ApplyRestoreArea(
 	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
+	// Defense in depth: the service and the decoder of the swap record check
+	// the decision too; this check stays so that no caller of the store
+	// replaces the access tables without the live row of each kept setting.
+	if err := backup.ValidateSwapDecision(d); err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
 	schema, err := areaSchema(a)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
@@ -854,7 +861,12 @@ func (s *Store) ApplyRestoreArea(
 				return fenceErr
 			}
 
-			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, d))
+			recorded, recordErr := withSwappedSetting(ctx, tx, d)
+			if recordErr != nil {
+				return recordErr
+			}
+
+			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, recorded))
 		},
 	}
 

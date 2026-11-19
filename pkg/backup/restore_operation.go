@@ -691,12 +691,57 @@ type SwapDecision struct {
 	// SettingBefore is the effective text of SettingRestoreAccessTables
 	// before the swap. It is empty when the service did not read it.
 	SettingBefore string
+	// SettingAfter is the text of SettingRestoreAccessTables after the swap,
+	// when the swap took the row from the backup. The store reads it from the
+	// staged row in the swap transaction and records it; the service sets no
+	// value, and the store overwrites any value that it gets. It is empty when
+	// the swap kept the live row.
+	SettingAfter string
 }
 
-// PlainSwap returns the decision of a swap that keeps no setting row and does
-// not widen: it keeps the access tables when keepAccess is true.
+// PlainSwap returns the decision of a swap that does not widen: it keeps the
+// access tables when keepAccess is true. A swap that keeps the access tables
+// also keeps the rows of KeptSettingKeys, as ValidateSwapDecision requires.
 func PlainSwap(keepAccess bool) SwapDecision {
-	return SwapDecision{KeepAccessTables: keepAccess, Widened: false, KeepSettingKeys: nil, SettingBefore: ""}
+	kept := map[bool][]string{false: nil, true: KeptSettingKeys()}
+
+	return SwapDecision{
+		KeepAccessTables: keepAccess, Widened: false, KeepSettingKeys: kept[keepAccess], SettingBefore: "",
+		SettingAfter: "",
+	}
+}
+
+// ValidateSwapDecision returns ErrCorrupt for a decision that the store must
+// not apply: a decision that is both widened and keeping the access tables, or
+// one that keeps or widens the access tables without keeping the live row of
+// each key of KeptSettingKeys. Such a decision lets a backup set the setting
+// that widens a later restore.
+func ValidateSwapDecision(d SwapDecision) error {
+	if !swapDecisionConsistent(d) {
+		return fmt.Errorf("%w: the swap decision does not keep the restore setting rows", ErrCorrupt)
+	}
+
+	return nil
+}
+
+// swapDecisionConsistent is the rule of ValidateSwapDecision. It also checks
+// the decision of a decoded step result.
+func swapDecisionConsistent(d SwapDecision) bool {
+	if d.Widened && d.KeepAccessTables {
+		return false
+	}
+
+	if !d.KeepAccessTables && !d.Widened {
+		return true
+	}
+
+	for _, want := range KeptSettingKeys() {
+		if !slices.Contains(d.KeepSettingKeys, want) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // restoreSwapResult is the result that ApplyRestoreArea records with the
@@ -707,6 +752,7 @@ type restoreSwapResult struct {
 	Widened           bool     `json:"widened"`
 	KeepSettingKeys   []string `json:"keepSettingKeys"`
 	SettingBefore     string   `json:"settingBefore"`
+	SettingAfter      string   `json:"settingAfter"`
 }
 
 // EncodeRestoreSwap returns the step result that ApplyRestoreArea records
@@ -719,12 +765,12 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 
 	out, err := json.Marshal(restoreSwapResult{
 		DroppedTempAdmins: kept.DroppedTempAdmins, KeepAccessTables: d.KeepAccessTables, Widened: d.Widened,
-		KeepSettingKeys: keys, SettingBefore: d.SettingBefore,
+		KeepSettingKeys: keys, SettingBefore: d.SettingBefore, SettingAfter: d.SettingAfter,
 	})
 	if err != nil {
 		// A struct of integers, booleans and strings always encodes.
 		return []byte(`{"droppedTempAdmins":0,"keepAccessTables":true,` +
-			`"widened":false,"keepSettingKeys":[],"settingBefore":""}`)
+			`"widened":false,"keepSettingKeys":[],"settingBefore":"","settingAfter":""}`)
 	}
 
 	return out
@@ -751,7 +797,7 @@ func DecodeRestoreSwapDecision(result []byte) (SwapDecision, error) {
 
 	return SwapDecision{
 		KeepAccessTables: out.KeepAccessTables, Widened: out.Widened,
-		KeepSettingKeys: out.KeepSettingKeys, SettingBefore: out.SettingBefore,
+		KeepSettingKeys: out.KeepSettingKeys, SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter,
 	}, nil
 }
 
@@ -761,8 +807,14 @@ func parseRestoreSwap(result []byte) (restoreSwapResult, error) {
 	decoder := json.NewDecoder(bytes.NewReader(result))
 	decoder.DisallowUnknownFields()
 
+	// Defense in depth: the service and the store check the decision too; this
+	// check stays so that a stored result cannot show a swap that took the
+	// restore setting with the access tables kept or widened.
 	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 ||
-		(out.Widened && out.KeepAccessTables) {
+		!swapDecisionConsistent(SwapDecision{
+			KeepAccessTables: out.KeepAccessTables, Widened: out.Widened, KeepSettingKeys: out.KeepSettingKeys,
+			SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter,
+		}) {
 		return restoreSwapResult{}, fmt.Errorf("%w: the result of the swap step does not decode", ErrCorrupt)
 	}
 

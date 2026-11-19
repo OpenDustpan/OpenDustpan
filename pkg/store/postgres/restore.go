@@ -290,6 +290,12 @@ func (s *Store) swapIn(
 		return err
 	}
 
+	if s.swapAfterKeepHook != nil {
+		if hookErr := s.swapAfterKeepHook(ctx); hookErr != nil {
+			return hookErr
+		}
+	}
+
 	if in.plan.keepAccess {
 		n, err := s.keepAccessTx(ctx, tx, srv, in.live, in.plan)
 

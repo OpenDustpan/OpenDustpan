@@ -105,6 +105,10 @@ type restoreServiceLive struct {
 	// swapHook runs at the start of each ApplyRestoreArea call with the number
 	// of the attempt, from 1, and its error fails the call before any change.
 	swapHook func(attempt int) error
+	// backupSetting is the text of the restore access setting in the backup:
+	// the value that a swap that keeps no setting row records as the value
+	// after the swap.
+	backupSetting string
 	// swapAttempts counts the ApplyRestoreArea calls, and decisions holds the
 	// decision of each call that applied.
 	swapAttempts int
@@ -2018,23 +2022,24 @@ func emptyReport() backup.DevStripReport {
 // data.
 func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry) *restoreServiceLive {
 	return &restoreServiceLive{
-		checks:       checks,
-		registry:     regs,
-		mu:           sync.Mutex{},
-		stageBlock:   nil,
-		applyGate:    nil,
-		stageCalls:   0,
-		staged:       nil,
-		keeps:        nil,
-		dropReport:   nil,
-		applied:      0,
-		kept:         0,
-		bumped:       0,
-		keepingErr:   nil,
-		applyErr:     nil,
-		swapHook:     nil,
-		swapAttempts: 0,
-		decisions:    nil,
+		checks:        checks,
+		registry:      regs,
+		mu:            sync.Mutex{},
+		stageBlock:    nil,
+		applyGate:     nil,
+		stageCalls:    0,
+		staged:        nil,
+		keeps:         nil,
+		dropReport:    nil,
+		applied:       0,
+		kept:          0,
+		bumped:        0,
+		keepingErr:    nil,
+		applyErr:      nil,
+		swapHook:      nil,
+		backupSetting: "",
+		swapAttempts:  0,
+		decisions:     nil,
 		dev: devLiveState{
 			kind: installation.KindProduction, kindErr: nil, detect: emptyReport(), remove: emptyReport(),
 			stripErr: map[backup.DevStripMode]error{}, dropped: 0, order: nil, appendErr: nil,

@@ -811,6 +811,13 @@ func (s *Store) removeAreas(drop func(backup.StagingArea) bool) error {
 func (s *Store) ApplyRestoreArea(
 	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
+	// Defense in depth: the service and the decoder of the swap record check
+	// the decision too; this check stays so that no caller of the store
+	// replaces the access tables without the live row of each kept setting.
+	if err := backup.ValidateSwapDecision(d); err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
 	path, err := s.areaPath(a)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
@@ -834,27 +841,16 @@ func (s *Store) ApplyRestoreArea(
 					return fenceErr
 				}
 
-				// The swap runs only in maintenance mode, so no tool traffic
-				// writes during it. The store write lock holds the state
-				// until the rename.
-				state, stateErr := q.GetInstallationState(ctx)
-				if stateErr != nil {
-					return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
-				}
-
-				if maintenance.State(state) != maintenance.StateMaintenance {
-					return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
-				}
-
-				if _, statErr := os.Stat(path); statErr != nil {
-					return fmt.Errorf("apply staging area %s: %w", a, backup.ErrCorrupt)
-				}
-
-				return nil
+				return checkSwapState(ctx, q, a, path)
 			}, nil)
 		},
 		after: func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error {
-			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, d))
+			recorded, recordErr := withStagedSetting(ctx, tx, d)
+			if recordErr != nil {
+				return recordErr
+			}
+
+			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, recorded))
 		},
 	}
 
@@ -864,6 +860,27 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
+}
+
+// checkSwapState checks that the installation is in maintenance mode and that
+// the staged file at path exists. The swap runs only in maintenance mode, so
+// no tool traffic writes during it. The store write lock holds the state until
+// the rename.
+func checkSwapState(ctx context.Context, q *db.Queries, a backup.StagingArea, path string) error {
+	state, err := q.GetInstallationState(ctx)
+	if err != nil {
+		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	if maintenance.State(state) != maintenance.StateMaintenance {
+		return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
+	}
+
+	if _, statErr := os.Stat(path); statErr != nil {
+		return fmt.Errorf("apply staging area %s: %w", a, backup.ErrCorrupt)
+	}
+
+	return nil
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging. SQLite keeps no old

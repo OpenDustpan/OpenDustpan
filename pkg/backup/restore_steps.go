@@ -1209,7 +1209,7 @@ func (s *RestoreService) afterApplyEntries(
 
 	entries := []audit.Entry{own}
 
-	if settingEntry, ok := s.settingAuditEntry(ctx, op, in); ok {
+	if settingEntry, ok := s.settingAuditEntry(op, in); ok {
 		entries = append(entries, settingEntry)
 	}
 
