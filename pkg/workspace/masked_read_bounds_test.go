@@ -192,7 +192,7 @@ func refusedAllocation(t *testing.T, state string) uint64 {
 
 	data := []byte(state)
 
-	runtime.GC() //nolint:revive // The count starts from a collected heap, so the garbage of earlier tests is not counted.
+	runtime.GC()
 
 	var before, after runtime.MemStats
 
@@ -212,9 +212,11 @@ func refusedAllocation(t *testing.T, state string) uint64 {
 // TestMaskedPathsRefusalBuildsNoPath proves that a refusal of the work bound
 // builds no path: the memory that the refusal allocates stays far below what
 // the paths of the same document would need.
-//
-//nolint:paralleltest // The test counts the allocation of the process, so no other test may run at the same time.
 func TestMaskedPathsRefusalBuildsNoPath(t *testing.T) {
+	// The test counts the allocation of the process, so no other test may run
+	// at the same time. t.Setenv forbids t.Parallel, so the test runs alone.
+	t.Setenv("DUSTPAN_ALLOC_TEST", "1")
+
 	const limit = 8 << 20
 
 	tests := []struct {
@@ -366,11 +368,18 @@ func TestMaskedReadUnknownShapeFailsClosed(t *testing.T) {
 // singleShotCtx is a context whose Err answers the deadline on the call number
 // at and nil on every other call. It counts the calls.
 type singleShotCtx struct {
-	context.Context //nolint:containedctx // The wrapper must satisfy context.Context, so it embeds the real one.
-
 	calls *atomic.Int64
 	at    int64
 }
+
+// Deadline implements context.Context: the context has no deadline of its own.
+func (c singleShotCtx) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+// Done implements context.Context: the context is never canceled by itself.
+func (c singleShotCtx) Done() <-chan struct{} { return nil }
+
+// Value implements context.Context: the context holds no value.
+func (c singleShotCtx) Value(any) any { return nil }
 
 // Err implements context.Context.
 func (c singleShotCtx) Err() error {
@@ -396,7 +405,7 @@ func TestMaskedReadNeverAnswersPastTheDeadline(t *testing.T) {
 
 	count := &atomic.Int64{}
 
-	if _, err := h.read(singleShotCtx{Context: t.Context(), calls: count, at: 0}, latest(), ""); err != nil {
+	if _, err := h.read(singleShotCtx{calls: count, at: 0}, latest(), ""); err != nil {
 		t.Fatalf("read with no deadline: %v", err)
 	}
 
@@ -409,7 +418,7 @@ func TestMaskedReadNeverAnswersPastTheDeadline(t *testing.T) {
 	}
 
 	for k := int64(1); k <= total; k++ {
-		page, err := h.read(singleShotCtx{Context: t.Context(), calls: &atomic.Int64{}, at: k}, latest(), "")
+		page, err := h.read(singleShotCtx{calls: &atomic.Int64{}, at: k}, latest(), "")
 		if err == nil {
 			t.Errorf("deadline at check %d of %d: read answered a page with %d markers", k, total, len(page.Markers))
 		}
@@ -424,12 +433,12 @@ func TestMaskedReadDeadlineAfterTheWalkReportsTheDeadline(t *testing.T) {
 	h, _ := newMaskedHostile(t, stateWithAttributes(`{"k":[0,1]}`), 4<<20)
 
 	count := &atomic.Int64{}
-	if _, err := h.read(singleShotCtx{Context: t.Context(), calls: count, at: 0}, latest(), ""); err != nil {
+	if _, err := h.read(singleShotCtx{calls: count, at: 0}, latest(), ""); err != nil {
 		t.Fatalf("read with no deadline: %v", err)
 	}
 
 	// The last check of the read is the one after the walk.
-	_, err := h.read(singleShotCtx{Context: t.Context(), calls: &atomic.Int64{}, at: count.Load()}, latest(), "")
+	_, err := h.read(singleShotCtx{calls: &atomic.Int64{}, at: count.Load()}, latest(), "")
 	if !errors.Is(err, workspace.ErrReadDeadline) {
 		t.Fatalf("err = %v, want ErrReadDeadline", err)
 	}

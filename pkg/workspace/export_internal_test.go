@@ -38,6 +38,15 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 	return maskedResourcePaths(context.Background(), state, marks)
 }
 
+// MaskedPathsContext is MaskedPaths with the context of the read, for the tests.
+func MaskedPathsContext(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	return maskedResourcePaths(ctx, state, marks)
+}
+
+// MaskedMaxDuplicateWork is the most comparisons of the duplicate pass of one
+// instance, for the tests.
+const MaskedMaxDuplicateWork = maskedMaxDuplicateWork
+
 // MaskedCursorSpec names what a test cursor of the masked read binds.
 type MaskedCursorSpec struct {
 	Unit    string

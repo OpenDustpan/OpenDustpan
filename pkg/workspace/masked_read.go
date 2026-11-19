@@ -66,6 +66,12 @@ const maskedMaxMarkers = 10000
 // holds its whole prefix, so a long key above many values would multiply.
 const maskedMaxPathBytes = 32 << 20
 
+// maskedMaxDuplicateWork is the most comparisons of one instance for the
+// duplicate pass of a masked read: its nodes times its propagable secrets.
+// The pass compares each node with each secret, so a state inside the other
+// bounds could still need minutes of CPU without this bound.
+const maskedMaxDuplicateWork = 50_000_000
+
 var (
 	// ErrBadPath is the refusal of a version, a value path or a cursor of a
 	// masked read that fails the boundary check. It carries no value of the
@@ -527,9 +533,13 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
-			_, paths := maskTofuInstance(
-				instance, entry.index, i, tofuInstanceAddress(entry.obj, instance), marks,
+			_, paths, err := maskTofuInstance(
+				ctx, instance, entry.index, i, tofuInstanceAddress(entry.obj, instance), marks,
 			)
+			if err != nil {
+				return nil, err
+			}
+
 			masked = append(masked, paths...)
 		}
 	}
@@ -589,6 +599,7 @@ func maskedCheckDepth(state []byte) error {
 type maskedWork struct {
 	markers     int
 	pathBytes   int
+	nodes       int
 	countLeaves bool
 }
 
@@ -604,19 +615,36 @@ func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
 			base := len("/resources/") + len(strconv.Itoa(entry.index)) +
 				len("/instances/") + len(strconv.Itoa(i)) + len("/attributes")
 
-			if len(marks) > 0 {
-				address := tofuInstanceAddress(entry.obj, instance)
-				work.markers += len(tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks))
-			}
-
 			attributes := instance["attributes"]
 			if attributes == nil {
 				// The masking replaces missing attributes with an empty object.
 				attributes = map[string]any{}
 			}
 
+			secrets := 0
+
+			if len(marks) > 0 {
+				address := tofuInstanceAddress(entry.obj, instance)
+				pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
+				work.markers += len(pointers)
+
+				for _, relative := range pointers {
+					if value, found := lookupPointer(attributes, relative); found && propagableSecret(value) {
+						secrets++
+					}
+				}
+			}
+
+			work.nodes = 0
+
 			if err := work.walk(attributes, base); err != nil {
 				return err
+			}
+
+			// The duplicate pass compares each node with each secret.
+			if secrets > 0 && work.nodes > maskedMaxDuplicateWork/secrets {
+				return fmt.Errorf("%w: %d values and %d secrets need more than %d comparisons",
+					ErrTooLarge, work.nodes, secrets, maskedMaxDuplicateWork)
 			}
 		}
 	}
@@ -628,6 +656,7 @@ func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
 // of v.
 func (w *maskedWork) walk(v any, pathLen int) error {
 	w.pathBytes += pathLen
+	w.nodes++
 
 	if w.pathBytes > maskedMaxPathBytes {
 		return fmt.Errorf("%w: the value paths need more than %d bytes", ErrTooLarge, maskedMaxPathBytes)

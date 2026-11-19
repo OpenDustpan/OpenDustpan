@@ -12,12 +12,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
-	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -216,7 +217,7 @@ func TestMaskedReadNestingScanIgnoresStrings(t *testing.T) {
 // allocDuring returns the bytes that fn allocates. The caller must not run in
 // parallel, because the counter holds the allocations of the whole process.
 func allocDuring(fn func()) uint64 {
-	runtime.GC() //nolint:revive // The count starts from a collected heap, so the garbage of earlier tests is not counted.
+	runtime.GC()
 
 	var before, after runtime.MemStats
 
@@ -283,9 +284,11 @@ func chainSecretsDoc(depth, n int) []byte {
 // path: the deep document and the document with too many markers allocate
 // less than the paths would take. It runs alone, because the counter of
 // allocations holds the whole process.
-//
-//nolint:paralleltest // The allocation counter holds the allocations of the whole process.
 func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
+	// The counter holds the allocations of the whole process, so no other test
+	// may run at the same time. t.Setenv forbids t.Parallel, so the test runs alone.
+	t.Setenv("DUSTPAN_ALLOC_TEST", "1")
+
 	// The decode of the document alone allocates about 11 MB. A build of the
 	// paths adds more than 30 MB, so the bound sits between the two.
 	const bound = 16 << 20
@@ -322,11 +325,18 @@ func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
 // shotContext reports a deadline on exactly the k-th call of Err, and no
 // error on the other calls. It counts the calls.
 type shotContext struct {
-	context.Context //nolint:containedctx // The wrapper must satisfy context.Context, so it embeds the real one.
-
 	calls *atomic.Int64
 	k     int64
 }
+
+// Deadline implements context.Context: the context has no deadline of its own.
+func (c shotContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+// Done implements context.Context: the context is never canceled by itself.
+func (c shotContext) Done() <-chan struct{} { return nil }
+
+// Value implements context.Context: the context holds no value.
+func (c shotContext) Value(any) any { return nil }
 
 // Err implements context.Context.
 func (c shotContext) Err() error {
@@ -334,7 +344,7 @@ func (c shotContext) Err() error {
 		return context.DeadlineExceeded
 	}
 
-	return c.Context.Err() //nolint:wrapcheck // The error is the one of the wrapped context, unchanged on purpose.
+	return nil
 }
 
 // minErrCalls is the number of calls of Err that one uninterrupted read of
@@ -354,7 +364,7 @@ func TestMaskedReadDeadlineSweep(t *testing.T) {
 
 	count := &atomic.Int64{}
 
-	counted := shotContext{Context: t.Context(), calls: count, k: 0}
+	counted := shotContext{calls: count, k: 0}
 
 	args := stack.ReadMaskedArgs{
 		Ref: r.f.ref, Object: r.obj, Selector: r.sel,
@@ -374,7 +384,7 @@ func TestMaskedReadDeadlineSweep(t *testing.T) {
 		sink := newSink()
 		args.Sink = sink.refusal
 
-		ctx := shotContext{Context: t.Context(), calls: &atomic.Int64{}, k: k}
+		ctx := shotContext{calls: &atomic.Int64{}, k: k}
 
 		page, err := r.f.svc.ReadMasked(ctx, args)
 		if err == nil || len(page.Markers) != 0 {
@@ -610,6 +620,21 @@ func TestMaskedReadNegativeOffset(t *testing.T) {
 	}
 }
 
+// uncalledReplayer is a journal replayer that fails the test when the read
+// calls it: the masked read must never replay a journal.
+type uncalledReplayer struct {
+	t *testing.T
+}
+
+// Replay implements stack.JournalReplayer.
+func (r uncalledReplayer) Replay(
+	context.Context, func(context.Context) (io.ReadCloser, error), [][]byte, io.Writer,
+) error {
+	r.t.Error("the masked read called the journal replayer")
+
+	return errors.New("replayer must not be called")
+}
+
 // TestMaskedReadSkipsRunningJournal proves the masked read serves stored
 // checkpoint rows only: the version of a running journaled update has no
 // row, so a pinned read of it is refused with no state, and the latest read
@@ -619,7 +644,7 @@ func TestMaskedReadSkipsRunningJournal(t *testing.T) {
 	t.Parallel()
 
 	clk := newClock()
-	f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+	f := newBuildFixture(t, clk, uncalledReplayer{t: t})
 	running := f.startJournaled(t)
 
 	obj, err := identity.UnitObject("pulumi", "acme", "web/dev")

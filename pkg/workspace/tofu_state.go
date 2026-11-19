@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -913,16 +914,47 @@ func propagableSecret(value any) bool {
 	}
 }
 
+// maskTickEvery is the number of nodes between two checks of the context in
+// the masking walks.
+const maskTickEvery = 4096
+
+// maskTicker counts the nodes that a masking walk visits and checks the
+// context every maskTickEvery nodes.
+type maskTicker struct {
+	nodes int
+}
+
+// tick counts one node. It answers ErrReadDeadline when the context is done.
+func (t *maskTicker) tick(ctx context.Context) error {
+	t.nodes++
+
+	if t.nodes%maskTickEvery == 0 && ctx.Err() != nil {
+		return ErrReadDeadline
+	}
+
+	return nil
+}
+
+// dupPass is the state of the duplicate pass of one instance: seen holds the
+// paths already masked, masked collects each new marker path and secrets
+// holds the masked secrets to compare with.
+type dupPass struct {
+	seen    map[string]bool
+	masked  *[]string
+	secrets []any
+	ticker  maskTicker
+}
+
 // maskDuplicateAt replaces child with a marker for path when it duplicates a
 // masked secret, and reports whether it replaced anything.
-func maskDuplicateAt(child any, path string, seen map[string]bool, masked *[]string, secrets []any) bool {
-	if seen[path] {
+func (p *dupPass) maskDuplicateAt(child any, path string) bool {
+	if p.seen[path] {
 		return false
 	}
 
-	for _, secret := range secrets {
+	for _, secret := range p.secrets {
 		if reflect.DeepEqual(child, secret) {
-			*masked = append(*masked, path)
+			*p.masked = append(*p.masked, path)
 
 			return true
 		}
@@ -934,76 +966,106 @@ func maskDuplicateAt(child any, path string, seen map[string]bool, masked *[]str
 // maskDuplicates masks every value under node that duplicates a masked
 // secret: the CLI copies a sensitive input into a derived attribute the
 // rendering does not mark, as the output of a terraform_data resource, so
-// the copy answers masked too. Path is the value path of node; seen holds
-// the paths already masked, and masked collects each new marker path.
-func maskDuplicates(node any, path string, seen map[string]bool, masked *[]string, secrets []any) {
+// the copy answers masked too. Path is the value path of node. It checks the
+// context every maskTickEvery nodes and answers ErrReadDeadline.
+func (p *dupPass) maskDuplicates(ctx context.Context, node any, path string) error {
 	switch typed := node.(type) {
 	case map[string]any:
-		maskDuplicateMap(typed, path, seen, masked, secrets)
+		return p.maskDuplicateMap(ctx, typed, path)
 	case []any:
-		maskDuplicateList(typed, path, seen, masked, secrets)
+		return p.maskDuplicateList(ctx, typed, path)
 	default:
+		return nil
 	}
 }
 
 // maskDuplicateMap masks each duplicating entry of doc.
-func maskDuplicateMap(
-	doc map[string]any, path string, seen map[string]bool, masked *[]string, secrets []any,
-) {
+func (p *dupPass) maskDuplicateMap(ctx context.Context, doc map[string]any, path string) error {
 	for key, child := range doc {
+		if err := p.ticker.tick(ctx); err != nil {
+			return err
+		}
+
 		childPath := path + "/" + escapeTofuPointerToken(key)
 
-		if maskDuplicateAt(child, childPath, seen, masked, secrets) {
+		if p.maskDuplicateAt(child, childPath) {
 			doc[key] = newTofuMarker(childPath)
-			seen[childPath] = true
+			p.seen[childPath] = true
 
 			continue
 		}
 
-		maskDuplicates(child, childPath, seen, masked, secrets)
+		if err := p.maskDuplicates(ctx, child, childPath); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // maskDuplicateList masks each duplicating element of list.
-func maskDuplicateList(
-	list []any, path string, seen map[string]bool, masked *[]string, secrets []any,
-) {
+func (p *dupPass) maskDuplicateList(ctx context.Context, list []any, path string) error {
 	for i, child := range list {
+		if err := p.ticker.tick(ctx); err != nil {
+			return err
+		}
+
 		childPath := path + "/" + strconv.Itoa(i)
 
-		if maskDuplicateAt(child, childPath, seen, masked, secrets) {
+		if p.maskDuplicateAt(child, childPath) {
 			list[i] = newTofuMarker(childPath)
-			seen[childPath] = true
+			p.seen[childPath] = true
 
 			continue
 		}
 
-		maskDuplicates(child, childPath, seen, masked, secrets)
+		if err := p.maskDuplicates(ctx, child, childPath); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // maskAllLeaves replaces each leaf value under v with a marker for its path,
-// and appends each marker path to masked. Containers keep their shape.
-func maskAllLeaves(v any, base string, masked *[]string) any {
+// and appends each marker path to masked. Containers keep their shape. It
+// checks the context every maskTickEvery nodes and answers ErrReadDeadline.
+func maskAllLeaves(ctx context.Context, v any, base string, masked *[]string, ticker *maskTicker) (any, error) {
+	if err := ticker.tick(ctx); err != nil {
+		return nil, err
+	}
+
 	switch typed := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
+
 		for key, elem := range typed {
-			out[key] = maskAllLeaves(elem, base+"/"+escapeTofuPointerToken(key), masked)
+			child, err := maskAllLeaves(ctx, elem, base+"/"+escapeTofuPointerToken(key), masked, ticker)
+			if err != nil {
+				return nil, err
+			}
+
+			out[key] = child
 		}
 
-		return out
+		return out, nil
 	case []any:
 		out := make([]any, len(typed))
+
 		for i, elem := range typed {
-			out[i] = maskAllLeaves(elem, base+"/"+strconv.Itoa(i), masked)
+			child, err := maskAllLeaves(ctx, elem, base+"/"+strconv.Itoa(i), masked, ticker)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = child
 		}
 
-		return out
+		return out, nil
 	default:
 		*masked = append(*masked, base)
 
-		return newTofuMarker(base)
+		return newTofuMarker(base), nil
 	}
 }
 
@@ -1056,8 +1118,8 @@ func maskOnePointer(attributes any, relative, full string, out *maskCollectors) 
 // an already masked pointer masks nothing. A pointer at the same node is
 // masked again.
 func maskTofuInstance(
-	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
-) (any, []string) {
+	ctx context.Context, instance map[string]any, resource, position int, address string, marks SensitiveMarks,
+) (any, []string, error) {
 	base := "/resources/" + strconv.Itoa(resource) + "/instances/" + strconv.Itoa(position) + "/attributes"
 
 	attributes := instance["attributes"]
@@ -1068,12 +1130,16 @@ func maskTofuInstance(
 	if len(marks) == 0 {
 		var masked []string
 
-		out := maskAllLeaves(attributes, base, &masked)
+		out, err := maskAllLeaves(ctx, attributes, base, &masked, &maskTicker{nodes: 0})
+		if err != nil {
+			return nil, nil, err
+		}
+
 		if masked == nil {
 			masked = []string{}
 		}
 
-		return out, masked
+		return out, masked, nil
 	}
 
 	seen := map[string]bool{}
@@ -1096,14 +1162,18 @@ func maskTofuInstance(
 	}
 
 	if len(secrets) > 0 {
-		maskDuplicates(attributes, base, seen, &masked, secrets)
+		pass := dupPass{seen: seen, masked: &masked, secrets: secrets, ticker: maskTicker{nodes: 0}}
+
+		if err := pass.maskDuplicates(ctx, attributes, base); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	if masked == nil {
 		masked = []string{}
 	}
 
-	return attributes, masked
+	return attributes, masked, nil
 }
 
 // tofuInstanceBase strips one trailing instance index from an address, so a
@@ -1164,7 +1234,13 @@ func ReadStateResource(state []byte, marks SensitiveMarks, address string) (Stat
 	}
 
 	for i, instance := range tofuInstances(obj) {
-		attributes, masked := maskTofuInstance(instance, position, i, tofuInstanceAddress(obj, instance), marks)
+		attributes, masked, err := maskTofuInstance(
+			context.Background(), instance, position, i, tofuInstanceAddress(obj, instance), marks,
+		)
+		if err != nil {
+			return StateDetail{}, err
+		}
+
 		detail.Instances = append(detail.Instances, StateInstance{Attributes: attributes})
 		detail.Masked = append(detail.Masked, masked...)
 	}
@@ -1531,7 +1607,11 @@ func maskedInstanceCopy(
 		return instance["attributes"]
 	}
 
-	masked, _ := maskTofuInstance(fresh, resource, position, address, marks)
+	masked, _, err := maskTofuInstance(context.Background(), fresh, resource, position, address, marks)
+	if err != nil {
+		// Fail closed: no attribute values leave with an error.
+		return nil
+	}
 
 	return masked
 }
