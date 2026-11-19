@@ -966,6 +966,14 @@ func isUniqueViolation(err error) bool {
 		sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY)
 }
 
+// isCheckViolation reports whether err is a CHECK constraint failure of the
+// driver.
+func isCheckViolation(err error) bool {
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+
+	return ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_CHECK
+}
+
 // guardSiteAdministrator returns the body of a transaction that runs change,
 // which ends a principal, a membership or a grant, and returns
 // access.ErrLastSiteAdministrator when the change takes the last site
