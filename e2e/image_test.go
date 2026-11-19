@@ -399,6 +399,10 @@ func TestReleaseWorkflowStampsTheImage(t *testing.T) {
 		t.Errorf("the docker buildx build line does not pass the tag as VERSION: %s", build)
 	}
 
+	if strings.Contains(build, "CONSOLE_") {
+		t.Errorf("the docker buildx build line passes a console build argument: %s", build)
+	}
+
 	if strings.Contains(build, strings.Repeat("0", 64)) {
 		t.Errorf("the docker buildx build line holds the placeholder console pin: %s", build)
 	}

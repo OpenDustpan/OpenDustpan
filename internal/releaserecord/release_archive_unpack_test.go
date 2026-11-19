@@ -70,24 +70,64 @@ func verifyArchiveSum(sums []byte, name string, archive []byte) error {
 	}
 }
 
+// archiveNameAbsolute reports whether the name starts with a slash.
+//
+// Defense in depth: the part check of archiveEntryAllowed also refuses a
+// leading slash, because the first part is empty. This check stays so that a
+// change of that loop cannot let an absolute path pass. It does not rely on
+// the part check or on the byte check.
+func archiveNameAbsolute(name string) bool {
+	return strings.HasPrefix(name, "/")
+}
+
+// archiveNameHasSeparatorByte reports whether the name holds a backslash or a
+// NUL byte.
+//
+// Defense in depth: the byte check of archiveEntryAllowed also refuses both
+// bytes, because neither is in its set. This check stays so that a change of
+// that set cannot let them pass. It does not rely on the byte check.
+func archiveNameHasSeparatorByte(name string) bool {
+	return strings.ContainsAny(name, "\\\x00")
+}
+
+// archivePartAllowed reports whether one part of a name is valid: not empty,
+// not a single or double dot, and made only of the bytes A-Z a-z 0-9 . _ ~ + -.
+// The set has no byte that a file system folds, so a name has one spelling on
+// a file system that ignores case or Unicode form.
+func archivePartAllowed(part string) bool {
+	if part == "" || part == "." || part == ".." {
+		return false
+	}
+
+	for i := range len(part) {
+		c := part[i]
+
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '_', c == '~', c == '+', c == '-':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
 // archiveEntryAllowed is the allowlist of the unpack step. The archive holds
 // the binary, two files and the directory of the licenses. An entry that is
 // not in this list is refused: an absolute path, a part that is empty or is a
-// single or double dot, a backslash and any other name.
+// single or double dot, a part with a byte outside the set of
+// archivePartAllowed, and any other name.
 func archiveEntryAllowed(name string) bool {
 	trimmed := strings.TrimSuffix(name, "/")
 
-	// Defense in depth: the empty-part check in the loop below also refuses a
-	// leading slash, because the first part is empty. This check stays so that
-	// a change of that loop cannot let an absolute path pass. It does not rely
-	// on the empty-part check.
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") || strings.ContainsAny(trimmed, "\\\x00") {
+	if trimmed == "" || archiveNameAbsolute(trimmed) || archiveNameHasSeparatorByte(trimmed) {
 		return false
 	}
 
 	parts := strings.Split(trimmed, "/")
 	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
+		if !archivePartAllowed(part) {
 			return false
 		}
 	}
@@ -128,9 +168,11 @@ func writeArchiveEntry(root *os.Root, hdr *tar.Header, body io.Reader) error {
 }
 
 // noteArchiveName records the name of an entry and refuses a name that the
-// archive already used. A name is the same with and without a trailing slash.
+// archive already used. The key is the cleaned name in lower case, so that a
+// name is the same with and without a trailing slash, with a doubled slash or
+// a leading dot part, and on a file system that ignores case.
 func noteArchiveName(seen map[string]struct{}, name string) error {
-	key := strings.TrimSuffix(name, "/")
+	key := strings.ToLower(path.Clean(strings.TrimSuffix(name, "/")))
 	if _, dup := seen[key]; dup {
 		return fmt.Errorf("%w: entry %q appears more than once", errUnpack, name)
 	}

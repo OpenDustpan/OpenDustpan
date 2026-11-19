@@ -42,7 +42,7 @@ When an image is built from a version, `opendustpan --version` in that image SHA
 
 #### Scenario: Tag workflow stamps the tag
 - **WHEN** the release workflow builds the image for the tag `v0.1.0`.
-- **THEN** the build command holds `--build-arg VERSION=` with the tag, and the console build arguments from the Dockerfile pin.
+- **THEN** the build command holds `--build-arg VERSION=` with the tag and holds no console build argument.
 
 ### Requirement: a server starts from a built archive
 
@@ -54,7 +54,7 @@ When the release archives of one version are built, the archive of the host plat
 
 #### Scenario: Wrong checksum
 - **WHEN** the archive bytes differ from the `SHA256SUMS` line.
-- **THEN** the documented check command exits with a non-zero status and the test does not start the binary.
+- **THEN** the checksum step of the test refuses the archive and the test does not start the binary.
 
 #### Scenario: Hostile archive entry
 - **WHEN** an archive entry has an absolute path, a dot dot part, a link or a name outside the allowlist.

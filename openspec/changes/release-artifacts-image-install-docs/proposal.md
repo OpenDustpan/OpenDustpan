@@ -12,7 +12,7 @@ version: 7
 
 The user path this change must make work:
 
-1. **Docs page.** Read `docs/guides/install.md` and pick the image or the binary archive.
+1. **Docs page.** Read `docs/guides/install.md` and pick the image, and read in the archive section what to use until archives are available.
 2. **CLI, image.** Run `docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version` and read `v0.1.0`, the tag.
 3. **Docs page, archive.** Read the section "Install from a binary archive". It says that archives and `SHA256SUMS` are not available yet, gives no download address, and points to the quickstart and to `./scripts/build-image-local.sh`.
 4. **API.** `GET /health/ready` answers 200 on the running server.
@@ -51,7 +51,7 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- The operator must see the same version string in the tag, in `--version` of the image and in `--version` of the archive binary. The page shows both commands next to each other.
+- The operator must see the same version string in the tag, in `--version` of the image and in `--version` of the archive binary. The page shows the `--version` command of the image. The archive command comes with the change that uploads the archives.
 - The archive section says that archives and `SHA256SUMS` are not available yet and gives no download address, so that no link fails. It names the two ways that work today.
 
 ## What main already does

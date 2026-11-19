@@ -16,6 +16,8 @@ func hostileNames() []string {
 	return []string{
 		"/tmp/escape", "../escape", "third_party_licenses/../../escape", "./LICENSE",
 		`third_party_licenses\..\escape`, "evil", "LICENSE/x", "opendustpan/x", "", "LICENSE\x00x",
+		"third_party_licenses/a\\b", "third_party_licenses/a\x00b", "third_party_licenses/\u00e9",
+		"third_party_licenses/e\u0301", "third_party_licenses/a b", "third_party_licenses/a:b",
 	}
 }
 
@@ -103,9 +105,66 @@ func checkAllowlistAlone(t *testing.T) {
 		}
 	}
 
+	// The NFC and the NFD form of é are one file on APFS: refuse both.
+	for _, name := range []string{"third_party_licenses/\u00e9", "third_party_licenses/e\u0301"} {
+		if archiveEntryAllowed(name) {
+			t.Errorf("the allowlist accepted %q", name)
+		}
+	}
+
 	for _, good := range []string{"opendustpan", "LICENSE", "README.md", "third_party_licenses/", "third_party_licenses/go/LICENSE"} {
 		if !archiveEntryAllowed(good) {
 			t.Errorf("the allowlist refused %q", good)
+		}
+	}
+}
+
+// checkAbsoluteAlone sends a leading slash to the absolute-path check alone.
+func checkAbsoluteAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"/x", "/"} {
+		if !archiveNameAbsolute(name) {
+			t.Errorf("the absolute-path check accepted %q", name)
+		}
+	}
+
+	for _, name := range []string{"x", "x/y", ""} {
+		if archiveNameAbsolute(name) {
+			t.Errorf("the absolute-path check refused %q", name)
+		}
+	}
+}
+
+// checkSeparatorByteAlone sends a backslash and a NUL byte to the byte check
+// alone.
+func checkSeparatorByteAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"third_party_licenses/a\\b", "third_party_licenses/a\x00b", "\\", "\x00"} {
+		if !archiveNameHasSeparatorByte(name) {
+			t.Errorf("the byte check accepted %q", name)
+		}
+	}
+
+	if archiveNameHasSeparatorByte("third_party_licenses/a") {
+		t.Error("the byte check refused a plain name")
+	}
+}
+
+// checkPartAlone sends bytes outside the set to the part check alone.
+func checkPartAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, part := range []string{"", ".", "..", "a b", "a:b", "a*", "\u00e9", "e\u0301", "a\\b", "a\x00b", "a\nb"} {
+		if archivePartAllowed(part) {
+			t.Errorf("the part check accepted %q", part)
+		}
+	}
+
+	for _, part := range []string{"LICENSE", "README.md", "a_b~c+d-e.1", "third_party_licenses"} {
+		if !archivePartAllowed(part) {
+			t.Errorf("the part check refused %q", part)
 		}
 	}
 }
@@ -172,6 +231,25 @@ func checkSeenNameAlone(t *testing.T) {
 	if err := noteArchiveName(seen, "LICENSE"); err != nil {
 		t.Errorf("the seen-name check refused a new name: %v", err)
 	}
+
+	// Two spellings of one file must give one key: a doubled slash, a leading
+	// dot part and a case fold. The two Unicode forms of é are two byte
+	// strings, so only the allowlist refuses them: see checkAllowlistAlone.
+	pairs := [][2]string{
+		{"a/b", "a//b"}, {"a/b", "./a/b"}, {"Foo", "foo"},
+	}
+
+	for _, pair := range pairs {
+		fresh := make(map[string]struct{})
+
+		if err := noteArchiveName(fresh, pair[0]); err != nil {
+			t.Fatalf("the seen-name check refused the first name %q: %v", pair[0], err)
+		}
+
+		if err := noteArchiveName(fresh, pair[1]); err == nil {
+			t.Errorf("the seen-name check accepted %q after %q", pair[1], pair[0])
+		}
+	}
 }
 
 // tarOfEntries makes a gzip tar of regular files, one per name, each with the
@@ -191,6 +269,32 @@ func tarOfEntries(t *testing.T, names ...string) []byte {
 		}
 
 		if _, err := tw.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return raw.Bytes()
+}
+
+// tarOfDirs makes a gzip tar of directory entries, one per name.
+func tarOfDirs(t *testing.T, names ...string) []byte {
+	t.Helper()
+
+	var raw bytes.Buffer
+
+	zw := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(zw)
+
+	for _, name := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -227,6 +331,20 @@ func checkWholeStep(t *testing.T) {
 		}
 	})
 
+	// The directory is the same entry twice: only the seen-name check stands,
+	// because the writer accepts a directory that exists.
+	t.Run("duplicate directory entry", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		data := tarOfDirs(t, "third_party_licenses/", "third_party_licenses/")
+		if err := unpackArchive(root, data); err == nil {
+			t.Error("the unpack step accepted a repeated directory entry")
+		}
+	})
+
 	for i := range headers {
 		hdr := &headers[i]
 		data, made := tarOf(t, hdr)
@@ -256,6 +374,9 @@ func TestReleaseArchiveUnpackRefusesHostileEntries(t *testing.T) {
 	t.Parallel()
 
 	t.Run("allowlist alone", checkAllowlistAlone)
+	t.Run("absolute-path check alone", checkAbsoluteAlone)
+	t.Run("separator byte check alone", checkSeparatorByteAlone)
+	t.Run("part check alone", checkPartAlone)
 	t.Run("seen-name check alone", checkSeenNameAlone)
 	t.Run("root writer alone", checkRootWriterAlone)
 	t.Run("whole step", checkWholeStep)
