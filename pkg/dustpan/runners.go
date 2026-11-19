@@ -56,15 +56,6 @@ func WithJobClaimer(build JobClaimerFunc) Option {
 	return func(o *settings) { o.jobClaimer = build }
 }
 
-// WithJobClaimerWrapForTests sets a function that wraps the claimer that the
-// job claimer function built, so a test can keep or watch it. The wrap does not
-// depend on the order of the options, so it works with a built-in store, whose
-// options replace WithJobClaimer. It does nothing when the server builds no
-// claimer.
-func WithJobClaimerWrapForTests(wrap func(job.Claimer) job.Claimer) Option {
-	return func(o *settings) { o.jobClaimerWrap = wrap }
-}
-
 // claimGuard is the guard of the gates that the claimer of the runner
 // protocol asks at each claim. It follows the rule of the state.write gates
 // of the tool adapters: with the gates on, it is the guard that the start of
@@ -149,9 +140,6 @@ func newRunnerHandler(
 		}
 
 		claimer = cfg.jobClaimer(guard)
-		if cfg.jobClaimerWrap != nil && claimer != nil {
-			claimer = cfg.jobClaimerWrap(claimer)
-		}
 	}
 
 	deps, err := sessionDepsOf(cfg, svc)

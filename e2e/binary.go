@@ -1318,7 +1318,6 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
 		signIn:        signIn,
-		claimers:      nil,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)
@@ -1409,7 +1408,6 @@ func newHABinaryEnv(ctx context.Context, in envInput, n int) *Env {
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
 		signIn:        signIn,
-		claimers:      nil,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)

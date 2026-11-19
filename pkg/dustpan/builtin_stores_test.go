@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/fakecred"
@@ -16,7 +15,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -809,76 +807,4 @@ func TestAdoptedStoreOwnership(t *testing.T) {
 			})
 		}
 	}
-}
-
-// wrapProbe records the calls of a wrap of WithJobClaimerWrapForTests.
-type wrapProbe struct {
-	calls   atomic.Int32
-	nonNil  atomic.Bool
-	wrapper dustpan.Option
-}
-
-// newWrapProbe returns a probe and the option that installs it.
-func newWrapProbe() *wrapProbe {
-	p := &wrapProbe{calls: atomic.Int32{}, nonNil: atomic.Bool{}, wrapper: nil}
-	p.wrapper = dustpan.WithJobClaimerWrapForTests(func(c job.Claimer) job.Claimer {
-		p.calls.Add(1)
-		p.nonNil.Store(c != nil)
-
-		return c
-	})
-
-	return p
-}
-
-// checkClaimerWrap starts a server over an adopted SQLite store with the wrap
-// probe and the public URL (empty for none), and checks the calls of the wrap.
-func checkClaimerWrap(t *testing.T, publicURL string, wantCalls int32) {
-	t.Helper()
-
-	st := openAdoptedStore(t, "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
-	t.Cleanup(func() {
-		if err := st.Close(); err != nil {
-			t.Errorf("close the store: %v", err)
-		}
-	})
-
-	probe := newWrapProbe()
-
-	extra := []dustpan.Option{probe.wrapper}
-	if publicURL != "" {
-		extra = append(extra, dustpan.WithPublicURL(publicURL))
-	}
-
-	srv := newAdoptingServer(t, st, extra...)
-	t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Errorf("close the server: %v", err)
-		}
-	})
-
-	if got := probe.calls.Load(); got != wantCalls {
-		t.Fatalf("wrap calls = %d, want %d", got, wantCalls)
-	}
-
-	if wantCalls > 0 && !probe.nonNil.Load() {
-		t.Fatal("the wrap got a nil claimer, want the claimer of the built-in store")
-	}
-}
-
-// TestJobClaimerWrapForTests proves that WithJobClaimerWrapForTests gives the
-// wrap the claimer that the built-in store built. A server that serves no
-// runner protocol (no public URL) builds no claimer, so the wrap does not run.
-func TestJobClaimerWrapForTests(t *testing.T) {
-	t.Parallel()
-
-	t.Run("runner protocol on", func(t *testing.T) {
-		t.Parallel()
-		checkClaimerWrap(t, "https://dustpan.example.test", 1)
-	})
-
-	t.Run("no claimer built", func(t *testing.T) {
-		t.Parallel()
-		checkClaimerWrap(t, "", 0)
-	})
 }

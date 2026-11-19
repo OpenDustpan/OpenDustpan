@@ -195,9 +195,6 @@ type Env struct {
 	backupDir string
 	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
 	signIn *signInSetup
-	// claimers keeps the job claimer of the in-process server, or is nil for
-	// the binary server.
-	claimers *claimerSlot
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -253,8 +250,6 @@ type serverBuild struct {
 	dbURL string
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
-	// claimers keeps the job claimer of the server, or is nil.
-	claimers *claimerSlot
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -544,7 +539,6 @@ func startInprocessServer(
 
 	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
 	// in-process mode uses the equivalent server option.
-	claimers := newClaimerSlot()
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -556,11 +550,9 @@ func startInprocessServer(
 		publicURL:         inprocessPublicURL(in, ts),
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
-		claimers:          claimers,
 		auditSinks:        in.auditSinks,
 		listener:          nil,
 	})
-	build.claimers = claimers
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
 
@@ -591,7 +583,6 @@ func startRunInprocessServer(
 		tb.Fatalf("listen for the in-process server: %v", err)
 	}
 
-	claimers := newClaimerSlot()
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -603,11 +594,9 @@ func startRunInprocessServer(
 		publicURL:         "",
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
-		claimers:          claimers,
 		auditSinks:        in.auditSinks,
 		listener:          ln,
 	})
-	build.claimers = claimers
 
 	serverURL := "http://" + ln.Addr().String()
 	client := &http.Client{Timeout: commandTimeout}
@@ -665,7 +654,6 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		store:         in.store,
 		client:        client,
 		inprocess:     build.store,
-		claimers:      build.claimers,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -800,9 +788,6 @@ type serverArgs struct {
 	// issuer is a fake OpenID provider whose keys the server may read on the
 	// loopback, or nil.
 	issuer *OIDCIssuerFake
-	// claimers keeps the job claimer that the in-process server builds, or
-	// is nil.
-	claimers *claimerSlot
 	// auditSinks receive a copy of each audit entry of the in-process server.
 	auditSinks []audit.ShipSink
 	// listener makes the in-process server run its own listener for the
@@ -831,7 +816,6 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 func storeOptions(builtin *dustpan.BuiltinStore, args serverArgs) []dustpan.Option {
 	return slices.Concat(
 		[]dustpan.Option{dustpan.WithBuiltinStore(builtin)},
-		claimerOptions(args.claimers),
 		settingStoreOptions(builtin), trustRuleOptions(args.issuer),
 		publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
@@ -888,7 +872,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	tb.Helper()
 
 	builtin, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
-	st := adapterStore(tb, builtin)
+	st := adapterStoreOf(builtin).store
 
 	// The first namespace is created through POST /api/server/namespaces
 	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
@@ -953,7 +937,6 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dbProxy:   dbProxy,
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
-		claimers:  nil,
 	}
 }
 
@@ -1049,25 +1032,26 @@ func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) *dustpan
 	return builtin
 }
 
-// adapterStore returns the adapter store behind builtin: the steps that seed
+// adapterHandle holds the adapter store behind a built-in store. It is a
+// struct so that the function that finds it returns no interface.
+type adapterHandle struct {
+	store serverStore
+}
+
+// adapterStoreOf returns the adapter store behind builtin: the steps that seed
 // rows through the ports that the built-in store does not export (the drift
 // results, the notification outbox) need the adapter. It is the same store, not
 // a second handle: SQLite refuses a second handle on one file. The server
 // gets its ports from builtin, never from this value.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
-func adapterStore(tb testing.TB, builtin *dustpan.BuiltinStore) serverStore {
-	tb.Helper()
-
+func adapterStoreOf(builtin *dustpan.BuiltinStore) adapterHandle {
 	switch st := builtin.StorePorts.(type) {
 	case *sqlite.Store:
-		return st
+		return adapterHandle{store: st}
 	case *postgres.Store:
-		return st
+		return adapterHandle{store: st}
 	default:
-		tb.Fatalf("the built-in store holds the unknown adapter %T", builtin.StorePorts)
-
-		return nil
+		// A panic, not Fatalf, so that no caller sees a nil store.
+		panic(fmt.Sprintf("the built-in store holds the unknown adapter %T", builtin.StorePorts))
 	}
 }
 

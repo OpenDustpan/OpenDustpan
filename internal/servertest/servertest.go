@@ -329,7 +329,7 @@ func (c *Cluster) Kill(t *testing.T, i int) {
 	// A killed server may return an error from Run, as a crash may.
 	waitErr := in.wait()
 
-	in.closeHandles()
+	in.closeHandles(t)
 	c.transport.CloseIdleConnections()
 
 	if errors.Is(waitErr, errStopTimeout) {
@@ -369,7 +369,7 @@ func (c *Cluster) Signal(t *testing.T, i int) func() {
 			t.Errorf("stop server %d: %v", i, err)
 		}
 
-		in.closeHandles()
+		in.closeHandles(t)
 		c.transport.CloseIdleConnections()
 	}
 }
@@ -482,7 +482,9 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 	srv, err := dustpan.NewServer(append(own, c.opts...)...)
 	if err != nil {
 		if builtin != nil {
-			_ = builtin.Close() //nolint:errcheck // The test fails next; the close error adds nothing.
+			if closeErr := builtin.Close(); closeErr != nil {
+				t.Errorf("close the built-in store of server %d: %v", i, closeErr)
+			}
 		}
 
 		closeAll(t, store, blobs, db)
@@ -509,7 +511,7 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 	if readyErr := c.waitReady(t, in); readyErr != nil {
 		in.cancel()
 		waitErr := in.wait()
-		in.closeHandles()
+		in.closeHandles(t)
 		t.Fatalf("start server %d: %v", i, errors.Join(readyErr, waitErr))
 	}
 
@@ -638,7 +640,7 @@ func (c *Cluster) stopAll(t *testing.T) {
 			t.Errorf("stop server on %s: %v", in.url, err)
 		}
 
-		in.closeHandles()
+		in.closeHandles(t)
 	}
 
 	c.transport.CloseIdleConnections()
@@ -669,9 +671,13 @@ var errStopTimeout = errors.New("run did not return in time")
 
 // closeHandles closes the store, the blob store and the database proxy of
 // in, after Run returned.
-func (in *instance) closeHandles() {
+func (in *instance) closeHandles(t *testing.T) {
+	t.Helper()
+
 	if in.builtin != nil {
-		_ = in.builtin.Close() //nolint:errcheck // The server is stopped; the adapter handle closes next.
+		if err := in.builtin.Close(); err != nil {
+			t.Errorf("close the built-in store of %s: %v", in.url, err)
+		}
 	}
 
 	in.store.Close()
