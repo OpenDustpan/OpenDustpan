@@ -240,3 +240,42 @@ func TestAuthorizeObjectRequireAction(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthorizeObjectNilNotFoundFailsClosed checks that a denied read stays a
+// refusal when Checks.NotFound is nil, so that a missing answer never allows a
+// read.
+func TestAuthorizeObjectNilNotFoundFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	nsObject := identity.NamespaceObject(namespace.Name("acme"))
+
+	cases := []struct {
+		name  string
+		allow map[identity.Action]bool
+		reads []identity.Action
+	}{
+		{name: "denied namespace read", allow: map[identity.Action]bool{}, reads: nil},
+		{
+			name:  "denied object read",
+			allow: map[identity.Action]bool{identity.ActionNamespaceRead: true},
+			reads: []identity.Action{identity.ActionUnitRead},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var p identity.Principal
+
+			g := guard(t, new([]string), newAuthorizer(tc.allow, nil))
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
+			checks := route.Checks{Namespace: nsObject, Reads: tc.reads, Actions: nil, NotFound: nil, RequireAction: false}
+
+			err := g.AuthorizeObject(t.Context(), r, p, nsObject, checks)
+			if !errors.Is(err, identity.ErrDenied) {
+				t.Fatalf("err = %v, want a denial", err)
+			}
+		})
+	}
+}

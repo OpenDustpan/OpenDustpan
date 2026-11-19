@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1094,10 +1095,38 @@ func TestUnknownUnitAnswersLikeAForbiddenOne(t *testing.T) {
 	}
 }
 
+// answerOf is the whole answer of one request: status, body and headers.
+type answerOf struct {
+	code   int
+	body   string
+	header http.Header
+}
+
+// answerFor returns the answer in rec. The headers that carry a per-request
+// value are removed, so that two answers to the same refusal compare equal.
+func answerFor(rec *httptest.ResponseRecorder) answerOf {
+	h := rec.Header().Clone()
+	h.Del("X-Request-Id")
+	h.Del("Date")
+
+	return answerOf{code: rec.Code, body: rec.Body.String(), header: h}
+}
+
+// sameAnswer fails when two answers differ in status, body or headers.
+func sameAnswer(t *testing.T, label string, got, want answerOf) {
+	t.Helper()
+
+	if got.code != want.code || got.body != want.body || !maps.EqualFunc(got.header, want.header, slices.Equal) {
+		t.Fatalf("%s = %d %q %v, want %d %q %v", label, got.code, got.body, got.header, want.code, want.body, want.header)
+	}
+}
+
 // TestUnknownToolAnswersLikeAKnownOne proves that a caller without the action
-// gets 403 for a tool that the server does not serve, as for a tool that it
-// serves, so the answer does not show which tools the server serves. A caller
-// with the action gets 404 for the unknown tool.
+// gets the same 403 (status, body and headers) for a tool that the server
+// does not serve, for a tool that it serves and for another namespace, so the
+// answer does not show which tools the server serves. A caller with the
+// action gets 404 for the unknown tool. A malformed unit ID answers the same
+// 400 to every caller, and a malformed tool answers 400.
 func TestUnknownToolAnswersLikeAKnownOne(t *testing.T) {
 	t.Parallel()
 
@@ -1120,10 +1149,40 @@ func TestUnknownToolAnswersLikeAKnownOne(t *testing.T) {
 				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{tc.action: true}}, nil,
 			)
 
-			for _, target := range []string{tc.known, other} {
-				if rec := denied.serve(t, tc.method, target, ""); rec.Code != http.StatusForbidden {
-					t.Fatalf("denied %s %s = %d, want %d", tc.method, target, rec.Code, http.StatusForbidden)
-				}
+			want := answerFor(denied.serve(t, tc.method, tc.known, ""))
+			if want.code != http.StatusForbidden {
+				t.Fatalf("denied %s %s = %d, want %d", tc.method, tc.known, want.code, http.StatusForbidden)
+			}
+
+			variants := map[string]string{
+				"unknown tool":      other,
+				"another namespace": strings.Replace(tc.known, "organization=acme", "organization=other", 1),
+			}
+
+			for label, target := range variants {
+				sameAnswer(t, label, answerFor(denied.serve(t, tc.method, target, "")), want)
+			}
+
+			// A malformed unit ID cannot name a unit, so syntax validation
+			// refuses it with the same 400 before any lookup or check: the
+			// answer is the same for a denied and an allowed caller.
+			badID := strings.Replace(tc.known, seededUnitID, "stk%00..%2F", 1)
+			allowedCaller := newDeletedFixture(
+				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
+			)
+
+			badAnswer := answerFor(denied.serve(t, tc.method, badID, ""))
+			if badAnswer.code != http.StatusBadRequest {
+				t.Fatalf("malformed unit ID = %d %s, want 400", badAnswer.code, badAnswer.body)
+			}
+
+			sameAnswer(t, "malformed unit ID, allowed caller", answerFor(allowedCaller.serve(t, tc.method, badID, "")), badAnswer)
+
+			bad := strings.Replace(tc.known, "/pulumi/", "/Bad!Tool/", 1)
+
+			rec := denied.serve(t, tc.method, bad, "")
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "request.invalid-object") {
+				t.Fatalf("malformed tool = %d %s, want 400 request.invalid-object", rec.Code, rec.Body.String())
 			}
 
 			allowed := newDeletedFixture(
@@ -1132,6 +1191,83 @@ func TestUnknownToolAnswersLikeAKnownOne(t *testing.T) {
 
 			if rec := allowed.serve(t, tc.method, other, ""); rec.Code != http.StatusNotFound {
 				t.Fatalf("allowed %s %s = %d, want %d", tc.method, other, rec.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+// TestUnknownToolReadsTheStoreLikeAKnownOne proves that a denied caller makes
+// the same number of store reads for a tool that the server serves as for one
+// that it does not serve, so the time of the answer does not show which tools
+// the server serves.
+func TestUnknownToolReadsTheStoreLikeAKnownOne(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		action identity.Action
+		method string
+		known  string
+	}{
+		{action: identity.ActionUnitRestore, method: http.MethodPost, known: restoreTarget},
+		{action: identity.ActionUnitPurge, method: http.MethodDelete, known: purgeTarget},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.action), func(t *testing.T) {
+			t.Parallel()
+
+			deny := selectiveAuthorizer{deny: map[identity.Action]bool{tc.action: true}}
+			known := newDeletedFixture(t, seededDeleted().entries, deny, nil)
+			unknown := newDeletedFixture(t, seededDeleted().entries, deny, nil)
+
+			known.serve(t, tc.method, tc.known, "")
+			unknown.serve(t, tc.method, strings.Replace(tc.known, "/pulumi/", "/nosuchtool/", 1), "")
+
+			if known.deleted.reads == 0 || known.deleted.reads != unknown.deleted.reads {
+				t.Fatalf("store reads: served tool %d, unknown tool %d, want equal and not zero",
+					known.deleted.reads, unknown.deleted.reads)
+			}
+		})
+	}
+}
+
+// TestDeletedUnitOfAnUnservedToolAnswers404 proves that the lifecycle check
+// after the authorization stands alone: a stored deleted unit under a tool
+// that the server does not serve, and a caller with the action, answer 404
+// and never reach a lifecycle (a nil lifecycle would panic).
+func TestDeletedUnitOfAnUnservedToolAnswers404(t *testing.T) {
+	t.Parallel()
+
+	entries := []coreinventory.DeletedEntry{deletedEntry("nosuchtool", "web/prod", seededUnitID, 30)}
+	cases := []struct {
+		name   string
+		method string
+		target string
+	}{
+		{
+			name:   "restore",
+			method: http.MethodPost,
+			target: "/api/inventory/deleted-units/nosuchtool/" + seededUnitID + "/restore?organization=acme",
+		},
+		{
+			name:   "purge",
+			method: http.MethodDelete,
+			target: "/api/inventory/deleted-units/nosuchtool/" + seededUnitID + "?organization=acme",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newDeletedFixture(t, entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil)
+
+			if rec := f.serve(t, tc.method, tc.target, ""); rec.Code != http.StatusNotFound {
+				t.Fatalf("%s = %d %s, want %d", tc.name, rec.Code, rec.Body.String(), http.StatusNotFound)
+			}
+
+			if len(f.pulumi.calls) != 0 {
+				t.Fatalf("lifecycle calls = %+v, want none", f.pulumi.calls)
 			}
 		})
 	}

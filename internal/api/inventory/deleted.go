@@ -368,17 +368,12 @@ func (h *Handler) resolveDeletedUnit(_ http.ResponseWriter, r *http.Request) (id
 	tool := r.PathValue("tool")
 	unitID := r.PathValue("unitID")
 
-	// An unknown tool resolves as an unknown unit does, so that the route
-	// authorizes it first: a caller without the action gets the same 403 for
-	// a tool that the server does not serve as for one that it serves. The
-	// handler answers 404 for the unknown tool after the check.
-	var e coreinventory.DeletedEntry
-
-	err = coreinventory.ErrNotFound
-
-	if life, ok := h.lifecycles[tool]; ok && life != nil {
-		e, err = h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, unitID)
-	}
+	// Every tool, served or not, does the same store read, so that the time
+	// of the answer does not show which tools the server serves. The store
+	// answers not found for a tool that has no deleted units. The route
+	// authorizes the reference first; the handler answers 404 for a tool
+	// that the server does not serve after that check.
+	e, err := h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, unitID)
 
 	if errors.Is(err, coreinventory.ErrNotFound) {
 		obj, objErr := identity.UnitObject(tool, nsObj.Namespace(), unitID)
