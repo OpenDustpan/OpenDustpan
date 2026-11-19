@@ -28,8 +28,9 @@ read it, but lacks the action of the route, receives 403.
 A rule lets a workload act as its principal. So a create needs the same right
 as a service token of that principal: `principal:manage-tokens` on it. The
 server refuses a create with an access token with 403 and
-`trust-rule.sign-in-required`: only a person who signed in to the console, or
-the bootstrap admin token, can create a rule.
+`trust-rule.sign-in-required`: only a person who signed in to the console with
+a recent sign-in can create a rule. The bootstrap admin token gets 403 with
+`mfa.fresh-step-required`.
 
 To change a rule, update it (see "Update a rule"). A delete does not end the access tokens that a workload already received
 through the rule. Revoke them with the routes of the service tokens of the
@@ -142,8 +143,9 @@ certificates. A namespace has at most one bundle. The bundle keeps versions.
 The first save makes the bundle with version 1 active. A later save adds a
 version and keeps the active version. A rotation adds a version and makes it
 active. The server keeps at most 5 versions. As for a rule create, a save, a
-rotation and a delete need a console session or the bootstrap admin token, not
-an access token.
+rotation and a delete need a console session with a recent sign-in. An access
+token cannot do them, and the bootstrap admin token gets 403 with
+`mfa.fresh-step-required`.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
@@ -170,7 +172,7 @@ version writes the audit entry `trust-bundle:save`, `trust-bundle:rotate` or
 | --- | --- | --- |
 | 400 | `trust-rule.bundle-invalid` | The PEM text or the overlap fails its rules. The message names the index of the CA and the count. The server stores nothing. Change the PEM text and send it again. |
 | 403 | `trust-rule.sign-in-required` | The caller used an access token only. Sign in to the console, then send the request again. |
-| 403 | `mfa.fresh-step-required` | The caller signed in too long ago, or has no console session (for example the bootstrap admin token). Sign in to the console again, then send the request again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
+| 403 | `mfa.fresh-step-required` | The caller signed in too long ago, or has no console session (the bootstrap admin token has none). Sign in to the console again, then send the request again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
 | 403 | `access.denied` | The caller lacks `namespace:manage-trust-rules`. To see the rules of the namespace, send `GET .../trust-rules`. |
 | 404 | `trust-rule.bundle-not-found` | The namespace has no bundle with the ID. To list the bundle of the namespace, send `GET .../trust-bundles`. |
 | 409 | `trust-rule.bundle-invalid` | The version is the active version. Rotate first, then delete the old version. |

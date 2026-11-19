@@ -256,9 +256,17 @@ func TestNewServiceNeedsKindReader(t *testing.T) {
 	t.Parallel()
 
 	_, err := gate.NewService(gate.ServiceConfig{
-		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Units: stubUnits{},
-		Subjects: subjects{}, Fences: stubFences{}, KindReader: nil, IsDev: principalpkg.IsDevSubject, Now: nil,
-		Log: slog.New(slog.DiscardHandler),
+		Store:      stubStore{Store: nil},
+		Engine:     stubEngine{Engine: nil},
+		Producers:  nil,
+		Units:      stubUnits{},
+		Subjects:   subjects{},
+		Fences:     stubFences{},
+		KindReader: nil,
+		IsDev:      principalpkg.IsDevSubject,
+		BreakGlass: nil,
+		Now:        nil,
+		Log:        slog.New(slog.DiscardHandler),
 	})
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("NewService(no kind reader) = %v, want ErrInvalid", err)
@@ -269,9 +277,17 @@ func TestNewServiceNeedsDevSubjectMatcher(t *testing.T) {
 	t.Parallel()
 
 	_, err := gate.NewService(gate.ServiceConfig{
-		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Units: stubUnits{},
-		Subjects: subjects{}, Fences: stubFences{}, KindReader: fixedKind("production"), IsDev: nil, Now: nil,
-		Log: slog.New(slog.DiscardHandler),
+		Store:      stubStore{Store: nil},
+		Engine:     stubEngine{Engine: nil},
+		Producers:  nil,
+		Units:      stubUnits{},
+		Subjects:   subjects{},
+		Fences:     stubFences{},
+		KindReader: fixedKind("production"),
+		IsDev:      nil,
+		BreakGlass: nil,
+		Now:        nil,
+		Log:        slog.New(slog.DiscardHandler),
 	})
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("NewService with no dev subject matcher: err = %v, want ErrInvalid", err)

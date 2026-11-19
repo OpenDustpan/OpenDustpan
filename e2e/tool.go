@@ -189,28 +189,7 @@ const Pinned = "pinned"
 // variable stands for every pinned version. The scheduled nightly run sets the
 // variable to latest to run the newest release.
 func (t Tool) Versions() []string {
-	raw := os.Getenv(t.versionsEnv)
-	if raw == "" {
-		return slices.Clone(t.defaults)
-	}
-
-	var versions []string
-
-	for part := range strings.SplitSeq(raw, ",") {
-		switch v := strings.TrimSpace(part); v {
-		case "":
-		case Pinned:
-			for _, label := range t.defaults {
-				if label != Latest {
-					versions = append(versions, label)
-				}
-			}
-		default:
-			versions = append(versions, v)
-		}
-	}
-
-	return versions
+	return t.expandVersions(os.Getenv(t.versionsEnv))
 }
 
 // Single returns the version of a test that installs one version of the
@@ -312,6 +291,32 @@ func (t Tool) ArchiveName(version string) (string, error) {
 	default:
 		return t.archive(version, runtime.GOOS, runtime.GOARCH), nil
 	}
+}
+
+// expandVersions expands the value of the version variable of t, as Versions
+// does for the value of the environment. An empty value selects the defaults.
+func (t Tool) expandVersions(raw string) []string {
+	if raw == "" {
+		return slices.Clone(t.defaults)
+	}
+
+	var versions []string
+
+	for part := range strings.SplitSeq(raw, ",") {
+		switch v := strings.TrimSpace(part); v {
+		case "":
+		case Pinned:
+			for _, label := range t.defaults {
+				if label != Latest {
+					versions = append(versions, label)
+				}
+			}
+		default:
+			versions = append(versions, v)
+		}
+	}
+
+	return versions
 }
 
 func (t Tool) releaseFile(version, file string) string {

@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-const wantMessage = "check-pr-body: the PR body names no issue. Add 'Closes #N', 'Part of #N' or 'No issue: <reason>'.\n"
+const wantMessage = "check-pr-body: the PR body names no issue. Add 'Closes #N', 'Part of #N', 'Issue: #N' or 'No issue: <reason>'.\n"
 
 // runScript runs scripts/check-pr-body.sh with args. The script goes in on
 // standard input, and each argument goes in through an environment variable,
@@ -93,6 +93,27 @@ func TestCheckPRBodyNamesAnIssue(t *testing.T) {
 		{name: "no issue with a dash reason", body: "No issue - docs only\n", pass: true},
 		{name: "no issue after other text", body: "Summary\r\nNo issue: docs\r\n", pass: true},
 		{name: "closes after a code block", body: "```\ncode\n```\n\nCloses #5\n", pass: true},
+		{name: "issue line", body: "Issue: #3568\n", pass: true},
+		{name: "issue line lowercase and indented", body: "  issue: #7\n", pass: true},
+		{name: "issue line with a final period", body: "Issue: #3568.\n", pass: true},
+		{name: "issue line with CRLF", body: "Summary\r\nIssue: #12\r\n", pass: true},
+		{name: "issue line without a space", body: "Issue:#12\n", pass: true},
+		{name: "issue line after a code block", body: "```\ncode\n```\nIssue: #5\n", pass: true},
+		{name: "issue line after a very long line", body: strings.Repeat("a", 200000) + "\nIssue: #5\n", pass: true},
+		{name: "issue line inside a code block", body: "```\nIssue: #12\n```\n", pass: false},
+		{name: "issue without a number", body: "Issue: #\n", pass: false},
+		{name: "issue with a word for a number", body: "Issue: #abc\n", pass: false},
+		{name: "issue with a letter after the number", body: "Issue: #12abc\n", pass: false},
+		{name: "issue without a hash", body: "Issue: 12\n", pass: false},
+		{name: "issue of another repository", body: "Issue: other/repo#12\n", pass: false},
+		{
+			name: "issue URL of another repository",
+			body: "Issue: https://github.com/other/repo/issues/12\n",
+			pass: false,
+		},
+		{name: "issue inside a sentence", body: "See the Issue: #12 for details.\n", pass: false},
+		{name: "issue after a bare CR", body: "text\rIssue: #12\n", pass: false},
+		{name: "issue split by a line break", body: "Issue:\n#12\n", pass: false},
 		{name: "none", body: "Adds a helper.\n\nNo link here.\n", pass: false},
 		{name: "closes inside a code block", body: "```\nCloses #12\n```\n", pass: false},
 		{name: "closes without digits", body: "Closes #\n", pass: false},

@@ -69,3 +69,9 @@ func WriteDeliveryError(ctx context.Context, w http.ResponseWriter, err error) {
 	h.logger = slog.New(slog.DiscardHandler)
 	h.writeDeliveryError(ctx, w, err)
 }
+
+// RedeliverableAtOf returns the redeliverableAt that the API answers for d, so
+// the external tests reach a delivery that the store would not read.
+func RedeliverableAtOf(d *notify.Delivery) bool {
+	return toDeliveryDocument(d).RedeliverableAt != nil
+}

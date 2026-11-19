@@ -46,8 +46,9 @@ type TokenStore interface {
 	// fail the page.
 	ListTokens(ctx context.Context, q Query) ([]Token, int64, error)
 	// RevokeToken sets the revoke time of the token id to e.At. It returns
-	// ErrNotFound when no such token exists, and ErrEnded when it was
-	// revoked.
+	// ErrNotFound when no such token exists, ErrEnded when it was revoked,
+	// and ErrUnknownKind, with no change, when the row has a kind that this
+	// version does not know.
 	RevokeToken(ctx context.Context, id string, e audit.Entry) error
 	// RotateToken ends the token r.OldID and issues r.Next with the digest
 	// r.Digest in one transaction. It sets the expiry of the old token to

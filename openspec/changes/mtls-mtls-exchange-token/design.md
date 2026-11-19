@@ -107,6 +107,12 @@ API: `POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange`, public 
 | 429 | mtls.rate-limited | ErrRateLimited |
 | 500 | token.issue-failed | ErrIssueFailed: no token and no entry |
 
+The JSON (JWT) path of the same route answers 400 `request.body-invalid` for a body over the limit, because the body decoder reports it there. The 413 `request.body-too-large` of the table is therefore reachable only from the guard of the mTLS path, and its test must call the guard.
+
+Until a revocation source exists (open question below), no revocation check is injected, so every real mTLS call answers 401 `mtls.revocation-unknown`. Tests inject a check; the e2e step of part 3 cannot get a token until the source is decided.
+
+The store reads only the rules that the verified chain can match inside the fenced transaction, not every rule of the namespace (issue #3685: 172.7 ms at 100k rules against 0.56 ms at 100).
+
 A call with the forged header of a forwarded chain and no handshake certificate gives 401 mtls.no-client-certificate. Out of scope: the listener setting that requests the client certificate, the e2e step and the docs page (part 3), the source of revocation data, JWT behavior.
 
 Rule write: `POST .../trust-rules` and `PATCH .../trust-rules/{rule_id}` answer 400 `trust-rule.spiffe-wildcard` for a `spiffePattern` with a `*` segment, and store nothing. The message reads: "spiffePattern holds a *. A rule for the mTLS exchange must name an exact SPIFFE ID. Remove the * and name the whole SPIFFE ID." Every other answer of the two routes is unchanged.

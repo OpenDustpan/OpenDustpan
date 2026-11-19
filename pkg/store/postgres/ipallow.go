@@ -37,11 +37,19 @@ func (s *Store) NamespaceList(ctx context.Context, ns namespace.Name) (ipallow.L
 
 // NamespacesWithList implements ipallow.Store. It returns the names of the
 // namespaces with a list, in name order. It refuses a stored name that is not
-// a valid namespace name.
+// a valid namespace name. It reads at most ipallow.MaxNamespacesWithList
+// rows plus one, and returns ipallow.ErrTooManyLists when a further namespace
+// has a list.
 func (s *Store) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
-	names, err := s.queries.NamespacesWithList(ctx)
+	names, err := s.queries.NamespacesWithList(ctx, ipallow.MaxNamespacesWithList+1)
 	if err != nil {
 		return nil, fmt.Errorf("select namespaces with an IP allowlist: %w", err)
+	}
+
+	// The query reads at most Max+1 rows, so that the read stays bounded. A row
+	// past Max means that more namespaces have a list: refuse.
+	if len(names) > ipallow.MaxNamespacesWithList {
+		return nil, fmt.Errorf("%w: more than %d", ipallow.ErrTooManyLists, ipallow.MaxNamespacesWithList)
 	}
 
 	out := make([]namespace.Name, 0, len(names))

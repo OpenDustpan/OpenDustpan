@@ -70,16 +70,12 @@ var errUnexpected = errors.New("unexpected output")
 func cacheDir(t *testing.T) string {
 	t.Helper()
 
-	if dir := os.Getenv("E2E_CACHE_DIR"); dir != "" {
-		return dir
-	}
-
-	base, err := os.UserCacheDir()
+	dir, err := e2e.CacheDir()
 	if err != nil {
-		t.Fatalf("find user cache dir: %v", err)
+		t.Fatalf("find cache dir: %v", err)
 	}
 
-	return filepath.Join(base, "opendustpan-e2e")
+	return dir
 }
 
 // fetchers holds one Fetcher for each cache directory. A Fetcher checks each
@@ -6782,7 +6778,8 @@ func maskedCloudConfig(host, workspace string) string {
   }
   required_providers {
     random = {
-      source = "hashicorp/random"
+      source  = "hashicorp/random"
+      version = %q
     }
   }
 }
@@ -6811,7 +6808,27 @@ output "secret_out" {
   value     = var.secret_input
   sensitive = true
 }
-`, host, e2e.Namespace, workspace)
+`, host, e2e.Namespace, workspace, e2e.RandomProviderVersion)
+}
+
+// maskedCloudConfig puts each value in its own block: the host in the cloud
+// block, the namespace as the organization, the workspace as the name and the
+// pinned version in required_providers.
+func TestMaskedCloudConfigArgumentOrder(t *testing.T) {
+	t.Parallel()
+
+	cfg := maskedCloudConfig("tf.example.test", "ws-name")
+
+	for _, want := range []string{
+		`hostname     = "tf.example.test"`,
+		`organization = "` + e2e.Namespace + `"`,
+		`name = "ws-name"`,
+		`version = "` + e2e.RandomProviderVersion + `"`,
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("configuration lacks %s:\n%s", want, cfg)
+		}
+	}
 }
 
 // maskedApplyEnv returns the step environment that sets the sensitive
