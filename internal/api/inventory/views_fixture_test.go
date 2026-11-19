@@ -306,6 +306,7 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 		},
 		Collections:    nil,
 		Locks:          nil,
+		Records:        nil,
 		Moves:          nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
 		Authenticator:  viewCallers{},

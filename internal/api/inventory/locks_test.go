@@ -41,15 +41,27 @@ type memLocks struct {
 	// removeErr, when set, is the error of every removal. Tests set it to reach
 	// the answers of store errors that a fresh store does not give.
 	removeErr error
+	// putErr, when set, returns the error of the lock of the named target.
+	putErr func(target string) error
+	// calls counts the calls of the store methods that the lock routes use.
+	calls int
 }
 
 func newMemLocks() *memLocks {
-	return &memLocks{mu: sync.Mutex{}, locks: map[string]manuallock.Lock{}, entries: nil, removeErr: nil}
+	return &memLocks{mu: sync.Mutex{}, locks: map[string]manuallock.Lock{}, entries: nil, removeErr: nil, putErr: nil, calls: 0}
 }
 
 func (m *memLocks) PutLock(_ context.Context, l manuallock.Lock, _ namespace.Fence, e audit.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.calls++
+
+	if m.putErr != nil {
+		if err := m.putErr(l.Target.String()); err != nil {
+			return err
+		}
+	}
 
 	if !m.known(l.Target) {
 		return manuallock.ErrTargetNotFound
@@ -109,6 +121,8 @@ func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (ma
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.calls++
+
 	if m.removeErr != nil {
 		return manuallock.Lock{}, m.removeErr
 	}
@@ -134,7 +148,7 @@ func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (ma
 
 // known reports whether the route tests have the object.
 func (m *memLocks) known(t manuallock.Target) bool {
-	return t.String() == lockUnitRef || t.String() == "collection acme/payments" || t.String() == "namespace acme"
+	return t.String() == lockUnitRef || strings.HasPrefix(t.String(), "pulumi:acme/web/bulk-") || t.String() == "collection acme/payments" || t.String() == "namespace acme"
 }
 
 // subjectAuthenticator maps the token "<subject>-token" to the subject.
@@ -244,6 +258,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 		ReadScope:      fixedScope{err: nil, ids: nil, all: true},
 		Collections:    nil,
 		Locks:          locks,
+		Records:        nil,
 		Moves:          nil,
 		Authenticator:  subjectAuthenticator{},
 		Authorizer:     authz,

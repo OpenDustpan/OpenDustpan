@@ -72,6 +72,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Outputs:       outputs,
 		Views:         coverageViews(tb),
 		Locks:         locks,
+		Records:       nil,
 		PublicURL:     "",
 		Moves:         nil,
 		Namespaces:    namespaces,

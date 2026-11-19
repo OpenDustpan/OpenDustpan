@@ -257,6 +257,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Outputs:       nil,
 		Views:         nil,
 		Locks:         locks, PublicURL: "", Namespaces: nsSvc,
+		Records:     nil,
 		Units:       &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections: colSvc, Moves: f.ids, Deleted: &memDeleted{entries: nil}, History: nil,
 		Lifecycles: testLifecycles(), ReadScope: fixedScope{err: nil, ids: nil, all: true}, Now: nil,

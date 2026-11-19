@@ -2914,6 +2914,7 @@ func newInventoryHandler(svc services, cfg *settings, onFailure func()) (http.Ha
 		Collections:   svc.collections,
 		Placements:    svc.placements,
 		Locks:         svc.manualLocks,
+		Records:       cfg.idempotencyStore,
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
