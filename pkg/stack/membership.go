@@ -12,7 +12,7 @@ import (
 // creates or starts an update, so that no update of a stack in no collection
 // begins. It is a required port: an Updates without one fails closed.
 type Membership interface {
-	// CollectionOf returns the stable ID of the collection that holds ref, with
+	// CollectionOf returns the name of the collection that holds ref, with
 	// true. It returns "", false and no error when the stack is in no
 	// collection or does not exist. It returns an error only for a store
 	// failure.
@@ -74,6 +74,9 @@ func (m CollectionMembership) CollectionOf(ctx context.Context, ref Ref) (string
 // transaction, and the HTTP adapter maps the refusal. This check stays so that
 // a store without that check cannot start an update of a stack in no
 // collection. It does not rely on the stores or on the adapter.
+//
+// Create and Start call it. SaveCheckpoint and the journal path do not: no
+// update can start unplaced, so they rely on the store check of each write.
 func (s *Updates) requirePlaced(ctx context.Context, ref Ref) error {
 	if s.membership == nil {
 		return fmt.Errorf("write to %s: %w: collection membership", ref, ErrMissingDependency)

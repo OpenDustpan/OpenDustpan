@@ -27,9 +27,6 @@ type PlacementCollections interface {
 	// the collection does not exist. A missing collection is not an error: the
 	// caller answers with collection.ErrPlacementCollectionMissing.
 	CollectionID(ctx context.Context, obj identity.Object) (string, bool, error)
-	// CollectionOf returns the name of the collection that holds the unit, and
-	// false when the unit is in no collection or does not exist.
-	CollectionOf(ctx context.Context, unit identity.Object) (string, bool, error)
 }
 
 // Placer chooses the collection of a new stack. The stack store then makes the

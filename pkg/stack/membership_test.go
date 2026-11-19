@@ -77,6 +77,108 @@ func TestStartRefusesAStackInNoCollection(t *testing.T) {
 	}
 }
 
+// TestWriteEntriesRefuseAStackInNoCollection proves that Create, Import and
+// Restore each refuse a stack in no collection on their own. The in-memory
+// store does not check membership, so only the update service can refuse. No
+// update row may exist after the refusal.
+func TestWriteEntriesRefuseAStackInNoCollection(t *testing.T) {
+	t.Parallel()
+
+	unplaced := stacktest.Membership{Err: nil, Collection: "", Found: false}
+	failing := stacktest.Membership{Err: errMembershipStore, Collection: "", Found: false}
+
+	cases := []struct {
+		name       string
+		membership stack.Membership
+		want       error
+		call       func(t *testing.T, svc *stack.Updates, f updatesFixture) error
+	}{
+		{
+			name: "create, in no collection", membership: unplaced, want: collection.ErrNoCollection,
+			call: func(t *testing.T, svc *stack.Updates, f updatesFixture) error {
+				t.Helper()
+
+				_, err := svc.Create(t.Context(), f.ref, stack.Plan{
+					Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
+				})
+
+				return err
+			},
+		},
+		{
+			name: "create, membership store error", membership: failing, want: errMembershipStore,
+			call: func(t *testing.T, svc *stack.Updates, f updatesFixture) error {
+				t.Helper()
+
+				_, err := svc.Create(t.Context(), f.ref, stack.Plan{
+					Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
+				})
+
+				return err
+			},
+		},
+		{
+			name: "import, in no collection", membership: unplaced, want: collection.ErrNoCollection,
+			call: func(t *testing.T, svc *stack.Updates, f updatesFixture) error {
+				t.Helper()
+
+				_, err := svc.Import(t.Context(), f.ref, "carol@example.com", checkpoint(0, `{"imported":true}`))
+
+				return err
+			},
+		},
+		{
+			name: "restore, in no collection", membership: unplaced, want: collection.ErrNoCollection,
+			call: func(t *testing.T, svc *stack.Updates, f updatesFixture) error {
+				t.Helper()
+
+				_, err := svc.Restore(t.Context(), f.ref, 1, "carol@example.com")
+
+				return err
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdates(t)
+
+			// A placed import makes version 1, so that Restore passes its input check.
+			if _, err := f.svc.Import(t.Context(), f.ref, "", checkpoint(0, `{"seed":true}`)); err != nil {
+				t.Fatalf("seed import: %v", err)
+			}
+
+			cfg := updatesConfigFor(f, f.blobs, f.refusals)
+			cfg.Membership = tc.membership
+
+			svc, err := stack.NewUpdates(cfg)
+			if err != nil {
+				t.Fatalf("NewUpdates: %v", err)
+			}
+
+			before := countUpdateRows(f.store)
+
+			if callErr := tc.call(t, svc, f); !errors.Is(callErr, tc.want) {
+				t.Fatalf("err = %v, want %v", callErr, tc.want)
+			}
+
+			if after := countUpdateRows(f.store); after != before {
+				t.Fatalf("update rows after a refused write = %d, want %d", after, before)
+			}
+		})
+	}
+}
+
+// countUpdateRows returns the number of update rows of m, with every status.
+func countUpdateRows(m *memUpdates) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return len(m.updates)
+}
+
 // startWithMembership creates an update with the placed service of f and starts
 // it with a service that asks membership. It returns the update and the error
 // of the start.

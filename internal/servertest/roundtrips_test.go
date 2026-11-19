@@ -897,14 +897,15 @@ type requestFlow struct {
 // and the other pulumi flows that end an update hold up to 4 for their writes
 // and their final version.
 //
-// Each start of an update asks which collection holds the stack, to refuse a
-// stack in no collection before the update takes its lease. The lookup is 2
-// round trips: the inventory entry of the unit, then its membership. So
-// "pulumi update cycle", "pulumi stack import" and "pulumi stack restore" each
-// hold 2 round trips for their one start. The writes of a running update (the
-// create, the checkpoints and the journal batches) pay nothing for this
-// check: the store makes it in the transaction of the write, in the statement
-// that already reads the stack.
+// Each create and each start of an update asks which collection holds the
+// stack, to refuse a stack in no collection before the update exists and
+// before it takes its lease. The lookup is 1 round trip
+// (GetUnitCollectionByName). The service pays it once in Updates.Create and
+// once in Updates.Start. So "pulumi update cycle", "pulumi stack import" and
+// "pulumi stack restore" each pay it twice. The writes of a running update (the
+// checkpoints and the journal batches) pay nothing for this check: the store
+// makes it in the transaction of the write, in the statement that already
+// reads the stack.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 43, func(h *rtHarness) {

@@ -162,9 +162,10 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 			return err
 		}
 
-		// Defense in depth: the update service and the HTTP handler refuse a
-		// stack in no collection too. This check stays so that a caller of the
-		// store port cannot start an update of such a stack.
+		// Defense in depth: the update service refuses to start an update of a
+		// stack in no collection, and the HTTP adapter maps that refusal to 409
+		// and writes the audit entry. This check covers the start of an update
+		// and does not rely on those layers.
 		if !locked.Placed {
 			return fmt.Errorf("start update on stack %s/%s/%s: %w",
 				u.Ref.Namespace, u.Ref.Project, u.Ref.Stack, collection.ErrNoCollection)
@@ -1073,9 +1074,14 @@ func lockStack(ctx context.Context, q *db.Queries, ref stack.Ref) (lockedStack, 
 // same statement reads the stack and its membership, so the check costs no
 // round trip and has no gap between the check and the write.
 //
-// Defense in depth: the update service and the HTTP handler check the
-// membership too. This check stays so that a caller of the store port cannot
-// write to a stack in no collection, and it does not rely on those layers.
+// Defense in depth: the update service refuses to create and to start an
+// update of a stack in no collection, and the HTTP adapter maps that refusal
+// to 409 and writes the audit entry. This check covers every state write and
+// does not rely on those layers.
+//
+// The plain SELECT relies on one invariant: no API path moves a live unit to
+// no collection. A move upserts, a collection delete needs no live units, a
+// purge deletes the unit, and a restore runs in maintenance mode.
 func placedStackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, error) {
 	row, err := q.GetPlacedStack(ctx, db.GetPlacedStackParams{
 		Namespace: ref.Namespace.String(),
