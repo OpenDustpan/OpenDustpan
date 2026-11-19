@@ -397,12 +397,19 @@ type PruneResult struct {
 	MaxRows int `json:"maxRows"`
 }
 
-// PruneLocks runs one prune of the name counts of locks at the time at: it
-// deletes at most the MaxRows of Prune counts whose last failure is the Age
-// of Prune or older, whose lock ended and whose level is past its reset
-// time. The store appends the audit entry of the run, with the server as the
-// subject, the reason and the count that it deleted, in the transaction of
-// the delete. So each run has its entry, also a run that deletes nothing.
+// PruneLocks runs the prune of the name counts of locks at the time at. A
+// batch deletes at most the MaxRows of Prune counts whose last failure is
+// the Age of Prune or older, whose lock ended and whose level is past its
+// reset time. While a batch deletes its full MaxRows, more old counts may
+// wait, so the run starts another batch. The run stops at the first batch
+// that deletes less, at the error of a batch, or when ctx ends or
+// authgate.NamePruneMaxRun has passed. So a spray of attempts that adds
+// counts faster than one batch deletes them cannot grow the table without
+// bound. The store appends the audit entry of each batch, with the server as
+// the subject, the reason and the count that it deleted, in the transaction
+// of the delete. So each batch has its entry, also a batch that deletes
+// nothing. Deleted in the result is the sum of all batches, also when an
+// error stops the run.
 func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Time) (PruneResult, error) {
 	p := Prune()
 	res := PruneResult{Deleted: 0, AgeSeconds: int64(p.Age / time.Second), MaxRows: p.MaxRows}
@@ -420,12 +427,20 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Tim
 		Origin: nil,
 	}
 
-	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, p.MaxEnded, e)
-	if err != nil {
-		return res, fmt.Errorf("prune the name counts: %w", err)
+	runCtx, cancel := context.WithTimeout(ctx, authgate.NamePruneMaxRun)
+	defer cancel()
+
+	for {
+		n, err := locks.PruneNameLocks(runCtx, p.Age, p.MaxRows, p.MaxEnded, e)
+		if err != nil {
+			return res, fmt.Errorf("prune the name counts: %w", err)
+		}
+
+		res.Deleted += n
+
+		// A batch that deletes less than its limit left no old count.
+		if n < int64(p.MaxRows) || runCtx.Err() != nil {
+			return res, nil
+		}
 	}
-
-	res.Deleted = n
-
-	return res, nil
 }

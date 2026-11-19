@@ -77,6 +77,9 @@ const (
 	// a count only when its lock ended and its level is past its reset time
 	// too.
 	NamePruneAge = DefaultNameGlobalMaxLockFor + DefaultNameGlobalResetAfter
+	// NamePruneMaxRun is the longest time that one scheduled prune keeps
+	// running more batches while each batch deletes its full limit.
+	NamePruneMaxRun = 5 * time.Minute
 	// MaxNamePruneRows is the most counts that one run of the prune deletes.
 	// The next run deletes the rest.
 	MaxNamePruneRows = 10000

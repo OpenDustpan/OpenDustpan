@@ -482,3 +482,106 @@ func (f *fixture) serviceWithSubjects(t *testing.T, subjects localusersvc.Subjec
 
 	return svc
 }
+
+// batchPrune is a counter whose prune returns a scripted count for each
+// batch, then 0, and counts the batches. after runs after each batch.
+type batchPrune struct {
+	authgate.NameLockCounter
+
+	after   func(calls int)
+	batches []int64
+	calls   int
+}
+
+func (b *batchPrune) PruneNameLocks(context.Context, time.Duration, int, int, audit.Entry) (int64, error) {
+	b.calls++
+	if b.after != nil {
+		defer b.after(b.calls)
+	}
+
+	if b.calls > len(b.batches) {
+		return 0, nil
+	}
+
+	return b.batches[b.calls-1], nil
+}
+
+// TestPruneLocksRunsAgainWhileBatchesAreFull proves that a run keeps
+// deleting while a batch deletes its full limit, stops at the first batch
+// below the limit, and returns the sum. A run that stops after one batch
+// fails this test.
+func TestPruneLocksRunsAgainWhileBatchesAreFull(t *testing.T) {
+	t.Parallel()
+
+	full := int64(authgate.MaxNamePruneRows)
+	b := &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full, full, 7, full}}
+
+	res, err := localusersvc.PruneLocks(t.Context(), b, time.Now())
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	if b.calls != 4 || res.Deleted != 3*full+7 {
+		t.Fatalf("batches = %d, deleted = %d, want 4 batches and %d deleted", b.calls, res.Deleted, 3*full+7)
+	}
+}
+
+// TestPruneLocksStopsWhenItsContextEnds proves that a run with only full
+// batches stops when its context ends, so that it cannot run without bound.
+// A run that ignores the context fails this test.
+func TestPruneLocksStopsWhenItsContextEnds(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	full := int64(authgate.MaxNamePruneRows)
+	b := &batchPrune{NameLockCounter: nil, calls: 0, batches: make([]int64, 1000), after: func(calls int) {
+		if calls == 3 {
+			cancel()
+		}
+	}}
+
+	for i := range b.batches {
+		b.batches[i] = full
+	}
+
+	res, err := localusersvc.PruneLocks(ctx, b, time.Now())
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	if b.calls != 3 || res.Deleted != 3*full {
+		t.Fatalf("batches = %d, deleted = %d, want 3 batches and %d deleted", b.calls, res.Deleted, 3*full)
+	}
+}
+
+// TestPruneLocksKeepsTheCountOfBatchesBeforeAnError proves that a batch that
+// fails after full batches returns the error and the count that the earlier
+// batches deleted.
+func TestPruneLocksKeepsTheCountOfBatchesBeforeAnError(t *testing.T) {
+	t.Parallel()
+
+	full := int64(authgate.MaxNamePruneRows)
+	b := &errAfterPrune{
+		batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full}},
+	}
+
+	res, err := localusersvc.PruneLocks(t.Context(), b, time.Now())
+	if !errors.Is(err, errDiskOnFire) || res.Deleted != 2*full {
+		t.Fatalf("prune = %+v, %v, want %d deleted and the error of the store", res, err, 2*full)
+	}
+}
+
+// errAfterPrune fails the batch after its scripted batches.
+type errAfterPrune struct {
+	batchPrune
+}
+
+func (b *errAfterPrune) PruneNameLocks(ctx context.Context, a time.Duration, l, e int, en audit.Entry) (int64, error) {
+	if b.calls >= len(b.batches) {
+		return 0, errDiskOnFire
+	}
+
+	return b.batchPrune.PruneNameLocks(ctx, a, l, e, en)
+}

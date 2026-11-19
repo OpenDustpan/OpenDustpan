@@ -269,11 +269,13 @@ denial.
 ### Prune of old counts
 
 Each failed attempt for a new user name adds a count, also for an unknown
-name. Every hour, the server deletes at most 10000 counts whose last failure
-is 48 hours old or older (the longest lock and the reset time), whose lock
-ended and whose level is past its reset time. The next run deletes the rest.
-Each run writes the audit entry `sign-in.name-locks-pruned` with the number
-of counts, in the transaction of the delete. `GET
+name. Every hour, the server deletes counts whose last failure is 48 hours
+old or older (the longest lock and the reset time), whose lock ended and
+whose level is past its reset time. It deletes at most 10000 counts in each
+batch. While a batch deletes 10000 counts, the run starts another batch, for
+at most 5 minutes. Each batch writes the audit entry
+`sign-in.name-locks-pruned` with the number of counts, in the transaction of
+the delete. `GET
 /api/dustpan/v1/local-users/policy` shows the effective values in
 `lockPrune`:
 
