@@ -3,6 +3,7 @@ package logtext_test
 import (
 	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/logtext"
@@ -54,5 +55,42 @@ func TestCleanCutsOnRuneBoundary(t *testing.T) {
 
 	if want := strings.Repeat("€", 66) + "..."; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCleanRemovesEveryControlRune(t *testing.T) {
+	t.Parallel()
+
+	for name, in := range map[string]string{
+		"NUL":                 "a\x00b",
+		"BEL":                 "a\ab",
+		"backspace":           "a\bb",
+		"tab":                 "a\tb",
+		"vertical tab":        "a\vb",
+		"form feed":           "a\fb",
+		"ESC":                 "a\x1b[31mb",
+		"DEL":                 "a\x7fb",
+		"C1 control":          "a\u0080b",
+		"C1 control CSI":      "a\u009bb",
+		"NEL":                 "a\u0085b",
+		"line separator":      "a\u2028b",
+		"paragraph separator": "a\u2029b",
+	} {
+		got := logtext.Clean(in)
+
+		for _, r := range got {
+			if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+				t.Errorf("%s: Clean(%q) = %q, holds the rune %U", name, in, got, r)
+			}
+		}
+
+		if !strings.HasPrefix(got, "a") || !strings.HasSuffix(got, "b") {
+			t.Errorf("%s: Clean(%q) = %q, lost the text around the rune", name, in, got)
+		}
+	}
+
+	// Text with no control rune stays as it is, with multibyte runes too.
+	if got, want := logtext.Clean("naïve €"), "naïve €"; got != want {
+		t.Errorf("Clean changed a clean value: got %q, want %q", got, want)
 	}
 }

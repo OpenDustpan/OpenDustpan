@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,9 +74,13 @@ type liarInventory struct {
 	fakeInventory
 
 	lie func(coreinventory.Entry) coreinventory.Entry
+	// gets counts each GetUnit call.
+	gets *atomic.Int64
 }
 
 func (l liarInventory) GetUnit(ctx context.Context, unitID string) (coreinventory.Entry, error) {
+	l.gets.Add(1)
+
 	e, err := l.fakeInventory.GetUnit(ctx, unitID)
 	if err != nil || l.lie == nil {
 		return e, err
@@ -129,6 +134,8 @@ type spyRig struct {
 	h     *triggers.Handler
 	inner *fakeStore
 	spy   *spyStore
+	// gets counts each GetUnit call of the inventory.
+	gets *atomic.Int64
 }
 
 func newSpyRig(
@@ -145,9 +152,12 @@ func newSpyRigLogged(
 ) *spyRig {
 	t.Helper()
 
+	var r0gets atomic.Int64
+
 	inner := newStore()
 	spy := &spyStore{Store: inner, mu: sync.Mutex{}, reads: nil, fail: map[trigger.ID]error{}}
 	inv := fakeInventory{gone: map[string]bool{}, extra: map[string]coreinventory.Entry{}}
+	liar := liarInventory{fakeInventory: inv, lie: lie, gets: &r0gets}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
@@ -161,7 +171,7 @@ func newSpyRigLogged(
 		Dispatcher: &dispatcher{mu: sync.Mutex{}, reqs: nil, subjs: nil, err: nil},
 		Authorizer: authz,
 		Savers:     &savers{err: nil},
-		Units:      lenientUnits{inv: liarInventory{fakeInventory: inv, lie: lie}},
+		Units:      lenientUnits{inv: liar},
 		Fences:     fences{},
 		Now:        func() time.Time { return time.Unix(1_800_000_000, 0) },
 		NewID:      func() trigger.ID { return "trg-1" },
@@ -171,7 +181,7 @@ func newSpyRigLogged(
 	}
 
 	h, err := triggers.NewHandler(triggers.Config{
-		Namespaces: namespaces, Units: liarInventory{fakeInventory: inv, lie: lie}, Store: spy, Manager: manager,
+		Namespaces: namespaces, Units: liar, Store: spy, Manager: manager,
 		Workers: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Audit:          &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
 		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: logger,
@@ -180,7 +190,7 @@ func newSpyRigLogged(
 		t.Fatalf("handler: %v", err)
 	}
 
-	r := &spyRig{h: h, inner: inner, spy: spy}
+	r := &spyRig{h: h, inner: inner, spy: spy, gets: &r0gets}
 
 	// The good trigger, stored like the one that a save makes.
 	inner.plant(trigger.Trigger{
@@ -608,5 +618,53 @@ func checkBoundedRecords(t *testing.T, rec *logtexttest.Recorder, message string
 
 	if !found {
 		t.Fatalf("no log record %q", message)
+	}
+}
+
+// TestMalformedUnitIDNeverReachesTheInventory proves that the unit resolver
+// refuses a unit ID that is malformed or too long before it reads the
+// inventory. The authorizer allows each check, so only the resolver can answer
+// the not-found answer. The list route resolves the unit and no trigger.
+func TestMalformedUnitIDNeverReachesTheInventory(t *testing.T) {
+	t.Parallel()
+
+	ids := map[string]string{
+		"space":        "a%20b",
+		"tilde":        "ws~bad",
+		"NUL":          "ws-1%00",
+		"line breaks":  "ws-1%0D%0AX:%201",
+		"quote":        "%22%3Cscript%3E",
+		"leading dot":  ".hidden",
+		"leading dash": "-lead",
+		"too long":     strings.Repeat("a", 101),
+		"very long":    strings.Repeat("a", 5000),
+	}
+
+	for name, id := range ids {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newSpyRig(t, allowEverything{}, nil)
+
+			got := ask(t, r, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units/"+id+"/triggers")
+			if got.code != http.StatusNotFound {
+				t.Errorf("answer = %d %s, want 404", got.code, got.body)
+			}
+
+			if n := r.gets.Load(); n != 0 {
+				t.Errorf("inventory GetUnit calls = %d, want 0", n)
+			}
+		})
+	}
+
+	// Control: a well formed unit ID reaches the inventory.
+	r := newSpyRig(t, allowEverything{}, nil)
+	got := ask(t, r, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units/"+netID+"/triggers")
+	if got.code != http.StatusOK {
+		t.Fatalf("control answer = %d %s, want 200", got.code, got.body)
+	}
+
+	if r.gets.Load() == 0 {
+		t.Error("the control request did not reach the inventory")
 	}
 }

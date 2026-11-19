@@ -789,3 +789,63 @@ func TestDamagedRowLogHoldsNoLineBreak(t *testing.T) {
 		}
 	}
 }
+
+// TestTargetBuildersRefuseAHostileStoredUnitID calls liveTarget and goneTarget
+// directly with a valid tool and name and a stored unit ID that fails the
+// reference check. The path check of the resolver does not run here, so the
+// reference check of each function is the only guard. Each call answers the
+// not-found answer and writes one log record with a clean unit ID.
+func TestTargetBuildersRefuseAHostileStoredUnitID(t *testing.T) {
+	t.Parallel()
+
+	ids := map[string]string{
+		"space":       "bad id",
+		"line breaks": "a\r\nb",
+		"too long":    strings.Repeat("a", 101),
+	}
+
+	builders := map[string]func(h *contextapi.Handler, r *http.Request, id string) error{
+		"live": func(h *contextapi.Handler, r *http.Request, id string) error {
+			return contextapi.LiveTarget(h, r, "acme", liveRow("acme", "opentofu", "net", id))
+		},
+		"gone": func(h *contextapi.Handler, r *http.Request, id string) error {
+			return contextapi.GoneTarget(h, r, "acme", goneRow("opentofu", "old", id))
+		},
+	}
+
+	for builderName, build := range builders {
+		for idName, id := range ids {
+			t.Run(builderName+"/"+idName, func(t *testing.T) {
+				t.Parallel()
+
+				checkTargetBuilder(t, build, id)
+			})
+		}
+	}
+}
+
+// checkTargetBuilder calls build with the stored unit ID id and checks the
+// answer and the one log record.
+func checkTargetBuilder(t *testing.T, build func(*contextapi.Handler, *http.Request, string) error, id string) {
+	t.Helper()
+
+	rec := logtexttest.New()
+	units, deleted := hostileUnits()
+	handler := newReaderHandler(t, newAuthorizer(), units, deleted, rec.Logger())
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+
+	if err := build(handler.Handler, r, id); !contextapi.IsNotFoundAnswer(err) {
+		t.Errorf("error = %v, want the not-found answer", err)
+	}
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("log records = %d, want 1", len(records))
+	}
+
+	for key, value := range records[0].Attrs {
+		if strings.ContainsAny(value, "\r\n") || len(value) > logtext.MaxBytes+len("...") {
+			t.Errorf("log attribute %s is not clean: %q", key, value)
+		}
+	}
+}
