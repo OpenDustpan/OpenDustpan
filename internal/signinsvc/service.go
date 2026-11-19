@@ -786,20 +786,25 @@ func causeType(err error) string {
 			last = t
 		}
 
-		//nolint:errorlint // The walk must see an error that wraps several errors, which errors.As cannot name by type.
-		switch u := e.(type) {
-		case interface{ Unwrap() error }:
-			e = u.Unwrap()
-		case interface{ Unwrap() []error }:
-			errs := u.Unwrap()
-			if len(errs) == 0 {
-				return firstSet(last, leaf)
-			}
+		if next := errors.Unwrap(e); next != nil {
+			e = next
 
-			e = errs[len(errs)-1]
-		default:
+			continue
+		}
+
+		// errors.Unwrap returned nil, so e has no single cause, and As can
+		// match only e itself.
+		var multi interface{ Unwrap() []error }
+		if !errors.As(e, &multi) {
 			return firstSet(last, leaf)
 		}
+
+		errs := multi.Unwrap()
+		if len(errs) == 0 {
+			return firstSet(last, leaf)
+		}
+
+		e = errs[len(errs)-1]
 	}
 
 	return firstSet(last, leaf)
