@@ -56,7 +56,7 @@ func TestBackupCoverageFailsOnAddedEmptiedColumn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
 	copyTemplate(t, path)
-	addSpikeColumnTo(t, path, "git_host_event_receipts")
+	addSpikeColumnTo(t, path, `ALTER TABLE git_host_event_receipts ADD COLUMN spike_new_col TEXT`)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -187,12 +187,13 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 func addSpikeColumn(t *testing.T, path string) {
 	t.Helper()
 
-	addSpikeColumnTo(t, path, "stacks")
+	addSpikeColumnTo(t, path, `ALTER TABLE stacks ADD COLUMN spike_new_col TEXT`)
 }
 
-// addSpikeColumnTo adds the column spike_new_col to table, as addSpikeColumn
-// does. The name of table is a constant of the test, never an input.
-func addSpikeColumnTo(t *testing.T, path, table string) {
+// addSpikeColumnTo runs the statement alter, which adds the column
+// spike_new_col to a table, as addSpikeColumn does. The statement is a
+// constant of the test, never an input.
+func addSpikeColumnTo(t *testing.T, path, alter string) {
 	t.Helper()
 
 	conn, err := openRawDB(path)
@@ -205,8 +206,6 @@ func addSpikeColumnTo(t *testing.T, path, table string) {
 			t.Errorf("close database: %v", closeErr)
 		}
 	}()
-
-	alter := `ALTER TABLE ` + table + ` ADD COLUMN spike_new_col TEXT`
 
 	if _, execErr := conn.ExecContext(t.Context(), alter); execErr != nil {
 		t.Fatalf("add column: %v", execErr)
