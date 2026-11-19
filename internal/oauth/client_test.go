@@ -1065,3 +1065,42 @@ func TestNewRefusesAHostileIssuerForm(t *testing.T) {
 		})
 	}
 }
+
+// TestNewNeverEchoesTheIssuerInAnError sends an issuer with a secret in its
+// user information or its query, and with a wrong scheme or a parse error,
+// to both constructors. No error holds the secret.
+func TestNewNeverEchoesTheIssuerInAnError(t *testing.T) {
+	t.Parallel()
+
+	const secret = "s3cr3t"
+
+	for name, issuer := range map[string]string{
+		"user information on http":  "http://user:" + secret + "@idp.example",
+		"user information on ftp":   "ftp://user:" + secret + "@idp",
+		"scheme-relative":           "//user:" + secret + "@idp",
+		"parse error with a query":  "https://idp/%zz?t=" + secret,
+		"user information on https": "https://user:" + secret + "@idp.example",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := oauth.Config{
+				HTTPClient: nil, Now: nil, Issuer: issuer, ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: redirectURI, Scopes: nil,
+			}
+
+			_, errNew := oauth.New(t.Context(), cfg)
+			_, errLazy := oauth.NewLazy(cfg)
+
+			for _, err := range []error{errNew, errLazy} {
+				if !errors.Is(err, oauth.ErrConfig) {
+					t.Fatalf("error = %v, want ErrConfig", err)
+				}
+
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("the error holds the secret: %v", err)
+				}
+			}
+		})
+	}
+}

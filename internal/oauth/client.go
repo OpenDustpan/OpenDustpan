@@ -194,16 +194,22 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: redirect URL is empty", ErrConfig)
 	}
 
+	// The form check comes first: it refuses user information, and its text
+	// never holds the issuer. The two checks below give fixed text too.
+	if err := checkIssuerForm(cfg.Issuer); err != nil {
+		return err
+	}
+
 	issuer, err := url.Parse(cfg.Issuer)
 	if err != nil || issuer.Host == "" {
-		return fmt.Errorf("%w: issuer %q is not an absolute URL", ErrConfig, cfg.Issuer)
+		return fmt.Errorf("%w: the issuer is not an absolute URL", ErrConfig)
 	}
 
 	if !secureURL(issuer) {
-		return fmt.Errorf("%w: issuer %q must use https", ErrConfig, cfg.Issuer)
+		return fmt.Errorf("%w: the issuer must use https", ErrConfig)
 	}
 
-	return checkIssuerForm(cfg.Issuer)
+	return nil
 }
 
 // checkIssuerForm returns ErrConfig for an issuer that session.CheckIssuer

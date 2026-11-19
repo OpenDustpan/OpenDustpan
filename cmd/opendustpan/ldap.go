@@ -270,7 +270,8 @@ func (l *ldapFlags) checkSubject() error {
 	// Refuse a space around the name. Do not trim it: the allowlist check
 	// runs on the exact value.
 	if l.subject != strings.TrimSpace(l.subject) {
-		return fmt.Errorf("--ldap-subject: %w: the name has a space at its start or its end", ldapauth.ErrSubjectAttribute)
+		return fmt.Errorf("--ldap-subject: %w: the name has a space at its start or its end",
+			ldapauth.ErrSubjectAttribute)
 	}
 
 	taken := []string{l.userNameAttribute, l.emailAttribute, l.nameAttribute}

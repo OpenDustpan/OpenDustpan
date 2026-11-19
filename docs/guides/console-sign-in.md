@@ -102,6 +102,11 @@ The rules:
 - At a sign-in, the server reads the discovery document from the issuer.
   So only a site administrator may set the issuer: give
   `server:manage-sign-in` to no other person.
+- A stored provider can hold an issuer that the server now refuses, for
+  example from an older version or a restored backup. The answer shows
+  `issuerRefused: true` for it. That provider cannot sign a person in.
+  Disable it with `"enabled": false`, which always works, and make a new
+  provider with a new ID for the issuer.
 - Disable a provider with `"enabled": false`. A disabled provider answers
   404 at the start of a sign-in. The disable also ends every active
   session of a person with a subject of the provider, and its audit entry

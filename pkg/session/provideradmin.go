@@ -269,8 +269,15 @@ func (a *ProviderAdmin) Update(
 	p := applyChange(old, c)
 	p.UpdatedAt, p.Version = maxTime(at, old.UpdatedAt), old.Version+1
 
-	if err := p.Validate(); err != nil {
-		return ProviderConfig{}, err
+	// A change that only disables the provider sets no field, so it checks
+	// no field. A stored row that the current rules refuse, from an older
+	// version or a restored backup, must still be possible to disable.
+	// Any other change validates the whole merged row.
+	disable := disablesOnly(old, p, c)
+	if !disable {
+		if err := p.Validate(); err != nil {
+			return ProviderConfig{}, err
+		}
 	}
 
 	if err := a.sealChange(ctx, &p, c); err != nil {
@@ -295,7 +302,7 @@ func (a *ProviderAdmin) Update(
 	// which works in maintenance mode. Any other change, also one that
 	// disables and changes a setting, takes the general write.
 	var storeErr error
-	if disablesOnly(old, p, c) {
+	if disable {
 		storeErr = a.store.DisableProviderConfig(ctx, id, old.Version, p.UpdatedAt, entry)
 	} else {
 		storeErr = a.store.UpdateProviderConfig(ctx, p, entry)

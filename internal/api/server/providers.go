@@ -66,6 +66,11 @@ type providerResponse struct {
 	AutoCreate      bool     `json:"autoCreate"`
 	Enabled         bool     `json:"enabled"`
 	ClientSecretSet bool     `json:"clientSecretSet"`
+	// IssuerRefused is true for a stored provider whose issuer the server
+	// now refuses, for example a row from an older version or a restored
+	// backup. Such a provider cannot sign a person in. PATCH it with
+	// {"enabled": false} to disable it.
+	IssuerRefused bool `json:"issuerRefused"`
 	// Mode is "oidc", "oauth" or "ldap". The four fields below are set for
 	// "oauth" only, and LDAP for "ldap" only.
 	Mode             string          `json:"mode"`
@@ -434,12 +439,30 @@ const invalidProviderRef = "sign-in-provider:?"
 // storedProviderOf returns the wire form of a provider of the API.
 func storedProviderOf(p *session.ProviderConfig) providerResponse {
 	out := providerResponse{
-		CreatedAt: optionalWireTime(p.CreatedAt), UpdatedAt: optionalWireTime(p.UpdatedAt), ID: p.ID,
-		Source: providerSourceAPI, Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
-		Scopes: valueOr(&p.Scopes, []string{}), Version: p.Version, AutoCreate: p.AutoCreate, Enabled: p.Enabled,
-		ClientSecretSet: len(p.SealedSecret) > 0, Mode: string(p.Mode), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil, LDAP: nil,
+		CreatedAt:   optionalWireTime(p.CreatedAt),
+		UpdatedAt:   optionalWireTime(p.UpdatedAt),
+		ID:          p.ID,
+		Source:      providerSourceAPI,
+		Issuer:      p.Issuer,
+		DisplayName: p.DisplayName,
+		ClientID:    p.ClientID,
+		Scopes:      valueOr(&p.Scopes, []string{}),
+		Version:     p.Version,
+		AutoCreate:  p.AutoCreate,
+		Enabled:     p.Enabled,
+		ClientSecretSet: len(
+			p.SealedSecret,
+		) > 0,
+		IssuerRefused:    false,
+		Mode:             string(p.Mode),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
+		LDAP:             nil,
 	}
+
+	out.IssuerRefused = p.Mode == session.ModeOIDC && session.CheckIssuer(p.Issuer) != nil
 
 	if p.Mode == session.ModeOAuth {
 		out.AuthorizationURL, out.TokenURL, out.UserinfoURL = p.OAuth.AuthorizationURL, p.OAuth.TokenURL,
@@ -521,10 +544,25 @@ func (c *providerClaimsChange) email() string {
 // configuration of the server.
 func staticProviderOf(p SignInProvider) providerResponse {
 	return providerResponse{
-		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
-		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: true, Mode: string(session.ModeOIDC), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil, LDAP: nil,
+		CreatedAt:        nil,
+		UpdatedAt:        nil,
+		ID:               p.ID,
+		Source:           providerSourceStatic,
+		Issuer:           "",
+		DisplayName:      p.DisplayName,
+		ClientID:         "",
+		Scopes:           []string{},
+		Version:          0,
+		AutoCreate:       p.AutoCreate,
+		Enabled:          true,
+		ClientSecretSet:  true,
+		IssuerRefused:    false,
+		Mode:             string(session.ModeOIDC),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
+		LDAP:             nil,
 	}
 }
 

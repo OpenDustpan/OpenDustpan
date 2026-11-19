@@ -45,41 +45,53 @@ func TestSignInProviderRoutesRefuseAHostileIssuer(t *testing.T) {
 				`"clientID":"dustpan-gamma","clientSecret":"` + betaSecret + `"}`
 			patch := `{"version":1,"issuer":` + string(issuerJSON) + `}`
 
-			for _, tc := range []struct{ method, target, body string }{
-				{http.MethodPost, "/api/server/sign-in-providers", post},
-				{http.MethodPatch, "/api/server/sign-in-providers/beta", patch},
-			} {
-				rec := e.adminDo(t, tc.method, tc.target, tc.body)
-				if rec.Code != http.StatusBadRequest {
-					t.Errorf("%s = %d %s, want 400", tc.method, rec.Code, rec.Body.String())
-				}
+			e.requireRefusedIssuer(t, http.MethodPost, "/api/server/sign-in-providers", post)
+			e.requireRefusedIssuer(t, http.MethodPatch, "/api/server/sign-in-providers/beta", patch)
 
-				// The text of ErrIssuer shows that the handler refused the issuer
-				// before the session layer, which words its refusal another way.
-				if !strings.Contains(rec.Body.String(), "no user information, no query and no fragment") {
-					t.Errorf("%s: the answer %s is not the refusal of the handler", tc.method, rec.Body.String())
-				}
-
-				if strings.Contains(rec.Body.String(), "pw@") || strings.Contains(rec.Body.String(), "evil.example") {
-					t.Errorf("%s: the answer holds the issuer: %s", tc.method, rec.Body.String())
-				}
+			gamma := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/gamma", "")
+			if gamma.Code != http.StatusNotFound {
+				t.Errorf("GET gamma = %d, want 404: the refused POST stored a provider", gamma.Code)
 			}
 
-			if rec := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/gamma", ""); rec.Code != http.StatusNotFound {
-				t.Errorf("GET gamma = %d, want 404: the refused POST stored a provider", rec.Code)
-			}
-
-			rec := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/beta", "")
-
-			var got providerDoc
-			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-				t.Fatalf("decode beta: %v", err)
-			}
-
-			if got.Issuer != beta.Issuer || got.Version != beta.Version {
-				t.Errorf("beta = issuer %q version %d, want issuer %q version %d: the refused PATCH changed it",
-					got.Issuer, got.Version, beta.Issuer, beta.Version)
-			}
+			e.requireBetaUnchanged(t, beta)
 		})
+	}
+}
+
+// requireRefusedIssuer sends one request and checks that the handler answers
+// 400 with the text of ErrIssuer and with no part of the issuer.
+func (e providerEnv) requireRefusedIssuer(t *testing.T, method, target, body string) {
+	t.Helper()
+
+	rec := e.adminDo(t, method, target, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("%s = %d %s, want 400", method, rec.Code, rec.Body.String())
+	}
+
+	// The text of ErrIssuer shows that the handler refused the issuer before
+	// the session layer, which words its refusal another way.
+	if !strings.Contains(rec.Body.String(), "no user information, no query and no fragment") {
+		t.Errorf("%s: the answer %s is not the refusal of the handler", method, rec.Body.String())
+	}
+
+	if strings.Contains(rec.Body.String(), "pw@") || strings.Contains(rec.Body.String(), "evil.example") {
+		t.Errorf("%s: the answer holds the issuer: %s", method, rec.Body.String())
+	}
+}
+
+// requireBetaUnchanged checks that the refused PATCH left beta as it was.
+func (e providerEnv) requireBetaUnchanged(t *testing.T, beta providerDoc) {
+	t.Helper()
+
+	rec := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/beta", "")
+
+	var got providerDoc
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode beta: %v", err)
+	}
+
+	if got.Issuer != beta.Issuer || got.Version != beta.Version {
+		t.Errorf("beta = issuer %q version %d, want issuer %q version %d: the refused PATCH changed it",
+			got.Issuer, got.Version, beta.Issuer, beta.Version)
 	}
 }

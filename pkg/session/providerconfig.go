@@ -165,9 +165,8 @@ func (p ProviderConfig) validateMode() error {
 				ModeOIDC)
 		}
 
-		if !validIssuer(p.Issuer) {
-			return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
-				"of at most %d bytes", ErrInvalidProvider, maxIssuer)
+		if err := CheckIssuer(p.Issuer); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidProvider, err)
 		}
 
 		return nil
@@ -206,9 +205,31 @@ func CheckIssuer(issuer string) error {
 		return ErrIssuer
 	}
 
+	parts, ok := splitIssuer(issuer)
+	if !ok {
+		return ErrIssuer
+	}
+
+	host, ok := issuerHost(parts.authority)
+	if !ok || !issuerSchemeAllowed(parts.scheme, host) || !issuerPathAllowed(parts.path) {
+		return ErrIssuer
+	}
+
+	return nil
+}
+
+// issuerParts are the three parts of an issuer.
+type issuerParts struct {
+	scheme, authority, path string
+}
+
+// splitIssuer splits an issuer into its scheme, its authority and its path.
+// The path is empty, or starts with "/". It returns false when the scheme is
+// not exactly "https" or "http".
+func splitIssuer(issuer string) (issuerParts, bool) {
 	scheme, rest, found := strings.Cut(issuer, "://")
 	if !found || (scheme != schemeHTTPS && scheme != schemeHTTP) {
-		return ErrIssuer
+		return issuerParts{scheme: "", authority: "", path: ""}, false
 	}
 
 	authority, path, _ := strings.Cut(rest, "/")
@@ -216,12 +237,13 @@ func CheckIssuer(issuer string) error {
 		path = "/" + path
 	}
 
-	host, ok := issuerHost(authority)
-	if !ok || (scheme == schemeHTTP && !loopbackHost(host)) || !issuerPathAllowed(path) {
-		return ErrIssuer
-	}
+	return issuerParts{scheme: scheme, authority: authority, path: path}, true
+}
 
-	return nil
+// issuerSchemeAllowed reports whether the scheme is "https", or "http" with
+// a loopback host.
+func issuerSchemeAllowed(scheme, host string) bool {
+	return scheme == schemeHTTPS || (scheme == schemeHTTP && loopbackHost(host))
 }
 
 // issuerBytesAllowed reports whether each byte of s is a printable ASCII
@@ -245,37 +267,26 @@ func issuerBytesAllowed(s string) bool {
 // brackets. It refuses user information, an empty host and a port that is not
 // from 1 to 65535.
 func issuerHost(authority string) (string, bool) {
+	// Defense in depth: issuerDomain and issuerPort refuse "@" too, because
+	// it is not a label character and not a digit. This check stays so that
+	// a change of those two cannot let user information through. It does not
+	// rely on them.
 	if authority == "" || strings.Contains(authority, "@") {
 		return "", false
 	}
 
-	host, port := authority, ""
-
 	if strings.HasPrefix(authority, "[") {
-		end := strings.Index(authority, "]")
-		if end < 0 {
-			return "", false
-		}
-
-		host, port = authority[1:end], authority[end+1:]
-
-		a, err := netip.ParseAddr(host)
-		if err != nil || a.Zone() != "" {
-			return "", false
-		}
-
-		if port != "" && (port[0] != ':' || !issuerPort(port[1:])) {
-			return "", false
-		}
-
-		return host, true
+		return issuerIPLiteral(authority)
 	}
 
-	if i := strings.LastIndex(authority, ":"); i >= 0 {
-		host, port = authority[:i], authority[i+1:]
+	host := authority
+
+	if h, port, found := strings.CutLast(authority, ":"); found {
 		if !issuerPort(port) {
 			return "", false
 		}
+
+		host = h
 	}
 
 	if !issuerDomain(host) {
@@ -285,30 +296,62 @@ func issuerHost(authority string) (string, bool) {
 	return host, true
 }
 
-// issuerPort reports whether p is a port from 1 to 65535 in decimal digits.
-func issuerPort(p string) bool {
-	if p == "" || len(p) > 5 {
-		return false
+// issuerIPLiteral checks an authority that starts with "[": an IP address
+// with no zone, in brackets, and an optional port.
+func issuerIPLiteral(authority string) (string, bool) {
+	end := strings.Index(authority, "]")
+	if end < 0 {
+		return "", false
 	}
 
-	n := 0
+	host, port := authority[1:end], authority[end+1:]
+
+	a, err := netip.ParseAddr(host)
+	if err != nil || a.Zone() != "" {
+		return "", false
+	}
+
+	if port != "" && (port[0] != ':' || !issuerPort(port[1:])) {
+		return "", false
+	}
+
+	return host, true
+}
+
+// maxPortDigits is the number of digits of the largest port, 65535.
+const maxPortDigits = 5
+
+// maxPort is the largest port.
+const maxPort = 65535
+
+// issuerPort reports whether p is a port from 1 to 65535 in decimal digits.
+func issuerPort(p string) bool {
+	if p == "" || len(p) > maxPortDigits {
+		return false
+	}
 
 	for i := range len(p) {
 		if p[i] < '0' || p[i] > '9' {
 			return false
 		}
-
-		n = n*10 + int(p[i]-'0')
 	}
 
-	return n >= 1 && n <= 65535
+	n, err := strconv.Atoi(p)
+
+	return err == nil && n >= 1 && n <= maxPort
 }
+
+// maxHostBytes and maxLabelBytes are the limits of a DNS name.
+const (
+	maxHostBytes  = 253
+	maxLabelBytes = 63
+)
 
 // issuerDomain reports whether host is an IPv4 address, or a list of ASCII
 // letter, digit and hyphen labels with no trailing dot. A host of only digits
 // and dots must be an IPv4 address.
 func issuerDomain(host string) bool {
-	if host == "" || len(host) > 253 {
+	if host == "" || len(host) > maxHostBytes {
 		return false
 	}
 
@@ -319,19 +362,33 @@ func issuerDomain(host string) bool {
 	}
 
 	for label := range strings.SplitSeq(host, ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		if !issuerLabel(label) {
 			return false
-		}
-
-		for i := range len(label) {
-			c := label[i]
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
-				return false
-			}
 		}
 	}
 
 	return true
+}
+
+// issuerLabel reports whether label is 1 to 63 ASCII letters, digits and
+// hyphens, with no hyphen at its start or its end.
+func issuerLabel(label string) bool {
+	if label == "" || len(label) > maxLabelBytes || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+
+	for i := range len(label) {
+		if !isLabelByte(label[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isLabelByte reports whether c is an ASCII letter, digit or hyphen.
+func isLabelByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-'
 }
 
 // issuerPathAllowed reports whether each segment of path has only the
@@ -378,18 +435,6 @@ func issuerSegmentAllowed(seg string) bool {
 // isHex reports whether c is a hexadecimal digit.
 func isHex(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-}
-
-// secureScheme reports whether u uses https, or http on a loopback host.
-func secureScheme(u *url.URL) bool {
-	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
-}
-
-// validIssuer reports whether issuer passes CheckIssuer. The sign-in client
-// applies the same scheme rule when it fetches the discovery document, so a
-// stored issuer never fails it.
-func validIssuer(issuer string) bool {
-	return CheckIssuer(issuer) == nil
 }
 
 // loopbackHost reports whether host is localhost or a loopback IP address.

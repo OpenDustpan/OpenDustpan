@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -454,18 +453,18 @@ func groupFilter(g Groups, escapedMember string) string {
 // name, an email or a display name attribute.
 var ErrSubjectAttribute = errors.New("the subject attribute must be an attribute that holds a stable directory ID")
 
-// stableSubjectAttributes holds the names, in lowercase, of the attributes
-// that hold an ID that the directory sets once and never changes. The list
-// has names only: an OID is not a name on the list.
-var stableSubjectAttributes = []string{
-	"entryuuid", "objectguid", "nsuniqueid", "ipauniqueid", "guid", "orclguid", "ibm-entryuuid",
-}
-
 // stableSubjectAttribute reports whether name is on the list of the stable
-// directory ID attributes. It compares with no regard to case and with the
-// exact text of name.
+// directory ID attributes: the attributes that hold an ID that the directory
+// sets once and never changes. The list has names only: an OID is not a name
+// on the list. It compares with no regard to case and with the exact text of
+// name.
 func stableSubjectAttribute(name string) bool {
-	return slices.Contains(stableSubjectAttributes, strings.ToLower(name))
+	switch strings.ToLower(name) {
+	case "entryuuid", "objectguid", "nsuniqueid", "ipauniqueid", "guid", "orclguid", "ibm-entryuuid":
+		return true
+	default:
+		return false
+	}
 }
 
 // CheckSubjectAttribute returns an error that matches ErrSubjectAttribute
@@ -477,8 +476,8 @@ func stableSubjectAttribute(name string) bool {
 // with a space is refused.
 func CheckSubjectAttribute(name string, taken ...string) error {
 	if !validAttributeType(name) {
-		return fmt.Errorf("%w: the name is not an attribute name, so name one attribute of the entry that never changes",
-			ErrSubjectAttribute)
+		return fmt.Errorf("%w: the name is not an attribute name, so use entryUUID, objectGUID, nsUniqueId, "+
+			"ipaUniqueID, GUID, orclGUID or ibm-entryUUID", ErrSubjectAttribute)
 	}
 
 	if !stableSubjectAttribute(name) {
