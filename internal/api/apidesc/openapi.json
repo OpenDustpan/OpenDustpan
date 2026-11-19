@@ -4578,6 +4578,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "batchPauseMillis": {
+            "format": "int64",
+            "type": "integer"
+          },
           "intervalSeconds": {
             "format": "int64",
             "type": "integer"
@@ -4589,13 +4593,19 @@
           "maxRows": {
             "format": "int64",
             "type": "integer"
+          },
+          "maxRunSeconds": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "ageSeconds",
+          "batchPauseMillis",
           "intervalSeconds",
           "maxEndedLocks",
-          "maxRows"
+          "maxRows",
+          "maxRunSeconds"
         ],
         "type": "object"
       },

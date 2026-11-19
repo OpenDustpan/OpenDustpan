@@ -203,8 +203,9 @@ func lockRuleBody(r authgate.LockRule) localUserLockRuleBody {
 
 // localUserLockPruneBody is the effective schedule of the prune of the
 // counts of the lockout by name: the time between two runs, the age past the
-// last failure of a count that a run can delete, and the most counts that
-// one run deletes.
+// last failure of a count that a run can delete, the most counts that one
+// batch deletes, the longest time that one run starts new batches, and the
+// pause between two batches.
 //
 // Contract: never remove or rename these fields.
 type localUserLockPruneBody struct {
@@ -212,6 +213,8 @@ type localUserLockPruneBody struct {
 	AgeSeconds      int64 `json:"ageSeconds"`
 	MaxRows         int   `json:"maxRows"`
 	MaxEndedLocks   int   `json:"maxEndedLocks"`
+	MaxRunSeconds   int64 `json:"maxRunSeconds"`
+	BatchPauseMs    int64 `json:"batchPauseMillis"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -551,6 +554,7 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		LockPrune: localUserLockPruneBody{
 			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
 			MaxRows: prune.MaxRows, MaxEndedLocks: prune.MaxEnded,
+			MaxRunSeconds: int64(prune.MaxRun / time.Second), BatchPauseMs: prune.BatchPause.Milliseconds(),
 		},
 		LockRules: localUserLockRulesBody{
 			Password: lockRuleBody(rules.Password), PasswordName: lockRuleBody(rules.PasswordName),

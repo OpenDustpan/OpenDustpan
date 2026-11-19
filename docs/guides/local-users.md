@@ -272,15 +272,20 @@ Each failed attempt for a new user name adds a count, also for an unknown
 name. Every hour, the server deletes counts whose last failure is 48 hours
 old or older (the longest lock and the reset time), whose lock ended and
 whose level is past its reset time. It deletes at most 10000 counts in each
-batch. While a batch deletes 10000 counts, the run starts another batch, for
-at most 5 minutes. Each batch writes the audit entry
+batch. While a batch deletes 10000 counts, the run waits 25 milliseconds
+and starts another batch, so that other writes can commit between two
+batches. A run starts no new batch after 5 minutes. A batch that is in
+progress at that time finishes. So one run deletes more than 10000 counts when
+many old counts wait, and a run that reaches the 5 minutes ends with no error
+and the next run, one hour later, continues. Each batch writes the audit entry
 `sign-in.name-locks-pruned` with the number of counts, in the transaction of
-the delete. `GET
-/api/dustpan/v1/local-users/policy` shows the effective values in
+the delete. The server logs the counts that a run deleted, the batches and
+the reason that the run stopped (`short batch`, `time bound` or `context
+ended`). `GET /api/dustpan/v1/local-users/policy` shows the effective values in
 `lockPrune`:
 
 ```json
-{"lockPrune": {"intervalSeconds": 3600, "ageSeconds": 172800, "maxRows": 10000, "maxEndedLocks": 1000}}
+{"lockPrune": {"intervalSeconds": 3600, "ageSeconds": 172800, "maxRows": 10000, "maxEndedLocks": 1000, "maxRunSeconds": 300, "batchPauseMillis": 25}}
 ```
 
 ## Change the own password

@@ -315,7 +315,7 @@ func TestPruneLocksKeepsRecentCountsWithItsRecord(t *testing.T) {
 
 	f.fail(t, 1, "alice")
 
-	res, err := localusersvc.PruneLocks(t.Context(), f.store, time.Now())
+	res, err := localusersvc.PruneLocks(t.Context(), f.store, newFakePruneClock().clock())
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -375,15 +375,14 @@ func TestPruneLocksFailsClosed(t *testing.T) {
 
 	f := newFixture(t)
 
-	if _, err := localusersvc.PruneLocks(t.Context(), nil, time.Now()); !errors.Is(
+	if _, err := localusersvc.PruneLocks(t.Context(), nil, newFakePruneClock().clock()); !errors.Is(
 		err, localusersvc.ErrMissingDependency,
 	) {
 		t.Fatalf("prune with no counter = %v, want ErrMissingDependency", err)
 	}
 
-	if _, err := localusersvc.PruneLocks(t.Context(), failingPrune{NameLockCounter: f.store}, time.Now()); !errors.Is(
-		err, errDiskOnFire,
-	) {
+	_, err := localusersvc.PruneLocks(t.Context(), failingPrune{NameLockCounter: f.store}, newFakePruneClock().clock())
+	if !errors.Is(err, errDiskOnFire) {
 		t.Fatalf("prune with a failing store = %v, want its error", err)
 	}
 }
@@ -516,7 +515,7 @@ func TestPruneLocksRunsAgainWhileBatchesAreFull(t *testing.T) {
 	full := int64(authgate.MaxNamePruneRows)
 	b := &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full, full, 7, full}}
 
-	res, err := localusersvc.PruneLocks(t.Context(), b, time.Now())
+	res, err := localusersvc.PruneLocks(t.Context(), b, newFakePruneClock().clock())
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -546,7 +545,7 @@ func TestPruneLocksStopsWhenItsContextEnds(t *testing.T) {
 		b.batches[i] = full
 	}
 
-	res, err := localusersvc.PruneLocks(ctx, b, time.Now())
+	res, err := localusersvc.PruneLocks(ctx, b, newFakePruneClock().clock())
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -567,7 +566,7 @@ func TestPruneLocksKeepsTheCountOfBatchesBeforeAnError(t *testing.T) {
 		batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full}},
 	}
 
-	res, err := localusersvc.PruneLocks(t.Context(), b, time.Now())
+	res, err := localusersvc.PruneLocks(t.Context(), b, newFakePruneClock().clock())
 	if !errors.Is(err, errDiskOnFire) || res.Deleted != 2*full {
 		t.Fatalf("prune = %+v, %v, want %d deleted and the error of the store", res, err, 2*full)
 	}
@@ -584,4 +583,132 @@ func (b *errAfterPrune) PruneNameLocks(ctx context.Context, a time.Duration, l, 
 	}
 
 	return b.batchPrune.PruneNameLocks(ctx, a, l, e, en)
+}
+
+// fakePruneClock is a clock that moves only when a run pauses: each pause
+// adds its time. It records the pauses.
+type fakePruneClock struct {
+	now    time.Time
+	pauses []time.Duration
+	// step is added to the time at each call of Now, to model a slow batch.
+	step time.Duration
+}
+
+func newFakePruneClock() *fakePruneClock {
+	return &fakePruneClock{now: time.Unix(1_700_000_000, 0), pauses: nil, step: 0}
+}
+
+func (c *fakePruneClock) clock() localusersvc.PruneClock {
+	return localusersvc.PruneClock{
+		Now: func() time.Time {
+			c.now = c.now.Add(c.step)
+
+			return c.now
+		},
+		Pause: func(ctx context.Context, d time.Duration) bool {
+			if ctx.Err() != nil {
+				return false
+			}
+
+			c.pauses = append(c.pauses, d)
+			c.now = c.now.Add(d)
+
+			return true
+		},
+	}
+}
+
+// deadlineProbe is a counter that fails a batch whose context has a deadline,
+// as a store does when the deadline ends inside a transaction.
+type deadlineProbe struct {
+	batchPrune
+}
+
+func (b *deadlineProbe) PruneNameLocks(ctx context.Context, a time.Duration, l, e int, en audit.Entry) (int64, error) {
+	if _, ok := ctx.Deadline(); ok {
+		return 0, context.DeadlineExceeded
+	}
+
+	return b.batchPrune.PruneNameLocks(ctx, a, l, e, en)
+}
+
+// TestPruneLocksStopsAtTheTimeBoundWithNoError proves that a run with only
+// full batches stops when the injected clock passes NamePruneMaxRun, returns
+// no error, reports the stop reason and the batches, and pauses between
+// batches. A run with no time bound never stops here, and a run that gives
+// the bound to the batch as a context deadline returns an error.
+func TestPruneLocksStopsAtTheTimeBoundWithNoError(t *testing.T) {
+	t.Parallel()
+
+	full := int64(authgate.MaxNamePruneRows)
+	c := newFakePruneClock()
+	c.step = time.Minute // each read of the clock: one minute passes
+
+	// The batches are many more than the bound allows.
+	b := &deadlineProbe{batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: make([]int64, 100)}}
+	for i := range b.batches {
+		b.batches[i] = full
+	}
+
+	res, err := localusersvc.PruneLocks(t.Context(), b, c.clock())
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	if res.StopReason != localusersvc.PruneStopTimeBound {
+		t.Fatalf("stop reason = %q, want %q", res.StopReason, localusersvc.PruneStopTimeBound)
+	}
+
+	if res.Batches != b.calls || res.Batches < 2 || res.Batches >= 100 || res.Deleted != int64(res.Batches)*full {
+		t.Fatalf("batches = %d (calls %d), deleted = %d", res.Batches, b.calls, res.Deleted)
+	}
+
+	if len(c.pauses) != res.Batches || c.pauses[0] != authgate.NamePruneBatchPause {
+		t.Fatalf("pauses = %v, want one pause of %s after each batch", c.pauses, authgate.NamePruneBatchPause)
+	}
+}
+
+// TestPruneLocksStopReasons proves the stop reason of a short batch, of a
+// context that ends in a pause, and of a batch error.
+func TestPruneLocksStopReasons(t *testing.T) {
+	t.Parallel()
+
+	full := int64(authgate.MaxNamePruneRows)
+
+	b := &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, 3}}
+	if res, err := localusersvc.PruneLocks(t.Context(), b, newFakePruneClock().clock()); err != nil ||
+		res.StopReason != localusersvc.PruneStopShortBatch || res.Batches != 2 {
+		t.Fatalf("short batch: %+v, %v", res, err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	b = &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full}}
+	if res, err := localusersvc.PruneLocks(ctx, b, newFakePruneClock().clock()); err != nil ||
+		res.StopReason != localusersvc.PruneStopContext || res.Batches != 1 {
+		t.Fatalf("context: %+v, %v", res, err)
+	}
+
+	e := &errAfterPrune{batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full}}}
+	if res, err := localusersvc.PruneLocks(t.Context(), e, newFakePruneClock().clock()); err == nil ||
+		res.StopReason != localusersvc.PruneStopError || res.Batches != 1 || res.Deleted != full {
+		t.Fatalf("error: %+v, %v", res, err)
+	}
+}
+
+// TestPruneLocksNeedsAClock proves that a run with no clock fails closed.
+func TestPruneLocksNeedsAClock(t *testing.T) {
+	t.Parallel()
+
+	b := &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: nil}
+	if _, err := localusersvc.PruneLocks(t.Context(), b, localusersvc.PruneClock{Now: nil, Pause: nil}); !errors.Is(
+		err, localusersvc.ErrMissingDependency,
+	) {
+		t.Fatalf("prune with no clock = %v, want ErrMissingDependency", err)
+	}
+
+	if b.calls != 0 {
+		t.Fatalf("batches = %d, want 0", b.calls)
+	}
 }
