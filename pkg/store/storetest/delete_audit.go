@@ -44,7 +44,7 @@ func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 	st := mustGetFixtureStack(t, f)
 
 	// The fixture put the stack in a collection, which wrote its own entries.
-	earlier, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	earlier, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries before: %v", err)
 	}
