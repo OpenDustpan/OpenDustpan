@@ -312,3 +312,41 @@ func testRestoreStagingRefusesNamespacePrincipalMemberships(t *testing.T, newSto
 		})
 	}
 }
+
+// testRestoreStagingRefusesGrantIDsThatAreNotGrantIDs stages a portable
+// backup that holds a grant whose ID is not a grant ID: the stage fails with
+// ErrCorrupt, the error does not hold the ID, and the live rows stay.
+func testRestoreStagingRefusesGrantIDsThatAreNotGrantIDs(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	seedBackupStore(t, ps.src)
+
+	files, sum, descs := PortableFiles(t, ps.src)
+
+	seedBackupStore(t, ps.dst)
+
+	before := portableSummaryOf(t, ps.dst)
+
+	for _, id := range []string{"", "grt-", "junk", "grt-a b", "grt-a\r\nb", "grt-/etc/passwd", "grt-" + strings.Repeat("z", 61)} {
+		row := namespacePrincipalGrantRow(id, access.RoleViewer, identity.NamespaceObject("acme"), "acme")
+		row["subject"], row["subject_kind"], row["subject_id"] = "principal:prn-admin", "principal", "prn-admin"
+
+		edited, editedDescs, editedSum := AddPortableRows(t, files, descs, sum, backup.TableGrants, row)
+
+		_, err := ps.dst.StagePortable(
+			t.Context(), PortableOpener(edited), editedSum, editedDescs, StageAs(t, ps.dst),
+		)
+		if !errors.Is(err, backup.ErrCorrupt) {
+			t.Fatalf("stage a backup with the grant ID %.20q: err = %v, want ErrCorrupt", id, err)
+		}
+
+		if len(id) > 8 && strings.Contains(err.Error(), id) {
+			t.Fatalf("the error holds the ID: %.80q", err.Error())
+		}
+
+		assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
+		discardStaging(t, ps.dst)
+	}
+}
