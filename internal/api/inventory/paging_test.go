@@ -191,7 +191,7 @@ func TestUnitListPageErrors(t *testing.T) {
 		{name: "token with other filters", namespace: "acme", query: "label=team%3Dplatform&pageToken=" + token},
 		{name: "token with no filter", namespace: "acme", query: "pageToken=" + token},
 		{name: "token in another namespace", namespace: "other", query: "label=team%3Dpayments&pageToken=" + token},
-		{name: "token with the at value", namespace: "acme", query: "at=100&pageToken=" + token},
+		{name: "token with the at value", namespace: "acme", query: "at=2026-10-10T09:00:00Z&pageToken=" + token},
 	}
 
 	for _, tc := range tests {

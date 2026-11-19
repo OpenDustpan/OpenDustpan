@@ -188,7 +188,7 @@ curl -H "Authorization: Bearer $DUSTPAN_TOKEN" \
 | `state` | A unit state, for example `locked`. A client can send the name up to 9 times. A unit must have at least one of the states. See [Unit states](#unit-states). |
 | `pageSize` | The number of units in a page, from 1 to 500. The default is 100. |
 | `pageToken` | The `nextPageToken` of the page before. |
-| `at` | A time in Unix milliseconds. The list shows the units at that time. The view at a time has no pages. |
+| `at` | An RFC 3339 time, for example `2026-10-18T09:30:00Z`. It can have a fraction of 1 to 9 digits and an offset: `2026-10-18T11:30:00+02:00` gives the same view. The server rounds the time down to whole milliseconds. The list shows the units at that time. The view at a time has no pages. The answer holds `at` as an RFC 3339 time in UTC. The letters `T` and `Z` must be upper case. A leap second (`:60`) is not valid. A client can send the name at most once: the server answers 400 for more than one `at` value, an empty one included. One `at` with an empty value (`at=`) gives the plain list. For a time before 1970-01-01T00:00:00Z, the server answers 400 with a message that ends with `at must not be before 1970-01-01T00:00:00Z`. It answers 400 for a Unix time and for any other form. |
 
 URL-encode the value of a query value: `&`, `#`, `+`, `%` and spaces. The
 server splits a `label` value at the first equals sign, so `label=team=payments`
