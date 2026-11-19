@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -27,6 +28,21 @@ func drainPeriodDeclaration(period time.Duration) setting.Declaration {
 	}
 }
 
+// errRetentionRange is the reason of a refused retention value. The numbers
+// are MinRetentionHours and MaxRetentionHours of the gate package.
+var errRetentionRange = errors.New("give 0 (keep forever) or a whole number of hours from 24 to 87600")
+
+// retentionCheck runs the check of the gate package and gives the settings
+// resource a reason that holds no package prefix and does not repeat the key:
+// the answer names the key itself.
+func retentionCheck(value string) error {
+	if gate.RetentionCheck(value) != nil {
+		return errRetentionRange
+	}
+
+	return nil
+}
+
 // decisionRecordRetentionDeclaration returns the declaration of the retention
 // period of the decision records, in whole hours. The default "0" keeps the
 // records forever. The setting prunes decision records only and never an audit
@@ -39,7 +55,7 @@ func decisionRecordRetentionDeclaration() setting.Declaration {
 		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
 		// The kind check of the setting package and RetentionCheck both run, so
 		// the declaration does not rely on one of them alone.
-		Check:           gate.RetentionCheck,
+		Check:           retentionCheck,
 		ReducesSecurity: gate.RetentionReducesSecurity,
 		Doc: "The hours that the server keeps decision records, from 24 to 87600. 0 keeps decision records " +
 			"forever. The setting never deletes an audit entry. No job deletes decision records yet.",

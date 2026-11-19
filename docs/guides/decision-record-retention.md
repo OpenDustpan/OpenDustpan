@@ -57,10 +57,9 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" \
 
 Each change writes one audit entry that names the key, the old value and the
 new value. A change to a shorter period, or from `0` to a period, deletes
-evidence sooner, so it needs a fresh authentication: an access token is
-refused with 403 and the code `mfa.fresh-step-required`, and a console session
-with a recent sign-in makes the change. A change to a longer period, or to `0`,
-needs none.
+evidence sooner, so it counts as a change that reduces security. See
+[A change that reduces security](../reference/settings-api.md#a-change-that-reduces-security).
+A change to a longer period, or to `0`, does not.
 
 The setting prunes decision records only. It never deletes or changes an audit
 entry.
@@ -97,8 +96,7 @@ deleted. The caller gives an audit entry, and the method writes it in the same
 transaction, also when no record matches. A record of another decision point, a record at or after the cutoff and
 a record of another namespace stay. If the call fails, it deletes nothing.
 
-The method takes the cutoff from its caller. It does not read the audit
-retention setting, and it holds no timer and no lease.
+The method takes the cutoff from its caller. It does not read `decisionRecords.retentionHours`, and it holds no timer and no lease.
 
 ## What is not available yet
 

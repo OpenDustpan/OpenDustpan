@@ -3,12 +3,17 @@ package dustpan_test
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // getAuditEntries reads the audit entries of the installation and answers the
@@ -131,7 +136,80 @@ func checkRetentionStored(t *testing.T, base, etag string) {
 	}
 
 	code, entries := getAuditEntries(t, base)
-	if code != http.StatusOK || strings.Count(entries, gate.RetentionKey) < 1 || !strings.Contains(entries, "8760") {
-		t.Fatalf("audit entries = %d %s, want an entry that names %s and 8760", code, entries, gate.RetentionKey)
+	if code != http.StatusOK || strings.Count(entries, gate.RetentionKey) < 1 || !strings.Contains(entries, "8760") ||
+		!strings.Contains(entries, `"old":"0"`) {
+		t.Fatalf("audit entries = %d %s, want an entry that names %s, the old value 0 and 8760",
+			code, entries, gate.RetentionKey)
+	}
+}
+
+// TestDecisionRecordRetentionIgnoresRefusedStoredValue proves that a stored
+// value that the declaration refuses, as after a restore from another
+// version, is not read: the item has the default value and the default source.
+// This is the layer below the PATCH check, so the test writes the value
+// straight into the settings store.
+func TestDecisionRecordRetentionIgnoresRefusedStoredValue(t *testing.T) {
+	t.Parallel()
+
+	for _, stored := range []string{"23", "024"} {
+		t.Run(stored, func(t *testing.T) {
+			t.Parallel()
+
+			p := newPorts(t)
+			storeRawRetention(t, p.st.SettingStore(), stored)
+
+			opts := append(fullServerOptions(t, p.st, p.blobs, p.authn),
+				dustpan.WithSettings(p.st.SettingStore(), nil, nil),
+				dustpan.WithIdempotencyStore(p.st.Idempotency(testWrapper(t))),
+			)
+
+			srv, err := dustpan.NewServer(opts...)
+			if err != nil {
+				t.Fatalf("new server: %v", err)
+			}
+
+			ts := httptest.NewServer(startedHandler(t, srv))
+			t.Cleanup(ts.Close)
+
+			doc, _ := readSettings(t, ts.URL)
+
+			item := itemOf(t, doc, gate.RetentionKey)
+			if item.Value != float64(0) || item.Source != "default" {
+				t.Fatalf("%s with stored %q = %+v, want value 0 and source default", gate.RetentionKey, stored, item)
+			}
+		})
+	}
+}
+
+// storeRawRetention writes value for the retention key into store through a
+// declaration with no check, so that the store holds a value that the real
+// declaration refuses.
+func storeRawRetention(t *testing.T, store setting.Store, value string) {
+	t.Helper()
+
+	reg, err := setting.NewRegistry([]setting.Declaration{{
+		Key: gate.RetentionKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "0",
+		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
+		Check: nil, ReducesSecurity: nil, Doc: "A declaration with no check, for a test.",
+	}})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	_, err = store.Update(t.Context(), setting.InstallationScope(), namespace.Fence{Namespace: "", FailoverVersion: 0},
+		setting.ChangeInput{
+			Registry: reg, Static: nil, Patch: setting.Patch{{Key: gate.RetentionKey, Value: value, Delete: false}},
+			Entry: audit.Entry{
+				At: time.UnixMilli(1), Namespace: audit.ServerScope, Subject: "admin", IDPSubject: "", TokenID: "",
+				Action: string(identity.ActionServerManageSettings), Object: audit.ServerScope.String(),
+				Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "",
+				Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+				ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "",
+				JobID: "", Origin: nil,
+			},
+			IfMatch: 0, Fresh: true, AtMs: 1_700_000_000_000,
+		})
+	if err != nil {
+		t.Fatalf("store raw %q: %v", value, err)
 	}
 }

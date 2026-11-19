@@ -79,9 +79,40 @@ func retentionScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	tag = read.Header.Get("ETag")
 
+	retentionShorter(ctx, t, env, tag)
+
 	retentionRefusals(ctx, t, env, tag)
 
+	retentionStays(ctx, t, env)
+
 	retentionLonger(ctx, t, env, tag)
+}
+
+// retentionShorter proves that a shorter period needs a fresh authentication.
+func retentionShorter(ctx context.Context, t *testing.T, env *e2e.Env, tag string) {
+	t.Helper()
+
+	// A shorter period deletes evidence sooner. An access token never gives
+	// the fresh authentication, so the change is refused and 8760 stays.
+	resp, refused := settingsPatch(ctx, t, env, settingsReq{
+		path: settingsRoute, ifMatch: tag, body: `{"` + retentionKey + `":720}`,
+	})
+	if resp.Status != http.StatusForbidden || refused.ErrorCode != "mfa.fresh-step-required" {
+		t.Fatalf("PATCH 720 with an access token answers %d %q (%s), want 403 mfa.fresh-step-required",
+			resp.Status, refused.ErrorCode, resp.Body)
+	}
+
+	retentionStays(ctx, t, env)
+}
+
+// retentionStays proves that the stored period is still 8760.
+func retentionStays(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	_, doc := settingsRead(ctx, t, env, settingsRoute)
+	if item := settingFor(t, doc, retentionKey); item.Value != float64(8760) || item.Source != "database" {
+		t.Fatalf("%s = %+v, want 8760 from the database", retentionKey, item)
+	}
 }
 
 // retentionRefusals proves that a value that a typo can cause gets 400.
