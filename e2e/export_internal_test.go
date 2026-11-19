@@ -54,3 +54,10 @@ func RemapCacheMember(wantMember, wantBinary string) error {
 func PinnedSums(tool Tool) map[string]string {
 	return maps.Clone(tool.pinned)
 }
+
+// ArchiveNameFor returns the archive name of tool version for goos and arch,
+// so a test can check the pinned sum of each platform that CI may run on, not
+// only the platform of the test host.
+func ArchiveNameFor(tool Tool, version, goos, arch string) string {
+	return tool.archive(version, goos, arch)
+}
