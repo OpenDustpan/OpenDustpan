@@ -85,14 +85,16 @@ func runImageScript(t *testing.T, script string, imageVersion *string) scriptRun
 		"PATH=" + filepath.Join(tree, "bin") + ":" + os.Getenv("PATH"),
 		"HOME=" + tree,
 		"DOCKER_LOG=" + filepath.Join(tree, "docker.log"),
+		"IMAGE_SCRIPT=" + filepath.Join(tree, "scripts", script),
 		"CONSOLE_URL=", "CONSOLE_SHA256=",
 	}
 	if imageVersion != nil {
 		env = append(env, "IMAGE_VERSION="+*imageVersion)
 	}
 
-	// The command takes an argument list, so no argument passes through a shell.
-	cmd := exec.CommandContext(t.Context(), "bash", filepath.Join(tree, "scripts", script))
+	// The path of the script goes in the environment, so that the command line
+	// holds no variable.
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", `exec bash "$IMAGE_SCRIPT"`)
 	cmd.Dir = tree
 	cmd.Env = env
 
