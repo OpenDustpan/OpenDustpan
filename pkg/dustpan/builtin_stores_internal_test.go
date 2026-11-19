@@ -159,3 +159,21 @@ func freshPostgresSchemaURL(t *testing.T, base string) string {
 
 	return u.String()
 }
+
+// TestBuiltinStoreNilCloseFunction proves that a handle with no close function
+// answers nil on each Close. The function is nil for a handle that has nothing
+// to close.
+func TestBuiltinStoreNilCloseFunction(t *testing.T) {
+	t.Parallel()
+
+	st := newBuiltinStore(builtinStoreParts{
+		ports: nil, options: nil, settingStore: nil, settingDeclarations: nil,
+		minimumBinaryVersions: nil, close: nil,
+	})
+
+	for range 2 {
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close of a handle without a close function = %v, want nil", err)
+		}
+	}
+}

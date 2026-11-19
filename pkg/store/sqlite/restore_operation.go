@@ -858,12 +858,12 @@ func (s *Store) ApplyRestoreArea(
 		},
 	}
 
-	dropped, err := s.swapStaged(ctx, plan)
+	kept, err := s.swapStaged(ctx, plan)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
+	return kept, nil
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging. SQLite keeps no old

@@ -52,3 +52,24 @@ func TestFromAccessTokenRowKinds(t *testing.T) {
 		})
 	}
 }
+
+// TestFromAccessTokenRowUnknownKindCarriesOwner checks that the error of a
+// row of an unknown kind carries the owner and the stored kind, read without
+// decoding the kind, so an own route checks the owner first.
+func TestFromAccessTokenRowUnknownKindCarriesOwner(t *testing.T) {
+	t.Parallel()
+
+	row := knownRow("trust")
+	row.PrincipalID = "prn-1"
+
+	_, err := codec.FromAccessTokenRow(row)
+
+	var unknown *accesstoken.UnknownKindError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("err = %v, want an UnknownKindError", err)
+	}
+
+	if unknown.PrincipalID != "prn-1" || unknown.Kind != "trust" || unknown.ID != "tok-1" {
+		t.Errorf("UnknownKindError = %+v, want the owner prn-1, the kind trust and the ID tok-1", unknown)
+	}
+}

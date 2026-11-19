@@ -142,6 +142,8 @@ var (
 	// ErrLastCredential reports a change that removes the last sign-in
 	// credential of a local user: the password when the person has no
 	// passkey.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrLastCredential = errors.New("the change removes the last sign-in credential")
 	// ErrDemoOnly reports a demo sign-in on an installation that is not of
 	// the kind dev, or a demo person on such an installation.
@@ -169,6 +171,8 @@ var (
 	// ErrOwnAccount reports a reset or a removal of the password of the own
 	// account by an administrator. A person changes the own password with
 	// the change route.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrOwnAccount = errors.New("an administrator cannot reset or remove the own password")
 	// ErrGenerationChanged reports a change from a session whose session
 	// generation is no longer the stored one: another change ended the

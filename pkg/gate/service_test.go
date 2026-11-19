@@ -55,6 +55,7 @@ func newService(t *testing.T) *gate.Service {
 		Fences:     stubFences{},
 		KindReader: fixedKind("production"),
 		IsDev:      principalpkg.IsDevSubject,
+		BreakGlass: nil,
 		Now:        nil,
 		Log:        slog.New(slog.DiscardHandler),
 	})
@@ -77,6 +78,7 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 		Fences:     nil,
 		KindReader: nil,
 		IsDev:      nil,
+		BreakGlass: nil,
 		Now:        nil,
 		Log:        nil,
 	})

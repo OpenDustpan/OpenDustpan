@@ -200,6 +200,16 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_LOG_OTLP_HEADERS` | Extra headers of each request of an `otlp:` log sink, in the same form. Optional. |
 | `DUSTPAN_LOG_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_LOG_OTLP_HEADERS` wins. |
 
+After the start reads its settings, `serve` clears these variables from its own
+environment, so that a child process does not inherit them: each variable in the
+table above, each other sensitive setting, and the variables that a library
+reads and no setting declares (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `PGPASSWORD`, `PGSSLPASSWORD`).
+`serve` logs at Info the count and the names of the variables that it cleared,
+never a value. If `serve` cannot clear a variable, it does not start.
+`serve` does not clear `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`: the HTTP
+client reads them at its first outbound request, which can come after the
+clear. Keep a proxy password out of the environment of `serve`.
+
 Make a key-encryption key with this command:
 
 ```sh
