@@ -27,8 +27,8 @@ const (
 
 // verifyArchiveSum is the checksum step: the archive must match the line of its
 // own name in SHA256SUMS. It reads the file as untrusted data. It refuses a
-// missing line, a second line for the same name, a line with a bad hash and a
-// hash that differs. Defense in
+// malformed line (no two-space separator), a missing line, a second line for
+// the same name, a line with a bad hash and a hash that differs. Defense in
 // depth: the unpack step does not rely on it, and it does not rely on the
 // unpack step.
 func verifyArchiveSum(sums []byte, name string, archive []byte) error {
@@ -40,8 +40,16 @@ func verifyArchiveSum(sums []byte, name string, archive []byte) error {
 	var failure error
 
 	for line := range strings.SplitSeq(string(sums), "\n") {
+		if line == "" {
+			continue
+		}
+
 		hash, file, found := strings.Cut(line, "  ")
-		if !found || file != name {
+		if !found {
+			return fmt.Errorf("%w: SHA256SUMS holds a line with no two-space separator", errChecksum)
+		}
+
+		if file != name {
 			continue
 		}
 
@@ -68,6 +76,11 @@ func verifyArchiveSum(sums []byte, name string, archive []byte) error {
 // single or double dot, a backslash and any other name.
 func archiveEntryAllowed(name string) bool {
 	trimmed := strings.TrimSuffix(name, "/")
+
+	// Defense in depth: the empty-part check in the loop below also refuses a
+	// leading slash, because the first part is empty. This check stays so that
+	// a change of that loop cannot let an absolute path pass. It does not rely
+	// on the empty-part check.
 	if trimmed == "" || strings.HasPrefix(trimmed, "/") || strings.ContainsAny(trimmed, "\\\x00") {
 		return false
 	}
@@ -114,6 +127,28 @@ func writeArchiveEntry(root *os.Root, hdr *tar.Header, body io.Reader) error {
 	}
 }
 
+// noteArchiveName records the name of an entry and refuses a name that the
+// archive already used. A name is the same with and without a trailing slash.
+func noteArchiveName(seen map[string]struct{}, name string) error {
+	key := strings.TrimSuffix(name, "/")
+	if _, dup := seen[key]; dup {
+		return fmt.Errorf("%w: entry %q appears more than once", errUnpack, name)
+	}
+
+	seen[key] = struct{}{}
+
+	return nil
+}
+
+// admitArchiveEntry applies the allowlist and the seen-name check to one name.
+func admitArchiveEntry(seen map[string]struct{}, name string) error {
+	if !archiveEntryAllowed(name) {
+		return fmt.Errorf("%w: entry %q is outside the allowlist", errUnpack, name)
+	}
+
+	return noteArchiveName(seen, name)
+}
+
 // writeArchiveFile writes one regular file. It never replaces a file.
 func writeArchiveFile(root *os.Root, name string, hdr *tar.Header, body io.Reader) error {
 	if hdr.Size < 0 || hdr.Size > archiveEntryLimit {
@@ -129,6 +164,9 @@ func writeArchiveFile(root *os.Root, name string, hdr *tar.Header, body io.Reade
 		mode = 0o755
 	}
 
+	// Defense in depth: unpackArchiveLimited refuses a repeated name before it
+	// calls this function. O_EXCL stays so that a caller that skips that check
+	// still cannot replace a file. It does not rely on that check.
 	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return fmt.Errorf("%w: open %q: %w", errUnpack, hdr.Name, err)
@@ -162,6 +200,8 @@ func unpackArchiveLimited(root *os.Root, data []byte, maxEntries int, maxTotal i
 
 	var total int64
 
+	seen := make(map[string]struct{})
+
 	for count := 0; ; count++ {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -181,8 +221,8 @@ func unpackArchiveLimited(root *os.Root, data []byte, maxEntries int, maxTotal i
 			return fmt.Errorf("%w: files hold more than %d bytes", errUnpack, maxTotal)
 		}
 
-		if !archiveEntryAllowed(hdr.Name) {
-			return fmt.Errorf("%w: entry %q is outside the allowlist", errUnpack, hdr.Name)
+		if err := admitArchiveEntry(seen, hdr.Name); err != nil {
+			return err
 		}
 
 		if err := writeArchiveEntry(root, hdr, tr); err != nil {

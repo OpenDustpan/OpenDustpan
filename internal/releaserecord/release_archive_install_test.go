@@ -129,11 +129,7 @@ func freePort(t *testing.T) string {
 func binaryVersion(t *testing.T, dir string) string {
 	t.Helper()
 
-	cmd := exec.CommandContext( //nolint:gosec // The test runs the binary that it unpacked.
-		t.Context(),
-		filepath.Join(dir, "opendustpan"),
-		"--version",
-	)
+	cmd := exec.CommandContext(t.Context(), "./opendustpan", "--version")
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir}
 
@@ -189,18 +185,14 @@ func startServe(t *testing.T, dir string) serveInstance {
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
-	cmd := exec.CommandContext( //nolint:gosec // The test runs the binary that it unpacked.
-		ctx,
-		filepath.Join(dir, "opendustpan"),
-		"serve",
-		"--listen", "127.0.0.1:"+port,
-		"--database", "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"),
-	)
+	cmd := exec.CommandContext(ctx, "./opendustpan", "serve")
 	cmd.Dir = dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + dir,
+		"DUSTPAN_LISTEN=127.0.0.1:" + port,
+		"DUSTPAN_DATABASE=sqlite:" + filepath.Join(t.TempDir(), "dustpan.db"),
 		"DUSTPAN_KEY_ENCRYPTION_KEY=" + randomText(t, 32, base64.StdEncoding.EncodeToString),
 		"DUSTPAN_ADMIN_TOKEN=" + randomText(t, 32, hex.EncodeToString),
 	}
@@ -431,14 +423,16 @@ func TestReleaseArchiveInstallRefusesAWrongChecksum(t *testing.T) {
 	bad := strings.Repeat("0", 64) + "  " + name
 
 	cases := map[string]checksumCase{
-		"flipped byte":         {sums, flipped},
-		"line of another name": {[]byte(strings.Replace(string(sums), name, "other.tar.gz", 1)), archive},
-		"short hash":           {[]byte("abcd  " + name + "\n"), archive},
-		"empty file":           {nil, archive},
-		"hash of other bytes":  {[]byte(bad + "\n"), archive},
-		"good line then bad":   {[]byte(good + "\n" + bad + "\n"), archive},
-		"bad line then good":   {[]byte(bad + "\n" + good + "\n"), archive},
-		"two good lines":       {[]byte(good + "\n" + good + "\n"), archive},
+		"flipped byte":           {sums, flipped},
+		"line of another name":   {[]byte(strings.Replace(string(sums), name, "other.tar.gz", 1)), archive},
+		"short hash":             {[]byte("abcd  " + name + "\n"), archive},
+		"empty file":             {nil, archive},
+		"hash of other bytes":    {[]byte(bad + "\n"), archive},
+		"good line then bad":     {[]byte(good + "\n" + bad + "\n"), archive},
+		"bad line then good":     {[]byte(bad + "\n" + good + "\n"), archive},
+		"two good lines":         {[]byte(good + "\n" + good + "\n"), archive},
+		"line with no separator": {[]byte(good + "\nnotaline\n"), archive},
+		"single-space line":      {[]byte(strings.Replace(good, "  ", " ", 1) + "\n"), archive},
 	}
 
 	for label, tc := range cases {

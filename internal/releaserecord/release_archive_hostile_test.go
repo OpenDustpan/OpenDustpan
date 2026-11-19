@@ -121,6 +121,23 @@ func checkRootWriterAlone(t *testing.T) {
 		headers = append(headers, tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: 1})
 	}
 
+	// A second entry of a name must not replace the first: only O_EXCL stands.
+	t.Run("duplicate entry name", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		hdr := &tar.Header{Name: "LICENSE", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}
+		if err := writeArchiveEntry(root, hdr, strings.NewReader("a")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writeArchiveEntry(root, hdr, strings.NewReader("b")); err == nil {
+			t.Error("the root writer replaced a file")
+		}
+	})
+
 	for i := range headers {
 		hdr := &headers[i]
 		parent, root := targetRoot(t)
@@ -136,6 +153,59 @@ func checkRootWriterAlone(t *testing.T) {
 	}
 }
 
+// checkSeenNameAlone sends repeated names to the seen-name check alone.
+func checkSeenNameAlone(t *testing.T) {
+	t.Parallel()
+
+	seen := make(map[string]struct{})
+
+	if err := noteArchiveName(seen, "third_party_licenses/"); err != nil {
+		t.Fatalf("the seen-name check refused a first name: %v", err)
+	}
+
+	for _, name := range []string{"third_party_licenses/", "third_party_licenses"} {
+		if err := noteArchiveName(seen, name); err == nil {
+			t.Errorf("the seen-name check accepted the repeated name %q", name)
+		}
+	}
+
+	if err := noteArchiveName(seen, "LICENSE"); err != nil {
+		t.Errorf("the seen-name check refused a new name: %v", err)
+	}
+}
+
+// tarOfEntries makes a gzip tar of regular files, one per name, each with the
+// body "x".
+func tarOfEntries(t *testing.T, names ...string) []byte {
+	t.Helper()
+
+	var raw bytes.Buffer
+
+	zw := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(zw)
+
+	for _, name := range names {
+		hdr := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := tw.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return raw.Bytes()
+}
+
 // checkWholeStep sends each hostile entry to the whole unpack step.
 func checkWholeStep(t *testing.T) {
 	t.Parallel()
@@ -145,6 +215,17 @@ func checkWholeStep(t *testing.T) {
 	for _, name := range hostileNames() {
 		headers = append(headers, tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: 1})
 	}
+
+	t.Run("duplicate entry name", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		if err := unpackArchive(root, tarOfEntries(t, "LICENSE", "LICENSE")); err == nil {
+			t.Error("the unpack step accepted a repeated name")
+		}
+	})
 
 	for i := range headers {
 		hdr := &headers[i]
@@ -175,6 +256,7 @@ func TestReleaseArchiveUnpackRefusesHostileEntries(t *testing.T) {
 	t.Parallel()
 
 	t.Run("allowlist alone", checkAllowlistAlone)
+	t.Run("seen-name check alone", checkSeenNameAlone)
 	t.Run("root writer alone", checkRootWriterAlone)
 	t.Run("whole step", checkWholeStep)
 }

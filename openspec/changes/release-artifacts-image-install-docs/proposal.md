@@ -8,13 +8,13 @@ version: 7
 
 - The tag workflow builds the image with no version argument. The binary of that image prints `dev`, not the tag.
 - The tag workflow passes no console tarball URL and no SHA-256. The Dockerfile then uses its placeholder pin, and the build stops at the download with a curl error that does not name the pin.
-- The install page does not show the binary archive path. No test starts a server from a built archive.
+- The install page does not say how to install from a binary archive. No test starts a server from a built archive.
 
 The user path this change must make work:
 
 1. **Docs page.** Read `docs/guides/install.md` and pick the image or the binary archive.
 2. **CLI, image.** Run `docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version` and read `v0.1.0`, the tag.
-3. **CLI, archive.** Download one archive and `SHA256SUMS`, check the checksum, unpack the archive, run `./opendustpan --version` and start `serve`.
+3. **Docs page, archive.** Read the section "Install from a binary archive". It says that archives and `SHA256SUMS` are not available yet, gives no download address, and points to the quickstart and to `./scripts/build-image-local.sh`.
 4. **API.** `GET /health/ready` answers 200 on the running server.
 
 Errors the person may hit, and the one command that helps:
@@ -24,7 +24,6 @@ Errors the person may hit, and the one command that helps:
 | The version for a local image build is empty or holds a character outside letters, digits, dots, plus and dash. | `build-image-local.sh` and `smoke-image.sh` refuse before any `docker` call and print the allowed set. The Dockerfile refuses the same value. | `IMAGE_VERSION=v0.1.0 scripts/build-image-local.sh` |
 | The console pin is the placeholder. | The Dockerfile stops in the console stage and says to pin the console tag and SHA-256 in the Dockerfile, or to pass `CONSOLE_URL` and `CONSOLE_SHA256`. | `docker build --build-arg CONSOLE_URL=<https URL> --build-arg CONSOLE_SHA256=<sha256> .` |
 | The console tarball SHA-256 does not match. | The build stops with no image. This is on main (`Dockerfile:56`). The smoke test now proves it. | `make image-smoke` |
-| The archive checksum does not match its `SHA256SUMS` line. | The page says to download the archive again. | `grep ' <archive>$' SHA256SUMS \| sha256sum -c -` |
 
 ## What Changes
 
@@ -32,7 +31,7 @@ Errors the person may hit, and the one command that helps:
 - The Dockerfile validates `VERSION` again in the Go stage and refuses the placeholder console pin with a message that names the pin.
 - `scripts/smoke-image.sh` gets two refusal cases that run a real build: a wrong console SHA-256 and a bad version.
 - A new test builds the release archives in a copy of the work tree, checks the archive of the host platform against `SHA256SUMS`, runs its binary with `--version`, starts `serve` and reads `GET /health/ready`.
-- `docs/guides/install.md` gets the sections "Check the version of the image" and "Install from a binary archive". The commands of the archive section run in the new test.
+- `docs/guides/install.md` gets the section "Check the version of the image" and the section "Install from a binary archive". The archive section says that archives and `SHA256SUMS` are not available yet, gives no download address, and points to the quickstart and the local image build script. A test checks this.
 - The release workflow passes `--build-arg VERSION` to the image build. The Dockerfile pin stays the single source of the console pin, so the workflow passes no console argument. A person applies this diff: it is under "Workflow patch (apply locally)" in the pull request body, and the task list contains no workflow file.
 
 Out of scope:
@@ -53,8 +52,7 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - The operator must see the same version string in the tag, in `--version` of the image and in `--version` of the archive binary. The page shows both commands next to each other.
-- The page says that `SHA256SUMS` is no signature, as ADR 283 decision 4 says. It makes no compliance claim.
-- The archive has no console. The page says to use the image, or `--console-dir` with a console release tarball, for the console.
+- The archive section says that archives and `SHA256SUMS` are not available yet and gives no download address, so that no link fails. It names the two ways that work today.
 
 ## What main already does
 
@@ -100,7 +98,7 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 - Quote, decision 5: "The image release workflow uses them to build linux/amd64 and linux/arm64."
 - Quote, decision 6: "A `v*` tag starts the workflow of the binaries and the image."
 - Quote, decision 7: "The gate item "Install docs, with TLS" stays."
-- Effect: the change adds no signature, no SBOM and no OS package. The install page says that `SHA256SUMS` is no signature. The change adds an install page section for the archive; the TLS and reverse proxy part of the gate item "Install docs, with TLS" stays with the existing TLS pages and is not in this change.
+- Effect: the change adds no signature, no SBOM and no OS package. The change adds an install page section for the archive that says archives are not available yet; the TLS and reverse proxy part of the gate item "Install docs, with TLS" stays with the existing TLS pages and is not in this change.
 - Conflict: none.
 
 **ADR 315: Container registries, the quickstart, the lock event, the history scan and the rules for the docs site** (owner-tagged).

@@ -250,16 +250,12 @@ func versionCheckBody(t *testing.T, lines []string) string {
 
 // runVersionCheck runs the body with sh and answers the exit code and the
 // output. VERSION is in the environment, as the build argument is in a RUN
-// step. The command takes an argument list: no shell parses the value.
+// step. The body goes on stdin and the arguments are constants: no shell parses the value.
 func runVersionCheck(t *testing.T, body, version string) (int, string) {
 	t.Helper()
 
-	cmd := exec.CommandContext( //nolint:gosec // The body is the Dockerfile RUN text; the hostile value is in the environment.
-		t.Context(),
-		"sh",
-		"-c",
-		body,
-	)
+	cmd := exec.CommandContext(t.Context(), "sh", "-s")
+	cmd.Stdin = strings.NewReader(body)
 	cmd.Env = []string{"LC_ALL=C", "PATH=" + os.Getenv("PATH"), "VERSION=" + version}
 
 	out, err := cmd.CombinedOutput()

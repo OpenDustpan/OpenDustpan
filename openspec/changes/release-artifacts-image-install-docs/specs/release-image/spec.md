@@ -60,10 +60,10 @@ When the release archives of one version are built, the archive of the host plat
 - **WHEN** an archive entry has an absolute path, a dot dot part, a link or a name outside the allowlist.
 - **THEN** the unpack step of the test refuses it and writes no file outside the target directory.
 
-### Requirement: install page for both artifacts
+### Requirement: install page archive section promises no download
 
-The page `docs/guides/install.md` SHALL show the version check of the image and the install from a binary archive, and SHALL say that `SHA256SUMS` is no signature.
+The section "Install from a binary archive" of `docs/guides/install.md` SHALL say that binary archives and `SHA256SUMS` are not available yet, SHALL give no download address and no shell block, and SHALL point to the quickstart and to the local image build script. The page SHALL show the version check of the image.
 
-#### Scenario: Archive commands run
-- **WHEN** the archive test runs.
-- **THEN** it runs the check block and the unpack block of the page as written, with the placeholders replaced, and both exit with status 0.
+#### Scenario: Archive section promises no download
+- **WHEN** the page test reads the archive section.
+- **THEN** the section says "not available yet", holds no shell block, no `releases/download` address and none of the commands `curl`, `tar -xzf` and `sha256sum`, and names `quickstart.md` and `build-image-local.sh`.
