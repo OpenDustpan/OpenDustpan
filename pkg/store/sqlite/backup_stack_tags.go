@@ -27,7 +27,9 @@ func checkStagedStackTags(ctx context.Context, conn *sql.DB) error {
 	}
 
 	defer func() {
-		_ = rows.Close() //nolint:errcheck // Read-only check handle.
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
 	}()
 
 	for rows.Next() {
