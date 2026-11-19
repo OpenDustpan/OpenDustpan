@@ -99,12 +99,45 @@ The test's working directory is the e2e package, so the default directory
 - The Markdown holds the verdict per metric with its slope and threshold,
   the totals, and the overall verdict.
 
+## The nightly run
+
+A nightly workflow, `nightly-perf.yml`, runs this soak run on PostgreSQL with the load harness and the Toxiproxy fault tests.
+It runs on a schedule and on manual dispatch, never on a pull request.
+It uses no secret beyond the repository token, so a pull request from a fork does not run it.
+
+`perf/run-soak.sh` runs `make soak` and and writes `measurements.json`, a list of `name`, `p50`, `p95`, `max`, `unit` and `scope`.
+The soak entries hold the p50, p95 and max of the samples of goroutines, heap bytes, open file descriptors and error rate.
+The compare program checks each measurement against `perf/budgets.json`, which holds one entry for each measurement name:
+
+```json
+{ "soak.goroutines": { "p50": 200, "p95": 300, "max": 400, "unit": "count", "scope": "soak" } }
+```
+
+A figure above its budget fails the job.
+The tolerance is zero.
+A measurement with no budget entry is record-only: the job passes and the artifact holds the value.
+A budget entry that the run did not produce gives a warning and does not fail the job.
+The job opens one issue with the title `[nightly-perf] <measurement>`.
+A repeat breach adds a comment to that issue.
+The job closes the issue when the measurement is within its budget again.
+A run that ends with no measurement fails and files no issue.
+A service container, the harness or a timeout failed, and the job log names the step.
+
+Read a failed run with `gh run view <run-id>`.
+After a fix, run the workflow again:
+
+```sh
+gh workflow run nightly-perf.yml
+```
+
+To accept the first values as budgets, copy them from the `measurements.json` artifact into `perf/budgets.json` in a pull request that a person reviews.
+No job changes a budget.
+Nightly figures come from shared runners, so they are never a service level agreement.
+
 ## What this guide does not cover
 
 These items are not part of the harness:
 
-- The nightly CI job, which is a separate issue.
-- Budget thresholds for the nightly job.
 - Fault injection and crash testing.
 
 The harness reuses the e2e helpers, but not the load/ helpers:

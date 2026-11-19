@@ -336,11 +336,45 @@ The harness, the balancer, the server processes, PostgreSQL and the object store
 So the numbers depend on that host.
 The [measured sizing page](measured-sizing.md) shows a run and its limits.
 
+## The nightly run
+
+A nightly workflow, `nightly-perf.yml`, runs this harness on PostgreSQL with the soak run and the Toxiproxy fault tests.
+It runs on a schedule and on manual dispatch, never on a pull request.
+It uses no secret beyond the repository token, so a pull request from a fork does not run it.
+
+`perf/run-load.sh` runs the harness and writes `measurements.json`, a list of `name`, `p50`, `p95`, `max`, `unit` and `scope`.
+The harness reports one value for most figures, so those entries hold the value in all three fields.
+The compare program checks each measurement against `perf/budgets.json`, which holds one entry for each measurement name:
+
+```json
+{ "load.checkpoint.full.1024k": { "p50": 50, "p95": 50, "max": 50, "unit": "ms", "scope": "load" } }
+```
+
+A figure above its budget fails the job.
+The tolerance is zero.
+A measurement with no budget entry is record-only: the job passes and the artifact holds the value.
+A budget entry that the run did not produce gives a warning and does not fail the job.
+The job opens one issue with the title `[nightly-perf] <measurement>`.
+A repeat breach adds a comment to that issue.
+The job closes the issue when the measurement is within its budget again.
+A run that ends with no measurement fails and files no issue.
+A service container, the harness or a timeout failed, and the job log names the step.
+
+Read a failed run with `gh run view <run-id>`.
+After a fix, run the workflow again:
+
+```sh
+gh workflow run nightly-perf.yml
+```
+
+To accept the first values as budgets, copy them from the `measurements.json` artifact into `perf/budgets.json` in a pull request that a person reviews.
+No job changes a budget.
+Nightly figures come from shared runners, so they are never a service level agreement.
+
 ## What this guide does not cover
 
 These items are not part of the harness:
 
-- Budget thresholds for the nightly job.
 - Real CLI runs against the harness server.
 - Runner protocol routes that need a joined runner, and the start of a job through a pool.
 - Fault injection and crash testing.
