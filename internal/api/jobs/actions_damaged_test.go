@@ -95,23 +95,13 @@ func TestJobActionRoutesCancelADamagedJob(t *testing.T) {
 
 			// A denied cancel of a damaged job writes one refusal entry that
 			// names job:cancel.
-			entries.mu.Lock()
-			defer entries.mu.Unlock()
-
-			denials := 0
-
-			for _, e := range entries.entries {
-				if e.Action == string(identity.ActionJobCancel) && e.Outcome == audit.OutcomeDenied {
-					denials++
-				}
+			wantDenials := 0
+			if tc.wantDeny {
+				wantDenials = 1
 			}
 
-			if tc.wantDeny && denials != 1 {
-				t.Errorf("refusal entries for job:cancel = %d, want 1 (entries: %+v)", denials, entries.entries)
-			}
-
-			if !tc.wantDeny && denials != 0 {
-				t.Errorf("refusal entries for job:cancel = %d, want 0", denials)
+			if got := cancelDenials(entries); got != wantDenials {
+				t.Errorf("refusal entries for job:cancel = %d, want %d", got, wantDenials)
 			}
 		})
 	}
@@ -211,13 +201,8 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, tc.wantCode)
 			}
 
-			if strings.Contains(rec.Body.String(), "hunter2") {
-				t.Errorf("the answer leaks the text of the failure: %s", rec.Body.String())
-			}
-
-			if strings.Contains(logBuf.String(), "hunter2") {
-				t.Errorf("the log holds the text of the failure: %s", logBuf.String())
-			}
+			noText(t, rec.Body.String(), "the answer")
+			noText(t, logBuf.String(), "the log")
 
 			wantCalls := 0
 			if tc.svcErr != nil {
@@ -231,6 +216,31 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 	}
 }
 
+// cancelDenials counts the entries that refuse job:cancel.
+func cancelDenials(a *recordingAudit) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	n := 0
+
+	for i := range a.entries {
+		if e := &a.entries[i]; e.Action == string(identity.ActionJobCancel) && e.Outcome == audit.OutcomeDenied {
+			n++
+		}
+	}
+
+	return n
+}
+
+// noText fails the test when the log holds the secret text of a failure.
+func noText(t *testing.T, got, what string) {
+	t.Helper()
+
+	if strings.Contains(got, "hunter2") {
+		t.Errorf("%s holds the text of the failure: %s", what, got)
+	}
+}
+
 // syncBuffer is a log buffer that many goroutines may write.
 type syncBuffer struct {
 	mu  sync.Mutex
@@ -241,7 +251,12 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write log: %w", err)
+	}
+
+	return n, nil
 }
 
 func (b *syncBuffer) String() string {
