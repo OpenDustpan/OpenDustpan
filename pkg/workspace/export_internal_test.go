@@ -85,8 +85,8 @@ const MaskedMaxDepth = maskedMaxDepth
 // MaskedMaxMarkers is the most markers of one version, for the tests.
 const MaskedMaxMarkers = maskedMaxMarkers
 
-// MaskedStatePaths is maskedStatePaths for the tests: the resource markers and
+// MaskedStateAndOutputPaths is maskedStatePaths for the tests: the resource markers and
 // the sensitive outputs of state, under the bounds of the read.
-func MaskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+func MaskedStateAndOutputPaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
 	return maskedStatePaths(ctx, state, marks)
 }

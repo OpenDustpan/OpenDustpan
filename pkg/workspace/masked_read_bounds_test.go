@@ -69,10 +69,15 @@ func TestMaskedPathsNestingBound(t *testing.T) {
 
 			_, err := workspace.MaskedPaths([]byte(stateWithAttributes(nestedAttributes(tc.depth))), nil)
 
-			switch {
-			case tc.wantErr && !errors.Is(err, workspace.ErrTooLarge):
-				t.Fatalf("err = %v, want ErrTooLarge", err)
-			case !tc.wantErr && err != nil:
+			if tc.wantErr {
+				if !errors.Is(err, workspace.ErrTooLarge) {
+					t.Fatalf("err = %v, want ErrTooLarge", err)
+				}
+
+				return
+			}
+
+			if err != nil {
 				t.Fatalf("err = %v, want none", err)
 			}
 		})
@@ -101,7 +106,9 @@ func TestMaskedPathsMarkerBound(t *testing.T) {
 	t.Run("no kept marks at the bound", func(t *testing.T) {
 		t.Parallel()
 
-		paths, err := workspace.MaskedPaths([]byte(stateWithAttributes(leafAttributes(1, workspace.MaskedMaxMarkers))), nil)
+		state := stateWithAttributes(leafAttributes(1, workspace.MaskedMaxMarkers))
+
+		paths, err := workspace.MaskedPaths([]byte(state), nil)
 		if err != nil || len(paths) != workspace.MaskedMaxMarkers {
 			t.Fatalf("paths = %d, err = %v, want %d paths", len(paths), err, workspace.MaskedMaxMarkers)
 		}
@@ -160,7 +167,7 @@ func TestMaskedStatePathsOutputsCountAsMarkers(t *testing.T) {
 		`"outputs":{}`, `"outputs":{"o":{"value":"x","type":"string","sensitive":true}}`, 1,
 	)
 
-	_, err := workspace.MaskedStatePaths(t.Context(), []byte(state), nil)
+	_, err := workspace.MaskedStateAndOutputPaths(t.Context(), []byte(state), nil)
 	if !errors.Is(err, workspace.ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -185,7 +192,7 @@ func refusedAllocation(t *testing.T, state string) uint64 {
 
 	data := []byte(state)
 
-	runtime.GC()
+	runtime.GC() //nolint:revive // The count starts from a collected heap, so the garbage of earlier tests is not counted.
 
 	var before, after runtime.MemStats
 
@@ -359,7 +366,7 @@ func TestMaskedReadUnknownShapeFailsClosed(t *testing.T) {
 // singleShotCtx is a context whose Err answers the deadline on the call number
 // at and nil on every other call. It counts the calls.
 type singleShotCtx struct {
-	context.Context
+	context.Context //nolint:containedctx // The wrapper must satisfy context.Context, so it embeds the real one.
 
 	calls *atomic.Int64
 	at    int64
@@ -443,7 +450,7 @@ type naiveStates struct {
 func (n naiveStates) GetWorkspaceStateVersion(
 	ctx context.Context, _ namespace.Name, _ workspace.ID, id workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
-	return n.memStore.GetStateVersion(ctx, id)
+	return n.GetStateVersion(ctx, id)
 }
 
 // serviceOverStore returns a service over the stores of f, with states as the
@@ -486,9 +493,17 @@ func writeStateOf(t *testing.T, f fixture, w workspace.Workspace, state string) 
 	return sv.ID
 }
 
+// siblings holds the versions of the other workspaces of a test: one in the
+// same namespace, one in another namespace, and the ID of the second.
+type siblings struct {
+	sameNS    workspace.StateVersionID
+	otherNS   workspace.StateVersionID
+	foreignID workspace.ID
+}
+
 // otherWorkspaces makes a second workspace in the namespace of f and a third
 // in another namespace, writes a state in each, and returns their versions.
-func otherWorkspaces(t *testing.T, f fixture) (sameNS, otherNS workspace.StateVersionID, foreignID workspace.ID) {
+func otherWorkspaces(t *testing.T, f fixture) siblings {
 	t.Helper()
 
 	name, err := workspace.ParseName("sibling")
@@ -506,7 +521,7 @@ func otherWorkspaces(t *testing.T, f fixture) (sameNS, otherNS workspace.StateVe
 		FailoverVersion: 1, Overrides: noOverrides(),
 	}
 
-	if err := f.store.CreateNamespace(t.Context(), beta); err != nil {
+	if err = f.store.CreateNamespace(t.Context(), beta); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
@@ -517,7 +532,10 @@ func otherWorkspaces(t *testing.T, f fixture) (sameNS, otherNS workspace.StateVe
 
 	secretState := stateWithAttributes(`{"other-workspace-secret":"x"}`)
 
-	return writeStateOf(t, f, sibling, secretState), writeStateOf(t, f, foreign, secretState), foreign.ID
+	return siblings{
+		sameNS: writeStateOf(t, f, sibling, secretState), otherNS: writeStateOf(t, f, foreign, secretState),
+		foreignID: foreign.ID,
+	}
 }
 
 // TestMaskedReadRefusesAVersionOfAnotherWorkspace proves a pinned version is
@@ -534,28 +552,35 @@ func TestMaskedReadRefusesAVersionOfAnotherWorkspace(t *testing.T) {
 			t.Parallel()
 
 			h, _ := newMaskedHostile(t, stateWithAttributes(`{"own":"x"}`), 4<<20)
-			sameNS, otherNS, _ := otherWorkspaces(t, h.f)
+			others := otherWorkspaces(t, h.f)
 
 			if layer == "service check alone" {
 				h.f.svc = serviceOverStore(t, h.f, naiveStates{memStore: h.f.store})
 			}
 
-			for name, id := range map[string]workspace.StateVersionID{"same namespace": sameNS, "other namespace": otherNS} {
-				page, err := h.read(t.Context(), workspace.VersionSelector{Latest: false, ID: id}, "")
-				if !errors.Is(err, workspace.ErrStateVersionNotFound) {
-					t.Errorf("%s: err = %v, want ErrStateVersionNotFound", name, err)
-				}
-
-				if len(page.Markers) != 0 || len(page.ValuePaths) != 0 {
-					t.Errorf("%s: page = %+v, want no marker of the other workspace", name, page)
-				}
-			}
+			checkNotReadable(t, h, "same namespace", others.sameNS)
+			checkNotReadable(t, h, "other namespace", others.otherNS)
 
 			// The version of the workspace itself still reads.
 			if _, err := h.read(t.Context(), workspace.VersionSelector{Latest: false, ID: h.id}, ""); err != nil {
 				t.Errorf("own version: %v", err)
 			}
 		})
+	}
+}
+
+// checkNotReadable proves the pinned version id answers ErrStateVersionNotFound
+// and no marker through the workspace of h.
+func checkNotReadable(t *testing.T, h *maskedHostile, name string, id workspace.StateVersionID) {
+	t.Helper()
+
+	page, err := h.read(t.Context(), workspace.VersionSelector{Latest: false, ID: id}, "")
+	if !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Errorf("%s: err = %v, want ErrStateVersionNotFound", name, err)
+	}
+
+	if len(page.Markers) != 0 || len(page.ValuePaths) != 0 {
+		t.Errorf("%s: page = %+v, want no marker of the other workspace", name, page)
 	}
 }
 
@@ -615,81 +640,84 @@ func (s *swapAuthorizer) Authorize(
 // that the grant named, not the name. If the workspace is deleted and made again
 // with the same name between the check and the read, the new workspace has
 // another ID, and the read refuses it with ErrNotFound: the state of the new
-// workspace is not read under the check of the old one. A read with no unit ID
-// is refused too.
+// workspace is not read under the check of the old one.
 func TestMaskedReadReadsByTheAuthorizedID(t *testing.T) {
 	t.Parallel()
 
-	t.Run("deleted and made again between the check and the read", func(t *testing.T) {
-		t.Parallel()
+	h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
 
-		h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+	swap := &swapAuthorizer{grantAuthorizer: h.authz, once: sync.Once{}, hook: func() { replaceWorkspace(t, h) }}
 
-		h.authz = grantAuthorizer{grants: h.authz.grants}
-		swap := &swapAuthorizer{grantAuthorizer: h.authz, once: sync.Once{}, hook: func() {
-			if _, err := h.f.svc.Unlock(t.Context(), h.f.ws.ID, "alice"); err != nil {
-				t.Errorf("unlock: %v", err)
-			}
-
-			if err := h.f.svc.Delete(t.Context(), h.f.ws.Ref, retentionEntry()); err != nil {
-				t.Errorf("delete: %v", err)
-			}
-
-			again, err := h.f.svc.Create(t.Context(), h.f.ws.Ref, memPlacement("acme"))
-			if err != nil {
-				t.Errorf("create again: %v", err)
-
-				return
-			}
-
-			writeStateOf(t, h.f, again, stateWithAttributes(`{"new-unit-secret":"x"}`))
-		}}
-
-		page, err := h.f.svc.ReadMasked(t.Context(), workspace.ReadMaskedArgs{
-			Ref: h.f.ws.Ref, Object: h.obj, Selector: latest(), Principal: person("pat"),
-			Authorizer: swap, Key: testCursorKey(), Sink: h.log.sink(), Cursor: "",
-		})
-		if !errors.Is(err, workspace.ErrNotFound) {
-			t.Fatalf("err = %v, want ErrNotFound", err)
-		}
-
-		if len(page.Markers) != 0 {
-			t.Fatalf("page = %+v, want no marker of the new workspace", page)
-		}
+	page, err := h.f.svc.ReadMasked(t.Context(), workspace.ReadMaskedArgs{
+		Ref: h.f.ws.Ref, Object: h.obj, Selector: latest(), Principal: person("pat"),
+		Authorizer: swap, Key: testCursorKey(), Sink: h.log.sink(), Cursor: "",
 	})
+	if !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
 
-	t.Run("no unit ID", func(t *testing.T) {
-		t.Parallel()
+	if len(page.Markers) != 0 {
+		t.Fatalf("page = %+v, want no marker of the new workspace", page)
+	}
+}
 
-		h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+// replaceWorkspace deletes the workspace of h and makes it again with the same
+// name and another state.
+func replaceWorkspace(t *testing.T, h *maskedHostile) {
+	t.Helper()
 
-		bare, err := identity.UnitObject("opentofu", h.f.ws.Ref.Namespace, h.f.ws.Ref.Name.String())
-		if err != nil {
-			t.Fatalf("unit object: %v", err)
-		}
+	if _, err := h.f.svc.Unlock(t.Context(), h.f.ws.ID, "alice"); err != nil {
+		t.Errorf("unlock: %v", err)
+	}
 
-		h.authz = grantAuthorizer{grants: map[string][]identity.Action{bare.String(): {identity.ActionUnitRead}}}
-		h.obj = bare
+	if err := h.f.svc.Delete(t.Context(), h.f.ws.Ref, retentionEntry()); err != nil {
+		t.Errorf("delete: %v", err)
+	}
 
-		if _, err := h.read(t.Context(), latest(), ""); !errors.Is(err, workspace.ErrNotFound) {
-			t.Fatalf("err = %v, want ErrNotFound", err)
-		}
-	})
+	again, err := h.f.svc.Create(t.Context(), h.f.ws.Ref, memPlacement("acme"))
+	if err != nil {
+		t.Errorf("create again: %v", err)
 
-	t.Run("an ID of a workspace in another namespace", func(t *testing.T) {
-		t.Parallel()
+		return
+	}
 
-		h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
-		_, _, foreign := otherWorkspaces(t, h.f)
+	writeStateOf(t, h.f, again, stateWithAttributes(`{"new-unit-secret":"x"}`))
+}
 
-		// The grant names the unit by its name in the namespace "acme", with the
-		// ID of a workspace of the namespace "beta".
-		other := h.obj.WithUnitID(foreign.String())
-		h.obj = other
-		h.authz = grantAuthorizer{grants: map[string][]identity.Action{other.String(): {identity.ActionUnitRead}}}
+// TestMaskedReadRefusesAnObjectWithNoUnitID proves a read with no stable ID in
+// the object is refused with ErrNotFound.
+func TestMaskedReadRefusesAnObjectWithNoUnitID(t *testing.T) {
+	t.Parallel()
 
-		if _, err := h.read(t.Context(), latest(), ""); !errors.Is(err, workspace.ErrNotFound) {
-			t.Fatalf("err = %v, want ErrNotFound", err)
-		}
-	})
+	h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+
+	bare, err := identity.UnitObject("opentofu", h.f.ws.Ref.Namespace, h.f.ws.Ref.Name.String())
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	h.authz = grantAuthorizer{grants: map[string][]identity.Action{bare.String(): {identity.ActionUnitRead}}}
+	h.obj = bare
+
+	if _, err = h.read(t.Context(), latest(), ""); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestMaskedReadRefusesAnIDOfAnotherNamespace proves the namespace of the unit
+// that the ID names must be the namespace of the object: the grant names a unit
+// of "acme" with the ID of a workspace of "beta".
+func TestMaskedReadRefusesAnIDOfAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+	foreign := otherWorkspaces(t, h.f).foreignID
+
+	other := h.obj.WithUnitID(foreign.String())
+	h.obj = other
+	h.authz = grantAuthorizer{grants: map[string][]identity.Action{other.String(): {identity.ActionUnitRead}}}
+
+	if _, err := h.read(t.Context(), latest(), ""); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
 }

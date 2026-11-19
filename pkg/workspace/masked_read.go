@@ -231,8 +231,9 @@ func (s *Service) maskedWorkspace(ctx context.Context, args ReadMaskedArgs) (Wor
 	if id == "" {
 		// Defense in depth: the lookup by ID below answers ErrNotFound for an
 		// empty ID too, and the handler always sets the ID; this check stays so
-		// that a store that answers an empty ID cannot be reached. Fail closed: with no ID the read cannot tell which workspace the
-		// grant covers.
+		// that a store that answers an empty ID cannot be reached. Fail
+		// closed: with no ID the read cannot tell which workspace the grant
+		// covers.
 		return Workspace{}, fmt.Errorf("masked read of %s: %w: no unit ID", args.Ref, ErrNotFound)
 	}
 
@@ -558,6 +559,7 @@ func maskedCheckDepth(state []byte) error {
 				i++
 			case '"':
 				inString = false
+			default:
 			}
 
 			continue
@@ -574,6 +576,7 @@ func maskedCheckDepth(state []byte) error {
 			}
 		case '}', ']':
 			depth--
+		default:
 		}
 	}
 
@@ -582,10 +585,11 @@ func maskedCheckDepth(state []byte) error {
 
 // maskedWork is the count of the work of one masked read, made before any path
 // is built: the leaf values, the kept marks and the bytes that the paths of
-// all values need.
+// all values need. With countLeaves set, each leaf counts as a marker.
 type maskedWork struct {
-	markers   int
-	pathBytes int
+	markers     int
+	pathBytes   int
+	countLeaves bool
 }
 
 // maskedCheckWork refuses a state whose markers or paths are over the bounds.
@@ -593,7 +597,7 @@ type maskedWork struct {
 // number. With no kept marks every leaf is a marker; with marks the markers
 // come from the pointers that the instance names.
 func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
-	var work maskedWork
+	work := maskedWork{markers: 0, pathBytes: 0, countLeaves: len(marks) == 0}
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
@@ -611,7 +615,7 @@ func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
 				attributes = map[string]any{}
 			}
 
-			if err := work.walk(attributes, base, len(marks) == 0); err != nil {
+			if err := work.walk(attributes, base); err != nil {
 				return err
 			}
 		}
@@ -621,36 +625,57 @@ func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
 }
 
 // walk adds the values under v to the work. pathLen is the length of the path
-// of v. A leaf counts as a marker when leaves is true.
-func (w *maskedWork) walk(v any, pathLen int, leaves bool) error {
+// of v.
+func (w *maskedWork) walk(v any, pathLen int) error {
 	w.pathBytes += pathLen
 
 	if w.pathBytes > maskedMaxPathBytes {
 		return fmt.Errorf("%w: the value paths need more than %d bytes", ErrTooLarge, maskedMaxPathBytes)
 	}
 
+	var err error
+
 	switch typed := v.(type) {
 	case map[string]any:
-		for key, elem := range typed {
-			escaped := len(key) + strings.Count(key, "~") + strings.Count(key, "/")
-			if err := w.walk(elem, pathLen+1+escaped, leaves); err != nil {
-				return err
-			}
-		}
+		err = w.walkObject(typed, pathLen)
 	case []any:
-		for i, elem := range typed {
-			if err := w.walk(elem, pathLen+1+len(strconv.Itoa(i)), leaves); err != nil {
-				return err
-			}
-		}
+		err = w.walkArray(typed, pathLen)
 	default:
-		if leaves {
+		if w.countLeaves {
 			w.markers++
 		}
 	}
 
+	if err != nil {
+		return err
+	}
+
 	if w.markers > maskedMaxMarkers {
 		return fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+	}
+
+	return nil
+}
+
+// walkObject adds the values of an object. The path of a value holds the
+// escaped key: "~" and "/" each take one more byte.
+func (w *maskedWork) walkObject(obj map[string]any, pathLen int) error {
+	for key, elem := range obj {
+		escaped := len(key) + strings.Count(key, "~") + strings.Count(key, "/")
+		if err := w.walk(elem, pathLen+1+escaped); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// walkArray adds the values of an array.
+func (w *maskedWork) walkArray(list []any, pathLen int) error {
+	for i, elem := range list {
+		if err := w.walk(elem, pathLen+1+len(strconv.Itoa(i))); err != nil {
+			return err
+		}
 	}
 
 	return nil
