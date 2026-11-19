@@ -14,9 +14,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/store/schema"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // devResetCommand is the subcommand of dev that starts a data directory again
@@ -279,8 +278,8 @@ func checkDevResetKind(ctx context.Context, db string) error {
 	// Defense in depth: StoredKind refuses a value that is not a known kind,
 	// and this check refuses every kind but dev, also a kind that a later
 	// change adds. The checks of the paths do not decide it.
-	kind, err := sqlite.StoredKind(ctx, db)
-	if errors.Is(err, sqlite.ErrInUse) {
+	kind, err := dustpan.StoredInstallationKind(ctx, db)
+	if errors.Is(err, dustpan.ErrStoreInUse) {
 		return fmt.Errorf("%s: %w: %w", db, errDevResetInUse, err)
 	}
 
@@ -485,7 +484,7 @@ func remakeDevDatabase(ctx context.Context, db string, logger *slog.Logger, proc
 // helps: dev names dev reset, and serve names a backup or a new database.
 // serve never offers a reset. It answers every other error unchanged.
 func schemaRefusal(err error, command, dataDir string) error {
-	if !errors.Is(err, schema.ErrSchemaDiverged) && !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+	if !errors.Is(err, dustpan.ErrStoreSchemaDiverged) && !errors.Is(err, dustpan.ErrStoreSchemaBeforeBaseline) {
 		return err
 	}
 
