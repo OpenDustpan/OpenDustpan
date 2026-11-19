@@ -20,6 +20,28 @@ suffix" for each reason that gets this text.
   The access-review export shows it as a row with source `"code-rule"` and
   rule `"bootstrap admin token"`, with no grant ID, no creator and no time.
 
+## First administrator
+
+- The route `POST /api/server/first-administrator` accepts only the static
+  bootstrap administrator, and only while the marker "first administrator
+  made" is not stored. A personal token, a temporary administrator and a
+  console session get a refusal. After the marker, the route answers 409 with
+  the code `first-administrator.already-made`.
+- The code is 32 bytes from the system random source. The server stores a
+  digest only, compares it in constant time, and never writes the code to a
+  log, an audit entry or an error text. One code is valid at a time, for 10
+  minutes, for one use, for the role `site-administrator` on the installation.
+- The redeem (`POST /api/server/first-administrator/redeem`) needs a console
+  session with its CSRF value and a fresh sign-in. An access token gets 403
+  `mfa.fresh-step-required`. The setting `freshAuthEnabled` does not apply.
+  One transaction makes the grant, spends the code and stores the marker. A
+  failed audit write changes none of the three.
+- The principal must be a live, enabled person. A break-glass account, a
+  temporary administrator, a service principal and a `dev:` subject get 400
+  `first-administrator.principal-invalid`
+  ([Make the first administrator](../guides/first-administrator.md)).
+- The marker travels in a backup. The code never does.
+
 ## Sensitive actions
 
 - Each action of the operator, the administration and the delegation families

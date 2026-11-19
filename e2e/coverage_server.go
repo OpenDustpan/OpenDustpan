@@ -207,6 +207,23 @@ func operatorAllowEntries() []AllowEntry {
 				"checkpoint epoch after a restore or a failed check of the signed checkpoints.",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/server/first-administrator",
+			CoveringTest: "TestFirstAdministratorPath",
+			Reason:       "Operator route: no CLI calls it. The harness reads the state before and after the redeem.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/first-administrator",
+			CoveringTest: "TestFirstAdministratorPath",
+			Reason: "Operator route: no CLI calls it. The harness asks for the code with the bootstrap " +
+				"admin token, and a second request after the marker answers 409.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/first-administrator/redeem",
+			CoveringTest: "TestFirstAdministratorPath",
+			Reason: "Console route: no CLI calls it. The harness redeems the code in a console session, " +
+				"and refuses an access token and a stale sign-in.",
+		},
+		{
 			Method: http.MethodGet, Path: "/health/live",
 			CoveringTest: "TestHealthLiveStillChecksNothing",
 			Reason:       "Operator probe: no CLI calls it.",
