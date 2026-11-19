@@ -343,6 +343,13 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 
+	// The file gets mode 0600 before SQLite opens it, so the file and the
+	// -wal and -shm files that SQLite copies the mode to never have a wider
+	// mode. An existing file with a wider mode fails here.
+	if prepareErr := prepareDatabaseFile(resolved); prepareErr != nil {
+		return nil, errors.Join(prepareErr, guard.release())
+	}
+
 	var extra url.Values
 	if probe.noMigrate {
 		extra = url.Values{dsnModeKey: {"rw"}}
@@ -512,6 +519,15 @@ func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, e
 
 	if err := conn.PingContext(ctx); err != nil {
 		return nil, errors.Join(fmt.Errorf("connect to sqlite database: %w", err), conn.Close())
+	}
+
+	// Defense in depth: Open makes the file with mode 0600 and refuses a wider
+	// one before this call. This check stays because swap and reopen call
+	// openDatabase without Open, and because it also checks the -wal and
+	// -shm files that SQLite made on connect. It does not rely on the
+	// check of Open or on the startup check of the command.
+	if err := checkPrivateFiles(databaseFiles(abs)...); err != nil {
+		return nil, errors.Join(err, conn.Close())
 	}
 
 	return conn, nil

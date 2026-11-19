@@ -385,6 +385,13 @@ type walBackupSource struct {
 // hold a reader open; the tamper helpers in inspect_test.go and sqlite_test.go
 // use it too, so keep the timeout in sync with the store default.
 func openRawDB(path string) (*sql.DB, error) {
+	// A new file gets mode 0600, as the store makes it: Open refuses a wider mode.
+	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+		if writeErr := os.WriteFile(path, nil, 0o600); writeErr != nil {
+			return nil, fmt.Errorf("make raw database file: %w", writeErr)
+		}
+	}
+
 	query := url.Values{}
 	query.Add("_pragma", "busy_timeout(10000)")
 

@@ -772,6 +772,13 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 		}
 	}
 
+	// Defense in depth: snapshotPath makes the staged file with mode 0600 and
+	// openDatabase checks the live file after the move. This check stays so
+	// that a staged file with a wider mode never becomes the live database.
+	if err := checkPrivateFiles(databaseFiles(temp)...); err != nil {
+		return errors.Join(err, s.reopenDatabase(ctx))
+	}
+
 	if err := os.Rename(temp, s.path); err != nil {
 		renameErr := fmt.Errorf("move restored database into place: %w", err)
 		reopenErr := s.reopenDatabase(ctx)
@@ -1316,9 +1323,12 @@ func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 	return gathered, nil
 }
 
-// snapshotPath reserves a new file name for a VACUUM INTO target in dir: it
-// creates and removes a temp file, because VACUUM INTO refuses a target that
-// exists.
+// snapshotPath reserves a new file in dir for a VACUUM INTO target or a staged
+// database and returns its path. It makes an empty file with mode 0600 and
+// keeps it: VACUUM INTO accepts an empty target, and SQLite gives the -wal and
+// -shm files of a database the mode of the database file. A name with no file
+// would get the default mode of the process, which the umask often leaves at
+// 0644.
 func snapshotPath(dir string) (string, error) {
 	f, err := os.CreateTemp(dir, "dustpan-backup-*.db")
 	if err != nil {
@@ -1327,12 +1337,15 @@ func snapshotPath(dir string) (string, error) {
 
 	name := f.Name()
 
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, os.Remove(name)))
+	// CreateTemp makes the file with mode 0600. The explicit change keeps that
+	// true if the standard library changes, and it checks the mode after the
+	// create.
+	if err := f.Chmod(databaseFileMode); err != nil {
+		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, f.Close(), os.Remove(name)))
 	}
 
-	if err := os.Remove(name); err != nil {
-		return "", fmt.Errorf("reserve snapshot file: %w", err)
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, os.Remove(name)))
 	}
 
 	return name, nil
