@@ -167,12 +167,38 @@ type directoryChangedError struct {
 }
 
 func (e directoryChangedError) Error() string {
-	recorded := strings.TrimPrefix(e.recorded, directoryBindingPrefix)
+	recorded := displayRecordedDirectory(e.recorded)
 
 	return fmt.Sprintf("sign-in provider %q has the directory URL %q in the database and the directory URL %q in "+
 		"the configuration, so set the URL (--ldap-url) back to %q, or set a new provider ID (--ldap-provider) "+
-		"only if the directory changed", e.id, recorded, strings.TrimPrefix(e.configured, directoryBindingPrefix),
+		"only if the directory changed", e.id, recorded, displayRecordedDirectory(e.configured),
 		recorded)
+}
+
+// notValidDirectoryURL is the text that the refusal shows in place of a
+// recorded row that is not a valid directory binding.
+const notValidDirectoryURL = "a directory URL that is not valid"
+
+// displayRecordedDirectory returns the text of a recorded row for the
+// refusal: the normalized directory URL, or a fixed phrase. The row can come
+// from another version or from a manual edit, and it can hold user
+// information, so the refusal never shows its text as stored.
+//
+// Defense in depth: BindProviders writes only normalized rows, and this
+// layer does not rely on that. It normalizes the row again, and on an error
+// or a row with no "ldap:" prefix it shows no part of the row.
+func displayRecordedDirectory(row string) string {
+	raw, ok := strings.CutPrefix(row, directoryBindingPrefix)
+	if !ok {
+		return notValidDirectoryURL
+	}
+
+	n, err := NormalizeDirectoryURL(raw)
+	if err != nil {
+		return notValidDirectoryURL
+	}
+
+	return n
 }
 
 // Unwrap returns ErrIssuerChanged.
@@ -219,7 +245,7 @@ func NormalizeDirectoryURL(raw string) (string, error) {
 		return "", ErrDirectoryURL
 	}
 
-	scheme := strings.ToLower(u.Scheme)
+	scheme := u.Scheme
 
 	defaultPort := directoryDefaultPort(scheme)
 	if defaultPort == "" {
@@ -254,30 +280,41 @@ func directoryDefaultPort(scheme string) string {
 }
 
 // normalizeDirectoryPort returns the port as a number in decimal text, or
-// defaultPort when text is empty. It reports false for a value above 65535.
+// defaultPort when text is empty. It reports false for port 0 and for a value
+// above 65535.
 func normalizeDirectoryPort(text, defaultPort string) (string, bool) {
 	if text == "" {
 		return defaultPort, true
 	}
 
 	n, err := strconv.ParseUint(text, 10, 16)
-	if err != nil {
+	if err != nil || n == 0 {
 		return "", false
 	}
 
 	return strconv.FormatUint(n, 10), true
 }
 
-// normalizeDirectoryHost returns host in lowercase, with no trailing root dot
-// and, for an IP address, in its canonical text form.
+// normalizeDirectoryHost returns host with no trailing root dot. An IP
+// address has its canonical text form, with its IPv6 zone as given: a zone
+// is a name of this computer, so its case counts. Any other host has its ASCII
+// letters in lowercase and no other change. Unicode case folding would join
+// two different host names, for example the Kelvin sign and "k".
 func normalizeDirectoryHost(host string) string {
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	host = strings.TrimSuffix(host, ".")
 
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return addr.String()
 	}
 
-	return host
+	b := []byte(host)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+
+	return string(b)
 }
 
 // bracket puts an IPv6 address in square brackets.

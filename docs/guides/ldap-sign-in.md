@@ -279,7 +279,11 @@ and does not hold the directory.
 
 The server compares the URLs in this form:
 
-- The scheme and the host have lowercase letters.
+- The scheme and the host have lowercase letters. The server changes only
+  the letters A to Z. A host name with another letter keeps it, so
+  `BÜCHER.example` and `bücher.example` are different directories. An IPv6
+  zone keeps its case, so `[fe80::1%25eth0]` and `[fe80::1%25ETH0]` are
+  different directories.
 - A trailing dot after the host is removed.
 - An IP address has its canonical form, so `[::1]` and `[0:0::1]` are the
   same address.
@@ -288,7 +292,14 @@ The server compares the URLs in this form:
   `ldaps://h:0636` are the same directory. An empty port, as in `ldaps://h:`,
   is the default port.
 - A slash after the host is removed.
+- The server refuses port 0 and a port above 65535.
 - `ldap` and `ldaps` are different. A URL with another port is different.
+
+A host name with one label, for example `dc1`, is resolved through the search
+list of the resolver. So `dc1` and `dc1.` are the same directory only when
+they resolve to the same host. The IPv4-mapped IPv6 form of an address, for
+example `[::ffff:10.0.0.1]`, and the IPv4 form `10.0.0.1` are different
+directories.
 
 The server does not translate host names. An internationalized host name
 and its punycode form, for example `bücher.example` and

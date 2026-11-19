@@ -248,6 +248,8 @@ func TestBindProvidersRefusesAnInvalidDirectoryURL(t *testing.T) {
 		"an opaque URL":          "ldaps:ldap.example.org",
 		"a port above 65535":     "ldaps://ldap.example.org:65536",
 		"a space":                " ldaps://ldap.example.org",
+		"port 0":                 "ldaps://ldap.example.org:0",
+		"port 0 with zeros":      "ldap://ldap.example.org:000",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -315,7 +317,9 @@ func TestNormalizeDirectoryURL(t *testing.T) {
 		{"ldaps://10.0.0.1", "ldaps://10.0.0.2"},
 		{"ldaps://[::1]", "ldaps://[::2]"},
 		{"ldaps://bücher.example", "ldaps://xn--bcher-kva.example"},
-		{"ldaps://h:0", "ldaps://h"},
+		{"ldap://dir.\u212Aorp", "ldap://dir.korp"},
+		{"ldap://BÜCHER.example", "ldap://bücher.example"},
+		{"ldap://[fe80::1%25eth0]", "ldap://[fe80::1%25ETH0]"},
 	}
 	for _, c := range different {
 		a, errA := session.NormalizeDirectoryURL(c[0])
@@ -347,18 +351,19 @@ func TestBindProvidersStartsWithAnotherFormOfTheSameDirectory(t *testing.T) {
 		first, next string
 		refused     bool
 	}{
-		"ldaps and its default port":       {first: "ldaps://h", next: "ldaps://h:636", refused: false},
-		"the default port and ldaps":       {first: "ldaps://h:636", next: "ldaps://h", refused: false},
-		"ldap and its default port":        {first: "ldap://h", next: "ldap://h:389", refused: false},
-		"a port with a leading zero":       {first: "ldaps://h", next: "ldaps://h:0636", refused: false},
-		"a root dot":                       {first: "ldaps://h", next: "ldaps://h.", refused: false},
-		"an IPv6 address in two forms":     {first: "ldaps://[::1]", next: "ldaps://[0:0::1]", refused: false},
-		"ldaps and the port of ldap":       {first: "ldaps://h", next: "ldaps://h:389", refused: true},
-		"ldap and ldaps":                   {first: "ldap://h", next: "ldaps://h", refused: true},
-		"another host":                     {first: "ldaps://h", next: "ldaps://g", refused: true},
-		"another IPv6 address":             {first: "ldaps://[::1]", next: "ldaps://[::2]", refused: true},
-		"an IDN host and its punycode":     {first: "ldaps://bücher.example", next: "ldaps://xn--bcher-kva.example", refused: true},
-		"another port with a leading zero": {first: "ldaps://h", next: "ldaps://h:03636", refused: true},
+		"ldaps and its default port":             {first: "ldaps://h", next: "ldaps://h:636", refused: false},
+		"the default port and ldaps":             {first: "ldaps://h:636", next: "ldaps://h", refused: false},
+		"ldap and its default port":              {first: "ldap://h", next: "ldap://h:389", refused: false},
+		"a port with a leading zero":             {first: "ldaps://h", next: "ldaps://h:0636", refused: false},
+		"a root dot":                             {first: "ldaps://h", next: "ldaps://h.", refused: false},
+		"an IPv6 address in two forms":           {first: "ldaps://[::1]", next: "ldaps://[0:0::1]", refused: false},
+		"ldaps and the port of ldap":             {first: "ldaps://h", next: "ldaps://h:389", refused: true},
+		"ldap and ldaps":                         {first: "ldap://h", next: "ldaps://h", refused: true},
+		"another host":                           {first: "ldaps://h", next: "ldaps://g", refused: true},
+		"another IPv6 address":                   {first: "ldaps://[::1]", next: "ldaps://[::2]", refused: true},
+		"an IDN host and its punycode":           {first: "ldaps://bücher.example", next: "ldaps://xn--bcher-kva.example", refused: true},
+		"another port with a leading zero":       {first: "ldaps://h", next: "ldaps://h:03636", refused: true},
+		"a host that differs by the Kelvin sign": {first: "ldap://dir.\u212Aorp", next: "ldap://dir.korp", refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -377,5 +382,59 @@ func TestBindProvidersStartsWithAnotherFormOfTheSameDirectory(t *testing.T) {
 				t.Fatalf("second start = %v, want refused = %t", err, tc.refused)
 			}
 		})
+	}
+}
+
+// TestDirectoryChangedErrorHidesTheRecordedRow sends hostile recorded rows
+// straight to the refusal, as if BindProviders had written them: a row with
+// user information, and a row that is not an LDAP binding.
+func TestDirectoryChangedErrorHidesTheRecordedRow(t *testing.T) {
+	t.Parallel()
+
+	const user, password = "alice", "hunter2-fake"
+
+	withUser := fakecred.URL("ldaps", user, password, "old.example.org", "")
+
+	for name, row := range map[string]string{
+		"a row with user information":   "ldap:" + withUser,
+		"a row with a path and a query": "ldap:ldaps://old.example.org/dc=x?secret-fake=1",
+		"a row of an OpenID issuer":     "https://issuer.example.org/realm-fake",
+		"a row with an unknown scheme":  "ldap:" + strings.Replace(withUser, "ldaps", "http", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &memoryProviders{err: nil, issuers: map[string]string{"corp": row}}
+			p := session.Provider{
+				ID: "corp", Issuer: "", UserinfoURL: "", SubjectClaim: "", DirectoryURL: "ldaps://new.example.org",
+			}
+
+			err := session.BindProviders(t.Context(), store, []session.Provider{p}, time.Now())
+			if !errors.Is(err, session.ErrIssuerChanged) {
+				t.Fatalf("BindProviders = %v, want ErrIssuerChanged", err)
+			}
+
+			for _, secret := range []string{user, password, "secret-fake", "realm-fake", "/dc=x"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("error %q holds %q", err, secret)
+				}
+			}
+		})
+	}
+}
+
+// TestDirectoryChangedErrorShowsTheNormalizedRow proves that a valid
+// recorded row shows in its normalized form.
+func TestDirectoryChangedErrorShowsTheNormalizedRow(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryProviders{err: nil, issuers: map[string]string{"corp": "ldap:LDAPS://Old.Example.org.:636"}}
+	p := session.Provider{
+		ID: "corp", Issuer: "", UserinfoURL: "", SubjectClaim: "", DirectoryURL: "ldaps://new.example.org",
+	}
+
+	err := session.BindProviders(t.Context(), store, []session.Provider{p}, time.Now())
+	if err == nil || !strings.Contains(err.Error(), `"ldaps://old.example.org"`) {
+		t.Fatalf("BindProviders = %v, want the normalized recorded URL", err)
 	}
 }
