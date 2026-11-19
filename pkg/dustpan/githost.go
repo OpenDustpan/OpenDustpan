@@ -167,6 +167,11 @@ func newGitHostParts(cfg *settings, deps installationDeps) (gitHostParts, error)
 		return none, err
 	}
 
+	// With no Git host store, the server has no webhook route.
+	if svc == nil {
+		return gitHostParts{service: nil, idem: idem, webhook: nil}, nil
+	}
+
 	webhook, err := newGitHostWebhookHandler(cfg, svc, deps.observed)
 	if err != nil {
 		return none, err
@@ -256,16 +261,12 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 }
 
 // newGitHostWebhookHandler returns the handler of the deliveries of the Git
-// host webhook, or nil when no Git host service is set. The handler counts the
-// rejects on observed, and writes a limited audit entry for each reject
-// through the limiter that the other adapters share.
+// host webhook. The handler counts the rejects on observed, and writes a
+// limited audit entry for each reject through the limiter that the other
+// adapters share.
 func newGitHostWebhookHandler(
 	cfg *settings, svc *forge.Service, observed *metrics.ServerMetrics,
 ) (http.Handler, error) {
-	if svc == nil {
-		return nil, nil //nolint:nilnil // No webhook route: no Git host store is set.
-	}
-
 	entries, ok := cfg.namespaceStore.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
