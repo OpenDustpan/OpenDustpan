@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/ident"
@@ -393,12 +393,12 @@ func (h *Handler) damagedTarget(ctx context.Context, ns namespace.Namespace, id 
 		// nothing about the row.
 		return target{}, errNotFound
 	case err != nil:
-		// A failure of the inventory is not "no such job". The log holds the
-		// job ID and a fixed message. It holds no text of the error, because
-		// the text of an adapter error can hold connection details, and no
-		// content of the row.
-		h.logger.ErrorContext(ctx, "find the unit of a damaged job failed",
-			slog.String("job", string(id)))
+		// A failure of the inventory is not "no such job". The log holds a
+		// fixed message and the cause class. It holds no text of the error,
+		// because the text of an adapter error can hold connection details,
+		// and no content of the row.
+		faultlog.LogFault(ctx, h.logger, "find the unit of a damaged job failed",
+			faultlog.Cause(err), "jobs.damaged_unit")
 
 		return target{}, fmt.Errorf("find unit of damaged job: %w", err)
 	}
