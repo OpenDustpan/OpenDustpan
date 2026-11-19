@@ -67,3 +67,27 @@ If a caller causes repeated refusals on the read route, then the server SHALL co
 #### Scenario: over size refused
 - **WHEN** version is above 5 MB
 - **THEN** server refuses with 413 and no content
+
+### Requirement: bounded work for one read
+
+The server SHALL limit the work of one read by the shape of the state, not only by its size. A version with a nesting depth above 100, or with more than 10000 markers, SHALL be refused with 413 before the server builds the path of any marker, and the refusal goes to the denial limiter. The server SHALL build the path of a marker only for the page that the answer holds, and SHALL check the deadline after the parse and after the walk.
+
+#### Scenario: deep nesting under the size limit
+- **WHEN** a version of less than 5 MB has a nesting depth above 100
+- **THEN** server refuses with 413, builds no path, and the memory of the read stays below the bound of the page
+
+#### Scenario: too many markers under the size limit
+- **WHEN** a version of less than 5 MB holds more than 10000 markers
+- **THEN** server refuses with 413 and builds no path
+
+#### Scenario: deadline after the walk
+- **WHEN** the walk of the state ends after the 30 second deadline
+- **THEN** server answers 504 with the code `state.read-timeout` and no bytes
+
+### Requirement: a shape that the server cannot read fails closed
+
+If the server cannot read the shape of a version, for example a client-encrypted state, a `resources` value that is not an array, or an entry with no type or name, then the server SHALL refuse the read with 500 and no content. The server SHALL NOT answer 200 with fewer markers.
+
+#### Scenario: unknown shape
+- **WHEN** a version holds a client-encrypted envelope or a `resources` value that is not an array
+- **THEN** server answers 500 with no content, and a reader cannot mistake the answer for "no secrets"

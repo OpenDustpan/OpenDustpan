@@ -43,20 +43,21 @@ func countingService(t *testing.T, f *fixture, compares *atomic.Int64) *localuse
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:        nil,
-		Store:      f.store,
-		Principals: f.principals,
-		Hasher:     countingHasher{PasswordHasher: f.hasher, compares: compares},
-		Blocklist:  blocklist.Embedded(),
-		Audit:      f.store,
-		Locks:      f.store,
-		Keys:       f.store,
-		Settings:   f.settings,
-		SSO:        func(context.Context) (bool, error) { return f.sso, nil },
-		Reach:      noReach(),
-		Subjects:   f.store,
-		Kind:       installation.KindProduction,
-		Now:        nil,
+		Log:         nil,
+		Store:       f.store,
+		Principals:  f.principals,
+		NoPublicURL: false,
+		Hasher:      countingHasher{PasswordHasher: f.hasher, compares: compares},
+		Blocklist:   blocklist.Embedded(),
+		Audit:       f.store,
+		Locks:       f.store,
+		Keys:        f.store,
+		Settings:    f.settings,
+		SSO:         func(context.Context) (bool, error) { return f.sso, nil },
+		Reach:       noReach(),
+		Subjects:    f.store,
+		Kind:        installation.KindProduction,
+		Now:         nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

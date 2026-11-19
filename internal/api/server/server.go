@@ -784,6 +784,10 @@ func classifyBackup(err error) (failure, bool) {
 		text, args := unverifiedRefusal(err)
 
 		return failCoded(http.StatusUnprocessableEntity, text, errcode.BackupTooManyUnverified, args...), true
+	case errors.Is(err, backup.ErrRegistryFilesTooLarge):
+		text, args := registryFilesRefusal(err)
+
+		return failCoded(http.StatusUnprocessableEntity, text, errcode.BackupRegistryFilesTooLarge, args...), true
 	case errors.Is(err, backup.ErrDevBackupRefused):
 		return fail(http.StatusConflict, backup.ErrDevBackupRefused.Error()), true
 	case errors.Is(err, backup.ErrManifestKindInvalid):
@@ -904,6 +908,33 @@ func activeWorkArgs(err error) []errcode.Value {
 	return []errcode.Value{
 		errcode.Quantity("workCount", int64(work)),
 		errcode.Quantity("canceledCount", int64(canceled)),
+	}
+}
+
+// registryFilesRefusal returns the text and the arguments of the answer to a
+// backup that the limits of the registry files refused: the size that passed
+// the limit, in bytes, and the limit. An error that carries no size gives zero
+// for both.
+func registryFilesRefusal(err error) (string, []errcode.Value) {
+	refused, ok := errors.AsType[*backup.RegistryFilesTooLargeError](err)
+	if !ok {
+		return backup.ErrRegistryFilesTooLarge.Error(), []errcode.Value{
+			errcode.Quantity("size", 0),
+			errcode.Quantity("limit", 0),
+		}
+	}
+
+	size := refused.Size
+	if refused.Limit == backup.RegistryFileLimitNamespace {
+		size = refused.Total
+	}
+
+	// Defense in depth: the refusal text holds names of a release and a
+	// version, which a publisher chose. Clean stays so that no control
+	// character reaches the answer, also when another layer lets one pass.
+	return denials.Clean(refused.Error(), maxCauseBytes), []errcode.Value{
+		errcode.Quantity("size", size),
+		errcode.Quantity("limit", refused.Max),
 	}
 }
 

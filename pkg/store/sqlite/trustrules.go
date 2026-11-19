@@ -334,6 +334,10 @@ func (t TrustRules) RecordExchange(
 			return ruleErr
 		}
 
+		if recheckErr := recheckExchange(ctx, q, fence.Namespace, &x); recheckErr != nil {
+			return recheckErr
+		}
+
 		p, err := q.GetExchangePrincipal(ctx, x.Token.PrincipalID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("select the principal of the exchange: %w", err)
@@ -348,4 +352,51 @@ func (t TrustRules) RecordExchange(
 
 		return insertToken(ctx, q, x.Token, x.Digest)
 	})
+}
+
+// recheckExchange reads the rules and the bundle of the namespace again in
+// the transaction of an mTLS exchange, and checks that the rule still names
+// the SPIFFE ID alone, and that the bundle and the version that the service
+// verified are still the bundle of the rule and its active version. A rule or
+// a rotate that another call made after the verify so refuses the exchange.
+// It does nothing for an exchange that is not of the kind mtls-exchange.
+func recheckExchange(ctx context.Context, q *db.Queries, ns namespace.Name, x *trustrule.Exchange) error {
+	// Defense in depth: CheckExchange refuses an unknown kind before the
+	// transaction. This switch stays so that a new caller of the recheck
+	// cannot skip a kind: an unknown kind fails closed.
+	needsBundle, kindErr := trustrulestore.ExchangeKindNeedsBundle(x.Token.Kind)
+	if kindErr != nil {
+		return kindErr
+	}
+
+	if !needsBundle {
+		return nil
+	}
+
+	rows, err := q.ListTrustRulesOfNamespace(ctx, ns.String())
+	if err != nil {
+		return fmt.Errorf("select the trust rules of the exchange: %w", err)
+	}
+
+	list := make([]trustrulestore.Row, 0, len(rows))
+	for i := range rows {
+		list = append(list, trustRuleListRow(rows[i]))
+	}
+
+	if matchErr := trustrulestore.CheckExchangeMatch(list, x); matchErr != nil {
+		return matchErr
+	}
+
+	b, err := q.GetTrustBundleOfNamespace(ctx, ns.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return trustrulestore.CheckExchangeBundle(nil, list, x)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select the trust bundle of the exchange: %w", err)
+	}
+
+	return trustrulestore.CheckExchangeBundle(&trustrulestore.BundleRow{
+		ID: b.ID, Namespace: b.Namespace, Active: b.ActiveVersion, Revision: b.Revision, CreatedAtMs: b.CreatedAtMs,
+	}, list, x)
 }

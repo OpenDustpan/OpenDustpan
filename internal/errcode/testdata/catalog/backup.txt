@@ -1,2 +1,3 @@
 backup.corrupt backup:identifier
+backup.registry-files-too-large size:quantity limit:quantity
 backup.too-many-unverified count:quantity limit:quantity

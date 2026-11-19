@@ -51,15 +51,17 @@ const MaxRegistryFilesTotalBytes int64 = 2 << 30
 // checkRegistryFileSize refuses a size that is negative, above the limit of
 // one file, or that makes the running total pass the limit of a namespace.
 func checkRegistryFileSize(size, total int64) error {
-	switch {
-	case size < 0:
+	if size < 0 {
 		return fmt.Errorf("size %d is negative: %w", size, ErrCorrupt)
-	case size > MaxRegistryFileBytes:
+	}
+
+	switch registryFileOverLimit(size, total) {
+	case RegistryFileLimitFile:
 		return fmt.Errorf(
 			"size %d is above the limit of %d bytes for one file: %w",
 			size, MaxRegistryFileBytes, ErrCorrupt,
 		)
-	case total > MaxRegistryFilesTotalBytes-size:
+	case RegistryFileLimitNamespace:
 		return fmt.Errorf(
 			"the total is above the limit of %d bytes for one namespace: %w",
 			MaxRegistryFilesTotalBytes, ErrCorrupt,
