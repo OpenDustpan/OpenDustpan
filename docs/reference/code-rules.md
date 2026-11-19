@@ -27,6 +27,24 @@ that a grant seems to allow.
   the server logs the failed check
   ([Groups](../guides/principals-and-groups.md#groups)).
 
+## Settings changes that need a fresh sign-in
+
+- A change of a setting that reduces security (`mayReduceSecurity` is `true`
+  on the setting) needs a fresh authentication. A server that has no console
+  sign-in asks for none, and the change runs with no fresh authentication.
+  The server has no console sign-in when it has no provider in its
+  configuration, no dev sign-in, and no stored providers with an HTTPS public
+  URL. The code checks only this condition. It does not read the setting of
+  built-in MFA or the list of SSO providers. This rule stays because such a
+  server has no sign-in step to ask for.
+- The rule has no effective value in the API. The unmounted sign-in routes
+  of the server show its condition. Each change that the rule lets through
+  writes the normal audit entry of a settings change with the changed keys.
+  The server writes no separate record that it skipped the step.
+- A server that has a console sign-in answers 403 with the code
+  `mfa.fresh-step-required` to a change with no fresh authentication
+  ([Changes that need a fresh sign-in](../guides/settings.md#changes-that-need-a-fresh-sign-in)).
+
 ## Git host links
 
 - Only a person in a console session makes or accepts a link. An accept needs
