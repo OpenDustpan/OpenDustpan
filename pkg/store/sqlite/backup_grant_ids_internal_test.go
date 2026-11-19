@@ -56,7 +56,7 @@ func TestCheckStagedGrantIDs(t *testing.T) {
 			t.Fatalf("check of the ID %.20q = %v, want ErrCorrupt", id, err)
 		}
 
-		if len(id) > 3 && strings.Contains(err.Error(), id) {
+		if err != nil && len(id) > 3 && strings.Contains(err.Error(), id) {
 			t.Fatalf("the error holds the ID: %.80q", err.Error())
 		}
 	}
