@@ -52,7 +52,11 @@ func gitHostSpecs() []Spec {
 			Meaning: "the calls that the key of the GitHub App signed in the current window reached the limit of the budget",
 			Args:    nil,
 		},
-		{Code: GitHostAppNoRotation, Meaning: "the registration of the GitHub App has no open rotation of the event secret", Args: nil},
+		{
+			Code:    GitHostAppNoRotation,
+			Meaning: "the registration of the GitHub App has no open rotation of the event secret",
+			Args:    nil,
+		},
 		{Code: GitHostAppNotRegistered, Meaning: "the operator has not registered the GitHub App", Args: nil},
 		{
 			Code:    GitHostInstallationNotAssigned,
