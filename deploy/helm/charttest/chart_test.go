@@ -149,7 +149,7 @@ func TestTemplateRefused(t *testing.T) {
 				"--set", "adminToken.existingSecret.name=",
 				"--skip-schema-validation",
 			},
-			wantText: [][]string{{"adminToken.existingSecret.name is required"}},
+			wantText: [][]string{{"adminToken.existingSecret.name is empty"}, {"kubectl create secret generic opendustpan-admin-token"}},
 		},
 		{
 			name:    "database and key in one Secret and key",
