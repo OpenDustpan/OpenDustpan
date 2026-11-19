@@ -18,13 +18,13 @@ that a grant seems to allow.
   is sensitive, except each read-only server action (`server:read-*`), which
   cannot raise a privilege. A new action of those families is sensitive with
   no other change, and an action that no family classifies is not sensitive.
-  A check that must fail closed on an unknown action reads the family itself,
+  Code that must fail closed on an unknown action reads the family itself,
   and a person sees the effect in the `protected` flag of a group. The flag
   is `true` when the group holds a sensitive action on the installation or on
-  a principal of the installation. A read that cannot check the group answers
+  a principal of the installation. A read that cannot load the group answers
   500 with the code `server.internal`, never `protected: false`. A create or a
-  change that cannot check the stored group answers `protected: true`, and
-  the server logs the failed check
+  change that cannot load the stored group answers `protected: true`, and
+  the server logs the failed load
   ([Groups](../guides/principals-and-groups.md#groups)).
 
 ## Git host links
@@ -72,11 +72,15 @@ that a grant seems to allow.
 <!-- code-rule: access.ErrEscalation -->
 - A person cannot give more than they hold. The server refuses a grant that
   gives more on its object than the person who makes it holds there. The
-  server answers 403 with no specific code, and the refused grant is
-  written to the audit log.
+  server answers 403. The code is `access.denied` when the refusal wraps a
+  denial (a grant of a move target). In other cases the answer has no code.
+  The server writes an audit entry for the refused grant. Its reason is
+  `grant gives more than the granter holds`. When the refusal is a reach
+  refusal, the reason names the missing actions.
 <!-- code-rule: access.ErrBuiltIn -->
 - A built-in role cannot be changed or deleted. The server answers 409 with
-  no specific code. The refusal writes no audit entry.
+  no specific code. The server writes an audit entry with the outcome
+  `failure` and no reason.
 
 ## Access tokens
 
@@ -97,7 +101,7 @@ that a grant seems to allow.
   change-password route.
 <!-- code-rule: localuser.ErrLastCredential -->
 <!-- code-rule: mfa.ErrLastCredential -->
-- The server refuses each change that removes the last sign-in credential of
+- The server refuses each change that deletes the last sign-in credential of
   a local person: the password when they have no passkey, or the last passkey
   when they have no password. The server answers 409 with the code
   `local-user.last-credential`.
@@ -128,7 +132,9 @@ that a grant seems to allow.
   provider, apply only to a person. A service principal, a namespace
   principal, a break-glass account and a temporary administrator are never
   a target. The server refuses the sign-in with the sign-in refusal reason
-  `not a target`, which the audit log records.
+  `principal cannot sign in through an identity provider`. It refuses the
+  disable with the reason `identity provider reports a principal as disabled
+  that it cannot manage`. The audit log records both reasons.
 
 ## Jobs and agents
 
@@ -141,7 +147,7 @@ that a grant seems to allow.
 - An agent cannot approve, confirm or break a freeze, and cannot start a job
   that its agent mode does not allow. The server answers 403 with the code
   `job.agent-denied`. A refused approval writes an audit entry with the reason
-  `agent-denied`.
+  `an agent cannot do this`.
 <!-- code-rule: job.ErrNotRequester -->
 - Only the person who asked the agent for a job can confirm it, whatever
   grant another principal holds. The server answers 403 with the code
