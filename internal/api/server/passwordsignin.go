@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -137,6 +138,14 @@ var (
 	errPasswordSignInUnavailable = &codedError{
 		status: http.StatusServiceUnavailable, code: errcode.SignInUnavailable, args: nil,
 		message: "the directory of the sign-in provider does not answer: try again later",
+	}
+	// errPasswordSignInNeedsTLS is the answer when the URL of the directory
+	// has no TLS and the installation does not allow that. A retry does not
+	// help: the text names the change that an administrator makes.
+	errPasswordSignInNeedsTLS = &codedError{
+		status: http.StatusServiceUnavailable, code: errcode.SignInUnavailable, args: nil,
+		message: "the sign-in provider is not set up with TLS: ask an administrator to use ldaps:// " +
+			"or StartTLS for the directory",
 	}
 )
 
@@ -291,6 +300,14 @@ func (h *Handler) providerPasswordSignIn(
 func (h *Handler) answerPasswordError(ctx context.Context, w http.ResponseWriter, err error) {
 	if !signinsvc.IsRefusal(err) {
 		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if errors.Is(err, ldapauth.ErrPlainRefused) {
+		// The setting of the provider is not valid: the person caused
+		// nothing, so the budget of the address does not change.
+		h.writeError(ctx, w, errPasswordSignInNeedsTLS)
 
 		return
 	}
