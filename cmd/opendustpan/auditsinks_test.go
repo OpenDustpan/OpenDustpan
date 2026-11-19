@@ -914,6 +914,10 @@ func TestSecretFromAcceptsOneLineEndingOnly(t *testing.T) {
 		{"two LF", "pass\n\n", errSecretControlChar},
 		{"CR LF then LF", "pass\r\n\n", errSecretControlChar},
 		{"two CR then LF", "pass\r\r\n", errSecretControlChar},
+		{"BOM", "\xef\xbb\xbfpass\n", errSecretControlChar},
+		{"C1 control", "pass\u0085", errSecretControlChar},
+		{"line separator", "pass\u2028", errSecretControlChar},
+		{"invalid UTF-8", "pass\xff", errSecretControlChar},
 		{"empty", "", errNoOIDCSecret},
 		{"LF only", "\n", errNoOIDCSecret},
 		{"CR LF only", "\r\n", errNoOIDCSecret},
@@ -935,6 +939,8 @@ func TestSecretFromAcceptsOneLineEndingOnly(t *testing.T) {
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("got %q, %v; want %v", got, err, tc.wantErr)
 			}
+
+			checkSecretErrorNamesSetting(t, err, tc.wantErr, oidcSecretFileEnvVar, tc.content)
 		})
 	}
 
@@ -945,6 +951,10 @@ func TestSecretFromAcceptsOneLineEndingOnly(t *testing.T) {
 	}{
 		{"LF", "pass\n", errSecretControlChar},
 		{"CR", "pass\r", errSecretControlChar},
+		{"BOM", "\xef\xbb\xbfpass", errSecretControlChar},
+		{"C1 control", "pass\u0085", errSecretControlChar},
+		{"line separator", "pass\u2028", errSecretControlChar},
+		{"invalid UTF-8", "pass\xff", errSecretControlChar},
 		{"space tab", " \t", errNoOIDCSecret},
 	} {
 		t.Run("variable "+tc.name, func(t *testing.T) {
@@ -957,6 +967,26 @@ func TestSecretFromAcceptsOneLineEndingOnly(t *testing.T) {
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("got %q, %v; want %v", got, err, tc.wantErr)
 			}
+
+			checkSecretErrorNamesSetting(t, err, tc.wantErr, oidcSecretEnvVar, tc.value)
 		})
+	}
+}
+
+// checkSecretErrorNamesSetting proves that a refusal of a secret names the
+// variable, and that it does not repeat the text of the secret.
+func checkSecretErrorNamesSetting(t *testing.T, err, want error, name, text string) {
+	t.Helper()
+
+	if !errors.Is(want, errSecretControlChar) {
+		return
+	}
+
+	if !strings.Contains(err.Error(), name) {
+		t.Errorf("error %q does not name %s", err, name)
+	}
+
+	if strings.Contains(err.Error(), strings.TrimSpace(text)) {
+		t.Errorf("error %q repeats the secret", err)
 	}
 }

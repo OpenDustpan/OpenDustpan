@@ -45,7 +45,9 @@ configuration file takes it, because a process list shows each flag. The
 file must be readable by its owner only. The server clears the variable
 `DUSTPAN_LDAP_BIND_PASSWORD` after it reads it, so a child process does not
 get the password. The server keeps each space of the password. From the
-file, it ignores one line ending at the end of the file.
+file, it ignores one line ending at the end of the file. The server
+refuses a password with a control character or a hidden character, such as
+a byte order mark, and a password that is not valid UTF-8.
 
 The sign-in needs a public URL with HTTPS. The server checks each setting
 when it starts, and does not start with a setting that is not valid. Only a

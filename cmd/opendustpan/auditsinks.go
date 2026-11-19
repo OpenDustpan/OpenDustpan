@@ -18,8 +18,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -341,8 +343,11 @@ var (
 	)
 	// errSecretFilePermissions reports a secret file that group or others can read.
 	errSecretFilePermissions = errors.New("secret file allows group or other access")
-	// errSecretControlChar reports a secret with a control character.
-	errSecretControlChar = errors.New("the secret holds a control character")
+	// errSecretControlChar reports a secret with a control character, a
+	// hidden character (such as a byte order mark) or bytes that are not UTF-8.
+	errSecretControlChar = errors.New(
+		"the secret holds a control character, a hidden character such as a byte order mark, or text that is not UTF-8",
+	)
 )
 
 // sinkClient answers the client of a webhook or OTLP sink: the egress rules
@@ -420,7 +425,8 @@ var (
 // The text is a list of Name=Value items, separated by commas or line
 // breaks, as OTEL_EXPORTER_OTLP_HEADERS writes it. A value is
 // percent-encoded, so it can hold a comma or an equals sign. A name or a
-// decoded value with a control character is refused. The errors name
+// decoded value with a control character, a hidden character or bytes that
+// are not UTF-8 is refused. The errors name
 // the position of an item, never its text, because a value can be a secret.
 func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (map[string]string, error) {
 	raw, _, err := secretTextFrom(lookup, env, fileEnv, errNoOTLPHeaders)
@@ -445,7 +451,7 @@ func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (m
 
 		// Defense in depth, as for the value below. The error does not
 		// repeat the name, because the name holds the character.
-		if strings.ContainsFunc(name, isControlRune) {
+		if hasHiddenText([]byte(name)) {
 			return nil, fmt.Errorf("item %d: %w", i+1, errSecretControlChar)
 		}
 
@@ -457,7 +463,7 @@ func otlpHeadersFrom(lookup func(string) (string, bool), env, fileEnv string) (m
 
 		// Defense in depth: otlp.New refuses a control character too; this
 		// check stays so that a new caller of the headers cannot skip it.
-		if strings.ContainsFunc(decoded, isControlRune) {
+		if hasHiddenText([]byte(decoded)) {
 			return nil, fmt.Errorf("item %d (%s): %w", i+1, name, errSecretControlChar)
 		}
 
@@ -489,7 +495,8 @@ func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) 
 // secretFrom reads a secret from the variable env, else from the file that
 // the variable fileEnv names. The file must allow no group or other
 // access. A missing or empty secret answers errMissing. A secret with a
-// control character is refused. The variable value is used as it is. From a
+// control character, a hidden character (such as a byte order mark) or
+// bytes that are not UTF-8 is refused. The variable value is used as it is. From a
 // file, the function removes one final line ending (LF or CR LF). It keeps
 // every space.
 func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMissing error) ([]byte, error) {
@@ -501,7 +508,7 @@ func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMiss
 	// Defense in depth: the start reads the real environment; this check
 	// stays so that a snapshot value or a broken file cannot become a
 	// secret.
-	if bytes.IndexFunc(secret, isControlRune) >= 0 {
+	if hasHiddenText(secret) {
 		return nil, fmt.Errorf("%s: %w", source, errSecretControlChar)
 	}
 
@@ -558,9 +565,12 @@ func secretTextFrom(
 	return []byte(secret), fileEnv, nil
 }
 
-// isControlRune reports a control character: a rune below 0x20 or 0x7f.
-func isControlRune(r rune) bool {
-	return r < 0x20 || r == 0x7f
+// hasHiddenText reports text that a secret must not hold: bytes that are not
+// valid UTF-8, a control character (Cc, with the C1 range), a format
+// character (Cf, with the byte order mark), or a line or paragraph separator
+// (Zl, Zp). Such a character can look different from its bytes.
+func hasHiddenText(text []byte) bool {
+	return !utf8.Valid(text) || bytes.IndexFunc(text, ident.IsHiddenRune) >= 0
 }
 
 // close closes every opened sink and answers the joined errors.
