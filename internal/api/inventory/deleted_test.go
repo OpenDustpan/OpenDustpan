@@ -1094,6 +1094,49 @@ func TestUnknownUnitAnswersLikeAForbiddenOne(t *testing.T) {
 	}
 }
 
+// TestUnknownToolAnswersLikeAKnownOne proves that a caller without the action
+// gets 403 for a tool that the server does not serve, as for a tool that it
+// serves, so the answer does not show which tools the server serves. A caller
+// with the action gets 404 for the unknown tool.
+func TestUnknownToolAnswersLikeAKnownOne(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		action identity.Action
+		method string
+		known  string
+	}{
+		{action: identity.ActionUnitRestore, method: http.MethodPost, known: restoreTarget},
+		{action: identity.ActionUnitPurge, method: http.MethodDelete, known: purgeTarget},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.action), func(t *testing.T) {
+			t.Parallel()
+
+			other := strings.Replace(tc.known, "/pulumi/", "/nosuchtool/", 1)
+
+			denied := newDeletedFixture(
+				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{tc.action: true}}, nil,
+			)
+
+			for _, target := range []string{tc.known, other} {
+				if rec := denied.serve(t, tc.method, target, ""); rec.Code != http.StatusForbidden {
+					t.Fatalf("denied %s %s = %d, want %d", tc.method, target, rec.Code, http.StatusForbidden)
+				}
+			}
+
+			allowed := newDeletedFixture(
+				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
+			)
+
+			if rec := allowed.serve(t, tc.method, other, ""); rec.Code != http.StatusNotFound {
+				t.Fatalf("allowed %s %s = %d, want %d", tc.method, other, rec.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
 // TestDeletedPageTokenBelongsToItsQuery proves that a page token works only
 // for the filters that made it: another tool, name prefix or purge window
 // answers 400, and another page size keeps the token.

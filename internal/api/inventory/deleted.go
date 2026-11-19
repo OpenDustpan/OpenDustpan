@@ -354,11 +354,11 @@ func deletedObject(e coreinventory.DeletedEntry) (identity.Object, error) {
 
 // resolveDeletedUnit returns the unit reference of the deleted unit in the
 // path: the tool and unit ID in the path and the namespace in the
-// organization query value. An unknown tool answers 404. An unknown unit
-// resolves to a reference with the unit ID as its name, so the route
-// authorizes it before the handler finds that it does not exist: a caller
-// without the action gets 403 for an unknown unit and for a forbidden one
-// alike, and only a caller with the action learns that it is unknown (404).
+// organization query value. An unknown tool and an unknown unit resolve to a
+// reference with the unit ID as its name, so the route authorizes it before
+// the handler finds that it does not exist: a caller without the action gets
+// 403 for an unknown tool, an unknown unit and a forbidden one alike, and only
+// a caller with the action learns that it is unknown (404).
 func (h *Handler) resolveDeletedUnit(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	nsObj, err := resolveListUnits(nil, r)
 	if err != nil {
@@ -366,13 +366,20 @@ func (h *Handler) resolveDeletedUnit(_ http.ResponseWriter, r *http.Request) (id
 	}
 
 	tool := r.PathValue("tool")
-	if life, ok := h.lifecycles[tool]; !ok || life == nil {
-		return identity.Object{}, unknownTool(tool)
-	}
-
 	unitID := r.PathValue("unitID")
 
-	e, err := h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, unitID)
+	// An unknown tool resolves as an unknown unit does, so that the route
+	// authorizes it first: a caller without the action gets the same 403 for
+	// a tool that the server does not serve as for one that it serves. The
+	// handler answers 404 for the unknown tool after the check.
+	var e coreinventory.DeletedEntry
+
+	err = coreinventory.ErrNotFound
+
+	if life, ok := h.lifecycles[tool]; ok && life != nil {
+		e, err = h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, unitID)
+	}
+
 	if errors.Is(err, coreinventory.ErrNotFound) {
 		obj, objErr := identity.UnitObject(tool, nsObj.Namespace(), unitID)
 		if objErr != nil {
