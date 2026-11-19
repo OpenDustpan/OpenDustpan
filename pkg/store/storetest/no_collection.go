@@ -1,7 +1,6 @@
 package storetest
 
 import (
-	"crypto/md5" //nolint:gosec // The journal row names the batch by its MD5, as the manifest does.
 	"crypto/sha256"
 	"errors"
 	"testing"
@@ -29,7 +28,7 @@ func testNoCollectionRefusesStateWrites(t *testing.T, f fixture) {
 	cp := f.checkpoint(t, running, 1, `{"version":3,"deployment":{}}`)
 	row := stack.JournalRow{
 		Ref: st.Ref, Update: running.ID, Lease: running.Lease.Digest, BlobKey: cp.BlobKey,
-		SHA256: [sha256.Size]byte{}, MD5: [md5.Size]byte{}, Size: 0, SequenceIDs: []int64{1},
+		SHA256: [sha256.Size]byte{}, MD5: [16]byte{}, Size: 0, SequenceIDs: []int64{1},
 		OperationIDs: nil, HasRebuild: false, Verify: nil, AttemptStartedAt: time.Time{},
 	}
 

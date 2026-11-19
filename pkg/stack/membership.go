@@ -27,24 +27,29 @@ type UnitCollections interface {
 	UnitCollection(ctx context.Context, unit collection.UnitRef) (collection.Ref, error)
 }
 
-type collectionMembership struct {
+// CollectionMembership is the Membership that reads the collection of a stack
+// from the collections of a store. Make it with NewCollectionMembership.
+type CollectionMembership struct {
 	units UnitCollections
 }
 
-// CollectionMembership returns the Membership that reads the collection of a
-// stack from units. It returns nil for a nil units, which Updates refuses.
-//
-//nolint:ireturn // The port is the return type.
-func CollectionMembership(units UnitCollections) Membership {
-	if units == nil {
-		return nil
-	}
-
-	return collectionMembership{units: units}
+// NewCollectionMembership returns the Membership that reads the collection of
+// a stack from units. For a nil units, CollectionOf fails with an error, so a
+// write to any stack is refused: the port fails closed.
+func NewCollectionMembership(units UnitCollections) CollectionMembership {
+	return CollectionMembership{units: units}
 }
 
+// errNoUnitCollections is the error of a CollectionMembership that has no
+// collections to read.
+var errNoUnitCollections = errors.New("membership has no collections to read")
+
 // CollectionOf implements Membership.
-func (m collectionMembership) CollectionOf(ctx context.Context, ref Ref) (string, bool, error) {
+func (m CollectionMembership) CollectionOf(ctx context.Context, ref Ref) (string, bool, error) {
+	if m.units == nil {
+		return "", false, fmt.Errorf("collection of %s: %w", ref, errNoUnitCollections)
+	}
+
 	got, err := m.units.UnitCollection(ctx, collection.UnitRef{
 		Namespace: ref.Namespace,
 		Tool:      InventoryTool,

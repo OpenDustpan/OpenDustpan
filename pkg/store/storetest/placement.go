@@ -38,8 +38,26 @@ func PlaceStack(t *testing.T, s any, ref stack.Ref) {
 
 // PlaceStackCtx is PlaceStack for code that holds no *testing.T.
 func PlaceStackCtx(ctx context.Context, s any, ref stack.Ref) error {
-	h, ok := holderOf(s)
-	if !ok {
+	// Find the store that holds collections in s or in the stores that s
+	// wraps.
+	var h collectionHolder
+
+	for range 8 {
+		if got, ok := s.(collectionHolder); ok {
+			h = got
+
+			break
+		}
+
+		w, ok := s.(Unwrapper)
+		if !ok {
+			break
+		}
+
+		s = w.Unwrap()
+	}
+
+	if h == nil {
 		// A store of a test double keeps no collections and refuses nothing.
 		return nil
 	}
@@ -111,25 +129,4 @@ func placementEntry(ns namespace.Name, action string) audit.Entry {
 // methods of the store that it wraps: it returns that store.
 type Unwrapper interface {
 	Unwrap() any
-}
-
-// holderOf finds the store that holds collections in s or in the stores that
-// s wraps.
-//
-//nolint:ireturn // The result is the narrow port that placeStack needs.
-func holderOf(s any) (collectionHolder, bool) {
-	for range 8 {
-		if h, ok := s.(collectionHolder); ok {
-			return h, true
-		}
-
-		w, ok := s.(Unwrapper)
-		if !ok {
-			return nil, false
-		}
-
-		s = w.Unwrap()
-	}
-
-	return nil, false
 }

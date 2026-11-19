@@ -20,9 +20,7 @@ var _ stack.Membership = Membership{Err: nil, Collection: "", Found: false}
 
 // PlacedAll returns a Membership that puts every stack in a collection. Use it
 // where a test has no collections and the check is not under test.
-//
-//nolint:ireturn // The port is the return type.
-func PlacedAll() stack.Membership {
+func PlacedAll() Membership {
 	return Membership{Err: nil, Collection: "c-test", Found: true}
 }
 

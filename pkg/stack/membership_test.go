@@ -144,7 +144,7 @@ func TestCollectionMembership(t *testing.T) {
 				name: "payments",
 			}
 
-			_, found, err := stack.CollectionMembership(units).CollectionOf(t.Context(), f.ref)
+			_, found, err := stack.NewCollectionMembership(units).CollectionOf(t.Context(), f.ref)
 			if found != tc.wantFound || (err != nil) != tc.wantErr {
 				t.Fatalf("CollectionOf = (%v, %v), want found %v, error %v", found, err, tc.wantFound, tc.wantErr)
 			}
@@ -156,7 +156,9 @@ func TestCollectionMembership(t *testing.T) {
 		})
 	}
 
-	if stack.CollectionMembership(nil) != nil {
-		t.Fatal("CollectionMembership(nil) is not nil, so Updates would not refuse it")
+	f := newUpdates(t)
+
+	if _, found, err := stack.NewCollectionMembership(nil).CollectionOf(t.Context(), f.ref); found || err == nil {
+		t.Fatalf("CollectionOf with no collections = (%v, %v), want not found and an error", found, err)
 	}
 }
