@@ -22015,6 +22015,7 @@ SET state = $1, attempts = $2, next_at_ms = $3,
 WHERE notification_deliveries.id = $6 AND notification_deliveries.scope = $7
   AND notification_deliveries.owner = $8 AND notification_deliveries.version = $9
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > $10
+  AND (CAST($1 AS TEXT) = 'pending' OR CAST($5 AS BIGINT) > 0)
 `
 
 type RecordNotificationAttemptParams struct {
@@ -22031,7 +22032,8 @@ type RecordNotificationAttemptParams struct {
 }
 
 // Stores the result for the live claim only: the owner and the version of the
-// stored claim, and a lease that has not passed at now_ms.
+// stored claim, and a lease that has not passed at now_ms. A stopped state
+// needs a delivered time above zero: the wait of a redeliver starts there.
 func (q *Queries) RecordNotificationAttempt(ctx context.Context, arg RecordNotificationAttemptParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordNotificationAttempt,
 		arg.State,
