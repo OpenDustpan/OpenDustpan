@@ -657,6 +657,10 @@ func (f *serveFlags) beforeServe(
 	ctx context.Context, st store, logger *slog.Logger, reloads *reloadMetrics, started *startedReloader,
 ) func(context.Context) error {
 	return func(hookCtx context.Context) error {
+		if clearErr := clearSensitiveEnv(os.Unsetenv); clearErr != nil {
+			return clearErr
+		}
+
 		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
 			return startErr
 		}

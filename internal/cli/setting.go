@@ -357,6 +357,23 @@ func DeclaredEnvs() []string {
 	return envs
 }
 
+// SensitiveEnvs answers, in order, the environment variables of the settings
+// that can hold a secret. The server clears each of them after the start
+// reads it.
+func SensitiveEnvs() []string {
+	var envs []string
+
+	for _, s := range Settings {
+		if s.Env != "" && s.Sensitive {
+			envs = append(envs, s.Env)
+		}
+	}
+
+	slices.Sort(envs)
+
+	return slices.Compact(envs)
+}
+
 // SettingsFor answers the declarations of the flag names in order. It
 // panics when a flag has no declaration, as ByFlag does.
 func SettingsFor(flags ...string) []*Setting {
