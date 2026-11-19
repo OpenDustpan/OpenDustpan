@@ -1147,7 +1147,9 @@ type PendingState struct {
 func (s *Service) BeginState(
 	ctx context.Context, id ID, holder string, in NewState, auth Authority,
 ) (PendingState, error) {
-	return s.beginState(ctx, id, holder, in, auth, false)
+	return s.declareState(ctx, declareRequest{
+		id: id, holder: holder, in: in, auth: auth, requireCollection: false,
+	})
 }
 
 // BeginStateInCollection is BeginState for a workspace that a collection must
@@ -1158,77 +1160,8 @@ func (s *Service) BeginState(
 func (s *Service) BeginStateInCollection(
 	ctx context.Context, id ID, holder string, in NewState, auth Authority,
 ) (PendingState, error) {
-	return s.beginState(ctx, id, holder, in, auth, true)
-}
-
-// beginState is the declare behind BeginState and BeginStateInCollection.
-// requireCollection refuses the declare when no collection holds the workspace.
-func (s *Service) beginState(
-	ctx context.Context, id ID, holder string, in NewState, auth Authority, requireCollection bool,
-) (PendingState, error) {
-	sum, err := in.parse()
-	if err != nil {
-		return PendingState{}, err
-	}
-
-	w, err := s.GetByID(ctx, id)
-	if err != nil {
-		return PendingState{}, err
-	}
-
-	// A workspace that no collection holds takes no state. The read above
-	// carries the membership, so the check adds no round trip.
-	//
-	// Defense in depth: the handler, the authorizer and the gates also refuse
-	// a write to a workspace in no collection. The handler can reach only
-	// BeginStateInCollection, which sets requireCollection; this check stays
-	// so that a new caller of beginState cannot skip it.
-	if requireCollection && !w.InCollection {
-		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, collection.ErrNoCollection)
-	}
-
-	current, hasState, err := s.followedState(ctx, w, in)
-	if err != nil {
-		return PendingState{}, err
-	}
-
-	var known *StateVersion
-	if hasState {
-		known = &current
-	}
-
-	unlocked, used, err := declareOverrides(w, holder, in, known, auth.Allow)
-	if err != nil {
-		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
-	}
-
-	// A write that holds no lock is not the write of a tool that holds its own
-	// lock, so a manual lock stops it. The check runs before the override is
-	// recorded: a refused write leaves no override entry. A write under the lock
-	// of the caller is never refused here.
-	if unlocked {
-		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
-			return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, lockErr)
-		}
-	}
-
-	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
-		return PendingState{}, recordErr
-	}
-
-	// Declares of one workspace share a stripe from here to the create,
-	// which trims contention in this process. The stripe and the cap check
-	// in admitDeclare do not hold the cap across instances. The store
-	// enforces the cap where concurrent declares serialize.
-	unlock, err := s.admitDeclare(ctx, w)
-	if err != nil {
-		return PendingState{}, err
-	}
-
-	defer unlock()
-
-	return s.createPending(ctx, w, in, sum, pendingDeclare{
-		restoredFrom: "", unlocked: unlocked, origin: originFrom(ctx),
+	return s.declareState(ctx, declareRequest{
+		id: id, holder: holder, in: in, auth: auth, requireCollection: true,
 	})
 }
 
@@ -3278,4 +3211,85 @@ func (s *Service) repeatedForceUnlock(
 	}
 
 	return w, false, nil
+}
+
+// declareRequest is the input of declareState.
+type declareRequest struct {
+	id     ID
+	holder string
+	in     NewState
+	auth   Authority
+	// requireCollection refuses the declare when no collection holds the
+	// workspace.
+	requireCollection bool
+}
+
+// declareState is the declare behind BeginState and BeginStateInCollection.
+func (s *Service) declareState(ctx context.Context, req declareRequest) (PendingState, error) {
+	id, holder, in, auth := req.id, req.holder, req.in, req.auth
+
+	sum, err := in.parse()
+	if err != nil {
+		return PendingState{}, err
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return PendingState{}, err
+	}
+
+	// A workspace that no collection holds takes no state. The read above
+	// carries the membership, so the check adds no round trip.
+	//
+	// Defense in depth: the handler, the authorizer and the gates also refuse
+	// a write to a workspace in no collection. The handler can reach only
+	// BeginStateInCollection, which sets requireCollection; this check stays
+	// so that a new caller of declareState cannot skip it.
+	if req.requireCollection && !w.InCollection {
+		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, collection.ErrNoCollection)
+	}
+
+	current, hasState, err := s.followedState(ctx, w, in)
+	if err != nil {
+		return PendingState{}, err
+	}
+
+	var known *StateVersion
+	if hasState {
+		known = &current
+	}
+
+	unlocked, used, err := declareOverrides(w, holder, in, known, auth.Allow)
+	if err != nil {
+		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
+	}
+
+	// A write that holds no lock is not the write of a tool that holds its own
+	// lock, so a manual lock stops it. The check runs before the override is
+	// recorded: a refused write leaves no override entry. A write under the lock
+	// of the caller is never refused here.
+	if unlocked {
+		if lockErr := s.refuseManualLock(ctx, w, ""); lockErr != nil {
+			return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, lockErr)
+		}
+	}
+
+	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
+		return PendingState{}, recordErr
+	}
+
+	// Declares of one workspace share a stripe from here to the create,
+	// which trims contention in this process. The stripe and the cap check
+	// in admitDeclare do not hold the cap across instances. The store
+	// enforces the cap where concurrent declares serialize.
+	unlock, err := s.admitDeclare(ctx, w)
+	if err != nil {
+		return PendingState{}, err
+	}
+
+	defer unlock()
+
+	return s.createPending(ctx, w, in, sum, pendingDeclare{
+		restoredFrom: "", unlocked: unlocked, origin: originFrom(ctx),
+	})
 }
