@@ -58,10 +58,15 @@ Start the server:
 ```
 
 A new installation has no namespace. In a second shell with the same
-`DUSTPAN_ADMIN_TOKEN`, create one. Then log in and run the first update:
+`DUSTPAN_ADMIN_TOKEN`, create one. The server refuses a new stack that no
+placement rule matches, so make a collection and a rule first. Then log in and
+run the first update:
 
 ```sh
 ./bin/opendustpan namespace create --server http://localhost:8080 acme
+./bin/opendustpan collection create --server http://localhost:8080 acme/everything
+./bin/opendustpan placement add --server http://localhost:8080 \
+  --tool pulumi --project '*' --stack '*' --collection everything acme
 mkdir demo && cd demo
 export PULUMI_ACCESS_TOKEN=$DUSTPAN_ADMIN_TOKEN
 pulumi login http://localhost:8080
@@ -92,11 +97,18 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
 ```
 
 A new installation has no namespace. In a second shell with the same
-`DUSTPAN_ADMIN_TOKEN`, create one:
+`DUSTPAN_ADMIN_TOKEN`, create one. The server refuses a new workspace that no
+placement rule matches, so make a collection and a rule first:
 
 ```sh
 ./bin/opendustpan namespace create --server https://localhost:8080 --ca-file cert.pem acme
+./bin/opendustpan collection create --server https://localhost:8080 --ca-file cert.pem acme/everything
+./bin/opendustpan placement add --server https://localhost:8080 --ca-file cert.pem \
+  --tool opentofu --project '*' --stack '*' --collection everything acme
 ```
+
+The [quickstart guide](docs/guides/quickstart.md) explains collections and
+placement rules.
 
 In a directory of its own, a `main.tf` with a `cloud` block names the server,
 the namespace and the workspace:
