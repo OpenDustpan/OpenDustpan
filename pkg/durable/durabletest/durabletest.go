@@ -159,6 +159,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an end write sets the deadline releases to 0 and a renewal does not", testEndWriteResetsDeadlineReleases},
 		{"a release at the deadline by a non-holder changes nothing", testReleaseAtDeadlineNonHolder},
 		{"a release at the deadline during a cancel ends canceled and does not count", testReleaseAtDeadlineCanceled},
+		{"a fail or release during a cancel ends canceled and resets the count", testEndWriteCanceledResetsDeadlineReleases},
 		{"a give-back returns the operation to pending, and a non-holder changes nothing", testGiveBack},
 		{"a give-back during a cancel is ErrCanceled and changes nothing", testGiveBackCanceled},
 		{"a recorded step stays done after a takeover", testStepDoneAfterTakeover},
@@ -884,6 +885,8 @@ func testReleaseAtDeadlineCanceled(t *testing.T, h Harness) {
 
 	a := h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
+	raiseDeadlineReleases(t, a, 2)
+
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
 	if err := a.Cancel(t.Context(), held.ID); err != nil {
@@ -897,6 +900,59 @@ func testReleaseAtDeadlineCanceled(t *testing.T, h Harness) {
 	got := mustGet(t, a, held.ID)
 	if got.State != durable.StateCanceled || got.DeadlineReleases != 0 {
 		t.Fatalf("operation after a release at the deadline during a cancel = %+v, want canceled with count 0", got)
+	}
+}
+
+// testEndWriteCanceledResetsDeadlineReleases proves that Fail and Release,
+// when they meet a requested cancel, end the operation canceled and set the
+// count of deadline releases to 0, as every other end write does.
+func testEndWriteCanceledResetsDeadlineReleases(t *testing.T, h Harness) {
+	t.Helper()
+
+	ends := []struct {
+		name string
+		end  func(context.Context, durable.Store, durable.Claim) error
+	}{
+		{"Fail", func(ctx context.Context, s durable.Store, c durable.Claim) error {
+			return s.Fail(ctx, c, durable.Failure{Message: "x", Final: false, RetryAfter: 0})
+		}},
+		{"Release", func(ctx context.Context, s durable.Store, c durable.Claim) error { return s.Release(ctx, c) }},
+	}
+
+	for _, e := range ends {
+		t.Run(e.name, func(t *testing.T) {
+			a := h.Open(t, 0)
+			mustStart(t, a, "k-"+e.name, kindA)
+			raiseDeadlineReleases(t, a, 2)
+
+			held := mustClaim(t, a, ownerA, longLease, kindA)
+
+			if err := a.Cancel(t.Context(), held.ID); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+
+			if err := e.end(t.Context(), a, held.Claim); err != nil {
+				t.Fatalf("%s during a cancel: %v", e.name, err)
+			}
+
+			got := mustGet(t, a, held.ID)
+			if got.State != durable.StateCanceled || got.DeadlineReleases != 0 {
+				t.Fatalf("operation after %s during a cancel = %+v, want canceled with count 0", e.name, got)
+			}
+		})
+	}
+}
+
+// raiseDeadlineReleases raises the count of deadline releases of the only
+// claimable operation of a to n, with n rounds of claim and ReleaseAtDeadline.
+func raiseDeadlineReleases(t *testing.T, a durable.Store, n int) {
+	t.Helper()
+
+	for range n {
+		held := mustClaim(t, a, ownerA, longLease, kindA)
+		if err := a.ReleaseAtDeadline(t.Context(), held.Claim); err != nil {
+			t.Fatalf("ReleaseAtDeadline: %v", err)
+		}
 	}
 }
 

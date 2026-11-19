@@ -503,7 +503,10 @@ func completeEnd(row db.DurableOperation, now int64) (db.DurableOperation, error
 func failEnd(f durable.Failure) endRule {
 	return func(row db.DurableOperation, now int64) (db.DurableOperation, error) {
 		if row.CancelRequested {
-			return endCanceled(row, now), nil
+			canceled := endCanceled(row, now)
+			canceled.DeadlineReleases = 0
+
+			return canceled, nil
 		}
 
 		row.Failures++
@@ -524,7 +527,10 @@ func failEnd(f durable.Failure) endRule {
 // releaseEnd is the rule of durable.Store.Release.
 func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
 	if row.CancelRequested {
-		return endCanceled(row, now), nil
+		canceled := endCanceled(row, now)
+		canceled.DeadlineReleases = 0
+
+		return canceled, nil
 	}
 
 	row.State = string(durable.StatePending)

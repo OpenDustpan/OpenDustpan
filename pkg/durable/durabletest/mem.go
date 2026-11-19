@@ -934,6 +934,7 @@ func (s memStore) end(c durable.Claim, onCancel cancelRule, fn func(op *durable.
 			return durable.ErrCanceled
 		}
 
+		op.DeadlineReleases = 0
 		s.db.endCanceled(op, now)
 
 		return nil

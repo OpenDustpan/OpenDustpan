@@ -1553,6 +1553,48 @@ func TestRunnerDoesNotCountADatabaseGap(t *testing.T) {
 	}
 }
 
+// TestRunnerCountsAfterAGapThatARenewalFollows proves that the count of
+// deadline releases grows when a gap is followed by a renewal that succeeds,
+// and then by renewals that fail for a reason that is not a gap. The release
+// at the deadline counts.
+func TestRunnerCountsAfterAGapThatARenewalFollows(t *testing.T) {
+	t.Parallel()
+
+	inner := durabletest.NewMem().Store()
+	store := newCountingStore(inner)
+
+	var calls atomic.Int32
+
+	store.extend = func(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+		switch calls.Add(1) {
+		case 1:
+			return durable.Claim{}, fmt.Errorf("extend: %w", namespace.ErrUnreachable)
+		case 2:
+			return inner.Extend(ctx, c, lease)
+		default:
+			return durable.Claim{}, errNetwork
+		}
+	}
+
+	var ran atomic.Int32
+
+	cfg := testConfig(store, "a", blockStep(&ran))
+	cfg.DeadlineReleaseLimit = 2
+	op := start(t, store, "k")
+
+	if err := newRunner(t, cfg).RunOnce(t.Context()); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("RunOnce: error = %v, want ErrClaimLost", err)
+	}
+
+	if calls.Load() < 3 {
+		t.Fatalf("Extend calls = %d, want at least 3", calls.Load())
+	}
+
+	if got := mustGet(t, inner, op.ID); got.State != durable.StatePending || got.DeadlineReleases != 1 {
+		t.Fatalf("operation = %+v, want pending with 1 deadline release", got)
+	}
+}
+
 // runRenewedAndDeferred runs one attempt in which a renewal succeeds, and the
 // step then asks for a wait, so the runner releases with no failure. It
 // checks that the count of deadline releases is 0 after it.

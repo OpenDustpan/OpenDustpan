@@ -789,6 +789,13 @@ func (r *Runner) release(ctx context.Context, claim Claim, log *slog.Logger) {
 // isGap reports whether err means that the database cannot be reached: it
 // wraps namespace.ErrUnreachable, or the Deferred function of the runner
 // matches it. A gap does not count against DeadlineReleaseLimit.
+//
+// Ordering: the timeout of each Extend is at most the lease minus the margin.
+// It must end before the statement deadline of the PostgreSQL store (30 s). A
+// stalled Extend then ends with the context error of the runner, and it does
+// not count as a gap. With a configured Lease above about 40 s, the statement
+// deadline ends the stalled Extend first, the error is a gap, and the release
+// does not count.
 func (r *Runner) isGap(err error) bool {
 	return errors.Is(err, namespace.ErrUnreachable) || (r.cfg.Deferred != nil && r.cfg.Deferred(err))
 }
