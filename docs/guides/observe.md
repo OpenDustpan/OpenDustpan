@@ -91,6 +91,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_blob_purge_oldest_age_seconds` | (none) |
 | `dustpan_blob_purge_read_errors_total` | (none) |
 | `dustpan_blob_deletes_waiting_total` | `reason` |
+| `dustpan_mtls_exchange_refused_total` | `reason` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.

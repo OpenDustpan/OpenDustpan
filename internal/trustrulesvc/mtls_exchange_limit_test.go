@@ -64,7 +64,7 @@ func countLimited(g *trustrulesvc.MtlsGuard, n int, key func(int) string) int {
 	var limited int
 
 	for i := range n {
-		if _, err := g.Admit(key(i), 0); errors.Is(err, trustrulesvc.ErrRateLimited) {
+		if _, err := g.Admit(key(i), "acme", 0); errors.Is(err, trustrulesvc.ErrRateLimited) {
 			limited++
 		}
 	}
@@ -97,12 +97,12 @@ func testOversizeBody(t *testing.T) {
 	g := newGuard(t, newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 10, 1000 })
 
 	for _, n := range []int64{1025, 1 << 40, -1} {
-		if _, err := g.Admit("k", n); !errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
+		if _, err := g.Admit("k", "acme", n); !errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
 			t.Fatalf("body %d: error = %v", n, err)
 		}
 	}
 
-	if _, err := g.Admit("k", 1024); err != nil {
+	if _, err := g.Admit("k", "acme", 1024); err != nil {
 		t.Fatalf("body at the cap: %v", err)
 	}
 }
@@ -129,13 +129,13 @@ func testKeyLimit(t *testing.T) {
 		t.Fatalf("limited = %d, want 1", n)
 	}
 
-	if _, err := g.Admit("b", 0); err != nil {
+	if _, err := g.Admit("b", "acme", 0); err != nil {
 		t.Fatalf("other key: %v", err)
 	}
 
 	clock.advance(time.Minute)
 
-	if _, err := g.Admit("a", 0); err != nil {
+	if _, err := g.Admit("a", "acme", 0); err != nil {
 		t.Fatalf("after the window: %v", err)
 	}
 }
@@ -193,7 +193,7 @@ func testConcurrentLimit(t *testing.T) {
 
 	for range 50 {
 		wg.Go(func() {
-			if _, err := g.Admit("same", 0); err == nil {
+			if _, err := g.Admit("same", "acme", 0); err == nil {
 				allowed.Add(1)
 			}
 		})
@@ -273,8 +273,8 @@ func testAdmittedNotFirst(t *testing.T) {
 
 	g := newGuard(t, newClock(), nil)
 
-	if first, err := g.Admit("a", 0); first || err != nil {
-		t.Fatalf("first = %v, err = %v, want false and nil", first, err)
+	if r, err := g.Admit("a", "acme", 0); r.First || err != nil {
+		t.Fatalf("first = %v, err = %v, want false and nil", r.First, err)
 	}
 }
 
@@ -286,7 +286,7 @@ func testFirstRefusalOversize(t *testing.T) {
 	var got int
 
 	for range 10 {
-		if first, err := g.Admit("a", 1<<40); first && errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
+		if r, err := g.Admit("a", "acme", 1<<40); r.First && errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
 			got++
 		}
 	}
@@ -302,10 +302,155 @@ func countFirst(g *trustrulesvc.MtlsGuard, n int, key func(int) string) int {
 	var got int
 
 	for i := range n {
-		if first, err := g.Admit(key(i), 0); first && err != nil {
+		if r, err := g.Admit(key(i), "acme", 0); r.First && err != nil {
 			got++
 		}
 	}
 
 	return got
+}
+
+// TestMtlsGuardRearm checks that a refusal that the caller gives back is a
+// first refusal again, and that the counts of the guard reach the next one.
+func TestMtlsGuardRearm(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a refusal given back is first again", testRearmFirstAgain)
+	t.Run("a name that does not exist keeps no slot", testRearmNotFound)
+	t.Run("names beyond the bound share one slot", testSlotBound)
+	t.Run("a held count reaches the next first refusal", testHeldCarry)
+}
+
+func rearmGuard(t *testing.T) (*trustrulesvc.MtlsGuard, *guardClock) {
+	t.Helper()
+
+	clock := newClock()
+
+	return newGuard(t, clock, func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 1, 1000 }), clock
+}
+
+// admitOK makes a call that the guard must admit.
+func admitOK(t *testing.T, g *trustrulesvc.MtlsGuard, ns string) {
+	t.Helper()
+
+	if _, err := g.Admit("a", ns, 0); err != nil {
+		t.Fatalf("Admit(%q): %v, want nil", ns, err)
+	}
+}
+
+// admitRefused makes a call that the guard must refuse.
+func admitRefused(t *testing.T, g *trustrulesvc.MtlsGuard, ns string) trustrulesvc.Refusal {
+	t.Helper()
+
+	r, err := g.Admit("a", ns, 0)
+	if err == nil {
+		t.Fatalf("Admit(%q) = nil, want a refusal", ns)
+	}
+
+	return r
+}
+
+func testRearmFirstAgain(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	admitOK(t, g, "acme")
+
+	r := admitRefused(t, g, "acme")
+	if !r.First {
+		t.Fatal("the first refusal is not first")
+	}
+
+	if admitRefused(t, g, "acme").First {
+		t.Fatal("a second refusal is first before Rearm")
+	}
+
+	g.Rearm(r)
+
+	if !admitRefused(t, g, "acme").First {
+		t.Fatal("the refusal after Rearm is not first")
+	}
+}
+
+func testRearmNotFound(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	admitOK(t, g, "ghost")
+
+	ghost := admitRefused(t, g, "ghost")
+	if !ghost.First {
+		t.Fatal("the refusal for ghost is not first")
+	}
+
+	g.Forget(ghost)
+
+	if !admitRefused(t, g, "acme").First {
+		t.Fatal("a refusal for another namespace is hidden by the one for ghost")
+	}
+}
+
+func testSlotBound(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	admitOK(t, g, "n0")
+
+	var first int
+
+	for i := range 40 {
+		if admitRefused(t, g, fmt.Sprintf("n%d", i)).First {
+			first++
+		}
+	}
+
+	if first != 9 {
+		t.Fatalf("first refusals = %d, want 9 (8 names and one shared slot)", first)
+	}
+}
+
+func testHeldCarry(t *testing.T) {
+	t.Parallel()
+
+	g, clock := rearmGuard(t)
+
+	admitOK(t, g, "acme")
+
+	for range 5 {
+		admitRefused(t, g, "acme")
+	}
+
+	clock.advance(time.Hour)
+
+	admitOK(t, g, "acme")
+
+	r := admitRefused(t, g, "acme")
+	if !r.First {
+		t.Fatal("the refusal of the new window is not first")
+	}
+
+	if len(r.Held) != 1 || r.Held[0].Namespace != "acme" || r.Held[0].Count != 4 {
+		t.Fatalf("held = %+v, want acme 4", r.Held)
+	}
+}
+
+// TestMtlsGuardOversizeCounts checks that a call with a body that is too
+// large counts toward the rate limit of its key.
+func TestMtlsGuardOversizeCounts(t *testing.T) {
+	t.Parallel()
+
+	g := newGuard(t, newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 3, 1000 })
+
+	for range 3 {
+		if _, err := g.Admit("a", "acme", 1<<40); !errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
+			t.Fatalf("oversize call: %v, want ErrBodyTooLarge", err)
+		}
+	}
+
+	if _, err := g.Admit("a", "acme", 0); !errors.Is(err, trustrulesvc.ErrRateLimited) {
+		t.Fatalf("normal call after the oversize calls: %v, want ErrRateLimited", err)
+	}
 }

@@ -52,7 +52,10 @@ type Config struct {
 	MtlsExchanger *trustrulesvc.MtlsExchanger
 	// MtlsGuard limits the mTLS exchange calls. It is required with
 	// MtlsExchanger.
-	MtlsGuard     *trustrulesvc.MtlsGuard
+	MtlsGuard *trustrulesvc.MtlsGuard
+	// OnMtlsRefused, when set, runs once for each mTLS exchange call that the
+	// guard refuses. Its argument is "rate-limit" or "body-size".
+	OnMtlsRefused func(reason string)
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses.
@@ -101,6 +104,7 @@ type Handler struct {
 	exchanger      *trustrulesvc.Exchanger
 	mtls           *trustrulesvc.MtlsExchanger
 	mtlsGuard      *trustrulesvc.MtlsGuard
+	onMtlsRefused  func(reason string)
 	authn          identity.Authenticator
 	sessions       *sessionauth.Checker
 	guard          *refusal.Recorder
@@ -144,6 +148,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		exchanger:      cfg.Exchanger,
 		mtls:           cfg.MtlsExchanger,
 		mtlsGuard:      cfg.MtlsGuard,
+		onMtlsRefused:  cfg.OnMtlsRefused,
 		authn:          cfg.Authenticator,
 		sessions:       cfg.Sessions,
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("trustrules"),

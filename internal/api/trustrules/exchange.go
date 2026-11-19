@@ -128,6 +128,52 @@ func (h *Handler) requestEntry(r *http.Request) audit.Entry {
 	}
 }
 
+// writeMtlsRefusal writes the denial entry of the first refusal of the guard.
+// When the write fails, it gives the refusal back to the guard, so the next
+// refusal of the window tries the write again: a failure must not hide the
+// refusals that follow. A namespace that does not exist has no audit log: the
+// guard frees its slot, so it does not take the slot of a real namespace.
+func (h *Handler) writeMtlsRefusal(
+	ctx context.Context, r *http.Request, name namespace.Name, refusal trustrulesvc.Refusal, cause error,
+) {
+	unwritten, err := h.mtls.RefuseCall(ctx, name, h.requestEntry(r), cause, refusal.Held)
+	if err == nil {
+		h.mtlsGuard.GiveBack(unwritten)
+
+		return
+	}
+
+	if errors.Is(err, trustrulesvc.ErrBundleUnknown) {
+		h.mtlsGuard.Forget(refusal)
+
+		return
+	}
+
+	h.mtlsGuard.Rearm(refusal)
+
+	if h.onAuditFailure != nil {
+		h.onAuditFailure()
+	}
+
+	h.logger.WarnContext(ctx, "the denial entry of a refused mTLS call failed",
+		slog.String("namespace", string(name)), slog.String("error", err.Error()))
+}
+
+// countMtlsRefused counts a call that the guard refused, by its reason.
+func (h *Handler) countMtlsRefused(cause error) {
+	if h.onMtlsRefused == nil {
+		return
+	}
+
+	if errors.Is(cause, trustrulesvc.ErrBodyTooLarge) {
+		h.onMtlsRefused("body-size")
+
+		return
+	}
+
+	h.onMtlsRefused("rate-limit")
+}
+
 // exchangeMtls serves an exchange with an empty body: the client
 // certificate of the TLS handshake is the credential. The chain comes only
 // from the TLS state of the request. A header never gives a chain: a header
@@ -143,17 +189,16 @@ func (h *Handler) exchangeMtls(w http.ResponseWriter, r *http.Request, name name
 
 	// Each call counts, also one with no certificate: it is the call that
 	// costs the server no work, and the one that a flood sends.
-	if first, err := h.mtlsGuard.Admit(clientip.String(r), r.ContentLength); err != nil {
-		// The first refusal of a window writes a denial entry through the
-		// limiter of the exchanger. The guard counts the later ones in
-		// memory, so a flood costs no store read for each call. The answer
-		// is always the cause of the guard: a failure of the entry does not
-		// change it.
-		if first {
-			if refuseErr := h.mtls.RefuseCall(ctx, name, h.requestEntry(r), err); refuseErr != nil {
-				h.logger.WarnContext(ctx, "the denial entry of a refused mTLS call failed",
-					slog.String("namespace", string(name)), slog.String("error", refuseErr.Error()))
-			}
+	if refusal, err := h.mtlsGuard.Admit(clientip.String(r), string(name), r.ContentLength); err != nil {
+		h.countMtlsRefused(err)
+
+		// The first refusal of a window and namespace writes a denial entry
+		// through the limiter of the exchanger. The guard counts the later
+		// ones in memory, so a flood costs no store read for each call. The
+		// answer is always the cause of the guard: a failure of the entry
+		// does not change it.
+		if refusal.First {
+			h.writeMtlsRefusal(ctx, r, name, refusal, err)
 		}
 
 		h.writeMtlsError(ctx, w, err)

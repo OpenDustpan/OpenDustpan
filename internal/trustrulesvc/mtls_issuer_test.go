@@ -77,39 +77,81 @@ func TestMtlsExchangeIssuerInvalid(t *testing.T) {
 func TestMtlsRefuseCall(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a rate limit writes one denial entry", func(t *testing.T) {
-		t.Parallel()
+	t.Run("a rate limit writes one denial entry", testRefuseRateLimit)
+	t.Run("held counts are written with the entry", testRefuseHeld)
+	t.Run("a canceled context still writes the entry", testRefuseCanceled)
+	t.Run("an unknown namespace writes no entry", testRefuseUnknown)
+}
 
-		e := newMtlsEnv(t)
-		x := e.exchanger(nil)
+func testRefuseRateLimit(t *testing.T) {
+	t.Parallel()
 
-		if err := x.RefuseCall(t.Context(), "acme", emptyEntry(), trustrulesvc.ErrRateLimited); err != nil {
-			t.Fatalf("RefuseCall: %v, want nil", err)
-		}
+	e := newMtlsEnv(t)
+	x := e.exchanger(nil)
 
-		entries := e.exchangeEntries("acme")
-		if len(entries) != 1 || entries[0].Outcome != audit.OutcomeDenied || entries[0].Reason == "" {
-			t.Fatalf("entries = %+v, want one denial entry with a reason", entries)
-		}
+	if _, err := x.RefuseCall(t.Context(), "acme", emptyEntry(), trustrulesvc.ErrRateLimited, nil); err != nil {
+		t.Fatalf("RefuseCall: %v, want nil", err)
+	}
 
-		if entries := e.exchangeEntries("acme"); entries[0].Reason == "" {
-			t.Fatalf("entry = %+v, want a reason", entries[0])
-		}
-	})
+	entries := e.exchangeEntries("acme")
+	if len(entries) != 1 || entries[0].Outcome != audit.OutcomeDenied || entries[0].Reason == "" {
+		t.Fatalf("entries = %+v, want one denial entry with a reason", entries)
+	}
+}
 
-	t.Run("an unknown namespace writes no entry", func(t *testing.T) {
-		t.Parallel()
+func testRefuseHeld(t *testing.T) {
+	t.Parallel()
 
-		e := newMtlsEnv(t)
-		x := e.exchanger(nil)
+	e := newMtlsEnv(t)
+	x := e.exchanger(nil)
+	held := []trustrulesvc.HeldCount{{Namespace: "acme", Count: 7}, {Namespace: "nowhere", Count: 2}}
 
-		err := x.RefuseCall(t.Context(), "nowhere", emptyEntry(), trustrulesvc.ErrRateLimited)
-		if !isErr(err, trustrulesvc.ErrBundleUnknown) || isErr(err, trustrulesvc.ErrRateLimited) {
-			t.Fatalf("error = %v, want ErrBundleUnknown", err)
-		}
+	unwritten, err := x.RefuseCall(t.Context(), "acme", emptyEntry(), trustrulesvc.ErrRateLimited, held)
+	if err != nil || len(unwritten) != 0 {
+		t.Fatalf("RefuseCall = %v, %v, want no error and no unwritten count", unwritten, err)
+	}
 
-		if n := len(e.exchangeEntries("acme")) + len(e.exchangeEntries("other")); n != 0 {
-			t.Fatalf("%d entries, want none", n)
-		}
-	})
+	var found bool
+
+	entries := e.exchangeEntries("acme")
+	for i := range entries {
+		found = found || entries[i].Reason == "7 refused exchanges wrote no entry of their own"
+	}
+
+	if !found {
+		t.Fatalf("entries = %+v, want the held count of 7", e.exchangeEntries("acme"))
+	}
+}
+
+func testRefuseCanceled(t *testing.T) {
+	t.Parallel()
+
+	e := newMtlsEnv(t)
+	x := e.exchanger(nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := x.RefuseCall(ctx, "acme", emptyEntry(), trustrulesvc.ErrRateLimited, nil); err != nil {
+		t.Fatalf("RefuseCall: %v, want nil", err)
+	}
+
+	if n := len(e.exchangeEntries("acme")); n != 1 {
+		t.Fatalf("%d entries, want 1", n)
+	}
+}
+
+func testRefuseUnknown(t *testing.T) {
+	t.Parallel()
+
+	e := newMtlsEnv(t)
+	x := e.exchanger(nil)
+
+	_, err := x.RefuseCall(t.Context(), "nowhere", emptyEntry(), trustrulesvc.ErrRateLimited, nil)
+	if !isErr(err, trustrulesvc.ErrBundleUnknown) || isErr(err, trustrulesvc.ErrRateLimited) {
+		t.Fatalf("error = %v, want ErrBundleUnknown", err)
+	}
+
+	if n := len(e.exchangeEntries("acme")) + len(e.exchangeEntries("other")); n != 0 {
+		t.Fatalf("%d entries, want none", n)
+	}
 }

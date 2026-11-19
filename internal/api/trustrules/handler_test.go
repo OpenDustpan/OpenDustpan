@@ -527,11 +527,11 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 			Authenticator:  tokenAuthenticator{},
 			Authorizer:     identity.AdminOnly{},
 			Audit:          newTestAudit(),
-			OnAuditFailure: nil,
-			DenialLimiter:  nil,
-			Sessions:       nil,
-			Logger:         slog.New(slog.DiscardHandler),
-			Now:            nil,
+			OnAuditFailure: nil, OnMtlsRefused: nil,
+			DenialLimiter: nil,
+			Sessions:      nil,
+			Logger:        slog.New(slog.DiscardHandler),
+			Now:           nil,
 		}
 	}
 

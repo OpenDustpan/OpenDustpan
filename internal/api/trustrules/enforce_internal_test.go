@@ -84,6 +84,7 @@ func TestEnforceActions(t *testing.T) {
 				exchanger:      nil,
 				mtls:           nil,
 				mtlsGuard:      nil,
+				onMtlsRefused:  nil,
 				authn:          enforceTokens{},
 				sessions:       nil,
 				guard:          refusals,

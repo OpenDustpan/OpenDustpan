@@ -496,17 +496,29 @@ func (e *MtlsExchanger) Verify(ctx context.Context, in *MtlsVerifyInput) (Verifi
 // no entry is written. The caller calls RefuseCall for the first refusal of
 // each window only, because each call reads the namespace.
 func (e *MtlsExchanger) RefuseCall(
-	ctx context.Context, name namespace.Name, request audit.Entry, cause error,
-) error {
+	ctx context.Context, name namespace.Name, request audit.Entry, cause error, held []HeldCount,
+) ([]HeldCount, error) {
+	// The entry of a refusal does not depend on the client: a client that
+	// disconnects must not cancel the write of the record of its refusal.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refuseCallTimeout)
+	defer cancel()
+
 	ns, err := e.cfg.Namespaces.WritableHere(ctx, name)
 	if err != nil {
-		return namespaceError(err)
+		return held, namespaceError(err)
 	}
 
 	in := ExchangeInput{Namespace: ns.Name, Token: "", Rule: "", Request: request}
 
-	return errors.Join(writeFailures(e.refuser.refuse(ctx, ns, in, nil, cause))...)
+	if refuseErr := errors.Join(writeFailures(e.refuser.refuse(ctx, ns, in, nil, cause))...); refuseErr != nil {
+		return held, refuseErr
+	}
+
+	return e.writeHeld(ctx, request, held), nil
 }
+
+// refuseCallTimeout is the time that RefuseCall has to write a denial entry.
+const refuseCallTimeout = 5 * time.Second
 
 // namespaceError turns the error of a namespace read into the answer of the
 // mTLS exchange.
@@ -609,6 +621,36 @@ func (e *MtlsExchanger) Exchange(ctx context.Context, in *MtlsExchangeInput) (Mt
 	}
 
 	return e.issue(ctx, ns, in, &rule, &owner)
+}
+
+// writeHeld writes the counts of refused calls that the guard held back, and
+// returns the counts that it could not write. A count for a namespace that
+// does not exist is dropped: that namespace has no audit log.
+func (e *MtlsExchanger) writeHeld(ctx context.Context, request audit.Entry, held []HeldCount) []HeldCount {
+	var unwritten []HeldCount
+
+	for _, h := range held {
+		p := denylimit.Pending{
+			Key:        denylimit.Key{Principal: "", Action: "", Kind: "", Scope: ""},
+			Suppressed: h.Count, Overflow: h.Namespace == "",
+		}
+
+		if h.Namespace != "" {
+			ns, err := namespace.ParseName(h.Namespace)
+			if err != nil {
+				continue
+			}
+
+			p.Key = unsignedKey(ns)
+		}
+
+		err := e.refuser.flush(ctx, request, []denylimit.Pending{p})
+		if err != nil && !errors.Is(err, namespace.ErrNotFound) {
+			unwritten = append(unwritten, h)
+		}
+	}
+
+	return unwritten
 }
 
 // signedOrNil returns signed when the chain names a SPIFFE ID, and nil for a

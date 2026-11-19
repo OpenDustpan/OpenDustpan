@@ -229,9 +229,14 @@ The answer is 201 with `Cache-Control: no-store`, in the form of the token
 exchange above. The token never lives longer than the leaf certificate. Each
 exchange writes the audit entry `trust-rule:exchange`, and each refusal writes
 an audit entry with the outcome `denied`. This includes a refusal for the rate
-limit. For each window, the server writes the first refusal and counts the
-others in memory, so a flood of refused calls causes no store read. A call to a namespace that does not exist writes no
-entry, because that namespace has no audit log.
+limit or the body size. For each window and namespace, the server writes the
+first refusal and counts the others in memory, so a flood of refused calls
+causes one namespace read for each window. The server writes the count of the
+others as an entry with the reason "N refused exchanges wrote no entry of
+their own". If the server cannot write an entry, the next refusal tries again.
+A call to a namespace that does not exist writes no entry, because that
+namespace has no audit log. Such a call does not hide the refusals of another
+namespace.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |

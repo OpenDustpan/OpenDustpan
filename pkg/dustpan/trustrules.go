@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/trustrules"
+	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/trustkeys"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -142,6 +143,7 @@ func newTrustRuleHandler(
 	handler, err := trustrules.NewHandler(trustrules.Config{
 		MtlsExchanger:  mtls,
 		MtlsGuard:      mtlsGuard,
+		OnMtlsRefused:  mtlsRefusedHook(cfg.observed),
 		Namespaces:     svc.namespaces,
 		Rules:          ruleSvc,
 		Exchanger:      exchanger,
@@ -256,4 +258,14 @@ func newMtlsExchange(
 	}
 
 	return x, guard, nil
+}
+
+// mtlsRefusedHook returns the function that counts a refused mTLS exchange
+// call in the server metrics, or nil when the server has none.
+func mtlsRefusedHook(observed *metrics.ServerMetrics) func(string) {
+	if observed == nil {
+		return nil
+	}
+
+	return observed.IncMtlsRefused
 }

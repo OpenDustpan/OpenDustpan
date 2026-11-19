@@ -141,6 +141,9 @@ type mtlsOpts struct {
 	limit int
 	// noMtls leaves the mTLS exchange out of the handler config.
 	noMtls bool
+	// canceled gives each request a context that is already canceled, like a
+	// client that disconnects during the call.
+	canceled bool
 }
 
 // mtlsServer is the handler behind a TLS server that asks for a client
@@ -230,14 +233,24 @@ func (e *env) newMtlsServerWith(
 	h, err := trustrules.NewHandler(trustrules.Config{
 		Exchanger: exchanger, MtlsExchanger: cfgMtls, MtlsGuard: cfgGuard,
 		Namespaces: namespaces, Rules: rules, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: e.audit, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
+		Audit: e.audit, OnAuditFailure: nil, OnMtlsRefused: nil, DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("handler: %v", err)
 	}
 
-	srv := httptest.NewUnstartedServer(h)
+	var served http.Handler = h
+
+	if o.canceled {
+		served = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithCancel(r.Context())
+			cancel()
+			h.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+
+	srv := httptest.NewUnstartedServer(served)
 	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequestClientCert}
 	srv.StartTLS()
 	e.t.Cleanup(srv.Close)
@@ -360,7 +373,7 @@ func TestExchangeMtlsIssuesAToken(t *testing.T) {
 	t.Parallel()
 
 	e, ca, ruleID := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: false})
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: false, canceled: false})
 	cert := ca.goodLeaf(t)
 
 	status, header, body := m.call(t, mtlsExchangeURL, &cert, nil)
@@ -545,7 +558,9 @@ func runHostile(t *testing.T, row *hostileRow) {
 		e, ca, _ = mtlsFixture(t)
 	}
 
-	m := e.newMtlsServer(mtlsOpts{revocation: row.revocation, failWrite: row.failWrite, limit: 0, noMtls: false})
+	m := e.newMtlsServer(
+		mtlsOpts{revocation: row.revocation, failWrite: row.failWrite, limit: 0, noMtls: false, canceled: false},
+	)
 
 	var cert *tls.Certificate
 	if row.cert != nil {
@@ -612,7 +627,7 @@ func TestExchangeMtlsBodyTooLarge(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: false})
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: false, canceled: false})
 	cert := ca.goodLeaf(t)
 	body := `{"token":"` + strings.Repeat("a", trustrule.MaxTokenBytes+4096) + `"}`
 
@@ -649,7 +664,7 @@ func TestExchangeMtlsRateLimit(t *testing.T) {
 	t.Parallel()
 
 	e, _, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 3, noMtls: false})
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 3, noMtls: false, canceled: false})
 
 	for i := 1; i <= 3; i++ {
 		status, _, body := m.call(t, mtlsExchangeURL, nil, nil)
@@ -674,7 +689,7 @@ func TestExchangeMtlsNotConfigured(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: true})
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: true, canceled: false})
 	cert := ca.goodLeaf(t)
 
 	status, _, body := m.call(t, mtlsExchangeURL, &cert, nil)
@@ -696,7 +711,7 @@ func TestExchangeMtlsRateLimitAudit(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 2, noMtls: false})
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 2, noMtls: false, canceled: false})
 	cert := ca.goodLeaf(t)
 
 	for i := 1; i <= 2; i++ {
@@ -738,12 +753,14 @@ type countingNamespaces struct {
 
 	writable atomic.Int64
 	fail     error
+	// failing, when not nil, makes fail apply only while it holds true.
+	failing *atomic.Bool
 }
 
 func (c *countingNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
 	c.writable.Add(1)
 
-	if c.fail != nil {
+	if c.fail != nil && (c.failing == nil || c.failing.Load()) {
 		return namespace.Namespace{}, c.fail
 	}
 
@@ -758,14 +775,16 @@ func TestExchangeMtlsRefusedFloodReads(t *testing.T) {
 
 	e, ca, _ := mtlsFixture(t)
 
-	counter := &countingNamespaces{Namespaces: nil, writable: atomic.Int64{}, fail: nil}
+	counter := &countingNamespaces{Namespaces: nil, writable: atomic.Int64{}, fail: nil, failing: nil}
 
-	m := e.newMtlsServerWith(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false},
+	m := e.newMtlsServerWith(
+		mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
 		func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
 			counter.Namespaces = n
 
 			return counter
-		})
+		},
+	)
 	cert := ca.goodLeaf(t)
 
 	if status, _, body := m.call(t, mtlsExchangeURL, &cert, nil); status != http.StatusCreated {
@@ -796,10 +815,12 @@ func TestExchangeMtlsRefusedAnswer(t *testing.T) {
 		t.Parallel()
 
 		e, ca, _ := mtlsFixture(t)
-		m := e.newMtlsServerWith(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false},
+		m := e.newMtlsServerWith(
+			mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
 			func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
-				return &countingNamespaces{Namespaces: n, writable: atomic.Int64{}, fail: errDisk}
-			})
+				return &countingNamespaces{Namespaces: n, writable: atomic.Int64{}, fail: errDisk, failing: nil}
+			},
+		)
 		cert := ca.goodLeaf(t)
 
 		// The first call passes the guard and then fails at the namespace
@@ -816,7 +837,9 @@ func TestExchangeMtlsRefusedAnswer(t *testing.T) {
 		t.Parallel()
 
 		e, ca, _ := mtlsFixture(t)
-		m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false})
+		m := e.newMtlsServer(
+			mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
+		)
 		cert := ca.goodLeaf(t)
 		path := "/api/dustpan/v1/namespaces/nowhere/trust-rules/exchange"
 
@@ -827,4 +850,103 @@ func TestExchangeMtlsRefusedAnswer(t *testing.T) {
 			t.Fatalf("answer = %d %s, want 429 mtls.rate-limited", status, body)
 		}
 	})
+}
+
+// deniedExchangeEntries returns the exchange audit entries of acme with the
+// outcome denied.
+func (e *env) deniedExchangeEntries() []audit.Entry {
+	e.t.Helper()
+
+	var out []audit.Entry
+
+	all := e.exchangeEntries()
+	for i := range all {
+		if all[i].Outcome == audit.OutcomeDenied {
+			out = append(out, all[i])
+		}
+	}
+
+	return out
+}
+
+// TestExchangeMtlsRefusalNotLost checks that an attacker cannot make the
+// guard lose the audited refusal of a flood to acme. Each case ends with at
+// least one denial entry in acme.
+func TestExchangeMtlsRefusalNotLost(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a refused call to a namespace that does not exist first", testRefusalUnknownFirst)
+	t.Run("a store error at the first refusal", testRefusalStoreError)
+	t.Run("a client that disconnects during the first refusal", testRefusalCanceled)
+}
+
+func testRefusalUnknownFirst(t *testing.T) {
+	t.Parallel()
+
+	e, ca, _ := mtlsFixture(t)
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false})
+	cert := ca.goodLeaf(t)
+	ghost := "/api/dustpan/v1/namespaces/nowhere/trust-rules/exchange"
+
+	m.call(t, ghost, &cert, nil)
+	m.call(t, ghost, &cert, nil)
+
+	for range 6 {
+		if status, _, _ := m.call(t, mtlsExchangeURL, &cert, nil); status != http.StatusTooManyRequests {
+			t.Fatalf("status = %d, want 429", status)
+		}
+	}
+
+	if got := len(e.deniedExchangeEntries()); got < 1 {
+		t.Fatalf("%d denial entries in acme after 6 refused calls, want at least 1", got)
+	}
+}
+
+func testRefusalStoreError(t *testing.T) {
+	t.Parallel()
+
+	e, ca, _ := mtlsFixture(t)
+	failing := &atomic.Bool{}
+	counter := &countingNamespaces{Namespaces: nil, writable: atomic.Int64{}, fail: errDisk, failing: failing}
+	m := e.newMtlsServerWith(
+		mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
+		func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
+			counter.Namespaces = n
+
+			return counter
+		},
+	)
+	cert := ca.goodLeaf(t)
+
+	m.call(t, mtlsExchangeURL, &cert, nil)
+
+	failing.Store(true)
+	m.call(t, mtlsExchangeURL, &cert, nil)
+	failing.Store(false)
+
+	for range 6 {
+		if status, _, _ := m.call(t, mtlsExchangeURL, &cert, nil); status != http.StatusTooManyRequests {
+			t.Fatalf("status = %d, want 429", status)
+		}
+	}
+
+	if got := len(e.deniedExchangeEntries()); got < 1 {
+		t.Fatalf("%d denial entries in acme after the store recovered, want at least 1", got)
+	}
+}
+
+func testRefusalCanceled(t *testing.T) {
+	t.Parallel()
+
+	e, ca, _ := mtlsFixture(t)
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: true})
+	cert := ca.goodLeaf(t)
+
+	for range 7 {
+		m.call(t, mtlsExchangeURL, &cert, nil)
+	}
+
+	if got := len(e.deniedExchangeEntries()); got < 1 {
+		t.Fatalf("%d denial entries in acme after refused calls with a canceled context, want at least 1", got)
+	}
 }
