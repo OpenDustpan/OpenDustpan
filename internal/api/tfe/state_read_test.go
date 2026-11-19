@@ -1,6 +1,7 @@
 package tfe_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -533,5 +534,41 @@ func TestGetStateResourceRefusesHostileStates(t *testing.T) {
 				t.Fatalf("body %.200s, want the code %s", body, errcode.StateVersionTooComplex)
 			}
 		})
+	}
+}
+
+// TestStateReadPastTheBoundLogsAWarning proves that a masked read that the
+// bound refuses writes one warning with the state version, and no value.
+func TestStateReadPastTheBoundLogsAWarning(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	handler := loggedTFEHandler(t, stubWorkspaces{}, &buf)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, stateRequest(t, "/api/v2/state-versions/sv-deep123/resources/terraform_data.smoke"))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("log has %d lines, want 1: %q", len(lines), buf.String())
+	}
+
+	var entry struct {
+		Level        string `json:"level"`
+		Message      string `json:"msg"`
+		StateVersion string `json:"stateVersion"`
+	}
+
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("log line %q: %v", lines[0], err)
+	}
+
+	if entry.Level != "WARN" || entry.Message != "state past the masked read bound" || entry.StateVersion != "sv-deep123" {
+		t.Fatalf("log entry %+v, want a warning for sv-deep123", entry)
 	}
 }

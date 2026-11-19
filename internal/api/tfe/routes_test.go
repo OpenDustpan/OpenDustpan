@@ -784,7 +784,7 @@ func stubReadStateAt(ctx context.Context, req workspace.StateAtRequest) (workspa
 }
 
 func (stubWorkspaces) DiffStates(
-	_ context.Context, to, from workspace.StateVersionID, cursor string, size int,
+	ctx context.Context, to, from workspace.StateVersionID, cursor string, size int,
 ) (workspace.StateDiff, error) {
 	if from.String() == "sv-other123" {
 		return workspace.StateDiff{}, fmt.Errorf("%w: state version %s", workspace.ErrStateVersionNotFound, from)
@@ -812,6 +812,7 @@ func (stubWorkspaces) DiffStates(
 	}
 
 	return workspace.DiffStates(
+		ctx,
 		workspace.StateWithMarks{State: fromRaw, Marks: fromMarks},
 		workspace.StateWithMarks{State: toRaw, Marks: toMarks},
 		cursor, size,

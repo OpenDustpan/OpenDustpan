@@ -1,7 +1,10 @@
 package tfe
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -135,7 +138,7 @@ func (h *Handler) listStateResources(
 
 	page, err := h.workspaces.ReadResources(ctx, id, cursor, size, filter)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, err, id)
 
 		return
 	}
@@ -174,11 +177,11 @@ func (h *Handler) getStateResource(
 ) {
 	ctx := r.Context()
 
-	detail, err := h.workspaces.ReadResource(
-		ctx, workspace.StateVersionID(r.PathValue("state_version_id")), r.PathValue("address"),
-	)
+	id := workspace.StateVersionID(r.PathValue("state_version_id"))
+
+	detail, err := h.workspaces.ReadResource(ctx, id, r.PathValue("address"))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, err, id)
 
 		return
 	}
@@ -208,4 +211,17 @@ func (h *Handler) getStateResource(
 			},
 		},
 	})
+}
+
+// writeStateReadError writes the error of a masked state read. A state that
+// the read refuses because it is too deep or too large also logs a warning
+// with the state version, and no value of the state.
+func (h *Handler) writeStateReadError(
+	ctx context.Context, w http.ResponseWriter, err error, id workspace.StateVersionID,
+) {
+	if errors.Is(err, workspace.ErrStateBound) {
+		h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("stateVersion", id.String()))
+	}
+
+	h.writeError(ctx, w, err)
 }

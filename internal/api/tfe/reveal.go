@@ -112,6 +112,10 @@ func (h *Handler) revealStateValue(
 		// server (ADR 41 decision 5). The Pulumi route differs on purpose:
 		// its issue asks for an entry when another secrets provider holds
 		// the value.
+		if errors.Is(err, workspace.ErrStateBound) {
+			h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("stateVersion", id.String()))
+		}
+
 		h.writeNoStore(ctx, w, err)
 
 		return

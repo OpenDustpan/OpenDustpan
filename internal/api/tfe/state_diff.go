@@ -107,7 +107,7 @@ func (h *Handler) diffState(
 
 	diff, err := h.workspaces.DiffStates(ctx, to, workspace.StateVersionID(from), cursor, size)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, err, to)
 
 		return
 	}

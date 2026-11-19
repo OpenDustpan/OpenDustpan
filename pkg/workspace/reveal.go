@@ -105,7 +105,7 @@ func RevealVersion(
 		}}, nil
 	}
 
-	value, _, err := revealFromOpener(open, sv.SensitiveMarks, path)
+	value, _, err := revealFromOpener(ctx, open, sv.SensitiveMarks, path)
 
 	return value, err
 }
@@ -144,7 +144,7 @@ func (c *warnOnClose) Close() error {
 // stream again (about 3x CPU). A failed open fails as an open state error. A
 // close error does not fail the lookup. The opener logs it.
 func revealFromOpener(
-	open stateOpener, marks SensitiveMarks, path string,
+	ctx context.Context, open stateOpener, marks SensitiveMarks, path string,
 ) (any, []string, error) {
 	target, shapeOK := parseRevealTarget(path, marks)
 	if !shapeOK {
@@ -154,7 +154,7 @@ func revealFromOpener(
 		)
 
 		err := withPass(open, func(dec *jsontext.Decoder) error {
-			v, m, rerr := revealStream(dec, marks, path)
+			v, m, rerr := revealStream(ctx, dec, marks, path)
 			value, masked = v, m
 
 			return rerr
@@ -185,13 +185,11 @@ func revealFromOpener(
 		info.size = res.end - res.start
 	}
 
-	address := tofuInstanceAddress(res.fields, map[string]any{"index_key": info.indexKey})
-
 	if len(marks) == 0 {
 		return revealNoMarks(open, target, path)
 	}
 
-	return revealWithMarks(open, target, path, info, address)
+	return revealWithMarks(ctx, open, target, path, info)
 }
 
 // withPass opens the state, runs fn on its stream, and closes the stream
@@ -447,8 +445,10 @@ func revealNoMarksElement(dec *jsontext.Decoder, index int) (bool, error) {
 // revealWithMarks answers a reveal with marks from the stream when the
 // pointer layout is not entangled, else with the full decode.
 func revealWithMarks(
-	open stateOpener, target revealTarget, path string, info instanceInfo, address string,
+	ctx context.Context, open stateOpener, target revealTarget, path string, info instanceInfo,
 ) (any, []string, error) {
+	address := tofuInstanceAddress(info.fields, map[string]any{"index_key": info.indexKey})
+
 	pointers := instancePointers(info, address, target.marks)
 	if len(pointers) == 0 || !isAttributesContainer(info) {
 		return nil, nil, notFoundState(path)
@@ -460,7 +460,7 @@ func revealWithMarks(
 	}
 
 	if scan.entangled {
-		return revealFullDecode(open, target.marks, path, info)
+		return revealFullDecode(ctx, open, target.marks, path, info)
 	}
 
 	return revealStreamedAnswer(open, target, path, scan)
@@ -563,7 +563,7 @@ func revealTargetScan(
 // the target instance in full, as before. It refuses an instance over the
 // fallback limit.
 func revealFullDecode(
-	open stateOpener, marks SensitiveMarks, path string, info instanceInfo,
+	ctx context.Context, open stateOpener, marks SensitiveMarks, path string, info instanceInfo,
 ) (any, []string, error) {
 	if info.size > revealFallbackLimit {
 		return nil, nil, fmt.Errorf(
@@ -580,7 +580,7 @@ func revealFullDecode(
 	)
 
 	err := withPass(open, func(dec *jsontext.Decoder) error {
-		v, m, rerr := revealStream(dec, marks, path)
+		v, m, rerr := revealStream(ctx, dec, marks, path)
 		value, masked = v, m
 
 		return rerr
@@ -723,7 +723,7 @@ func drainStreamedArray(dec *jsontext.Decoder) error {
 // wherever the envelope sits. A path outside the masked set fails with
 // ErrResourceNotFound.
 func revealStream(
-	dec *jsontext.Decoder, marks SensitiveMarks, path string,
+	ctx context.Context, dec *jsontext.Decoder, marks SensitiveMarks, path string,
 ) (any, []string, error) {
 	target, shapeOK := parseRevealTarget(path, marks)
 
@@ -756,7 +756,7 @@ func revealStream(
 			break
 		}
 
-		value, ok, err := revealStreamedMember(dec, want, name)
+		value, ok, err := revealStreamedMember(ctx, dec, want, name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -781,7 +781,7 @@ func revealStream(
 // 409 whatever the path is. The encrypted envelope fails the lookup, so no
 // value of a client-encrypted state ever answers.
 func revealStreamedMember(
-	dec *jsontext.Decoder, target *revealTarget, name string,
+	ctx context.Context, dec *jsontext.Decoder, target *revealTarget, name string,
 ) (any, bool, error) {
 	switch name {
 	case encryptedStateKey:
@@ -791,7 +791,7 @@ func revealStreamedMember(
 			return nil, false, skipStreamed(dec)
 		}
 
-		return revealFromResources(dec, *target)
+		return revealFromResources(ctx, dec, *target)
 	default:
 		return nil, false, skipStreamed(dec)
 	}
@@ -823,7 +823,7 @@ func streamArrayAt(dec *jsontext.Decoder, index int) (bool, error) {
 // revealFromResources walks the streamed resources array that dec streams to
 // the value of target. It reports whether the walk found the value. Values
 // off the path are skipped without building them.
-func revealFromResources(dec *jsontext.Decoder, target revealTarget) (any, bool, error) {
+func revealFromResources(ctx context.Context, dec *jsontext.Decoder, target revealTarget) (any, bool, error) {
 	open, err := openStreamedArray(dec)
 	if err != nil {
 		return nil, false, err
@@ -842,7 +842,7 @@ func revealFromResources(dec *jsontext.Decoder, target revealTarget) (any, bool,
 		return nil, false, nil
 	}
 
-	value, ok, err := revealFromResource(dec, target)
+	value, ok, err := revealFromResource(ctx, dec, target)
 	if err != nil {
 		return nil, false, err
 	}
@@ -860,7 +860,7 @@ func revealFromResources(dec *jsontext.Decoder, target revealTarget) (any, bool,
 // the value of target. The resource fields may sit before or after the
 // instances array. It reports whether the walk found a masked value at the
 // path.
-func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, error) {
+func revealFromResource(ctx context.Context, dec *jsontext.Decoder, target revealTarget) (any, bool, error) {
 	side, err := streamedResource(dec, target.position)
 	if err != nil {
 		return nil, false, err
@@ -906,11 +906,17 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 		return nil, false, fmt.Errorf("decode revealed value: %w", err)
 	}
 
-	if err := checkInstanceWork(side.instance, target.resource, target.position); err != nil {
-		return nil, false, err
+	if workErr := checkInstanceWork(newMaskBudget(), side.instance, target.resource, target.position); workErr != nil {
+		return nil, false, workErr
 	}
 
-	_, masked := maskTofuInstance(side.instance, target.resource, target.position, address, target.marks)
+	site := instanceSite{resource: target.resource, position: target.position, address: address}
+
+	_, masked, maskErr := maskTofuInstance(ctx, side.instance, site, target.marks)
+	if maskErr != nil {
+		return nil, false, maskErr
+	}
+
 	if !slices.Contains(masked, target.path) {
 		return nil, false, nil
 	}

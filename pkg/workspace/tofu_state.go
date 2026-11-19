@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
+	"math/bits"
 	"reflect"
 	"slices"
 	"strconv"
@@ -134,16 +136,45 @@ func decodeState(state []byte) (any, error) {
 // use this one number.
 const MaxStateDepth = 100
 
-// maxMaskPathBytes bounds the total length of the value paths that one masked
-// read builds. A document under the version size cap can hold millions of
-// small leaves, each with a long path, so the depth alone does not bound the
-// work. The scan counts the bytes before the walk builds any path.
-const maxMaskPathBytes = 32 << 20
+// maxMaskWorkBytes bounds the work of one masked read, in bytes. The scan
+// charges each value the length of its value path plus maskValueCost, the
+// fixed cost of the marker and the map that the walk allocates for it. A
+// document under the version size cap can hold millions of small leaves, each
+// with a long path, so the depth alone does not bound the work. One budget
+// covers the whole read: every instance, both sides of a diff. The scan
+// charges it before the walk builds any path or marker.
+const maxMaskWorkBytes = 128 << 20
+
+// maskValueCost is the fixed cost, in bytes, that the scan charges for each
+// value of a masked read, for the marker that the walk allocates.
+const maskValueCost = 256
+
+// maskBudget is the work that one masked read has spent. The read creates one
+// budget and passes it to every scan, so the bound covers the whole read.
+type maskBudget struct {
+	spent int
+}
+
+// newMaskBudget returns the budget of one masked read, with nothing spent.
+func newMaskBudget() *maskBudget {
+	return &maskBudget{spent: 0}
+}
+
+// charge adds n bytes to the budget. It returns ErrStateBound when the read
+// has spent more than maxMaskWorkBytes.
+func (b *maskBudget) charge(n int) error {
+	b.spent += n
+	if b.spent > maxMaskWorkBytes {
+		return ErrStateBound
+	}
+
+	return nil
+}
 
 // ErrStateBound reports a state that a masked read refuses because it nests
-// deeper than MaxStateDepth, or because its value paths would hold more than
-// maxMaskPathBytes bytes. The refusal builds no path, so a hostile document
-// cannot exhaust the memory of the server.
+// deeper than MaxStateDepth, or because its masked read would spend more than
+// maxMaskWorkBytes bytes. The refusal builds no path and no marker, so a
+// hostile document cannot exhaust the memory of the server.
 var ErrStateBound = errors.New("state is too deep or too large for a masked read")
 
 // withinDepth reports whether v nests at most MaxStateDepth levels. It stops
@@ -175,25 +206,25 @@ func withinDepth(v any, depth int) bool {
 
 // checkInstanceWork returns ErrStateBound when a masked read of the
 // attributes of one instance would nest deeper than MaxStateDepth or would
-// build more than maxMaskPathBytes bytes of value paths. It builds no path.
+// spend more than maxMaskWorkBytes bytes. It builds no path. The budget is
+// shared by every call of one read.
 //
 // Defense in depth: the decoder bounds the depth of the whole document too;
 // this scan stays so that a new caller of the walk cannot skip the bound, and
 // it adds the path-byte bound that the decoder does not have.
-func checkInstanceWork(instance map[string]any, resource, position int) error {
+func checkInstanceWork(budget *maskBudget, instance map[string]any, resource, position int) error {
 	attributes := instance["attributes"]
 	if attributes == nil {
 		return nil
 	}
 
 	prefix := len(tofuAttributesBase(resource, position))
-	spent := 0
 
-	return scanMaskWork(attributes, prefix, 0, &spent)
+	return scanMaskWork(attributes, prefix, 0, budget)
 }
 
-// scanMaskWork adds the length of the path of each value under v to spent.
-func scanMaskWork(v any, prefix, depth int, spent *int) error {
+// scanMaskWork charges budget for each value under v.
+func scanMaskWork(v any, prefix, depth int, budget *maskBudget) error {
 	if depth > MaxStateDepth {
 		return ErrStateBound
 	}
@@ -203,13 +234,13 @@ func scanMaskWork(v any, prefix, depth int, spent *int) error {
 		for key, elem := range typed {
 			length := prefix + 1 + len(key) + strings.Count(key, "~") + strings.Count(key, "/")
 
-			if err := scanMaskChild(elem, length, depth, spent); err != nil {
+			if err := scanMaskChild(elem, length, depth, budget); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for i, elem := range typed {
-			if err := scanMaskChild(elem, prefix+1+len(strconv.Itoa(i)), depth, spent); err != nil {
+			if err := scanMaskChild(elem, prefix+1+len(strconv.Itoa(i)), depth, budget); err != nil {
 				return err
 			}
 		}
@@ -220,14 +251,14 @@ func scanMaskWork(v any, prefix, depth int, spent *int) error {
 	return nil
 }
 
-// scanMaskChild counts the path of one child of length bytes, then scans it.
-func scanMaskChild(elem any, length, depth int, spent *int) error {
-	*spent += length
-	if *spent > maxMaskPathBytes {
-		return ErrStateBound
+// scanMaskChild charges the path of one child of length bytes and the cost of
+// its marker, then scans it.
+func scanMaskChild(elem any, length, depth int, budget *maskBudget) error {
+	if err := budget.charge(length + maskValueCost); err != nil {
+		return err
 	}
 
-	return scanMaskWork(elem, length, depth+1, spent)
+	return scanMaskWork(elem, length, depth+1, budget)
 }
 
 // tofuAttributesBase returns the value path of the attributes of one instance.
@@ -533,17 +564,24 @@ func tofuLimit(size int) (int, error) {
 
 // previousTofuFingerprints maps each resource address of previous to the
 // fingerprints of its instances, or holds nothing when previous is nil or
-// parses no resources.
-func previousTofuFingerprints(previous []byte) map[string][]string {
+// parses no resources. A previous state that nests deeper than MaxStateDepth
+// answers ErrStateBound: the list refuses, and does not read every resource
+// as new. A previous state that does not decode for another reason holds
+// nothing.
+func previousTofuFingerprints(previous []byte) (map[string][]string, error) {
 	marks := map[string][]string{}
 
 	if len(previous) == 0 {
-		return marks
+		return marks, nil
 	}
 
 	doc, err := decodeState(previous)
 	if err != nil {
-		return marks
+		if errors.Is(err, ErrStateBound) {
+			return nil, fmt.Errorf("read previous state: %w", err)
+		}
+
+		return marks, nil
 	}
 
 	entries, _ := tofuStateResources(doc)
@@ -556,7 +594,7 @@ func previousTofuFingerprints(previous []byte) map[string][]string {
 		}
 	}
 
-	return marks
+	return marks, nil
 }
 
 // tofuChanged reports whether a resource is new or differs from previous:
@@ -626,7 +664,10 @@ func ListStateResources(
 		return StatePage{Resources: []StateResource{}, NextCursor: "", Incomplete: true}, nil
 	}
 
-	fingerprints := previousTofuFingerprints(previous)
+	fingerprints, err := previousTofuFingerprints(previous)
+	if err != nil {
+		return StatePage{}, err
+	}
 
 	summaries := make([]StateResource, 0, len(entries))
 
@@ -1025,73 +1066,178 @@ func propagableSecret(value any) bool {
 	}
 }
 
-// maskDuplicateAt replaces child with a marker for path when it duplicates a
-// masked secret, and reports whether it replaced anything.
-func maskDuplicateAt(child any, path string, seen map[string]bool, masked *[]string, secrets []any) bool {
-	if seen[path] {
-		return false
-	}
+// secretIndex finds the values that duplicate a masked secret with one lookup
+// for each value. It holds the secrets without duplicates, grouped by a
+// digest that a seed makes unpredictable for the writer of a state. A digest
+// match is checked with reflect.DeepEqual, so a collision cannot mask a value
+// that is not a duplicate. The earlier pass compared each value with each
+// secret, so its work grew with the product of the two counts.
+type secretIndex struct {
+	seed     maphash.Seed
+	byDigest map[uint64][]any
+}
+
+// newSecretIndex returns the index of secrets. A secret that equals an
+// earlier one adds nothing.
+func newSecretIndex(secrets []any) *secretIndex {
+	index := &secretIndex{seed: maphash.MakeSeed(), byDigest: map[uint64][]any{}}
 
 	for _, secret := range secrets {
-		if reflect.DeepEqual(child, secret) {
-			*masked = append(*masked, path)
+		digest := index.digest(secret)
 
-			return true
+		known := slices.ContainsFunc(index.byDigest[digest], func(other any) bool {
+			return reflect.DeepEqual(other, secret)
+		})
+		if !known {
+			index.byDigest[digest] = append(index.byDigest[digest], secret)
 		}
 	}
 
-	return false
+	return index
+}
+
+// Digest tags: each type of value starts from another number, so a string and
+// a number with the same text do not share a digest.
+const (
+	digestTagString uint64 = 0x9e3779b97f4a7c15
+	digestTagNumber uint64 = 0xc2b2ae3d27d4eb4f
+	digestTagMap    uint64 = 0x165667b19e3779f9
+	digestTagList   uint64 = 0x27d4eb2f165667c5
+	digestMultiply  uint64 = 0xff51afd7ed558ccd
+	digestRotate           = 23
+)
+
+// mixDigest combines two digests, and depends on their order.
+func mixDigest(a, b uint64) uint64 {
+	return (bits.RotateLeft64(a, digestRotate)*digestMultiply ^ b) * digestMultiply
+}
+
+// digest returns the digest of v. Equal values have equal digests: the digest
+// of a map does not depend on the order of its keys. One call walks v once.
+func (x *secretIndex) digest(v any) uint64 {
+	switch typed := v.(type) {
+	case string:
+		return mixDigest(digestTagString, maphash.String(x.seed, typed))
+	case json.Number:
+		return mixDigest(digestTagNumber, maphash.String(x.seed, string(typed)))
+	case map[string]any:
+		sum := mixDigest(digestTagMap, uint64(len(typed)))
+
+		for key, elem := range typed {
+			sum += mixDigest(maphash.String(x.seed, key), x.digest(elem))
+		}
+
+		return sum
+	case []any:
+		sum := mixDigest(digestTagList, uint64(len(typed)))
+
+		for _, elem := range typed {
+			sum = mixDigest(sum, x.digest(elem))
+		}
+
+		return sum
+	default:
+		return maphash.String(x.seed, fmt.Sprintf("%T:%v", v, v))
+	}
+}
+
+// duplicates reports whether child equals a masked secret. A secret is a
+// string, an object or an array, so a value of another type never matches.
+func (x *secretIndex) duplicates(child any) bool {
+	switch child.(type) {
+	case string, map[string]any, []any:
+	default:
+		return false
+	}
+
+	return slices.ContainsFunc(x.byDigest[x.digest(child)], func(secret any) bool {
+		return reflect.DeepEqual(child, secret)
+	})
+}
+
+// duplicatePass is the state of one maskDuplicates walk: the index of the
+// masked secrets, the paths already masked, and the collector of each new
+// marker path.
+type duplicatePass struct {
+	index  *secretIndex
+	seen   map[string]bool
+	masked *[]string
+}
+
+// maskDuplicateAt replaces child with a marker for path when it duplicates a
+// masked secret, and reports whether it replaced anything.
+func (p *duplicatePass) maskDuplicateAt(child any, path string) bool {
+	if p.seen[path] {
+		return false
+	}
+
+	if !p.index.duplicates(child) {
+		return false
+	}
+
+	*p.masked = append(*p.masked, path)
+
+	return true
 }
 
 // maskDuplicates masks every value under node that duplicates a masked
 // secret: the CLI copies a sensitive input into a derived attribute the
 // rendering does not mark, as the output of a terraform_data resource, so
-// the copy answers masked too. Path is the value path of node; seen holds
-// the paths already masked, and masked collects each new marker path.
-func maskDuplicates(node any, path string, seen map[string]bool, masked *[]string, secrets []any) {
+// the copy answers masked too. Path is the value path of node. It checks the
+// context at each container and stops with its error.
+func (p *duplicatePass) maskDuplicates(ctx context.Context, node any, path string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mask duplicates: %w", err)
+	}
+
 	switch typed := node.(type) {
 	case map[string]any:
-		maskDuplicateMap(typed, path, seen, masked, secrets)
+		return p.maskDuplicateMap(ctx, typed, path)
 	case []any:
-		maskDuplicateList(typed, path, seen, masked, secrets)
+		return p.maskDuplicateList(ctx, typed, path)
 	default:
+		return nil
 	}
 }
 
 // maskDuplicateMap masks each duplicating entry of doc.
-func maskDuplicateMap(
-	doc map[string]any, path string, seen map[string]bool, masked *[]string, secrets []any,
-) {
+func (p *duplicatePass) maskDuplicateMap(ctx context.Context, doc map[string]any, path string) error {
 	for key, child := range doc {
 		childPath := path + "/" + escapeTofuPointerToken(key)
 
-		if maskDuplicateAt(child, childPath, seen, masked, secrets) {
+		if p.maskDuplicateAt(child, childPath) {
 			doc[key] = newTofuMarker(childPath)
-			seen[childPath] = true
+			p.seen[childPath] = true
 
 			continue
 		}
 
-		maskDuplicates(child, childPath, seen, masked, secrets)
+		if err := p.maskDuplicates(ctx, child, childPath); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // maskDuplicateList masks each duplicating element of list.
-func maskDuplicateList(
-	list []any, path string, seen map[string]bool, masked *[]string, secrets []any,
-) {
+func (p *duplicatePass) maskDuplicateList(ctx context.Context, list []any, path string) error {
 	for i, child := range list {
 		childPath := path + "/" + strconv.Itoa(i)
 
-		if maskDuplicateAt(child, childPath, seen, masked, secrets) {
+		if p.maskDuplicateAt(child, childPath) {
 			list[i] = newTofuMarker(childPath)
-			seen[childPath] = true
+			p.seen[childPath] = true
 
 			continue
 		}
 
-		maskDuplicates(child, childPath, seen, masked, secrets)
+		if err := p.maskDuplicates(ctx, child, childPath); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // maskAllLeaves replaces each leaf value under v with a marker for its path,
@@ -1158,6 +1304,14 @@ func maskOnePointer(attributes any, relative, full string, out *maskCollectors) 
 	}
 }
 
+// instanceSite names one instance of a state: the position of its resource,
+// its position in the resource, and its address.
+type instanceSite struct {
+	resource int
+	position int
+	address  string
+}
+
 // maskTofuInstance returns the masked attributes of one instance at position
 // of the resource at resource index in the state: each path that
 // sensitive_attributes or the kept marks name answers as a marker with its
@@ -1168,8 +1322,9 @@ func maskOnePointer(attributes any, relative, full string, out *maskCollectors) 
 // an already masked pointer masks nothing. A pointer at the same node is
 // masked again.
 func maskTofuInstance(
-	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
-) (any, []string) {
+	ctx context.Context, instance map[string]any, site instanceSite, marks SensitiveMarks,
+) (any, []string, error) {
+	resource, position, address := site.resource, site.position, site.address
 	base := tofuAttributesBase(resource, position)
 
 	attributes := instance["attributes"]
@@ -1185,7 +1340,7 @@ func maskTofuInstance(
 			masked = []string{}
 		}
 
-		return out, masked
+		return out, masked, nil
 	}
 
 	seen := map[string]bool{}
@@ -1208,14 +1363,18 @@ func maskTofuInstance(
 	}
 
 	if len(secrets) > 0 {
-		maskDuplicates(attributes, base, seen, &masked, secrets)
+		pass := duplicatePass{index: newSecretIndex(secrets), seen: seen, masked: &masked}
+
+		if err := pass.maskDuplicates(ctx, attributes, base); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	if masked == nil {
 		masked = []string{}
 	}
 
-	return attributes, masked
+	return attributes, masked, nil
 }
 
 // tofuInstanceBase strips one trailing instance index from an address, so a
@@ -1281,12 +1440,26 @@ func ReadStateResource(
 		Masked:    []string{},
 	}
 
-	for i, instance := range tofuInstances(obj) {
-		if err := checkInstanceWork(instance, position, i); err != nil {
+	instances := tofuInstances(obj)
+
+	// One budget covers every instance of the resource, and the scan of all of
+	// them ends before the walk builds the first marker.
+	budget := newMaskBudget()
+
+	for i, instance := range instances {
+		if err := checkInstanceWork(budget, instance, position, i); err != nil {
 			return StateDetail{}, err
 		}
+	}
 
-		attributes, masked := maskTofuInstance(instance, position, i, tofuInstanceAddress(obj, instance), marks)
+	for i, instance := range instances {
+		site := instanceSite{resource: position, position: i, address: tofuInstanceAddress(obj, instance)}
+
+		attributes, masked, maskErr := maskTofuInstance(ctx, instance, site, marks)
+		if maskErr != nil {
+			return StateDetail{}, fmt.Errorf("read resource: %w", maskErr)
+		}
+
 		detail.Instances = append(detail.Instances, StateInstance{Attributes: attributes})
 		detail.Masked = append(detail.Masked, masked...)
 	}
@@ -1641,11 +1814,11 @@ type tofuDiffResource struct {
 // markers. With no kept marks for the version every attribute value answers
 // as a marker.
 func maskedInstanceCopy(
-	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
-) any {
+	ctx context.Context, instance map[string]any, site instanceSite, marks SensitiveMarks,
+) (any, error) {
 	copied, err := json.Marshal(instance)
 	if err != nil {
-		return instance["attributes"]
+		return nil, fmt.Errorf("copy instance %s: %w", site.address, err)
 	}
 
 	var fresh map[string]any
@@ -1653,13 +1826,16 @@ func maskedInstanceCopy(
 	dec := json.NewDecoder(bytes.NewReader(copied))
 	dec.UseNumber()
 
-	if err := dec.Decode(&fresh); err != nil {
-		return instance["attributes"]
+	if decodeErr := dec.Decode(&fresh); decodeErr != nil {
+		return nil, fmt.Errorf("copy instance %s: %w", site.address, decodeErr)
 	}
 
-	masked, _ := maskTofuInstance(fresh, resource, position, address, marks)
+	masked, _, err := maskTofuInstance(ctx, fresh, site, marks)
+	if err != nil {
+		return nil, err
+	}
 
-	return masked
+	return masked, nil
 }
 
 // tofuDiffSide is one side of an instance diff: the sorted instances with
@@ -1810,17 +1986,24 @@ type tofuResourcePair struct {
 
 // maskSide returns the sorted instances of side with their addresses and
 // their masked attribute copies.
-func maskSide(side tofuResourceSide) tofuDiffSide {
+func maskSide(ctx context.Context, side tofuResourceSide) (tofuDiffSide, error) {
 	instances := tofuInstances(side.obj)
 	sorted, addrs := sortTofuInstances(side.obj, instances)
 
 	masked := make([]any, 0, len(sorted))
 
 	for i, instance := range sorted {
-		masked = append(masked, maskedInstanceCopy(instance, side.index, i, addrs[i], side.marks))
+		copied, err := maskedInstanceCopy(
+			ctx, instance, instanceSite{resource: side.index, position: i, address: addrs[i]}, side.marks,
+		)
+		if err != nil {
+			return tofuDiffSide{}, err
+		}
+
+		masked = append(masked, copied)
 	}
 
-	return tofuDiffSide{instances: sorted, addrs: addrs, masked: masked}
+	return tofuDiffSide{instances: sorted, addrs: addrs, masked: masked}, nil
 }
 
 // diffTofuResource returns the changed paths and secret paths of one
@@ -1828,7 +2011,7 @@ func maskSide(side tofuResourceSide) tofuDiffSide {
 // module, mode) compare as plain paths; the instances compare with their
 // masked copies side by side, so a sensitive change lands in secrets. The
 // result holds empty slices, never nil, when nothing changed.
-func diffTofuResource(pair tofuResourcePair) tofuDiffResource {
+func diffTofuResource(ctx context.Context, pair tofuResourcePair) (tofuDiffResource, error) {
 	out := tofuDiffResource{paths: []string{}, secrets: []string{}}
 
 	for _, field := range []string{"type", "provider", "module", "mode"} {
@@ -1837,14 +2020,24 @@ func diffTofuResource(pair tofuResourcePair) tofuDiffResource {
 		}
 	}
 
-	entry := diffTofuInstances(maskSide(pair.from), maskSide(pair.to))
+	fromSide, err := maskSide(ctx, pair.from)
+	if err != nil {
+		return tofuDiffResource{}, err
+	}
+
+	toSide, err := maskSide(ctx, pair.to)
+	if err != nil {
+		return tofuDiffResource{}, err
+	}
+
+	entry := diffTofuInstances(fromSide, toSide)
 	out.paths = append(out.paths, entry.paths...)
 	out.secrets = append(out.secrets, entry.secrets...)
 
 	slices.Sort(out.paths)
 	slices.Sort(out.secrets)
 
-	return out
+	return out, nil
 }
 
 // tofuResourcesByBase maps each resource base of entries to its object. Later
@@ -1891,7 +2084,7 @@ type tofuVersionSide struct {
 // addresses only in to, removed those only in from, and changed those in
 // both with a change. Differing holds the sorted addresses that differ in
 // any way.
-func collectTofuDiff(from, to tofuVersionSide) tofuDiffMismatch {
+func collectTofuDiff(ctx context.Context, from, to tofuVersionSide) (tofuDiffMismatch, error) {
 	var out tofuDiffMismatch
 
 	for address := range to.byBase {
@@ -1919,7 +2112,11 @@ func collectTofuDiff(from, to tofuVersionSide) tofuDiffMismatch {
 			to:   tofuResourceSide{obj: toObj, marks: to.marks, index: to.index[address]},
 		}
 
-		entry := diffTofuResource(pair)
+		entry, err := diffTofuResource(ctx, pair)
+		if err != nil {
+			return tofuDiffMismatch{}, err
+		}
+
 		if len(entry.paths) == 0 && len(entry.secrets) == 0 {
 			continue
 		}
@@ -1938,7 +2135,7 @@ func collectTofuDiff(from, to tofuVersionSide) tofuDiffMismatch {
 	})
 	slices.Sort(out.differing)
 
-	return out
+	return out, nil
 }
 
 // pageTofuDiff returns the page of mismatch at offset with at most limit
@@ -2018,12 +2215,15 @@ func tofuVersionSideOf(entries []tofuResourceEntry, marks SensitiveMarks) tofuVe
 	}
 }
 
-// checkEntriesWork runs checkInstanceWork over every instance of each side.
+// checkEntriesWork runs checkInstanceWork over every instance of each side
+// with one budget, so the bound covers the whole diff.
 func checkEntriesWork(sides ...[]tofuResourceEntry) error {
+	budget := newMaskBudget()
+
 	for _, entries := range sides {
 		for _, entry := range entries {
 			for i, instance := range tofuInstances(entry.obj) {
-				if err := checkInstanceWork(instance, entry.index, i); err != nil {
+				if err := checkInstanceWork(budget, instance, entry.index, i); err != nil {
 					return err
 				}
 			}
@@ -2041,7 +2241,7 @@ func checkEntriesWork(sides ...[]tofuResourceEntry) error {
 // NextCursor of an earlier page; size is the page size, or zero for the
 // default page, and counts differing addresses. Resources match by base
 // address across versions.
-func DiffStates(from, to StateWithMarks, cursor string, size int) (StateDiff, error) {
+func DiffStates(ctx context.Context, from, to StateWithMarks, cursor string, size int) (StateDiff, error) {
 	offset, err := tofuOffset(cursor)
 	if err != nil {
 		return StateDiff{}, err
@@ -2052,35 +2252,62 @@ func DiffStates(from, to StateWithMarks, cursor string, size int) (StateDiff, er
 		return StateDiff{}, err
 	}
 
-	fromDoc, err := decodeState(from.State)
+	mismatch, readable, err := diffMismatch(ctx, from, to)
 	if err != nil {
 		return StateDiff{}, err
 	}
 
+	if !readable {
+		return emptyTofuDiff(), nil
+	}
+
+	return pageTofuDiff(mismatch, offset, limit), nil
+}
+
+// diffMismatch decodes both sides and compares their resources. It checks the
+// context after the decode and before the work scan, and the work scan before
+// it builds any marker. The second result is false when a side holds no
+// resources array that the server can read: the diff is then empty.
+func diffMismatch(ctx context.Context, from, to StateWithMarks) (tofuDiffMismatch, bool, error) {
+	var none tofuDiffMismatch
+
+	fromDoc, err := decodeState(from.State)
+	if err != nil {
+		return none, false, err
+	}
+
 	toDoc, err := decodeState(to.State)
 	if err != nil {
-		return StateDiff{}, err
+		return none, false, err
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return none, false, fmt.Errorf("diff states: %w", ctxErr)
 	}
 
 	fromEntries, fromSkipped := tofuStateResources(fromDoc)
 	toEntries, toSkipped := tofuStateResources(toDoc)
 
 	if (fromEntries == nil && fromSkipped) || (toEntries == nil && toSkipped) {
-		return emptyTofuDiff(), nil
+		return none, false, nil
 	}
 
-	if err := checkEntriesWork(fromEntries, toEntries); err != nil {
-		return StateDiff{}, err
+	if workErr := checkEntriesWork(fromEntries, toEntries); workErr != nil {
+		return none, false, workErr
 	}
 
-	mismatch := collectTofuDiff(
+	mismatch, err := collectTofuDiff(
+		ctx,
 		tofuVersionSideOf(fromEntries, from.Marks),
 		tofuVersionSideOf(toEntries, to.Marks),
 	)
+	if err != nil {
+		return none, false, fmt.Errorf("diff states: %w", err)
+	}
 
 	if fromSkipped || toSkipped {
 		mismatch.skipped = 1
 	}
 
-	return pageTofuDiff(mismatch, offset, limit), nil
+	return mismatch, true, nil
 }

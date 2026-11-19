@@ -1,7 +1,10 @@
 package pulumi
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -302,7 +305,7 @@ func (h *Handler) listStateResources(
 
 	page, err := stack.ListStateResources(current.Checkpoint.Deployment, previous, cursor, limit, filter)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Checkpoint.Update, err)
 
 		return
 	}
@@ -420,7 +423,7 @@ func (h *Handler) listStateAtResources(
 
 	page, err := stack.ListStateResources(current.Deployment, previous, cursor, limit, r.URL.Query().Get("filter[q]"))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Update, err)
 
 		return
 	}
@@ -468,7 +471,7 @@ func (h *Handler) getStateResource(
 
 	detail, err := stack.ReadStateResource(ctx, current.Deployment, r.PathValue("urn"))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Update, err)
 
 		return
 	}
@@ -482,6 +485,21 @@ func (h *Handler) getStateResource(
 		Outputs:  detail.Outputs,
 		Masked:   detail.Masked,
 	})
+}
+
+// writeStateReadError answers the error of a masked read of a state. A state
+// past the bound of the read answers 413 and leaves a warning that names the
+// stack and the update that saved the checkpoint, so the operator can find
+// the state. The record holds no value of the state.
+func (h *Handler) writeStateReadError(
+	ctx context.Context, w http.ResponseWriter, ref stack.Ref, update stack.UpdateID, err error,
+) {
+	if errors.Is(err, stack.ErrStateBound) {
+		h.logger.WarnContext(ctx, "state past the masked read bound",
+			slog.String("stack", ref.String()), slog.String("update", string(update)))
+	}
+
+	h.writeError(ctx, w, err)
 }
 
 // diffCheckpointOf resolves one side of a diff request: "latest" names the
@@ -613,7 +631,7 @@ func (h *Handler) getStateOutputs(
 
 	outputs, err := stack.ReadStateOutputs(ctx, current.Deployment)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Update, err)
 
 		return
 	}

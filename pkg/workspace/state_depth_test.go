@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -136,7 +137,7 @@ func TestStateReadersRefuseWorstCaseAtTheirBoundary(t *testing.T) {
 
 		side := workspace.StateWithMarks{State: state, Marks: nil}
 
-		if _, err := workspace.DiffStates(side, side, "", 0); !errors.Is(err, workspace.ErrStateBound) {
+		if _, err := workspace.DiffStates(t.Context(), side, side, "", 0); !errors.Is(err, workspace.ErrStateBound) {
 			t.Fatalf("err = %v, want ErrStateBound", err)
 		}
 	})
@@ -157,9 +158,11 @@ func TestStateReadersRefuseWorstCaseAtTheirBoundary(t *testing.T) {
 // depth bound. The read refuses it, and adds less than the ceiling to the
 // decode. The test reads the global allocation counter, so it does not run in
 // parallel.
-//
-//nolint:paralleltest // The test measures the allocation of the whole process.
 func TestReadStateResourceWorstCaseAllocation(t *testing.T) {
+	// The allocation counter belongs to the whole process, so this test must not
+	// run in parallel. t.Setenv makes testing panic if t.Parallel is added.
+	t.Setenv("OPENDUSTPAN_TEST_SERIAL_HEAP", "1")
+
 	attributes := `{"a":` + deepLeaves(workspace.MaxStateDepth-10, versionCapBytes/2-2*workspace.MaxStateDepth) + `}`
 	state := stateWithAttributes(attributes)
 
@@ -194,13 +197,18 @@ func TestReadStateResourceWorstCaseAllocation(t *testing.T) {
 }
 
 // cancelAfter is a context whose Err answers nil for the first limit calls
-// and context.Canceled after that.
+// and context.Canceled after that. It has no deadline, no done channel and no
+// values.
 type cancelAfter struct {
-	context.Context //nolint:containedctx // The test double wraps a context to change its Err.
-
 	calls int
 	limit int
 }
+
+func (c *cancelAfter) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (c *cancelAfter) Done() <-chan struct{} { return nil }
+
+func (c *cancelAfter) Value(any) any { return nil }
 
 func (c *cancelAfter) Err() error {
 	c.calls++
@@ -230,7 +238,7 @@ func TestReadStateResourceHonorsCancellation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx := &cancelAfter{Context: t.Context(), calls: 0, limit: tt.limit}
+			ctx := &cancelAfter{calls: 0, limit: tt.limit}
 
 			_, err := workspace.ReadStateResource(ctx, state, nil, resourceAddress)
 			if !errors.Is(err, context.Canceled) {
@@ -246,7 +254,6 @@ func allocatedBy(t *testing.T, run func()) uint64 {
 
 	var before, after runtime.MemStats
 
-	runtime.GC() //nolint:revive // The test reads the allocation counter and needs a settled heap.
 	runtime.ReadMemStats(&before)
 	run()
 	runtime.ReadMemStats(&after)

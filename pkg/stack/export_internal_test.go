@@ -84,7 +84,9 @@ func MapReplayBound(id UpdateID, err error) error {
 // MaskWorkBound runs the work scan of a masked read over v, whose own path
 // has prefix bytes, so the external tests reach it without a deployment.
 func MaskWorkBound(v any, prefix int) error {
-	return checkMaskWork(v, prefix)
+	var budget maskBudget
+
+	return checkMaskWork(&budget, v, prefix)
 }
 
 // DecodeForTest decodes a JSON text with no bound check, so a test hands the

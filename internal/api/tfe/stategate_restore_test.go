@@ -108,6 +108,11 @@ func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 		},
 		{"the state is over the size limit", workspace.ErrTooLarge, "gate.limit"},
 		{"the state has too many resource instances", workspace.ErrTooManyResources, "gate.limit"},
+		{
+			"the state nests too deep for a read",
+			fmt.Errorf("%w: state sv-1: %w", workspace.ErrInvalidState, workspace.ErrStateBound),
+			"gate.limit",
+		},
 	}
 
 	for _, tc := range tests {

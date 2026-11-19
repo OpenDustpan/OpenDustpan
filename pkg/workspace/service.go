@@ -1765,6 +1765,7 @@ func (s *Service) DiffStates(
 	}
 
 	diff, err := DiffStates(
+		ctx,
 		StateWithMarks{State: fromState, Marks: fromVersion.SensitiveMarks},
 		StateWithMarks{State: toState, Marks: toVersion.SensitiveMarks},
 		cursor, size,

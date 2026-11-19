@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ type StateOpener = stateOpener
 
 // RevealValueFromOpener is revealFromOpener for the tests.
 func RevealValueFromOpener(open StateOpener, marks SensitiveMarks, path string) (any, []string, error) {
-	return revealFromOpener(open, marks, path)
+	return revealFromOpener(context.Background(), open, marks, path)
 }
 
 // RevealValue returns the plain value at path of state, and the masked set
@@ -26,7 +27,7 @@ func RevealValueFromOpener(open StateOpener, marks SensitiveMarks, path string) 
 // encrypted fails with ErrClientEncrypted. It streams the state to the path
 // and keeps no more than one resource instance in memory.
 func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string, error) {
-	return revealFromOpener(func() (io.ReadCloser, error) {
+	return revealFromOpener(context.Background(), func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(state)), nil
 	}, marks, path)
 }
@@ -46,9 +47,13 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
-			_, paths := maskTofuInstance(
-				instance, entry.index, i, tofuInstanceAddress(entry.obj, instance), marks,
-			)
+			site := instanceSite{resource: entry.index, position: i, address: tofuInstanceAddress(entry.obj, instance)}
+
+			_, paths, err := maskTofuInstance(context.Background(), instance, site, marks)
+			if err != nil {
+				return nil, err
+			}
+
 			masked = append(masked, paths...)
 		}
 	}
@@ -63,7 +68,28 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 // InstanceWorkBound runs the work scan of a masked read over one instance, so
 // the external tests reach it without a state.
 func InstanceWorkBound(instance map[string]any, resource, position int) error {
-	return checkInstanceWork(instance, resource, position)
+	return checkInstanceWork(newMaskBudget(), instance, resource, position)
+}
+
+// InstancesWorkBound runs the work scan over each instance with one budget,
+// as a masked read of a resource does.
+func InstancesWorkBound(instances []map[string]any, resource int) error {
+	budget := newMaskBudget()
+
+	for position, instance := range instances {
+		if err := checkInstanceWork(budget, instance, resource, position); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// MaskInstanceForTest runs maskTofuInstance for the tests.
+func MaskInstanceForTest(
+	ctx context.Context, instance map[string]any, address string, marks SensitiveMarks,
+) (any, []string, error) {
+	return maskTofuInstance(ctx, instance, instanceSite{resource: 0, position: 0, address: address}, marks)
 }
 
 // DecodeForTest decodes a JSON text with no bound check, so a test hands the
