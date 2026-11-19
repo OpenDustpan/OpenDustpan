@@ -182,11 +182,20 @@ type ListCheck struct {
 func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 	t.Helper()
 
+	if err := listWithinAuthorizeError(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// listWithinAuthorizeError is the body of CheckListWithinAuthorize. It returns
+// an error, so that a test can prove that the check fails for a leaky
+// authorizer.
+func listWithinAuthorizeError(ctx context.Context, c ListCheck) error {
 	authz, p, action, every := c.Authorizer, c.Principal, c.Action, c.Every
 
 	scope, err := authz.ListObjects(ctx, p, action)
 	if err != nil {
-		t.Fatalf("list %s for %s: %v", action, p.Subject, err)
+		return fmt.Errorf("list %s for %s: %w", action, p.Subject, err)
 	}
 
 	listed := slices.Concat(scope.Namespaces, scope.Collections, scope.Units, scope.Principals)
@@ -203,9 +212,11 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 	for i := range listed {
 		obj := listed[i]
 		if err := authz.Authorize(ctx, p, action, obj); err != nil {
-			t.Fatalf("%s lists %q for %s, but Authorize denies it: %v", p.Subject, obj.String(), action, err)
+			return fmt.Errorf("%s lists %q for %s, but Authorize denies it: %w", p.Subject, obj.String(), action, err)
 		}
 	}
+
+	return nil
 }
 
 // CheckExactScope fails the test when the authorizer of c says that its scope
@@ -965,5 +976,52 @@ func testListLeavesOutNamespace(t *testing.T) {
 		CheckListWithinAuthorize(t.Context(), t, ListCheck{
 			Authorizer: under, Principal: alice, Action: action, Every: every,
 		})
+	}
+
+	testLeftOutNamesAreExact(t)
+}
+
+// testLeftOutNamesAreExact checks that a left-out namespace is an exact name,
+// not a prefix, and that a unit name cannot move a unit out of its namespace.
+func testLeftOutNamesAreExact(t *testing.T) {
+	t.Helper()
+
+	unit := func(ns namespace.Name, name string) identity.Object {
+		obj, err := identity.UnitObject("pulumi", ns, name)
+		if err != nil {
+			t.Fatalf("unit object: %v", err)
+		}
+
+		return obj
+	}
+
+	one := identity.Every("acme")
+	two := identity.Every("acme", "beta")
+
+	cases := []struct {
+		name  string
+		scope identity.Scope
+		obj   identity.Object
+		want  bool
+	}{
+		{"a longer namespace name is held", one, identity.NamespaceObject("acme-dev"), true},
+		{"a prefix of the namespace name is held", one, identity.NamespaceObject("acm"), true},
+		{"a unit of a longer namespace name is held", one, unit("acme-dev", "web/prod"), true},
+		{"a unit of a prefix namespace is held", one, unit("acm", "web/prod"), true},
+		{"a unit named like another namespace is not held", one, unit("acme", "beta/prod"), false},
+		{"two left-out namespaces hold no namespace of either", two, identity.NamespaceObject("acme"), false},
+		{"two left-out namespaces hold no namespace of the second", two, identity.NamespaceObject("beta"), false},
+		{"two left-out namespaces hold no unit of the first", two, unit("acme", "web/prod"), false},
+		{"two left-out namespaces hold no unit of the second", two, unit("beta", "web/prod"), false},
+		{"two left-out namespaces hold the principal", two, identity.PrincipalObject("prn-bot"), true},
+		{"two left-out namespaces hold the server", two, identity.ServerObject(), true},
+		{"two left-out namespaces hold the caller", two, identity.CallerObject(), true},
+	}
+
+	for i := range cases {
+		tc := cases[i]
+		if got := tc.scope.Contains(tc.obj); got != tc.want {
+			t.Fatalf("%s: scope holds %q = %t, want %t", tc.name, tc.obj.String(), got, tc.want)
+		}
 	}
 }

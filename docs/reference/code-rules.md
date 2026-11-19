@@ -52,3 +52,14 @@ that a grant seems to allow.
 - A restore stops with the code `principal.no-working-break-glass` when it
   lowers the count of working break-glass accounts and leaves fewer than two
   ([Other paths](../guides/break-glass-accounts.md#other-paths)).
+
+## IP allowlists
+
+- The server reads the namespaces that have an IP allowlist for a list check
+  of a principal whose scope covers every object. The read returns at most
+  1000 namespaces. When more than 1000 namespaces have a list, the read fails
+  with the error `ipallow: too many namespaces have an IP allowlist`, and the
+  server does not cover every object. No setting changes the limit. Once a
+  list check calls the read, a principal whose scope covers every object is
+  refused on every list until the number of namespaces with a list is 1000 or
+  fewer ([Limits](../guides/ip-allowlists.md#limits)).
