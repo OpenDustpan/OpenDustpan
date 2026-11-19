@@ -35,7 +35,7 @@ A person makes a personal token for itself. The create needs a fresh sign-in
 in the console. A token cannot make another token. The answer is `403` with the
 code `mfa.fresh-step-required`.
 
-Make the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
+Make the token in the console. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
 
 ```json
 {"name":"laptop-cli","expiresAt":"2027-06-30T00:00:00Z"}
@@ -103,7 +103,7 @@ An administrator reads one token with `GET /api/server/tokens/{id}`.
 ## Make a service token
 
 A caller with `principal:manage-tokens` on the service principal makes its token in the
-console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the service-token create is:
+console. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the service-token create is:
 
 ```json
 {"principalID":"prn-...","name":"ci-deploy","expiresAt":"2027-06-30T00:00:00Z"}
@@ -179,7 +179,7 @@ answers `404` with the code `token.not-found` for an unknown ID. Revoke a token 
 
 A rotation makes a new token, and it sets an end time for the old one.
 
-Rotate the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. Rotation of a service token or a principal token has the same rule.
+Rotate the token in the console. A stored access token gets `403` with `mfa.fresh-step-required`. Rotation of a service token or a principal token has the same rule.
 
 
 The routes are `POST /api/dustpan/v1/me/tokens/{id}/rotate` for a personal token,

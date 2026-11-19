@@ -131,7 +131,7 @@ list the grants that the principal holds.
 
 Create a grant. The body holds `subject` and `role`.
 
-A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the grant is:
+A stored access token gets `403` with `mfa.fresh-step-required`. The body of the grant is:
 
 ```json
 {"subject":"group:grp-...#member","role":"viewer"}

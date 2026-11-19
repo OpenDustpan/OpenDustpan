@@ -116,7 +116,7 @@ appears to come from the proxy's address. Use `--trusted-proxies` and
 needs `namespace:manage-ip-allowlist` on the namespace, with a fresh sign-in.
 The answer is `200` with the list as stored.
 
-Set the list in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body is:
+Set the list in the console. A stored access token gets `403` with `mfa.fresh-step-required`. The body is:
 
 ```json
 {"cidrs":["10.0.0.0/8","2001:db8::/32","192.0.2.7"]}
