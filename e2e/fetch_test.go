@@ -1898,3 +1898,70 @@ func checkEntryOnceCase(t *testing.T, tc entryOnceCase) {
 		t.Errorf("archive downloaded %d times, want 1", got)
 	}
 }
+
+// TestCheckCacheRefusesDirectoryModes proves that the cache check refuses a
+// cached directory with a mode other than the mode that extraction sets, and
+// the extracted directory that group or other users can write. Each row
+// changes only the mode of one directory of an otherwise valid entry, so a
+// check that skips directory modes fails every row but the first.
+func TestCheckCacheRefusesDirectoryModes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dir     string
+		mode    os.FileMode
+		wantErr bool
+	}{
+		{name: "mode of extraction", dir: "pulumi", mode: 0o750, wantErr: false},
+		{name: "group writable directory", dir: "pulumi", mode: 0o770, wantErr: true},
+		{name: "other writable directory", dir: "pulumi", mode: 0o757, wantErr: true},
+		{name: "directory readable by other", dir: "pulumi", mode: 0o755, wantErr: true},
+		{name: "directory with less access", dir: "pulumi", mode: 0o700, wantErr: true},
+		{name: "sticky directory", dir: "pulumi", mode: 0o750 | os.ModeSticky, wantErr: true},
+		{name: "setgid directory", dir: "pulumi", mode: 0o750 | os.ModeSetgid, wantErr: true},
+		{name: "group writable extracted root", dir: ".", mode: 0o770, wantErr: true},
+		{name: "other writable extracted root", dir: ".", mode: 0o702, wantErr: true},
+		{name: "sticky extracted root", dir: ".", mode: 0o750 | os.ModeSticky, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tool := e2e.Pulumi()
+
+			name, err := tool.ArchiveName(fakeVersion)
+			if err != nil {
+				t.Skipf("unsupported platform: %v", err)
+			}
+
+			archive := validArchive(t)
+			sum := sha256.Sum256(archive)
+			cacheDir := t.TempDir()
+
+			mustWriteCacheEntry(t, cacheDir, name, archive, cacheFiles{
+				files: map[string]string{"pulumi/pulumi": "#!/bin/sh\n"},
+				links: nil,
+			})
+
+			target := filepath.Join(cacheDir, strings.TrimSuffix(name, ".tar.gz"), tt.dir)
+			if err = os.Chmod(target, tt.mode); err != nil {
+				t.Fatalf("change directory mode: %v", err)
+			}
+
+			err = e2e.CheckToolCache(cacheDir, tool, fakeVersion, name, hex.EncodeToString(sum[:]))
+
+			switch {
+			case tt.wantErr && !errors.Is(err, e2e.ErrCacheMismatch):
+				t.Fatalf("check cache: got %v, want ErrCacheMismatch", err)
+			case tt.wantErr && !strings.Contains(err.Error(), "mode"):
+				t.Errorf("error %q does not name the mode", err)
+			case !tt.wantErr && err != nil:
+				t.Fatalf("check cache: %v", err)
+			default:
+				// The row has the expected result.
+			}
+		})
+	}
+}
