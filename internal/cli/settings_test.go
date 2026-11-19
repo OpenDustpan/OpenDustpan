@@ -131,8 +131,20 @@ func collectFileEnvNames(t *testing.T, path string, found map[string]bool) {
 // secret or a credential.
 var (
 	urlWords    = regexp.MustCompile(`(?i)\burl\b|://`)
-	secretWords = regexp.MustCompile(`(?i)token|secret|password|passphrase|credential`)
+	secretWords = regexp.MustCompile(`(?i)token|secret|password|passphrase|credential|\bkeys?\b|\bheaders\b|\bdsn\b`)
 )
+
+// notSecretSettings names the settings that match secretWords and hold no
+// secret, each with the reason. A new entry needs a real reason.
+func notSecretSettings() map[string]string {
+	return map[string]string{
+		"allowed-origins": "a list of console origins; the help names the CORS headers",
+		"recovery-mode":   "a mode name; the help names the offline operator key",
+		"tls-cert":        "a path of a certificate file; the help names the key file",
+		"tls-key":         "a path of a key file, not its content",
+		"out":             "a path of the new key file, not its content",
+	}
+}
 
 // TestSensitiveSettingsAreMarked is the guard of ADR 63 decision 6. It
 // checks each string declaration, so it also checks the settings that later
@@ -161,6 +173,10 @@ func TestSensitiveSettingsAreMarked(t *testing.T) {
 		}
 
 		holdsSecret := !holdsPath(s) && (secretWords.MatchString(text) || s.Flag == "")
+
+		if _, ok := notSecretSettings()[s.Name()]; ok {
+			continue
+		}
 
 		if holdsSecret && !s.Sensitive {
 			t.Errorf("setting %s holds a secret or a credential and has no sensitive mark", s.Name())

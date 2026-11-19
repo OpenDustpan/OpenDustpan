@@ -161,6 +161,10 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 
 	ctx := t.Context()
 
+	// The last step uses a fresh sign-in. Make that person first, so that a
+	// restart of the server binary cannot move a revision that a step holds.
+	env.PrepareFreshAdmin(ctx, t)
+
 	resp, doc := settingsRead(ctx, t, env, settingsRoute)
 	first := resp.Header.Get("ETag")
 

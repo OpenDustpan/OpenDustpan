@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -276,10 +277,21 @@ func parseURL(raw string, startTLS bool) (endpoint, error) {
 	}
 
 	if p := u.Port(); p != "" {
+		if !validPort(p) {
+			return none, configError(errURLForm)
+		}
+
 		port = p
 	}
 
 	return endpoint{host: u.Hostname(), address: net.JoinHostPort(u.Hostname(), port), transport: t}, nil
+}
+
+// validPort reports whether text is a port number from 1 to 65535.
+func validPort(text string) bool {
+	n, err := strconv.ParseUint(text, 10, 16)
+
+	return err == nil && n != 0
 }
 
 // transportOf returns the transport and the default port of the scheme.

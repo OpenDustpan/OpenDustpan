@@ -207,7 +207,7 @@ func (s *Service) subjectDisabled(ctx context.Context, req *Request) error {
 	target, targetErr := s.isTarget(ctx, &p, subject)
 	if targetErr != nil {
 		s.cfg.Logger.WarnContext(ctx, "disable refused: the read of the temporary administrators failed",
-			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+			slog.String("provider", req.Provider.ID), slog.String("cause", causeType(targetErr)))
 
 		return s.refuse(ctx, req, &refusal{
 			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject,
@@ -259,6 +259,17 @@ func (s *Service) disableRefusal(ctx context.Context, req *Request, err error) e
 		reason = ReasonDisableNotTarget
 	case errors.Is(err, principal.ErrDisabled):
 		reason = ReasonSubjectDisabled
+	case errors.Is(err, principal.ErrTempAdminRead):
+		// The server could not read the temporary administrator records, so it
+		// cannot decide. Fail closed: nothing is disabled, and the refusal
+		// names the failed read and keeps the cause.
+		s.cfg.Logger.WarnContext(ctx, "disable refused: the read of the temporary administrators failed",
+			slog.String("provider", req.Provider.ID), slog.String("cause", causeType(err)))
+
+		return s.refuse(ctx, req, &refusal{
+			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: req.Assertion.Subject,
+			cause: errors.Join(req.MethodErr, err),
+		})
 	default:
 		return fmt.Errorf("find the principal to disable: %w", err)
 	}

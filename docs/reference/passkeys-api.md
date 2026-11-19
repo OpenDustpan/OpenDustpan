@@ -26,7 +26,9 @@ the routes that need a fresh sign-in answer with the error code
 403 with the error code `mfa.session-required`.
 
 The routes are present only when the server has a public URL that gives a
-relying party, and a store that keeps passkeys. Otherwise they answer 404.
+relying party, and a store that keeps passkeys. Otherwise they answer 404 with
+the error code `server.route-not-found`. The command `dev` has no such public
+URL: see [Passkeys and dev](../guides/passkeys.md#passkeys-and-dev).
 
 There is no route to rename a passkey. The two routes of the
 [sign-in with a passkey](#sign-in-with-a-passkey) are public: they need no
@@ -42,7 +44,7 @@ creation options in the form of the WebAuthn protocol:
 {
   "publicKey": {
     "rp": { "name": "OpenDustpan", "id": "dustpan.example.com" },
-    "user": { "id": "...", "name": "alice", "displayName": "Alice Example" },
+    "user": { "id": "...", "name": "local:lus-...", "displayName": "Alice Example" },
     "challenge": "...",
     "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }, "..."],
     "timeout": 300000,
@@ -55,6 +57,11 @@ creation options in the form of the WebAuthn protocol:
   }
 }
 ```
+
+The `user.name` is the subject of the person (for a local user, `local:` and the
+ID of the local user record), never the user name. The `user.id` is the ID of
+the principal, in base64url form. The `displayName` is the display name of the
+person.
 
 The challenge has 32 random bytes. It is valid for 300 seconds and works once.
 The server keeps the SHA-256 digest of the challenge and never the challenge.
@@ -114,8 +121,8 @@ address. A server without them answers 404.
 
 `POST /sign-in/passkey/begin` takes no body. It stores a challenge and answers
 the request options in the form of the WebAuthn protocol. The options name no
-person and no credential (`allowCredentials` is empty), and they require user
-verification (`userVerification` is `required`). The challenge has 32 random
+person and no credential (the field `allowCredentials` is not in the answer), and
+they require user verification (`userVerification` is `required`). The challenge has 32 random
 bytes, is valid for 300 seconds and works once.
 
 `POST /sign-in/passkey/finish` takes this body:
@@ -212,7 +219,7 @@ client selects its text from `errorCode`.
 | 409 | `mfa.passkey-exists` | A person already holds the credential |
 | 409 | `mfa.passkey-limit` | The person holds 20 passkeys. `errorArgs.limit` holds the limit |
 | 409 | `local-user.last-credential` | The removal leaves a local user with no password and no passkey, or a break-glass account with no passkey |
-| 409 | `local-user.demo-fixed` | The person is the demo user of a dev installation |
+| 409 | `local-user.demo-fixed` | The person is the demo user of a dev installation. A default `dev` has no passkey routes, so it does not give this answer |
 | 413 | `request.body-too-large` | The body is longer than `errorArgs.maxBytes` bytes |
 | 429 | `mfa.rate-limited` | The person started too many ceremonies. The header `Retry-After` holds the wait in seconds |
 | 429 | `mfa.sign-in-source-limit` | The source address holds 20 open sign-in challenges, or its site group (the /48 of an IPv6 address) holds 80. A challenge ends after 5 minutes |
@@ -222,8 +229,20 @@ client selects its text from `errorCode`.
 ## Audit
 
 Every add, every removal and every refusal writes an entry in the scope
-`@server`. The actions are `passkey.added`, `passkey.removed`,
-`passkey.add-refused`, `passkey.remove-refused` and `passkey.list-refused`. A
+`@server`. The actions are:
+
+| Action | When |
+| --- | --- |
+| `passkey.added` | A passkey was added |
+| `passkey.removed` | A passkey was removed |
+| `passkey.add-refused` | A start or an end of a register ceremony was refused |
+| `passkey.remove-refused` | A removal was refused |
+| `passkey.list-refused` | A list was refused |
+| `passkey.ceremony-refused` | The passkey service refused a start or an end of a sign-in ceremony. Causes: no open challenge, a ceremony of another person or session, an unknown, suspended or foreign passkey, no user verification. The change `cause` holds the cause |
+| `passkey.sign-in-refused` | The sign-in route refused a finish before the passkey service ran, for example for a body that is not valid. The object is `passkey:unknown`, and the change `cause` holds the cause |
+| `passkey.suspended` | A response with a signature counter that did not grow suspended the passkey. The change `signCount` holds the stored and the new counter |
+
+A
 refusal of the step-up check writes an entry for the action
 `caller:manage-sign-in` with the outcome `failure`. No entry holds a challenge,
 a key or a response.

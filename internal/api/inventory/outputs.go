@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // tagOutputs is the tag of the output routes in the description.
@@ -146,6 +147,7 @@ func (h *Handler) getOutputs(w http.ResponseWriter, r *http.Request, p identity.
 // written the audit entry of its own denial, so the handler writes none. A
 // producer that does not exist answers as an unknown unit. A state that the
 // client encrypted answers 409 with the reason, for every caller. A state that moved answers 409.
+// A state past the bound of a masked read answers 413.
 // A unit with no state answers 404 with a message that names the unit.
 func (h *Handler) writeOutputsError(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object, err error,
@@ -170,6 +172,10 @@ func (h *Handler) writeOutputsError(
 		)
 	case errors.Is(err, outputshare.ErrStateMoved):
 		h.writeFailure(ctx, w, problem.New(http.StatusConflict, errcode.UnitStateMoved, errOutputsStateMoved))
+	case errors.Is(err, stack.ErrStateBound):
+		// A state past the bound of a masked read answers 413, as the Pulumi
+		// state routes do.
+		h.writeFailure(ctx, w, problem.New(http.StatusRequestEntityTooLarge, errcode.StackStateTooComplex, err.Error()))
 	default:
 		h.writeError(ctx, w, err)
 	}

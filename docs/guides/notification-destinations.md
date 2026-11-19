@@ -169,7 +169,20 @@ curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/sinks
 ```
 
-The `platform` is `slack`, `teams`, `mattermost` or `matrix`. The URL holds
+The `platform` is `slack`, `teams`, `mattermost` or `matrix`. A Matrix
+destination also needs an `accessToken`, the access token of the account that
+posts. Its `url` is the room, with the room ID percent-encoded. The server
+refuses a Matrix destination without the token with 400 `sink.access-token`,
+and it refuses the field for a platform that takes no token.
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -d '{"kind":"chat","platform":"matrix","name":"Ops room","url":"https://matrix.example.com/_matrix/client/v3/rooms/%21room%3Aexample.com","accessToken":"<access token>"}' \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/sinks
+```
+
+The `accessToken` is write-only: no answer shows it. See
+`docs/reference/notification-destinations-api.md` for its limits. The URL holds
 the token of the webhook, so the whole URL is a secret. The server seals it.
 A read of the destination shows the platform, the name and the **host** of the
 URL (`hooks.slack.com`), and `"urlSet": true`. It never shows the URL. A Slack

@@ -446,7 +446,7 @@ func (e *Env) RunTofuWithToken(
 	rc := filepath.Join(dir, "tofurc")
 
 	e.write(tb, filepath.Join(dir, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
-	e.write(tb, rc, fmt.Sprintf(tofuCLIConfig, e.Host(), token))
+	e.write(tb, rc, tofuRC(tb, e.Host(), token))
 
 	return e.RunAs(ctx, tofu, dir, []string{"TF_CLI_CONFIG_FILE=" + rc}, args...)
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -259,6 +260,26 @@ func (f *fixture) unit(tb testing.TB, obj identity.Object) identity.Object {
 
 // grant stores a grant of role on obj to subject, with no check. A unit
 // gets its stack first.
+// serviceOverGrantStore returns a service like the one of f that reads and writes
+// through store.
+func (f *fixture) serviceOverGrantStore(tb testing.TB, store access.Store) *access.Service {
+	tb.Helper()
+
+	st := f.store
+
+	svc, err := access.NewService(access.ServiceConfig{
+		Store: store, Directory: st, Namespaces: st, Authorizer: f.authz,
+		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
+		Now:   nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
+	})
+	if err != nil {
+		tb.Fatalf("new service: %v", err)
+	}
+
+	return svc
+}
+
 func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj identity.Object) {
 	tb.Helper()
 
@@ -279,7 +300,7 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 
 	err := f.store.CreateGrant(tb.Context(), access.Grant{
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
-		ID:   fmt.Sprintf("grt-%s-%s-%s", subject.ID, role, obj.String()),
+		ID:   accesstest.GrantID(fmt.Sprintf("%s-%s-%s", subject.ID, role, obj.String())),
 		Role: role, CreatedBy: "admin", Subject: subject,
 	}, fence, e, nil)
 	if err != nil {

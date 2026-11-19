@@ -72,7 +72,7 @@ func checkTestListNew(t *testing.T, page workspace.StatePage) {
 func readTestDetail(t *testing.T, address string, marks workspace.SensitiveMarks) workspace.StateDetail {
 	t.Helper()
 
-	detail, err := workspace.ReadStateResource([]byte(tofuTestState), marks, address)
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(tofuTestState), marks, address)
 	if err != nil {
 		t.Fatalf("read state resource %q: %v", address, err)
 	}
@@ -362,9 +362,8 @@ func TestReadTofuResource(t *testing.T) {
 	hash := secretMarker(t, providerAttributes, "bcrypt_hash")
 	checkMarkerPath(t, hash, "/resources/1/instances/0/attributes/bcrypt_hash")
 
-	if _, err := workspace.ReadStateResource([]byte(tofuTestState), tofuTestMarks(), "missing.none"); !errors.Is(
-		err, workspace.ErrResourceNotFound,
-	) {
+	_, err := workspace.ReadStateResource(t.Context(), []byte(tofuTestState), tofuTestMarks(), "missing.none")
+	if !errors.Is(err, workspace.ErrResourceNotFound) {
 		t.Errorf("read of an unknown address: err = %v, want ErrResourceNotFound", err)
 	}
 }
@@ -383,7 +382,7 @@ func TestReadTofuLegacyStringMarks(t *testing.T) {
 
 	marks := workspace.SensitiveMarks{"terraform_data.smoke": {"/input"}}
 
-	detail, err := workspace.ReadStateResource([]byte(state), marks, "terraform_data.smoke")
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(state), marks, "terraform_data.smoke")
 	if err != nil {
 		t.Fatalf("read state resource: %v", err)
 	}
@@ -417,7 +416,7 @@ func TestReadTofuNestedSensitive(t *testing.T) {
 
 	marks := workspace.SensitiveMarks{"terraform_data.smoke": {"/input/b"}}
 
-	detail, err := workspace.ReadStateResource([]byte(state), marks, "terraform_data.smoke")
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(state), marks, "terraform_data.smoke")
 	if err != nil {
 		t.Fatalf("read state resource: %v", err)
 	}
@@ -492,7 +491,7 @@ func readCtyPathInput(t *testing.T, steps string) any {
 
 	marks := workspace.SensitiveMarks{"other.none": {"/id"}}
 
-	detail, err := workspace.ReadStateResource([]byte(state), marks, "terraform_data.smoke")
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(state), marks, "terraform_data.smoke")
 	if err != nil {
 		t.Fatalf("read state resource: %v", err)
 	}
@@ -541,7 +540,7 @@ func TestCtyPathIndexSteps(t *testing.T) {
 
 		marks := workspace.SensitiveMarks{"other.none": {"/id"}}
 
-		detail, err := workspace.ReadStateResource([]byte(state), marks, "terraform_data.smoke")
+		detail, err := workspace.ReadStateResource(t.Context(), []byte(state), marks, "terraform_data.smoke")
 		if err != nil {
 			t.Fatalf("read state resource with steps %s: %v", steps, err)
 		}

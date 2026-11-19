@@ -7,8 +7,6 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // settingsCoveringTest names the test that proves the routes of the settings
@@ -47,17 +45,10 @@ func settingsAllowEntries() []AllowEntry {
 func (e *Env) AdminToken() string { return e.token }
 
 // settingStoreOptions returns the option that gives the in-process server the
-// settings resource of st, with the declarations of the binary. The in-process
-// server has no flags, so its static layer sets nothing.
-func settingStoreOptions(st serverStore) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithSettings(s.SettingStore(), cli.SettingDeclarations(), nil)}
-	case *postgres.Store:
-		declarations := append(cli.SettingDeclarations(), postgres.SettingDeclarations()...)
+// settings resource of the built-in store, with the declarations of the binary.
+// The in-process server has no flags, so its static layer sets nothing.
+func settingStoreOptions(builtin *dustpan.BuiltinStore) []dustpan.Option {
+	declarations := append(cli.SettingDeclarations(), builtin.SettingDeclarations()...)
 
-		return []dustpan.Option{dustpan.WithSettings(s.SettingStore(), declarations, nil)}
-	default:
-		return nil
-	}
+	return []dustpan.Option{dustpan.WithSettings(builtin.SettingStore(), declarations, nil)}
 }
