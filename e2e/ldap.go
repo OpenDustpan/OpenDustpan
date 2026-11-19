@@ -47,6 +47,7 @@ func (s *signInSetup) ldapOptions() []dustpan.Option {
 	provider := func(id, url string) dustpan.LDAPProvider {
 		return dustpan.LDAPProvider{
 			RootCAs:                   s.ldap.CertPool(),
+			CAFile:                    "",
 			AllowedRanges:             nil,
 			ID:                        id,
 			DisplayName:               "",

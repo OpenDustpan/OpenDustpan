@@ -101,22 +101,23 @@ const MaxSinkSeries = 16
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
-	registry  *Registry
-	requests  *Counter
-	duration  *Histogram
-	inFlight  *Gauge
-	ready     *Counter
-	audit     *Counter
-	chain     *chainFamilies
-	sinks     sinkFamilies
-	reloads   *Counter
-	reloadOK  *Gauge
-	sweeps    *Counter
-	deleted   *Counter
-	blobWait  *Counter
-	signin    *Counter
-	gitHost   *Counter
-	claimSkip *Counter
+	registry   *Registry
+	requests   *Counter
+	duration   *Histogram
+	inFlight   *Gauge
+	ready      *Counter
+	audit      *Counter
+	chain      *chainFamilies
+	sinks      sinkFamilies
+	reloads    *Counter
+	reloadOK   *Gauge
+	sweeps     *Counter
+	deleted    *Counter
+	blobWait   *Counter
+	signin     *Counter
+	gitHost    *Counter
+	claimSkip  *Counter
+	mtlsRefuse *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -173,12 +174,13 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps:    newSweepCounter(reg),
-		deleted:   newDeletedSweepCounter(reg),
-		blobWait:  newBlobDeleteWaitCounter(reg),
-		signin:    newSignInCounterErrors(reg),
-		gitHost:   newGitHostRefusedCounter(reg),
-		claimSkip: newClaimPollSkippedCounter(reg),
+		sweeps:     newSweepCounter(reg),
+		deleted:    newDeletedSweepCounter(reg),
+		blobWait:   newBlobDeleteWaitCounter(reg),
+		signin:     newSignInCounterErrors(reg),
+		gitHost:    newGitHostRefusedCounter(reg),
+		claimSkip:  newClaimPollSkippedCounter(reg),
+		mtlsRefuse: newMtlsRefusedCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -579,6 +581,48 @@ func newBlobDeleteWaitCounter(reg *Registry) *Counter {
 	}
 
 	return c
+}
+
+const (
+	// MtlsRefusedRateLimit counts an mTLS exchange call that the rate limit
+	// refused.
+	MtlsRefusedRateLimit = "rate-limit"
+	// MtlsRefusedBodySize counts an mTLS exchange call that the body size
+	// limit refused.
+	MtlsRefusedBodySize = "body-size"
+)
+
+// maxMtlsRefusedReasons holds one series for each reason.
+const maxMtlsRefusedReasons = 2
+
+// newMtlsRefusedCounter creates dustpan_mtls_exchange_refused_total in reg.
+// It registers the two reasons at zero, so an alert sees them before the
+// first refusal.
+func newMtlsRefusedCounter(reg *Registry) *Counter {
+	c := reg.NewCounter(
+		"dustpan_mtls_exchange_refused_total",
+		"mTLS exchange calls that the guard refused before any certificate check, by reason.",
+		[]string{labelReason},
+		maxMtlsRefusedReasons,
+	)
+
+	c.Add(0, MtlsRefusedRateLimit)
+	c.Add(0, MtlsRefusedBodySize)
+
+	return c
+}
+
+// IncMtlsRefused adds one to the mTLS exchange calls that the guard refused,
+// for reason: MtlsRefusedRateLimit or MtlsRefusedBodySize. Any other value
+// counts as MtlsRefusedRateLimit, so the label set stays fixed.
+func (m *ServerMetrics) IncMtlsRefused(reason string) {
+	// Defense in depth: the handler passes one of the two values already.
+	// This check stays so that a new caller cannot add a label value.
+	if reason != MtlsRefusedBodySize {
+		reason = MtlsRefusedRateLimit
+	}
+
+	m.mtlsRefuse.Inc(reason)
 }
 
 // IncBlobDeleteWaiting adds one to the blob deletes that a refused take kept

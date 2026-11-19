@@ -295,8 +295,11 @@ func classifyStoreCheck(err error) (failure, bool) {
 // classifyStoreCheckConflict maps the refusals of a start, which answer 409.
 func classifyStoreCheckConflict(err error) (failure, bool) {
 	if errors.Is(err, storecheck.ErrNoTarget) {
-		return failCoded(http.StatusConflict, "this server has no store for the target: use another target",
-			errcode.StoreCheckNoTarget), true
+		return failCoded(
+			http.StatusConflict,
+			"this server has no backup target: set --backup-target on the server (DUSTPAN_BACKUP_TARGET)",
+			errcode.StoreCheckNoTarget,
+		), true
 	}
 
 	if errors.Is(err, storecheck.ErrRunning) {

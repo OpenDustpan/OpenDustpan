@@ -77,6 +77,15 @@ type LDAPSettings struct {
 	GroupMemberOfAttribute string
 	GroupNameAttribute     string
 	StartTLS               bool
+	// CAFile is the path of the file with the certificate authorities of the
+	// directory. Empty means the system roots.
+	CAFile string
+	// DisabledMask is the bit mask of the disabled attribute as an unsigned
+	// decimal text. Empty means no mask.
+	DisabledMask string
+	// DisabledValues are the values of the disabled attribute that mark an
+	// account as disabled.
+	DisabledValues []string
 	// SubjectFailureLimit is the limit of the count of the subject from
 	// every source.
 	SubjectFailureLimit int
@@ -104,6 +113,9 @@ type providerLDAP struct {
 	GroupMemberAttribute      string   `json:"groupMemberAttribute"`
 	GroupMemberOfAttribute    string   `json:"groupMemberOfAttribute"`
 	GroupNameAttribute        string   `json:"groupNameAttribute"`
+	CAFile                    string   `json:"caFile"`
+	DisabledMask              string   `json:"disabledMask"`
+	DisabledValues            []string `json:"disabledValues"`
 	StartTLS                  bool     `json:"startTLS"`
 	BindPasswordSet           bool     `json:"bindPasswordSet"`
 	SubjectFailureLimit       int      `json:"subjectFailureLimit"`
@@ -186,7 +198,9 @@ func providerIDIn(providers []SignInProvider, id string) (SignInProvider, bool) 
 		}
 	}
 
-	return SignInProvider{Method: nil, ID: "", DisplayName: "", AutoCreate: false, Stored: false}, false
+	return SignInProvider{
+		Method: nil, ID: "", DisplayName: "", Issuer: "", ClientID: "", Scopes: nil, AutoCreate: false, Stored: false,
+	}, false
 }
 
 // directorySignInRoutes returns the route of the password sign-in of the
@@ -340,6 +354,9 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 			GroupMemberAttribute:      s.GroupMemberAttribute,
 			GroupMemberOfAttribute:    s.GroupMemberOfAttribute,
 			GroupNameAttribute:        s.GroupNameAttribute,
+			CAFile:                    s.CAFile,
+			DisabledMask:              s.DisabledMask,
+			DisabledValues:            nonNilRanges(s.DisabledValues),
 			StartTLS:                  s.StartTLS,
 			BindPasswordSet:           true,
 			SubjectFailureLimit:       s.SubjectFailureLimit,

@@ -170,3 +170,27 @@ func checkNamespaceError(err error, wantErrs []error, wantText, avoidText string
 
 	return ""
 }
+
+// TestCreateNamespaceNeedsAName proves that a run with no name, with a blank
+// name or with two names gives a short error that names the problem and the
+// command that helps, and not the whole usage. The error matches ErrUsage.
+func TestCreateNamespaceNeedsAName(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"--server", "http://127.0.0.1:1"},
+		{"--server", "http://127.0.0.1:1", " "},
+		{"--server", "http://127.0.0.1:1", "a", "b"},
+	} {
+		var stdout, stderr bytes.Buffer
+
+		err := client.CreateNamespace(t.Context(), args, &stdout, &stderr)
+		if err == nil || !errors.Is(err, client.ErrUsage) {
+			t.Fatalf("create namespace %v = %v, want it to match ErrUsage", args, err)
+		}
+
+		if !strings.Contains(err.Error(), "needs one argument") || strings.Contains(err.Error(), "Try out:") {
+			t.Fatalf("create namespace %v = %v, want a short error that names the problem", args, err)
+		}
+	}
+}

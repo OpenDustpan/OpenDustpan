@@ -128,7 +128,7 @@ func TestKeyGenerate(t *testing.T) {
 	checkKeyFile(t, path, out)
 
 	out, err = runBinary(t, bin, "key", "generate", "--out", path)
-	if err == nil || !strings.Contains(out, "the key file exists: "+path+": set --out to a new path") {
+	if err == nil || !strings.Contains(out, "key file exists: "+path+": set --out to a new path") {
 		t.Fatalf("key generate over the file: err = %v, output:\n%s", err, out)
 	}
 

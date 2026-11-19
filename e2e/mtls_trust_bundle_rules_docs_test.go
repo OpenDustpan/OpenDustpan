@@ -212,7 +212,7 @@ func trustBundleScenario(t *testing.T, env *e2e.Env) {
 	step("an update with no If-Match is refused", http.MethodPatch, trustRulesPath+"/"+rule,
 		`{"name":"mtls renamed"}`, nil, http.StatusPreconditionRequired, bodyHolds("request.precondition-required"))
 	step("update the rule", http.MethodPatch, trustRulesPath+"/"+rule,
-		`{"name":"mtls renamed","bundle":"`+bundle+`","spiffePattern":"spiffe://example.org/ci/*"}`,
+		`{"name":"mtls renamed","bundle":"`+bundle+`","spiffePattern":"spiffe://example.org/ci/deploy"}`,
 		map[string]string{"If-Match": ruleRev}, http.StatusOK, bodyHolds(`"name":"mtls renamed"`))
 	step("an update with the old revision is refused", http.MethodPatch, trustRulesPath+"/"+rule,
 		`{"name":"again"}`, map[string]string{"If-Match": ruleRev}, http.StatusPreconditionFailed,

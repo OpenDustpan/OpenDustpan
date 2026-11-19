@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -66,6 +67,15 @@ import (
 var (
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
+	// errServeArgument reports an argument of serve that is not a flag.
+	errServeArgument = errors.New("serve takes flags only: remove the argument")
+	// errListenAddress reports a --listen value that is not host:port.
+	errListenAddress = errors.New("invalid --listen (DUSTPAN_LISTEN): use host:port, for example :8080")
+	// errInstallationName reports an --installation value that is not valid.
+	errInstallationName = errors.New(
+		"invalid --installation (DUSTPAN_INSTALLATION): use 1 to 100 letters, digits, '-', '_' and '.', " +
+			"and do not start with '.' or '-'",
+	)
 	// errTLSCertMissing reports --tls-key without --tls-cert.
 	errTLSCertMissing = errors.New(
 		"TLS certificate is missing: set --tls-cert (DUSTPAN_TLS_CERT) or clear --tls-key",
@@ -216,6 +226,10 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	if fs.NArg() > 0 {
+		return fmt.Errorf("%w: %q", errServeArgument, fs.Arg(0))
+	}
+
 	if err := refuseDevEnvironment(os.LookupEnv); err != nil {
 		return err
 	}
@@ -364,7 +378,7 @@ func (f *serveFlags) kind() installation.Kind {
 // retention in f.retention.
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
-	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+	if err := f.checkNames(); err != nil {
 		return err
 	}
 
@@ -423,6 +437,25 @@ func (f *serveFlags) check() error {
 	f.auditSinkRanges = ranges
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+}
+
+// checkNames refuses an incomplete TLS pair, a --listen value that is not host:port and an
+// --installation value that is not a valid installation name. Each error
+// names the flag, so the operator sees the error before the database opens.
+func (f *serveFlags) checkNames() error {
+	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+		return err
+	}
+
+	if _, port, err := net.SplitHostPort(f.listen); err != nil || port == "" {
+		return fmt.Errorf("%w: %q", errListenAddress, f.listen)
+	}
+
+	if _, err := namespace.ParseInstallationName(f.installation); err != nil {
+		return fmt.Errorf("%w: %q", errInstallationName, f.installation)
+	}
+
+	return nil
 }
 
 // checkProxyFlags refuses a trusted proxy list or header that the server

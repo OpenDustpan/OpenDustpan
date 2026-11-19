@@ -115,10 +115,11 @@ func TestTemplateRefused(t *testing.T) {
 
 	helm := requireHelm(t)
 
-	// A valid base: the two required Secret names.
+	// A valid base: the three required Secret names.
 	base := []string{
 		"--set", "database.existingSecret.name=db",
 		"--set", "keyEncryptionKey.existingSecret.name=kek",
+		"--set", "adminToken.existingSecret.name=admin-token-secret",
 	}
 
 	tests := []struct {
@@ -136,6 +137,21 @@ func TestTemplateRefused(t *testing.T) {
 				// earlier versions write it with dots.
 				{"/database/existingSecret/name", "database.existingSecret.name:"},
 				{"/keyEncryptionKey/existingSecret/name", "keyEncryptionKey.existingSecret.name:"},
+				{"/adminToken/existingSecret/name", "adminToken.existingSecret.name:"},
+			},
+		},
+		{
+			// Defense in depth: the template refuses an empty name when the
+			// schema check is off.
+			name:    "no admin token Secret without the schema check",
+			useBase: true,
+			set: []string{
+				"--set", "adminToken.existingSecret.name=",
+				"--skip-schema-validation",
+			},
+			wantText: [][]string{
+				{"adminToken.existingSecret.name is empty"},
+				{"kubectl create secret generic opendustpan-admin-token"},
 			},
 		},
 		{
