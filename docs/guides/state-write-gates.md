@@ -410,5 +410,7 @@ still in the audit log. Retry the write after the server recovers.
   access limits for a namespace, a collection and a unit. It has no route for
   ownership rules or path sets yet.
 - No route reads decision records yet.
-- A break-glass for a gate in error is not available.
+- A break-glass for a gate in error is not reachable yet. No route issues a
+  pass, so the write stays refused. Read the gate with
+  `GET /api/dustpan/v1/namespaces/{namespace}/gates/{id}` and save it again.
 - An approval default does not apply at `state.write`.

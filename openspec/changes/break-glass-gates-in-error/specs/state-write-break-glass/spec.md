@@ -8,6 +8,10 @@ When a write evaluation ends in error in enforce mode and a valid pass matches t
 - **WHEN** a gate in enforce mode errors and a valid unused pass matches
 - **THEN** the decision permits the write and marks the pass used
 
+#### Scenario: Passed break-glass is a warning
+- **WHEN** a valid pass lets a write through a gate in error
+- **THEN** the decision result is warn, the record names the audit entry ID, and the gate error stays in the unit results of the record
+
 #### Scenario: Replay
 - **WHEN** the same pass is used a second time
 - **THEN** the decision refuses the write
@@ -35,6 +39,22 @@ If a write evaluation holds a deny, then the server SHALL refuse the write when 
 #### Scenario: Deny with a pass
 - **WHEN** the evaluation has a deny and a valid pass exists
 - **THEN** the decision refuses the write and consumes no pass
+
+#### Scenario: Matched gate whose message does not render
+- **WHEN** a deny gate or an approval gate matches, its message fails to render or its approval rule is missing, and a valid pass exists
+- **THEN** the decision refuses the write and consumes no pass
+
+#### Scenario: Store returns a wrong pass
+- **WHEN** the store returns a pass of another key or an expired pass
+- **THEN** the decision refuses the write with gate.unavailable
+
+### Requirement: Refuse a bad audit entry ID
+
+If the audit entry ID of a break-glass is not 1 to 128 ASCII letters, digits, `-`, `_` and `.`, or starts with `-` or `.`, then the server SHALL refuse the write with ErrInvalid before any store call.
+
+#### Scenario: Bad audit entry ID refuses with no store call
+- **WHEN** the audit entry ID holds a space, a slash, a non-ASCII character, a control character or too many characters, or starts with `-` or `.`
+- **THEN** the write is refused with ErrInvalid, the store is not called, no pass is used and no record is written
 
 ### Requirement: Fail closed without a store
 
