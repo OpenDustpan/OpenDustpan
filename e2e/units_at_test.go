@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +29,7 @@ type unitAtDoc struct {
 // unitsAtDoc is the answer of GET /api/dustpan/v1/namespaces/{namespace}/units with the at value.
 type unitsAtDoc struct {
 	Units   []unitAtDoc `json:"units"`
-	At      int64       `json:"at"`
+	At      string      `json:"at"`
 	Purged  int         `json:"purged"`
 	Omitted int         `json:"omitted"`
 }
@@ -39,7 +38,7 @@ type unitsAtDoc struct {
 // the inventory API, as the administrator of the e2e server.
 func unitsAt(ctx context.Context, env *e2e.Env, org string, at time.Time) (unitsAtDoc, string, error) {
 	q := url.Values{}
-	q.Set("at", strconv.FormatInt(at.UnixMilli(), 10))
+	q.Set("at", at.UTC().Format(time.RFC3339Nano))
 
 	path := "/api/dustpan/v1/namespaces/" + url.PathEscape(org) + "/units?" + q.Encode()
 

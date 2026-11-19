@@ -20401,13 +20401,12 @@
             }
           },
           {
-            "description": "Lists the units as they were at this time, in Unix milliseconds. It takes no filter and no page token.",
+            "description": "Lists the units as they were at this time, an RFC 3339 time with Z or an offset, for example 2026-10-18T09:30:00Z. It takes no filter and no page token.",
             "in": "query",
             "name": "at",
             "required": false,
             "schema": {
-              "format": "int64",
-              "type": "integer"
+              "type": "string"
             }
           },
           {
