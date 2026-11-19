@@ -39,7 +39,11 @@ blueprint reference as its object.
 
 - `GET .../draft` returns the draft with its version, as `{"version": n,
   "blueprint": {...}}`. The `ETag` header holds the version in quotes.
-- `PUT .../draft` stores the blueprint document in the body. The `If-Match`
+- `PUT .../draft` stores the blueprint document in the body. The `name` in the
+  document must be the same as the blueprint name in the path, or the answer is
+  `400` with the code `self-service.blueprint-invalid`. That answer does not name
+  the field. A blueprint that has no draft has the version `0`: a `GET` of its
+  draft answers `404`, and the first write sends `If-Match: "0"`. The `If-Match`
   header must hold the version that the caller read, in quotes. A missing or
   malformed `If-Match` header answers `428`. A version that changed since it
   was read answers `409`. A successful write answers `200` with the new

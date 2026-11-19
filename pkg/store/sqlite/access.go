@@ -104,6 +104,15 @@ func (r grantReads) GetPrincipal(ctx context.Context, id string) (principal.Prin
 
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
+	// Defense in depth: the service mints the ID and the CHECK constraint of
+	// the grants table refuses a bad one too. This check stays so that an ID
+	// from a bad generator answers a domain error and never a driver error.
+	// It does not rely on the service or on the constraint. The text holds no
+	// part of the ID.
+	if !access.ValidGrantID(g.ID) {
+		return fmt.Errorf("%w: the grant ID is not a grant ID", access.ErrInvalid)
+	}
+
 	kind, ok := access.KindOf(g.Object)
 	if !ok {
 		return fmt.Errorf("%w: object %q takes no grant", access.ErrInvalid, g.Object.String())
@@ -134,7 +143,7 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		return fitErr
 	}
 
-	n, err := q.CreateGrant(ctx, db.CreateGrantParams{
+	n, err := createGrantRow(ctx, q, db.CreateGrantParams{
 		ID:          g.ID,
 		Subject:     g.Subject.String(),
 		SubjectKind: string(g.Subject.Kind),
@@ -149,7 +158,7 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		CreatedBy:   g.CreatedBy,
 	})
 	if err != nil {
-		return fmt.Errorf("insert grant: %w", err)
+		return err
 	}
 
 	if n == 0 {
@@ -157,6 +166,25 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 	}
 
 	return nil
+}
+
+// createGrantRow inserts the grant row of params and returns the number of
+// rows it wrote. A row that breaks a CHECK of the grants table, for example
+// an ID that is not of the grant ID shape, returns access.ErrInvalid. The
+// text names no driver message and no part of the row. Defense in depth: the
+// service and insertGrant check the shape of the ID too; this translation
+// stays so that a caller that skips them never sees a driver error.
+func createGrantRow(ctx context.Context, q *db.Queries, params db.CreateGrantParams) (int64, error) {
+	n, err := q.CreateGrant(ctx, params)
+	if isCheckViolation(err) {
+		return 0, fmt.Errorf("%w: the grant row breaks a check of the grants table", access.ErrInvalid)
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("insert grant: %w", err)
+	}
+
+	return n, nil
 }
 
 // subjectFitsObject returns ErrInvalid when the subject of g is a principal
@@ -188,6 +216,14 @@ func subjectFitsObject(ctx context.Context, q *db.Queries, g access.Grant) error
 
 // GetGrant implements access.GrantStore.
 func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
+	// Defense in depth: the service and the HTTP handler check the shape of the
+	// ID too. This check stays so that a new caller of the store cannot read
+	// or end a grant by a text that is not a grant ID. It does not rely on the
+	// service, the handler or the CHECK constraint of the grants table.
+	if !access.ValidGrantID(id) {
+		return access.Grant{}, fmt.Errorf("get grant: %w", access.ErrInvalid)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -214,6 +250,14 @@ func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
 func (s *Store) RevokeGrant(
 	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
 ) error {
+	// Defense in depth: the service and the HTTP handler check the shape of the
+	// ID too. This check stays so that a new caller of the store cannot read
+	// or end a grant by a text that is not a grant ID. It does not rely on the
+	// service, the handler or the CHECK constraint of the grants table.
+	if !access.ValidGrantID(id) {
+		return fmt.Errorf("revoke grant: %w", access.ErrInvalid)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
