@@ -224,14 +224,10 @@ func (s *Service) rotate(
 		return rotationAddress, stored.Version, nil
 	}
 
-	current, err := s.secrets.OpenBound(
-		ctx,
-		EventSecretScope(kind),
-		[]byte(stored.AddressDigest),
-		stored.SealedEventSecret,
-	)
-	if err != nil {
-		return rotationNotOpened, stored.Version, nil //nolint:nilerr // a secret that does not open cannot be compared or kept: the window ends
+	// A secret that does not open cannot be compared or kept: the window ends.
+	current, ok := s.openSealed(ctx, kind, stored.AddressDigest, stored.SealedEventSecret)
+	if !ok {
+		return rotationNotOpened, stored.Version, nil
 	}
 
 	if subtle.ConstantTimeCompare(current, secret) == 1 {
@@ -253,6 +249,14 @@ func (s *Service) rotate(
 	reg.OldEventSecretEndsAt = at.Add(OldEventSecretWindow)
 
 	return rotationStarted, stored.Version, nil
+}
+
+// openSealed opens the sealed event secret of kind that is bound to digest.
+// ok is false for a value that does not open.
+func (s *Service) openSealed(ctx context.Context, kind Kind, digest string, sealed []byte) ([]byte, bool) {
+	plain, err := s.secrets.OpenBound(ctx, EventSecretScope(kind), []byte(digest), sealed)
+
+	return plain, err == nil
 }
 
 // ConfirmRotation ends the old event secret at once. It returns
