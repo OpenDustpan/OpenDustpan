@@ -1944,54 +1944,7 @@ func testRestoreSwapRecordsExpiredLeases(t *testing.T, newStore RestoreFactory) 
 	t.Helper()
 
 	for _, keepAccess := range []bool{false, true} {
-		r := newStagedRestoreWith(t, newStore, func(t *testing.T, src BackupStore) {
-			t.Helper()
-
-			updates, ok := src.(UpdatesStore)
-			if !ok {
-				t.Skip("the store has no update port")
-			}
-
-			// The seeded backup holds the namespace acme, so the stacks go in
-			// another namespace.
-			ns := newNamespace(t, updates, "initech")
-			st := newStack(ns.Name, "web", "prod")
-
-			if err := updates.CreateStack(t.Context(), st, ns.Fence()); err != nil {
-				t.Fatalf("create stack: %v", err)
-			}
-
-			f := fixture{s: updates, ref: st.Ref, fence: ns.Fence()}
-			f.run(t, f.ref, "u1", mutating())
-			f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
-		})
-
-		area := r.stage(t, r.held.Claim.Token)
-
-		if err := r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
-			t.Fatalf("enter maintenance mode: %v", err)
-		}
-
-		swap := r.held.Claim.Step(backup.RestoreStepSwap)
-
-		if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, keepAccess); err != nil {
-			t.Fatalf("keepAccess=%v: swap: %v", keepAccess, err)
-		}
-
-		op, err := r.dst.DurableOperationsPort().Get(t.Context(), r.held.ID)
-		if err != nil {
-			t.Fatalf("keepAccess=%v: get operation: %v", keepAccess, err)
-		}
-
-		rec, ok := op.Step(backup.RestoreStepSwap)
-		if !ok {
-			t.Fatalf("keepAccess=%v: operation has the steps %+v, want the swap step", keepAccess, op.Steps)
-		}
-
-		kept, err := backup.DecodeRestoreSwap(rec.Result)
-		if err != nil {
-			t.Fatalf("keepAccess=%v: decode the swap step %q: %v", keepAccess, rec.Result, err)
-		}
+		kept := swapRecordWithRunningUpdate(t, newStore, keepAccess)
 
 		// One update runs in the backup. The update that ended adds nothing.
 		if kept.ExpiredUpdateLeases != 1 {
@@ -1999,6 +1952,64 @@ func testRestoreSwapRecordsExpiredLeases(t *testing.T, newStore RestoreFactory) 
 				keepAccess, kept.ExpiredUpdateLeases)
 		}
 	}
+}
+
+// seedRunningUpdate adds a stack with one running update and one ended update
+// to src, in a namespace that the seeded backup does not hold.
+func seedRunningUpdate(t *testing.T, src BackupStore) {
+	t.Helper()
+
+	updates, ok := src.(UpdatesStore)
+	if !ok {
+		t.Skip("the store has no update port")
+	}
+
+	ns := newNamespace(t, updates, "initech")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := updates.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	f := fixture{s: updates, ref: st.Ref, fence: ns.Fence()}
+	f.run(t, f.ref, "u1", mutating())
+	f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
+}
+
+// swapRecordWithRunningUpdate stages a backup with a running update, swaps it
+// in, and returns the counts that the swap step recorded.
+func swapRecordWithRunningUpdate(t *testing.T, newStore RestoreFactory, keepAccess bool) backup.KeepAccessResult {
+	t.Helper()
+
+	r := newStagedRestoreWith(t, newStore, seedRunningUpdate)
+	area := r.stage(t, r.held.Claim.Token)
+
+	if err := r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	swap := r.held.Claim.Step(backup.RestoreStepSwap)
+
+	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, keepAccess); err != nil {
+		t.Fatalf("keepAccess=%v: swap: %v", keepAccess, err)
+	}
+
+	op, err := r.dst.DurableOperationsPort().Get(t.Context(), r.held.ID)
+	if err != nil {
+		t.Fatalf("keepAccess=%v: get operation: %v", keepAccess, err)
+	}
+
+	rec, ok := op.Step(backup.RestoreStepSwap)
+	if !ok {
+		t.Fatalf("keepAccess=%v: operation has the steps %+v, want the swap step", keepAccess, op.Steps)
+	}
+
+	kept, err := backup.DecodeRestoreSwap(rec.Result)
+	if err != nil {
+		t.Fatalf("keepAccess=%v: decode the swap step %q: %v", keepAccess, rec.Result, err)
+	}
+
+	return kept
 }
 
 // stackUnitName returns the name of the inventory entry of ref.

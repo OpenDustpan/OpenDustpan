@@ -717,28 +717,39 @@ func TestRestoreAuditsExpiredUpdateLeases(t *testing.T) {
 			appends := slices.Clone(setup.live.dev.appends)
 			setup.live.mu.Unlock()
 
-			// Any entry of the expired leases counts, so the case with no lease
-			// fails for an entry with a count of zero too.
-			var got []string
-
-			for _, e := range appends {
-				if strings.Contains(e.Object, "expired the lease of") {
-					got = append(got, e.Object)
-				}
-			}
-
-			if tc.want == "" {
-				if len(got) != 0 {
-					t.Fatalf("audit entries of the expired leases = %q, want none", got)
-				}
-
-				return
-			}
-
-			if len(got) != 1 || !strings.Contains(got[0], tc.want) || !strings.Contains(got[0], "restore "+id.String()) {
-				t.Errorf("audit entries of the expired leases = %q, want one with %q for restore %s", got, tc.want, id)
-			}
+			checkExpiredLeaseEntries(t, appends, tc.want, id)
 		})
+	}
+}
+
+// checkExpiredLeaseEntries checks the audit entries of the expired leases in
+// appends. An empty want means no entry. Any entry of the expired leases
+// counts, so a case with no lease also fails for an entry with a count of zero.
+func checkExpiredLeaseEntries(t *testing.T, appends []audit.Entry, want string, id backup.RestoreID) {
+	t.Helper()
+
+	var got []string
+
+	for i := range appends {
+		if strings.Contains(appends[i].Object, "expired the lease of") {
+			got = append(got, appends[i].Object)
+		}
+	}
+
+	if want == "" {
+		if len(got) != 0 {
+			t.Errorf("audit entries of the expired leases = %q, want none", got)
+		}
+
+		return
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("audit entries of the expired leases = %q, want one", got)
+	}
+
+	if !strings.Contains(got[0], want) || !strings.Contains(got[0], "restore "+id.String()) {
+		t.Errorf("audit entry of the expired leases = %q, want %q for restore %s", got[0], want, id)
 	}
 }
 
