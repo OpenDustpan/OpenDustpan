@@ -43,7 +43,20 @@ type ldapRouteEnv struct {
 func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 	t.Helper()
 
+	return newLDAPRouteEnvAt(t, "")
+}
+
+// newLDAPRouteEnvAt is newLDAPRouteEnv with the provider URL url. An empty
+// url selects the ldaps URL of the test directory.
+func newLDAPRouteEnvAt(t *testing.T, url string) ldapRouteEnv {
+	t.Helper()
+
 	dir := ldaptest.Start(t)
+
+	if url == "" {
+		url = dir.LDAPSURL()
+	}
+
 	dir.AddUser(ldaptest.User{
 		Attributes: map[string][]string{"entryUUID": {ldapRouteUUID}}, UserName: "alice", Password: ldapRoutePassword,
 	})
@@ -54,7 +67,7 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 		Enabled:    func(context.Context) (bool, error) { return true, nil },
 		AllowPlain: func(context.Context) (bool, error) { return false, nil },
 		Now:        nil, Logger: slog.New(slog.NewTextHandler(logs, nil)), RootCAs: dir.CertPool(),
-		ProviderID: ldapRouteID, URL: dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
+		ProviderID: ldapRouteID, URL: url, BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
 		UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
 		NameAttribute: "", BindPassword: session.NewPassword(dir.ServicePassword()),
 		Subject:  ldapauth.Subject{Kind: ldapauth.SubjectEntryUUID, Attribute: ""},
@@ -74,7 +87,7 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true, SubjectFailureLimit: 7,
 		LDAP: apiserver.LDAPSettings{
 			AllowedRanges:             nil,
-			URL:                       dir.LDAPSURL(),
+			URL:                       url,
 			BindDN:                    ldaptest.ServiceDN,
 			BaseDN:                    ldaptest.BaseDN,
 			UserFilter:                "(&(objectClass=person)(uid={user}))",
@@ -335,6 +348,40 @@ func TestLDAPRouteDirectoryDown(t *testing.T) {
 	}
 
 	checkLDAPAnswerIsClean(t, e, "directory down", rec)
+}
+
+// TestLDAPRoutePlainURLNamesTheFix proves that a directory URL with no TLS to
+// a host name, with the setting that allows plain connections off, gives 503
+// with a text that names ldaps and StartTLS, and not the text of a directory
+// that does not answer. The answer does not name the host or the address.
+func TestLDAPRoutePlainURLNamesTheFix(t *testing.T) {
+	t.Parallel()
+
+	e := newLDAPRouteEnvAt(t, "ldap://ldap.example.com")
+
+	before := e.limiter.count()
+
+	rec := e.post(t, ldapRoutePath, signInBody("alice", ldapRoutePassword))
+	if rec.Code != http.StatusServiceUnavailable || errorCodeOf(t, rec.Body.String()) != "sign-in.unavailable" {
+		t.Fatalf("sign-in = %d %s, want 503 sign-in.unavailable", rec.Code, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "ldaps://") || !strings.Contains(body, "StartTLS") {
+		t.Fatalf("answer %s does not name ldaps:// and StartTLS", body)
+	}
+
+	for _, text := range []string{"try again", "ldap.example.com"} {
+		if strings.Contains(body, text) {
+			t.Fatalf("answer %s holds %q", body, text)
+		}
+	}
+
+	if e.limiter.count() != before {
+		t.Fatalf("the budget changed from %d to %d, want no change", before, e.limiter.count())
+	}
+
+	checkLDAPAnswerIsClean(t, e, "plain URL", rec)
 }
 
 // ldapListDoc is the list of the sign-in providers, in the LDAP tests.
