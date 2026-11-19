@@ -781,7 +781,7 @@ func TestDiffSecretAddedOrRemovedIsChangedSecret(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			diff, err := stack.DiffStates(tt.from, tt.to, "", 100)
+			diff, err := stack.DiffStates(t.Context(), tt.from, tt.to, "", 100)
 			if err != nil {
 				t.Fatalf("diff states: %v", err)
 			}

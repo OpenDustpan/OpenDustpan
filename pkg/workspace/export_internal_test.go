@@ -106,3 +106,11 @@ func DecodeForTest(text string) (any, error) {
 
 	return doc, nil
 }
+
+// ForceOneDigest makes every value of the secret index share one digest, and
+// returns the function that restores the digest.
+func ForceOneDigest() func() {
+	forceOneDigest.Store(true)
+
+	return func() { forceOneDigest.Store(false) }
+}

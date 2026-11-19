@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // Masked state read for the console: a paged resource list and one resource
@@ -1096,6 +1097,12 @@ func newSecretIndex(secrets []any) *secretIndex {
 	return index
 }
 
+// forceOneDigest is a hook for the tests of this package. It is false in the
+// server, and no code outside the tests sets it.
+//
+//nolint:gochecknoglobals // Test hook: an atomic switch that the server never sets; a field would need a parameter through every mask call.
+var forceOneDigest atomic.Bool
+
 // Digest tags: each type of value starts from another number, so a string and
 // a number with the same text do not share a digest.
 const (
@@ -1115,6 +1122,12 @@ func mixDigest(a, b uint64) uint64 {
 // digest returns the digest of v. Equal values have equal digests: the digest
 // of a map does not depend on the order of its keys. One call walks v once.
 func (x *secretIndex) digest(v any) uint64 {
+	// A test sets this switch to give every value one digest, so that the
+	// equality check of duplicates is the only guard against a collision.
+	if forceOneDigest.Load() {
+		return 0
+	}
+
 	switch typed := v.(type) {
 	case string:
 		return mixDigest(digestTagString, maphash.String(x.seed, typed))

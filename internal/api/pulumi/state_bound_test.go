@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,4 +76,51 @@ func checkBoundLog(t *testing.T, raw []byte, planted string) {
 	if strings.Contains(string(raw), planted) {
 		t.Errorf("log %q holds a value of the state", raw)
 	}
+}
+
+// TestStateDiffPastTheWorkBoundAnswer413AndLogs proves that a diff of two
+// states whose paths cost more than the work budget answers 413 and logs one
+// warning with the stack and the update, and no value of the state. Each side
+// is about 249 KB: 20 nested keys of 10,000 bytes over 5,000 leaves that
+// differ.
+func TestStateDiffPastTheWorkBoundAnswer413AndLogs(t *testing.T) {
+	t.Parallel()
+
+	side := func(base int) string {
+		var out strings.Builder
+
+		out.WriteString(`{"resources":[{"urn":"` + stateURNStack + `","type":"pulumi:pulumi:Stack","outputs":`)
+
+		for level := range 20 {
+			out.WriteString(`{"` + strings.Repeat(string(rune('a'+level)), 10000) + `":`)
+		}
+
+		out.WriteString(`[`)
+
+		for i := range 5000 {
+			if i > 0 {
+				out.WriteString(`,`)
+			}
+
+			out.WriteString(strconv.Itoa(base + i))
+		}
+
+		out.WriteString(`]` + strings.Repeat(`}`, 20) + `}]}`)
+
+		return out.String()
+	}
+
+	var buf bytes.Buffer
+
+	f := loggedUpdateFixture(t, allowAll(), &buf)
+	seedStateVersion(t, f, side(0))
+	seedStateVersion(t, f, side(100000))
+	buf.Reset()
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/state/diff?from=1&to=2", ""))
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("diff answers %d, want 413 (%.200s)", status, body)
+	}
+
+	checkBoundLog(t, buf.Bytes(), "100000")
 }

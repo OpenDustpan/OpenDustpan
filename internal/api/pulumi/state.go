@@ -567,9 +567,9 @@ func (h *Handler) diffState(
 		return
 	}
 
-	diff, err := stack.DiffStates(from.Deployment, to.Deployment, cursor, limit)
+	diff, err := stack.DiffStates(ctx, from.Deployment, to.Deployment, cursor, limit)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, to.Update, err)
 
 		return
 	}

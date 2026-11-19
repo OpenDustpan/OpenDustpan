@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -99,7 +100,7 @@ func (r revealWorkspaces) ReadState(
 	sv.SensitiveMarks = stubResourceMarks()
 
 	switch id.String() {
-	case "sv-test123", "sv-encrypted123":
+	case "sv-test123", "sv-encrypted123", "sv-bound123":
 		sv.ID = id
 
 		return sv, nil
@@ -119,6 +120,8 @@ func (r revealWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io
 		return io.NopCloser(strings.NewReader(stubResourceState())), nil
 	case "sv-encrypted123":
 		return io.NopCloser(strings.NewReader(stubEncryptedState())), nil
+	case "sv-bound123":
+		return nil, fmt.Errorf("open state: %w", workspace.ErrStateBound)
 	case "sv-entangled-large123":
 		return io.NopCloser(strings.NewReader(revealEntangledLargeState())), nil
 	case "sv-marks-large123":
@@ -1007,4 +1010,38 @@ func checkRevealRefusal(t *testing.T, tc revealFresh, rec *httptest.ResponseReco
 // stubResourceAddresses names the resource instances of the stub state.
 func stubResourceAddresses() []string {
 	return []string{"terraform_data.smoke", "random_password.pw"}
+}
+
+// TestRevealPastTheBoundAnswers413AndLogs proves that a reveal on a state past
+// the bound answers 413 with no value, and that the server logs one warning
+// with the state version and no value of the state. The store of the test
+// answers the bound, so only the handler can write the log.
+func TestRevealPastTheBoundAnswers413AndLogs(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	handler := newRevealHandler(
+		t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil, nil, logger,
+	)
+
+	status, _, body := sendReveal(
+		t, handler, "/api/v2/state-versions/sv-bound123/actions/reveal",
+		revealBody(t, "/resources/0/instances/0/attributes/token"),
+	)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("reveal past the bound answers %d, want 413 (%s)", status, body)
+	}
+
+	line := logs.String()
+	if !strings.Contains(line, `"msg":"state past the masked read bound"`) ||
+		!strings.Contains(line, `"state_version":"sv-bound123"`) || !strings.Contains(line, `"level":"WARN"`) {
+		t.Fatalf("log misses the warning of the bound: %q", line)
+	}
+
+	if strings.Contains(line+body, "s3cr3t") {
+		t.Fatalf("log or body holds the value: %q %q", line, body)
+	}
 }

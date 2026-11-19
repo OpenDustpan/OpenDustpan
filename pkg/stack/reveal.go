@@ -155,7 +155,7 @@ func validEscapes(token string) bool {
 func SecretCiphertextOf(deployment []byte, path string) ([]byte, []string, error) {
 	tokens, ok := splitRevealPath(path)
 	if !ok || len(tokens) < 3 || tokens[0] != "resources" ||
-		(tokens[2] != "inputs" && tokens[2] != "outputs") {
+		(tokens[2] != fieldInputs && tokens[2] != fieldOutputs) {
 		return nil, nil, notFoundCipher(path)
 	}
 

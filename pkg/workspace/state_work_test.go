@@ -122,15 +122,29 @@ func TestReadStateResourceSharesOneBudgetAcrossInstances(t *testing.T) {
 }
 
 // TestDiffStatesSharesOneBudgetAcrossBothSides proves that the diff charges
-// both sides to one budget: each side is under the budget, the two together
-// are over it.
+// both sides to one budget. Each side holds 3 instances of about 30 MB of
+// work, about 90 MB, under the budget of 128 MiB. The two sides together are
+// about 180 MB, over it. A budget that restarts for each side lets the pair
+// pass.
 func TestDiffStatesSharesOneBudgetAcrossBothSides(t *testing.T) {
 	t.Parallel()
 
-	side := workspace.StateWithMarks{State: manyInstancesState(workInstances/2+1, workLeavesPerInstance), Marks: nil}
+	const sideInstances = 3
+
+	side := workspace.StateWithMarks{State: manyInstancesState(sideInstances, workLeavesPerInstance), Marks: nil}
+	empty := workspace.StateWithMarks{State: manyInstancesState(0, 0), Marks: nil}
+
+	// One side alone is under the budget, in either position.
+	if _, err := workspace.DiffStates(t.Context(), side, empty, "", 0); err != nil {
+		t.Fatalf("one heavy side as from: err = %v, want none", err)
+	}
+
+	if _, err := workspace.DiffStates(t.Context(), empty, side, "", 0); err != nil {
+		t.Fatalf("one heavy side as to: err = %v, want none", err)
+	}
 
 	if _, err := workspace.DiffStates(t.Context(), side, side, "", 0); !errors.Is(err, workspace.ErrStateBound) {
-		t.Fatalf("err = %v, want ErrStateBound", err)
+		t.Fatalf("both heavy sides: err = %v, want ErrStateBound", err)
 	}
 }
 
@@ -198,6 +212,54 @@ func TestMaskTofuInstanceDuplicatePassIsLinear(t *testing.T) {
 	if _, isMarker := object["copy"].(map[string]any); !isMarker {
 		t.Fatalf("copy = %v, want a marker", object["copy"])
 	}
+}
+
+// TestDuplicatePassComparesValuesOnADigestCollision proves that the duplicate
+// pass compares the values when two digests are equal. Every value has one
+// digest here. The copy of a secret is masked, and a value that is not a copy
+// stays, so only the equality check stops a collision from masking it.
+func TestDuplicatePassComparesValuesOnADigestCollision(t *testing.T) {
+	// The digest switch is global to the package, so this test must not run in
+	// parallel. t.Setenv makes testing panic if t.Parallel is added.
+	t.Setenv("OPENDUSTPAN_TEST_SERIAL_HEAP", "1")
+
+	restore := workspace.ForceOneDigest()
+	defer restore()
+
+	instance, marks := duplicateInstance(t, 1, 3)
+
+	attributes, masked, err := workspace.MaskInstanceForTest(t.Context(), instance, resourceAddress, marks)
+	if err != nil {
+		t.Fatalf("mask: %v", err)
+	}
+
+	object, isObject := attributes.(map[string]any)
+	if !isObject {
+		t.Fatalf("attributes have type %T, want an object", attributes)
+	}
+
+	if firstIsMarker(t, object, "n") {
+		t.Fatalf("a plain value that collides with a secret is masked: %v", masked)
+	}
+
+	if !firstIsMarker(t, object, "s") {
+		t.Fatalf("the secret is not masked: %v", object["s"])
+	}
+}
+
+// firstIsMarker reports whether the first element of the list under key is a
+// marker object.
+func firstIsMarker(t *testing.T, object map[string]any, key string) bool {
+	t.Helper()
+
+	list, isList := object[key].([]any)
+	if !isList || len(list) == 0 {
+		t.Fatalf("%s = %v, want a list", key, object[key])
+	}
+
+	_, isMarker := list[0].(map[string]any)
+
+	return isMarker
 }
 
 // TestMaskTofuInstanceDuplicatePassHonorsCancellation proves that the

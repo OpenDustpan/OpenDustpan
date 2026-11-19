@@ -210,6 +210,12 @@ func decodeDeployment(deployment []byte) (any, error) {
 	return doc, nil
 }
 
+// The names of the two value fields of a resource.
+const (
+	fieldInputs  = "inputs"
+	fieldOutputs = "outputs"
+)
+
 // MaxStateDepth is the deepest nesting of a stored state that a masked read
 // walks. Each marker path holds its whole prefix, so the memory of a read
 // grows with the depth of each value. Real states nest far less. Both tools
@@ -386,11 +392,11 @@ func resourceList(doc any) ([]map[string]any, int) {
 // still reads unchanged.
 func fingerprintOf(obj map[string]any) string {
 	shaped := map[string]any{
-		"type":     resourceField(obj, "type"),
-		"provider": resourceField(obj, "provider"),
-		"parent":   resourceField(obj, "parent"),
-		"inputs":   normalizeValue(obj["inputs"]),
-		"outputs":  normalizeValue(obj["outputs"]),
+		"type":       resourceField(obj, "type"),
+		"provider":   resourceField(obj, "provider"),
+		"parent":     resourceField(obj, "parent"),
+		fieldInputs:  normalizeValue(obj[fieldInputs]),
+		fieldOutputs: normalizeValue(obj[fieldOutputs]),
 	}
 
 	raw, err := json.Marshal(shaped)
@@ -590,12 +596,12 @@ func ReadStateResource(ctx context.Context, deployment []byte, urn string) (Stat
 
 	masked := []string{}
 
-	inputs := obj["inputs"]
+	inputs := obj[fieldInputs]
 	if inputs == nil {
 		inputs = map[string]any{}
 	}
 
-	outputs := obj["outputs"]
+	outputs := obj[fieldOutputs]
 	if outputs == nil {
 		outputs = map[string]any{}
 	}
@@ -679,7 +685,7 @@ func ReadStateOutputs(ctx context.Context, deployment []byte) (StateOutputs, err
 func maskStackOutputs(ctx context.Context, obj map[string]any, index int) (StateOutputs, error) {
 	masked := []string{}
 
-	outputs := obj["outputs"]
+	outputs := obj[fieldOutputs]
 	if outputs == nil {
 		outputs = map[string]any{}
 	}
@@ -875,24 +881,24 @@ func diffResource(from, to map[string]any) resourceDiff {
 		}
 	}
 
-	fromInputs := from["inputs"]
+	fromInputs := from[fieldInputs]
 	if fromInputs == nil {
 		fromInputs = map[string]any{}
 	}
 
-	toInputs := to["inputs"]
+	toInputs := to[fieldInputs]
 	if toInputs == nil {
 		toInputs = map[string]any{}
 	}
 
 	diffValues(fromInputs, toInputs, "/inputs", &out.paths, &out.secrets)
 
-	fromOutputs := from["outputs"]
+	fromOutputs := from[fieldOutputs]
 	if fromOutputs == nil {
 		fromOutputs = map[string]any{}
 	}
 
-	toOutputs := to["outputs"]
+	toOutputs := to[fieldOutputs]
 	if toOutputs == nil {
 		toOutputs = map[string]any{}
 	}
@@ -974,6 +980,69 @@ func collectDiff(fromByURN, toByURN map[string]map[string]any) diffMismatch {
 	return out
 }
 
+// boundedDiff scans the work of the diff, walks the matched resources, and
+// checks ctx after the walk. It returns ErrStateBound before the walk builds
+// any path when the scan is past the budget.
+func boundedDiff(ctx context.Context, fromByURN, toByURN map[string]map[string]any) (diffMismatch, error) {
+	if err := checkDiffWork(fromByURN, toByURN); err != nil {
+		return diffMismatch{}, err
+	}
+
+	mismatch := collectDiff(fromByURN, toByURN)
+
+	// Defense in depth: the scan above bounds the work before the walk; this
+	// check stops a canceled request after the walk and does not rely on it.
+	if err := ctx.Err(); err != nil {
+		return diffMismatch{}, fmt.Errorf("diff states: %w", err)
+	}
+
+	return mismatch, nil
+}
+
+// checkDiffWork returns ErrStateBound when the diff of the matched resources
+// of fromByURN and toByURN could cost more than maxMaskWorkBytes. One budget
+// covers the inputs and the outputs of both sides of every matched resource,
+// so neither a side nor a resource can spend the limit twice. It builds no
+// path. Resources in only one side build no path and cost nothing here.
+//
+// Defense in depth: the decoder bounds the depth of each document; this scan
+// adds the work bound and does not rely on the decoder or on the handler.
+func checkDiffWork(fromByURN, toByURN map[string]map[string]any) error {
+	var budget maskBudget
+
+	for urn, fromObj := range fromByURN {
+		toObj, ok := toByURN[urn]
+		if !ok {
+			continue
+		}
+
+		for _, obj := range []map[string]any{fromObj, toObj} {
+			if err := chargeResourceWork(&budget, obj); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// chargeResourceWork charges the inputs and the outputs of one resource side
+// to budget.
+func chargeResourceWork(budget *maskBudget, obj map[string]any) error {
+	for _, field := range []string{fieldInputs, fieldOutputs} {
+		value := obj[field]
+		if value == nil {
+			continue
+		}
+
+		if err := checkMaskWork(budget, value, len("/")+len(field)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // pageDiff returns the page of mismatch at offset with at most limit
 // differing URNs.
 func pageDiff(mismatch diffMismatch, offset, limit int) StateDiff {
@@ -1030,7 +1099,12 @@ func pageDiff(mismatch diffMismatch, offset, limit int) StateDiff {
 // both with a change. Cursor is "" or the NextCursor of an earlier page;
 // limit is 1 to 500 and counts differing URNs. Resources keep sorted URN
 // order across versions; matching across versions uses the URN.
-func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
+//
+// The diff builds one path for each differing value, so a hostile pair of
+// states could spend much memory. One budget covers the inputs and the
+// outputs of both sides of every matched resource. A pair past the budget
+// answers ErrStateBound before the diff builds any path.
+func DiffStates(ctx context.Context, from, to []byte, cursor string, limit int) (StateDiff, error) {
 	offset, err := stateOffset(cursor)
 	if err != nil {
 		return StateDiff{}, err
@@ -1050,6 +1124,10 @@ func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
 		return StateDiff{}, err
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return StateDiff{}, fmt.Errorf("diff states: %w", ctxErr)
+	}
+
 	fromEntries, fromSkipped := resourceList(fromDoc)
 	toEntries, toSkipped := resourceList(toDoc)
 
@@ -1064,7 +1142,11 @@ func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
 		}, nil
 	}
 
-	mismatch := collectDiff(resourcesByURN(fromEntries), resourcesByURN(toEntries))
+	mismatch, err := boundedDiff(ctx, resourcesByURN(fromEntries), resourcesByURN(toEntries))
+	if err != nil {
+		return StateDiff{}, err
+	}
+
 	mismatch.skipped = fromSkipped + toSkipped
 
 	return pageDiff(mismatch, offset, limit), nil
