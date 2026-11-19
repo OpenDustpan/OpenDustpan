@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -32,8 +31,21 @@ func markedSentinels(t *testing.T) []string {
 
 	fset := token.NewFileSet()
 
-	for _, root := range []string{"../../pkg", "../../internal"} {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	repo, err := os.OpenRoot("../..")
+	if err != nil {
+		t.Fatalf("open the repository root: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := repo.Close(); err != nil {
+			t.Errorf("close the repository root: %v", err)
+		}
+	})
+
+	repoFS := repo.FS()
+
+	for _, root := range []string{"pkg", "internal"} {
+		err := fs.WalkDir(repoFS, root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return fmt.Errorf("walk %s: %w", path, err)
 			}
@@ -42,7 +54,7 @@ func markedSentinels(t *testing.T) []string {
 				return nil
 			}
 
-			names, err := markedInFile(fset, path)
+			names, err := markedInFile(repoFS, fset, path)
 			out = append(out, names...)
 
 			return err
@@ -58,8 +70,9 @@ func markedSentinels(t *testing.T) []string {
 }
 
 // markedInFile returns the marked declarations of one Go file.
-func markedInFile(fset *token.FileSet, path string) ([]string, error) {
-	src, err := os.ReadFile(path) //nolint:gosec // path comes from the walk of the repository tree
+func markedInFile(repoFS fs.FS, fset *token.FileSet, path string) ([]string, error) {
+	// The read goes through os.Root, so a path cannot leave the repository.
+	src, err := fs.ReadFile(repoFS, path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

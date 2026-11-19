@@ -22,7 +22,9 @@ that a grant seems to allow.
   and a person sees the effect in the `protected` flag of a group. The flag
   is `true` when the group holds a sensitive action on the installation or on
   a principal of the installation. A read that cannot load the group answers
-  500 with the code `server.internal`, never `protected: false`. A create or a
+  500 with the code `server.internal`, never `protected: false`. A request
+  that reaches the defensive branch for an invalid action answers 400, not
+  500. A create or a
   change that cannot load the stored group answers `protected: true`, and
   the server logs the failed load
   ([Groups](../guides/principals-and-groups.md#groups)).
@@ -42,7 +44,7 @@ that a grant seems to allow.
 - The server refuses to disable or delete the last enabled break-glass account
   with 409 and the code `principal.no-working-break-glass`. The request
   changes nothing. Before the answer, the server writes one audit entry with
-  the outcome `denied`. When the server cannot write this entry, it still
+  the outcome `denied` and the reason `principal.no-working-break-glass`. When the server cannot write this entry, it still
   answers 409 and logs the failure
   ([Keep a break-glass account](../guides/break-glass-accounts.md#the-rule)).
 - A restore does not replay a disable that would leave no enabled break-glass
@@ -70,13 +72,18 @@ that a grant seems to allow.
 ## Grants and roles
 
 <!-- code-rule: access.ErrEscalation -->
-- A person cannot give more than they hold. The server refuses a grant that
-  gives more on its object than the person who makes it holds there. The
-  server answers 403. The code is `access.denied` when the refusal wraps a
-  denial (a grant of a move target). In other cases the answer has no code.
-  The server writes an audit entry for the refused grant. Its reason is
-  `grant gives more than the granter holds`. When the refusal is a reach
-  refusal, the reason names the missing actions.
+- A person cannot give more than they hold. The server refuses a grant, or a
+  role change, that gives more on its object than the person who makes it
+  holds there. The server answers 403. The code is `access.denied` when the
+  refusal wraps a denial (a grant of a move target). In other cases the
+  answer has no code. When the refusal names missing actions, the server
+  writes a denied audit entry with the reason
+  `outside the reach of the caller: <action> on <object>, ...` and the
+  route appended as ` on <route>`. The fixed reason
+  `grant gives more than the granter holds` applies only when the error
+  carries no missing actions. A refused grant or role change writes a
+  second entry with the outcome `failure` and no reason. The move-target
+  403 with the code `access.denied` writes no escalation entry.
 <!-- code-rule: access.ErrBuiltIn -->
 - A built-in role cannot be changed or deleted. The server answers 409 with
   no specific code. The server writes an audit entry with the outcome
@@ -90,21 +97,29 @@ that a grant seems to allow.
   answers 403 with the code `token.requires-sign-in`.
 <!-- code-rule: accesstoken.ErrNotOwnToken -->
 - A person creates and rotates only their own personal tokens, after a
-  sign-in, whatever grant they hold. The refusal is a denial (403).
+  sign-in, whatever grant they hold. The refusal is a denial (403). One
+  exception exists: the host recovery issuer makes the first token of a new
+  temporary administrator, and it refuses any other token with the same
+  denial.
 
 ## Local passwords and passkeys
 
 <!-- code-rule: localuser.ErrOwnAccount -->
-- An administrator cannot reset or clear their own password through the
-  administrator routes. The server answers 403 with the code
-  `local-user.own-account`. A person changes their own password with the
-  change-password route.
+- An administrator cannot reset their own password through the administrator
+  route. The server answers 403 with the code `local-user.own-account` and
+  writes an audit entry with the outcome `denied` and the change cause
+  `own account`. The service refuses the delete of the own password too, but
+  no administrator route calls it. A person changes their own password with
+  the change-password route.
 <!-- code-rule: localuser.ErrLastCredential -->
 <!-- code-rule: mfa.ErrLastCredential -->
-- The server refuses each change that deletes the last sign-in credential of
-  a local person: the password when they have no passkey, or the last passkey
-  when they have no password. The server answers 409 with the code
-  `local-user.last-credential`.
+- The server refuses a change that deletes the last sign-in credential of a
+  local person. The store refuses the delete of a password always, also when
+  the person has a passkey, and it refuses the delete of a local user while
+  the user has a password. It refuses the delete of a passkey when the
+  person would keep no passkey that is not suspended, and the person has no
+  password hash or is a break-glass account. A suspended passkey does not
+  count. The server answers 409 with the code `local-user.last-credential`.
 - One person holds at most 20 passkeys (`mfa.MaxPasskeys`). The server
   answers 409 with the code `mfa.passkey-limit` and the argument `limit`.
 
@@ -112,8 +127,9 @@ that a grant seems to allow.
 
 <!-- code-rule: principal.ErrBreakGlassKind -->
 - Only a person can be a break-glass account. A write that sets the flag on
-  a principal of another kind fails validation, in the service and in the
-  store.
+  a principal of another kind fails validation. The rule is in
+  `Principal.Validate`, which the service calls on a create and on an update,
+  and in the store create of each dialect. The service never sets the flag.
 <!-- code-rule: breakglass.ErrSelfReview -->
 - A person who took part in a break-glass use cannot record the verdict of its
   review. This covers the person who used break-glass, the owner of the
@@ -146,9 +162,10 @@ that a grant seems to allow.
 <!-- code-rule: job.ErrAgentDenied -->
 - An agent cannot approve, confirm or break a freeze, and cannot start a job
   that its agent mode does not allow. The server answers 403 with the code
-  `job.agent-denied`. A refused approval writes an audit entry with the reason
-  `an agent cannot do this`.
+  `job.agent-denied`. A refused approval, start or confirm writes an audit
+  entry with the reason `an agent cannot do this`.
 <!-- code-rule: job.ErrNotRequester -->
 - Only the person who asked the agent for a job can confirm it, whatever
   grant another principal holds. The server answers 403 with the code
-  `access.denied`.
+  `access.denied` and writes an audit entry with the outcome `denied` and the
+  reason `only the person who started the job can confirm it`.
