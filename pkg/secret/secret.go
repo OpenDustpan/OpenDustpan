@@ -202,7 +202,7 @@ func (s *Service) MaxBatchBytes() int {
 
 // CheckWrapper reports whether wrapper can open the data keys in keys, for
 // the start-up check that refuses a key-encryption key that opens less than
-// every one of them (ADR 23). It returns nil when keys holds no wrapped key:
+// every one of them. It returns nil when keys holds no wrapped key:
 // a server without a key-encryption key may start while the database holds
 // no wrapped key. Otherwise wrapper must be set, and every stored wrapper ID
 // must name it. A database with keys under more than one key stays refused
@@ -235,7 +235,7 @@ func checkWrapperIDs(ids []string, wrapper Wrapper) error {
 		if id != wrapper.ID() {
 			return fmt.Errorf(
 				"server refuses to start: database holds keys wrapped by %q: server holds %q: "+
-					"rewrap the database with one key-encryption key: no rewrap command exists yet (ADR 23): %w",
+					"rewrap the database with one key-encryption key: no rewrap command exists yet: %w",
 				ids,
 				wrapper.ID(),
 				ErrWrapperMismatch,

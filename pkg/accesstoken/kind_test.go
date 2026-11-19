@@ -2,10 +2,12 @@ package accesstoken_test
 
 import (
 	"errors"
+	"regexp"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // kindCase makes one stored token of a kind for a fixture. credential is the
@@ -131,5 +133,20 @@ func TestRevokeScopeOfEachKind(t *testing.T) {
 				t.Errorf("revoke a %s token in the service scope: err = %v, want %v", c.kind, err, c.want)
 			}
 		})
+	}
+}
+
+// TestKindForWorkloadErrorHasNoInternalReference checks that the error text
+// for a workload gives the reason and not an internal reference.
+func TestKindForWorkloadErrorHasNoInternalReference(t *testing.T) {
+	t.Parallel()
+
+	_, err := accesstoken.KindFor(principal.KindWorkload)
+	if !errors.Is(err, accesstoken.ErrNoTokenForKind) {
+		t.Fatalf("KindFor(workload) error = %v, want ErrNoTokenForKind", err)
+	}
+
+	if regexp.MustCompile(`\b(ADR|RFC) [0-9]+`).MatchString(err.Error()) {
+		t.Fatalf("KindFor(workload) error = %q, want no internal reference", err)
 	}
 }
