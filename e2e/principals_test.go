@@ -450,6 +450,10 @@ var freshAuthRules = []freshAuthRule{
 		[]string{http.MethodPut, http.MethodDelete},
 	},
 	{
+		regexp.MustCompile(`^/api/dustpan/v1/git-host-apps/[^/]+/confirm-rotation$`),
+		[]string{http.MethodPost},
+	},
+	{
 		regexp.MustCompile(`^/api/server/namespaces/[^/]+/ip-allowlist$`),
 		[]string{http.MethodPut, http.MethodDelete},
 	},

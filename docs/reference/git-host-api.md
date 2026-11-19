@@ -22,6 +22,7 @@ whose version matches the current version answers 200.
 | `GET /git-host-apps/github` | `server:read-git-host` | the installation | The registration, with no secret |
 | `PUT /git-host-apps/github` | `server:manage-git-host` | the installation | The registration. 201 for the first, 200 for a replacement |
 | `DELETE /git-host-apps/github` | `server:manage-git-host` | the installation | No body. 409 while an installation is assigned |
+| `POST /git-host-apps/github/confirm-rotation` | `server:manage-git-host` | the installation | The registration, with no `oldSecretEndsAt`. 409 when no rotation window is open. Takes no `Idempotency-Key` |
 | `GET /git-host-installations` | `server:read-git-host` | the installation | The assignments |
 | `GET /git-host-installations/{installation_id}` | `server:read-git-host` | the installation | One assignment |
 | `PUT /git-host-installations/{installation_id}` | `server:manage-git-host` | the installation | The assignment. 201 for a new one, 200 for a move |
@@ -55,6 +56,18 @@ A registration:
   "createdAt": "2026-10-21T09:30:00Z", "updatedAt": "2026-10-21T09:30:00Z"
 }
 ```
+
+The field `oldSecretEndsAt` is in the answer of `GET`, `PUT` and the route
+`confirm-rotation` while a rotation window is open. It is the end of the window, in Unix
+milliseconds. The window starts when a `PUT` changes the event secret, and lasts
+7 days. Until its end, a delivery that the old secret signs is accepted. The
+answer never shows the old secret or its set ID. The field is not in the answer
+when no window is open or its end passed.
+
+The route `POST /webhooks/{hookID}` takes the deliveries of the webhook. It is
+not under `/api/dustpan/v1`, has no action, and answers 204 with no body for
+every delivery. See "Webhooks and a federation" in the guide for its reasons and
+for the rotation of the event secret.
 
 The body of `PUT` holds `appID`, `apiAddress`, `privateKey` and `eventSecret`.
 All four are required. `privateKey` and `eventSecret` are write-only: no answer
@@ -112,6 +125,7 @@ GitHub" for the permissions of the app.
 | 400 | A body or a value that is not valid, or an address that the outbound rules refuse |
 | 400 | `If-Match` is not one version in quotes. The error code is `request.if-match-invalid` |
 | 404 | An object that does not exist, or no registration |
+| 409 | `confirm-rotation` when no rotation window is open |
 | 409 | A conflict. Examples: a second connection to one installation, the default connection, a registration in use, no registration for a new connection. Also the installation that the operator did not assign to the namespace, for create and for check. Also a check when the server cannot open the stored key of the app. Also a check when the address rules refuse the address of the app |
 | 412 | `If-Match` does not match the version |
 | 413 | The body is larger than 64 KiB |

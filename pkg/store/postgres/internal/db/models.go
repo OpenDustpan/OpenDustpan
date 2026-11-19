@@ -320,6 +320,9 @@ type GitHostAppRegistration struct {
 	Version                int64
 	CreatedAtMs            int64
 	UpdatedAtMs            int64
+	OldEventSecretEndsAtMs pgtype.Int8
+	OldEventSecretSetID    pgtype.Text
+	OldSealedEventSecret   []byte
 }
 
 type GitHostConnection struct {
@@ -334,6 +337,17 @@ type GitHostConnection struct {
 	Version        int64
 	CreatedAtMs    int64
 	UpdatedAtMs    int64
+}
+
+type GitHostEventReceipt struct {
+	Kind           string
+	DeliveryID     string
+	BodyDigest     string
+	InstallationID string
+	EventKind      string
+	Repo           string
+	ReviewID       string
+	ReceivedAtMs   int64
 }
 
 type GitHostInstallation struct {

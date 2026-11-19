@@ -1555,13 +1555,19 @@ func restoreModel() costModel {
 			unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
-			updateLeaseExpireTrips,
+			updateLeaseExpireTrips - eventReceiptTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// eventReceiptTrips is the number of round trips that the table of the Git host
+// event receipts takes off the fixed part. A restore leaves the table empty and
+// reads it only for its column check, 1 round trip, so it costs 1 less than the
+// 2 that perOther gives.
+const eventReceiptTrips = 1
 
 // updateLeaseExpireTrips is the number of round trips of the statement that
 // expires the lease of every running update in the swap transaction. It is one

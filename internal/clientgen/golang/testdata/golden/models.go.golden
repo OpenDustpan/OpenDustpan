@@ -139,6 +139,7 @@ const (
 	ErrorCodeGateUnavailable                       ErrorCode = "gate.unavailable"
 	ErrorCodeGateVersionConflict                   ErrorCode = "gate.version-conflict"
 	ErrorCodeGitHostAppBudgetSpent                 ErrorCode = "git-host.app-budget-spent"
+	ErrorCodeGitHostAppNoRotation                  ErrorCode = "git-host.app-no-rotation"
 	ErrorCodeGitHostAppNotRegistered               ErrorCode = "git-host.app-not-registered"
 	ErrorCodeGitHostInstallationNotAssigned        ErrorCode = "git-host.installation-not-assigned"
 	ErrorCodeGitHostLinkAccountInvalid             ErrorCode = "git-host.link-account-invalid"
@@ -524,15 +525,16 @@ func (v *ErrorResponse) UnmarshalJSON(data []byte) error {
 
 // GitHostApp is a schema of the API description.
 type GitHostApp struct {
-	ApiAddress  string               `json:"apiAddress"`
-	AppID       string               `json:"appID"`
-	CreatedAt   string               `json:"createdAt"`
-	EventSecret GitHostCredentialSet `json:"eventSecret"`
-	HookID      string               `json:"hookID"`
-	Kind        string               `json:"kind"`
-	PrivateKey  GitHostCredentialSet `json:"privateKey"`
-	UpdatedAt   string               `json:"updatedAt"`
-	Version     int64                `json:"version"`
+	ApiAddress      string               `json:"apiAddress"`
+	AppID           string               `json:"appID"`
+	CreatedAt       string               `json:"createdAt"`
+	EventSecret     GitHostCredentialSet `json:"eventSecret"`
+	HookID          string               `json:"hookID"`
+	Kind            string               `json:"kind"`
+	OldSecretEndsAt *int64               `json:"oldSecretEndsAt,omitempty"`
+	PrivateKey      GitHostCredentialSet `json:"privateKey"`
+	UpdatedAt       string               `json:"updatedAt"`
+	Version         int64                `json:"version"`
 }
 
 // UnmarshalJSON checks that the required members are there.

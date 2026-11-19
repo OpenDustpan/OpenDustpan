@@ -215,8 +215,8 @@ func ldapRefusals() []ldapRefusal {
 		},
 		{
 			name: "oversized body", path: ldapRoutePath,
-			body: signInBody("alice", strings.Repeat("a", 9*1024)), code: "request.body-invalid",
-			status: http.StatusBadRequest, spends: 1,
+			body: signInBody("alice", strings.Repeat("a", 9*1024)), code: "request.body-too-large",
+			status: http.StatusRequestEntityTooLarge, spends: 1,
 		},
 	}
 }

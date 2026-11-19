@@ -57,7 +57,9 @@ const (
 const maxIDLength = 128
 
 // MaxReasonLength is the length limit of the reason of a reset, in bytes.
-const MaxReasonLength = 1024
+// The audit log keeps a reason of at most 500 code points, and a code point
+// is at most 4 bytes in UTF-8, so each reason that the audit log keeps fits.
+const MaxReasonLength = 2000
 
 // Defaults and bounds of the password rules.
 //
@@ -182,7 +184,7 @@ var (
 	// not cover the reach of the person.
 	ErrOutsideReach = errors.New("the reach of the administrator does not cover the reach of the person")
 	// ErrReasonRequired reports an administrator change with no reason, or a
-	// reason that is not valid.
+	// reason with a control character.
 	ErrReasonRequired = errors.New("the change needs a reason")
 	// ErrSecondFactorRequired reports a password sign-in that needs a second
 	// factor that the server cannot ask for yet. The sign-in fails closed.
