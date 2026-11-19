@@ -41,7 +41,8 @@ checks `namespace:read` first, and then the grant of `unit:read`.
 These query values filter and page the list:
 
 - `tool`: `pulumi` or `opentofu` (the labels `Pulumi` and `OpenTofu` also
-  work).
+  work). The server does not check the value. A value that is not one of
+  these matches no unit, and the answer is `200` with an empty list.
 - `namePrefix`: the start of the unit name, case-sensitive. For a Pulumi
   stack the name is `<project>/<stack>`.
 - `purgeWithinDays`: only units whose retention period ends in this number
