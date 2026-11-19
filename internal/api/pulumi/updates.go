@@ -135,6 +135,10 @@ type deltaCheckpointRequest struct {
 func (h *Handler) saveCheckpointVerbatim(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
 
+	if !h.placedRefOrWrite(w, r, call.Ref) {
+		return
+	}
+
 	var req verbatimCheckpointRequest
 
 	releaseHold, ok := h.decodeCheckpoint(w, r, &req)
@@ -175,6 +179,10 @@ func (h *Handler) saveCheckpointVerbatim(w http.ResponseWriter, r *http.Request,
 // fallback then meets the normal limit.
 func (h *Handler) saveCheckpointDelta(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
+
+	if !h.placedRefOrWrite(w, r, call.Ref) {
+		return
+	}
 
 	var req deltaCheckpointRequest
 
@@ -251,6 +259,12 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 		Invalid:       false,
 	}
 
+	// A stack that no collection holds takes no import. The body gate holds
+	// its reservation first, as it does for every other write route.
+	if !h.placedOrWrite(w, r, obj) {
+		return
+	}
+
 	if !h.guardStateWrite(w, r, p, obj, checkImport()) {
 		return
 	}
@@ -288,6 +302,10 @@ func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identit
 
 	ref, ok := h.updateRef(w, r)
 	if !ok {
+		return
+	}
+
+	if !h.placedOrWrite(w, r, obj) {
 		return
 	}
 
@@ -394,18 +412,24 @@ func acceptedGitHead(raw string) string {
 // createUpdateHandler returns the handler that creates an update of kind.
 // The five kinds share this shape; each has its own route.
 func (h *Handler) createUpdateHandler(kind stack.UpdateKind) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		h.createUpdate(w, r, kind, p.Subject)
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		h.createUpdate(w, r, kind, p.Subject, obj)
 	}
 }
 
 // createUpdate records a new update without locking the stack. subject is
 // the caller, which the update records as its creator (ADR 28 decision 4).
-func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, subject string) {
+func (h *Handler) createUpdate(
+	w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, subject string, obj identity.Object,
+) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
 	if !ok {
+		return
+	}
+
+	if !h.placedOrWrite(w, r, obj) {
 		return
 	}
 
@@ -443,11 +467,15 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 // startUpdate starts the update and hands out its lease. The request tags
 // are ignored in milestone 1: they only annotate the stack. The journal version
 // is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
-func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	ref, id, ok := h.updateTarget(w, r)
 	if !ok {
+		return
+	}
+
+	if !h.placedOrWrite(w, r, obj) {
 		return
 	}
 
@@ -696,6 +724,10 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identit
 // deployment alone would fit.
 func (h *Handler) saveCheckpoint(w http.ResponseWriter, r *http.Request, call LeaseCall) {
 	ctx := r.Context()
+
+	if !h.placedRefOrWrite(w, r, call.Ref) {
+		return
+	}
 
 	var req checkpointRequest
 

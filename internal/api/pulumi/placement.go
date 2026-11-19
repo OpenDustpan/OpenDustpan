@@ -27,6 +27,9 @@ type PlacementCollections interface {
 	// the collection does not exist. A missing collection is not an error: the
 	// caller answers with collection.ErrPlacementCollectionMissing.
 	CollectionID(ctx context.Context, obj identity.Object) (string, bool, error)
+	// CollectionOf returns the name of the collection that holds the unit, and
+	// false when the unit is in no collection or does not exist.
+	CollectionOf(ctx context.Context, unit identity.Object) (string, bool, error)
 }
 
 // Placer chooses the collection of a new stack. The stack store then makes the
@@ -170,4 +173,56 @@ func stackPlacement(r *http.Request, p identity.Principal, ref stack.Ref, at pla
 		CollectionID: at.id,
 		Entry:        entry,
 	}, nil
+}
+
+// requirePlaced refuses a write to the existing stack obj when the stack is in
+// no collection. It returns an error that matches collection.ErrNoCollection
+// and names the command that moves the stack into a collection. It writes
+// nothing and reads only. It fails closed: a nil Placer cannot check the
+// stack, so it returns errPlacementOff, as choosePlacement does.
+//
+// Defense in depth: the authorizer already finds no collection grant for a
+// unit in no collection, but a grant on the namespace still allows the write.
+// This check stays so that no grant can write to a stack that no collection
+// holds. It does not rely on the route check or on the update service.
+func (h *Handler) requirePlaced(ctx context.Context, obj identity.Object) error {
+	if h.placer == nil || h.placer.Collections == nil {
+		return fmt.Errorf("write to %s: %w", obj, errPlacementOff)
+	}
+
+	_, found, err := h.placer.Collections.CollectionOf(ctx, obj)
+	if err != nil {
+		return fmt.Errorf("collection of %s: %w", obj, err)
+	}
+
+	if !found {
+		return fmt.Errorf("write to %s: %w", obj, collection.ErrNoCollection)
+	}
+
+	return nil
+}
+
+// placedOrWrite runs requirePlaced and writes the answer on a refusal. It
+// returns true when the write may go on.
+func (h *Handler) placedOrWrite(w http.ResponseWriter, r *http.Request, obj identity.Object) bool {
+	if err := h.requirePlaced(r.Context(), obj); err != nil {
+		h.writeError(r.Context(), w, err)
+
+		return false
+	}
+
+	return true
+}
+
+// placedRefOrWrite is placedOrWrite for a handler that has the stack
+// reference and no object.
+func (h *Handler) placedRefOrWrite(w http.ResponseWriter, r *http.Request, ref stack.Ref) bool {
+	obj, err := unitObject(ref)
+	if err != nil {
+		h.writeError(r.Context(), w, err)
+
+		return false
+	}
+
+	return h.placedOrWrite(w, r, obj)
 }

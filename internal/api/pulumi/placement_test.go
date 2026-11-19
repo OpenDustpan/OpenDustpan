@@ -102,6 +102,12 @@ func (f *fakePlacer) CollectionID(_ context.Context, _ identity.Object) (string,
 	return "col-1", true, nil
 }
 
+// CollectionOf says that every unit is in the collection "payments", unless
+// the collection is missing.
+func (f *fakePlacer) CollectionOf(_ context.Context, _ identity.Object) (string, bool, error) {
+	return "payments", !f.missing, nil
+}
+
 // placer returns the Placer that uses f.
 func (f *fakePlacer) placer() *pulumi.Placer {
 	return &pulumi.Placer{Rules: f, Collections: f}

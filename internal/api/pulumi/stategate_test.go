@@ -110,7 +110,7 @@ func guardedFixture(t *testing.T, guard stategate.Guard) updateFixture {
 	t.Helper()
 
 	return newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
-		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: guard,
+		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: guard, placer: nil,
 	})
 }
 

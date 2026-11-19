@@ -601,7 +601,7 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil},
+		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil, placer: nil},
 	)
 }
 
@@ -618,6 +618,9 @@ type fixtureOptions struct {
 	// guard is the state guard of the handler. Nil gives the guard of
 	// stategate.Off.
 	guard stategate.Guard
+	// placer is the Placer of the handler. Nil gives a Placer whose
+	// collections hold every unit.
+	placer *pulumi.Placer
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -691,8 +694,13 @@ func newUpdateFixtureWithAuthenticator(
 		guard = opts.guard
 	}
 
+	placer := opts.placer
+	if placer == nil {
+		placer = newFake().placer()
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  placer,
 		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -2956,7 +2964,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

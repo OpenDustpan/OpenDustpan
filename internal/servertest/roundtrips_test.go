@@ -896,6 +896,11 @@ type requestFlow struct {
 // "unlock" holds 2 for the final version of the release, and "pulumi cancel"
 // and the other pulumi flows that end an update hold up to 4 for their writes
 // and their final version.
+//
+// Each pulumi write route reads the collection of the stack once, to refuse a
+// write to a stack in no collection. So each of "pulumi checkpoint save",
+// "pulumi update cycle", "pulumi stack import" and "pulumi stack restore"
+// holds 1 round trip for each of its write calls that has this check.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 43, func(h *rtHarness) {
@@ -936,7 +941,7 @@ func requestFlows() []requestFlow {
 				h.unlock()
 			})
 		}},
-		{"pulumi checkpoint save", 14, func(h *rtHarness) {
+		{"pulumi checkpoint save", 15, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.save(run, 1) })
@@ -952,7 +957,7 @@ func requestFlows() []requestFlow {
 		// attempt deadline with one set_config: one more round trip. The start
 		// reads the stack one time, so that the manual lock check matches the
 		// lock by the stable ID of the stack, not by its name.
-		{"pulumi update cycle", 68, func(h *rtHarness) {
+		{"pulumi update cycle", 72, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -989,12 +994,12 @@ func requestFlows() []requestFlow {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 72, func(h *rtHarness) {
+		{"pulumi stack import", 73, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 73, func(h *rtHarness) {
+		{"pulumi stack restore", 74, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
