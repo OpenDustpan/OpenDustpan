@@ -2,6 +2,7 @@ package stack
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,7 +203,135 @@ func decodeDeployment(deployment []byte) (any, error) {
 		return nil, fmt.Errorf("decode deployment: %w", err)
 	}
 
+	if !withinDepth(doc, 0) {
+		return nil, fmt.Errorf("decode deployment: %w", ErrStateBound)
+	}
+
 	return doc, nil
+}
+
+// The names of the two value fields of a resource.
+const (
+	fieldInputs  = "inputs"
+	fieldOutputs = "outputs"
+)
+
+// MaxStateDepth is the deepest nesting of a stored state that a masked read
+// walks. Each marker path holds its whole prefix, so the memory of a read
+// grows with the depth of each value. Real states nest far less. Both tools
+// use this one number.
+const MaxStateDepth = 100
+
+// maxMaskWorkBytes bounds the work of one masked read: the total of the value
+// paths that the read builds, plus a fixed cost for the marker of each value.
+// A document under the version size cap can hold millions of small leaves,
+// each with a long path, so the depth alone does not bound the work. The scan
+// counts the work before the walk builds any path or marker. One read shares
+// one budget across all the values that it walks, so the inputs and the
+// outputs of a resource draw from the same limit.
+const maxMaskWorkBytes = 128 << 20
+
+// maskValueCost is the fixed work that a masked read charges for each value,
+// a container or a leaf, on top of the bytes of its path. It stands for the
+// marker and the copy that the walk allocates for the value.
+const maskValueCost = 256
+
+// maskBudget counts the work that the scan of one masked read has spent. A
+// read makes one budget and passes it to each scan, so a second scan in the
+// same read starts from what the first scan spent.
+type maskBudget struct {
+	spent int
+}
+
+// charge adds n bytes of work to the budget. It returns ErrStateBound when
+// the budget is past maxMaskWorkBytes.
+func (b *maskBudget) charge(n int) error {
+	b.spent += n
+	if b.spent > maxMaskWorkBytes {
+		return ErrStateBound
+	}
+
+	return nil
+}
+
+// ErrStateBound reports a deployment that a masked read refuses because it
+// nests deeper than MaxStateDepth, or because the paths and the markers of its
+// values would cost more than maxMaskWorkBytes. The refusal builds no path, so
+// a hostile document cannot exhaust the memory of the server.
+var ErrStateBound = errors.New("state is too deep or too large for a masked read")
+
+// withinDepth reports whether v nests at most MaxStateDepth levels. It stops
+// at the first value past the bound, so its own recursion stays bounded.
+func withinDepth(v any, depth int) bool {
+	if depth > MaxStateDepth {
+		return false
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for _, elem := range typed {
+			if !withinDepth(elem, depth+1) {
+				return false
+			}
+		}
+	case []any:
+		for _, elem := range typed {
+			if !withinDepth(elem, depth+1) {
+				return false
+			}
+		}
+	default:
+		// A scalar adds no level.
+	}
+
+	return true
+}
+
+// checkMaskWork returns ErrStateBound when a masked read of v, whose own path
+// has prefix bytes, would nest deeper than MaxStateDepth or would push budget
+// past maxMaskWorkBytes. Each value costs the bytes of its path plus
+// maskValueCost. It builds no path itself.
+//
+// Defense in depth: decodeDeployment checks the depth of the whole document
+// with withinDepth before a masked read reaches this scan. This scan does not
+// rely on that check. It stays so that a caller of the walk that did not call
+// decodeDeployment cannot skip the depth bound, and it adds the work bound
+// that withinDepth does not have.
+func checkMaskWork(budget *maskBudget, v any, prefix int) error {
+	return scanMaskWork(budget, v, prefix, 0)
+}
+
+// scanMaskWork charges the value v, then each value under it, to budget. The
+// path of v has prefix bytes.
+func scanMaskWork(budget *maskBudget, v any, prefix, depth int) error {
+	if depth > MaxStateDepth {
+		return ErrStateBound
+	}
+
+	if err := budget.charge(prefix + maskValueCost); err != nil {
+		return err
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for key, elem := range typed {
+			length := prefix + 1 + len(key) + strings.Count(key, "~") + strings.Count(key, "/")
+
+			if err := scanMaskWork(budget, elem, length, depth+1); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, elem := range typed {
+			if err := scanMaskWork(budget, elem, prefix+1+len(strconv.Itoa(i)), depth+1); err != nil {
+				return err
+			}
+		}
+	default:
+		// A scalar has no child.
+	}
+
+	return nil
 }
 
 // resourceField reads one string field of a resource, or "" when the field
@@ -265,11 +394,11 @@ func resourceList(doc any) ([]map[string]any, int) {
 // still reads unchanged.
 func fingerprintOf(obj map[string]any) string {
 	shaped := map[string]any{
-		"type":     resourceField(obj, "type"),
-		"provider": resourceField(obj, "provider"),
-		"parent":   resourceField(obj, "parent"),
-		"inputs":   normalizeValue(obj["inputs"]),
-		"outputs":  normalizeValue(obj["outputs"]),
+		"type":       resourceField(obj, "type"),
+		"provider":   resourceField(obj, "provider"),
+		"parent":     resourceField(obj, "parent"),
+		fieldInputs:  normalizeValue(obj[fieldInputs]),
+		fieldOutputs: normalizeValue(obj[fieldOutputs]),
 	}
 
 	raw, err := json.Marshal(shaped)
@@ -324,7 +453,10 @@ func ListStateResources(current, previous []byte, cursor string, limit int, filt
 		}, nil
 	}
 
-	marks := previousFingerprints(previous)
+	marks, err := previousFingerprints(previous)
+	if err != nil {
+		return StatePage{}, err
+	}
 
 	summaries := stateSummaries(entries, marks, filter)
 
@@ -377,17 +509,24 @@ func stateSummaries(entries []map[string]any, marks map[string]string, filter st
 }
 
 // previousFingerprints maps each URN of previous to its fingerprint, or
-// holds nothing when previous is nil or has no resources.
-func previousFingerprints(previous []byte) map[string]string {
+// holds nothing when previous is nil, has no resources, or does not decode.
+// A previous state that is past the bound of a masked read returns
+// ErrStateBound, so the list answers the bound and does not list every
+// resource as changed.
+func previousFingerprints(previous []byte) (map[string]string, error) {
 	marks := map[string]string{}
 
 	if len(previous) == 0 {
-		return marks
+		return marks, nil
 	}
 
 	doc, err := decodeDeployment(previous)
 	if err != nil {
-		return marks
+		if errors.Is(err, ErrStateBound) {
+			return nil, fmt.Errorf("read previous state: %w", err)
+		}
+
+		return marks, nil
 	}
 
 	entries, _ := resourceList(doc)
@@ -396,7 +535,7 @@ func previousFingerprints(previous []byte) map[string]string {
 		marks[resourceField(obj, "urn")] = fingerprintOf(obj)
 	}
 
-	return marks
+	return marks, nil
 }
 
 // stateOffset parses a list cursor: "" starts at the first resource.
@@ -447,25 +586,41 @@ func findResource(deployment []byte, urn string) (int, map[string]any, error) {
 
 // ReadStateResource returns one resource of deployment with its inputs and
 // outputs masked. Missing inputs or outputs read as empty objects.
-func ReadStateResource(deployment []byte, urn string) (StateDetail, error) {
+func ReadStateResource(ctx context.Context, deployment []byte, urn string) (StateDetail, error) {
 	index, obj, err := findResource(deployment, urn)
 	if err != nil {
 		return StateDetail{}, err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return StateDetail{}, fmt.Errorf("read resource: %w", err)
+	}
+
 	masked := []string{}
 
-	inputs := obj["inputs"]
+	inputs := obj[fieldInputs]
 	if inputs == nil {
 		inputs = map[string]any{}
 	}
 
-	outputs := obj["outputs"]
+	outputs := obj[fieldOutputs]
 	if outputs == nil {
 		outputs = map[string]any{}
 	}
 
 	base := "/resources/" + strconv.Itoa(index)
+
+	// One budget covers the inputs and the outputs, so a resource cannot spend
+	// the limit twice.
+	var budget maskBudget
+
+	if err := checkMaskWork(&budget, inputs, len(base)+len("/inputs")); err != nil {
+		return StateDetail{}, err
+	}
+
+	if err := checkMaskWork(&budget, outputs, len(base)+len("/outputs")); err != nil {
+		return StateDetail{}, err
+	}
 
 	detail := StateDetail{
 		URN:      resourceField(obj, "urn"),
@@ -481,16 +636,24 @@ func ReadStateResource(deployment []byte, urn string) (StateDetail, error) {
 		detail.Masked = []string{}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return StateDetail{}, fmt.Errorf("read resource: %w", err)
+	}
+
 	return detail, nil
 }
 
 // ReadStateOutputs returns the masked outputs of the stack resource of
 // deployment. A deployment without a stack resource or without outputs
 // reads as empty.
-func ReadStateOutputs(deployment []byte) (StateOutputs, error) {
+func ReadStateOutputs(ctx context.Context, deployment []byte) (StateOutputs, error) {
 	doc, err := decodeDeployment(deployment)
 	if err != nil {
 		return StateOutputs{}, err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return StateOutputs{}, fmt.Errorf("read outputs: %w", err)
 	}
 
 	top, ok := doc.(map[string]any)
@@ -513,26 +676,40 @@ func ReadStateOutputs(deployment []byte) (StateOutputs, error) {
 			continue
 		}
 
-		masked := []string{}
-
-		outputs := obj["outputs"]
-		if outputs == nil {
-			outputs = map[string]any{}
-		}
-
-		out := StateOutputs{
-			Outputs: maskValue(outputs, "/resources/"+strconv.Itoa(i)+"/outputs", &masked),
-			Masked:  masked,
-		}
-
-		if out.Masked == nil {
-			out.Masked = []string{}
-		}
-
-		return out, nil
+		return maskStackOutputs(ctx, obj, i)
 	}
 
 	return StateOutputs{Outputs: map[string]any{}, Masked: []string{}}, nil
+}
+
+// maskStackOutputs masks the outputs of the stack resource obj at index. It
+// checks the work bound before the walk and the context after it.
+func maskStackOutputs(ctx context.Context, obj map[string]any, index int) (StateOutputs, error) {
+	masked := []string{}
+
+	outputs := obj[fieldOutputs]
+	if outputs == nil {
+		outputs = map[string]any{}
+	}
+
+	base := "/resources/" + strconv.Itoa(index) + "/outputs"
+
+	var budget maskBudget
+
+	if err := checkMaskWork(&budget, outputs, len(base)); err != nil {
+		return StateOutputs{}, err
+	}
+
+	out := StateOutputs{
+		Outputs: maskValue(outputs, base, &masked),
+		Masked:  masked,
+	}
+
+	if err := ctx.Err(); err != nil {
+		return StateOutputs{}, fmt.Errorf("read outputs: %w", err)
+	}
+
+	return out, nil
 }
 
 // secretEqual reports whether two secret values hold the same ciphertext.
@@ -706,24 +883,24 @@ func diffResource(from, to map[string]any) resourceDiff {
 		}
 	}
 
-	fromInputs := from["inputs"]
+	fromInputs := from[fieldInputs]
 	if fromInputs == nil {
 		fromInputs = map[string]any{}
 	}
 
-	toInputs := to["inputs"]
+	toInputs := to[fieldInputs]
 	if toInputs == nil {
 		toInputs = map[string]any{}
 	}
 
 	diffValues(fromInputs, toInputs, "/inputs", &out.paths, &out.secrets)
 
-	fromOutputs := from["outputs"]
+	fromOutputs := from[fieldOutputs]
 	if fromOutputs == nil {
 		fromOutputs = map[string]any{}
 	}
 
-	toOutputs := to["outputs"]
+	toOutputs := to[fieldOutputs]
 	if toOutputs == nil {
 		toOutputs = map[string]any{}
 	}
@@ -805,6 +982,69 @@ func collectDiff(fromByURN, toByURN map[string]map[string]any) diffMismatch {
 	return out
 }
 
+// boundedDiff scans the work of the diff, walks the matched resources, and
+// checks ctx after the walk. It returns ErrStateBound before the walk builds
+// any path when the scan is past the budget.
+func boundedDiff(ctx context.Context, fromByURN, toByURN map[string]map[string]any) (diffMismatch, error) {
+	if err := checkDiffWork(fromByURN, toByURN); err != nil {
+		return diffMismatch{}, err
+	}
+
+	mismatch := collectDiff(fromByURN, toByURN)
+
+	// Defense in depth: the scan above bounds the work before the walk; this
+	// check stops a canceled request after the walk and does not rely on it.
+	if err := ctx.Err(); err != nil {
+		return diffMismatch{}, fmt.Errorf("diff states: %w", err)
+	}
+
+	return mismatch, nil
+}
+
+// checkDiffWork returns ErrStateBound when the diff of the matched resources
+// of fromByURN and toByURN could cost more than maxMaskWorkBytes. One budget
+// covers the inputs and the outputs of both sides of every matched resource,
+// so neither a side nor a resource can spend the limit twice. It builds no
+// path. Resources in only one side build no path and cost nothing here.
+//
+// Defense in depth: the decoder bounds the depth of each document; this scan
+// adds the work bound and does not rely on the decoder or on the handler.
+func checkDiffWork(fromByURN, toByURN map[string]map[string]any) error {
+	var budget maskBudget
+
+	for urn, fromObj := range fromByURN {
+		toObj, ok := toByURN[urn]
+		if !ok {
+			continue
+		}
+
+		for _, obj := range []map[string]any{fromObj, toObj} {
+			if err := chargeResourceWork(&budget, obj); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// chargeResourceWork charges the inputs and the outputs of one resource side
+// to budget.
+func chargeResourceWork(budget *maskBudget, obj map[string]any) error {
+	for _, field := range []string{fieldInputs, fieldOutputs} {
+		value := obj[field]
+		if value == nil {
+			continue
+		}
+
+		if err := checkMaskWork(budget, value, len("/")+len(field)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // pageDiff returns the page of mismatch at offset with at most limit
 // differing URNs.
 func pageDiff(mismatch diffMismatch, offset, limit int) StateDiff {
@@ -861,7 +1101,12 @@ func pageDiff(mismatch diffMismatch, offset, limit int) StateDiff {
 // both with a change. Cursor is "" or the NextCursor of an earlier page;
 // limit is 1 to 500 and counts differing URNs. Resources keep sorted URN
 // order across versions; matching across versions uses the URN.
-func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
+//
+// The diff builds one path for each differing value, so a hostile pair of
+// states could spend much memory. One budget covers the inputs and the
+// outputs of both sides of every matched resource. A pair past the budget
+// answers ErrStateBound before the diff builds any path.
+func DiffStates(ctx context.Context, from, to []byte, cursor string, limit int) (StateDiff, error) {
 	offset, err := stateOffset(cursor)
 	if err != nil {
 		return StateDiff{}, err
@@ -881,6 +1126,10 @@ func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
 		return StateDiff{}, err
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return StateDiff{}, fmt.Errorf("diff states: %w", ctxErr)
+	}
+
 	fromEntries, fromSkipped := resourceList(fromDoc)
 	toEntries, toSkipped := resourceList(toDoc)
 
@@ -895,7 +1144,11 @@ func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
 		}, nil
 	}
 
-	mismatch := collectDiff(resourcesByURN(fromEntries), resourcesByURN(toEntries))
+	mismatch, err := boundedDiff(ctx, resourcesByURN(fromEntries), resourcesByURN(toEntries))
+	if err != nil {
+		return StateDiff{}, err
+	}
+
 	mismatch.skipped = fromSkipped + toSkipped
 
 	return pageDiff(mismatch, offset, limit), nil

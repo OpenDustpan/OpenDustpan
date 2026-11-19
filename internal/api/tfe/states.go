@@ -809,7 +809,8 @@ func (h *Handler) rollbackState(
 	if err != nil {
 		// A state over a size limit is a limit and not a fault of the store.
 		// The refusal then has the code gate.limit.
-		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) {
+		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) ||
+			errors.Is(err, workspace.ErrStateBound) {
 			return nil, fmt.Errorf("%w: read the state change of the restore: %w", gate.ErrLimit, err)
 		}
 

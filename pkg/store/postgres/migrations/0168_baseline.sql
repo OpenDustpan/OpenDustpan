@@ -396,7 +396,8 @@ CREATE TABLE grants (
     created_at_ms bigint NOT NULL,
     created_by text DEFAULT ''::text NOT NULL,
     revoked_at_ms bigint,
-    revoked_by text DEFAULT ''::text NOT NULL
+    revoked_by text DEFAULT ''::text NOT NULL,
+    CONSTRAINT grants_id_check CHECK ((id ~ '^grt-[A-Za-z0-9_.-]{1,60}$'::text))
 );
 
 CREATE TABLE group_mappings (
@@ -2232,6 +2233,12 @@ CREATE INDEX inventory_deleted_purge_after ON inventory_deleted USING btree (pur
 CREATE INDEX inventory_labels_namespace ON inventory_labels USING btree (namespace, unit_id);
 
 CREATE INDEX inventory_labels_value ON inventory_labels USING btree (namespace, label_key, label_value, unit_id COLLATE "C");
+
+-- The units that a lock holds, in the order of the unit list. The locked filter
+-- of the unit list reads this index first, so the cost follows the count of
+-- locked units and not the count of units. The predicate is the lock test of
+-- the filter.
+CREATE INDEX inventory_locked ON inventory USING btree (namespace, unit_id COLLATE "C") WHERE (COALESCE(lock_holder, '') <> '' OR lock_since_ms IS NOT NULL OR COALESCE(lock_operation, '') <> '');
 
 CREATE INDEX inventory_namespace_unit_id ON inventory USING btree (namespace, unit_id COLLATE "C");
 

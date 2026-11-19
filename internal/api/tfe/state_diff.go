@@ -104,10 +104,11 @@ func (h *Handler) diffState(
 	}
 
 	to := workspace.StateVersionID(r.PathValue("state_version_id"))
+	fromID := workspace.StateVersionID(from)
 
-	diff, err := h.workspaces.DiffStates(ctx, to, workspace.StateVersionID(from), cursor, size)
+	diff, err := h.workspaces.DiffStates(ctx, to, fromID, cursor, size)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateDiffError(ctx, w, err, fromID, to)
 
 		return
 	}

@@ -301,7 +301,11 @@ CREATE TABLE roles (
 ) STRICT;
 
 CREATE TABLE grants (
-    id            TEXT    NOT NULL PRIMARY KEY,
+    id            TEXT    NOT NULL PRIMARY KEY CHECK (
+        length(CAST(id AS BLOB)) BETWEEN 5 AND 64 AND length(CAST(id AS BLOB)) = length(id)
+        AND id GLOB 'grt-?*'
+        AND id NOT GLOB '*[^A-Za-z0-9_.-]*'
+    ),
     subject       TEXT    NOT NULL,
     subject_kind  TEXT    NOT NULL,
     subject_id    TEXT    NOT NULL,
@@ -1845,6 +1849,12 @@ CREATE INDEX forge_account_links_principal ON forge_account_links (principal_id)
 CREATE INDEX forge_link_requests_principal ON forge_link_requests (principal_id, expires_at_ms);
 
 CREATE INDEX inventory_namespace_unit_id ON inventory (namespace, unit_id);
+
+-- The units that a lock holds, in the order of the unit list. The locked filter
+-- of the unit list reads this index first, so the cost follows the count of
+-- locked units and not the count of units. The predicate is the lock test of
+-- the filter.
+CREATE INDEX inventory_locked ON inventory (namespace, unit_id) WHERE (COALESCE(lock_holder, '') <> '' OR lock_since_ms IS NOT NULL OR COALESCE(lock_operation, '') <> '');
 
 CREATE INDEX inventory_labels_value ON inventory_labels (namespace, label_key, label_value, unit_id);
 

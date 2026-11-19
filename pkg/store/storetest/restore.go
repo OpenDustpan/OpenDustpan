@@ -110,6 +110,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			test: testRestoreStagingRefusesNamespacePrincipalGrants,
 		},
 		{
+			name: "staging refuses a grant whose ID is not a grant ID",
+			test: testRestoreStagingRefusesGrantIDsThatAreNotGrantIDs,
+		},
+		{
 			name: "staging refuses a membership of a namespace principal in a group",
 			test: testRestoreStagingRefusesNamespacePrincipalMemberships,
 		},
