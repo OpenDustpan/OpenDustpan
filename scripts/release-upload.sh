@@ -18,6 +18,9 @@ set -euo pipefail
 
 # CDPATH makes cd search other directories. This script never wants that: the
 # directory that it checks must be the directory that it uploads.
+# Defense in depth: the "./" prefix and the cd -P resolution below stop a
+# CDPATH attack too; this unset stays so that a new cd in this script never
+# searches CDPATH. It does not rely on that resolution.
 unset CDPATH
 
 if [[ $# -ne 2 ]]; then
@@ -54,6 +57,11 @@ fi
 
 # The path of this script, made unambiguous and resolved once: a leading "./"
 # keeps cd from reading a name such as "-" as OLDPWD.
+# Defense in depth: unset CDPATH above stops a CDPATH attack too; the prefix
+# and cd -P stay so that a name such as "-" or a symbolic link cannot change
+# the directory when CDPATH is set again. They do not rely on the unset.
+# The value is the path of this script, not a caller value, so its refusal
+# text is fixed and no test removes the 2>/dev/null here.
 here="${BASH_SOURCE[0]%/*}"
 [[ "${BASH_SOURCE[0]}" == */* ]] || here="."
 [[ "$here" == /* ]] || here="./$here"
@@ -65,9 +73,15 @@ help="rebuild the set, then run make release-verify VERSION=$version"
 # so the checked directory and the uploaded directory cannot differ. The
 # message names no caller value: the value is not checked yet.
 [[ -n "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
+# Defense in depth: unset CDPATH above stops a CDPATH attack too; the "./"
+# prefix and cd -P stay so that a name such as "-" is never read as OLDPWD.
+# They do not rely on the unset.
 [[ "$dir" == /* ]] || dir="./$dir"
 [[ -d "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
 dir="$(cd -P -- "$dir" 2>/dev/null && pwd -P)" || refuse "missing file: the set directory is not a directory; $help"
+# Defense in depth: cd -P succeeded, and this second test stays so that a
+# directory that vanished or became a file after the cd is refused here. It
+# does not rely on the first -d test or on cd.
 [[ -d "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
 
 # The first check: the verify script of the build. Defense in depth: the
