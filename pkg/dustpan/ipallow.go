@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -47,6 +49,10 @@ type allowDenial struct {
 type allowDecision struct {
 	Scope  allowScope
 	Denied bool
+	// Unavailable says that the list could not be read because the database
+	// does not answer. The request is denied, but no address was refused, so
+	// the caller answers 503 and writes no denial entry.
+	Unavailable bool
 }
 
 // allowChecker holds the parsed lists of one request. The installation list
@@ -58,6 +64,9 @@ type allowChecker struct {
 	installation ipallow.List
 	namespace    *ipallow.List
 	record       func(context.Context, allowDenial)
+	// unavailable is true when the read of the list failed because the
+	// database does not answer.
+	unavailable bool
 }
 
 // newAllowChecker returns a checker for the lists. record writes the denial
@@ -65,10 +74,12 @@ type allowChecker struct {
 func newAllowChecker(
 	enabled bool,
 	installation ipallow.List,
-	namespace *ipallow.List,
+	perNamespace *ipallow.List,
 	record func(context.Context, allowDenial),
 ) *allowChecker {
-	return &allowChecker{enabled: enabled, installation: installation, namespace: namespace, record: record}
+	return &allowChecker{
+		enabled: enabled, installation: installation, namespace: perNamespace, record: record, unavailable: false,
+	}
 }
 
 // check answers whether addr is outside an opted-in list. It checks the
@@ -76,7 +87,13 @@ func newAllowChecker(
 // scope that refused.
 func (c *allowChecker) check(ctx context.Context, addr netip.Addr) allowDecision {
 	if c == nil || !c.enabled {
-		return allowDecision{Scope: "", Denied: false}
+		return allowDecision{Scope: "", Denied: false, Unavailable: false}
+	}
+
+	// The list is unknown, so the request is denied (fail closed). No client
+	// address was refused, so the decision writes no denial entry.
+	if c.unavailable {
+		return allowDecision{Scope: "", Denied: true, Unavailable: true}
 	}
 
 	steps := []struct {
@@ -96,10 +113,10 @@ func (c *allowChecker) check(ctx context.Context, addr netip.Addr) allowDecision
 			c.record(ctx, allowDenial{Scope: step.scope, Address: addr})
 		}
 
-		return allowDecision{Scope: step.scope, Denied: true}
+		return allowDecision{Scope: step.scope, Denied: true, Unavailable: false}
 	}
 
-	return allowDecision{Scope: "", Denied: false}
+	return allowDecision{Scope: "", Denied: false, Unavailable: false}
 }
 
 // allowlistGate reads the installation list from the settings resource on
@@ -153,7 +170,7 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 	if err != nil {
 		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingEnabled))
 
-		return newAllowChecker(true, ipallow.List{}, nil, record)
+		return failedReadChecker(err, record)
 	}
 
 	if enabled.Value != "true" {
@@ -164,10 +181,24 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 	if err != nil {
 		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingInstallation))
 
-		return newAllowChecker(true, ipallow.List{}, nil, record)
+		return failedReadChecker(err, record)
 	}
 
 	return g.installationChecker(ctx, installation.Value, record)
+}
+
+// failedReadChecker returns the checker for a failed read of an allowlist
+// setting. It denies in each case. When the database does not answer, the
+// decision also says so, so that the request gets a 503 that the client can
+// retry, not a 403 that names an address that no list refused.
+//
+// Defense in depth: the denial does not rely on the answer of the caller. The
+// checker denies even when a caller ignores the unavailable flag.
+func failedReadChecker(err error, record func(context.Context, allowDenial)) *allowChecker {
+	checker := newAllowChecker(true, ipallow.List{}, nil, record)
+	checker.unavailable = errors.Is(err, namespace.ErrUnavailable)
+
+	return checker
 }
 
 // installationChecker returns the checker of the stored installation list
@@ -466,11 +497,22 @@ func (c requestCaller) admit(
 	return admission{caller: caller, signedIn: signedIn, refused: false}
 }
 
-// writeAllowlistDenial writes the 403 of a refusal: the code of the catalog
-// and a message that names the scope that refused. The scope is one of the
-// fixed values of allowScope, never text of the request.
+// writeAllowlistDenial writes the answer of a denial. A refusal gets a 403
+// with the code of the catalog and a message that names the scope that
+// refused. The scope is one of the fixed values of allowScope, never text of
+// the request. A stopped database gets a 503 that the client can retry.
 func writeAllowlistDenial(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, decision allowDecision) {
-	problem.Writer{Logger: logger, KeepDenied: nil, Classify: nil}.WriteProblem(ctx, w, problem.New(
+	writer := problem.Writer{Logger: logger, KeepDenied: nil, Classify: nil}
+
+	// A database that does not answer is no refusal of an address: answer the
+	// 503 of every other route, so the client tries again.
+	if decision.Unavailable {
+		writer.WriteProblem(ctx, w, problem.StoreUnavailable())
+
+		return
+	}
+
+	writer.WriteProblem(ctx, w, problem.New(
 		http.StatusForbidden, errcode.AccessIPNotAllowed,
 		"the address is outside the IP allowlist of the "+string(decision.Scope),
 	))

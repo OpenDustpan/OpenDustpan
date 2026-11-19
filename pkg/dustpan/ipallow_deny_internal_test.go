@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -44,7 +45,7 @@ func TestDenyAnyListDenies(t *testing.T) {
 		t.Fatalf("parse the installation list: %v", err)
 	}
 
-	namespace, err := ipallow.ParseList([]string{"203.0.113.0/24"})
+	nsList, err := ipallow.ParseList([]string{"203.0.113.0/24"})
 	if err != nil {
 		t.Fatalf("parse the namespace list: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestDenyAnyListDenies(t *testing.T) {
 	)
 	record := func(ctx context.Context, d allowDenial) { auditor.record(ctx, req, d) }
 
-	checker := newAllowChecker(true, installation, &namespace, record)
+	checker := newAllowChecker(true, installation, &nsList, record)
 	addr := netip.MustParseAddr("203.0.113.7")
 
 	decision := checker.check(t.Context(), addr)
@@ -790,4 +791,84 @@ func TestAllowlistGateUsesItsOwnLimiter(t *testing.T) {
 	if got := cfg.allowlistLimiter.Len(); got != 3 {
 		t.Fatalf("the allowlist limiter holds %d keys, want 3", got)
 	}
+}
+
+// TestAllowlistGateAnswersUnavailableForAStoppedDatabase checks that a read of
+// the allowlist setting that fails because the database does not answer is
+// denied with a 503 and no denial entry, and that any other failed read keeps
+// the 403. It fails when the gate turns a stopped database into a refusal of
+// the client address.
+func TestAllowlistGateAnswersUnavailableForAStoppedDatabase(t *testing.T) {
+	t.Parallel()
+
+	inside := netip.MustParseAddr("198.51.100.7")
+	values := map[string]string{ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24"}
+
+	tests := []struct {
+		name       string
+		err        error
+		failFrom   int32
+		wantStatus int
+		wantEntry  bool
+	}{
+		{"enabled read: database down", namespace.ErrUnavailable, 1, http.StatusServiceUnavailable, false},
+		{"list read: database down", namespace.ErrUnavailable, 2, http.StatusServiceUnavailable, false},
+		{"enabled read: other failure", errStoreDown, 1, http.StatusForbidden, true},
+		{"list read: other failure", errStoreDown, 2, http.StatusForbidden, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := &recordingServer{mu: sync.Mutex{}, entries: nil}
+			gate := newTestGate(t, &unavailableSettingsStore{
+				Store: nil, values: values, failFrom: tc.failFrom, err: tc.err, calls: atomic.Int32{},
+			})
+			gate.audit = server
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+			r.Header.Set("Authorization", "Bearer token")
+
+			decision := gate.checker(t.Context(), r).check(t.Context(), inside)
+			if !decision.Denied {
+				t.Fatalf("decision = %+v, want a denial", decision)
+			}
+
+			rec := httptest.NewRecorder()
+			writeAllowlistDenial(t.Context(), rec, slog.New(slog.DiscardHandler), decision)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			server.mu.Lock()
+			got := len(server.entries) > 0
+			server.mu.Unlock()
+
+			if got != tc.wantEntry {
+				t.Fatalf("denial entry written = %t, want %t", got, tc.wantEntry)
+			}
+		})
+	}
+}
+
+// unavailableSettingsStore is a setting.Store whose Load fails with err from
+// call number failFrom on and returns values before that.
+type unavailableSettingsStore struct {
+	setting.Store
+
+	values   map[string]string
+	err      error
+	failFrom int32
+	calls    atomic.Int32
+}
+
+// Load implements setting.Store.
+func (s *unavailableSettingsStore) Load(context.Context, setting.Scope) (setting.Stored, error) {
+	if s.calls.Add(1) >= s.failFrom {
+		return setting.Stored{}, s.err
+	}
+
+	return setting.Stored{Values: s.values, Revision: 1, Digest: ""}, nil
 }
