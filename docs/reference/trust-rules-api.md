@@ -123,11 +123,12 @@ entry `trust-rule:update`.
 
 A rule can name a `bundle`, the ID of the trust bundle of the namespace, and a
 `spiffePattern` of at most 512 bytes, in the form
-`spiffe://<trust-domain>/<path>`. The path can end in `/*`, which matches one
-path segment. A `*` in another place matches only itself. A `bundle` that is
-not the bundle of the namespace fails with `trust-rule.bundle-invalid`. A rule
-with these fields makes no exchange yet: the check of the client certificate is
-a later part.
+`spiffe://<trust-domain>/<path>`. The pattern names one exact SPIFFE ID. A `*`
+in the pattern fails with `trust-rule.spiffe-wildcard`: delete the `*` and name
+the whole SPIFFE ID. A `bundle` that is not the bundle of the namespace fails
+with `trust-rule.bundle-invalid`. A workload that connects with a client
+certificate can exchange it for an access token, as [Token exchange with a
+client certificate](#token-exchange-with-a-client-certificate) says.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
@@ -207,6 +208,61 @@ policy, one hour by default.
 | 401 | `trust-rule.no-match` | No rule of the namespace accepts the token, or the namespace does not exist. The answer never names the failed check: the audit log of the namespace does. |
 | 409 | `trust-rule.ambiguous` | More than one rule accepts the token. Name the rule in `rule`. |
 
+## Token exchange with a client certificate
+
+`POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange` with an empty
+body is an exchange of the client certificate of the TLS connection. It needs no
+sign-in. The server takes the certificate chain from the TLS handshake only. A
+header that holds a chain is not read.
+
+Today this call does not issue a token. No listener asks for a client
+certificate yet, so a call answers `mtls.no-client-certificate`. The server has
+no revocation source yet, so a call that has a certificate answers
+`mtls.revocation-unknown`.
+
+The server checks that the chain leads to the active version of the trust bundle
+of the namespace, that the leaf is in its validity time, and that the
+revocation check passes. The leaf must name exactly one SPIFFE ID. The server
+then looks for the one enabled rule that names this SPIFFE ID in the same
+bundle. The server fails closed: if it cannot learn whether a certificate is
+revoked, it refuses the exchange.
+
+The answer is 201 with `Cache-Control: no-store`, in the form of the token
+exchange above. The token never lives longer than the leaf certificate. Each
+exchange writes the audit entry `trust-rule:exchange`, and each refusal writes
+an audit entry with the outcome `denied`. This includes a refusal for the rate
+limit or the body size. For each window, the server tracks 8 namespace names for
+each address. Under a flood from many addresses, the 8 names are for the whole
+installation. It writes the first refusal of each tracked name and counts the
+others in memory, so a flood of refused calls to these names causes a bounded
+number of namespace reads for each window. The server writes the count of the
+others as an entry with the reason "N refused exchanges wrote no entry of
+their own". The count for the names beyond the 8 goes to the audit log of the
+installation, not to the log of a namespace, with the reason "N refused mTLS
+exchanges to namespaces beyond the 8 names the guard tracks in a window wrote
+no entry of their own". A caller can use these names to keep the refusals to a
+real namespace out of the log of that namespace for the rest of the window.
+The count of the installation shows it. If the server cannot write an entry, the
+next refusal tries again, at most 2 times in a window. A call to a namespace that
+does not exist, or that another installation owns, writes no entry, because
+this installation has no audit log for that namespace.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 401 | `mtls.no-client-certificate` | The TLS connection has no client certificate. |
+| 401 | `mtls.unknown-issuer` | The chain does not lead to the active trust bundle, or it is too large, too deep or not valid. |
+| 401 | `mtls.expired` | The leaf certificate is past its end time. |
+| 401 | `mtls.not-yet-valid` | The leaf certificate is before its start time. |
+| 401 | `mtls.revoked` | The certificate is revoked. |
+| 401 | `mtls.revocation-unknown` | The server cannot tell if the certificate is revoked. |
+| 401 | `mtls.no-matching-rule` | No enabled rule names the SPIFFE ID in the bundle. |
+| 401 | `mtls.ambiguous-rule` | More than one rule names the SPIFFE ID in the bundle. |
+| 401 | `mtls.bundle-disabled` | The namespace has no trust bundle, or the bundle has no active version. |
+| 401 | `mtls.principal-disabled` | The principal of the rule cannot get a token. |
+| 413 | `request.body-too-large` | The body is over the limit. |
+| 429 | `mtls.rate-limited` | The caller made too many calls. |
+| 500 | `token.issue-failed` | The server could not store the token. No token exists. |
+
 ## Errors
 
 Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
@@ -216,6 +272,7 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 400 | `request.body-invalid` | The body is not one JSON object. It has an unknown field, a missing field, or data after the object. |
 | 400 | `trust-rule.invalid` | A field fails its rules. The message names the field. |
 | 400 | `trust-rule.issuer-refused` | The issuer is at or under the public URL of the server, or is an issuer URL of the OIDC issuer of the server. |
+| 400 | `trust-rule.spiffe-wildcard` | `spiffePattern` has a `*`. Name the whole SPIFFE ID. |
 | 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is a principal of the installation. |
 | 403 | `trust-rule.principal-refused` | The principal is a principal of another namespace. The write names an object outside the namespace of the path. The refusal writes an audit entry. |
 | 401 | | The request has no valid credential. |

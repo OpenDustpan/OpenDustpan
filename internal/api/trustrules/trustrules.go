@@ -45,7 +45,17 @@ type Config struct {
 	// Rules is the service of the trust rules.
 	Rules *trustrulesvc.Service
 	// Exchanger serves the token exchange. Nil serves no exchange route.
-	Exchanger     *trustrulesvc.Exchanger
+	Exchanger *trustrulesvc.Exchanger
+	// MtlsExchanger serves the exchange of a client certificate. Nil serves
+	// no mTLS exchange: a call with an empty body gets 401
+	// mtls.no-client-certificate.
+	MtlsExchanger *trustrulesvc.MtlsExchanger
+	// MtlsGuard limits the mTLS exchange calls. It is required with
+	// MtlsExchanger.
+	MtlsGuard *trustrulesvc.MtlsGuard
+	// OnMtlsRefused, when set, runs once for each mTLS exchange call that the
+	// guard refuses. Its argument is "rate-limit" or "body-size".
+	OnMtlsRefused func(reason string)
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses.
@@ -80,6 +90,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.MtlsExchanger != nil && cfg.MtlsGuard == nil:
+		return fmt.Errorf("%w: mTLS exchange guard", ErrMissingDependency)
 	}
 
 	return nil
@@ -90,6 +102,9 @@ type Handler struct {
 	namespaces     *namespace.Service
 	rules          *trustrulesvc.Service
 	exchanger      *trustrulesvc.Exchanger
+	mtls           *trustrulesvc.MtlsExchanger
+	mtlsGuard      *trustrulesvc.MtlsGuard
+	onMtlsRefused  func(reason string)
 	authn          identity.Authenticator
 	sessions       *sessionauth.Checker
 	guard          *refusal.Recorder
@@ -131,6 +146,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces:     cfg.Namespaces,
 		rules:          cfg.Rules,
 		exchanger:      cfg.Exchanger,
+		mtls:           cfg.MtlsExchanger,
+		mtlsGuard:      cfg.MtlsGuard,
+		onMtlsRefused:  cfg.OnMtlsRefused,
 		authn:          cfg.Authenticator,
 		sessions:       cfg.Sessions,
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("trustrules"),

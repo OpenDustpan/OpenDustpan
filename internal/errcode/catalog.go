@@ -97,6 +97,7 @@ func areas() []func() []Spec {
 		lockSpecs,
 		maintenanceSpecs,
 		mfaSpecs,
+		mtlsSpecs,
 		namespaceSpecs,
 		overrideSpecs,
 		passwordSpecs,
