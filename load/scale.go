@@ -664,11 +664,20 @@ type monitor struct {
 	txBegin   int64
 	txBeginOK bool
 
-	mu      sync.Mutex
-	counts  []int
-	cancel  context.CancelFunc
+	mu     sync.Mutex
+	counts []int
+	// stop asks the sampler to return at its next tick. The sampler never
+	// stops a query that runs: a canceled query closes the connection.
+	stop    chan struct{}
 	sampled sync.WaitGroup
+	// sampleSQL is the query of one sample. It answers one integer.
+	sampleSQL string
 }
+
+// sampleSQLDefault counts the client connections of the database.
+const sampleSQLDefault = `SELECT count(*) FROM pg_stat_activity
+	WHERE datname = current_database() AND backend_type = 'client backend'
+	AND pid <> pg_backend_pid()`
 
 // cpuMark is the CPU time of the groups at one moment. Each group has a flag
 // that says the read worked. A group whose read failed has no time.
@@ -685,7 +694,8 @@ func blankMonitor(conn *pgx.Conn, procs []*serverProc, storePID int) *monitor {
 			instances: 0, postgres: 0, store: 0, harness: 0,
 			instancesOK: false, postgresOK: false, storeOK: false, harnessOK: false,
 		},
-		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, cancel: nil, sampled: sync.WaitGroup{},
+		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, stop: nil, sampled: sync.WaitGroup{},
+		sampleSQL: sampleSQLDefault,
 	}
 }
 
@@ -795,8 +805,10 @@ func (m *monitor) begin(ctx context.Context) {
 	m.cpu = m.marks()
 	m.txBegin, m.txBeginOK = m.transactions(ctx)
 
-	sampleCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	m.cancel = cancel
+	// The queries run with a context that end never cancels.
+	queryCtx := context.WithoutCancel(ctx)
+	stop := make(chan struct{})
+	m.stop = stop
 
 	m.sampled.Go(func() {
 		ticker := time.NewTicker(sampleEvery)
@@ -804,14 +816,12 @@ func (m *monitor) begin(ctx context.Context) {
 
 		for {
 			select {
-			case <-sampleCtx.Done():
+			case <-stop:
 				return
 			case <-ticker.C:
 				var count int
 
-				err := m.conn.QueryRow(sampleCtx, `SELECT count(*) FROM pg_stat_activity
-					WHERE datname = current_database() AND backend_type = 'client backend'
-					AND pid <> pg_backend_pid()`).Scan(&count)
+				err := m.conn.QueryRow(queryCtx, m.sampleSQL).Scan(&count)
 				if err == nil {
 					m.mu.Lock()
 					m.counts = append(m.counts, count)
@@ -825,8 +835,10 @@ func (m *monitor) begin(ctx context.Context) {
 // end stops the samples and answers the resources of the window.
 func (m *monitor) end(ctx context.Context, window time.Duration, requests int) ResourceStats {
 	// The sampler and the transaction read share one connection, and a
-	// connection serves one query at a time. Stop the sampler first.
-	m.cancel()
+	// connection serves one query at a time. Stop the sampler first, between
+	// two queries: a query that a canceled context interrupts closes the
+	// connection, and then the transaction read fails.
+	close(m.stop)
 	m.sampled.Wait()
 
 	now := m.marks()

@@ -143,6 +143,39 @@ func TestMonitorWindowOnPostgres(t *testing.T) {
 	checkUnmeasured(t, got, []string{"storeCores"})
 }
 
+func TestMonitorEndDuringSample(t *testing.T) {
+	t.Parallel()
+
+	pgURL := os.Getenv(postgresURLEnv)
+	if pgURL == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the monitor against PostgreSQL")
+	}
+
+	mon, err := newMonitor(t.Context(), pgURL, nil, 0)
+	if err != nil {
+		t.Fatalf("newMonitor: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := mon.close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	})
+
+	// A sample query that takes 1 s, so that end runs while it is in flight.
+	mon.sampleSQL = "SELECT count(*) FROM (SELECT pg_sleep(1)) AS slow"
+
+	mon.begin(t.Context())
+	generateTransactions(t, pgURL, 50)
+	sleep(t.Context(), sampleEvery+300*time.Millisecond)
+
+	got := mon.end(t.Context(), sampleEvery, 100)
+
+	if got.DBTransactionsPerSec == nil {
+		t.Fatalf("the transaction rate was not measured: %+v", got)
+	}
+}
+
 // generateTransactions runs n transactions on a connection of its own. The
 // monitor owns its connection while it samples.
 func generateTransactions(t *testing.T, pgURL string, n int) {
