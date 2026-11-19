@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -95,6 +96,12 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
 		{name: "apply releases the workspace locks of the backup", test: testRestoreApplyReleasesWorkspaceLocks},
+		{
+			name: "apply expires the leases of the running updates of the backup",
+			test: testRestoreApplyExpiresUpdateLeases,
+		},
+		{name: "keeping apply counts the expired update leases", test: testRestoreKeepingApplyCountsExpiredLeases},
+		{name: "the swap step record holds the expired update leases", test: testRestoreSwapRecordsExpiredLeases},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
 		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
@@ -1821,11 +1828,256 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 	}
 }
 
+// testRestoreApplyExpiresUpdateLeases proves that a restore stops the lease of
+// a Pulumi update that was running when the backup was made. The backup holds
+// the lease columns, so without this step the CLI that holds the lease token
+// from before the restore could save checkpoints and renew its lease again.
+// The update stays running, so the stack stays locked and an operator ends it
+// with a cancel. It keeps its digest, loses its expiry, and its revision
+// moves.
+func testRestoreApplyExpiresUpdateLeases(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+
+	srcUpdates, srcOK := src.(UpdatesStore)
+	if !srcOK {
+		t.Skip("the store has no update port")
+	}
+
+	f := newFixture(t, srcUpdates)
+	running := f.run(t, f.ref, "u1", mutating())
+	finished := f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
+
+	if _, err := srcUpdates.ActiveUpdate(ctx, f.ref); err != nil {
+		t.Fatalf("active update before the restore: %v", err)
+	}
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	// The inventory entry must hold the lock before the restore. Without
+	// this, the check on the restored entry below could pass on its own.
+	if inventoryLock(t, ps.src, f.ref.Namespace, stack.InventoryTool, stackUnitName(f.ref)) == nil {
+		t.Fatalf("inventory lock of %s before the restore = none, want one", f.ref)
+	}
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	dst, dstOK := ps.dst.(UpdatesStore)
+	if !dstOK {
+		t.Fatal("the restored store has no update port")
+	}
+
+	checkRestoredRunningUpdate(t, dst, running)
+
+	if inventoryLock(t, ps.dst, f.ref.Namespace, stack.InventoryTool, stackUnitName(f.ref)) == nil {
+		t.Errorf("inventory lock of %s after the restore = none, want the lock kept", f.ref)
+	}
+
+	// An update that ended before the backup keeps its status.
+	after, err := dst.GetUpdate(ctx, finished.Ref, finished.ID)
+	if err != nil {
+		t.Fatalf("get ended update: %v", err)
+	}
+
+	if after.Status != stack.StatusSucceeded {
+		t.Errorf("status of the update that ended before the backup = %q, want %q", after.Status, stack.StatusSucceeded)
+	}
+}
+
+// testRestoreKeepingApplyCountsExpiredLeases proves that the swap that keeps
+// the access tables reports the count of the update leases that it expired:
+// the restore writes the count in its audit entry. An update that ended before
+// the backup adds nothing to the count.
+func testRestoreKeepingApplyCountsExpiredLeases(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+
+	srcUpdates, srcOK := src.(UpdatesStore)
+	if !srcOK {
+		t.Skip("the store has no update port")
+	}
+
+	f := newFixture(t, srcUpdates)
+	f.run(t, f.ref, "u1", mutating())
+	f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	keeper, ok := ps.dst.(backup.AccessKeepingApplier)
+	if !ok {
+		t.Skip("the store cannot keep the access tables")
+	}
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	result, err := keeper.ApplyStagingKeepingAccess(ctx)
+	if err != nil {
+		t.Fatalf("apply staging area keeping access: %v", err)
+	}
+
+	if result.ExpiredUpdateLeases != 1 {
+		t.Errorf("expired update leases = %d, want 1 (the running update)", result.ExpiredUpdateLeases)
+	}
+}
+
+// testRestoreSwapRecordsExpiredLeases proves that ApplyRestoreArea records the
+// count of the update leases that the swap expired in the result of its swap
+// step. The restore reads the count from that record to write its audit
+// entry, so a swap that records a wrong count hides the expired leases.
+func testRestoreSwapRecordsExpiredLeases(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	for _, keepAccess := range []bool{false, true} {
+		kept := swapRecordWithRunningUpdate(t, newStore, keepAccess)
+
+		// One update runs in the backup. The update that ended adds nothing.
+		if kept.ExpiredUpdateLeases != 1 {
+			t.Errorf("keepAccess=%v: expired update leases in the swap record = %d, want 1 (the running update)",
+				keepAccess, kept.ExpiredUpdateLeases)
+		}
+	}
+}
+
+// seedRunningUpdate adds a stack with one running update and one ended update
+// to src, in a namespace that the seeded backup does not hold.
+func seedRunningUpdate(t *testing.T, src BackupStore) {
+	t.Helper()
+
+	updates, ok := src.(UpdatesStore)
+	if !ok {
+		t.Skip("the store has no update port")
+	}
+
+	ns := newNamespace(t, updates, "initech")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := updates.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	f := fixture{s: updates, ref: st.Ref, fence: ns.Fence()}
+	f.run(t, f.ref, "u1", mutating())
+	f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
+}
+
+// swapRecordWithRunningUpdate stages a backup with a running update, swaps it
+// in, and returns the counts that the swap step recorded.
+func swapRecordWithRunningUpdate(t *testing.T, newStore RestoreFactory, keepAccess bool) backup.KeepAccessResult {
+	t.Helper()
+
+	r := newStagedRestoreWith(t, newStore, seedRunningUpdate)
+	area := r.stage(t, r.held.Claim.Token)
+
+	if err := r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
+	swap := r.held.Claim.Step(backup.RestoreStepSwap)
+
+	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, keepAccess); err != nil {
+		t.Fatalf("keepAccess=%v: swap: %v", keepAccess, err)
+	}
+
+	op, err := r.dst.DurableOperationsPort().Get(t.Context(), r.held.ID)
+	if err != nil {
+		t.Fatalf("keepAccess=%v: get operation: %v", keepAccess, err)
+	}
+
+	rec, ok := op.Step(backup.RestoreStepSwap)
+	if !ok {
+		t.Fatalf("keepAccess=%v: operation has the steps %+v, want the swap step", keepAccess, op.Steps)
+	}
+
+	kept, err := backup.DecodeRestoreSwap(rec.Result)
+	if err != nil {
+		t.Fatalf("keepAccess=%v: decode the swap step %q: %v", keepAccess, rec.Result, err)
+	}
+
+	return kept
+}
+
+// stackUnitName returns the name of the inventory entry of ref.
+func stackUnitName(ref stack.Ref) string {
+	return ref.Project.String() + "/" + ref.Stack.String()
+}
+
+// checkRestoredRunningUpdate proves that the restore expired the lease of the
+// update that ran at backup time, kept it running with its digest, and moved
+// its revision.
+func checkRestoredRunningUpdate(t *testing.T, dst UpdatesStore, running stack.Update) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	got, err := dst.GetUpdate(ctx, running.Ref, running.ID)
+	if err != nil {
+		t.Fatalf("get restored update: %v", err)
+	}
+
+	if got.Status != stack.StatusRunning {
+		t.Errorf("status of the restored update = %q, want %q", got.Status, stack.StatusRunning)
+	}
+
+	if !got.EndedAt.IsZero() && got.EndedAt.UnixMilli() != 0 {
+		t.Errorf("end time of the restored update = %v, want none", got.EndedAt)
+	}
+
+	if got.Lease.Digest != running.Lease.Digest {
+		t.Error("lease digest of the restored update changed, want the digest kept")
+	}
+
+	if got.Revision <= running.Revision {
+		t.Errorf("revision of the restored update = %d, want more than %d", got.Revision, running.Revision)
+	}
+
+	active, activeErr := dst.ActiveUpdate(ctx, running.Ref)
+	if activeErr != nil {
+		t.Fatalf("active update after the restore: %v, want the running update", activeErr)
+	}
+
+	if active.ID != running.ID {
+		t.Errorf("active update after the restore = %s, want %s", active.ID, running.ID)
+	}
+
+	if !active.Lease.ExpiresAt.IsZero() && active.Lease.ExpiresAt.UnixMilli() != 0 {
+		t.Errorf("lease expiry of the active update = %v, want none", active.Lease.ExpiresAt)
+	}
+
+	if active.Revision <= running.Revision {
+		t.Errorf("revision of the active update = %d, want more than %d", active.Revision, running.Revision)
+	}
+}
+
 // workspaceInventoryLock returns the lock on the inventory entry of the
 // OpenTofu workspace name in ns, or nil when the entry holds none. The console
 // reads the lock of a workspace from this entry. It fails the test when the
 // inventory has no such entry.
 func workspaceInventoryLock(t *testing.T, s inventory.Reader, ns namespace.Name, name string) *inventory.Lock {
+	t.Helper()
+
+	return inventoryLock(t, s, ns, "opentofu", name)
+}
+
+// inventoryLock returns the lock on the inventory entry of the unit name of
+// tool in ns, or nil when the entry holds none. It fails the test when the
+// inventory has no such entry.
+func inventoryLock(t *testing.T, s inventory.Reader, ns namespace.Name, tool, name string) *inventory.Lock {
 	t.Helper()
 
 	entries, err := s.ListUnits(t.Context(), ns)
@@ -1834,12 +2086,12 @@ func workspaceInventoryLock(t *testing.T, s inventory.Reader, ns namespace.Name,
 	}
 
 	for i := range entries {
-		if entries[i].Tool == "opentofu" && entries[i].Name == name {
+		if entries[i].Tool == tool && entries[i].Name == name {
 			return entries[i].Lock
 		}
 	}
 
-	t.Fatalf("inventory has no opentofu entry %q in %q", name, ns)
+	t.Fatalf("inventory has no %s entry %q in %q", tool, name, ns)
 
 	return nil
 }

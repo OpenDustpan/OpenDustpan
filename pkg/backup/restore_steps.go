@@ -1205,11 +1205,50 @@ func (s *RestoreService) afterApplyEntries(
 		entries = append(entries, s.restoreAuditEntry(in, object))
 	}
 
+	expired, err := expiredUpdateLeasesOf(op)
+	if err != nil {
+		return nil, err
+	}
+
+	if expired > 0 {
+		entries = append(entries, s.restoreAuditEntry(in, expiredUpdateLeasesAuditObject(in, expired)))
+	}
+
 	for _, object := range devAuditObjects(in.ID, in.BackupID, st.Report) {
 		entries = append(entries, s.restoreAuditEntry(in, object))
 	}
 
 	return entries, nil
+}
+
+// expiredUpdateLeasesOf returns the count of the update leases that the swap
+// step of op expired. It returns zero when the step has no result.
+func expiredUpdateLeasesOf(op durable.Operation) (int64, error) {
+	rec, ok := op.Step(RestoreStepSwap)
+	if !ok || len(rec.Result) == 0 {
+		return 0, nil
+	}
+
+	kept, err := DecodeRestoreSwap(rec.Result)
+	if err != nil {
+		return 0, durable.Permanent(err)
+	}
+
+	return kept.ExpiredUpdateLeases, nil
+}
+
+// expiredUpdateLeasesAuditObject names the update leases that restore in
+// expired, for its audit entry: the backup holds the leases of updates that ran
+// when it was made, and no CLI can use them after the restore.
+func expiredUpdateLeasesAuditObject(in restoreInput, expired int64) string {
+	noun := " running updates"
+	if expired == 1 {
+		noun = " running update"
+	}
+
+	return "restore " + in.ID.String() + " expired the lease of " + strconv.FormatInt(expired, 10) +
+		noun + " of backup " + in.BackupID.String() +
+		": the updates stay running and keep their stacks locked until an operator cancels them"
 }
 
 // afterApplyResult is the result of the after-apply step.
