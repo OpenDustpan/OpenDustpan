@@ -392,3 +392,19 @@ func TestBreakGlassNoErrorNeedsNoPass(t *testing.T) {
 		t.Errorf("Record.BreakGlass = %q, want none: no gate was in error", rec.BreakGlass)
 	}
 }
+
+func TestBreakGlassSkipPathUsesNoPass(t *testing.T) {
+	t.Parallel()
+
+	e := newBGEnv(t)
+	e.putGate(t, newSWGate(atUnit, "broken-skip", bgBroken, gate.OutcomeDeny, "x").skippingErrors())
+	e.issue(t, "alice", gate.OperationApply, bgUnit(t, "web", "ws-test-web"))
+
+	if _, err := e.svc.Evaluate(t.Context(), e.change(t)); err != nil {
+		t.Fatalf("Evaluate(gate in error with onError skip) = %v, want nil", err)
+	}
+
+	if e.store.consumes.Load() != 0 || e.store.unused() != 1 {
+		t.Error("the skip path used a pass")
+	}
+}
