@@ -117,6 +117,9 @@ func mergeUpdate(stored *trustrule.Rule, in *UpdateInput) trustrule.Rule {
 func (s *Service) checkUpdate(
 	ctx context.Context, caller identity.Principal, ns namespace.Name, r *trustrule.Rule, in *UpdateInput,
 ) error {
+	// Defense in depth: the store checks the updated rule too, among them the
+	// * in a SPIFFE ID. This check stays so that no other caller can update a
+	// rule to name more than one SPIFFE ID.
 	if err := r.Validate(); err != nil {
 		return err
 	}
