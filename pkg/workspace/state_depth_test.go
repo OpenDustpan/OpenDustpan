@@ -102,7 +102,7 @@ func TestCheckInstanceWorkWalkLayer(t *testing.T) {
 		},
 		{
 			name:       "one long key over many leaves",
-			attributes: `{"` + longKey + `":` + deepLeaves(1, 100) + `}`,
+			attributes: `{"` + longKey + `":` + deepLeaves(1, 200) + `}`,
 			wantErr:    true,
 		},
 	}
