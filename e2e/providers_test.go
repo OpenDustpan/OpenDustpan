@@ -44,7 +44,9 @@ func fakeProvider(t *testing.T, body, served string, hits *atomic.Int32) (*e2e.P
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 
-		_, _ = w.Write([]byte(served)) //nolint:errcheck // A failed write fails the test through the sum.
+		if _, err := w.Write([]byte(served)); err != nil {
+			t.Errorf("write the fake archive: %v", err)
+		}
 	}))
 	t.Cleanup(ts.Close)
 
@@ -148,6 +150,54 @@ func TestProviderMirrorReplacesTamperedCache(t *testing.T) {
 	}
 }
 
+// A symlink in the cache does not redirect the mirror: not at the root, and
+// not at a directory below it.
+func TestProviderMirrorRefusesSymlinkInCache(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]func(t *testing.T, m *e2e.ProviderMirror, outside string){
+		"root is a symlink": func(t *testing.T, m *e2e.ProviderMirror, outside string) {
+			t.Helper()
+
+			if err := os.Symlink(outside, m.Dir()); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		},
+		"host directory is a symlink": func(t *testing.T, m *e2e.ProviderMirror, outside string) {
+			t.Helper()
+
+			if err := os.MkdirAll(m.Dir(), 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+
+			if err := os.Symlink(outside, filepath.Join(m.Dir(), "registry.opentofu.org")); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+		},
+	}
+
+	for name, setup := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var hits atomic.Int32
+
+			m, _ := fakeProvider(t, "zip-bytes", "zip-bytes", &hits)
+			outside := t.TempDir()
+			setup(t, m, outside)
+
+			if err := m.Fill(t.Context()); err == nil {
+				t.Fatal("fill followed a symlink in the cache")
+			}
+
+			entries, err := os.ReadDir(outside)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("outside directory holds %d entries, %v; want none", len(entries), err)
+			}
+		})
+	}
+}
+
 func TestProviderMirrorRefusesBadPins(t *testing.T) {
 	t.Parallel()
 
@@ -209,13 +259,24 @@ func TestEveryProviderOfTheSuiteIsPinned(t *testing.T) {
 		pinned[pin.Source()] = true
 	}
 
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		t.Fatalf("open the e2e directory: %v", err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			t.Errorf("close the e2e directory: %v", closeErr)
+		}
+	}()
+
 	files, err := filepath.Glob("*_test.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("list test files: %v (%d)", err, len(files))
 	}
 
 	for _, file := range files {
-		body, readErr := os.ReadFile(file) //nolint:gosec // The name comes from a glob of this directory.
+		body, readErr := root.ReadFile(file)
 		if readErr != nil {
 			t.Fatalf("read %s: %v", file, readErr)
 		}
