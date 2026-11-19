@@ -297,7 +297,7 @@ func classifyStoreCheckConflict(err error) (failure, bool) {
 	if errors.Is(err, storecheck.ErrNoTarget) {
 		return failCoded(
 			http.StatusConflict,
-			"this server has no store for the target: use another target, or set --backup-target on the server for the backup target",
+			"this server has no backup target: set --backup-target on the server (DUSTPAN_BACKUP_TARGET)",
 			errcode.StoreCheckNoTarget,
 		), true
 	}

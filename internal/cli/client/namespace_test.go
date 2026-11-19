@@ -185,12 +185,12 @@ func TestCreateNamespaceNeedsAName(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 
 		err := client.CreateNamespace(t.Context(), args, &stdout, &stderr)
-		if !errors.Is(err, client.ErrUsage) {
+		if err == nil || !errors.Is(err, client.ErrUsage) {
 			t.Fatalf("create namespace %v = %v, want it to match ErrUsage", args, err)
 		}
 
 		if !strings.Contains(err.Error(), "needs one argument") || strings.Contains(err.Error(), "Try out:") {
-			t.Fatalf("create namespace %v = %q, want a short error that names the problem", args, err)
+			t.Fatalf("create namespace %v = %v, want a short error that names the problem", args, err)
 		}
 	}
 }
