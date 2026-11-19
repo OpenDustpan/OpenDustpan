@@ -84,7 +84,7 @@ func newHandoffFixture(t *testing.T) *handoffFixture {
 func (f *handoffFixture) entries(t *testing.T) []audit.Entry {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -107,7 +107,7 @@ func (f *handoffFixture) refuseFrom(t *testing.T, addr string, err error) {
 func (f *handoffFixture) onlyEntry(t *testing.T) audit.Entry {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -122,7 +122,7 @@ func (f *handoffFixture) onlyEntry(t *testing.T) audit.Entry {
 func (f *handoffFixture) entryCount(t *testing.T) int {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

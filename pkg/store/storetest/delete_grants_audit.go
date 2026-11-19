@@ -15,7 +15,7 @@ import (
 func scopeEntries(t *testing.T, d *delegation, ns namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := d.st.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize})
+	listing, err := d.st.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries of %q: %v", ns, err)
 	}

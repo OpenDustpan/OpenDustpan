@@ -39,15 +39,22 @@ func auditPageQuery(t *testing.T) string {
 	return strings.Join(lines, "\n")
 }
 
-// TestListPlanUsesThePrimaryKey proves that the page query reads the primary
-// key backwards on a table of 20,000 rows, with no sort.
-func TestListPlanUsesThePrimaryKey(t *testing.T) {
-	t.Parallel()
+// checkQueryGuards fails the test unless the query holds each guard: the
+// scope, the start below a sequence, and the limit of the rows of one page.
+func checkQueryGuards(t *testing.T, query string, guards ...string) {
+	t.Helper()
 
-	base := os.Getenv(envURL)
-	if base == "" {
-		t.Skipf("set %s to run the PostgreSQL plan test", envURL)
+	for _, guard := range guards {
+		if !strings.Contains(query, guard) {
+			t.Fatalf("query %q does not hold %q", query, guard)
+		}
 	}
+}
+
+// seedAuditRows opens a store on a fresh schema, so the tables exist, and
+// adds 20,000 entries of the namespace acme through a second connection.
+func seedAuditRows(t *testing.T, base string) *pgx.Conn {
+	t.Helper()
 
 	schemaURL := isolatedURL(t, base)
 
@@ -64,8 +71,8 @@ func TestListPlanUsesThePrimaryKey(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		if err := conn.Close(t.Context()); err != nil {
-			t.Errorf("close connection: %v", err)
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close connection: %v", closeErr)
 		}
 	})
 
@@ -80,45 +87,61 @@ SELECT 'acme', i, 'user', 'unit:decrypt', 'obj', i, 'api', 'reveal', 'success', 
 		t.Fatalf("analyze: %v", err)
 	}
 
-	// The query holds placeholders. A plan with literal values shows the
-	// plan of a first page and of a deep page alike: the key and the
-	// direction decide it.
-	query := auditPageQuery(t)
+	return conn
+}
 
-	// The three guards of the query, each by its own check: the scope, the
-	// start below a sequence, and the limit of the rows that one page reads.
-	for _, guard := range []string{"namespace = $1", "sequence < $2", "LIMIT $3"} {
-		if !strings.Contains(query, guard) {
-			t.Fatalf("query %q does not hold %q", query, guard)
-		}
-	}
+// explainPlan returns the lines of the plan of query. The query holds
+// placeholders, so the plan runs with literal values: the key and the
+// direction decide the plan of a first page and of a deep page alike.
+func explainPlan(t *testing.T, conn *pgx.Conn, query string) string {
+	t.Helper()
 
-	query = strings.NewReplacer("$1", "'acme'", "$2", "15000", "$3", "51").Replace(query)
+	literal := strings.NewReplacer("$1", "'acme'", "$2", "15000", "$3", "51").Replace(query)
 
-	rows, err := conn.Query(t.Context(), "EXPLAIN "+query)
+	rows, err := conn.Query(t.Context(), "EXPLAIN "+literal)
 	if err != nil {
 		t.Fatalf("explain: %v", err)
 	}
+
+	defer rows.Close()
 
 	var plan strings.Builder
 
 	for rows.Next() {
 		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatalf("scan plan: %v", err)
+		if scanErr := rows.Scan(&line); scanErr != nil {
+			t.Fatalf("scan plan: %v", scanErr)
 		}
 
 		fmt.Fprintln(&plan, line)
 	}
 
-	rows.Close()
-
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read plan: %v", err)
 	}
 
-	if !strings.Contains(plan.String(), "Index Scan Backward using audit_entries_pkey") ||
-		strings.Contains(plan.String(), "Sort") || !strings.Contains(plan.String(), "Limit") {
-		t.Fatalf("plan = %q, want a backward scan of the primary key and no sort", plan.String())
+	return plan.String()
+}
+
+// TestListPlanUsesThePrimaryKey proves that the page query reads the primary
+// key backwards on a table of 20,000 rows, with no sort and with a limit.
+func TestListPlanUsesThePrimaryKey(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL plan test", envURL)
+	}
+
+	conn := seedAuditRows(t, base)
+	query := auditPageQuery(t)
+
+	checkQueryGuards(t, query, "namespace = $1", "sequence < $2", "LIMIT $3")
+
+	plan := explainPlan(t, conn, query)
+
+	if !strings.Contains(plan, "Index Scan Backward using audit_entries_pkey") ||
+		strings.Contains(plan, "Sort") || !strings.Contains(plan, "Limit") {
+		t.Fatalf("plan = %q, want a backward scan of the primary key, a limit and no sort", plan)
 	}
 }

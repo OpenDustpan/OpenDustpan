@@ -196,7 +196,7 @@ func get(t *testing.T, s Store, p person) preferences.Document {
 func changeEntries(t *testing.T, s Store) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: auditPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}

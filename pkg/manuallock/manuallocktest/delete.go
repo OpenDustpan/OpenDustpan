@@ -254,7 +254,7 @@ func deleteUnderLock(t *testing.T, f *fixture, scope lockScope, tool deleteTool,
 func auditEntryCount(t *testing.T, f *fixture) int {
 	t.Helper()
 
-	listing, err := f.s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize})
+	listing, err := f.s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}
@@ -405,7 +405,7 @@ func checkRace(t *testing.T, f *fixture, o raceOutcome) {
 func checkLockAfterDelete(t *testing.T, f *fixture, o raceOutcome) {
 	t.Helper()
 
-	listing, err := f.s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize})
+	listing, err := f.s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}

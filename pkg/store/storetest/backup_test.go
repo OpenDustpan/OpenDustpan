@@ -1337,12 +1337,12 @@ func (s *fakeBackupStore) List(
 	defer s.mu.RUnlock()
 
 	if s.closed {
-		return audit.Listing{}, errFakeClosed
+		return audit.Listing{Entries: nil, More: false}, errFakeClosed
 	}
 
 	p, err := page.Normalized()
 	if err != nil {
-		return audit.Listing{}, err
+		return audit.Listing{Entries: nil, More: false}, err
 	}
 
 	chain := s.data.audit[ns.String()]
@@ -1350,7 +1350,11 @@ func (s *fakeBackupStore) List(
 	entries := make([]audit.Entry, 0, min(len(chain), p.Size))
 	more := false
 
-	for i := len(chain) - 1; i >= 0; i-- {
+	if len(chain) == 0 {
+		return audit.Listing{Entries: entries, More: more}, nil
+	}
+
+	for i := range slices.Backward(chain) {
 		if p.Before != 0 && chain[i].Sequence >= p.Before {
 			continue
 		}

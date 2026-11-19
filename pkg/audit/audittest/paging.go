@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -14,8 +15,8 @@ import (
 // All returns every entry of scope, newest first. It follows More with the
 // sequence of the last entry of each page, in pages of audit.MaxPageSize, so
 // the helper never runs a count and never reads an offset.
-func All(t testing.TB, s audit.Store, scope namespace.Name) []audit.Entry {
-	t.Helper()
+func All(tb testing.TB, s audit.Store, scope namespace.Name) []audit.Entry {
+	tb.Helper()
 
 	var (
 		out    []audit.Entry
@@ -23,9 +24,9 @@ func All(t testing.TB, s audit.Store, scope namespace.Name) []audit.Entry {
 	)
 
 	for {
-		listing, err := s.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize, Before: before})
+		listing, err := s.List(tb.Context(), scope, audit.Page{Size: audit.MaxPageSize, Before: before})
 		if err != nil {
-			t.Fatalf("list audit entries of %s below %d: %v", scope, before, err)
+			tb.Fatalf("list audit entries of %s below %d: %v", scope, before, err)
 		}
 
 		out = append(out, listing.Entries...)
@@ -35,19 +36,24 @@ func All(t testing.TB, s audit.Store, scope namespace.Name) []audit.Entry {
 		}
 
 		if len(listing.Entries) == 0 {
-			t.Fatalf("list audit entries of %s below %d: More is true on an empty page", scope, before)
+			tb.Fatalf("list audit entries of %s below %d: More is true on an empty page", scope, before)
 		}
 
 		next := listing.Entries[len(listing.Entries)-1].Sequence
 		if before != 0 && next >= before {
-			t.Fatalf("list audit entries of %s below %d: the page ends at %d, so the walk does not advance", scope, before, next)
+			tb.Fatalf(
+				"list audit entries of %s below %d: the page ends at %d, so the walk does not advance",
+				scope,
+				before,
+				next,
+			)
 		}
 
 		before = next
 	}
 }
 
-// appendN appends n entries to ns with the subjects user-1 to user-n.
+// appendUsers appends n entries to ns with the subjects user-1 to user-n.
 func appendUsers(t *testing.T, s Store, ns namespace.Namespace, n int) {
 	t.Helper()
 
@@ -91,7 +97,7 @@ func testListFirstPage(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 	appendUsers(t, s, ns, 5)
 
-	first := listPage(t, s, ns.Name, audit.Page{Size: 2})
+	first := listPage(t, s, ns.Name, audit.Page{Size: 2, Before: 0})
 
 	checkSubjects(t, first.Entries, "user-5", "user-4")
 
@@ -109,7 +115,7 @@ func testListNextPageByBefore(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 	appendUsers(t, s, ns, 5)
 
-	first := listPage(t, s, ns.Name, audit.Page{Size: 2})
+	first := listPage(t, s, ns.Name, audit.Page{Size: 2, Before: 0})
 	second := listPage(t, s, ns.Name, audit.Page{Size: 2, Before: first.Entries[1].Sequence})
 
 	checkSubjects(t, second.Entries, "user-3", "user-2")
@@ -154,7 +160,7 @@ func testListExactFitHasNoEmptyPage(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 	appendUsers(t, s, ns, 4)
 
-	got := listPage(t, s, ns.Name, audit.Page{Size: 4})
+	got := listPage(t, s, ns.Name, audit.Page{Size: 4, Before: 0})
 
 	if len(got.Entries) != 4 || got.More {
 		t.Fatalf("exact fit = %d entries, More %t, want 4 entries, More false", len(got.Entries), got.More)
@@ -170,7 +176,7 @@ func testListEmptyScope(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 
 	for _, scope := range []namespace.Name{ns.Name, audit.ServerScope} {
-		got := listPage(t, s, scope, audit.Page{})
+		got := listPage(t, s, scope, audit.Page{Size: 0, Before: 0})
 
 		if len(got.Entries) != 0 || got.More {
 			t.Fatalf("empty %s = %d entries, More %t, want none", scope, len(got.Entries), got.More)
@@ -223,7 +229,7 @@ func testListNeverReturnsTheProbeRow(t *testing.T, ts TestStore) {
 	appendUsers(t, s, ns, 6)
 
 	for size := 1; size <= 7; size++ {
-		got := listPage(t, s, ns.Name, audit.Page{Size: size})
+		got := listPage(t, s, ns.Name, audit.Page{Size: size, Before: 0})
 
 		want := min(size, 6)
 		if len(got.Entries) != want {
@@ -239,6 +245,7 @@ func testListNeverReturnsTheProbeRow(t *testing.T, ts TestStore) {
 // countingStore counts the List calls of the store that it wraps.
 type countingStore struct {
 	audit.Store
+
 	calls int
 }
 
@@ -260,7 +267,7 @@ func testAllFollowsMoreAndStops(t *testing.T, ts TestStore) {
 
 	appendUsers(t, s, ns, total)
 
-	counter := &countingStore{Store: s}
+	counter := &countingStore{Store: s, calls: 0}
 	entries := All(t, counter, ns.Name)
 
 	if len(entries) != total {
@@ -288,7 +295,7 @@ func testListStableWhileLogGrows(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 	appendUsers(t, s, ns, 5)
 
-	first := listPage(t, s, ns.Name, audit.Page{Size: 2})
+	first := listPage(t, s, ns.Name, audit.Page{Size: 2, Before: 0})
 
 	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "late", "req-late", now()))
 
@@ -314,7 +321,7 @@ func testListPagesOverAGap(t *testing.T, ts TestStore) {
 		t.Fatalf("delete entry 4: %v", err)
 	}
 
-	first := listPage(t, s, ns.Name, audit.Page{Size: 2})
+	first := listPage(t, s, ns.Name, audit.Page{Size: 2, Before: 0})
 	checkSubjects(t, first.Entries, "user-6", "user-5")
 
 	second := listPage(t, s, ns.Name, audit.Page{Size: 2, Before: first.Entries[1].Sequence})
@@ -337,15 +344,38 @@ func testListPagesOverAGap(t *testing.T, ts TestStore) {
 	}
 }
 
-// testListHostilePageRows is the hostile table of the store layer. Each
-// row sends a page straight to the adapter, as if the handler and the
-// domain function had failed to stop it. A row that names an error must get
-// audit.ErrInvalidPage. A row that names no error must read the entries of
-// its own scope only, at most Size of them.
-func testListHostilePageRows(t *testing.T, ts TestStore) {
+// refused is a hostile row that the store must refuse with ErrInvalidPage.
+func refused(name string, scope namespace.Name, page audit.Page) hostileCase {
+	return hostileCase{name: name, scope: scope, page: page, wantOwn: "", wantCount: 0, wantErr: true}
+}
+
+// reads is a hostile row that must read count entries of scope, each with a
+// subject that starts with own.
+func reads(name string, scope namespace.Name, page audit.Page, count int, own string) hostileCase {
+	return hostileCase{name: name, scope: scope, page: page, wantOwn: own, wantCount: count, wantErr: false}
+}
+
+// hostileCase is one row of the hostile table of the store layer.
+type hostileCase struct {
+	name      string
+	scope     namespace.Name
+	wantOwn   string
+	page      audit.Page
+	wantCount int
+	wantErr   bool
+}
+
+// hostileScopes holds the two namespaces of the hostile table.
+type hostileScopes struct {
+	big, small namespace.Namespace
+}
+
+// seedHostileScopes makes the scopes that the hostile table reads: the
+// namespace acme with 40 entries, the namespace small with 3, and the server
+// scope with 3. It returns acme and small.
+func seedHostileScopes(t *testing.T, s Store) hostileScopes {
 	t.Helper()
 
-	s := ts.Store
 	big := newNamespace(t, s)
 
 	small := namespace.Namespace{
@@ -364,69 +394,96 @@ func testListHostilePageRows(t *testing.T, ts TestStore) {
 	appendUsers(t, s, big, 40)
 
 	for i := 1; i <= 3; i++ {
-		appendEntry(t, s, small.Fence(), newEntry(small.Name, fmt.Sprintf("small-%d", i), fmt.Sprintf("req-s%d", i), now()))
-	}
+		appendEntry(
+			t,
+			s,
+			small.Fence(),
+			newEntry(small.Name, fmt.Sprintf("small-%d", i), fmt.Sprintf("req-s%d", i), now()),
+		)
 
-	for i := 1; i <= 3; i++ {
-		if _, err := s.AppendServer(t.Context(), newServerEntry(fmt.Sprintf("server-%d", i), fmt.Sprintf("req-v%d", i))); err != nil {
+		_, err := s.AppendServer(t.Context(), newServerEntry(fmt.Sprintf("server-%d", i), fmt.Sprintf("req-v%d", i)))
+		if err != nil {
 			t.Fatalf("append server entry: %v", err)
 		}
 	}
 
-	cases := []struct {
-		name      string
-		scope     namespace.Name
-		wantErr   bool
-		page      audit.Page
-		wantCount int
-		wantOwn   string
-	}{
-		{name: "before -1", scope: big.Name, page: audit.Page{Before: -1}, wantErr: true},
-		{name: "before smallest int64", scope: big.Name, page: audit.Page{Before: math.MinInt64}, wantErr: true},
-		{name: "size -1", scope: big.Name, page: audit.Page{Size: -1}, wantErr: true},
-		{name: "size 201", scope: big.Name, page: audit.Page{Size: audit.MaxPageSize + 1}, wantErr: true},
-		{name: "size smallest int", scope: big.Name, page: audit.Page{Size: math.MinInt}, wantErr: true},
-		{name: "size largest int", scope: big.Name, page: audit.Page{Size: math.MaxInt}, wantErr: true},
-		{name: "before of a larger scope", scope: small.Name, page: audit.Page{Size: 200, Before: 30}, wantCount: 3, wantOwn: "small-"},
-		{name: "before of a larger scope above the namespace", scope: small.Name, page: audit.Page{Size: 200, Before: 40}, wantCount: 3, wantOwn: "small-"},
-		{name: "server scope with the sequences of a namespace", scope: audit.ServerScope, page: audit.Page{Size: 200, Before: 30}, wantCount: 3, wantOwn: "server-"},
-		{name: "namespace with the sequences of the server scope", scope: big.Name, page: audit.Page{Size: 200, Before: 3}, wantCount: 2, wantOwn: "user-"},
-		{name: "before largest int64", scope: small.Name, page: audit.Page{Size: 200, Before: math.MaxInt64}, wantCount: 3, wantOwn: "small-"},
-		{name: "size 1 holds one entry", scope: big.Name, page: audit.Page{Size: 1}, wantCount: 1, wantOwn: "user-"},
-		{name: "scope with SQL text", scope: namespace.Name("x' OR '1'='1"), page: audit.Page{Size: 200}, wantCount: 0},
-		{name: "scope with a comment and a union", scope: namespace.Name("a' UNION SELECT * FROM audit_entries --"), page: audit.Page{Size: 200}, wantCount: 0},
+	return hostileScopes{big: big, small: small}
+}
+
+// hostileCases returns the rows of the hostile table for the scopes of
+// seedHostileScopes.
+func hostileCases(big, small namespace.Name) []hostileCase {
+	all := audit.Page{Size: audit.MaxPageSize, Before: 0}
+
+	at := func(before int64) audit.Page { return audit.Page{Size: all.Size, Before: before} }
+
+	return []hostileCase{
+		refused("before -1", big, audit.Page{Size: 0, Before: -1}),
+		refused("before smallest int64", big, audit.Page{Size: 0, Before: math.MinInt64}),
+		refused("size -1", big, audit.Page{Size: -1, Before: 0}),
+		refused("size 201", big, audit.Page{Size: audit.MaxPageSize + 1, Before: 0}),
+		refused("size smallest int", big, audit.Page{Size: math.MinInt, Before: 0}),
+		refused("size largest int", big, audit.Page{Size: math.MaxInt, Before: 0}),
+		reads("before of a larger scope", small, at(30), 3, "small-"),
+		reads("before above the small namespace", small, at(40), 3, "small-"),
+		reads("server scope with namespace sequences", audit.ServerScope, at(30), 3, "server-"),
+		reads("namespace with server sequences", big, at(3), 2, "user-"),
+		reads("before largest int64", small, at(math.MaxInt64), 3, "small-"),
+		reads("size 1 holds one entry", big, audit.Page{Size: 1, Before: 0}, 1, "user-"),
+		reads("scope with SQL text", "x' OR '1'='1", all, 0, ""),
+		reads("scope with a comment and a union", "a' UNION SELECT hash FROM audit_entries --", all, 0, ""),
+	}
+}
+
+// checkHostileRow sends the page of tc straight to the store.
+func checkHostileRow(t *testing.T, s Store, tc hostileCase) {
+	t.Helper()
+
+	listing, err := s.List(t.Context(), tc.scope, tc.page)
+
+	if tc.wantErr {
+		if !errors.Is(err, audit.ErrInvalidPage) || len(listing.Entries) != 0 {
+			t.Fatalf(
+				"List(%+v) = %d entries, %v; want no entry and %v",
+				tc.page,
+				len(listing.Entries),
+				err,
+				audit.ErrInvalidPage,
+			)
+		}
+
+		return
 	}
 
-	for _, tc := range cases {
+	if err != nil {
+		t.Fatalf("List(%+v): %v", tc.page, err)
+	}
+
+	if len(listing.Entries) != tc.wantCount {
+		t.Fatalf("List(%+v) = %d entries, want %d", tc.page, len(listing.Entries), tc.wantCount)
+	}
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Namespace != tc.scope || !strings.HasPrefix(e.Subject, tc.wantOwn) {
+			t.Fatalf("List(%+v) read %s entry %q of scope %q", tc.page, tc.scope, e.Subject, e.Namespace)
+		}
+	}
+}
+
+// testListHostilePageRows is the hostile table of the store layer. Each
+// row sends a page straight to the adapter, as if the handler and the
+// domain function had failed to stop it. A row that names an error must get
+// audit.ErrInvalidPage. A row that names no error must read the entries of
+// its own scope only, at most Size of them.
+func testListHostilePageRows(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	scopes := seedHostileScopes(t, ts.Store)
+
+	for _, tc := range hostileCases(scopes.big.Name, scopes.small.Name) {
 		t.Run(tc.name, func(t *testing.T) {
-			listing, err := s.List(t.Context(), tc.scope, tc.page)
-
-			if tc.wantErr {
-				if !errors.Is(err, audit.ErrInvalidPage) {
-					t.Fatalf("List(%+v) err = %v, want %v", tc.page, err, audit.ErrInvalidPage)
-				}
-
-				if len(listing.Entries) != 0 {
-					t.Fatalf("List(%+v) read %d entries with an error", tc.page, len(listing.Entries))
-				}
-
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("List(%+v): %v", tc.page, err)
-			}
-
-			if len(listing.Entries) != tc.wantCount {
-				t.Fatalf("List(%+v) = %d entries, want %d", tc.page, len(listing.Entries), tc.wantCount)
-			}
-
-			for i := range listing.Entries {
-				e := listing.Entries[i]
-				if e.Namespace != tc.scope || len(e.Subject) < len(tc.wantOwn) || e.Subject[:len(tc.wantOwn)] != tc.wantOwn {
-					t.Fatalf("List(%+v) read %s entry %q of scope %q", tc.page, tc.scope, e.Subject, e.Namespace)
-				}
-			}
+			checkHostileRow(t, ts.Store, tc)
 		})
 	}
 }

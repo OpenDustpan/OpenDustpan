@@ -132,21 +132,25 @@ func (m *memAuditStore) List(
 	_ context.Context, ns namespace.Name, page audit.Page,
 ) (audit.Listing, error) {
 	if m.err != nil {
-		return audit.Listing{}, m.err
+		return audit.Listing{Entries: nil, More: false}, m.err
 	}
 
 	m.lists++
 
 	p, err := page.Normalized()
 	if err != nil {
-		return audit.Listing{}, err
+		return audit.Listing{Entries: nil, More: false}, err
 	}
 
 	chain := m.entries[ns]
 	out := make([]audit.Entry, 0, min(len(chain), p.Size))
 	more := false
 
-	for i := len(chain) - 1; i >= 0; i-- {
+	if len(chain) == 0 {
+		return audit.Listing{Entries: out, More: more}, nil
+	}
+
+	for i := range slices.Backward(chain) {
 		if p.Before != 0 && chain[i].Sequence >= p.Before {
 			continue
 		}

@@ -204,7 +204,11 @@ func TestListEntriesTokenOfAnotherScopeAnswers400(t *testing.T) {
 	before := entries.lists
 
 	for _, tc := range []struct{ org, token string }{{"@server", acme}, {"acme", server}} {
-		rec := getList(t, handler, "/api/audit/entries?organization="+url.QueryEscape(tc.org)+"&pageToken="+url.QueryEscape(tc.token))
+		rec := getList(
+			t,
+			handler,
+			"/api/audit/entries?organization="+url.QueryEscape(tc.org)+"&pageToken="+url.QueryEscape(tc.token),
+		)
 		checkRefusal(t, rec, errcode.RequestPageTokenInvalid)
 	}
 

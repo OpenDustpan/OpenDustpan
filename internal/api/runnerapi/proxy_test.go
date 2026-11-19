@@ -236,7 +236,7 @@ func (p *proxyEnv) openProxy() (*launcher, protocol.ProxySessionResponse) {
 func (p *proxyEnv) auditEntries() []audit.Entry {
 	p.t.Helper()
 
-	listing, err := p.audit.List(p.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := p.audit.List(p.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		p.t.Fatalf("list audit: %v", err)
 	}

@@ -407,16 +407,59 @@ old configuration and the reload fails.
 ## Read the entries
 
 `GET /api/audit/entries?organization=<namespace>` lists one page of the
-entries of the namespace, newest first, with the total count.
+entries of the namespace, newest first.
 It needs the action `namespace:read-audit` on the namespace.
 Send the access token as `Authorization: token <token>` or `Authorization: Bearer <token>`.
-`page[number]` selects the page (from 1) and `page[size]` selects its size
-(up to 200). Both default when missing.
+
+The list pages with a token:
+
+- `pageSize` is the number of entries in a page. It is a number from 1 to 200
+  with no sign and no leading zero. Without `pageSize` the page holds 50
+  entries.
+- The answer holds `entries`, `nextPageToken` and `pageSize`. `pageSize` is the
+  size that the server used.
+- `nextPageToken` is an opaque text. Send it as `pageToken`, with the same
+  `organization`, to read the next page. On the last page `nextPageToken` is the
+  empty string.
+- The list has no total. The server does not count the entries, so a page costs
+  the same at any depth. To check the log as a whole, use the chain check below.
+- A page holds the entries below the last entry of the page before. An entry
+  that the server appends while you read does not move an entry from one page
+  to the next.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
+  "https://dustpan.example/api/audit/entries?organization=acme&pageSize=50"
 ```
+
+To read the whole log, send each `nextPageToken` as `pageToken` until it is
+empty. This loop writes one entry for each line:
+
+```sh
+token=""
+while :; do
+  page=$(curl -sS -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" --get \
+    --data-urlencode "organization=acme" --data-urlencode "pageSize=200" \
+    --data-urlencode "pageToken=$token" \
+    "https://dustpan.example/api/audit/entries") || break
+  echo "$page" | jq -c '.entries[]'
+  token=$(echo "$page" | jq -r '.nextPageToken')
+  [ -n "$token" ] || break
+done
+```
+
+The server refuses a bad request with status 400 and one of these error codes:
+
+| Error code | Cause | What to do |
+| --- | --- | --- |
+| `request.page-size-invalid` | `pageSize` is not a number from 1 to 200, or it is sent twice | Send a number from 1 to 200, or send no `pageSize` for 50 |
+| `request.page-token-invalid` | `pageToken` does not decode, is longer than 4096 bytes, is sent twice, or is the token of another namespace or of `@server` | Send the request again without `pageToken` |
+| `request.invalid-query` | `organization` is missing, or the request holds `page[number]` or `page[size]`, which the list no longer reads | Send `organization`, `pageSize` and `pageToken` |
+
+A token works only for the `organization` that made it. The server checks the
+action on the `organization` before it reads `pageSize` or `pageToken`, so a
+caller who may not read the log gets the refusal of the route and nothing
+about the token.
 
 `GET /api/audit/entries/<sequence>?organization=<namespace>` reads one
 entry of the namespace by its sequence, in the same shape as an entry of the

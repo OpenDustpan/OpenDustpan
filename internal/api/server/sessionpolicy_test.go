@@ -137,7 +137,7 @@ func decodeSessionPolicy(t *testing.T, rec *httptest.ResponseRecorder) sessionPo
 func sessionPolicyEntries(t *testing.T, st *sqlite.Store) []audit.Entry {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

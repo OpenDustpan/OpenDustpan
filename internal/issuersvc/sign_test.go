@@ -91,7 +91,7 @@ func TestLoginMakesTheFirstKeysAndRecordsWhy(t *testing.T) {
 		t.Fatalf("keys after the first open = %d, want an active and a next key", len(keys))
 	}
 
-	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Size: 10})
+	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Size: 10, Before: 0})
 	if err != nil || len(list.Entries) == 0 {
 		t.Fatalf("audit list = %v, %v", list, err)
 	}

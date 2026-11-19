@@ -585,7 +585,7 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	// stays so that no caller of the store can skip the check.
 	p, err := page.Normalized()
 	if err != nil {
-		return audit.Listing{}, fmt.Errorf("list audit entries: %w", err)
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("list audit entries: %w", err)
 	}
 
 	before := p.Before
@@ -599,20 +599,22 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 		Limit:     clampInt32(p.Size) + 1,
 	})
 	if err != nil {
-		return audit.Listing{}, fmt.Errorf("select audit entries: %w", err)
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("select audit entries: %w", err)
 	}
 
+	// The extra row, if any, tells that more entries exist. It never
+	// reaches the caller.
 	more := len(rows) > p.Size
-	if more {
-		rows = rows[:p.Size]
-	}
-
-	entries := make([]audit.Entry, 0, len(rows))
+	entries := make([]audit.Entry, 0, min(len(rows), p.Size))
 
 	for i := range rows {
+		if i == p.Size {
+			break
+		}
+
 		e, err := fromAuditRow(rows[i])
 		if err != nil {
-			return audit.Listing{}, err
+			return audit.Listing{Entries: nil, More: false}, err
 		}
 
 		entries = append(entries, e)

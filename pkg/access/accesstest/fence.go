@@ -141,7 +141,7 @@ func checkScopeEntries(t *testing.T, s access.Store, ns namespace.Name, want int
 		return
 	}
 
-	listing, err := log.List(t.Context(), ns, audit.Page{Size: audit.DefaultPageSize})
+	listing, err := log.List(t.Context(), ns, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries of %q: %v", ns, err)
 	}

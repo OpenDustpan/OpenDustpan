@@ -342,7 +342,7 @@ func generation(t *testing.T, s Store, id string) uint64 {
 func entries(t *testing.T, s Store, prefix string) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

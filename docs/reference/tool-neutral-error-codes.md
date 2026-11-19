@@ -107,7 +107,9 @@ Each error answer has the header `Cache-Control: no-store`.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
-| 400 | `request.invalid-query` | The `organization` query value is missing, or `page[number]` or `page[size]` is not a positive number |
+| 400 | `request.invalid-query` | The `organization` query value is missing, or the request holds `page[number]` or `page[size]`, which the list no longer reads |
+| 400 | `request.page-size-invalid` | `pageSize` is not a decimal number from 1 to 200, or it is sent twice |
+| 400 | `request.page-token-invalid` | `pageToken` does not decode, is longer than 4096 bytes, is sent twice, or comes from another scope |
 | 400 | `request.invalid-path` | The sequence in the path is not a positive number |
 | 400 | `request.invalid-object` | The object of the request is not valid |
 | 404 | `namespace.not-found` | No namespace with this name |

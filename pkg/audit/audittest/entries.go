@@ -218,7 +218,7 @@ func mustOrigin(t *testing.T, fields audit.OriginArgs) *audit.Origin {
 func listAgentRoundTripEntries(t *testing.T, s EntryStore, ns namespace.Namespace) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

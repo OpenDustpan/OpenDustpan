@@ -100,7 +100,7 @@ func TestNameLockKey(t *testing.T) {
 func serverEntries(t *testing.T, s *postgres.Store) []audit.Entry {
 	t.Helper()
 
-	page, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
+	page, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

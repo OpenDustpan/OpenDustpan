@@ -738,7 +738,7 @@ func testGateFields(t *testing.T, s GateStore) {
 func wantRemoved(t *testing.T, s GateStore, action string, keys []string) {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List(audit) = %v", err)
 	}
@@ -1159,7 +1159,7 @@ func testGatePurgeChangeCap(t *testing.T, s GateStore) {
 		t.Fatalf("PurgeWorkspace() = %v", err)
 	}
 
-	listing, err := s.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List(audit) = %v", err)
 	}

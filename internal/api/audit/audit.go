@@ -498,15 +498,15 @@ func parsePage(r *http.Request, scope namespace.Name) (audit.Page, error) {
 	query := queryOf(r)
 
 	if query.Has("page[number]") || query.Has("page[size]") {
-		return audit.Page{}, errRemovedPaging
+		return audit.Page{Size: 0, Before: 0}, errRemovedPaging
 	}
 
 	if len(query.All("pageSize")) > 1 {
-		return audit.Page{}, errPageSize
+		return audit.Page{Size: 0, Before: 0}, errPageSize
 	}
 
 	if len(query.All("pageToken")) > 1 {
-		return audit.Page{}, errPageToken
+		return audit.Page{Size: 0, Before: 0}, errPageToken
 	}
 
 	page := audit.Page{Size: audit.DefaultPageSize, Before: 0}
@@ -514,7 +514,7 @@ func parsePage(r *http.Request, scope namespace.Name) (audit.Page, error) {
 	if query.Has("pageSize") {
 		n, err := parsePageSize(query.Get("pageSize"))
 		if err != nil {
-			return audit.Page{}, err
+			return audit.Page{Size: 0, Before: 0}, err
 		}
 
 		page.Size = n
@@ -523,7 +523,7 @@ func parsePage(r *http.Request, scope namespace.Name) (audit.Page, error) {
 	if token := query.Get("pageToken"); token != "" {
 		cursor, err := decodePageCursor(token, scope)
 		if err != nil {
-			return audit.Page{}, err
+			return audit.Page{Size: 0, Before: 0}, err
 		}
 
 		page.Before = cursor.before

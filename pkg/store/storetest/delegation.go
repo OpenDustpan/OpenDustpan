@@ -746,15 +746,12 @@ func (d *delegation) entryOf(t *testing.T, ns namespace.Name, object string) aud
 	t.Helper()
 
 	entries := audittest.All(t, d.st, ns)
-	for i := range entries {
-		if entries[i].Object == object {
-			return entries[i]
-		}
+	i := slices.IndexFunc(entries, func(e audit.Entry) bool { return e.Object == object })
+	if i < 0 {
+		t.Fatalf("no audit entry of %q", object)
 	}
 
-	t.Fatalf("no audit entry of %q", object)
-
-	return audit.Entry{}
+	return entries[i]
 }
 
 // countChanges returns the count of the changes with the key in the

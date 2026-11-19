@@ -706,7 +706,11 @@ func serverLinkEntries(t *testing.T, f accessFixture) []string {
 	var out []string
 
 	for before := int64(0); ; {
-		listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: before})
+		listing, err := f.store.List(
+			t.Context(),
+			audit.ServerScope,
+			audit.Page{Size: audit.MaxPageSize, Before: before},
+		)
 		if err != nil {
 			t.Fatalf("list audit: %v", err)
 		}

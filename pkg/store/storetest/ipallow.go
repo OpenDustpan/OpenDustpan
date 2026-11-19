@@ -396,7 +396,7 @@ func testIPAllowlistAuditEntry(t *testing.T, s IPAllowlistStore) {
 	want := ipAllowlistEntry(ns.Name)
 	mustSetIPAllowlist(t, s, ns, []string{"10.0.0.0/8"}, want)
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

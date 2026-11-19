@@ -420,7 +420,7 @@ func failingGrantReach(st *sqlite.Store) access.ReachConfig {
 func checkStoredGroupEntries(t *testing.T, st *sqlite.Store, groupID string) {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}

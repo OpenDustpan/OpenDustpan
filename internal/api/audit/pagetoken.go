@@ -30,6 +30,9 @@ type pageCursor struct {
 var errPageToken = problem.BadRequest(errcode.RequestPageTokenInvalid,
 	"pageToken is not valid for this scope: send the request again without pageToken")
 
+// errTokenSequence reports a sequence that no page token can hold.
+var errTokenSequence = errors.New("a page token needs a sequence of 1 or more")
+
 // scopeFingerprint returns the fingerprint of a scope. The fingerprint is a
 // consistency check and not a signature: a caller who may read the scope can
 // make a token for it, and the token gives no reach that the caller does not
@@ -59,7 +62,7 @@ func decodePageCursor(token string, scope namespace.Name) (pageCursor, error) {
 // encodePageToken returns the token of the page that starts below before.
 func encodePageToken(scope namespace.Name, before int64) (string, error) {
 	if before < 1 {
-		return "", errors.New("a page token needs a sequence of 1 or more")
+		return "", errTokenSequence
 	}
 
 	token, err := pagetoken.Encode(pageTokenWire{Fingerprint: scopeFingerprint(scope), Before: before})

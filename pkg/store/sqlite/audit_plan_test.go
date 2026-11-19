@@ -1,6 +1,7 @@
 package sqlite_test
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,11 +39,23 @@ func auditPageQuery(t *testing.T) string {
 	return strings.Join(lines, "\n")
 }
 
-// TestListPlanUsesThePrimaryKey proves that the page query reads the primary
-// key (namespace, sequence) backwards: the plan searches by the key and holds
-// no temporary B-tree for a sort.
-func TestListPlanUsesThePrimaryKey(t *testing.T) {
-	t.Parallel()
+// checkQueryGuards fails the test unless the query holds each guard: the
+// scope, the start below a sequence, and the limit of the rows of one page.
+func checkQueryGuards(t *testing.T, query string, guards ...string) {
+	t.Helper()
+
+	for _, guard := range guards {
+		if !strings.Contains(query, guard) {
+			t.Fatalf("query %q does not hold %q", query, guard)
+		}
+	}
+}
+
+// seedAuditRows opens a store at a copy of the template, so the schema
+// exists, and adds 20,000 entries of the namespace acme through a second
+// connection.
+func seedAuditRows(t *testing.T) *sql.DB {
+	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	copyTemplate(t, path)
@@ -53,8 +66,8 @@ func TestListPlanUsesThePrimaryKey(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
 		}
 	})
 
@@ -64,8 +77,8 @@ func TestListPlanUsesThePrimaryKey(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		if err := conn.Close(); err != nil {
-			t.Errorf("close raw database: %v", err)
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
 		}
 	})
 
@@ -77,15 +90,12 @@ SELECT 'acme', i, 'user', 'unit:decrypt', 'obj', i, 'api', 'reveal', 'success', 
 		t.Fatalf("seed audit entries: %v", err)
 	}
 
-	query := auditPageQuery(t)
+	return conn
+}
 
-	// The three guards of the query, each by its own check: the scope, the
-	// start below a sequence, and the limit of the rows that one page reads.
-	for _, guard := range []string{"namespace = ?", "sequence < ?", "LIMIT ?"} {
-		if !strings.Contains(query, guard) {
-			t.Fatalf("query %q does not hold %q", query, guard)
-		}
-	}
+// explainPlan returns the lines of the plan of query for a page below 15000.
+func explainPlan(t *testing.T, conn *sql.DB, query string) string {
+	t.Helper()
 
 	rows, err := conn.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, "acme", 15000, 51)
 	if err != nil {
@@ -93,8 +103,8 @@ SELECT 'acme', i, 'user', 'unit:decrypt', 'obj', i, 'api', 'reveal', 'success', 
 	}
 
 	defer func() {
-		if err := rows.Close(); err != nil {
-			t.Errorf("close plan rows: %v", err)
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close plan rows: %v", closeErr)
 		}
 	}()
 
@@ -104,8 +114,8 @@ SELECT 'acme', i, 'user', 'unit:decrypt', 'obj', i, 'api', 'reveal', 'success', 
 		var id, parent, unused int
 
 		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			t.Fatalf("scan plan: %v", err)
+		if scanErr := rows.Scan(&id, &parent, &unused, &detail); scanErr != nil {
+			t.Fatalf("scan plan: %v", scanErr)
 		}
 
 		fmt.Fprintln(&plan, detail)
@@ -115,10 +125,27 @@ SELECT 'acme', i, 'user', 'unit:decrypt', 'obj', i, 'api', 'reveal', 'success', 
 		t.Fatalf("read plan: %v", err)
 	}
 
+	return plan.String()
+}
+
+// TestListPlanUsesThePrimaryKey proves that the page query reads the primary
+// key (namespace, sequence) backwards: the plan searches by the key and holds
+// no temporary B-tree for a sort.
+func TestListPlanUsesThePrimaryKey(t *testing.T) {
+	t.Parallel()
+
+	conn := seedAuditRows(t)
+	query := auditPageQuery(t)
+
+	checkQueryGuards(t, query, "namespace = ?", "sequence < ?", "LIMIT ?")
+
+	plan := explainPlan(t, conn, query)
+
 	// SQLite names the index of the primary key (namespace, sequence) of a
 	// table with a row ID sqlite_autoindex_audit_entries_1.
-	if !strings.Contains(plan.String(), "SEARCH audit_entries USING INDEX sqlite_autoindex_audit_entries_1 (namespace=? AND sequence<?)") ||
-		strings.Contains(plan.String(), "USE TEMP B-TREE") {
-		t.Fatalf("plan = %q, want a search by the primary key and no temporary B-tree", plan.String())
+	const want = "SEARCH audit_entries USING INDEX sqlite_autoindex_audit_entries_1 (namespace=? AND sequence<?)"
+
+	if !strings.Contains(plan, want) || strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("plan = %q, want a search by the primary key and no temporary B-tree", plan)
 	}
 }

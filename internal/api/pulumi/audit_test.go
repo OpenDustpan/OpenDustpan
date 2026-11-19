@@ -68,7 +68,7 @@ func (m *memAuditStore) List(
 	defer m.mu.Unlock()
 
 	if m.err != nil {
-		return audit.Listing{}, m.err
+		return audit.Listing{Entries: nil, More: false}, m.err
 	}
 
 	out := append([]audit.Entry(nil), m.entries...)
@@ -76,7 +76,7 @@ func (m *memAuditStore) List(
 		out[i], out[j] = out[j], out[i]
 	}
 
-	return audit.Listing{Entries: out}, nil
+	return audit.Listing{Entries: out, More: false}, nil
 }
 
 func (m *memAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {

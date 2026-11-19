@@ -48,7 +48,7 @@ func approvalOps(t *testing.T, ops durable.Store) []durable.Operation {
 func approvalEntryCount(t *testing.T, st chainApprovalStore) int {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server scope: %v", err)
 	}

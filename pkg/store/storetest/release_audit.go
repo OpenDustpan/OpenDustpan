@@ -71,7 +71,7 @@ func listReleaseEntries(t *testing.T, s WorkspaceStore, ns namespace.Name) []aud
 		t.Skip("store does not list audit entries")
 	}
 
-	listing, err := lister.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

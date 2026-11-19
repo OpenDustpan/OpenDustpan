@@ -173,7 +173,7 @@ func TestHostResetSessionLimit(t *testing.T) {
 		t.Fatal("the stored limit stays after the reset")
 	}
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

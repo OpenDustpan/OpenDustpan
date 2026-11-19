@@ -161,12 +161,12 @@ func testNamespacePrincipalFence(t *testing.T, s NamespaceStore) {
 
 	mustCreateNamespacePrincipal(t, s, p)
 
-	listing, err := s.List(ctx, "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := s.List(ctx, "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil || len(listing.Entries) != 1 || listing.Entries[0].Object != entry().Object {
 		t.Fatalf("audit of acme = %+v, %v; want the entry of the create", listing.Entries, err)
 	}
 
-	server, err := s.List(ctx, audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	server, err := s.List(ctx, audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil || len(server.Entries) != 0 {
 		t.Fatalf("audit of the installation = %d entries, %v; want none", len(server.Entries), err)
 	}

@@ -391,7 +391,7 @@ func testEmptyHolderRefused(t *testing.T, s Store) {
 		}
 	}
 
-	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize})
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}
@@ -486,7 +486,7 @@ func testConcurrentRemoval(t *testing.T, s Store) {
 		t.Errorf("%d removals succeeded, want exactly 1", removed)
 	}
 
-	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize})
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}
@@ -516,7 +516,7 @@ func testAuditEntries(t *testing.T, s Store) {
 		t.Fatalf("RemoveLock: %v", err)
 	}
 
-	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize})
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}
@@ -1212,7 +1212,7 @@ func testNamespaceAudit(t *testing.T, s Store) {
 		t.Fatalf("RemoveLock: %v", err)
 	}
 
-	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize})
+	listing, err := s.List(t.Context(), f.ns.Name, audit.Page{Size: auditPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
 	}

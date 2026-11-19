@@ -745,7 +745,7 @@ func testAuditEntries(t *testing.T, s Store) {
 // listServerObjects returns the objects of the entries of @server, newest
 // first, so a case counts the entries that its writes append.
 func listServerObjects(ctx context.Context, lister auditLister) ([]string, error) {
-	listing, err := lister.List(ctx, audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := lister.List(ctx, audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		return nil, err
 	}

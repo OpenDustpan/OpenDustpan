@@ -120,7 +120,7 @@ func (a memAudit) List(_ context.Context, ns namespace.Name, _ audit.Page) (audi
 	es := slices.Clone(a.m.entries[ns])
 	slices.Reverse(es)
 
-	return audit.Listing{Entries: es}, nil
+	return audit.Listing{Entries: es, More: false}, nil
 }
 
 func (memAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {

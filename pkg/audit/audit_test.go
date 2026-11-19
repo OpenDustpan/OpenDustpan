@@ -410,14 +410,14 @@ func TestPageNormalizedTable(t *testing.T) {
 		wantSize int
 		wantErr  bool
 	}{
-		{name: "size 0 reads the default", page: audit.Page{}, wantSize: audit.DefaultPageSize},
-		{name: "size 200 stays", page: audit.Page{Size: audit.MaxPageSize}, wantSize: audit.MaxPageSize},
-		{name: "size 1 stays", page: audit.Page{Size: 1}, wantSize: 1},
-		{name: "size 201", page: audit.Page{Size: audit.MaxPageSize + 1}, wantErr: true},
-		{name: "size -1", page: audit.Page{Size: -1}, wantErr: true},
-		{name: "before -1", page: audit.Page{Before: -1}, wantErr: true},
-		{name: "before smallest int64", page: audit.Page{Before: math.MinInt64}, wantErr: true},
-		{name: "before largest int64", page: audit.Page{Before: math.MaxInt64}, wantSize: audit.DefaultPageSize},
+		{"size 0 reads the default", audit.Page{Size: 0, Before: 0}, audit.DefaultPageSize, false},
+		{"size 200 stays", audit.Page{Size: audit.MaxPageSize, Before: 0}, audit.MaxPageSize, false},
+		{"size 1 stays", audit.Page{Size: 1, Before: 0}, 1, false},
+		{"size 201", audit.Page{Size: audit.MaxPageSize + 1, Before: 0}, 0, true},
+		{"size -1", audit.Page{Size: -1, Before: 0}, 0, true},
+		{"before -1", audit.Page{Size: 0, Before: -1}, 0, true},
+		{"before smallest int64", audit.Page{Size: 0, Before: math.MinInt64}, 0, true},
+		{"before largest int64", audit.Page{Size: 0, Before: math.MaxInt64}, audit.DefaultPageSize, false},
 	}
 
 	for _, tc := range cases {

@@ -694,7 +694,7 @@ func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audi
 	ctx := t.Context()
 	ns := g.Object.Namespace()
 
-	listing, err := log.List(ctx, ns, audit.Page{Size: audit.MaxPageSize})
+	listing, err := log.List(ctx, ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of %q: %v", ns, err)
 	}
@@ -892,7 +892,7 @@ func testSubjectRevokeKeepsOrigin(t *testing.T, s access.Store) {
 func checkRevokeEntryOrigin(t *testing.T, log audit.Store, want *audit.Origin) {
 	t.Helper()
 
-	listing, err := log.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := log.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of acme: %v", err)
 	}

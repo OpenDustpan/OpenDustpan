@@ -101,14 +101,14 @@ func auditReadAllowEntries() []AllowEntry {
 		{
 			Method: http.MethodGet, Path: "/api/audit/entries",
 			CoveringTest: "TestCLIs (checkAuditLog)",
-			Reason: "Console-only: no CLI reads the audit entries. The " +
+			Reason: "No CLI reads the audit entries. The " +
 				"harness step lists them after a CLI command that calls the " +
 				"decrypt audit route and checks the chain.",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/audit/entries/{sequence}",
 			CoveringTest: "TestCLIs (checkAuditLog), TestServerAuditScope",
-			Reason: "Console-only and for audit sink receivers: no CLI reads " +
+			Reason: "For audit sink receivers: no CLI reads " +
 				"one audit entry. The harness steps read an entry of the " +
 				"namespace and of @server by its sequence.",
 		},

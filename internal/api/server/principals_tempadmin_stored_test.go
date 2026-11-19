@@ -241,7 +241,7 @@ func checkStoredPrincipalWarnings(t *testing.T, log *capturedLog, id string, wan
 func checkStoredPrincipalEntries(t *testing.T, st *sqlite.Store, id string, writes int) {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}

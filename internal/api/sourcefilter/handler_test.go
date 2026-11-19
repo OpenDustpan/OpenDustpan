@@ -63,7 +63,7 @@ func storedFilter(t *testing.T, e *env) source.Filter {
 func filterEntries(t *testing.T, e *env) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.store.audit.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := e.store.audit.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

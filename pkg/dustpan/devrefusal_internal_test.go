@@ -111,7 +111,7 @@ func (w *devRefusalWorld) signIn(t *testing.T, subject string) error {
 func (w *devRefusalWorld) entries(t *testing.T, subject string) []audit.Entry {
 	t.Helper()
 
-	list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Size: 100})
+	list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Size: 100, Before: 0})
 	if err != nil {
 		t.Fatalf("list installation entries: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestDevRefusalHostileSubject(t *testing.T) {
 			w := newDevRefusalWorld(t, installation.KindProduction)
 			w.refuse(t, tc.subject)
 
-			list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Size: 100})
+			list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Size: 100, Before: 0})
 			if err != nil {
 				t.Fatalf("list installation entries: %v", err)
 			}
@@ -401,7 +401,7 @@ func TestDevRefusalFloodBounds(t *testing.T) {
 			t.Fatalf("limiter holds %d keys, want at most %d", n, maxKeys)
 		}
 
-		list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Size: 500})
+		list, err := w.st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 		if err != nil {
 			t.Fatalf("list installation entries: %v", err)
 		}
@@ -464,7 +464,7 @@ func TestDevRefusalFlushesNamespaceKey(t *testing.T) {
 	// A dev refusal triggers the sweep, and its recorder writes the flush entry.
 	w.refuse(t, "dev:admin")
 
-	list, err := w.st.List(t.Context(), namespace.Name("team"), audit.Page{Size: 100})
+	list, err := w.st.List(t.Context(), namespace.Name("team"), audit.Page{Size: 100, Before: 0})
 	if err != nil {
 		t.Fatalf("list namespace entries: %v", err)
 	}

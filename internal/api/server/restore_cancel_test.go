@@ -176,7 +176,7 @@ func TestCancelRestoreUnknownAnswers404(t *testing.T) {
 		}
 	}
 
-	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestCancelRestoreUnknownAnswers404(t *testing.T) {
 func cancelEntries(t *testing.T, fix restoreFixture, id string, want audit.Outcome) int {
 	t.Helper()
 
-	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
+	listing, err := fix.audit.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

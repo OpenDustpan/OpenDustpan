@@ -685,7 +685,7 @@ func (e *env) auditActions() map[string]bool {
 
 	out := map[string]bool{}
 
-	listing, err := e.store.audit.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
+	listing, err := e.store.audit.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		e.t.Fatalf("list audit: %v", err)
 	}
