@@ -28,4 +28,13 @@ func TestStateWriterHasOnlyTheCheckedDeclare(t *testing.T) {
 	if _, ok := workspaces.MethodByName("BeginState"); ok {
 		t.Error("WorkspaceService has the unchecked BeginState; the handler could skip the collection check")
 	}
+
+	locker := reflect.TypeFor[tfe.WorkspaceLocker]()
+	if _, ok := locker.MethodByName("LockForJob"); ok {
+		t.Error("WorkspaceLocker has the unchecked LockForJob; the handler could skip the collection check")
+	}
+
+	if _, ok := workspaces.MethodByName("LockForJob"); ok {
+		t.Error("WorkspaceService has the unchecked LockForJob; the handler could skip the collection check")
+	}
 }

@@ -135,13 +135,7 @@ func prepareAuthFixture(t *testing.T, f fixture) authFixtureIDs {
 		ctx,
 		ws.ID,
 		"admin",
-		workspace.NewState{
-			Lineage: "l1",
-			MD5:     hex.EncodeToString(sum[:]),
-			Outputs: nil,
-			Serial:  1,
-			Force:   false,
-		},
+		workspace.NewState{Lineage: "l1", MD5: hex.EncodeToString(sum[:]), Outputs: nil, Serial: 1, Force: false},
 		workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil},
 	)
 	if err != nil {

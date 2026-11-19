@@ -212,7 +212,7 @@ func (foreignRestoreWorkspaces) GetByID(
 			Unlocked: false,
 		},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		InCollection: false,
+		InCollection: true,
 	}, nil
 }
 
@@ -300,7 +300,7 @@ func (lockedRestoreWorkspaces) GetByID(
 			Unlocked: false,
 		},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		InCollection: false,
+		InCollection: true,
 	}, nil
 }
 

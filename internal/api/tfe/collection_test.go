@@ -134,3 +134,66 @@ func TestWriteToAWorkspaceInNoCollectionIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// acceptingWorkspaces is stubWorkspaces with a service that lets every lock and
+// every declare through, and whose GetByID reports a workspace that no
+// collection holds. Only the handler can refuse a write to it.
+type acceptingWorkspaces struct{ stubWorkspaces }
+
+func (acceptingWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	w, err := stubWorkspaces{}.GetByID(ctx, id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	w.InCollection = false
+
+	return w, nil
+}
+
+func (acceptingWorkspaces) LockForJobInCollection(
+	ctx context.Context, id workspace.ID, holder, reason, jobID string,
+) (workspace.Workspace, error) {
+	return stubWorkspaces{}.LockForJobInCollection(ctx, id, holder, reason, jobID)
+}
+
+// TestHandlerRefusesAWorkspaceInNoCollectionWhenTheServiceDoesNot proves the
+// handler layer alone: the service accepts the write, the read of the workspace
+// reports no collection, and the handler answers 409 with unit.no-collection.
+func TestHandlerRefusesAWorkspaceInNoCollectionWhenTheServiceDoesNot(t *testing.T) {
+	t.Parallel()
+
+	placer := &tofuunit.Placer{
+		Rules: fixedRules{none: false}, Collections: fixedCollections{missing: false},
+	}
+
+	requests := []struct {
+		name   string
+		target string
+		body   string
+	}{
+		{"lock", "/api/v2/workspaces/ws-test123/actions/lock", `{"data":{}}`},
+		{
+			"state version create", "/api/v2/workspaces/ws-test123/state-versions",
+			stateCreateBody(4, stateCreateOutputs()),
+		},
+	}
+
+	for _, rq := range requests {
+		t.Run(rq.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(
+				t.Context(), http.MethodPost, rq.target, strings.NewReader(rq.body),
+			)
+			req.Header.Set("Authorization", "Bearer test-token")
+
+			rec := httptest.NewRecorder()
+			newPlacedHandler(t, placer, acceptingWorkspaces{stubWorkspaces: stubWorkspaces{}}).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "unit.no-collection") {
+				t.Fatalf("%s = %d %s, want 409 with unit.no-collection", rq.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

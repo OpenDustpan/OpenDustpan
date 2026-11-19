@@ -218,7 +218,7 @@ func membershipURL(t *testing.T) string {
 // TestWorkspaceReadIgnoresMembershipOfAnotherNamespace proves that a
 // membership row of the namespace other does not make a workspace of acme read
 // as in a collection. The schema allows the row state: the row names one
-// namespace, and the unit ID belongs to another.
+// namespace, and the stable ID of the unit belongs to another.
 func TestWorkspaceReadIgnoresMembershipOfAnotherNamespace(t *testing.T) {
 	t.Parallel()
 

@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -68,7 +69,12 @@ func (h *Handler) refusingHolder(ctx context.Context, id workspace.ID, err error
 		return lock.Holder
 	}
 
-	return h.lockHolder(ctx, id)
+	_, holder, err := h.lockHolder(ctx, id)
+	if err != nil {
+		return ""
+	}
+
+	return holder
 }
 
 // lockConflict returns the 409 of a workspace whose lock holder is another
@@ -80,15 +86,40 @@ func lockConflict(id workspace.ID, holder string) errorClass {
 	}
 }
 
-// lockHolder returns the holder of the stored workspace, or "" when the
-// workspace is missing or unlocked.
-func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) string {
+// lockHolder returns the stored workspace and the holder of its lock. The
+// holder is "" when the workspace is unlocked. It returns the read error, and
+// no workspace, when the workspace cannot be read.
+func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) (workspace.Workspace, string, error) {
 	ws, err := h.workspaces.GetByID(ctx, id)
-	if err != nil || !ws.Lock.Locked() {
-		return ""
+	if err != nil {
+		return workspace.Workspace{}, "", err
 	}
 
-	return ws.Lock.Holder
+	if !ws.Lock.Locked() {
+		return ws, "", nil
+	}
+
+	return ws, ws.Lock.Holder, nil
+}
+
+// requireMember refuses a write to a workspace that no collection holds. It
+// returns an error that matches tofuunit.ErrPlacementOff when the Placer cannot
+// check collections, and an error that matches collection.ErrNoCollection when
+// ws is in no collection. ws is the workspace that the caller has just read, so
+// the check adds no round trip.
+//
+// Defense in depth: the service checks the membership too; this check stays so
+// that a service that lets the write through still gets the 409 of this layer.
+func (h *Handler) requireMember(obj identity.Object, ws workspace.Workspace) error {
+	if err := h.placer.RequireEnabled(obj); err != nil {
+		return err
+	}
+
+	if !ws.InCollection {
+		return fmt.Errorf("write to %s: %w", ws.Ref, collection.ErrNoCollection)
+	}
+
+	return nil
 }
 
 // lockWorkspace serves POST /api/v2/workspaces/{id}/actions/lock.
@@ -121,8 +152,21 @@ func (h *Handler) lockWorkspace(
 	// held. If the holder unlocks after the read, the caller gets 409 and
 	// retries, so no call takes the lock without the gates. A retry writes no
 	// new decision record.
-	if holder := h.lockHolder(ctx, id); holder != "" {
+	ws, holder, err := h.lockHolder(ctx, id)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if holder != "" {
 		h.writeClassError(ctx, w, lockConflict(id, holder))
+
+		return
+	}
+
+	if err = h.requireMember(obj, ws); err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -134,8 +178,21 @@ func (h *Handler) lockWorkspace(
 
 	// The compare-and-swap was lost. Read the holder again: a held lock ends the
 	// call with 409, and a free lock goes through the gates again.
-	if holder := h.lockHolder(ctx, id); holder != "" {
+	ws, holder, err = h.lockHolder(ctx, id)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if holder != "" {
 		h.writeClassError(ctx, w, lockConflict(id, holder))
+
+		return
+	}
+
+	if err = h.requireMember(obj, ws); err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -166,15 +223,6 @@ type lockCall struct {
 // -lock-timeout.
 func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
 	if !h.guardStateWrite(c.w, c.r, c.p, c.obj, lockCheck()) {
-		return false
-	}
-
-	// A workspace that no collection holds takes no lock. The lock reads the
-	// membership with the workspace, so it adds no round trip. This check
-	// only keeps a server with no collections closed.
-	if err := h.placer.RequireEnabled(c.obj); err != nil {
-		h.writeError(ctx, c.w, err)
-
 		return false
 	}
 

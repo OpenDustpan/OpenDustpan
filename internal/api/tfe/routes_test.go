@@ -362,7 +362,7 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.P
 			Unlocked: false,
 		},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		InCollection: false,
+		InCollection: true,
 	}, nil
 }
 
@@ -946,7 +946,7 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Unlocked: false,
 		},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		InCollection: false,
+		InCollection: true,
 	}, nil
 }
 

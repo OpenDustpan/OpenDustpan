@@ -191,17 +191,26 @@ func (h *Handler) createStateVersion(
 
 	id := workspace.ID(r.PathValue("id"))
 
-	// A workspace that no collection holds takes no state. The declare reads
-	// the membership with the workspace, so it adds no round trip. This check
-	// only keeps a server with no collections closed.
+	// A workspace that no collection holds takes no state. The check uses the
+	// workspace that the allowance reads, so it adds no round trip.
+	//
+	// Defense in depth: BeginStateInCollection checks the membership too; this
+	// check stays so that a service that lets the declare through still gets
+	// the 409 of this layer.
 	if err = h.placer.RequireEnabled(obj); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	allow, err := h.allowance(ctx, p, id, obj)
+	allow, ws, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if err = h.requireMember(obj, ws); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

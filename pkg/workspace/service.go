@@ -776,8 +776,10 @@ func (s *Service) LockForJob(ctx context.Context, id ID, holder, reason, jobID s
 // LockForJobInCollection is LockForJob for a workspace that a collection must
 // hold. It returns an error that matches collection.ErrNoCollection, and
 // writes nothing, when no collection holds the workspace. The membership comes
-// from the read of the workspace that the lock makes anyway, so the check adds
-// no round trip. The check runs before the manual lock check: a workspace in no
+// from the same read of the workspace as the lock, so the check adds no round
+// trip. LockForJob reads the workspace only when a manual lock port is set;
+// this method always reads it once and passes that read to the manual lock
+// check. The check runs before the manual lock check: a workspace in no
 // collection takes no lock, whatever manual locks cover it.
 func (s *Service) LockForJobInCollection(ctx context.Context, id ID, holder, reason, jobID string) (Workspace, error) {
 	if holder == "" {
@@ -789,9 +791,10 @@ func (s *Service) LockForJobInCollection(ctx context.Context, id ID, holder, rea
 		return Workspace{}, err
 	}
 
-	// Defense in depth: the handler and the authorizer also refuse a lock on a
-	// workspace in no collection; this check stays so that a new caller of the
-	// service cannot skip it.
+	// Defense in depth: the tfe handler also refuses a lock on a workspace in
+	// no collection, from its own read of the workspace. The authorizer and the
+	// gates do not refuse it. This check stays so that a call that reaches the
+	// service without the handler gets the same refusal.
 	if !w.InCollection {
 		return Workspace{}, fmt.Errorf("lock %s: %w", w.Ref, collection.ErrNoCollection)
 	}
@@ -1155,8 +1158,8 @@ func (s *Service) BeginState(
 // BeginStateInCollection is BeginState for a workspace that a collection must
 // hold. It returns an error that matches collection.ErrNoCollection, and
 // writes nothing, when no collection holds the workspace. The membership comes
-// from the read of the workspace that the declare makes anyway, so the check
-// adds no round trip. The HTTP handler of the declare calls only this method.
+// from the same read of the workspace as the declare, so the check adds no
+// round trip. The HTTP handler of the declare calls only this method.
 func (s *Service) BeginStateInCollection(
 	ctx context.Context, id ID, holder string, in NewState, auth Authority,
 ) (PendingState, error) {
@@ -3241,10 +3244,11 @@ func (s *Service) declareState(ctx context.Context, req declareRequest) (Pending
 	// A workspace that no collection holds takes no state. The read above
 	// carries the membership, so the check adds no round trip.
 	//
-	// Defense in depth: the handler, the authorizer and the gates also refuse
-	// a write to a workspace in no collection. The handler can reach only
-	// BeginStateInCollection, which sets requireCollection; this check stays
-	// so that a new caller of declareState cannot skip it.
+	// Defense in depth: the tfe handler also refuses a write to a workspace in
+	// no collection, from its own read of the workspace. The authorizer and the
+	// gates do not refuse it. BeginState is the declare with no check: it
+	// leaves requireCollection false, so a caller of BeginState gets no
+	// refusal here.
 	if req.requireCollection && !w.InCollection {
 		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, collection.ErrNoCollection)
 	}

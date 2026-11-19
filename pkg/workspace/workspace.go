@@ -221,8 +221,9 @@ type Workspace struct {
 	NamespaceID namespace.ID
 	// InCollection is true when a collection holds the workspace. The store
 	// fills it in the read that returns the workspace, so a write path that
-	// needs a workspace in a collection adds no read of its own. A list, a
-	// page and a write ignore it, and it is false there.
+	// needs a workspace in a collection adds no read of its own. A list and a
+	// page leave it false. A write does not store it; the workspace that a
+	// service write returns keeps the value of its read.
 	InCollection bool
 	// Overrides holds the switches of this unit. A switch only narrows the
 	// switch of its namespace: an override needs both (ADR 44, decision 6).

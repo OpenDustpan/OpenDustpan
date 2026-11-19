@@ -1751,13 +1751,7 @@ func rawSum(content string) [md5.Size]byte {
 }
 
 func newState(lineage string, serial int64, content string) workspace.NewState {
-	return workspace.NewState{
-		Lineage: lineage,
-		MD5:     sum(content),
-		Outputs: nil,
-		Serial:  serial,
-		Force:   false,
-	}
+	return workspace.NewState{Lineage: lineage, MD5: sum(content), Outputs: nil, Serial: serial, Force: false}
 }
 
 // push declares and uploads one state version as alice, who must hold the lock.
@@ -1869,27 +1863,15 @@ func TestStateVersions(t *testing.T) {
 			want: workspace.ErrTooLarge,
 		},
 		{
-			name: "bad md5",
-			in: workspace.NewState{
-				Lineage: "l1",
-				MD5:     "nope",
-				Outputs: nil,
-				Serial:  2,
-				Force:   false,
-			},
+			name:    "bad md5",
+			in:      workspace.NewState{Lineage: "l1", MD5: "nope", Outputs: nil, Serial: 2, Force: false},
 			content: "",
 			want:    workspace.ErrInvalidState,
 		},
 		{name: "next state", in: newState("l1", 2, "{\"v\":2}"), content: "{\"v\":2}", want: nil},
 		{
-			name: "forced other lineage",
-			in: workspace.NewState{
-				Lineage: "l9",
-				MD5:     sum("{\"v\":9}"),
-				Outputs: nil,
-				Serial:  1,
-				Force:   true,
-			},
+			name:    "forced other lineage",
+			in:      workspace.NewState{Lineage: "l9", MD5: sum("{\"v\":9}"), Outputs: nil, Serial: 1, Force: true},
 			content: "{\"v\":9}",
 			want:    nil,
 		},
@@ -1930,13 +1912,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 	ctx := t.Context()
 	enableForced(t, f)
 
-	forced := workspace.NewState{
-		Lineage: "l9",
-		MD5:     sum("{\"v\":9}"),
-		Outputs: nil,
-		Serial:  1,
-		Force:   true,
-	}
+	forced := workspace.NewState{Lineage: "l9", MD5: sum("{\"v\":9}"), Outputs: nil, Serial: 1, Force: true}
 
 	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrNotLocked) {

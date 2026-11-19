@@ -94,7 +94,7 @@ func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace
 			Unlocked: false,
 		},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		InCollection: false,
+		InCollection: true,
 	}, nil
 }
 
@@ -347,7 +347,7 @@ func (r *raceWorkspaces) lockedWorkspace(holder string) workspace.Workspace {
 			Unlocked: false,
 		},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		InCollection: false,
+		InCollection: true,
 	}
 }
 
