@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,7 +61,7 @@ func TestClearSensitiveEnvUnsetsEveryListedVariable(t *testing.T) {
 
 	var unset []string
 
-	err := clearSensitiveEnv(func(name string) error {
+	err := clearSensitiveEnv(t.Context(), discardLogger(), noEnv, func(name string) error {
 		unset = append(unset, name)
 
 		return nil
@@ -85,6 +87,58 @@ func TestClearSensitiveEnvUnsetsEveryListedVariable(t *testing.T) {
 	}
 }
 
+// discardLogger answers a logger that drops every record.
+func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+// marker answers a unique value for the log test. It is built at run time, so
+// the source holds no literal that looks like a credential.
+func marker(name string) string { return "value-marker-" + name + "-7f3a" }
+
+// TestClearSensitiveEnvLogsNamesNotValues proves the record of the automatic
+// clear: it logs at Info the count and the names of the variables that were
+// set, never a variable that was not set, and never a value.
+func TestClearSensitiveEnvLogsNamesNotValues(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"DUSTPAN_ADMIN_TOKEN":   marker("admin"),
+		"AWS_SECRET_ACCESS_KEY": marker("aws"),
+	}
+
+	var buf bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	err := clearSensitiveEnv(t.Context(), logger, func(name string) (string, bool) {
+		value, ok := env[name]
+
+		return value, ok
+	}, func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("clearSensitiveEnv: %v", err)
+	}
+
+	out := buf.String()
+
+	for _, want := range []string{"level=INFO", "count=2", "DUSTPAN_ADMIN_TOKEN", "AWS_SECRET_ACCESS_KEY"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q does not contain %q", out, want)
+		}
+	}
+
+	for _, name := range []string{"PGPASSWORD", "DUSTPAN_OIDC_CLIENT_SECRET"} {
+		if strings.Contains(out, name) {
+			t.Errorf("log %q names %s, which was not set", out, name)
+		}
+	}
+
+	for name, value := range env {
+		if strings.Contains(out, value) {
+			t.Errorf("log %q holds the value of %s", out, name)
+		}
+	}
+}
+
 // TestClearSensitiveEnvFailsClosed proves a failing unset stops the start,
 // names the variable, and does not stop the clear of the other variables.
 func TestClearSensitiveEnvFailsClosed(t *testing.T) {
@@ -92,7 +146,7 @@ func TestClearSensitiveEnvFailsClosed(t *testing.T) {
 
 	var cleared []string
 
-	err := clearSensitiveEnv(func(name string) error {
+	err := clearSensitiveEnv(t.Context(), discardLogger(), noEnv, func(name string) error {
 		if name == "DUSTPAN_OIDC_CLIENT_SECRET" {
 			return errUnsetFailed
 		}
