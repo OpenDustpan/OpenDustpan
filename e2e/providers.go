@@ -53,6 +53,8 @@ var (
 	ErrBadProviderPin = errors.New("provider pin is not valid")
 	// ErrNoProviderSum is returned when a provider has no pinned sum for this platform.
 	ErrNoProviderSum = errors.New("no pinned checksum for provider on this platform")
+	// ErrUnsafeMirror is returned when the mirror root is not a plain directory.
+	ErrUnsafeMirror = errors.New("provider mirror root is not a plain directory")
 )
 
 var (
@@ -193,10 +195,6 @@ func (m *ProviderMirror) fillOne(ctx context.Context, pin ProviderPin, platform 
 	file := pin.File(platform)
 	rel := filepath.Join(providerHost, providerNamespace, pin.Name)
 
-	if err := os.MkdirAll(filepath.Join(m.Dir(), rel), dirMode); err != nil {
-		return fmt.Errorf("create provider mirror dir: %w", err)
-	}
-
 	unlock, err := lockEntry(m.CacheDir, providerMirrorDirName+"-"+file)
 	if err != nil {
 		return err
@@ -204,12 +202,18 @@ func (m *ProviderMirror) fillOne(ctx context.Context, pin ProviderPin, platform 
 
 	defer unlock()
 
-	root, err := os.OpenRoot(m.Dir())
+	root, err := openMirrorRoot(m.Dir())
 	if err != nil {
-		return fmt.Errorf("open provider mirror: %w", err)
+		return err
 	}
 
 	defer ignoreErr(root.Close)
+
+	// os.Root keeps the directories below the mirror root: a symlink in the
+	// cache cannot send them elsewhere.
+	if err := root.MkdirAll(rel, dirMode); err != nil {
+		return fmt.Errorf("create provider mirror dir: %w", err)
+	}
 
 	dest := filepath.Join(rel, file)
 
@@ -306,44 +310,29 @@ func CacheDir() (string, error) {
 	return filepath.Join(base, "opendustpan-e2e"), nil
 }
 
-// providerMirrorState holds the one mirror of this process, so each process
-// fills it one time.
-//
-//nolint:gochecknoglobals // One mirror for each process: a job fills it once before its tests need it.
-var providerMirrorState struct {
-	once sync.Once
-	dir  string
-	err  error
-}
-
-// providerMirrorDir fills the provider mirror one time for this process and
-// returns its directory. A failure stops the test: no test falls back to the
-// registry.
+// providerMirrorDir makes the provider mirror hold each pinned provider and
+// returns its directory. It keeps no state in the process: Fill checks each
+// archive against its pinned sum and makes no request for one that matches,
+// and the lock of each archive serializes the callers. A failure stops the
+// test: no test falls back to the registry.
 func providerMirrorDir(tb testing.TB) string {
 	tb.Helper()
 
-	providerMirrorState.once.Do(func() {
-		cache, err := CacheDir()
-		if err != nil {
-			providerMirrorState.err = err
-
-			return
-		}
-
-		// Not the context of one test: the mirror serves every test of the process.
-		ctx, cancel := context.WithTimeout(context.Background(), providerFillTimeout)
-		defer cancel()
-
-		mirror := &ProviderMirror{Client: http.DefaultClient, CacheDir: cache, ReleaseURL: "", Pins: nil}
-		providerMirrorState.dir = mirror.Dir()
-		providerMirrorState.err = mirror.Fill(ctx)
-	})
-
-	if providerMirrorState.err != nil {
-		tb.Fatalf("fill the provider mirror: %v", providerMirrorState.err)
+	cache, err := CacheDir()
+	if err != nil {
+		tb.Fatalf("fill the provider mirror: %v", err)
 	}
 
-	return providerMirrorState.dir
+	mirror := &ProviderMirror{Client: http.DefaultClient, CacheDir: cache, ReleaseURL: "", Pins: nil}
+
+	// The fill goes through an interface: the helpers of the harness have no
+	// context to pass, and the fill makes its own.
+	var filler mirrorFiller = detachedFiller{mirror: mirror}
+	if err := filler.fill(tb); err != nil {
+		tb.Fatalf("fill the provider mirror: %v", err)
+	}
+
+	return mirror.Dir()
 }
 
 // providerInstallation returns the provider_installation block of the CLI
@@ -369,4 +358,54 @@ func tofuRC(tb testing.TB, host, token string) string {
 	tb.Helper()
 
 	return fmt.Sprintf(tofuCLIConfig, host, token) + providerInstallation(providerMirrorDir(tb))
+}
+
+// openMirrorRoot opens the mirror root and makes it when it is absent. The
+// root itself is the one path that os.Root cannot contain, so a root that is
+// a symlink is refused.
+func openMirrorRoot(dir string) (*os.Root, error) {
+	if err := os.MkdirAll(filepath.Dir(dir), dirMode); err != nil {
+		return nil, fmt.Errorf("create provider cache dir: %w", err)
+	}
+
+	if err := os.Mkdir(dir, dirMode); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("create provider mirror root: %w", err)
+	}
+
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("check provider mirror root: %w", err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%w: %s is not a directory", ErrUnsafeMirror, dir)
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open provider mirror: %w", err)
+	}
+
+	return root, nil
+}
+
+// mirrorFiller fills a provider mirror for a test.
+type mirrorFiller interface {
+	fill(tb testing.TB) error
+}
+
+// detachedFiller runs Fill with a deadline and without the cancel of the
+// test: another test of the process reuses the archives, so the fill does not
+// stop when the first test ends.
+type detachedFiller struct {
+	mirror *ProviderMirror
+}
+
+func (d detachedFiller) fill(tb testing.TB) error {
+	tb.Helper()
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), providerFillTimeout)
+	defer cancel()
+
+	return d.mirror.Fill(ctx)
 }
