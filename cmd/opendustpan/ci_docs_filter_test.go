@@ -22,17 +22,19 @@ import (
 //     citations.
 //   - docs/commands-checked-pages.txt: the page lists of the docs commands
 //     check in e2e.
-var docsPathsReadByGoTests = []string{
-	"docs/guides/context.md",
-	"docs/reference/configuration.md",
-	"docs/reference/code-rules.md",
-	"docs/reference/helm-values.md",
-	"docs/tfe-api.md",
-	"docs/adr/0001-example.md",
-	"docs/rfc/0001-example.md",
-	"docs/explanation/example.md",
-	"docs/roadmap.md",
-	"docs/commands-checked-pages.txt",
+func docsPathsReadByGoTests() []string {
+	return []string{
+		"docs/guides/context.md",
+		"docs/reference/configuration.md",
+		"docs/reference/code-rules.md",
+		"docs/reference/helm-values.md",
+		"docs/tfe-api.md",
+		"docs/adr/0001-example.md",
+		"docs/rfc/0001-example.md",
+		"docs/explanation/example.md",
+		"docs/roadmap.md",
+		"docs/commands-checked-pages.txt",
+	}
 }
 
 const (
@@ -61,7 +63,7 @@ func codeRules(t *testing.T, workflow string) []classifyRule {
 		found   bool
 	)
 
-	for _, line := range strings.Split(workflow, "\n") {
+	for line := range strings.SplitSeq(workflow, "\n") {
 		trimmed := strings.TrimSpace(line)
 
 		switch {
@@ -77,11 +79,13 @@ func codeRules(t *testing.T, workflow string) []classifyRule {
 			if m := classifyArm.FindStringSubmatch(line); m != nil {
 				current = append(current, classifyRule{pattern: m[1], body: m[2]})
 			}
+		default:
 		}
 	}
 
 	if !found {
-		t.Fatalf("no case statement that sets %s in the workflow: the test must follow the classify step", classifyCodeTrue)
+		t.Fatalf("no case statement sets %s in the workflow: follow the classify step",
+			classifyCodeTrue)
 	}
 
 	return rules
@@ -124,7 +128,7 @@ func globToRegexp(pattern string) *regexp.Regexp {
 // shell case statement runs the first arm that matches and no other.
 func setsCode(rules []classifyRule, path string) bool {
 	for _, r := range rules {
-		for _, alt := range strings.Split(r.pattern, "|") {
+		for alt := range strings.SplitSeq(r.pattern, "|") {
 			if globToRegexp(strings.TrimSpace(alt)).MatchString(path) {
 				return strings.Contains(r.body, classifyCodeTrue)
 			}
@@ -148,7 +152,7 @@ func TestCIFilterRunsGoTestsForDocsTheyRead(t *testing.T) {
 
 	rules := codeRules(t, string(raw))
 
-	for _, path := range docsPathsReadByGoTests {
+	for _, path := range docsPathsReadByGoTests() {
 		if !setsCode(rules, path) {
 			t.Errorf("the classify step of .github/workflows/ci.yml does not set code=true for %s, which a Go test reads: "+
 				"a docs-only change of it skips the go job", path)
