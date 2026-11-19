@@ -6,6 +6,10 @@
 
 - [x] 2.1 No route: the change edits the sampler only. In `begin` (load/scale.go:793), replace the cancel of `sampleCtx` with a stop channel that the loop checks at each tick, and run each sampler query with the context of `begin`; in `end` (load/scale.go:826), close the stop channel and wait for the loop before the transaction read. Check: `DUSTPAN_TEST_POSTGRES_URL=<url> go test ./load/ -run 'TestMonitorWindowOnPostgres|TestMonitorEndDuringSample' -race -count=20` passes.
 
-## 3. Definition of done
+## 3. Bound of a sample query
 
-- [ ] 3.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.1 No route: the change edits the sampler only. Each sample query has its own `context.WithTimeout` (`sampleTimeout`), and `end` is safe to call twice and before `begin`. Check: `DUSTPAN_TEST_POSTGRES_URL=<url> go test ./load/ -run 'TestMonitorEndBoundsHungSample|TestMonitorEndTwiceAndBeforeBegin' -race -count=20` passes, and `TestMonitorEndBoundsHungSample` fails when the bound is removed.
+
+## 4. Definition of done
+
+- [ ] 4.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

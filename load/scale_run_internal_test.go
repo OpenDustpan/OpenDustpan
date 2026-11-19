@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,6 +175,83 @@ func TestMonitorEndDuringSample(t *testing.T) {
 	if got.DBTransactionsPerSec == nil {
 		t.Fatalf("the transaction rate was not measured: %+v", got)
 	}
+}
+
+func TestMonitorEndBoundsHungSample(t *testing.T) {
+	t.Parallel()
+
+	pgURL := os.Getenv(postgresURLEnv)
+	if pgURL == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the monitor against PostgreSQL")
+	}
+
+	mon, err := newMonitor(t.Context(), pgURL, nil, 0)
+	if err != nil {
+		t.Fatalf("newMonitor: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := mon.close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	})
+
+	// A sample query that outlasts the bound by far.
+	const bound = 700 * time.Millisecond
+
+	mon.sampleTimeout = bound
+	mon.sampleSQL = "SELECT count(*) FROM (SELECT pg_sleep(60)) AS hung"
+
+	mon.begin(t.Context())
+	sleep(t.Context(), sampleEvery+100*time.Millisecond)
+
+	started := time.Now()
+	got := mon.end(t.Context(), sampleEvery, 100)
+
+	if took := time.Since(started); took > bound+2*time.Second {
+		t.Fatalf("end took %v, want at most the bound %v plus a margin", took, bound)
+	}
+
+	if got.DBConnectionsMean != nil || got.DBConnectionsMax != nil {
+		t.Fatalf("the hung sample has a value, want none: %+v", got)
+	}
+
+	if got.DBTransactionsPerSec != nil {
+		t.Fatalf("the transaction rate has a value after the canceled sample, want none: %+v", got)
+	}
+
+	for _, name := range []string{"dbConnections", "dbTransactionsPerSec"} {
+		if !slices.Contains(got.Unmeasured, name) {
+			t.Fatalf("Unmeasured = %v, want %q", got.Unmeasured, name)
+		}
+	}
+}
+
+func TestMonitorEndTwiceAndBeforeBegin(t *testing.T) {
+	t.Parallel()
+
+	pgURL := os.Getenv(postgresURLEnv)
+	if pgURL == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the monitor against PostgreSQL")
+	}
+
+	mon, err := newMonitor(t.Context(), pgURL, nil, 0)
+	if err != nil {
+		t.Fatalf("newMonitor: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := mon.close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	})
+
+	// Before begin: no sampler runs and no stop channel exists.
+	mon.end(t.Context(), sampleEvery, 1)
+
+	mon.begin(t.Context())
+	mon.end(t.Context(), sampleEvery, 1)
+	mon.end(t.Context(), sampleEvery, 1)
 }
 
 // generateTransactions runs n transactions on a connection of its own. The

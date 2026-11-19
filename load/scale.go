@@ -49,10 +49,15 @@ const (
 	unlockTries          = 5
 	scaleHTTPTimeout     = 30 * time.Second
 	sampleEvery          = 500 * time.Millisecond
-	keyBytes             = 32
-	kibPerMiB            = 1024
-	perThousand          = 1000
-	scaleInstallation    = loadProject
+	// sampleTimeout bounds one sample query. A query that outlasts it is
+	// canceled, so that a hung query cannot block end. The cancel closes the
+	// connection, and the run then records the transaction rate and the
+	// connection counts as missing, never as zero.
+	sampleTimeout     = 4 * sampleEvery
+	keyBytes          = 32
+	kibPerMiB         = 1024
+	perThousand       = 1000
+	scaleInstallation = loadProject
 )
 
 // Errors of the scale run.
@@ -668,8 +673,11 @@ type monitor struct {
 	counts []int
 	// stop asks the sampler to return at its next tick. The sampler never
 	// stops a query that runs: a canceled query closes the connection.
-	stop    chan struct{}
-	sampled sync.WaitGroup
+	stop     chan struct{}
+	stopOnce sync.Once
+	sampled  sync.WaitGroup
+	// sampleTimeout bounds one sample query.
+	sampleTimeout time.Duration
 	// sampleSQL is the query of one sample. It answers one integer.
 	sampleSQL string
 }
@@ -694,8 +702,8 @@ func blankMonitor(conn *pgx.Conn, procs []*serverProc, storePID int) *monitor {
 			instances: 0, postgres: 0, store: 0, harness: 0,
 			instancesOK: false, postgresOK: false, storeOK: false, harnessOK: false,
 		},
-		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, stop: nil, sampled: sync.WaitGroup{},
-		sampleSQL: sampleSQLDefault,
+		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, stop: nil,
+		stopOnce: sync.Once{}, sampled: sync.WaitGroup{}, sampleTimeout: sampleTimeout, sampleSQL: sampleSQLDefault,
 	}
 }
 
@@ -805,7 +813,8 @@ func (m *monitor) begin(ctx context.Context) {
 	m.cpu = m.marks()
 	m.txBegin, m.txBeginOK = m.transactions(ctx)
 
-	// The queries run with a context that end never cancels.
+	// The queries run with a context that end never cancels. Each query has
+	// its own bound, so that a hung query cannot block end.
 	queryCtx := context.WithoutCancel(ctx)
 	stop := make(chan struct{})
 	m.stop = stop
@@ -821,7 +830,11 @@ func (m *monitor) begin(ctx context.Context) {
 			case <-ticker.C:
 				var count int
 
-				err := m.conn.QueryRow(queryCtx, m.sampleSQL).Scan(&count)
+				sampleCtx, cancel := context.WithTimeout(queryCtx, m.sampleTimeout)
+				err := m.conn.QueryRow(sampleCtx, m.sampleSQL).Scan(&count)
+
+				cancel()
+
 				if err == nil {
 					m.mu.Lock()
 					m.counts = append(m.counts, count)
@@ -838,7 +851,11 @@ func (m *monitor) end(ctx context.Context, window time.Duration, requests int) R
 	// connection serves one query at a time. Stop the sampler first, between
 	// two queries: a query that a canceled context interrupts closes the
 	// connection, and then the transaction read fails.
-	close(m.stop)
+	// A second call, or a call before begin, stops nothing and does not panic.
+	if m.stop != nil {
+		m.stopOnce.Do(func() { close(m.stop) })
+	}
+
 	m.sampled.Wait()
 
 	now := m.marks()
