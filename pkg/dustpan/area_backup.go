@@ -224,6 +224,8 @@ type restoreInputs struct {
 	// accessSetting reads the stored text of the restore access setting, or is
 	// nil when the installation keeps no settings.
 	accessSetting func(ctx context.Context) (string, error)
+	// accessSettingStatic says whether the static layer sets that setting.
+	accessSettingStatic func(ctx context.Context) (bool, error)
 }
 
 // newRestoreService builds the installation restore service when a backup
@@ -300,7 +302,7 @@ func newRestoreService(in restoreInputs) (*backup.RestoreService, error) {
 		Now:             in.now,
 		Logger:          in.logger,
 
-		AccessSetting: in.accessSetting,
+		AccessSetting: in.accessSetting, AccessSettingStatic: in.accessSettingStatic,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)

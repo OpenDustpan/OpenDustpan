@@ -965,6 +965,16 @@ func (s *Store) removeEndedAreas(ctx context.Context, id backup.RestoreID) ([]ba
 			return dropped, fmt.Errorf("remove staging area %s: %w", a, removeErr)
 		}
 
+		// A swap that stopped before its rename leaves a work copy.
+		work, workErr := workCopyPath(path)
+		if workErr != nil {
+			return dropped, workErr
+		}
+
+		if removeErr := removeSnapshotErr(work); removeErr != nil {
+			return dropped, fmt.Errorf("remove work copy of staging area %s: %w", a, removeErr)
+		}
+
 		dropped = append(dropped, a)
 	}
 

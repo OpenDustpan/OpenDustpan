@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -279,9 +281,17 @@ func (s *Store) workCopy(ctx context.Context, plan swapPlan) (string, error) {
 		}
 	}()
 
-	work, err := snapshotPath(filepath.Dir(plan.staged))
+	work, err := workCopyPath(plan.staged)
 	if err != nil {
 		return "", err
+	}
+
+	// A stop between VACUUM INTO and the rename leaves the copy. The name is
+	// fixed for the staged file, so a retry removes the stale copy here and
+	// CleanRestoreAreas removes it with the area. VACUUM INTO refuses a target
+	// that exists.
+	if clearErr := clearStaleWorkCopy(work); clearErr != nil {
+		return "", clearErr
 	}
 
 	if _, execErr := conn.ExecContext(ctx, `VACUUM INTO ?`, work); execErr != nil {
@@ -849,6 +859,55 @@ func appendDroppedRunnerCredentials(
 
 	if _, err := appendAuditEntry(ctx, q, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
 		return fmt.Errorf("append dropped runner credentials entry: %w", err)
+	}
+
+	return nil
+}
+
+// workCopySuffix joins the name of a staged file and the name of its work copy.
+// The name does not match the name of a staging area, so no listing takes the
+// copy for an area.
+const workCopySuffix = "-swap"
+
+// workCopyPath returns the path of the work copy of the staged file at staged:
+// the same name with workCopySuffix, in the same directory.
+func workCopyPath(staged string) (string, error) {
+	dir := filepath.Dir(staged)
+	name := filepath.Base(staged) + workCopySuffix
+	path := filepath.Join(dir, name)
+
+	// Defense in depth: the name of the staged file holds no separator, so the
+	// copy stays in the directory of the live database. This check stays so
+	// that a change of the name rule cannot leave that directory. It does not
+	// rely on areaPath.
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel != name || strings.ContainsRune(rel, filepath.Separator) {
+		return "", fmt.Errorf("work copy of %q: %w", filepath.Base(staged), backup.ErrInvalidRestoreID)
+	}
+
+	return path, nil
+}
+
+// clearStaleWorkCopy removes a work copy that an earlier attempt left. It
+// refuses a symbolic link or any file that is not a regular file, so a link
+// that another process put at the name cannot make the swap remove or write
+// the file that the link names.
+func clearStaleWorkCopy(path string) error {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		info, err := os.Lstat(name)
+
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return fmt.Errorf("check stale work copy: %w", backup.ErrExportRead)
+		case !info.Mode().IsRegular():
+			return fmt.Errorf("stale work copy is not a regular file: %w", backup.ErrCorrupt)
+		}
+
+		if rmErr := os.Remove(name); rmErr != nil {
+			return fmt.Errorf("remove stale work copy: %w", backup.ErrExportRead)
+		}
 	}
 
 	return nil

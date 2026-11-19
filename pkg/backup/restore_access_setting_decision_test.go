@@ -234,6 +234,42 @@ func TestRestoreSettingChangeEntryComesFromTheSwapRecord(t *testing.T) {
 	}
 }
 
+// TestRestoreSettingChangeEntryNeedsAnEffectiveChange proves that a restore
+// writes no setting-change entry when the static layer sets the key: the row
+// that the swap took does not change the value that the installation uses. The
+// same restore without the static layer writes the entry.
+func TestRestoreSettingChangeEntryNeedsAnEffectiveChange(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		static  func(context.Context) (bool, error)
+		entries int
+	}{
+		{name: "the static layer sets the key", static: func(context.Context) (bool, error) { return true, nil }, entries: 0},
+		{name: "the static layer does not set the key", static: func(context.Context) (bool, error) { return false, nil }, entries: 1},
+		{name: "the read of the static layer fails", static: func(context.Context) (bool, error) {
+			return true, errAccessSettingRead
+		}, entries: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			read := func(context.Context) (string, error) { return "false", nil }
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+				cfg.AccessSetting, cfg.AccessSettingStatic = read, tc.static
+			})
+			setup.live.backupSetting = "true"
+
+			runStartedRestore(t, setup, false)
+
+			if got := len(settingChangeEntries(setup)); got != tc.entries {
+				t.Fatalf("setting-change entries = %d, want %d", got, tc.entries)
+			}
+		})
+	}
+}
+
 // TestRestoreSwapRecordHostileDecode proves the decoder of the swap record
 // refuses a record that shows a swap that took the restore setting while it
 // kept or widened the access tables, and a record that is both kept and
@@ -283,6 +319,7 @@ func TestRestoreSwapRecordHostileDecode(t *testing.T) {
 func decisionOf(keepAccess, widened bool, keys []string) backup.SwapDecision {
 	return backup.SwapDecision{
 		KeepAccessTables: keepAccess, Widened: widened, KeepSettingKeys: keys, SettingBefore: "", SettingAfter: "",
+		SettingStatic: false,
 	}
 }
 
@@ -306,6 +343,10 @@ func TestValidateSwapDecisionHostile(t *testing.T) {
 		{"kept without the key", decisionOf(true, false, nil), false},
 		{"widened without the key", decisionOf(false, true, nil), false},
 		{"widened with another key", decisionOf(false, true, []string{"x"}), false},
+		{"widened with a duplicate key", decisionOf(false, true, append(slices.Clone(keys), keys...)), true},
+		{"widened with the key in another case", decisionOf(false, true, []string{"Restore.Replace-Access-Tables"}), false},
+		{"kept with an empty list", decisionOf(true, false, []string{}), false},
+		{"widened with an empty list", decisionOf(false, true, []string{}), false},
 	} {
 		err := backup.ValidateSwapDecision(tc.d)
 		if tc.ok && err != nil || !tc.ok && !errors.Is(err, backup.ErrCorrupt) {

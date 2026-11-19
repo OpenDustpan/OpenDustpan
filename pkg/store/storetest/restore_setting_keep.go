@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -38,6 +40,10 @@ type settingKeepCase struct {
 	// backupValue and liveValue are the text of the setting in the backup and
 	// in the live installation. An empty liveValue leaves the live row absent.
 	backupValue, liveValue string
+	// rawBackup writes backupValue to the backup row without the check of the
+	// declaration, as a backup of another version or a person can store it.
+	// absentBackup leaves the backup with no row for the key.
+	rawBackup, absentBackup bool
 	// decision is the decision of the swap.
 	decision backup.SwapDecision
 	// want is the effective value after the swap.
@@ -77,6 +83,22 @@ func settingKeepCases() []settingKeepCase {
 	}
 
 	return []settingKeepCase{
+		{
+			name: "a backup row TRUE is recorded as the effective false", backupValue: "TRUE", rawBackup: true,
+			liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+		},
+		{
+			name: "a backup row 1 is recorded as the effective false", backupValue: "1", rawBackup: true,
+			liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+		},
+		{
+			name: "a long backup row is recorded as the effective false", backupValue: strings.Repeat("x", 3000),
+			rawBackup: true, liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+		},
+		{
+			name: "a backup with no row is recorded as the effective false", absentBackup: true,
+			liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
+		},
 		{
 			name: "a swap that keeps the access tables without the setting key is refused", backupValue: "true",
 			liveValue: "false", decision: keepsNoKey, want: "false", wantErr: backup.ErrCorrupt,
@@ -150,7 +172,13 @@ func runSettingKeepCase(t *testing.T, newStore RestoreFactory, tc *settingKeepCa
 
 		src = store
 
-		setRestoreAccessSetting(t, src.SettingPorts().Store, tc.backupValue)
+		switch {
+		case tc.absentBackup:
+		case tc.rawBackup:
+			setRawRestoreAccessSetting(t, src.SettingPorts().Store, tc.backupValue)
+		default:
+			setRestoreAccessSetting(t, src.SettingPorts().Store, tc.backupValue)
+		}
 	})
 
 	dst, ok := r.dst.(settingKeepStore)
@@ -345,6 +373,44 @@ func setRestoreAccessSetting(t *testing.T, store setting.Store, value string) {
 	)
 	if err != nil {
 		t.Fatalf("set the restore access setting to %q: %v", value, err)
+	}
+}
+
+// setRawRestoreAccessSetting stores value as the row of the restore access
+// setting of store without the check of its declaration: the registry here
+// declares the key as free text. A backup of another version or a person can
+// leave such a row, and the settings resource then shows the default.
+func setRawRestoreAccessSetting(t *testing.T, store setting.Store, value string) {
+	t.Helper()
+
+	reg, err := setting.NewRegistry([]setting.Declaration{{
+		Key: backup.SettingRestoreAccessTables, Level: setting.LevelInstallation, Kind: setting.KindString,
+		Default: backup.RestoreAccessSettingDefault, Secret: false, Database: true, StaticCredentialHost: false,
+		Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil, Doc: "free text, for a hostile backup row",
+	}})
+	if err != nil {
+		t.Fatalf("raw registry: %v", err)
+	}
+
+	current, err := store.Load(t.Context(), setting.InstallationScope())
+	if err != nil {
+		t.Fatalf("read the settings revision: %v", err)
+	}
+
+	entry := audit.Entry{
+		At: time.UnixMilli(1), Namespace: audit.ServerScope, Subject: "alice", IDPSubject: "", TokenID: "",
+		Action: "", Object: audit.ServerScope.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+
+	_, err = store.Update(t.Context(), setting.InstallationScope(), namespace.Fence{}, setting.ChangeInput{
+		Registry: reg, Static: nil, Patch: setting.Patch{{Key: backup.SettingRestoreAccessTables, Value: value}},
+		Entry: entry, IfMatch: current.Revision, Fresh: true, AtMs: 1,
+	})
+	if err != nil {
+		t.Fatalf("store the raw restore access setting row: %v", err)
 	}
 }
 

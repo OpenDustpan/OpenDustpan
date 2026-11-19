@@ -2977,6 +2977,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		backups: deps.backups, maint: deps.maint, chain: deps.chain, key: cfg.secretWrapper,
 		installation: cfg.installation.String(), owner: durableOwner(cfg), lease: cfg.operationLease,
 		now: cfg.now, logger: cfg.logger, accessSetting: restoreAccessSettingReader(cfg),
+		accessSettingStatic: restoreAccessSettingStaticReader(cfg),
 	})
 	if err != nil {
 		return none, err

@@ -1096,7 +1096,22 @@ func (s *RestoreService) stepSwap(ctx context.Context, sc durable.StepContext, i
 	// restore that would keep the access tables can widen, so the setting
 	// never gives a caller a right that the route did not check
 	// (server:restore).
-	d := s.swapDecision(ctx, in)
+	decide := s.swapDecision
+	if s.decide != nil {
+		decide = s.decide
+	}
+
+	d := decide(ctx, in)
+
+	// Defense in depth: the store and the decoder of the swap record check the
+	// decision too; this check stays so that a decision that keeps or widens
+	// the access tables without the live row of each kept setting never leaves
+	// the service. It does not rely on the store. The error is permanent: a
+	// retry makes the same decision, so the restore fails and writes its
+	// failure entry.
+	if err := ValidateSwapDecision(d); err != nil {
+		return nil, durable.Permanent(fmt.Errorf("swap decision of restore %s: %w", in.ID, err))
+	}
 
 	if _, err := s.live.ApplyRestoreArea(ctx, sc.Fence, area, d); err != nil {
 		return nil, fmt.Errorf("apply staged data for restore %s: %w", in.ID, err)

@@ -131,7 +131,12 @@ func stagedSettingText(ctx context.Context, tx *sql.Tx) (string, error) {
 
 	switch {
 	case err == nil:
-		return value, nil
+		// Defense in depth: the settings resource treats a value that the
+		// declaration refuses as no value, and a person or a backup of
+		// another version can store any text. This check stays so that the
+		// audit entry never holds raw backup text. It does not rely on the
+		// service or on the settings resource.
+		return backup.EffectiveRestoreAccessSettingText(value), nil
 	case errors.Is(err, sql.ErrNoRows):
 		return backup.RestoreAccessSettingDefault, nil
 	default:

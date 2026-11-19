@@ -697,6 +697,10 @@ type SwapDecision struct {
 	// value, and the store overwrites any value that it gets. It is empty when
 	// the swap kept the live row.
 	SettingAfter string
+	// SettingStatic is true when the static layer sets the restore access
+	// setting. The row that the swap takes from the backup does not change the
+	// effective value then, so the restore writes no setting-change entry.
+	SettingStatic bool
 }
 
 // PlainSwap returns the decision of a swap that does not widen: it keeps the
@@ -707,7 +711,7 @@ func PlainSwap(keepAccess bool) SwapDecision {
 
 	return SwapDecision{
 		KeepAccessTables: keepAccess, Widened: false, KeepSettingKeys: kept[keepAccess], SettingBefore: "",
-		SettingAfter: "",
+		SettingAfter: "", SettingStatic: false,
 	}
 }
 
@@ -754,6 +758,7 @@ type restoreSwapResult struct {
 	KeepSettingKeys     []string `json:"keepSettingKeys"`
 	SettingBefore       string   `json:"settingBefore"`
 	SettingAfter        string   `json:"settingAfter"`
+	SettingStatic       bool     `json:"settingStatic"`
 }
 
 // EncodeRestoreSwap returns the step result that ApplyRestoreArea records
@@ -767,11 +772,12 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 	out, err := json.Marshal(restoreSwapResult{
 		DroppedTempAdmins: kept.DroppedTempAdmins, ExpiredUpdateLeases: kept.ExpiredUpdateLeases, KeepAccessTables: d.KeepAccessTables, Widened: d.Widened,
 		KeepSettingKeys: keys, SettingBefore: d.SettingBefore, SettingAfter: d.SettingAfter,
+		SettingStatic: d.SettingStatic,
 	})
 	if err != nil {
 		// A struct of integers, booleans and strings always encodes.
 		return []byte(`{"droppedTempAdmins":0,"expiredUpdateLeases":0,"keepAccessTables":true,` +
-			`"widened":false,"keepSettingKeys":[],"settingBefore":"","settingAfter":""}`)
+			`"widened":false,"keepSettingKeys":[],"settingBefore":"","settingAfter":"","settingStatic":false}`)
 	}
 
 	return out
@@ -799,6 +805,7 @@ func DecodeRestoreSwapDecision(result []byte) (SwapDecision, error) {
 	return SwapDecision{
 		KeepAccessTables: out.KeepAccessTables, Widened: out.Widened,
 		KeepSettingKeys: out.KeepSettingKeys, SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter,
+		SettingStatic: out.SettingStatic,
 	}, nil
 }
 
@@ -817,7 +824,7 @@ func parseRestoreSwap(result []byte) (restoreSwapResult, error) {
 	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 || out.ExpiredUpdateLeases < 0 ||
 		!swapDecisionConsistent(SwapDecision{
 			KeepAccessTables: out.KeepAccessTables, Widened: out.Widened, KeepSettingKeys: out.KeepSettingKeys,
-			SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter,
+			SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter, SettingStatic: out.SettingStatic,
 		}) {
 		return restoreSwapResult{}, fmt.Errorf("%w: the result of the swap step does not decode", ErrCorrupt)
 	}

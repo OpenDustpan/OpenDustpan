@@ -53,6 +53,25 @@ func newRestoreAccessSetting(text string) (restoreAccessSetting, error) {
 	}
 }
 
+// EffectiveRestoreAccessSettingText returns the text that the settings
+// resource shows as the effective value of the restore access setting for the
+// stored text: "true" and "false" as they are, empty as "false", and
+// RestoreAccessSettingDefault for any other text. The settings resource treats
+// a stored value that the declaration refuses as no value, so a store records
+// this text, not the raw row, as the value after a swap.
+func EffectiveRestoreAccessSettingText(text string) string {
+	value, err := newRestoreAccessSetting(text)
+	if err != nil {
+		return RestoreAccessSettingDefault
+	}
+
+	if value.on {
+		return "true"
+	}
+
+	return RestoreAccessSettingDefault
+}
+
 // RestoreAccessSettingDeclarations returns the declaration of the restore
 // access setting for the settings resource of the installation. The database
 // layer holds it, and no flag, variable or file sets it. A change to true is
@@ -116,6 +135,25 @@ func (s *RestoreService) readAccessSetting(ctx context.Context) (string, bool) {
 	return text, true
 }
 
+// accessSettingIsStatic reports whether the static layer sets the restore
+// access setting. A missing reader or a read error answers false, so the audit
+// entry of the restore shows the change that the swap made to the row.
+func (s *RestoreService) accessSettingIsStatic(ctx context.Context) bool {
+	if s.accessSettingStatic == nil {
+		return false
+	}
+
+	static, err := s.accessSettingStatic(ctx)
+	if err != nil {
+		s.logger.LogAttrs(ctx, slog.LevelWarn, "restore cannot read whether the static layer sets the setting",
+			slog.String("setting", SettingRestoreAccessTables))
+
+		return false
+	}
+
+	return static
+}
+
 // widenedAccess reports whether the restore access setting is on in text. It
 // fails closed: text that is not true or false answers false, so the restore
 // keeps the access tables.
@@ -143,6 +181,8 @@ func (s *RestoreService) swapDecision(ctx context.Context, in restoreInput) Swap
 	if ok {
 		d.SettingBefore = text
 	}
+
+	d.SettingStatic = s.accessSettingIsStatic(ctx)
 
 	if !in.KeepAccessTables {
 		return d
@@ -196,6 +236,10 @@ func settingModeText(d SwapDecision) string {
 		return "kept (" + value + ")"
 	}
 
+	if d.SettingStatic {
+		return "taken from the backup (" + value + " before the swap); the static layer sets the effective value"
+	}
+
 	return "taken from the backup (" + value + " before the swap)"
 }
 
@@ -215,7 +259,9 @@ func (s *RestoreService) settingAuditEntry(op durable.Operation, in restoreInput
 	}
 
 	d, err := DecodeRestoreSwapDecision(rec.Result)
-	if err != nil || len(d.KeepSettingKeys) > 0 || d.SettingBefore == "" || d.SettingAfter == "" ||
+	// A value from the static layer shadows the row that the swap took, so the
+	// effective value did not change and the restore writes no change entry.
+	if err != nil || len(d.KeepSettingKeys) > 0 || d.SettingStatic || d.SettingBefore == "" || d.SettingAfter == "" ||
 		d.SettingAfter == d.SettingBefore {
 		return none, false
 	}
