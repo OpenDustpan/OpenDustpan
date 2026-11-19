@@ -3226,10 +3226,10 @@ RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.e
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
 -- name: ExtendDurableClaim :exec
--- Moves the expiry and resets the count of deadline releases in a row: a
--- renewal that arrives in time shows that the store answers.
+-- Moves the expiry. It leaves the count of deadline releases in a row as it
+-- is: a renewal whose reply came too late shows nothing about the holder.
 UPDATE durable_operations
-SET deadline_releases = 0, claim_expires_at_ms = sqlc.arg('expires_at_ms')::bigint, updated_at_ms = sqlc.arg('now_ms')::bigint
+SET claim_expires_at_ms = sqlc.arg('expires_at_ms')::bigint, updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
 
 -- name: DurableStepExists :one
@@ -3247,12 +3247,12 @@ UPDATE durable_operations SET updated_at_ms = sqlc.arg('now_ms')::bigint WHERE i
 
 -- name: EndDurableClaim :exec
 -- Ends the claim of an operation with its next state, adds add_failures to
--- its failures, and adds add_deadline_releases to its deadline releases in a
--- row. The claim token stays, so the next claim gets a larger one.
+-- its failures, and sets its deadline releases in a row to deadline_releases.
+-- The claim token stays, so the next claim gets a larger one.
 UPDATE durable_operations
 SET state = sqlc.arg('state')::text, last_error = sqlc.arg('last_error')::text,
   failures = failures + sqlc.arg('add_failures')::bigint,
-  deadline_releases = deadline_releases + sqlc.arg('add_deadline_releases')::bigint,
+  deadline_releases = sqlc.arg('deadline_releases')::bigint,
   not_before_ms = sqlc.arg('not_before_ms')::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
   updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;

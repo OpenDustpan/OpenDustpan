@@ -426,9 +426,6 @@ func (o *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 		row.ClaimExpiresAtMs = sql.NullInt64{Int64: now + durationMs(lease), Valid: true}
 		row.UpdatedAtMs = now
-		// A renewal in time shows that the store answers.
-		row.DeadlineReleases = 0
-
 		if err := writeDurable(ctx, q, row); err != nil {
 			return err
 		}
@@ -497,6 +494,7 @@ func completeEnd(row db.DurableOperation, now int64) (db.DurableOperation, error
 	}
 
 	row.State = string(durable.StateSucceeded)
+	row.DeadlineReleases = 0
 
 	return clearClaim(row, now), nil
 }
@@ -509,6 +507,7 @@ func failEnd(f durable.Failure) endRule {
 		}
 
 		row.Failures++
+		row.DeadlineReleases = 0
 		row.LastError = f.Message
 
 		if f.Final {
@@ -530,6 +529,7 @@ func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error)
 
 	row.State = string(durable.StatePending)
 	row.NotBeforeMs = now
+	row.DeadlineReleases = 0
 
 	return clearClaim(row, now), nil
 }
@@ -538,11 +538,18 @@ func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error)
 // of Release, with one more deadline release when the operation returns to
 // pending. A cancel that it finds ends the operation without one.
 func deadlineReleaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
-	if !row.CancelRequested {
-		row.DeadlineReleases++
+	held := row.DeadlineReleases
+
+	row, err := releaseEnd(row, now)
+	if err != nil {
+		return row, err
 	}
 
-	return releaseEnd(row, now)
+	if row.State == string(durable.StatePending) {
+		row.DeadlineReleases = held + 1
+	}
+
+	return row, nil
 }
 
 // giveBackEnd is the rule of durable.Store.GiveBack.

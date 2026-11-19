@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Defaults of RunnerConfig.
@@ -434,7 +436,7 @@ func (r *Runner) runHeld(ctx context.Context, op Operation, claimedAt time.Time)
 	defer wg.Wait()
 	defer stop(errStepsDone)
 
-	lease := &leaseState{lastStart: claimedAt}
+	lease := &leaseState{lastStart: claimedAt, gap: false}
 
 	wg.Go(func() { r.renew(work, stop, claim, lease, log) })
 
@@ -448,7 +450,11 @@ func (r *Runner) runHeld(ctx context.Context, op Operation, claimedAt time.Time)
 	switch {
 	case errors.Is(cause, errLeaseDeadline):
 		// The wg.Wait above makes the write of lease visible here.
-		r.releaseBefore(ctx, claim, lease.lastStart.Add(r.cfg.Lease), log)
+		if lease.gap {
+			r.releaseInGapBefore(ctx, claim, lease.lastStart.Add(r.cfg.Lease), log)
+		} else {
+			r.releaseBefore(ctx, claim, lease.lastStart.Add(r.cfg.Lease), log)
+		}
 
 		// This runner cannot renew. A claim at once would take the operation
 		// again before a healthy runner can, so Run backs off.
@@ -653,6 +659,10 @@ type leaseState struct {
 	// lastStart is the start of the last successful Extend, or of the
 	// claim, on the monotonic clock.
 	lastStart time.Time
+	// gap is true when the last renewal that failed returned an error of a
+	// database gap: the database cannot be reached. A renewal that succeeds
+	// sets it to false.
+	gap bool
 }
 
 // margin is the time before the expiry at which the runner stops the work
@@ -712,7 +722,7 @@ func (r *Runner) renew(
 
 		switch {
 		case err == nil:
-			claim, lease.lastStart = next, start
+			claim, lease.lastStart, lease.gap = next, start, false
 			deadline.Reset(time.Until(deadlineAt()))
 		case errors.Is(err, ErrClaimLost), errors.Is(err, ErrCanceled):
 			stop(err)
@@ -721,6 +731,8 @@ func (r *Runner) renew(
 		case ctx.Err() != nil:
 			return
 		default:
+			lease.gap = r.isGap(err)
+
 			log.WarnContext(ctx, "durable operation claim renewal failed", slog.String("error", ErrorClass(err)))
 
 			if r.cfg.StopOnRenewalError {
@@ -774,6 +786,13 @@ func (r *Runner) release(ctx context.Context, claim Claim, log *slog.Logger) {
 	r.end(wctx, log, "release", r.cfg.Store.Release(wctx, claim))
 }
 
+// isGap reports whether err means that the database cannot be reached: it
+// wraps namespace.ErrUnreachable, or the Deferred function of the runner
+// matches it. A gap does not count against DeadlineReleaseLimit.
+func (r *Runner) isGap(err error) bool {
+	return errors.Is(err, namespace.ErrUnreachable) || (r.cfg.Deferred != nil && r.cfg.Deferred(err))
+}
+
 // releaseBefore releases the claim after the runner stopped its work near the
 // end of the lease. The release must arrive before end, the expiry of the
 // claim: then the operation returns to pending, its Expiries does not grow,
@@ -781,6 +800,22 @@ func (r *Runner) release(ctx context.Context, claim Claim, log *slog.Logger) {
 // holder that never renews in time. After end, the store answers
 // ErrClaimLost and changes nothing.
 func (r *Runner) releaseBefore(ctx context.Context, claim Claim, end time.Time, log *slog.Logger) {
+	r.releaseWithin(ctx, claim, end, r.cfg.Store.ReleaseAtDeadline, log.With(slog.String("end", "release at deadline")))
+}
+
+// releaseInGapBefore is releaseBefore for a holder whose last renewal failed
+// because the database cannot be reached. The release does not count against
+// DeadlineReleaseLimit, and it sets the count to 0.
+func (r *Runner) releaseInGapBefore(ctx context.Context, claim Claim, end time.Time, log *slog.Logger) {
+	r.releaseWithin(ctx, claim, end, r.cfg.Store.Release,
+		log.With(slog.String("end", "release at deadline in a gap")))
+}
+
+// releaseWithin calls release for claim before end, with the bound of a write
+// that ends an attempt.
+func (r *Runner) releaseWithin(
+	ctx context.Context, claim Claim, end time.Time, release func(context.Context, Claim) error, log *slog.Logger,
+) {
 	left := time.Until(end)
 	if left <= 0 {
 		log.WarnContext(ctx, "durable operation claim expired before its release")
@@ -792,7 +827,7 @@ func (r *Runner) releaseBefore(ctx context.Context, claim Claim, end time.Time, 
 	defer cancel()
 
 	log.WarnContext(ctx, "durable operation released at its lease deadline")
-	r.end(wctx, log, "release at deadline", r.cfg.Store.ReleaseAtDeadline(wctx, claim))
+	r.end(wctx, log, "release at deadline", release(wctx, claim))
 }
 
 // writeContext returns the context of a write that ends an attempt: not

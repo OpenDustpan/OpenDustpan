@@ -604,8 +604,9 @@ func releaseEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, e
 }
 
 // deadlineReleaseEnd is the rule of durable.Store.ReleaseAtDeadline: the end
-// of Release, with one more deadline release when the operation returns to
-// pending. A cancel that it finds ends the operation without one.
+// of Release, with one more deadline release in a row when the operation
+// returns to pending. Every other end of a claim sets the count to 0. A
+// cancel that it finds ends the operation without one.
 func deadlineReleaseEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
 	p, err := releaseEnd(row, now)
 	if err != nil {
@@ -613,7 +614,7 @@ func deadlineReleaseEnd(row db.DurableOperation, now int64) (db.EndDurableClaimP
 	}
 
 	if !row.CancelRequested {
-		p.AddDeadlineReleases = 1
+		p.DeadlineReleases = row.DeadlineReleases + 1
 	}
 
 	return p, nil
@@ -634,7 +635,7 @@ func endParams(
 	row db.DurableOperation, state durable.State, lastError string, notBeforeMs, now int64,
 ) db.EndDurableClaimParams {
 	return db.EndDurableClaimParams{
-		State: string(state), LastError: lastError, AddFailures: 0, AddDeadlineReleases: 0,
+		State: string(state), LastError: lastError, AddFailures: 0, DeadlineReleases: 0,
 		NotBeforeMs: notBeforeMs, NowMs: now, ID: row.ID,
 	}
 }

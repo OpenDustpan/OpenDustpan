@@ -505,7 +505,6 @@ func (s memStore) Extend(_ context.Context, c durable.Claim, lease time.Duration
 	}
 
 	op.Claim.ExpiresAt = now.Add(lease)
-	op.DeadlineReleases = 0
 	op.UpdatedAt = now
 
 	return op.Claim, nil
@@ -529,12 +528,16 @@ func (s memStore) RecordStep(_ context.Context, f durable.StepFence, result []by
 }
 
 func (s memStore) Complete(_ context.Context, c durable.Claim) error {
-	return s.end(c, refuseOnCancel, func(op *durable.Operation, _ time.Time) { op.State = durable.StateSucceeded })
+	return s.end(c, refuseOnCancel, func(op *durable.Operation, _ time.Time) {
+		op.State = durable.StateSucceeded
+		op.DeadlineReleases = 0
+	})
 }
 
 func (s memStore) Fail(_ context.Context, c durable.Claim, f durable.Failure) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.Failures++
+		op.DeadlineReleases = 0
 		op.LastError = f.Message
 		if f.Final {
 			op.State = durable.StateFailed
@@ -551,6 +554,7 @@ func (s memStore) Release(_ context.Context, c durable.Claim) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.State = durable.StatePending
 		op.NotBefore = now
+		op.DeadlineReleases = 0
 	})
 }
 
@@ -566,6 +570,7 @@ func (s memStore) GiveBack(_ context.Context, c durable.Claim) error {
 	return s.end(c, refuseOnCancel, func(op *durable.Operation, now time.Time) {
 		op.State = durable.StatePending
 		op.NotBefore = now
+		op.DeadlineReleases = 0
 	})
 }
 

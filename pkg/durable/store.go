@@ -61,8 +61,11 @@ type Store interface {
 	// now, and ErrInvalid for a request that fails Validate.
 	Claim(ctx context.Context, req ClaimRequest) (Operation, error)
 
-	// Extend moves the expiry of c to now plus lease, sets
-	// DeadlineReleases to 0, and returns the new claim. It returns ErrClaimLost when c is not the live claim, also when
+	// Extend moves the expiry of c to now plus lease, and returns the new
+	// claim. It leaves DeadlineReleases as it is: a renewal whose reply came
+	// too late shows nothing about the holder, so only an end of a claim by
+	// the holder sets the count to 0: Complete, Fail, Release and GiveBack. It
+	// returns ErrClaimLost when c is not the live claim, also when
 	// c expired and no other claim took the operation. It returns
 	// ErrCanceled when a cancel is requested. It returns ErrInvalid for a
 	// lease that is not positive. On an error it changes nothing.

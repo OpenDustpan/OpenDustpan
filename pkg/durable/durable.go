@@ -94,9 +94,9 @@ type Operation struct {
 	Expiries int
 	// DeadlineReleases is the number of releases in a row that the holder
 	// made because it could not renew its claim in time: the store did not
-	// answer an Extend before the local deadline of the claim. A renewal
-	// that succeeds sets it to 0. A first claim, a retry and any other
-	// release do not change it.
+	// answer an Extend before the local deadline of the claim. An end of a
+	// claim by the holder (Complete, Fail, Release or GiveBack) sets it to 0.
+	// A renewal, a first claim and an expiry do not change it.
 	DeadlineReleases int
 	// LastError is the message of the last failed attempt, or empty.
 	LastError string

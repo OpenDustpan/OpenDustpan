@@ -5200,31 +5200,31 @@ const endDurableClaim = `-- name: EndDurableClaim :exec
 UPDATE durable_operations
 SET state = $1::text, last_error = $2::text,
   failures = failures + $3::bigint,
-  deadline_releases = deadline_releases + $4::bigint,
+  deadline_releases = $4::bigint,
   not_before_ms = $5::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
   updated_at_ms = $6::bigint
 WHERE id = $7::text
 `
 
 type EndDurableClaimParams struct {
-	State               string
-	LastError           string
-	AddFailures         int64
-	AddDeadlineReleases int64
-	NotBeforeMs         int64
-	NowMs               int64
-	ID                  string
+	State            string
+	LastError        string
+	AddFailures      int64
+	DeadlineReleases int64
+	NotBeforeMs      int64
+	NowMs            int64
+	ID               string
 }
 
 // Ends the claim of an operation with its next state, adds add_failures to
-// its failures, and adds add_deadline_releases to its deadline releases in a
-// row. The claim token stays, so the next claim gets a larger one.
+// its failures, and sets its deadline releases in a row to deadline_releases.
+// The claim token stays, so the next claim gets a larger one.
 func (q *Queries) EndDurableClaim(ctx context.Context, arg EndDurableClaimParams) error {
 	_, err := q.db.Exec(ctx, endDurableClaim,
 		arg.State,
 		arg.LastError,
 		arg.AddFailures,
-		arg.AddDeadlineReleases,
+		arg.DeadlineReleases,
 		arg.NotBeforeMs,
 		arg.NowMs,
 		arg.ID,
@@ -5534,7 +5534,7 @@ func (q *Queries) ExpireRunnerClaimsWithoutSession(ctx context.Context, runnerID
 
 const extendDurableClaim = `-- name: ExtendDurableClaim :exec
 UPDATE durable_operations
-SET deadline_releases = 0, claim_expires_at_ms = $1::bigint, updated_at_ms = $2::bigint
+SET claim_expires_at_ms = $1::bigint, updated_at_ms = $2::bigint
 WHERE id = $3::text
 `
 
@@ -5544,8 +5544,8 @@ type ExtendDurableClaimParams struct {
 	ID          string
 }
 
-// Moves the expiry and resets the count of deadline releases in a row: a
-// renewal that arrives in time shows that the store answers.
+// Moves the expiry. It leaves the count of deadline releases in a row as it
+// is: a renewal whose reply came too late shows nothing about the holder.
 func (q *Queries) ExtendDurableClaim(ctx context.Context, arg ExtendDurableClaimParams) error {
 	_, err := q.db.Exec(ctx, extendDurableClaim, arg.ExpiresAtMs, arg.NowMs, arg.ID)
 	return err

@@ -321,9 +321,16 @@ suffix" for each reason that gets this text.
 
 - A background operation (a durable operation) whose holder cannot renew its
   claim in time is released at the local deadline of the claim. The server
-  counts these releases in a row for each operation. A
-  successful renewal sets the count to 0. At 5 releases in a row, the next
-  claim ends the operation failed. The last error of the operation names the
-  cause: "durable operation holders could not renew the claim in time too
-  often". The server also logs one warning for each release. No grant, setting
-  or administrator changes the limit of 5.
+  counts these releases in a row for each operation. Only an end of a claim by
+  the holder sets the count to 0: the operation succeeds, fails, is released,
+  or is given back. A renewal that succeeds does not set it to 0, because a
+  renewal whose reply comes after its timeout shows nothing about the holder.
+  At 5 releases in a row, the next claim ends the operation failed. The last
+  error of the operation names the cause: "durable operation holders could
+  not renew the claim in time too often". The server also logs one warning for
+  each release. No grant, setting or administrator changes the limit of 5.
+- A release at the deadline does not count when the last renewal that failed
+  returned an error that means that the database cannot be reached
+  (`namespace.ErrUnreachable`), or an error that the `Deferred` function of the
+  runner matches. The server releases the operation with no count, and the
+  count goes to 0. A database gap does not fail an operation with this limit.

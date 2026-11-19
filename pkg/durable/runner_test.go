@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
@@ -27,6 +28,7 @@ var (
 	errStepBroke = errors.New("step broke")
 	errNetwork   = errors.New("network unreachable")
 	errPaused    = errors.New("installation paused")
+	errGap       = errors.New("database gap")
 )
 
 // recorder counts the runs of each step.
@@ -1256,8 +1258,8 @@ func failingExtend(context.Context, durable.Claim, time.Duration) (durable.Claim
 }
 
 // blockStep is a step that runs until its context ends.
-func blockStep(name string, ran *atomic.Int32) durable.Step {
-	return durable.Step{Name: name, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+func blockStep(ran *atomic.Int32) durable.Step {
+	return durable.Step{Name: "one", Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
 		ran.Add(1)
 		<-ctx.Done()
 
@@ -1276,7 +1278,7 @@ func TestRunnerEndsAnOperationAfterTooManyDeadlineReleases(t *testing.T) {
 
 	var ran atomic.Int32
 
-	cfg := testConfig(store, "a", blockStep("one", &ran))
+	cfg := testConfig(store, "a", blockStep(&ran))
 	cfg.DeadlineReleaseLimit = limit
 	runner := newRunner(t, cfg)
 	op := start(t, store, "k")
@@ -1306,7 +1308,7 @@ func TestRunnerEndsAnOperationAfterTooManyDeadlineReleases(t *testing.T) {
 	}
 }
 
-func TestRunnerResetsTheDeadlineReleasesAfterARenewal(t *testing.T) {
+func TestRunnerResetsTheDeadlineReleasesAfterAnEndWrite(t *testing.T) {
 	t.Parallel()
 
 	const limit = 2
@@ -1317,7 +1319,7 @@ func TestRunnerResetsTheDeadlineReleasesAfterARenewal(t *testing.T) {
 
 	var ran atomic.Int32
 
-	cfg := testConfig(store, "a", blockStep("one", &ran))
+	cfg := testConfig(store, "a", blockStep(&ran))
 	cfg.DeadlineReleaseLimit = limit
 	op := start(t, store, "k")
 
@@ -1341,35 +1343,213 @@ func TestRunnerResetsTheDeadlineReleasesAfterARenewal(t *testing.T) {
 	}
 }
 
+// claimAndReleaseAtDeadline raises the count of deadline releases of the
+// pending operation by 1 through the store.
+func claimAndReleaseAtDeadline(t *testing.T, store durable.Store) {
+	t.Helper()
+
+	held, err := store.Claim(t.Context(), durable.ClaimRequest{
+		Owner: "a", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: time.Minute, TakeCanceled: false,
+	})
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	if err := store.ReleaseAtDeadline(t.Context(), held.Claim); err != nil {
+		t.Fatalf("ReleaseAtDeadline: %v", err)
+	}
+}
+
 func TestRunnerDefaultsTheDeadlineReleaseLimit(t *testing.T) {
 	t.Parallel()
 
-	inner := durabletest.NewMem().Store()
-	op := start(t, inner, "k")
+	cases := []struct {
+		name      string
+		count     int
+		wantState durable.State
+		wantRuns  int32
+	}{
+		{"at the default limit", durable.DefaultDeadlineReleaseLimit, durable.StateFailed, 0},
+		{"one below the default limit", durable.DefaultDeadlineReleaseLimit - 1, durable.StateSucceeded, 1},
+	}
 
-	// Raise the count to the default limit through the store.
-	for range durable.DefaultDeadlineReleaseLimit {
-		held, err := inner.Claim(t.Context(), durable.ClaimRequest{
-			Owner: "a", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: time.Minute, TakeCanceled: false,
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			inner := durabletest.NewMem().Store()
+			op := start(t, inner, "k")
+
+			for range tc.count {
+				claimAndReleaseAtDeadline(t, inner)
+			}
+
+			var ran atomic.Int32
+
+			step := durable.Step{Name: "one", Run: func(context.Context, durable.StepContext) ([]byte, error) {
+				ran.Add(1)
+
+				return nil, nil
+			}}
+
+			// A step that ignores its context would hang the test until the
+			// timeout of the package, so the run has its own timeout.
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			// DeadlineReleaseLimit 0 takes the default.
+			if err := newRunner(t, testConfig(inner, "a", step)).RunOnce(ctx); err != nil {
+				t.Fatalf("RunOnce: %v", err)
+			}
+
+			if got := mustGet(t, inner, op.ID); got.State != tc.wantState || ran.Load() != tc.wantRuns {
+				t.Fatalf("operation with %d deadline releases = %+v, step ran %d times; want state %s and %d runs",
+					tc.count, got, ran.Load(), tc.wantState, tc.wantRuns)
+			}
 		})
-		if err != nil {
-			t.Fatalf("Claim: %v", err)
+	}
+}
+
+// blockingExtend returns an Extend that calls before, then blocks until its
+// context ends and returns the error of the context.
+func blockingExtend(
+	before func(context.Context, durable.Claim, time.Duration) error,
+) func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
+	return func(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+		if err := before(ctx, c, lease); err != nil {
+			return c, err
 		}
 
-		if err := inner.ReleaseAtDeadline(t.Context(), held.Claim); err != nil {
-			t.Fatalf("ReleaseAtDeadline: %v", err)
+		<-ctx.Done()
+
+		return durable.Claim{}, ctx.Err()
+	}
+}
+
+// runUntilLimit runs runner for limit rounds, each of which must end with
+// ErrClaimLost and one more deadline release, and then once more, to reach the
+// limit.
+func runUntilLimit(t *testing.T, runner *durable.Runner, inner durable.Store, id durable.ID, limit int) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	for round := 1; round <= limit; round++ {
+		if err := runner.RunOnce(ctx); !errors.Is(err, durable.ErrClaimLost) {
+			t.Fatalf("round %d: RunOnce error = %v, want ErrClaimLost", round, err)
+		}
+
+		if got := mustGet(t, inner, id); got.State != durable.StatePending || got.DeadlineReleases != round {
+			t.Fatalf("round %d: operation = %+v, want pending with %d deadline releases", round, got, round)
 		}
 	}
 
-	var ran atomic.Int32
+	if err := runner.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce at the limit: %v", err)
+	}
+}
 
-	// DeadlineReleaseLimit 0 takes the default.
-	if err := newRunner(t, testConfig(inner, "a", blockStep("one", &ran))).RunOnce(t.Context()); err != nil {
-		t.Fatalf("RunOnce: %v", err)
+// TestRunnerEndsAfterRenewalsThatBlockPastTheirTimeout proves that an Extend
+// whose reply comes after its timeout does not hide a holder that keeps
+// losing the lease: the operation ends failed with ErrDeadlineReleaseLimit,
+// whether or not the late Extend committed.
+func TestRunnerEndsAfterRenewalsThatBlockPastTheirTimeout(t *testing.T) {
+	t.Parallel()
+
+	inner := func(store durable.Store) func(context.Context, durable.Claim, time.Duration) error {
+		return func(ctx context.Context, c durable.Claim, lease time.Duration) error {
+			_, err := store.Extend(context.WithoutCancel(ctx), c, lease)
+
+			return err
+		}
+	}
+	nothing := func(context.Context, durable.Claim, time.Duration) error { return nil }
+
+	for _, tc := range []struct {
+		name   string
+		before func(durable.Store) func(context.Context, durable.Claim, time.Duration) error
+	}{
+		{"the late Extend commits", inner},
+		{"the late Extend does not commit", func(durable.Store) func(context.Context, durable.Claim, time.Duration) error {
+			return nothing
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			const limit = 2
+
+			inner := durabletest.NewMem().Store()
+			store := newCountingStore(inner)
+			store.extend = blockingExtend(tc.before(inner))
+
+			var ran atomic.Int32
+
+			cfg := testConfig(store, "a", blockStep(&ran))
+			cfg.DeadlineReleaseLimit = limit
+			op := start(t, store, "k")
+
+			runUntilLimit(t, newRunner(t, cfg), inner, op.ID, limit)
+
+			got := mustGet(t, inner, op.ID)
+			if got.State != durable.StateFailed ||
+				!strings.Contains(got.LastError, durable.ErrDeadlineReleaseLimit.Error()) {
+				t.Fatalf("operation at the limit = %+v; want failed with the cause %q",
+					got, durable.ErrDeadlineReleaseLimit)
+			}
+		})
+	}
+}
+
+// TestRunnerDoesNotCountADatabaseGap proves that a renewal that fails
+// because the database cannot be reached leaves the count of deadline
+// releases at 0, so a gap longer than the limit does not fail the operation.
+func TestRunnerDoesNotCountADatabaseGap(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		err      error
+		deferred func(error) bool
+	}{
+		{"namespace.ErrUnreachable", fmt.Errorf("extend: %w", namespace.ErrUnreachable), nil},
+		{"the Deferred function matches", errGap, func(err error) bool { return errors.Is(err, errGap) }},
 	}
 
-	if got := mustGet(t, inner, op.ID); got.State != durable.StateFailed || ran.Load() != 0 {
-		t.Fatalf("operation at the default limit = %+v, step ran %d times; want failed and no run", got, ran.Load())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			const limit = 2
+
+			inner := durabletest.NewMem().Store()
+			store := newCountingStore(inner)
+			store.extend = func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
+				return durable.Claim{}, tc.err
+			}
+
+			var ran atomic.Int32
+
+			cfg := testConfig(store, "a", blockStep(&ran))
+			cfg.DeadlineReleaseLimit = limit
+			cfg.Deferred = tc.deferred
+			runner := newRunner(t, cfg)
+			op := start(t, store, "k")
+
+			// One round more than the limit: a counted release would fail
+			// the operation at the last claim.
+			for round := 1; round <= limit+1; round++ {
+				if err := runner.RunOnce(t.Context()); !errors.Is(err, durable.ErrClaimLost) {
+					t.Fatalf("round %d: RunOnce error = %v, want ErrClaimLost", round, err)
+				}
+
+				if got := mustGet(t, inner, op.ID); got.State != durable.StatePending || got.DeadlineReleases != 0 ||
+					got.Failures != 0 {
+					t.Fatalf("round %d: operation = %+v, want pending with 0 deadline releases", round, got)
+				}
+			}
+		})
 	}
 }
 
