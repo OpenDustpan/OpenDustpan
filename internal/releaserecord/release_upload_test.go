@@ -778,6 +778,13 @@ func TestReleaseUploadRefusesAMissingDirectoryWithoutEchoingIt(t *testing.T) {
 	}
 }
 
+// dirMode returns the mode that makes a directory usable again.
+func dirMode() os.FileMode {
+	mode := os.FileMode(0o600)
+
+	return mode | 0o100
+}
+
 // TestReleaseUploadRefusesAnUnreadableDirectoryWithoutEchoingIt checks that a
 // directory that exists but cannot be entered gets the fixed refusal, and that
 // bash prints no byte of the caller's value to stderr.
@@ -802,8 +809,8 @@ func TestReleaseUploadRefusesAnUnreadableDirectoryWithoutEchoingIt(t *testing.T)
 			}
 
 			t.Cleanup(func() {
-				//nolint:gosec // A directory needs the search bit to be removed again.
-				if err := os.Chmod(r.set, 0o700); err != nil {
+				// A directory needs the search bit to be removed again.
+				if err := os.Chmod(r.set, dirMode()); err != nil {
 					t.Error(err)
 				}
 			})
