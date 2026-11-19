@@ -166,6 +166,7 @@ func withManualLocksAndStacks(
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        locks,

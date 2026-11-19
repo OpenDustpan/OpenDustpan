@@ -79,6 +79,7 @@ func newRealStack(t *testing.T) *realStack {
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:  stacktest.PlacedAll(),
 		Sealer:      secrettest.NewMemorySealer(),
 		BlobGuard:   blobguardtest.None{},
 		ManualLocks: nil, Updates: st, Tokens: nil, Checkpoints: st, Events: st, Namespaces: namespaces,

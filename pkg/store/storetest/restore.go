@@ -1975,6 +1975,8 @@ func seedRunningUpdate(t *testing.T, src BackupStore) {
 		t.Fatalf("create stack: %v", err)
 	}
 
+	PlaceStack(t, updates, st.Ref)
+
 	f := fixture{s: updates, ref: st.Ref, fence: ns.Fence()}
 	f.run(t, f.ref, "u1", mutating())
 	f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)

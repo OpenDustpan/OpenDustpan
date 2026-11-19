@@ -1539,6 +1539,8 @@ func mustCreateStack(t *testing.T, s BackupStore, ns namespace.Namespace, name s
 		t.Fatalf("create stack %s: %v", st.Ref, err)
 	}
 
+	PlaceStack(t, s, st.Ref)
+
 	return st
 }
 

@@ -1888,6 +1888,15 @@ func newWorkspaceService(
 	return workspaces, nil
 }
 
+// noCollections is the membership of a store that holds no collections.
+type noCollections struct{}
+
+// CollectionOf implements stack.Membership. It answers that no collection
+// holds the stack.
+func (noCollections) CollectionOf(context.Context, stack.Ref) (string, bool, error) {
+	return "", false, nil
+}
+
 // clockOf returns the clock of the server settings, defaulting to time.Now
 // like the update service does. The journal replayer stamps the manifest of
 // each checkpoint it builds with it.
@@ -1918,6 +1927,15 @@ func newUpdateService(
 
 	attachBlobGuard(cfg)
 
+	// A store that holds no collections cannot place a stack, so every stack
+	// is in no collection for it and every update write is refused: the
+	// update service fails closed.
+	var membership stack.Membership = noCollections{}
+
+	if units, ok := cfg.namespaceStore.(stack.UnitCollections); ok {
+		membership = stack.NewCollectionMembership(units)
+	}
+
 	sealer, err := newItemSealer(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -1925,6 +1943,7 @@ func newUpdateService(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
+		Membership:         membership,
 		Checkpoints:        cfg.checkpointStore,
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,

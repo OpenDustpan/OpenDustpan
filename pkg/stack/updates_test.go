@@ -905,6 +905,7 @@ func newUpdatesFull(
 	sealer := secrettest.NewMemorySealer()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             sealer,
 		BlobGuard:          guard,
 		OnDeleteWait:       wait,
@@ -2342,6 +2343,7 @@ func (f updatesFixture) withStacks(t *testing.T, stacks stack.CheckpointStacks) 
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             f.sealer,
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -2448,6 +2450,7 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:  stacktest.PlacedAll(),
 		Sealer:      secrettest.NewMemorySealer(),
 		BlobGuard:   blobguardtest.None{},
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
@@ -2469,6 +2472,7 @@ func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Le
 	t.Helper()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:  stacktest.PlacedAll(),
 		Sealer:      secrettest.NewMemorySealer(),
 		BlobGuard:   guard,
 		ManualLocks: nil, Updates: f.store, Tokens: nil,
