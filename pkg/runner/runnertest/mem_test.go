@@ -42,6 +42,8 @@ type op struct {
 	phase     int
 	// canceled is true after Cancel. The claim stays live.
 	canceled bool
+	// canceledAt is the time of the cancel.
+	canceledAt time.Time
 }
 
 // nonceKey is a nonce of one subject.
@@ -131,7 +133,7 @@ func (m *mem) ClaimLease(
 	expires := time.Now().Add(lease)
 	m.ops[id] = op{
 		kind: kind, owner: owner, token: 1, expires: expires, claimedAt: time.Time{}, recorded: false, job: "",
-		phase: 0, canceled: false,
+		phase: 0, canceled: false, canceledAt: time.Time{},
 	}
 
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: expires}, nil
@@ -169,7 +171,11 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: o.expires}, nil
 }
 
-func (m *mem) Cancel(_ context.Context, c durable.Claim) error {
+func (m *mem) Cancel(ctx context.Context, c durable.Claim) error {
+	return m.CancelAged(ctx, c, 0)
+}
+
+func (m *mem) CancelAged(_ context.Context, c durable.Claim, age time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -179,6 +185,7 @@ func (m *mem) Cancel(_ context.Context, c durable.Claim) error {
 
 	o := m.ops[c.Operation]
 	o.canceled = true
+	o.canceledAt = time.Now().Add(-age)
 	m.ops[c.Operation] = o
 
 	return nil
@@ -950,9 +957,15 @@ func (m *mem) SessionRenew(
 		return durable.Claim{}, runner.ErrClaimLost
 	}
 
-	// A cancel does not stop the renewal: the launcher still writes its log
-	// and its finish.
+	// A cancel does not stop the renewal at once: the launcher still writes
+	// its log and its finish, until the bound.
 	o := m.ops[c.Operation]
+	if o.canceled {
+		if err := runner.CheckSessionRenew(o.canceledAt, time.Now()); err != nil {
+			return durable.Claim{}, err
+		}
+	}
+
 	o.expires = time.Now().Add(d)
 	m.ops[c.Operation] = o
 	c.ExpiresAt = o.expires

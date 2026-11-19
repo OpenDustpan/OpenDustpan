@@ -124,6 +124,18 @@ func (d *runnerDomain) Cancel(ctx context.Context, c durable.Claim) error {
 	return nil
 }
 
+func (d *runnerDomain) CancelAged(ctx context.Context, c durable.Claim, age time.Duration) error {
+	if err := d.Cancel(ctx, c); err != nil {
+		return err
+	}
+
+	if err := d.s.AgeCancel(ctx, c.Operation, time.Now().Add(-age)); err != nil {
+		return fmt.Errorf("age cancel: %w", err)
+	}
+
+	return nil
+}
+
 func (d *runnerDomain) End(ctx context.Context, c durable.Claim) error {
 	if err := d.s.DurableOperations().Complete(ctx, c); err != nil {
 		return fmt.Errorf("complete operation: %w", err)

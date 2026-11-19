@@ -3106,23 +3106,23 @@ SELECT COUNT(*) FROM principals WHERE starts_with(subject, sqlc.arg('prefix'));
 -- the start key names an operation, and then returns no row.
 INSERT INTO durable_operations (
   id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 )
 SELECT sqlc.arg('id')::text, sqlc.arg('start_key')::text, sqlc.arg('kind')::text, sqlc.arg('input')::bytea,
-  sqlc.arg('version')::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+  sqlc.arg('version')::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, 0, c.now_ms, c.now_ms, c.now_ms
 FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
 ON CONFLICT (start_key) DO NOTHING
 RETURNING id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms;
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms;
 
 -- name: GetDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1;
 
 -- name: GetDurableOperationByKey :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1;
 
 -- name: CountRunnableDurableOperations :one
@@ -3136,7 +3136,7 @@ SELECT COUNT(*) FROM durable_operations WHERE kind = $1 AND state IN ('pending',
 -- Holds the row of one operation until the transaction ends, so the checks
 -- and the write of a holder see one state.
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 FOR UPDATE;
 
@@ -3144,7 +3144,7 @@ FOR UPDATE;
 -- An empty kind or state list matches every operation. A limit of 0 means
 -- no limit.
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations
 WHERE (sqlc.arg('kind')::text = '' OR kind = sqlc.arg('kind')::text)
   AND (cardinality(sqlc.arg('states')::text[]) = 0 OR state = ANY(sqlc.arg('states')::text[]))
@@ -3206,7 +3206,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
 FROM c, pick
 WHERE o.id = pick.id
 RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
-  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
+  o.claim_expires_at_ms, o.cancel_requested, o.cancel_requested_at_ms, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
 -- name: ClaimStartedDurableOperation :one
 -- Claims the pending operation id that the transaction started, for the
@@ -3222,7 +3222,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
 FROM c
 WHERE o.id = sqlc.arg('id')::text AND o.state = 'pending'
 RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
-  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
+  o.claim_expires_at_ms, o.cancel_requested, o.cancel_requested_at_ms, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
 -- name: ExtendDurableClaim :exec
 UPDATE durable_operations
@@ -3256,6 +3256,7 @@ WHERE id = sqlc.arg('id')::text;
 -- name: CancelDurableOperation :exec
 UPDATE durable_operations
 SET state = sqlc.arg('state')::text, cancel_requested = sqlc.arg('cancel_requested')::boolean,
+  cancel_requested_at_ms = sqlc.arg('cancel_requested_at_ms')::bigint,
   updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
 

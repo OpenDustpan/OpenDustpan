@@ -1378,10 +1378,26 @@ func (r *Runners) SessionRenew(
 			return err
 		}
 
+		op, err := q.GetDurableOperation(ctx, string(c.Operation))
+		if err != nil {
+			return fmt.Errorf("read durable operation: %w", err)
+		}
+
+		// A renewal during a cancel is allowed, because the launcher still
+		// needs its claim for its last writes, but only for
+		// runner.SessionCancelBound after the cancel.
+		cancelAt := time.Time{}
+		if op.CancelRequested {
+			cancelAt = codec.RunnerTime(op.CancelRequestedAtMs)
+		}
+
+		err = runner.CheckSessionRenew(cancelAt, codec.RunnerTime(dbNow))
+		if err != nil {
+			return fmt.Errorf("renew session claim: %w", err)
+		}
+
 		expires := dbNow + d.Milliseconds()
 
-		// No check of a requested cancel: durable.Store.Extend would refuse
-		// it, and the launcher still needs its claim for its last writes.
 		err = q.SetRunnerClaimExpiry(ctx, db.SetRunnerClaimExpiryParams{
 			ID: string(c.Operation), Token: c.Token, ExpiresAtMs: sql.NullInt64{Int64: expires, Valid: true},
 		})

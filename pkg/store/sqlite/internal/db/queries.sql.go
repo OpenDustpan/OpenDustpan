@@ -6190,7 +6190,7 @@ func (q *Queries) GetDriftResult(ctx context.Context, arg GetDriftResultParams) 
 
 const getDurableOperation = `-- name: GetDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = ?
 `
 
@@ -6212,6 +6212,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -6221,7 +6222,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 
 const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = ?
 `
 
@@ -6243,6 +6244,7 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -10818,8 +10820,8 @@ const insertDurableOperation = `-- name: InsertDurableOperation :exec
 
 INSERT INTO durable_operations (
     id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
-) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?)
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, 0, ?, ?, ?)
 `
 
 type InsertDurableOperationParams struct {
@@ -23886,23 +23888,24 @@ func (q *Queries) UpdateBreakGlassReviewVerdict(ctx context.Context, arg UpdateB
 const updateDurableOperation = `-- name: UpdateDurableOperation :exec
 UPDATE durable_operations
 SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
-    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+    claim_expires_at_ms = ?, cancel_requested = ?, cancel_requested_at_ms = ?, not_before_ms = ?, updated_at_ms = ?
 WHERE id = ?
 `
 
 type UpdateDurableOperationParams struct {
-	State            string
-	Attempt          int64
-	Expiries         int64
-	Failures         int64
-	LastError        string
-	ClaimOwner       sql.NullString
-	ClaimToken       int64
-	ClaimExpiresAtMs sql.NullInt64
-	CancelRequested  bool
-	NotBeforeMs      int64
-	UpdatedAtMs      int64
-	ID               string
+	State               string
+	Attempt             int64
+	Expiries            int64
+	Failures            int64
+	LastError           string
+	ClaimOwner          sql.NullString
+	ClaimToken          int64
+	ClaimExpiresAtMs    sql.NullInt64
+	CancelRequested     bool
+	CancelRequestedAtMs int64
+	NotBeforeMs         int64
+	UpdatedAtMs         int64
+	ID                  string
 }
 
 // Writes every column that changes after the start of an operation.
@@ -23917,6 +23920,7 @@ func (q *Queries) UpdateDurableOperation(ctx context.Context, arg UpdateDurableO
 		arg.ClaimToken,
 		arg.ClaimExpiresAtMs,
 		arg.CancelRequested,
+		arg.CancelRequestedAtMs,
 		arg.NotBeforeMs,
 		arg.UpdatedAtMs,
 		arg.ID,

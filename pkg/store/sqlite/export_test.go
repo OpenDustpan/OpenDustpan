@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -88,6 +89,19 @@ func (s *Store) AgeSupersededMarks(ctx context.Context, stackID stack.ID, at tim
 
 	if _, err := s.conn.ExecContext(ctx, stmt, at.UnixMilli(), stackID.String()); err != nil {
 		return fmt.Errorf("age superseded marks: %w", err)
+	}
+
+	return nil
+}
+
+// AgeCancel sets the time of the cancel of the operation id, with a direct SQL
+// update. The cases of the renewal of a job session need a cancel older than
+// the bound without a wait.
+func (s *Store) AgeCancel(ctx context.Context, id durable.ID, at time.Time) error {
+	const stmt = `UPDATE durable_operations SET cancel_requested_at_ms = ? WHERE id = ?`
+
+	if _, err := s.conn.ExecContext(ctx, stmt, at.UnixMilli(), string(id)); err != nil {
+		return fmt.Errorf("age cancel: %w", err)
 	}
 
 	return nil

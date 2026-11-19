@@ -163,6 +163,32 @@ func GraceFor(s *job.Step) time.Duration {
 	return GraceOther
 }
 
+// SessionCancelBound is the longest time from a requested cancel to the
+// last renewal of the claim of a job session: the longest grace period of a
+// step (GraceChanges) and the time for the last log chunks and the finish
+// (ReportTime). SessionStore.SessionRenew refuses a renewal after it, so a
+// launcher that ignores a cancel loses its claim, and the operation ends
+// canceled.
+const SessionCancelBound = GraceChanges + ReportTime
+
+// CheckSessionRenew checks a renewal of the claim of a job session at now.
+// cancelRequestedAt is the time of the cancel on the clock of the store, and
+// the zero Time when no cancel is requested. It returns ErrClaimLost when
+// the cancel is older than SessionCancelBound. A renewal at exactly
+// SessionCancelBound after the cancel passes. A cancel that is later than now
+// (clock skew between instances) counts as a cancel at now.
+func CheckSessionRenew(cancelRequestedAt, now time.Time) error {
+	if cancelRequestedAt.IsZero() {
+		return nil
+	}
+
+	if now.Sub(cancelRequestedAt) > SessionCancelBound {
+		return fmt.Errorf("%w: the cancel is older than %v", ErrClaimLost, SessionCancelBound)
+	}
+
+	return nil
+}
+
 // Limits are the time limits of one launcher. The launcher owns the
 // deadline of each step: it stops a step at its timeout. The deadline of
 // the Job or the sandbox is a generous limit after which the platform
