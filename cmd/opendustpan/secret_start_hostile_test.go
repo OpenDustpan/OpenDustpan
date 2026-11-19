@@ -191,7 +191,7 @@ func checkSecretStartRefuses(t *testing.T, setting secretStart, source, text, ca
 	vars, named := secretInput(t, setting, source, text)
 
 	got, err := setting.start(t, envOf(vars))
-	if !errors.Is(err, errSecretControlChar) {
+	if err == nil || !errors.Is(err, errSecretControlChar) {
 		t.Fatalf("start = %q, %v; want %v", got, err, errSecretControlChar)
 	}
 
