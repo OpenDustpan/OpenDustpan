@@ -558,17 +558,14 @@ func TestStateReadPastTheBoundLogsAWarning(t *testing.T) {
 		t.Fatalf("log has %d lines, want 1: %q", len(lines), buf.String())
 	}
 
-	var entry struct {
-		Level        string `json:"level"`
-		Message      string `json:"msg"`
-		StateVersion string `json:"stateVersion"`
-	}
+	var entry map[string]any
 
 	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
 		t.Fatalf("log line %q: %v", lines[0], err)
 	}
 
-	if entry.Level != "WARN" || entry.Message != "state past the masked read bound" || entry.StateVersion != "sv-deep123" {
-		t.Fatalf("log entry %+v, want a warning for sv-deep123", entry)
+	if entry["level"] != "WARN" || entry["msg"] != "state past the masked read bound" ||
+		entry["state_version"] != "sv-deep123" {
+		t.Fatalf("log entry %v, want a warning for sv-deep123", entry)
 	}
 }

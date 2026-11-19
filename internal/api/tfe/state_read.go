@@ -220,7 +220,7 @@ func (h *Handler) writeStateReadError(
 	ctx context.Context, w http.ResponseWriter, err error, id workspace.StateVersionID,
 ) {
 	if errors.Is(err, workspace.ErrStateBound) {
-		h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("stateVersion", id.String()))
+		h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("state_version", id.String()))
 	}
 
 	h.writeError(ctx, w, err)

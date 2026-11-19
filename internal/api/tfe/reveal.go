@@ -113,7 +113,7 @@ func (h *Handler) revealStateValue(
 		// its issue asks for an entry when another secrets provider holds
 		// the value.
 		if errors.Is(err, workspace.ErrStateBound) {
-			h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("stateVersion", id.String()))
+			h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("state_version", id.String()))
 		}
 
 		h.writeNoStore(ctx, w, err)
