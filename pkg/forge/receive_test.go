@@ -45,11 +45,11 @@ func intake(t *testing.T) (*rig, string) {
 	return r, view.HookID
 }
 
-// wantRefusal checks that err is an EventRefusal with the reason.
+// wantRefusal checks that err is an EventRefusalError with the reason.
 func wantRefusal(t *testing.T, err error, reason string) {
 	t.Helper()
 
-	var ref *forge.EventRefusal
+	var ref *forge.EventRefusalError
 	if !errors.As(err, &ref) || ref.Reason != reason {
 		t.Fatalf("error = %v, want the refusal %q", err, reason)
 	}

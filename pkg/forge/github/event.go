@@ -38,16 +38,11 @@ const (
 	actionClosed   = "closed"
 )
 
-// eventVerifier is the forge.Events of GitHub. It holds no state and makes no
-// call to GitHub. Opener.Events returns it, and the ParseEvent method of an
-// opened Forge runs the same function, so the two cannot differ.
-type eventVerifier struct{}
-
-var _ forge.Events = eventVerifier{}
-
 // ParseEvent checks the signature of r against each secret and returns the
-// event. See parseEvent.
-func (eventVerifier) ParseEvent(_ context.Context, r forge.EventRequest, secrets [][]byte) (forge.Event, error) {
+// event. It needs no connection and makes no call to GitHub. The ParseEvent
+// method of an opened Forge runs the same function, so the two cannot differ.
+// See parseEvent.
+func (*Opener) ParseEvent(_ context.Context, r forge.EventRequest, secrets [][]byte) (forge.Event, error) {
 	return parseEvent(r, secrets, hmac.Equal)
 }
 

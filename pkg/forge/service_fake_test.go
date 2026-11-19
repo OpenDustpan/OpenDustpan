@@ -384,7 +384,7 @@ type recorder struct {
 	caps     forge.Capabilities
 	checkErr error
 	openErr  error
-	// events is the verifier that Events returns. A test sets it to nil to
+	// events is the verifier that ParseEvent runs. A test sets it to nil to
 	// show that the service fails closed.
 	events forge.Events
 }
@@ -396,8 +396,18 @@ type openCall struct {
 
 func (r *recorder) Kind() forge.Kind { return forge.KindGitHub }
 
-//nolint:ireturn // The port is the interface: the adapter type stays hidden.
-func (r *recorder) Events() forge.Events { return r.events }
+// errNoVerifier is the error of a recorder with no verifier.
+var errNoVerifier = errors.New("the recorder has no verifier")
+
+// ParseEvent runs the verifier of r. A recorder with no verifier returns an
+// error that the port does not name, so the service fails closed.
+func (r *recorder) ParseEvent(ctx context.Context, req forge.EventRequest, secrets [][]byte) (forge.Event, error) {
+	if r.events == nil {
+		return forge.Event{}, errNoVerifier
+	}
+
+	return r.events.ParseEvent(ctx, req, secrets)
+}
 
 //nolint:ireturn // The port is the interface: the adapter type stays hidden.
 func (r *recorder) Open(_ context.Context, c forge.Connection, cred forge.Credential) (forge.Forge, error) {

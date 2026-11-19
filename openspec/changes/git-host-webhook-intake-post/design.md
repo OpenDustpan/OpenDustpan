@@ -25,7 +25,7 @@ H-->>GH: 204, empty body, same headers in every case
 
 ## Decisions
 
-1. **The verifier is in the adapter, and it needs no connection.** `Opener` gets a NEW method `Events() Events` that returns the verifier of the kind. The service cannot open a Forge before it knows the installation, and the installation is in the body that the signature must cover first. The ParseEvent method of an opened Forge calls the same function, so the two paths cannot differ. The verifier follows `pkg/forge/forge.go:427-439`:
+1. **The verifier is in the adapter, and it needs no connection.** `Opener` gets a NEW method `ParseEvent` with the contract of `Events.ParseEvent`. It returns an event, not an interface, so the port needs no interface return. The service cannot open a Forge before it knows the installation, and the installation is in the body that the signature must cover first. The ParseEvent method of an opened Forge calls the same function, so the two paths cannot differ. The verifier follows `pkg/forge/forge.go:427-439`:
    - It reads the header X-Hub-Signature-256 only. It needs exactly one value of the form `sha256=` and 64 hex digits, else ErrSignature. The legacy header X-Hub-Signature (SHA-1) is never read.
    - It computes HMAC-SHA256 of the body for each secret and compares with `hmac.Equal`. It ignores a secret shorter than `forge.MinEventSecretBytes` as it ignores an empty one. It computes the digest for each secret before it decides, so the time does not tell which secret matched. A list with no usable secret returns ErrSignature.
    - Only after a match, it reads X-GitHub-Event and X-GitHub-Delivery (one value each; the delivery ID needs the form of a UUID) and the body. Ping gives EventPing. A pull request event with the action opened, reopened, synchronize or closed gives EventReview. Any other event name or action gives ErrUnsupported. A body that is not JSON, or lacks the installation ID, the repository full name, the pull request number or the sender, gives ErrInvalid. The adapter checks the repository name with the same rule as `splitRepo`.
@@ -65,7 +65,7 @@ Port changes in `pkg/forge` (sentinels and errors follow the package: `fmt.Error
 type Opener interface {
 	Kind() Kind
 	Open(ctx context.Context, c Connection, cred Credential) (Forge, error)
-	Events() Events // NEW
+	ParseEvent(ctx context.Context, r EventRequest, secrets [][]byte) (Event, error) // NEW
 }
 
 // Namespaces gets one method (decision 8).
@@ -117,10 +117,10 @@ type ReceiptStore interface {
 	RecordEventReceipt(ctx context.Context, r EventReceipt) (bool, error)
 }
 
-// NEW: EventRefusal is the error of ReceiveEvent for a delivery that the server refused.
-type EventRefusal struct{ Reason string } // Reason is one of the EventReason constants
+// NEW: EventRefusalError is the error of ReceiveEvent for a delivery that the server refused.
+type EventRefusalError struct{ Reason string } // Reason is one of the EventReason constants
 
-// NEW: ReceiveEvent runs the steps of decision 3. It returns the receipt, or an *EventRefusal.
+// NEW: ReceiveEvent runs the steps of decision 3. It returns the receipt, or an *EventRefusalError.
 func (s *Service) ReceiveEvent(ctx context.Context, hookID string, r EventRequest) (EventReceipt, error)
 ```
 
@@ -156,7 +156,7 @@ CREATE INDEX git_host_event_receipts_received ON git_host_event_receipts (receiv
 
 ## Structure
 
-- The verifier is an unexported function of the adapter. Both `Opener.Events` and the ParseEvent method of an opened Forge return its result, so there is one check.
+- The verifier is an unexported function of the adapter. Both `Opener.ParseEvent` and the ParseEvent method of an opened Forge return its result, so there is one check.
 - The NEW `ReceiveEvent` is the only code that decides the order of the checks. The handler holds no rule except the byte bound and the uniform answer.
 - The old secret exists only as a sealed value bound to the digest, so a put that changes the address cannot carry it (see "Parked: owner question").
 - The reject reasons are constants in `pkg/forge`. The metric maps any other value to `other`, as `ObserveGitHostRefused` does (`internal/metrics/server.go:726-735`).

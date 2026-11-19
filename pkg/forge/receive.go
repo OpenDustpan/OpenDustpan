@@ -29,17 +29,15 @@ const (
 	EventReasonOther           = "other"
 )
 
-// EventRefusal is the error of Service.ReceiveEvent for a delivery that the
+// EventRefusalError is the error of Service.ReceiveEvent for a delivery that the
 // server refused. Reason is one of the EventReason constants.
-//
-//nolint:errname // EventRefusal is the name that the port contract gives this error.
-type EventRefusal struct{ Reason string }
+type EventRefusalError struct{ Reason string }
 
-func (e *EventRefusal) Error() string { return "the server refused the event: " + e.Reason }
+func (e *EventRefusalError) Error() string { return "the server refused the event: " + e.Reason }
 
 // refuse returns the refusal with the reason.
 func refuse(reason string) error {
-	return &EventRefusal{Reason: reason}
+	return &EventRefusalError{Reason: reason}
 }
 
 // verifyReason maps an error of the verifier to a reason. An error that the
@@ -59,7 +57,7 @@ func verifyReason(err error) string {
 }
 
 // ReceiveEvent checks and records one delivery of the hook hookID. It returns
-// the receipt, or an *EventRefusal whose Reason is one of the EventReason
+// the receipt, or an *EventRefusalError whose Reason is one of the EventReason
 // constants. It runs these steps and stops at the first refusal: the form and
 // the value of the hook ID, the registration, the address digest, the
 // signature (the current secret, then the old secret in its window), the kind
@@ -166,11 +164,6 @@ func (s *Service) verifyEvent(
 		return Event{}, false, refuse(EventReasonOther)
 	}
 
-	verifier := opener.Events()
-	if verifier == nil {
-		return Event{}, false, refuse(EventReasonOther)
-	}
-
 	digest := AddressDigest(reg.Kind, reg.BaseURL, reg.AppID)
 
 	current, err := s.secrets.OpenBound(ctx, EventSecretScope(reg.Kind), []byte(digest), reg.SealedEventSecret)
@@ -178,7 +171,7 @@ func (s *Service) verifyEvent(
 		return Event{}, false, refuse(EventReasonSecretNotOpened)
 	}
 
-	ev, err := verifier.ParseEvent(ctx, r, [][]byte{current})
+	ev, err := opener.ParseEvent(ctx, r, [][]byte{current})
 	if err == nil {
 		return ev, false, nil
 	}
@@ -198,7 +191,7 @@ func (s *Service) verifyEvent(
 		return Event{}, false, refuse(EventReasonSecretNotOpened)
 	}
 
-	ev, err = verifier.ParseEvent(ctx, r, [][]byte{old})
+	ev, err = opener.ParseEvent(ctx, r, [][]byte{old})
 	if err != nil {
 		return Event{}, false, refuse(verifyReason(err))
 	}

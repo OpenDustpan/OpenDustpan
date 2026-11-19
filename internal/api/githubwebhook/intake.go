@@ -53,7 +53,7 @@ var ErrMissingDependency = errors.New("missing dependency")
 var errNoServerAudit = errors.New("audit store has no installation scope")
 
 // Receiver is the service that checks and records one delivery. *forge.Service
-// implements it. It returns an *forge.EventRefusal for a delivery that it
+// implements it. It returns an *forge.EventRefusalError for a delivery that it
 // refused.
 type Receiver interface {
 	ReceiveEvent(ctx context.Context, hookID string, r forge.EventRequest) (forge.EventReceipt, error)
@@ -205,7 +205,7 @@ func (h *Handler) receive(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 
-	if refused, isRefusal := errors.AsType[*forge.EventRefusal](err); isRefusal && refused != nil {
+	if refused, isRefusal := errors.AsType[*forge.EventRefusalError](err); isRefusal && refused != nil {
 		return normalize(refused.Reason)
 	}
 

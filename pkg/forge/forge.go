@@ -206,10 +206,11 @@ type Opener interface {
 	// kind, an auth kind that the adapter does not support, a missing
 	// parameter, or a secret that it cannot parse.
 	Open(ctx context.Context, c Connection, cred Credential) (Forge, error)
-	// Events returns the verifier of the events of the kind. It needs no
-	// connection and makes no call to the forge: the server checks the
-	// signature of an event before it knows which installation sent it.
-	Events() Events
+	// ParseEvent checks an event of the kind. It has the contract of
+	// Events.ParseEvent. It needs no connection and makes no call to the
+	// forge: the server checks the signature of an event before it knows
+	// which installation sent it.
+	ParseEvent(ctx context.Context, r EventRequest, secrets [][]byte) (Event, error)
 }
 
 // Forge is one forge connection with one credential set. Each method takes

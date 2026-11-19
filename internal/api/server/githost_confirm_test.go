@@ -259,10 +259,10 @@ func TestRegistrationShowsOldSecretEndsAt(t *testing.T) {
 		t.Fatalf("the put of a new secret shows no oldSecretEndsAt: %s", rotated.body)
 	}
 
-	// The window is 7 days from now, in Unix milliseconds.
-	// The server reads its own clock in this test, so the check needs the wall clock too.
-	wantEnd := time.Now().Add(7 * 24 * time.Hour) // nosemgrep: semgrep.tests-no-wall-clock
-	if got := time.UnixMilli(ends); got.Before(wantEnd.Add(-time.Minute)) || got.After(wantEnd.Add(time.Minute)) {
+	// The window is 7 days from the clock of the service, in Unix milliseconds.
+	// That clock starts at hostNow and moves 1 second at each read.
+	wantEnd := hostNow().Add(7 * 24 * time.Hour)
+	if got := time.UnixMilli(ends); got.Before(wantEnd) || got.After(wantEnd.Add(time.Hour)) {
 		t.Fatalf("oldSecretEndsAt = %v, want about %v", got, wantEnd)
 	}
 

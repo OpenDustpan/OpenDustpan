@@ -108,24 +108,26 @@ func TestEventSecretsOfTheTests(t *testing.T) {
 	}
 }
 
-// TestParseEventVerifier sends hostile requests to the verifier. It runs each
-// request through the verifier of the Opener and through the ParseEvent
-// method of an opened Forge: both must give the same answer.
-func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of hostile cases.
-	t.Parallel()
-
-	good := review(reviewBody)
-	current := secrets(secretCurrent)
-	sigOf := func(r forge.EventRequest) string { return r.Header[headerSignature][0] }
-
-	wantReview := forge.Event{
+// wantReviewEvent is the event that the good review request gives.
+func wantReviewEvent() forge.Event {
+	return forge.Event{
 		DeliveryID: deliveryID, Kind: forge.EventReview, Repo: "acme/infra", ReviewID: "7", InstallationID: "9001",
 		Sender: forge.Account{ID: "5", Login: "octo", ExpiresAt: time.Time{}, NoExpiry: false, Scopes: nil},
 	}
+}
 
-	tests := []verifierCase{
+// sigOf returns the signature header of r.
+func sigOf(r forge.EventRequest) string { return r.Header[headerSignature][0] }
+
+// signatureCases are the hostile requests for the signature header.
+func signatureCases() []verifierCase {
+	good := review(reviewBody)
+	current := secrets(secretCurrent)
+	wr := wantReviewEvent()
+
+	return []verifierCase{
 		// The signature header.
-		{"valid review event", good, current, nil, &wantReview},
+		{"valid review event", good, current, nil, &wr},
 		{"no signature header", withHeader(good, headerSignature), current, forge.ErrSignature, nil},
 		{"empty signature header", withHeader(good, headerSignature, ""), current, forge.ErrSignature, nil},
 		{
@@ -207,6 +209,15 @@ func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of ho
 			forge.ErrSignature,
 			nil,
 		},
+	}
+}
+
+// secretListCases are the hostile lists of secrets.
+func secretListCases() []verifierCase {
+	good := review(reviewBody)
+	wr := wantReviewEvent()
+
+	return []verifierCase{
 		{"secret that is not in the list", good, secrets(secretOther), forge.ErrSignature, nil},
 		{
 			"secret of 31 bytes that signs",
@@ -224,11 +235,20 @@ func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of ho
 			eventRequest(secretOld, "pull_request", reviewBody),
 			secrets(secretCurrent, secretOld),
 			nil,
-			&wantReview,
+			&wr,
 		},
-		{"current secret first in the list signs", good, secrets(secretCurrent, secretOld), nil, &wantReview},
-		{"short secret first, then the secret that signs", good, secrets(secretShort, secretCurrent), nil, &wantReview},
-		{"empty secret first, then the secret that signs", good, secrets("", secretCurrent), nil, &wantReview},
+		{"current secret first in the list signs", good, secrets(secretCurrent, secretOld), nil, &wr},
+		{"short secret first, then the secret that signs", good, secrets(secretShort, secretCurrent), nil, &wr},
+		{"empty secret first, then the secret that signs", good, secrets("", secretCurrent), nil, &wr},
+	}
+}
+
+// deliveryCases are the requests with a bad delivery ID, and the order of the checks.
+func deliveryCases() []verifierCase {
+	good := review(reviewBody)
+	current := secrets(secretCurrent)
+
+	return []verifierCase{
 		// The event name and the delivery ID are read after a match only.
 		{
 			"bad signature and no delivery ID",
@@ -292,6 +312,16 @@ func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of ho
 			forge.ErrInvalid,
 			nil,
 		},
+	}
+}
+
+// eventCases are the requests with a bad event name or body.
+func eventCases() []verifierCase {
+	good := review(reviewBody)
+	current := secrets(secretCurrent)
+	wr := wantReviewEvent()
+
+	return []verifierCase{
 		// The event name.
 		{"no event name", withHeader(good, headerEvent), current, forge.ErrInvalid, nil},
 		{
@@ -384,7 +414,7 @@ func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of ho
 			"ping", eventRequest(secretCurrent, "ping", pingBody), current, nil,
 			&forge.Event{
 				DeliveryID: deliveryID, Kind: forge.EventPing, Repo: "", ReviewID: "", InstallationID: "",
-				Sender: wantReview.Sender,
+				Sender: wr.Sender,
 			},
 		},
 		{"ping that is not JSON", eventRequest(secretCurrent, "ping", "zen"), current, forge.ErrInvalid, nil},
@@ -396,6 +426,15 @@ func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of ho
 			nil,
 		},
 	}
+}
+
+// TestParseEventVerifier sends hostile requests to the verifier. It runs each
+// request through the verifier of the Opener and through the ParseEvent
+// method of an opened Forge: both must give the same answer.
+func TestParseEventVerifier(t *testing.T) {
+	t.Parallel()
+
+	tests := slices.Concat(signatureCases(), secretListCases(), deliveryCases(), eventCases())
 
 	o := openHost(t, forge.AuthApp)
 	opener := newHostOpener(t, o.host)
@@ -404,7 +443,7 @@ func TestParseEventVerifier(t *testing.T) { //nolint:maintidx // One table of ho
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			tc.check(t, "opener", opener.Events())
+			tc.check(t, "opener", opener)
 			tc.check(t, "forge", o.fg)
 		})
 	}
@@ -511,7 +550,7 @@ func TestOpenerEventsMakesNoCall(t *testing.T) {
 	o := openHost(t, forge.AuthApp)
 	before := o.host.Calls()
 
-	got, err := newHostOpener(t, o.host).Events().ParseEvent(
+	got, err := newHostOpener(t, o.host).ParseEvent(
 		t.Context(), review(reviewBody), secrets(secretCurrent),
 	)
 	if err != nil || got.Kind != forge.EventReview {

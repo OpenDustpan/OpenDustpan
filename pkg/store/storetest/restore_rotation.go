@@ -11,11 +11,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
+// gitHost holds the Git host store of a store under test. It is a struct, so
+// that gitHostOf returns a concrete type.
+type gitHost struct{ forge.Store }
+
 // gitHostOf returns the Git host store of s, or skips the test for a store that
 // keeps none.
-//
-//nolint:ireturn // The suite takes the port, as the stores return it.
-func gitHostOf(t *testing.T, s any) forge.Store {
+func gitHostOf(t *testing.T, s any) gitHost {
 	t.Helper()
 
 	keeper, ok := s.(interface{ GitHost() forge.Store })
@@ -23,7 +25,7 @@ func gitHostOf(t *testing.T, s any) forge.Store {
 		t.Skip("the store keeps no Git host registration")
 	}
 
-	return keeper.GitHost()
+	return gitHost{Store: keeper.GitHost()}
 }
 
 // restoreOnto exports src in the portable form, stages it on dst and applies it.

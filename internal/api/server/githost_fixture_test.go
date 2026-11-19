@@ -125,8 +125,9 @@ type hostOpener struct {
 
 func (o *hostOpener) Kind() forge.Kind { return forge.KindGitHub }
 
-//nolint:ireturn // The port is the interface.
-func (o *hostOpener) Events() forge.Events { return nil }
+func (o *hostOpener) ParseEvent(context.Context, forge.EventRequest, [][]byte) (forge.Event, error) {
+	return forge.Event{}, forge.ErrUnsupported
+}
 
 //nolint:ireturn // The port is the interface.
 func (o *hostOpener) Open(context.Context, forge.Connection, forge.Credential) (forge.Forge, error) {
@@ -224,6 +225,19 @@ func newHostEnv(t *testing.T, authz identity.Authorizer) *hostEnv {
 	return newHostEnvWith(t, authz, withKeys)
 }
 
+// hostNow returns the start of the clock of the Git host service in these
+// tests. A test reads it to compute a time that the server shows, so no test
+// reads the wall clock.
+func hostNow() time.Time { return time.Date(2030, time.March, 4, 10, 0, 0, 0, time.UTC) }
+
+// hostClock returns a clock that starts at hostNow and moves forward 1 second
+// at each read, so the check limits of the service see time pass.
+func hostClock() func() time.Time {
+	var reads atomic.Int64
+
+	return func() time.Time { return hostNow().Add(time.Duration(reads.Add(1)) * time.Second) }
+}
+
 // keyMode says whether the handler of a test has the Idempotency-Key middleware.
 type keyMode int
 
@@ -302,7 +316,7 @@ func newHostEnvWrapped(
 		},
 		CheckLimits: limits,
 		Logger:      nil,
-		Now:         nil,
+		Now:         hostClock(),
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)

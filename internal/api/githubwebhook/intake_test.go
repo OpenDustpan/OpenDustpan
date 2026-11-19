@@ -249,7 +249,7 @@ func (e *env) deliver(t *testing.T, hook string, body []byte) answer {
 }
 
 func refusalOf(reason string) error {
-	return fmt.Errorf("receive: %w", &forge.EventRefusal{Reason: reason})
+	return fmt.Errorf("receive: %w", &forge.EventRefusalError{Reason: reason})
 }
 
 func sameAnswer(t *testing.T, name string, got, want answer) {

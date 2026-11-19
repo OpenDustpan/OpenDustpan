@@ -147,11 +147,6 @@ func (o *Opener) CloseIdleConnections() {
 // Kind returns forge.KindGitHub.
 func (*Opener) Kind() forge.Kind { return forge.KindGitHub }
 
-// Events returns the verifier of the events of GitHub. It makes no call.
-func (*Opener) Events() forge.Events { //nolint:ireturn // The port returns the Events interface.
-	return eventVerifier{}
-}
-
 // Open returns the Forge of c with the credential cred. It makes no call to
 // GitHub. It returns forge.ErrInvalid for a connection of another kind, an
 // auth kind other than app and token, a missing or bad parameter, an API
