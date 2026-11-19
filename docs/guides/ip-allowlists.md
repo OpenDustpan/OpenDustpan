@@ -65,11 +65,14 @@ needs a fresh sign-in, and the access token in the example is enough. The
 [settings guide](settings.md#changes-that-need-a-fresh-sign-in) explains the
 rule.
 
-The list value is one string of CIDRs or addresses, separated by commas:
+The list value is one string of CIDRs or addresses, separated by commas.
+The settings resource keeps and shows the string as you sent it, for example
+`10.1.2.3/8,127.0.0.1,127.0.0.1`. The server reads the string as a list when it
+checks a client address:
 
 - Each item is a CIDR, such as `10.0.0.0/8`, or a single address, such as
-  `192.0.2.7`. A single address is stored as `/32` for IPv4, or `/128` for IPv6.
-- The host bits of a CIDR are dropped. `10.1.2.3/8` is stored as `10.0.0.0/8`.
+  `192.0.2.7`. A single address counts as `/32` for IPv4, or `/128` for IPv6.
+- The host bits of a CIDR are dropped. `10.1.2.3/8` counts as `10.0.0.0/8`.
 - A duplicate is dropped. The order of the other items is kept.
 - The list holds at most 64 distinct entries. A 65th entry gets `400`.
 - An item that is not a CIDR or an address gets `400`, with the code
@@ -157,7 +160,7 @@ three of these are true:
 3. The client address is in one of the `cidrs`.
 
 A namespace with no list allows every address that the installation list
-allows. An unknown namespace reads as having no list.
+allows. An unknown namespace answers `404` with the code `namespace.not-found`.
 
 When the feature is off, `GET` still returns the stored list, with `enabled`
 set to `false`. The list stays stored and does not apply.

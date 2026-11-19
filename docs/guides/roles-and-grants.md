@@ -36,7 +36,7 @@ server does not store them, and an operator cannot change them.
 
 | Role | What it holds |
 | --- | --- |
-| `viewer` | Read the namespace, the collections, the units, the outputs that the sharing rules allow, the profiles and the gates, and manage its own saved views. |
+| `viewer` | Read the namespace, the collections, the units, the outputs (the action `unit:read-outputs`), the profiles and the gates, and manage its own saved views. |
 | `auditor` | Everything in `viewer`, plus the audit log and the access of each object. |
 | `secret-viewer` | Everything in `viewer`, plus read the secrets of a unit. |
 | `planner` | Everything in `viewer`, plus plan jobs and their logs. |
@@ -50,7 +50,8 @@ server does not store them, and an operator cannot change them.
 
 The `planner` role cannot apply, destroy, approve, cancel or read secrets. The [planner role guide](planner-role.md) describes the role in detail.
 
-The name `namespace-admin` is an alias of `admin`.
+The server has no role named `namespace-admin`. `GET /api/server/roles/namespace-admin`
+and a grant create with this role answer `404`. Use the role `admin`.
 
 ## Make a custom role
 
@@ -120,10 +121,13 @@ The object is set by the route. The body does not name it.
 | The installation | `/api/server/grants` | `server:manage-access` | `DELETE /api/server/grants/{id}` |
 | A namespace | `/api/server/namespaces/{namespace}/grants` | `namespace:manage-access` | `DELETE /api/server/namespaces/{namespace}/grants/{id}` |
 | A collection | `/api/server/namespaces/{namespace}/collections/{collection}/grants` | `collection:manage-access` | `DELETE .../collections/{collection}/grants/{id}` |
-| A unit | `/api/server/namespaces/{namespace}/unit-grants?tool=<tool>&unit=<name>` | `unit:manage-access` | `DELETE /api/server/namespaces/{namespace}/unit-grants/{id}` |
+| A unit | `/api/server/namespaces/{namespace}/unit-grants?tool=<tool>&unit=<name>` | `unit:manage-access` | `DELETE /api/server/namespaces/{namespace}/unit-grants/{id}?tool=<tool>&unit=<name>` |
 | A service principal | `/api/server/principals/{principal}/grants` | `server:manage-access` on the principal | `DELETE /api/server/principals/{principal}/grants/{id}` |
 
-The unit route needs both `tool` and `unit`. Without them the answer is `400`.
+The unit routes need both `tool` and `unit`, also the revoke route. Without
+them the answer is `400`. The route of a service principal lists and makes the
+grants whose object is the principal, that is, who can act as it. It does not
+list the grants that the principal holds.
 
 Create a grant. The body holds `subject` and `role`.
 
@@ -172,7 +176,9 @@ the history keeps it.
 A revoke takes effect on the next request. The server reads the stored grant
 for each request and keeps no allow, so a personal access token whose only
 grant ended gets `403` on the next CLI command. To see which grants a token
-still holds, read `GET /api/server/principals/{principal}/grants`.
+still holds, read an [access review](access-review.md) of an object with the
+`subject` filter, for example
+`GET /api/server/namespaces/{namespace}/access-review?subject=principal:<id>`.
 
 ```sh
 curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
