@@ -38,6 +38,9 @@ func (h *Handler) findNamespace(r *http.Request) (namespace.Namespace, error) {
 	}
 
 	ns, err := h.namespaces.Get(r.Context(), name)
+	// Defense in depth: writeError maps the raw namespace.ErrNotFound to the
+	// same 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, namespace.ErrNotFound) {
 		return namespace.Namespace{}, errNotFound
 	}
@@ -125,6 +128,9 @@ func (h *Handler) resolveWith(
 	}
 
 	got, err := read(r.Context(), t.ns.Name, id)
+	// Defense in depth: writeError maps the raw trigger.ErrNotFound to the
+	// same 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, trigger.ErrNotFound) {
 		return target{}, errNotFound
 	}

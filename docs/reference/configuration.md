@@ -191,14 +191,24 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_ADMIN_TOKEN_FILE` | A file that holds the tokens, one per line or comma-separated. Only its owner can read it. When you set both, `DUSTPAN_ADMIN_TOKEN` wins. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY` | The base64 text of 32 random bytes. It can stay unset while the database holds no secrets. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | A file that holds that value. Only its owner can read it. |
-| `DUSTPAN_AUDIT_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. Required when `--audit-sink` names a webhook and you set no secret file. |
-| `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
-| `DUSTPAN_LOG_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. Required when `--log-sink` names a webhook and you set no secret file. |
-| `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_AUDIT_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. Required when `--audit-sink` names a webhook and you set no secret file. A space at the start or at the end is part of the secret. The server uses the value exactly as it is. It refuses a value with a control character or a hidden character such as a byte order mark in it. A value of white space only counts as not set, and the server then reads the file variable. |
+| `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. A space at the start or at the end is part of the secret. The server ignores one final line ending (LF or CR LF) of the file. It refuses a secret with a control character or a hidden character such as a byte order mark in it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_LOG_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. Required when `--log-sink` names a webhook and you set no secret file. A space at the start or at the end is part of the secret. The server uses the value exactly as it is. It refuses a value with a control character or a hidden character such as a byte order mark in it. A value of white space only counts as not set, and the server then reads the file variable. |
+| `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. A space at the start or at the end is part of the secret. The server ignores one final line ending (LF or CR LF) of the file. It refuses a secret with a control character or a hidden character such as a byte order mark in it. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
 | `DUSTPAN_AUDIT_OTLP_HEADERS` | Extra headers of each request of an `otlp:` audit sink, as `Name=Value` items separated by commas or line breaks. Percent-encode a value. Optional. |
 | `DUSTPAN_AUDIT_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_OTLP_HEADERS` wins. |
 | `DUSTPAN_LOG_OTLP_HEADERS` | Extra headers of each request of an `otlp:` log sink, in the same form. Optional. |
 | `DUSTPAN_LOG_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_LOG_OTLP_HEADERS` wins. |
+
+After the start reads its settings, `serve` clears these variables from its own
+environment, so that a child process does not inherit them: each variable in the
+table above, each other sensitive setting, and the variables that a library
+reads and no setting declares (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `PGPASSWORD`, `PGSSLPASSWORD`).
+`serve` logs at Info the count and the names of the variables that it cleared,
+never a value. If `serve` cannot clear a variable, it does not start.
+`serve` does not clear `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`: the HTTP
+client reads them at its first outbound request, which can come after the
+clear. Keep a proxy password out of the environment of `serve`.
 
 Make a key-encryption key with this command:
 

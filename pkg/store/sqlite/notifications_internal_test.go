@@ -173,7 +173,7 @@ func TestNotificationDeliveriesRefuseNegativeRedeliveries(t *testing.T) {
 }
 
 // TestNotificationDeliveryRedeliverPredicates checks the predicates of the
-// update on their own, as if two redelivers had read the row at the same time.
+// update of the adapter on their own, as if two redelivers had read the row at the same time.
 func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
 	t.Parallel()
 
@@ -201,9 +201,9 @@ func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
 				t.Fatalf("plant the delivery: %v", err)
 			}
 
-			n, err := s.queries.RedeliverNotificationDelivery(t.Context(), db.RedeliverNotificationDeliveryParams{
-				ID: "dlv-1", Scope: "@server", MaxRedeliveries: notify.MaxAttempts,
-			})
+			// The helper of the adapter holds the limit argument, so a change of
+			// that argument to MaxAttempts+1 fails the "at the limit" case.
+			n, err := redeliverRow(t.Context(), s.queries, "dlv-1", "@server")
 			if err != nil {
 				t.Fatalf("redeliver the delivery: %v", err)
 			}

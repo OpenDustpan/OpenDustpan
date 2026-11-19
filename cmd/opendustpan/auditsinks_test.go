@@ -825,3 +825,168 @@ func TestServeRefusesAnUnknownAuditSink(t *testing.T) {
 		t.Fatalf("serve with an unknown sink: got %v, want an --audit-sink error", err)
 	}
 }
+
+// TestSecretFromKeepsSpaces proves that a space at the start or at the end of
+// a secret reaches the consumer, from the variable and from the file, and that
+// the file loses only one final line ending.
+func TestSecretFromKeepsSpaces(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"leading space", " pass", " pass"},
+		{"trailing space", "pass ", "pass "},
+		{"both", "  pass  ", "  pass  "},
+		{"trailing space and LF", "pass \n", "pass "},
+		{"trailing space and CR LF", "pass \r\n", "pass "},
+		{"space inside", "pa ss", "pa ss"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fromVar, err := secretFrom(
+				envOf(map[string]string{oidcSecretEnvVar: strings.TrimRight(tc.content, "\r\n")}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if err != nil || string(fromVar) != tc.want {
+				t.Fatalf("from variable = %q, %v; want %q", fromVar, err, tc.want)
+			}
+
+			path := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-"))
+			if writeErr := os.WriteFile(path, []byte(tc.content), 0o600); writeErr != nil {
+				t.Fatalf("write secret file: %v", writeErr)
+			}
+
+			fromFile, err := secretFrom(
+				envOf(map[string]string{oidcSecretFileEnvVar: path}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if err != nil || string(fromFile) != tc.want {
+				t.Fatalf("from file = %q, %v; want %q", fromFile, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestSecretFromRefusesWhiteSpaceOnly proves that a value of spaces only
+// counts as not set, in the variable and in the file.
+func TestSecretFromRefusesWhiteSpaceOnly(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "blank")
+	if err := os.WriteFile(path, []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	for name, vars := range map[string]map[string]string{
+		"variable": {oidcSecretEnvVar: "   "},
+		"file":     {oidcSecretFileEnvVar: path},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := secretFrom(envOf(vars), oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
+			if !errors.Is(err, errNoOIDCSecret) {
+				t.Fatalf("got %v, want %v", err, errNoOIDCSecret)
+			}
+		})
+	}
+}
+
+// TestSecretFromAcceptsOneLineEndingOnly proves that a file loses one final
+// line ending and no more, and that a lone CR is not a line ending.
+func TestSecretFromAcceptsOneLineEndingOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for _, tc := range []struct {
+		name    string
+		content string
+		wantErr error
+	}{
+		{"lone CR", "pass\r", errSecretControlChar},
+		{"two LF", "pass\n\n", errSecretControlChar},
+		{"CR LF then LF", "pass\r\n\n", errSecretControlChar},
+		{"two CR then LF", "pass\r\r\n", errSecretControlChar},
+		{"BOM", "\xef\xbb\xbfpass\n", errSecretControlChar},
+		{"C1 control", "pass\u0085", errSecretControlChar},
+		{"line separator", "pass\u2028", errSecretControlChar},
+		{"invalid UTF-8", "pass\xff", errSecretControlChar},
+		{"empty", "", errNoOIDCSecret},
+		{"LF only", "\n", errNoOIDCSecret},
+		{"CR LF only", "\r\n", errNoOIDCSecret},
+		{"two LF only", "\n\n", errNoOIDCSecret},
+		{"space tab LF", " \t\n", errNoOIDCSecret},
+	} {
+		t.Run("file "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-"))
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatalf("write secret file: %v", err)
+			}
+
+			got, err := secretFrom(
+				envOf(map[string]string{oidcSecretFileEnvVar: path}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %q, %v; want %v", got, err, tc.wantErr)
+			}
+
+			checkSecretErrorNamesSetting(t, err, tc.wantErr, oidcSecretFileEnvVar, tc.content)
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		value   string
+		wantErr error
+	}{
+		{"LF", "pass\n", errSecretControlChar},
+		{"CR", "pass\r", errSecretControlChar},
+		{"BOM", "\xef\xbb\xbfpass", errSecretControlChar},
+		{"C1 control", "pass\u0085", errSecretControlChar},
+		{"line separator", "pass\u2028", errSecretControlChar},
+		{"invalid UTF-8", "pass\xff", errSecretControlChar},
+		{"space tab", " \t", errNoOIDCSecret},
+	} {
+		t.Run("variable "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := secretFrom(
+				envOf(map[string]string{oidcSecretEnvVar: tc.value}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %q, %v; want %v", got, err, tc.wantErr)
+			}
+
+			checkSecretErrorNamesSetting(t, err, tc.wantErr, oidcSecretEnvVar, tc.value)
+		})
+	}
+}
+
+// checkSecretErrorNamesSetting proves that a refusal of a secret names the
+// variable, and that it does not repeat the text of the secret.
+func checkSecretErrorNamesSetting(t *testing.T, err, want error, name, text string) {
+	t.Helper()
+
+	if !errors.Is(want, errSecretControlChar) {
+		return
+	}
+
+	if !strings.Contains(err.Error(), name) {
+		t.Errorf("error %q does not name %s", err, name)
+	}
+
+	if strings.Contains(err.Error(), strings.TrimSpace(text)) {
+		t.Errorf("error %q repeats the secret", err)
+	}
+}
