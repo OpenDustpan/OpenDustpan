@@ -39,6 +39,8 @@ var (
 	// scope, by a caller that authenticated with an access token. A token
 	// comes from a sign-in (ADR 53, decision 10): a token that could make
 	// new tokens would outlive its maximum lifetime and a revoke.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrSignInRequired = errors.New("sign in to create or rotate an access token: an access token cannot")
 	// ErrNoOwnPrincipal reports a caller that has no person record, so it
 	// cannot own personal tokens: a bootstrap admin token, a service or a
@@ -47,6 +49,8 @@ var (
 	// ErrNotOwnToken reports a create or a rotation of a personal token of
 	// another person. Each person makes and rotates only its own personal
 	// tokens, after a sign-in. It comes wrapped with identity.ErrDenied.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNotOwnToken = errors.New(
 		"a person makes and rotates only its own personal tokens: the person signs in and uses /api/dustpan/v1/me/tokens",
 	)

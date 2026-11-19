@@ -105,6 +105,12 @@ Give the role to a second person first, or start `dev` without `--demo`.
 It reads the namespaces and works in them, but it cannot change an installation setting.
 The server refuses each change of its password, its user name and its factors with the error code `local-user.demo-fixed`.
 
+`dev` has no passkey routes, because its public URL is an IP address and a passkey needs a host name.
+The log of `dev` has the line `passkeys are off: the public URL gives no relying party`.
+The routes `/me/passkeys/...` and `/sign-in/passkey/...` answer 404.
+So the demo person has no passkey, and the error code `local-user.demo-fixed` of a passkey route does not occur in `dev`.
+See [Passkeys and dev](passkeys.md#passkeys-and-dev).
+
 Only `dev` takes `--demo`.
 `serve` has no flag, variable or key for it.
 The seed and the server refuse a database that is not of the kind `dev`.

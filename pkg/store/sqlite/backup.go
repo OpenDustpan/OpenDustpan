@@ -945,6 +945,10 @@ func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) err
 		return ownedErr
 	}
 
+	if idErr := checkStagedGrantIDs(ctx, conn); idErr != nil {
+		return idErr
+	}
+
 	if grantErr := checkStagedNamespacePrincipalGrants(ctx, conn); grantErr != nil {
 		return grantErr
 	}
@@ -1303,13 +1307,14 @@ func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 		return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", iterErr)
 	}
 
-	collector := &blobrefs.Collector{}
+	// The collector starts with the references of the query above, so all
+	// references stay in one slice and the sort below orders it in place.
+	collector := blobrefs.NewCollector(out)
 	if addErr := addStoredBlobRefs(ctx, conn, collector); addErr != nil {
 		return blobrefs.BackupRefs{}, addErr
 	}
 
 	gathered := collector.BackupRefs()
-	gathered.Refs = append(out, gathered.Refs...)
 	slices.SortFunc(gathered.Refs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
 	return gathered, nil
