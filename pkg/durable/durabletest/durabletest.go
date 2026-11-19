@@ -159,7 +159,10 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an end write sets the deadline releases to 0 and a renewal does not", testEndWriteResetsDeadlineReleases},
 		{"a release at the deadline by a non-holder changes nothing", testReleaseAtDeadlineNonHolder},
 		{"a release at the deadline during a cancel ends canceled and does not count", testReleaseAtDeadlineCanceled},
-		{"a fail or release during a cancel ends canceled and resets the count", testEndWriteCanceledResetsDeadlineReleases},
+		{
+			"a fail or release during a cancel ends canceled and resets the count",
+			testEndWriteCanceledResetsDeadlineReleases,
+		},
 		{"a give-back returns the operation to pending, and a non-holder changes nothing", testGiveBack},
 		{"a give-back during a cancel is ErrCanceled and changes nothing", testGiveBackCanceled},
 		{"a recorded step stays done after a takeover", testStepDoneAfterTakeover},
