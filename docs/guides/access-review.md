@@ -115,7 +115,8 @@ the request has no `subject` filter. On the installation review it has no
 `inheritedFrom`. On any other review, `inheritedFrom` is `@server`, the
 installation. Its `source` is `code-rule` and its `rule` is `bootstrap admin
 token`: the token holds every action by a code rule with no stored grant
-record, and it ends on the first sign-in of a person. See the catalog of code
+record, and it stays valid until the operator deletes it from the configuration
+and restarts the server. See the catalog of code
 rules for that rule.
 
 ## Read a history

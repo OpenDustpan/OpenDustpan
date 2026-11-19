@@ -2,6 +2,7 @@ package authgatetest
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"strconv"
 	"sync"
@@ -27,6 +28,13 @@ type NameLockHarness struct {
 	// plus offset: each time column of the count goes to that time, and a
 	// column of 0 stays 0.
 	Place func(t *testing.T, scope, name, sub string, offset time.Duration)
+	// SetTimes sets the three time columns of one stored name count, the count
+	// that scope, name and sub name, each to the time of the database clock
+	// plus its own offset: the last failure, the end of the lock and the
+	// end of the last lock. An offset of NoTime stores 0, a count with no
+	// lock or no end. Unlike Place, it moves each column on its own, so a
+	// case can test one check of a prune with the other checks passed.
+	SetTimes func(t *testing.T, scope, name, sub string, lastFailure, lockedUntil, lastLockEnd time.Duration)
 	// Broken returns a handle whose writes fail, for example a closed store.
 	Broken func(t *testing.T) authgate.NameLockCounter
 	// Entries returns the audit entries of the installation that the store
@@ -36,6 +44,9 @@ type NameLockHarness struct {
 	// of the harness holds, in the order of the append.
 	Notices func(t *testing.T) []notify.Notification
 }
+
+// NoTime is the offset of SetTimes that stores 0 in a time column.
+const NoTime = time.Duration(math.MinInt64)
 
 // NameLockFactory returns a fresh harness on an empty store for one subtest.
 type NameLockFactory func(t *testing.T) NameLockHarness
@@ -76,7 +87,7 @@ type nameCase struct {
 
 // nameCases returns the cases of the suite, in the order of the run.
 func nameCases() []nameCase {
-	return slices.Concat(countCases(), recordCases())
+	return slices.Concat(countCases(), pruneLayerCases(), recordCases())
 }
 
 // countCases returns the cases of the counts, the locks, the clear and the
@@ -741,6 +752,109 @@ func testPrune(t *testing.T, h NameLockHarness) {
 	if got := prunedCounts(entries); len(got) != 1 || got[0] != "1" {
 		t.Fatalf("pruned counts of the entries of the prune = %v, want [1]", got)
 	}
+}
+
+// pruneLayerCases returns the cases that each prove one check of the prune.
+func pruneLayerCases() []nameCase {
+	return []nameCase{
+		{
+			name: "a prune of ended locks keeps a lock that has not ended, although its last failure is old",
+			test: testPruneKeepsLockThatHolds,
+		},
+		{
+			name: "a prune keeps a level that has not reset, although its last failure is old",
+			test: testPruneKeepsLevelNotReset,
+		},
+		{
+			name: "a prune of ended locks keeps a lock that ended, when its last failure is inside the age",
+			test: testPruneKeepsRecentFailure,
+		},
+	}
+}
+
+// pruneAge is the age of the prune of the cases of one check. It is longer
+// than the shift of a recent failure, and shorter than the shift of an old one.
+const (
+	pruneAge     = longLock
+	oldFailure   = -2 * longLock
+	freshFailure = -shortLock
+)
+
+// pruneOnly runs one prune on the store of h with a target count (the times
+// are its last failure, the end of its lock and the end of its last lock) that the
+// prune must keep, and two control counts that it must delete: one with no
+// lock, and one with a lock that ended. The controls prove that the prune
+// ran and reached each of its two queries, so a kept target is a kept target
+// of the check that is under test and not of a prune that did nothing.
+func pruneOnly(
+	t *testing.T,
+	h NameLockHarness,
+	target countKey,
+	rl authgate.LockRule,
+	times [3]time.Duration,
+) {
+	t.Helper()
+
+	c := h.Open(t)
+
+	add(t, c, target, rl, nil)
+	add(t, c, key(authgate.ScopePassword, "control-plain", "s"), rule(limitFive, longLock), nil)
+	add(t, c, key(authgate.ScopePassword, "control-ended", "s"), rule(1, longLock), nil)
+
+	h.SetTimes(t, target.scope, target.name, target.sub, times[0], times[1], times[2])
+	h.SetTimes(t, authgate.ScopePassword, "control-plain", "s", oldFailure, NoTime, NoTime)
+	h.SetTimes(t, authgate.ScopePassword, "control-ended", "s", oldFailure, -shortLock, NoTime)
+
+	n, err := c.PruneNameLocks(
+		t.Context(),
+		pruneAge,
+		authgate.MaxNamePruneRows,
+		authgate.MaxNamePruneEnded,
+		pruneEntry(),
+	)
+	if err != nil || n != limitTwo {
+		t.Fatalf("prune = %d, %v; want the 2 control counts", n, err)
+	}
+
+	kept, err := c.NameLocks(t.Context(), target.scope, target.name)
+	if err != nil || len(kept) != 1 {
+		t.Fatalf("count %s after a prune = %+v, %v; want it kept", target.name, kept, err)
+	}
+
+	for _, name := range []string{"control-plain", "control-ended"} {
+		gone, goneErr := c.NameLocks(t.Context(), authgate.ScopePassword, name)
+		if goneErr != nil || len(gone) != 0 {
+			t.Fatalf("control count %s after a prune = %+v, %v; want it deleted", name, gone, goneErr)
+		}
+	}
+}
+
+// testPruneKeepsLockThatHolds: the last failure is old and the end of the
+// lock is in the future. Only the check of the end of the lock keeps it.
+func testPruneKeepsLockThatHolds(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	pruneOnly(t, h, key(authgate.ScopePassword, "holds", "s"), rule(1, longLock),
+		[3]time.Duration{oldFailure, longLock, NoTime})
+}
+
+// testPruneKeepsLevelNotReset: the last failure is old, the count has no
+// lock and a level, and its reset time is in the future. Only the check of
+// the reset time keeps it.
+func testPruneKeepsLevelNotReset(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	pruneOnly(t, h, key(authgate.ScopePasswordName, "level", ""),
+		doubling(shortLock, longLock, longLock), [3]time.Duration{oldFailure, NoTime, freshFailure})
+}
+
+// testPruneKeepsRecentFailure: the lock ended and the level has reset, but the
+// last failure is inside the age. Only the check of the age keeps it.
+func testPruneKeepsRecentFailure(t *testing.T, h NameLockHarness) {
+	t.Helper()
+
+	pruneOnly(t, h, key(authgate.ScopePassword, "recent-ended", "s"), rule(1, longLock),
+		[3]time.Duration{freshFailure, -shortLock, NoTime})
 }
 
 // pruneRows is the count of old counts of the case of the bound.

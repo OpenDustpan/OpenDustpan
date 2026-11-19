@@ -71,15 +71,16 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (targe
 
 	unitID := r.PathValue("unit_id")
 
-	live, err := h.units.ListUnits(r.Context(), ns.Name)
-	if err != nil {
-		return target{}, fmt.Errorf("list units: %w", err)
-	}
+	live, err := h.units.GetUnit(r.Context(), unitID)
 
-	for i := range live {
-		if live[i].UnitID == unitID {
-			return h.liveTarget(ns, live[i])
-		}
+	switch {
+	case err == nil && live.Namespace == ns.Name:
+		return h.liveTarget(ns, live)
+	case err == nil, errors.Is(err, coreinventory.ErrUnitNotFound):
+		// A live unit of another namespace takes the path of an unknown ID,
+		// so the answer does not tell a caller that the unit exists.
+	default:
+		return target{}, fmt.Errorf("get unit: %w", err)
 	}
 
 	return h.deletedTargetByID(r, ns, unitID)

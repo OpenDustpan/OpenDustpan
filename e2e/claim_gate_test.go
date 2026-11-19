@@ -5,7 +5,6 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,18 +12,16 @@ import (
 
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Names of the unit, the pool and the runner of the claim steps. The pool
+// Names of the unit and the pool of the claim steps. The pool
 // holds the jobs of these steps only, so a claim finds no other job.
 const (
-	claimUnit   = "claim-network"
-	claimPool   = "claims"
-	claimRunner = "e2e-runner"
+	claimUnit = "claim-network"
+	claimPool = "claims"
 )
 
 // claimStartBody returns the body of a plan job on the unit of the claim steps.
@@ -42,14 +39,14 @@ type claimJobDoc struct {
 
 // aGateStopsAClaim proves that the gates of a unit hold at the claim of a
 // phase, not only at the start of its job: a job starts with no gate, an
-// enforced gate at state.write is saved, and the claim of the phase by the
-// job claimer of the server fails the job with the name of the gate and a
-// denied runner:claim entry. A gate in evaluate mode then lets the claim of
+// enforced gate at state.write is saved, and the poll of a runner over the
+// runner protocol fails the job with the name of the gate and a denied
+// runner:claim entry. A gate in evaluate mode then lets the claim of
 // the next job go on.
 func aGateStopsAClaim(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	// The steps save gates and claim through the in-process server.
+	// The steps save gates through the in-process server.
 	if e2e.UseBinaryServer() {
 		t.Log("skip the claim gate steps: they need the in-process server")
 
@@ -75,15 +72,16 @@ func aGateStopsAClaim(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 
 	first := startClaimJob(ctx, t, env, "claim gate: start a job with no gate")
+	fake := env.JoinFakeRunner(ctx, t, e2e.Namespace, first.PoolID, "claim-runner")
 
 	enforced := claimGate(scope, "no-claims", gate.ModeEnforce)
 	must(t, env.PutGate(ctx, t, enforced))
 
-	if a, claimErr := env.ClaimJobPhase(ctx, claimRunner, first.PoolID); !errors.Is(claimErr, durable.ErrNoWork) {
-		t.Fatalf("claim with a gate saved after the start = job %s, %v; want durable.ErrNoWork", a.Job.ID, claimErr)
+	if work := fake.Poll(ctx, t, pollWait); work != nil {
+		t.Fatalf("poll with a gate saved after the start = job %s; want no work", work.Job)
 	}
 
-	checkClaimRefused(ctx, t, env, first.ID)
+	checkClaimRefused(ctx, t, env, first.ID, fake.ID())
 	must(t, env.DeleteGate(ctx, t, scope, enforced.ID))
 
 	// A gate in evaluate mode stops nothing.
@@ -91,10 +89,9 @@ func aGateStopsAClaim(ctx context.Context, t *testing.T, env *e2e.Env) {
 	watch := claimGate(scope, "watch-claims", gate.ModeEvaluate)
 	must(t, env.PutGate(ctx, t, watch))
 
-	a, err := env.ClaimJobPhase(ctx, claimRunner, second.PoolID)
-	if err != nil || string(a.Job.ID) != second.ID || a.Job.State != job.StateRunning {
-		t.Fatalf("claim with a gate in evaluate mode = job %s (%s), %v; want job %s running",
-			a.Job.ID, a.Job.State, err, second.ID)
+	work := fake.Poll(ctx, t, pollWait)
+	if work == nil || work.Job != second.ID {
+		t.Fatalf("poll with a gate in evaluate mode = %+v; want the phase of job %s", work, second.ID)
 	}
 
 	must(t, env.DeleteGate(ctx, t, scope, watch.ID))
@@ -137,8 +134,8 @@ func startClaimJob(ctx context.Context, t *testing.T, env *e2e.Env, name string)
 }
 
 // checkClaimRefused checks that the job id failed with the name of the gate,
-// and that the refused claim wrote a denied runner:claim entry.
-func checkClaimRefused(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
+// and that the refused claim of the runner runnerID wrote a denied runner:claim entry.
+func checkClaimRefused(ctx context.Context, t *testing.T, env *e2e.Env, id, runnerID string) {
 	t.Helper()
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -167,7 +164,7 @@ func checkClaimRefused(ctx context.Context, t *testing.T, env *e2e.Env, id strin
 	for i := range entries {
 		e := &entries[i]
 		if e.Action == string(job.ActionRunnerClaim) && e.JobID == id && e.Outcome == audit.OutcomeDenied &&
-			e.Subject == claimRunner && strings.Contains(e.Reason, "no-claims") {
+			e.Subject == runnerID && strings.Contains(e.Reason, "no-claims") {
 			return
 		}
 	}

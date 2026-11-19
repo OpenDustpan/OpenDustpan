@@ -2,7 +2,7 @@
 
 - [ ] 0.1 Confirm against the code first; record each difference in the pull request body. Read each fact of "What main already does" at its file, line and function on the current main. Do not edit design.md or proposal.md during the implementation. Check: the pull request body lists the differences, or says that there are none.
 - [ ] 0.2 Confirm that `rg -n "bulk-lock|bulk-unlock|unit-locks" internal pkg e2e docs openspec/specs` finds nothing on main, and that no merged change owns the two routes. Check: the pull request body quotes the empty result.
-- [ ] 0.3 Find which port the inventory adapter can use for the per-item replay records (the settings adapter uses `h.records` in internal/api/settings/keyed.go). If the inventory Handler has none, task 2.4 adds it to its Config, as the settings Config has it. Check: the pull request body names the port and the file.
+- [ ] 0.3 Find which port the inventory adapter can use for the per-item replay records (the settings adapter uses `h.records` in internal/api/settings/keyed.go) and confirm that no Completion exists in pkg/manuallock or in pkg/store/{postgres,sqlite}/manual_locks.go (task 2.6 adds it). If the inventory Handler has none, task 2.4 adds it to its Config, as the settings Config has it. Check: the pull request body names the port and the file.
 
 ## 1. Failing tests first
 
@@ -18,7 +18,7 @@
 - [ ] 2.1 Add the NEW file `internal/api/inventory/locks_bulk.go` with the two handlers, the wire types, the NEW constant `MaxBulkLocks`, the body limit and the per-item path. Extract `lockOne` and `unlockOne` from `putLock` and `deleteLock` so a single call and an item use the same code. Check: `go test ./internal/api/inventory -run 'TestBulk|TestLock' -count=1`.
 - [ ] 2.2 Add the two route rows to `lockRoutes` in internal/api/inventory/locks.go with the object namespace and the action `namespace:read`, and the NEW path constants `BulkLockPath` and `BulkUnlockPath` to internal/api/refusal/lockroutes.go. A route without an action fails the route test. Check: `go test ./internal/api/inventory/... ./internal/api/refusal/... -count=1`.
 - [ ] 2.3 Add the operation labels (NEW names `bulkLockUnits` and `bulkUnlockUnits`, tag `locks`) and the body schemas to internal/api/inventory/operations.go, and the NEW code `lock.bulk-size` to internal/errcode/catalog_lock.go with its catalog test data in internal/errcode/testdata/catalog/lock.txt. Check: `go test ./internal/errcode/... ./internal/api/apidesc/... -count=1`.
-- [ ] 2.4 Wire the replay records and the per-item keys as in internal/api/settings/keyed.go, through the port that task 0.3 names. Check: the replay tests of task 1.3 pass.
+- [ ] 2.4 Wire the replay records and the per-item keys as in internal/api/settings/keyed.go, through the port that task 0.3 names. The per-item answer is stored by the store call of task 2.6, not by the handler after the call. Check: the replay tests of task 1.3 pass.
 - [ ] 2.5 Stop the item loop in internal/api/inventory/locks_bulk.go (NEW) when the request context ends, before the next item runs. An item that did not run writes no lock and no audit entry. Check: `go test ./internal/api/inventory -run TestBulkLockContextEnds -count=1` (NEW test TestBulkLockContextEnds in internal/api/inventory/locks_bulk_test.go; it passes only with the check).
 
 ## 3. Side effects (computed from main)

@@ -45,7 +45,7 @@ func checkOrderMasked(t *testing.T, state string, want []string) {
 func checkOrderMarker(t *testing.T, state, key, path string) {
 	t.Helper()
 
-	detail, err := workspace.ReadStateResource([]byte(state), orderMarks(), "terraform_data.x")
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(state), orderMarks(), "terraform_data.x")
 	if err != nil {
 		t.Fatalf("read state resource: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestMaskedPointerDescendantFirst(t *testing.T) {
 		t.Fatalf("masked paths = %q, want %q", got, want)
 	}
 
-	detail, err := workspace.ReadStateResource([]byte(state), orderMarks(), "terraform_data.x")
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(state), orderMarks(), "terraform_data.x")
 	if err != nil {
 		t.Fatalf("read state resource: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestMaskedPointerUnrelatedAfterMasked(t *testing.T) {
 		t.Fatalf("masked paths = %q, want %q", got, want)
 	}
 
-	detail, err := workspace.ReadStateResource([]byte(state), orderMarks(), "terraform_data.x")
+	detail, err := workspace.ReadStateResource(t.Context(), []byte(state), orderMarks(), "terraform_data.x")
 	if err != nil {
 		t.Fatalf("read state resource: %v", err)
 	}

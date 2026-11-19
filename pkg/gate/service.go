@@ -172,6 +172,7 @@ type Service struct {
 	fences     FenceSource
 	kindReader KindReader
 	isDev      DevSubjectMatcher
+	breakGlass BreakGlassStore
 	now        func() time.Time
 	log        *slog.Logger
 }
@@ -190,6 +191,10 @@ type ServiceConfig struct {
 	// IsDev matches a dev subject. The caller passes principal.IsDevSubject, so
 	// one rule decides everywhere. NewService refuses a nil matcher.
 	IsDev DevSubjectMatcher
+	// BreakGlass keeps the passes of break-glass for gates in error. When nil,
+	// no store is wired, and a change that sets BreakGlass is refused with
+	// ErrUnavailable.
+	BreakGlass BreakGlassStore
 	// Now is the clock, and time.Now when nil.
 	Now func() time.Time
 	Log *slog.Logger
@@ -208,8 +213,14 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		now = time.Now
 	}
 
+	bg := cfg.BreakGlass
+	if bg == nil {
+		bg = unwiredBreakGlassStore{}
+	}
+
 	return &Service{
-		store: cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), units: cfg.Units,
+		breakGlass: bg,
+		store:      cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), units: cfg.Units,
 		subjects: cfg.Subjects, fences: cfg.Fences, kindReader: cfg.KindReader, isDev: cfg.IsDev, now: now,
 		log: cfg.Log,
 	}, nil
@@ -246,8 +257,11 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 //
 // This version evaluates the gates of state.write for a unit. It returns an
 // error that wraps ErrUnavailable for each other decision point, and for a
-// change with a BreakGlass: no route gives a break-glass yet, so none passes
-// a gate in error.
+// change with a BreakGlass when no BreakGlassStore is wired. A change with a
+// BreakGlass names one unit and passes a gate in error in enforce mode once,
+// when the store holds a valid pass of the subject for that unit and
+// operation kind. It never passes a deny, an approval or an engine that does
+// not answer.
 func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 	point, err := ParseDecisionPoint(string(c.Point))
 	if err != nil {

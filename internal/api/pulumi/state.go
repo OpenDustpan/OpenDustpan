@@ -1,7 +1,10 @@
 package pulumi
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -302,7 +305,7 @@ func (h *Handler) listStateResources(
 
 	page, err := stack.ListStateResources(current.Checkpoint.Deployment, previous, cursor, limit, filter)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Checkpoint.Update, err)
 
 		return
 	}
@@ -420,7 +423,7 @@ func (h *Handler) listStateAtResources(
 
 	page, err := stack.ListStateResources(current.Deployment, previous, cursor, limit, r.URL.Query().Get("filter[q]"))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Update, err)
 
 		return
 	}
@@ -466,9 +469,9 @@ func (h *Handler) getStateResource(
 		return
 	}
 
-	detail, err := stack.ReadStateResource(current.Deployment, r.PathValue("urn"))
+	detail, err := stack.ReadStateResource(ctx, current.Deployment, r.PathValue("urn"))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Update, err)
 
 		return
 	}
@@ -482,6 +485,55 @@ func (h *Handler) getStateResource(
 		Outputs:  detail.Outputs,
 		Masked:   detail.Masked,
 	})
+}
+
+// writeStateReadError answers the error of a masked read of a state. A state
+// past the bound of the read answers 413 and leaves a warning that names the
+// stack and the update that saved the checkpoint, so the operator can find
+// the state. The record holds no value of the state.
+func (h *Handler) writeStateReadError(
+	ctx context.Context, w http.ResponseWriter, ref stack.Ref, update stack.UpdateID, err error,
+) {
+	if errors.Is(err, stack.ErrStateBound) {
+		h.logger.WarnContext(ctx, "state is too deep or too large for a masked read",
+			slog.String("stack", oneLine(ref.String())), slog.String("update", oneLine(string(update))))
+	}
+
+	h.writeError(ctx, w, err)
+}
+
+// oneLine returns s with each CR and LF removed, so a logged identifier cannot
+// start a second log line.
+//
+// Defense in depth: names and update IDs are validated at the boundary and the
+// logger may encode its values. This helper does not rely on either layer. It
+// stays so that a value that reaches a log call without those checks cannot
+// forge a log line.
+func oneLine(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
+// diffUpdates names the updates that saved the two checkpoints of a diff.
+type diffUpdates struct {
+	from stack.UpdateID
+	to   stack.UpdateID
+}
+
+// writeStateDiffError answers the error of a diff of two states. A diff past
+// the bound answers 413 and leaves a warning that names the stack and both
+// updates, because either side can hold the state that is past the bound. The
+// record holds no value of the state.
+func (h *Handler) writeStateDiffError(
+	ctx context.Context, w http.ResponseWriter, ref stack.Ref, updates diffUpdates, err error,
+) {
+	if errors.Is(err, stack.ErrStateBound) {
+		h.logger.WarnContext(ctx, "state is too deep or too large for a masked read",
+			slog.String("stack", oneLine(ref.String())),
+			slog.String("from_update", oneLine(string(updates.from))),
+			slog.String("to_update", oneLine(string(updates.to))))
+	}
+
+	h.writeError(ctx, w, err)
 }
 
 // diffCheckpointOf resolves one side of a diff request: "latest" names the
@@ -549,9 +601,9 @@ func (h *Handler) diffState(
 		return
 	}
 
-	diff, err := stack.DiffStates(from.Deployment, to.Deployment, cursor, limit)
+	diff, err := stack.DiffStates(ctx, from.Deployment, to.Deployment, cursor, limit)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateDiffError(ctx, w, ref, diffUpdates{from: from.Update, to: to.Update}, err)
 
 		return
 	}
@@ -611,9 +663,9 @@ func (h *Handler) getStateOutputs(
 		return
 	}
 
-	outputs, err := stack.ReadStateOutputs(current.Deployment)
+	outputs, err := stack.ReadStateOutputs(ctx, current.Deployment)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateReadError(ctx, w, ref, current.Update, err)
 
 		return
 	}

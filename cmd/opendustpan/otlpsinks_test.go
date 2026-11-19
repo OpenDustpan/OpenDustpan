@@ -154,6 +154,12 @@ func TestOTLPHeadersRefuseControlCharacters(t *testing.T) {
 		"tab in name":     "X-\tA=" + canary,
 		"escape in name":  "X-\x1bA=" + canary,
 		"after good item": "X-A=1,X-B=" + canary + "%0D%0A",
+		"BOM in value":    "X-A=" + canary + "%EF%BB%BF",
+		"C1 in value":     "X-A=" + canary + "%C2%85",
+		"U+2028 in value": "X-A=" + canary + "%E2%80%A8",
+		"bad UTF-8 value": "X-A=" + canary + "%FF",
+		"BOM in name":     "X-\ufeffA=" + canary,
+		"bad UTF-8 name":  "X-\xffA=" + canary,
 	}
 
 	for name, text := range cases {

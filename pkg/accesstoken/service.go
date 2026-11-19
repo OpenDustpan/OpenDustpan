@@ -313,7 +313,23 @@ func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 func (s *Service) Revoke(ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, id string) error {
 	t, err := s.store.GetToken(ctx, id)
 	if err != nil {
-		return fmt.Errorf("revoke access token %q: %w", id, err)
+		return fmt.Errorf("revoke access token %q: %w", id, s.ownerFirst(ctx, caller, scope, err))
+	}
+
+	// The owner check runs before any answer about the kind, so an own route
+	// tells a person nothing about the row of another person, an unknown
+	// kind included. authorizeRevoke checks the owner again.
+	if scope == ScopeOwn {
+		if ownerErr := s.checkOwner(ctx, caller, t.PrincipalID); ownerErr != nil {
+			return fmt.Errorf("revoke access token %q: %w", id, ownerErr)
+		}
+	}
+
+	// Defense in depth: the store decode and the store revoke refuse an
+	// unknown kind too. This check stays so that a store adapter that skips
+	// them never lets a revoke act on a row of an unknown kind.
+	if !t.Kind.Valid() {
+		return fmt.Errorf("revoke access token %q: %w: %q", id, ErrUnknownKind, string(t.Kind))
 	}
 
 	if err := s.authorizeRevoke(ctx, caller, scope, t); err != nil {
@@ -423,7 +439,11 @@ func (s *Service) Rotate(
 
 	old, err := s.store.GetToken(ctx, id)
 	if err != nil {
-		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, err)
+		return Rotation{}, Secret{}, fmt.Errorf(
+			"rotate access token %q: %w",
+			id,
+			s.ownerFirst(ctx, caller, in.Scope, err),
+		)
 	}
 
 	if authErr := s.authorizeRotate(ctx, caller, in.Scope, old); authErr != nil {
