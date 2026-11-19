@@ -3,17 +3,21 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -134,7 +138,11 @@ func TestAllowlistRequestSkipsProbes(t *testing.T) {
 	}
 }
 
-var errStoreDown = errors.New("database unavailable")
+var (
+	errStoreDown     = errors.New("database unavailable")
+	errDriver        = errors.New("driver")
+	errOutageLikeTxt = errors.New("database unavailable: connection")
+)
 
 // countingAuthn counts the token checks. A check of a real token store
 // updates the last-used time of the token, so a call here is that update.
@@ -153,11 +161,13 @@ func (a *countingAuthn) AuthenticateToken(context.Context, string) (identity.Pri
 }
 
 // failingSettingsStore is a setting.Store whose Load fails from call number
-// failFrom on (1 is the first call) and returns values before that.
+// failFrom on (1 is the first call) and returns values before that. It fails
+// with err, or with errStoreDown when err is nil.
 type failingSettingsStore struct {
 	setting.Store
 
 	values   map[string]string
+	err      error
 	failFrom int32
 	calls    atomic.Int32
 }
@@ -165,6 +175,10 @@ type failingSettingsStore struct {
 // Load implements setting.Store.
 func (s *failingSettingsStore) Load(context.Context, setting.Scope) (setting.Stored, error) {
 	if s.calls.Add(1) >= s.failFrom {
+		if s.err != nil {
+			return setting.Stored{}, s.err
+		}
+
 		return setting.Stored{}, errStoreDown
 	}
 
@@ -230,7 +244,13 @@ func TestAllowlistGateFailsClosed(t *testing.T) {
 
 			gate := newTestGate(
 				t,
-				&failingSettingsStore{Store: nil, values: tc.values, failFrom: tc.failFrom, calls: atomic.Int32{}},
+				&failingSettingsStore{
+					Store:    nil,
+					err:      nil,
+					values:   tc.values,
+					failFrom: tc.failFrom,
+					calls:    atomic.Int32{},
+				},
 			)
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
 			r.Header.Set("Authorization", "Bearer token")
@@ -254,7 +274,7 @@ func TestAllowlistGateFailsClosed(t *testing.T) {
 
 			gate := newTestGate(
 				t,
-				&failingSettingsStore{Store: nil, values: nil, failFrom: 1 << 20, calls: atomic.Int32{}},
+				&failingSettingsStore{Store: nil, err: nil, values: nil, failFrom: 1 << 20, calls: atomic.Int32{}},
 			)
 
 			decision := gate.installationChecker(t.Context(), value, nil).check(t.Context(), inside)
@@ -267,9 +287,12 @@ func TestAllowlistGateFailsClosed(t *testing.T) {
 	t.Run("control: stored list admits", func(t *testing.T) {
 		t.Parallel()
 
-		gate := newTestGate(t, &failingSettingsStore{Store: nil, calls: atomic.Int32{}, values: map[string]string{
-			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
-		}, failFrom: 1 << 20})
+		gate := newTestGate(
+			t,
+			&failingSettingsStore{Store: nil, err: nil, calls: atomic.Int32{}, values: map[string]string{
+				ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+			}, failFrom: 1 << 20},
+		)
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
 		r.Header.Set("Authorization", "Bearer token")
 
@@ -288,7 +311,7 @@ func TestAdmitProbeUsesNoToken(t *testing.T) {
 	t.Parallel()
 
 	refused := netip.MustParseAddr("203.0.113.9")
-	store := &failingSettingsStore{Store: nil, calls: atomic.Int32{}, values: map[string]string{
+	store := &failingSettingsStore{Store: nil, err: nil, calls: atomic.Int32{}, values: map[string]string{
 		ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
 	}, failFrom: 1 << 20}
 
@@ -346,6 +369,45 @@ func TestAdmitProbeUsesNoToken(t *testing.T) {
 	})
 }
 
+// TestAdmitAnswersUnavailableForAStoppedDatabase is the handler-layer test of
+// the outage: a credentialed request while the settings read fails with the
+// sentinel gets the 503, no token is read, and no denial entry is written.
+func TestAdmitAnswersUnavailableForAStoppedDatabase(t *testing.T) {
+	t.Parallel()
+
+	server := &recordingServer{mu: sync.Mutex{}, entries: nil}
+	gate := newTestGate(t, &failingSettingsStore{
+		Store: nil, values: nil, err: wrappedOutage(), failFrom: 1, calls: atomic.Int32{},
+	})
+	gate.audit = server
+
+	authn := &countingAuthn{calls: atomic.Int32{}}
+	caller := requestCaller{authn: authn, allow: gate}
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+	r.Header.Set("Authorization", "Bearer token")
+
+	rec := httptest.NewRecorder()
+
+	got := caller.admit(rec, r, netip.MustParseAddr("198.51.100.7"), slog.New(slog.DiscardHandler))
+	if !got.refused || got.signedIn || rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("admit = %+v, status %d, want a refusal with a 503", got, rec.Code)
+	}
+
+	assertOutageAnswer(t, rec)
+
+	if authn.calls.Load() != 0 {
+		t.Fatalf("%d token checks during the outage, want none", authn.calls.Load())
+	}
+
+	server.mu.Lock()
+	entries := len(server.entries)
+	server.mu.Unlock()
+
+	if entries != 0 {
+		t.Fatalf("%d denial entries, want none", entries)
+	}
+}
+
 // TestAllowlistRefusalWritesAuditEntry proves that a refusal writes its
 // security entry: one refused address, one entry of the action
 // installation:deny-ip-allowlist with the outcome denied. It fails when the
@@ -357,7 +419,7 @@ func TestAllowlistRefusalWritesAuditEntry(t *testing.T) {
 	server := &recordingServer{mu: sync.Mutex{}, entries: nil}
 	gate := newTestGate(
 		t,
-		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+		&failingSettingsStore{Store: nil, err: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
 			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
 		}},
 	)
@@ -418,7 +480,7 @@ func TestAllowlistRefusalAuditIsLimited(t *testing.T) {
 
 	gate := newTestGate(
 		t,
-		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+		&failingSettingsStore{Store: nil, err: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
 			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
 		}},
 	)
@@ -537,7 +599,7 @@ func newLimitedGate(t *testing.T, maxKeys int, store audit.ServerStore) limitedG
 
 	gate := newTestGate(
 		t,
-		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+		&failingSettingsStore{Store: nil, err: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
 			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
 		}},
 	)
@@ -765,7 +827,7 @@ func TestAllowlistGateUsesItsOwnLimiter(t *testing.T) {
 
 	gate.settings = newTestGate(
 		t,
-		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+		&failingSettingsStore{Store: nil, err: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
 			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
 		}},
 	).settings
@@ -813,8 +875,19 @@ func TestAllowlistGateAnswersUnavailableForAStoppedDatabase(t *testing.T) {
 	}{
 		{"enabled read: database down", namespace.ErrUnavailable, 1, http.StatusServiceUnavailable, false},
 		{"list read: database down", namespace.ErrUnavailable, 2, http.StatusServiceUnavailable, false},
+		// The production chain: the settings service wraps the error of the
+		// store adapter, and the adapter error holds the sentinel in its
+		// Unwrap() []error list. A match of one level only fails these rows.
+		{"enabled read: wrapped chain", wrappedOutage(), 1, http.StatusServiceUnavailable, false},
+		{"list read: wrapped chain", wrappedOutage(), 2, http.StatusServiceUnavailable, false},
+		// These rows show that no string match is used: errStoreDown has the
+		// same text as the sentinel, and it still gets the 403.
 		{"enabled read: other failure", errStoreDown, 1, http.StatusForbidden, true},
 		{"list read: other failure", errStoreDown, 2, http.StatusForbidden, true},
+		// Hostile row: it looks like an outage, but it does not wrap the
+		// sentinel, so it is a refusal.
+		{"enabled read: outage text without the sentinel", lookalikeOutage(), 1, http.StatusForbidden, true},
+		{"list read: outage text without the sentinel", lookalikeOutage(), 2, http.StatusForbidden, true},
 	}
 
 	for _, tc := range tests {
@@ -822,7 +895,7 @@ func TestAllowlistGateAnswersUnavailableForAStoppedDatabase(t *testing.T) {
 			t.Parallel()
 
 			server := &recordingServer{mu: sync.Mutex{}, entries: nil}
-			gate := newTestGate(t, &unavailableSettingsStore{
+			gate := newTestGate(t, &failingSettingsStore{
 				Store: nil, values: values, failFrom: tc.failFrom, err: tc.err, calls: atomic.Int32{},
 			})
 			gate.audit = server
@@ -842,6 +915,12 @@ func TestAllowlistGateAnswersUnavailableForAStoppedDatabase(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body.String())
 			}
 
+			if tc.wantStatus == http.StatusServiceUnavailable {
+				assertOutageAnswer(t, rec)
+			} else {
+				assertRefusalAnswer(t, rec)
+			}
+
 			server.mu.Lock()
 			got := len(server.entries) > 0
 			server.mu.Unlock()
@@ -853,22 +932,48 @@ func TestAllowlistGateAnswersUnavailableForAStoppedDatabase(t *testing.T) {
 	}
 }
 
-// unavailableSettingsStore is a setting.Store whose Load fails with err from
-// call number failFrom on and returns values before that.
-type unavailableSettingsStore struct {
-	setting.Store
-
-	values   map[string]string
-	err      error
-	failFrom int32
-	calls    atomic.Int32
+// wrappedOutage returns the error that a stopped database gives in
+// production: the adapter wraps the sentinel and the driver error with Join,
+// and the settings read wraps that again.
+func wrappedOutage() error {
+	return fmt.Errorf("read settings: %w",
+		fmt.Errorf("select settings: %w", errors.Join(namespace.ErrUnavailable, errDriver)))
 }
 
-// Load implements setting.Store.
-func (s *unavailableSettingsStore) Load(context.Context, setting.Scope) (setting.Stored, error) {
-	if s.calls.Add(1) >= s.failFrom {
-		return setting.Stored{}, s.err
+// lookalikeOutage returns an error with the text of the outage that does not
+// wrap the sentinel.
+func lookalikeOutage() error {
+	return fmt.Errorf("x: %w", errors.Join(errStoreDown, errOutageLikeTxt))
+}
+
+// assertRefusalAnswer checks the answer of a refusal: the code of a refusal
+// and no Retry-After.
+func assertRefusalAnswer(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	retry := rec.Header().Get("Retry-After")
+	body := rec.Body.String()
+
+	if retry != "" || !strings.Contains(body, errcode.AccessIPNotAllowed) {
+		t.Fatalf("refusal: Retry-After %q, body %s, want no Retry-After and %s",
+			retry, body, errcode.AccessIPNotAllowed)
+	}
+}
+
+// assertOutageAnswer checks the answer of an outage: the Retry-After header
+// and the code namespace.unavailable, and never the code of a refusal.
+func assertOutageAnswer(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	retry := rec.Header().Get("Retry-After")
+	body := rec.Body.String()
+
+	want := strconv.FormatInt(problem.RetryAfterSeconds(problem.StoreRetryAfter), 10)
+	if retry != want {
+		t.Fatalf("Retry-After = %q, want %q", retry, want)
 	}
 
-	return setting.Stored{Values: s.values, Revision: 1, Digest: ""}, nil
+	if !strings.Contains(body, errcode.NamespaceUnavailable) || strings.Contains(body, "ip-not-allowed") {
+		t.Fatalf("body = %s, want the code %s and no ip-not-allowed", body, errcode.NamespaceUnavailable)
+	}
 }

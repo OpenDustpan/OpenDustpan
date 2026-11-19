@@ -168,7 +168,8 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 
 	enabled, err := g.settings.Effective(ctx, setting.InstallationScope(), ipallow.SettingEnabled)
 	if err != nil {
-		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingEnabled))
+		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingEnabled),
+			slog.Bool("database_unavailable", errors.Is(err, namespace.ErrUnavailable)))
 
 		return failedReadChecker(err, record)
 	}
@@ -179,7 +180,8 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 
 	installation, err := g.settings.Effective(ctx, setting.InstallationScope(), ipallow.SettingInstallation)
 	if err != nil {
-		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingInstallation))
+		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingInstallation),
+			slog.Bool("database_unavailable", errors.Is(err, namespace.ErrUnavailable)))
 
 		return failedReadChecker(err, record)
 	}
