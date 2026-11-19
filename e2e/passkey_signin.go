@@ -255,7 +255,7 @@ func readServerRecords(ctx context.Context, st namespace.Store) ([]audit.Entry, 
 		return nil, nil, fmt.Errorf("%w: %T", errNoPasskeyRows, st)
 	}
 
-	listing, err := log.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := log.List(ctx, audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		return nil, nil, fmt.Errorf("list the audit log: %w", err)
 	}

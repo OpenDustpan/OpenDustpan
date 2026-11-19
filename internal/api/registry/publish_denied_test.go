@@ -23,7 +23,7 @@ func TestPublishDenialWritesAuditEntry(t *testing.T) {
 	got := f.call(t, "publisher", http.MethodPut, base+"/providers/payments/versions/1.0.0", []byte("{}"))
 	wantCode(t, "publish with the action denied", got, http.StatusForbidden)
 
-	entries, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	entries, err := f.store.List(t.Context(), "acme", audit.Page{Size: 100})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

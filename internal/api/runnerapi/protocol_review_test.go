@@ -230,7 +230,7 @@ func TestJoinAgainAuditNamesTheKeysAndClaims(t *testing.T) {
 func (e *env) rejoinChanges() map[string]*audit.Change {
 	e.t.Helper()
 
-	listing, err := e.store.audit.List(e.t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.audit.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		e.t.Fatalf("list audit: %v", err)
 	}

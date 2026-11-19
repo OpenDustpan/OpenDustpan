@@ -291,7 +291,7 @@ func checkRefusedApproval(t *testing.T, tc approverCase) {
 func deniedEntryCount(t *testing.T, chain *auditChain, subject string) int {
 	t.Helper()
 
-	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 50})
+	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Size: 50})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -460,7 +460,7 @@ func (f *failOnceApproval) ApproveChainChange(
 func approvalEntriesOf(t *testing.T, chain *auditChain) []audit.Entry {
 	t.Helper()
 
-	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list server scope: %v", err)
 	}

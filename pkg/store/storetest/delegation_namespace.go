@@ -224,7 +224,7 @@ func testNamespacePrincipalDelete(t *testing.T, d *delegation) {
 		t.Fatalf("grants of a deleted principal = %v, %v; want none", grants, err)
 	}
 
-	listing, err := d.st.List(ctx, "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := d.st.List(ctx, "acme", audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit of acme: %v", err)
 	}

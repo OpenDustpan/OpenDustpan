@@ -939,7 +939,7 @@ func testRenameWritesAuditEntry(t *testing.T, s Store) {
 		t.Fatalf("rename stack: %v", err)
 	}
 
-	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -1051,7 +1051,7 @@ func runSameNameRename(t *testing.T, s Store, lister auditLister, tc sameNameRen
 		assertStack(t, got, st)
 	}
 
-	listing, listErr := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, listErr := lister.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize})
 	if listErr != nil {
 		t.Fatalf("list audit entries: %v", listErr)
 	}

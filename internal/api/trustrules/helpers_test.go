@@ -447,7 +447,7 @@ func errorCode(t *testing.T, body []byte) string {
 func (e *env) ruleEntries() []audit.Entry {
 	e.t.Helper()
 
-	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		e.t.Fatalf("list audit: %v", err)
 	}

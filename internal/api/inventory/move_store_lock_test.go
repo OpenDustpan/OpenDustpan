@@ -87,7 +87,7 @@ func TestMoveOutOfLockedCollectionWithUnitLock(t *testing.T) {
 func (f storeMoveFixture) wantOneMoveOutRefusal(t *testing.T) {
 	t.Helper()
 
-	l, err := f.store.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: 100})
+	l, err := f.store.List(t.Context(), f.ns.Name, audit.Page{Size: 100})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

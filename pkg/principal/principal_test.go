@@ -304,7 +304,7 @@ func TestServiceEntries(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil || len(listing.Entries) != 1 {
 		t.Fatalf("entries = %+v, %v; want one", listing.Entries, err)
 	}
@@ -399,7 +399,7 @@ func (fx switchFixture) check(t *testing.T, step switchStep) {
 		t.Fatalf("%s: the group reads %v, want %v", step.name, changed.ClosedToIdentityProvider, *step.value)
 	}
 
-	listing, err := fx.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := fx.st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil || len(listing.Entries) == 0 {
 		t.Fatalf("%s: entries = %+v, %v; want at least one", step.name, listing.Entries, err)
 	}

@@ -11,7 +11,9 @@ import (
 // without a request.
 var (
 	ErrMissingOrganization = errMissingOrganization
-	ErrInvalidPage         = errInvalidPage
+	ErrRemovedPaging       = errRemovedPaging
+	ErrPageSize            = errPageSize
+	ErrPageToken           = errPageToken
 	ErrInvalidSequence     = errInvalidSequence
 	ErrNoEntryReader       = errNoEntryReader
 	ErrInvalidFormat       = errInvalidFormat

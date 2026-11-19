@@ -308,7 +308,7 @@ func (e repeatEnv) snapshot(t *testing.T) repeatSnapshot {
 		t.Fatalf("get workspace: %v", err)
 	}
 
-	listing, err := e.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

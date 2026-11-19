@@ -502,7 +502,7 @@ type revealCount struct{ granted, denied, failed int }
 func (f fixture) countReveals(t *testing.T) revealCount {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 50})
+	listing, err := f.store.List(t.Context(), "acme", audit.Page{Size: 50})
 	if err != nil {
 		t.Fatalf("audit list: %v", err)
 	}
@@ -961,7 +961,7 @@ func TestSharedLimiterFlushReachesNamespace(t *testing.T) {
 	denied := f.do(t, send("reader", http.MethodPost, base, "{}"))
 	wantCode(t, "write without profile:write", denied, http.StatusForbidden)
 
-	list, err := f.store.List(t.Context(), namespace.Name("acme"), audit.Page{Number: 1, Size: 100})
+	list, err := f.store.List(t.Context(), namespace.Name("acme"), audit.Page{Size: 100})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

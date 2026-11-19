@@ -1265,21 +1265,17 @@ INSERT INTO audit_entries (
     fence_version, reason, principal_kind, job_id
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- name: ListAuditEntries :many
--- One page of the entries of a namespace, newest first. Ties on time break
--- by sequence, as the port comment promises.
+-- name: ListAuditEntriesBefore :many
+-- One page of the entries of a namespace below a sequence, newest first. It
+-- reads the primary key (namespace, sequence) backwards, so a page costs the
+-- same at any depth.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
-WHERE namespace = ?
+WHERE namespace = ? AND sequence < ?
 ORDER BY sequence DESC
-LIMIT ? OFFSET ?;
-
--- name: CountAuditEntries :one
-SELECT COUNT(*)
-FROM audit_entries
-WHERE namespace = ?;
+LIMIT ?;
 
 -- name: ListAuditChainPage :many
 -- One bounded page of the chain of a namespace oldest first, for the chain

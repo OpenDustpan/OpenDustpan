@@ -266,10 +266,14 @@ func toAuditChanges(changes []audit.Change) []auditChange {
 
 // listEntriesResponse is the answered document of the entry list.
 //
-// Contract: never remove or rename these fields.
+// The console does not read this route. The answer follows the list rule of
+// the tool-neutral API: NextPageToken is always present and is the empty
+// string on the last page, and PageSize is the size that the server used.
+// The list has no total.
 type listEntriesResponse struct {
-	Entries []auditEntry `json:"entries"`
-	Total   int64        `json:"total"`
+	Entries       []auditEntry `json:"entries"`
+	NextPageToken string       `json:"nextPageToken"`
+	PageSize      int          `json:"pageSize"`
 }
 
 // checkResponse is the answered document of the chain check.
@@ -316,7 +320,7 @@ func (h *Handler) listEntries(
 		return
 	}
 
-	page, err := parsePage(r)
+	page, err := parsePage(r, ns)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -335,7 +339,18 @@ func (h *Handler) listEntries(
 		entries = append(entries, toAuditEntry(listing.Entries[i]))
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})
+	next := ""
+
+	if listing.More && len(listing.Entries) > 0 {
+		next, err = encodePageToken(ns, listing.Entries[len(listing.Entries)-1].Sequence)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, NextPageToken: next, PageSize: page.Size})
 }
 
 // getEntry answers GET /api/audit/entries/{sequence} with the one entry of
@@ -414,9 +429,14 @@ func (h *Handler) checkChain(
 	})
 }
 
-// errInvalidPage reports a page[number] or page[size] value that is not a
-// positive number. classify maps it to the 400 the console expects.
-var errInvalidPage = errors.New("invalid page[number] or page[size]: send positive numbers")
+// errRemovedPaging reports the removed names page[number] and page[size].
+// requestErrors maps it to 400.
+var errRemovedPaging = errors.New("page[number] and page[size] are not supported: send pageSize and pageToken")
+
+// errPageSize reports a pageSize that is not a decimal number from 1 to 200.
+var errPageSize = problem.BadRequest(errcode.RequestPageSizeInvalid,
+	fmt.Sprintf("pageSize is a number from 1 to %d: send a number in this range, or send no pageSize for %d",
+		audit.MaxPageSize, audit.DefaultPageSize))
 
 // errInvalidSequence reports a sequence in the path that is not a positive
 // number in its one decimal form. classify maps it to 400.
@@ -448,33 +468,68 @@ func parseSequence(raw string) (int64, error) {
 // it to 501.
 var errNoEntryReader = errors.New("this server cannot read one audit entry: list the entries instead")
 
-// parsePage reads page[number] and page[size] from the request. Missing
-// values read the defaults of the audit port; values above the maximum read
-// the maximum.
-func parsePage(r *http.Request) (audit.Page, error) {
-	query := queryOf(r)
-
-	page := audit.Page{Number: 1, Size: audit.DefaultPageSize}
-
-	if raw := query.Get("page[number]"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 {
-			return audit.Page{}, errInvalidPage
-		}
-
-		page.Number = n
+// parsePageSize reads one pageSize value. It accepts only the decimal form
+// of a number from 1 to MaxPageSize, with no sign, no leading zero and no
+// space, so each size has one spelling.
+func parsePageSize(raw string) (int, error) {
+	if raw == "" || len(raw) > 3 || raw[0] < '1' || raw[0] > '9' {
+		return 0, errPageSize
 	}
 
-	if raw := query.Get("page[size]"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 {
-			return audit.Page{}, errInvalidPage
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, errPageSize
+		}
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > audit.MaxPageSize {
+		return 0, errPageSize
+	}
+
+	return n, nil
+}
+
+// parsePage reads pageSize and pageToken from the request for scope. The
+// scope comes from the object of the route and never from the token. It
+// refuses the removed names page[number] and page[size], a repeated value, a
+// size outside 1 to 200 and a token that does not belong to scope.
+func parsePage(r *http.Request, scope namespace.Name) (audit.Page, error) {
+	query := queryOf(r)
+
+	if query.Has("page[number]") || query.Has("page[size]") {
+		return audit.Page{}, errRemovedPaging
+	}
+
+	if len(query.All("pageSize")) > 1 {
+		return audit.Page{}, errPageSize
+	}
+
+	if len(query.All("pageToken")) > 1 {
+		return audit.Page{}, errPageToken
+	}
+
+	page := audit.Page{Size: audit.DefaultPageSize, Before: 0}
+
+	if query.Has("pageSize") {
+		n, err := parsePageSize(query.Get("pageSize"))
+		if err != nil {
+			return audit.Page{}, err
 		}
 
 		page.Size = n
 	}
 
-	return page.Normalized(), nil
+	if token := query.Get("pageToken"); token != "" {
+		cursor, err := decodePageCursor(token, scope)
+		if err != nil {
+			return audit.Page{}, err
+		}
+
+		page.Before = cursor.before
+	}
+
+	return page, nil
 }
 
 // writeError answers err through the shared error module of the
@@ -487,7 +542,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // log. The shared module answers the rest.
 func requestErrors(err error) (problem.Problem, bool) {
 	switch {
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage), errors.Is(err, errInvalidFormat),
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errRemovedPaging), errors.Is(err, errInvalidFormat),
 		errors.Is(err, errInvalidTime), errors.Is(err, errInvalidRange), errors.Is(err, errInvalidFromSequence):
 		return problem.New(http.StatusBadRequest, errcode.RequestInvalidQuery, err.Error()), true
 	case errors.Is(err, errInvalidSequence):

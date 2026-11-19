@@ -321,7 +321,7 @@ func checkLimiterScopes(t *testing.T, st chainStore) {
 	var aggregate, flushed, missing bool
 
 	for _, scope := range []namespace.Name{"acme", audit.ServerScope} {
-		list, err := st.List(t.Context(), scope, audit.Page{Number: 1, Size: 100})
+		list, err := st.List(t.Context(), scope, audit.Page{Size: 100})
 		if err != nil {
 			t.Fatalf("list %s: %v", scope, err)
 		}
@@ -375,7 +375,7 @@ func TestRunFlushesDenialCountsAtShutdown(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	list, err := w.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	list, err := w.store.List(t.Context(), "acme", audit.Page{Size: 100})
 	if err != nil {
 		t.Fatalf("list acme entries: %v", err)
 	}

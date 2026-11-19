@@ -30,7 +30,7 @@ import (
 
 // tokenAuditPage returns the page of the audit reads of these tests.
 func tokenAuditPage() audit.Page {
-	return audit.Page{Number: 1, Size: audit.MaxPageSize}
+	return audit.Page{Size: audit.MaxPageSize}
 }
 
 // tokenEnv is a session environment whose handler issues job tokens: the

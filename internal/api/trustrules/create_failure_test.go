@@ -29,7 +29,7 @@ func createFailureEntries(t *testing.T, e *env) []audit.Entry {
 	t.Helper()
 
 	listing, err := e.audit.List(t.Context(), audit.ServerScope,
-		audit.Page{Number: 1, Size: audit.MaxPageSize})
+		audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

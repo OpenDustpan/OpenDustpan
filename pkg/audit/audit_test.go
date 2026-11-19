@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -398,15 +399,44 @@ func TestComputeHashHasNoKnownCollision(t *testing.T) {
 	}
 }
 
-func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
+// TestPageNormalizedTable proves the default size and the refusal of a page
+// that no store may read.
+func TestPageNormalizedTable(t *testing.T) {
 	t.Parallel()
 
-	if got := (audit.Page{Number: 0, Size: 0}).Normalized(); got.Number != 1 || got.Size != audit.DefaultPageSize {
-		t.Fatalf("zero page = %+v, want 1/%d", got, audit.DefaultPageSize)
+	cases := []struct {
+		name     string
+		page     audit.Page
+		wantSize int
+		wantErr  bool
+	}{
+		{name: "size 0 reads the default", page: audit.Page{}, wantSize: audit.DefaultPageSize},
+		{name: "size 200 stays", page: audit.Page{Size: audit.MaxPageSize}, wantSize: audit.MaxPageSize},
+		{name: "size 1 stays", page: audit.Page{Size: 1}, wantSize: 1},
+		{name: "size 201", page: audit.Page{Size: audit.MaxPageSize + 1}, wantErr: true},
+		{name: "size -1", page: audit.Page{Size: -1}, wantErr: true},
+		{name: "before -1", page: audit.Page{Before: -1}, wantErr: true},
+		{name: "before smallest int64", page: audit.Page{Before: math.MinInt64}, wantErr: true},
+		{name: "before largest int64", page: audit.Page{Before: math.MaxInt64}, wantSize: audit.DefaultPageSize},
 	}
 
-	if got := (audit.Page{Number: 2, Size: audit.MaxPageSize + 1}).Normalized(); got.Size != audit.MaxPageSize {
-		t.Fatalf("oversize page = %+v, want capped at %d", got, audit.MaxPageSize)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tc.page.Normalized()
+			if tc.wantErr {
+				if !errors.Is(err, audit.ErrInvalidPage) {
+					t.Fatalf("Normalized(%+v) err = %v, want %v", tc.page, err, audit.ErrInvalidPage)
+				}
+
+				return
+			}
+
+			if err != nil || got.Size != tc.wantSize || got.Before != tc.page.Before {
+				t.Fatalf("Normalized(%+v) = %+v, %v, want size %d", tc.page, got, err, tc.wantSize)
+			}
+		})
 	}
 }
 

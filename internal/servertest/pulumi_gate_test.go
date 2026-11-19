@@ -152,7 +152,7 @@ func (e rmGateEnv) checkRecord(id gate.RecordID, want gate.Result, code string) 
 		e.t.Fatalf("decision record %s = %+v, %v, want a stored record with the result %s", id, rec, err, want)
 	}
 
-	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		e.t.Fatalf("audit entries: %v", err)
 	}

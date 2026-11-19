@@ -173,7 +173,7 @@ func TestReviewWritesAnAuditEntry(t *testing.T) {
 	f := newAccessFixture(t)
 
 	latest := func(scope string) audit.Entry {
-		listing, err := f.store.List(t.Context(), namespace.Name(scope), audit.Page{Number: 1, Size: 1})
+		listing, err := f.store.List(t.Context(), namespace.Name(scope), audit.Page{Size: 1})
 		if err != nil || len(listing.Entries) != 1 {
 			t.Fatalf("list %s entries: %v", scope, err)
 		}
@@ -1123,7 +1123,7 @@ func checkReviewEntry(t *testing.T, f accessFixture, tc reviewEntryCase, at time
 	t.Helper()
 
 	listing, err := f.store.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize},
 	)
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)

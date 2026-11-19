@@ -389,7 +389,7 @@ func checkRefusalText(t *testing.T, rc refusedCall) {
 func checkDenialEntry(t *testing.T, g guardedHandler, action identity.Action) {
 	t.Helper()
 
-	listing, err := g.audit.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := g.audit.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

@@ -551,7 +551,7 @@ func TestPublishFlow(t *testing.T) {
 	wantCode(t, "get", f.call(t, "reader", http.MethodGet, target, nil), http.StatusOK)
 
 	// The audit log of the namespace holds the key and the publish, once each.
-	entries, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	entries, err := f.store.List(t.Context(), "acme", audit.Page{Size: 100})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

@@ -130,7 +130,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 		t.Fatalf("delete platform: %v", err)
 	}
 
-	listing, listErr := s.List(ctx, ns.Name, audit.Page{Number: 1, Size: 50})
+	listing, listErr := s.List(ctx, ns.Name, audit.Page{Size: 50})
 	if listErr != nil {
 		t.Fatalf("list audit: %v", listErr)
 	}

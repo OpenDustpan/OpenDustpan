@@ -358,7 +358,7 @@ func testCollectionDeleteRevokes(t *testing.T, s access.Store) {
 		return
 	}
 
-	listing, err := lister.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	listing, err := lister.List(t.Context(), "acme", audit.Page{Size: 100})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

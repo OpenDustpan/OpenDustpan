@@ -92,7 +92,7 @@ func TestNameLockKey(t *testing.T) {
 func serverEntries(t *testing.T, s *sqlite.Store) []audit.Entry {
 	t.Helper()
 
-	page, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	page, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

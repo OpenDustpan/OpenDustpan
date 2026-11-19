@@ -75,7 +75,7 @@ func (m *memRevealAudit) Append(
 func (m *memRevealAudit) List(
 	_ context.Context, _ namespace.Name, _ audit.Page,
 ) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil}, nil
 }
 
 func (m *memRevealAudit) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {

@@ -1166,7 +1166,7 @@ func testChangeAppendsEntry(t *testing.T, s principal.Store) {
 		t.Fatalf("create: %v", err)
 	}
 
-	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

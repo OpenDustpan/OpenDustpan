@@ -56,7 +56,18 @@ func Run(t *testing.T, newStore Factory) {
 		name string
 	}{
 		{name: "append then list returns the entry with its chain", test: testAppendList},
-		{name: "list is newest first with paging", test: testListPaging},
+		{name: "the first page holds the newest entries", test: testListFirstPage},
+		{name: "the next page starts below the before sequence", test: testListNextPageByBefore},
+		{name: "the last page answers More false", test: testListLastPageMoreFalse},
+		{name: "a log of exactly one page has no empty page after it", test: testListExactFitHasNoEmptyPage},
+		{name: "an empty scope lists an empty page", test: testListEmptyScope},
+		{name: "a start above the newest entry reads the first page", test: testListStartAboveNewestReadsFirstPage},
+		{name: "a start below the oldest entry is empty", test: testListStartBelowOldestIsEmpty},
+		{name: "a page never holds the probe row", test: testListNeverReturnsTheProbeRow},
+		{name: "All follows More and stops", test: testAllFollowsMoreAndStops},
+		{name: "a page read while the log grows is stable", test: testListStableWhileLogGrows},
+		{name: "paging over a deleted entry has no duplicate and no miss", test: testListPagesOverAGap},
+		{name: "hostile pages are refused or read nothing of another scope", test: testListHostilePageRows},
 		{name: "append with a stale fence fails", test: testStaleFence},
 		{name: "append to a missing namespace fails", test: testMissingNamespace},
 		{name: "entries of another namespace are not listed", test: testIsolation},
@@ -231,7 +242,7 @@ func testAppendList(t *testing.T, ts TestStore) {
 	stored := appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
 	checkFirstEntry(t, stored)
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -267,13 +278,9 @@ func checkFirstEntry(t *testing.T, stored audit.Entry) {
 }
 
 // checkSingleListing fails the test unless listing holds exactly the
-// appended reveal entry with its total.
+// appended reveal entry.
 func checkSingleListing(t *testing.T, listing audit.Listing) {
 	t.Helper()
-
-	if listing.Total != 1 {
-		t.Fatalf("total = %d, want 1", listing.Total)
-	}
 
 	if len(listing.Entries) != 1 {
 		t.Fatalf("entries = %d, want 1", len(listing.Entries))
@@ -282,65 +289,6 @@ func checkSingleListing(t *testing.T, listing audit.Listing) {
 	got := listing.Entries[0]
 	if got.Subject != "admin" || got.RequestID != "req-1" || got.Kind != audit.KindReveal {
 		t.Fatalf("listed entry = %+v, want the appended entry", got)
-	}
-}
-
-// testListPaging appends five entries and proves that the list answers them
-// newest first across pages of two.
-func testListPaging(t *testing.T, ts TestStore) {
-	t.Helper()
-
-	s := ts.Store
-	ns := newNamespace(t, s)
-
-	for i := 1; i <= 5; i++ {
-		appendEntry(t, s, ns.Fence(), newEntry(ns.Name, fmt.Sprintf("user-%d", i), fmt.Sprintf("req-%d", i), now()))
-	}
-
-	checkPagingFirst(t, s, ns.Name)
-	checkPagingRest(t, s, ns.Name)
-}
-
-// checkPagingFirst proves the first page holds the two newest entries with
-// the total.
-func checkPagingFirst(t *testing.T, s Store, ns namespace.Name) {
-	t.Helper()
-
-	first, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: 2})
-	if err != nil {
-		t.Fatalf("list page 1: %v", err)
-	}
-
-	if first.Total != 5 {
-		t.Fatalf("total = %d, want 5", first.Total)
-	}
-
-	if len(first.Entries) != 2 || first.Entries[0].Subject != "user-5" || first.Entries[1].Subject != "user-4" {
-		t.Fatalf("page 1 = %+v, want user-5 then user-4", first.Entries)
-	}
-}
-
-// checkPagingRest proves the second page holds the next two entries and the
-// third page holds the oldest one.
-func checkPagingRest(t *testing.T, s Store, ns namespace.Name) {
-	t.Helper()
-
-	second, err := s.List(t.Context(), ns, audit.Page{Number: 2, Size: 2})
-	if err != nil {
-		t.Fatalf("list page 2: %v", err)
-	}
-
-	if len(second.Entries) != 2 || second.Entries[0].Subject != "user-3" || second.Entries[1].Subject != "user-2" {
-		t.Fatalf("page 2 = %+v, want user-3 then user-2", second.Entries)
-	}
-
-	third, err := s.List(t.Context(), ns, audit.Page{Number: 3, Size: 2})
-	if err != nil {
-		t.Fatalf("list page 3: %v", err)
-	}
-
-	if len(third.Entries) != 1 || third.Entries[0].Subject != "user-1" {
-		t.Fatalf("page 3 = %+v, want user-1", third.Entries)
 	}
 }
 
@@ -360,13 +308,13 @@ func testStaleFence(t *testing.T, ts TestStore) {
 		t.Fatalf("append with a stale fence: err = %v, want %v", err, namespace.ErrFenced)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	if listing.Total != 0 {
-		t.Fatalf("total = %d, want 0", listing.Total)
+	if len(listing.Entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(listing.Entries))
 	}
 }
 
@@ -388,13 +336,13 @@ func testMissingNamespace(t *testing.T, ts TestStore) {
 		t.Fatalf("append to a missing namespace: err = %v, want %v", err, namespace.ErrNotFound)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	if listing.Total != 0 {
-		t.Fatalf("total = %d, want 0", listing.Total)
+	if len(listing.Entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(listing.Entries))
 	}
 }
 
@@ -421,12 +369,12 @@ func testIsolation(t *testing.T, ts TestStore) {
 
 	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
 
-	listing, err := s.List(t.Context(), other.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), other.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries of the other namespace: %v", err)
 	}
 
-	if listing.Total != 0 || len(listing.Entries) != 0 {
+	if len(listing.Entries) != 0 {
 		t.Fatalf("other namespace lists %+v, want empty", listing)
 	}
 
@@ -483,7 +431,7 @@ func testConcurrentAppends(t *testing.T, ts TestStore) {
 		t.Fatalf("check = %+v, want valid with %d entries", check, n)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: n})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: n})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -549,13 +497,8 @@ func testCheckPagesLongChain(t *testing.T, ts TestStore) {
 		t.Fatalf("check = %+v, want valid with %d entries", check, total)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
-	if err != nil {
-		t.Fatalf("list audit entries: %v", err)
-	}
-
-	if listing.Total != total {
-		t.Fatalf("total = %d, want %d", listing.Total, total)
+	if got := len(All(t, s, ns.Name)); got != total {
+		t.Fatalf("listed entries = %d, want %d", got, total)
 	}
 }
 
@@ -581,12 +524,12 @@ func testValueCountRoundTrip(t *testing.T, ts TestStore) {
 		t.Fatalf("stored value count = %+v, want %d", stored.ValueCount, count)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	if listing.Total != 2 || len(listing.Entries) != 2 {
+	if len(listing.Entries) != 2 {
 		t.Fatalf("listing = %+v, want 2 entries", listing)
 	}
 
@@ -755,13 +698,13 @@ func testServerScopeChain(t *testing.T, ts TestStore) {
 func checkServerScopeReads(t *testing.T, s Store, ns namespace.Name) {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
 
-	if listing.Total != 3 || len(listing.Entries) != 3 {
-		t.Fatalf("server listing = %d of %d, want 3", len(listing.Entries), listing.Total)
+	if len(listing.Entries) != 3 {
+		t.Fatalf("server listing = %d, want 3", len(listing.Entries))
 	}
 
 	checkStoredChain(t, listing)
@@ -775,8 +718,8 @@ func checkServerScopeReads(t *testing.T, s Store, ns namespace.Name) {
 		t.Fatalf("server check = %+v, want valid with 3 entries", check)
 	}
 
-	nsListing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.DefaultPageSize})
-	if err != nil || nsListing.Total != 1 {
+	nsListing, err := s.List(t.Context(), ns, audit.Page{Size: audit.DefaultPageSize})
+	if err != nil || len(nsListing.Entries) != 1 {
 		t.Fatalf("namespace listing = %+v, %v; want only its own entry", nsListing, err)
 	}
 }
@@ -857,7 +800,7 @@ func testConcurrentServerAppends(t *testing.T, ts TestStore) {
 		t.Fatalf("server check = %+v, want valid with %d entries", check, n)
 	}
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: n})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: n})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -908,7 +851,7 @@ func testObjectIDRoundTrip(t *testing.T, ts TestStore) {
 		t.Fatalf("stored object ID = %q, want %q", stored.ObjectID, withID.ObjectID)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -949,7 +892,7 @@ func testReasonRoundTrip(t *testing.T, ts TestStore) {
 		t.Fatalf("stored reason has %d bytes, want %d", len(stored.Reason), len(withReason.Reason))
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -990,7 +933,7 @@ func testPrincipalRoundTrip(t *testing.T, ts TestStore) {
 	job.JobID = "job-7"
 	appendEntry(t, s, ns.Fence(), job)
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -1031,8 +974,8 @@ func testPrincipalKindRefused(t *testing.T, ts TestStore) {
 		t.Fatalf("append with an unknown principal kind: error = %v, want ErrInvalidEntry", err)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
-	if err != nil || listing.Total != 0 {
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
+	if err != nil || len(listing.Entries) != 0 {
 		t.Fatalf("list after a refused append = %+v, %v; want no entry", listing, err)
 	}
 }
@@ -1052,8 +995,8 @@ func testReasonRefused(t *testing.T, ts TestStore) {
 		t.Fatalf("append with a line break in the reason: error = %v, want ErrInvalidEntry", err)
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
-	if err != nil || listing.Total != 0 {
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.DefaultPageSize})
+	if err != nil || len(listing.Entries) != 0 {
 		t.Fatalf("list after a refused append = %+v, %v; want no entry", listing, err)
 	}
 }
@@ -1094,7 +1037,7 @@ func testChangesRoundTrip(t *testing.T, ts TestStore) {
 		t.Fatalf("append changes entry: %v", err)
 	}
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -1183,7 +1126,7 @@ func testCheckChangedChanges(tampered string) func(t *testing.T, ts TestStore) {
 func checkListAnswers(t *testing.T, s Store, seq int64) {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list after the tamper: %v", err)
 	}

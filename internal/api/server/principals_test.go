@@ -624,7 +624,7 @@ func TestGroupIdentityProviderSwitch(t *testing.T) {
 func checkGroupSwitchEntries(t *testing.T, st *sqlite.Store, groupID string) {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -1152,7 +1152,7 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 		`{"principalID":"` + bob.ID + `"}`, http.StatusForbidden,
 	}, nil)
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -1286,7 +1286,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 		t.Fatalf("principal after a lost entry = %v, want ErrNotFound", getErr)
 	}
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil || len(listing.Entries) != 1 || listing.Entries[0].Outcome != audit.OutcomeFailure {
 		t.Fatalf("entries = %+v, %v; want one failure entry", listing.Entries, err)
 	}
@@ -1303,7 +1303,7 @@ func TestPrincipalFailureObjectsNeverHoldRequestText(t *testing.T) {
 	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/principals/prn-x%0Aforged", "", http.StatusNotFound}, nil)
 	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/groups/drop%20table", "", http.StatusNotFound}, nil)
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

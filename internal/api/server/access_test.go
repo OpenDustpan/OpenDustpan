@@ -786,7 +786,7 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 		t.Fatalf("delta grants = %+v, want none", list.Grants)
 	}
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -841,7 +841,7 @@ func TestGrantChangesWriteAuditEntries(t *testing.T) {
 
 	// A grant on a namespace writes its entries in that namespace, so the
 	// auditor of the namespace sees them.
-	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), "acme", audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list acme entries: %v", err)
 	}
@@ -1149,7 +1149,7 @@ func TestEscalationRefusalIsAudited(t *testing.T) {
 		http.StatusForbidden,
 	}, nil)
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

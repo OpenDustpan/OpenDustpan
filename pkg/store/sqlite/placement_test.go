@@ -144,7 +144,7 @@ func (f *placementFixture) place(project, stack string) (collection.Rule, error)
 func (f *placementFixture) auditEntries() []audit.Entry {
 	f.t.Helper()
 
-	listing, err := f.log.List(f.t.Context(), f.ns, audit.Page{Number: 1, Size: 50})
+	listing, err := f.log.List(f.t.Context(), f.ns, audit.Page{Size: 50})
 	if err != nil {
 		f.t.Fatalf("list audit: %v", err)
 	}

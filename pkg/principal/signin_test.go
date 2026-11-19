@@ -118,7 +118,7 @@ func TestSignInPrincipalWritesAudit(t *testing.T) {
 		t.Fatalf("SignInPrincipal: %v", err)
 	}
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 10})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: 10})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

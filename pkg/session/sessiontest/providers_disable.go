@@ -96,7 +96,7 @@ func checkSessionsEndedEntry(t *testing.T, s Store) {
 		return
 	}
 
-	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

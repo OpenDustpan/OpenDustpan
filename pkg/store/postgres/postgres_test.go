@@ -1240,7 +1240,7 @@ func assertRestoreAuditEntry(
 	t.Helper()
 
 	listing, err := st.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize},
 	)
 	if err != nil {
 		t.Fatalf("list entries: %v", err)

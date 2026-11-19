@@ -107,7 +107,7 @@ func checkStartEntry(t *testing.T, path, logs string, secrets ...string) {
 		}
 	}()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}

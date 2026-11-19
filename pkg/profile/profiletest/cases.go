@@ -180,7 +180,7 @@ func testAuditAppended(t *testing.T, s Store) {
 	p = save(t, s, ns, p, doc+"  more: 1\n")
 	remove(t, s, ns, p)
 
-	l, err := s.Audit.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: bigPage})
+	l, err := s.Audit.List(t.Context(), ns.Name, audit.Page{Size: bigPage})
 	if err != nil {
 		t.Fatalf("audit List: %v", err)
 	}
@@ -207,7 +207,7 @@ func testAuditMany(t *testing.T, s Store) {
 		t.Fatalf("Create with two entries: %v", err)
 	}
 
-	l, err := s.Audit.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: bigPage})
+	l, err := s.Audit.List(t.Context(), ns.Name, audit.Page{Size: bigPage})
 	if err != nil {
 		t.Fatalf("audit List: %v", err)
 	}
@@ -659,10 +659,10 @@ func testCompletionLost(t *testing.T, s Store) {
 	_, err = s.Profiles.Get(t.Context(), ns.Name, profile.RefByName("aws-prod"))
 	wantErr(t, "Get after a lost record", err, profile.ErrNotFound)
 
-	list, listErr := s.Audit.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: bigPage})
-	if listErr != nil || list.Total != 0 || c.Stored() {
+	list, listErr := s.Audit.List(t.Context(), ns.Name, audit.Page{Size: bigPage})
+	if listErr != nil || len(list.Entries) != 0 || c.Stored() {
 		t.Errorf("after a lost record: audit total = %d, err = %v, stored = %t, want 0, nil, false",
-			list.Total, listErr, c.Stored())
+			len(list.Entries), listErr, c.Stored())
 	}
 }
 

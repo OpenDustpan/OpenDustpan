@@ -559,7 +559,7 @@ func TestFreshAuthRefusesASignInAfterNow(t *testing.T) {
 func failureEntries(t *testing.T, e providerEnv, scope namespace.Name, action identity.Action) int {
 	t.Helper()
 
-	listing, err := e.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit of %s: %v", scope, err)
 	}

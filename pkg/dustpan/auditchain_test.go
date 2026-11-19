@@ -390,7 +390,7 @@ func listServer(t *testing.T, st *sqlite.Store) []audit.Entry {
 func listScope(t *testing.T, st *sqlite.Store, scope namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := st.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list %s: %v", scope, err)
 	}

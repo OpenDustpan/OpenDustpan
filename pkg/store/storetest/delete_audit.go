@@ -55,7 +55,7 @@ func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	listing, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -348,7 +348,7 @@ func testDeleteWorkspaceAppendsChangeEntry(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
-	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

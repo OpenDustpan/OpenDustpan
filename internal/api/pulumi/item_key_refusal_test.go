@@ -39,7 +39,7 @@ func startedBy(t *testing.T, f updateFixture, subject string) (stack.UpdateID, s
 func deniedSecurityEntries(t *testing.T, f updateFixture) []audit.Entry {
 	t.Helper()
 
-	listing, err := f.audit.List(t.Context(), namespace.Name("acme"), audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.audit.List(t.Context(), namespace.Name("acme"), audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("audit list: %v", err)
 	}

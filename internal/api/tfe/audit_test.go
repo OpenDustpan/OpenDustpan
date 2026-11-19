@@ -79,7 +79,7 @@ func (m *memAuditStore) List(
 		out[i], out[j] = out[j], out[i]
 	}
 
-	return audit.Listing{Entries: out, Total: int64(len(out))}, nil
+	return audit.Listing{Entries: out}, nil
 }
 
 func (m *memAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {

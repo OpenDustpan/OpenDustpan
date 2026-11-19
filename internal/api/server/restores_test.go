@@ -1231,7 +1231,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	doc := startRestore(t, handler, `{"backupID":"`+backupID.String()+`"}`)
 	waitRestoreState(t, handler, doc.ID, "succeeded")
 
-	listing, err := stores.registry.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := stores.registry.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
@@ -1260,7 +1260,7 @@ func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want 
 	t.Helper()
 
 	listing, err := stores.registry.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize},
 	)
 	if err != nil {
 		t.Fatalf("list entries: %v", err)

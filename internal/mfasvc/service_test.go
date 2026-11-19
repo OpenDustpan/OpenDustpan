@@ -224,7 +224,7 @@ func (f *fixture) assertion(
 func (f *fixture) entries(t *testing.T, action string) []audit.Entry {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

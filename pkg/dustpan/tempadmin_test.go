@@ -413,7 +413,7 @@ func checkTempAdminEnded(t *testing.T, st *sqlite.Store, base time.Time) {
 func checkTempAdminAudit(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

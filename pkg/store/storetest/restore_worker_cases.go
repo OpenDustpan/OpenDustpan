@@ -410,7 +410,7 @@ func (r *workerRig) opOf(t *testing.T, id backup.RestoreID) durable.Operation {
 func (r *workerRig) restoreEntries(t *testing.T, prefix string) int {
 	t.Helper()
 
-	listing, err := r.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := r.st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list the audit log: %v", err)
 	}
