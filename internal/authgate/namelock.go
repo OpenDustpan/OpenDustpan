@@ -86,8 +86,10 @@ const (
 	// NamePruneBatchPause is the time that a run waits between two batches.
 	// The store has one writer, so a run with no pause keeps the write lock
 	// for almost all of its time, and the other writes (sign-in failure
-	// counts, audit entries, lease renewals) wait for it.
-	NamePruneBatchPause = 25 * time.Millisecond
+	// counts, audit entries, lease renewals) wait for it. The pause is longer
+	// than the longest sleep of the busy handler of SQLite (100 ms), so a
+	// writer that waits for the lock gets a turn inside each pause.
+	NamePruneBatchPause = 150 * time.Millisecond
 	// MaxNamePruneRows is the most counts that one batch of the prune
 	// deletes. A run starts another batch while a batch deletes this many.
 	MaxNamePruneRows = 10000

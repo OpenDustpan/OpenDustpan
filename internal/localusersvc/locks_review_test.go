@@ -546,8 +546,9 @@ func TestPruneLocksStopsWhenItsContextEnds(t *testing.T) {
 	}
 
 	res, err := localusersvc.PruneLocks(ctx, b, newFakePruneClock().clock())
-	if err != nil {
-		t.Fatalf("prune: %v", err)
+	if !errors.Is(err, context.Canceled) || res.StopReason != localusersvc.PruneStopContext {
+		t.Fatalf("prune = %+v, %v, want the error of the context and the stop reason %q",
+			res, err, localusersvc.PruneStopContext)
 	}
 
 	if b.calls != 3 || res.Deleted != 3*full {
@@ -685,7 +686,7 @@ func TestPruneLocksStopReasons(t *testing.T) {
 	cancel()
 
 	b = &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full}}
-	if res, err := localusersvc.PruneLocks(ctx, b, newFakePruneClock().clock()); err != nil ||
+	if res, err := localusersvc.PruneLocks(ctx, b, newFakePruneClock().clock()); !errors.Is(err, context.Canceled) ||
 		res.StopReason != localusersvc.PruneStopContext || res.Batches != 1 {
 		t.Fatalf("context: %+v, %v", res, err)
 	}
@@ -694,6 +695,42 @@ func TestPruneLocksStopReasons(t *testing.T) {
 	if res, err := localusersvc.PruneLocks(t.Context(), e, newFakePruneClock().clock()); err == nil ||
 		res.StopReason != localusersvc.PruneStopError || res.Batches != 1 || res.Deleted != full {
 		t.Fatalf("error: %+v, %v", res, err)
+	}
+}
+
+// TestPruneLocksChecksItsContextAfterThePause proves that a run stops when its
+// context ends, also when the pause of the clock ignores the context and
+// always reports a full pause. The run does not rely on the clock. A run
+// with no check of the context after the pause fails this test.
+func TestPruneLocksChecksItsContextAfterThePause(t *testing.T) {
+	t.Parallel()
+
+	const stopAfter = 4
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	full := int64(authgate.MaxNamePruneRows)
+	b := &batchPrune{NameLockCounter: nil, calls: 0, batches: make([]int64, 1000), after: func(calls int) {
+		if calls == stopAfter {
+			cancel()
+		}
+	}}
+
+	for i := range b.batches {
+		b.batches[i] = full
+	}
+
+	clock := localusersvc.PruneClock{
+		Now:   func() time.Time { return time.Unix(1_700_000_000, 0) },
+		Pause: func(context.Context, time.Duration) bool { return true },
+	}
+
+	res, err := localusersvc.PruneLocks(ctx, b, clock)
+	if !errors.Is(err, context.Canceled) || res.StopReason != localusersvc.PruneStopContext ||
+		res.Batches != stopAfter || b.calls != stopAfter {
+		t.Fatalf("prune = %+v, %v after %d calls, want %d batches, the stop reason %q and the error of the context",
+			res, err, b.calls, stopAfter, localusersvc.PruneStopContext)
 	}
 }
 

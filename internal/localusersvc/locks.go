@@ -392,8 +392,9 @@ func Prune() PruneSettings {
 	}
 }
 
-// The reasons that a run of the prune stopped. A run that stops for any of
-// the first three returns no error.
+// The reasons that a run of the prune stopped. A run that stops for
+// PruneStopShortBatch or PruneStopTimeBound returns no error. A run that stops
+// for PruneStopContext or PruneStopError returns an error.
 const (
 	// PruneStopShortBatch: a batch deleted less than its limit, so no old
 	// count is left.
@@ -401,7 +402,8 @@ const (
 	// PruneStopTimeBound: the run reached the longest time of a run. The
 	// next run continues.
 	PruneStopTimeBound = "time bound"
-	// PruneStopContext: the context of the run ended between two batches.
+	// PruneStopContext: the context of the run ended between two batches. The
+	// run returns the error of the context.
 	PruneStopContext = "context ended"
 	// PruneStopError: a batch returned an error.
 	PruneStopError = "batch error"
@@ -459,11 +461,12 @@ type PruneResult struct {
 // that adds counts faster than one batch deletes them cannot grow the table
 // without bound. The run stops at the first batch that deletes less
 // (PruneStopShortBatch), when the MaxRun of Prune has passed since the start
-// (PruneStopTimeBound) or when ctx ends between two batches
-// (PruneStopContext). These three stops return no error: the next run
+// (PruneStopTimeBound). These two stops return no error: the next run
 // continues. Each batch gets ctx itself, so a batch never ends in the middle
-// because of the time bound. A batch that fails stops the run with the error
-// and PruneStopError. The store appends the audit entry of each batch, with
+// because of the time bound. When ctx ends between two batches, the run
+// stops with PruneStopContext and returns the error of ctx, wrapped. So the
+// runner sees the same interruption as when ctx ends inside a batch. A batch
+// that fails stops the run with the error and PruneStopError. The store appends the audit entry of each batch, with
 // the server as the subject, the reason and the count that it deleted, in
 // the transaction of the delete. So each batch has its entry, also a batch
 // that deletes nothing. Deleted in the result is the sum of all batches,
@@ -519,20 +522,20 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, clock Prune
 			return res, nil
 		}
 
-		// A pause that ends early means that ctx ended. The run also checks
-		// ctx itself, so a clock whose pause ignores ctx cannot keep it going.
+		// A pause that ends early means that ctx ended.
 		paused := clock.Pause(ctx, p.BatchPause)
 
-		select {
-		case <-ctx.Done():
-			paused = false
-		default:
-		}
-
-		if !paused {
+		// Defense in depth: a pause that ends early reports the end of ctx
+		// too. This check stays so that a clock whose pause ignores ctx
+		// cannot keep the run going after ctx ended.
+		if ctxErr := ctx.Err(); ctxErr != nil || !paused {
 			res.StopReason = PruneStopContext
 
-			return res, nil
+			if ctxErr == nil {
+				ctxErr = context.Canceled
+			}
+
+			return res, fmt.Errorf("prune the name counts: stopped between batches: %w", ctxErr)
 		}
 
 		if !clock.Now().Before(deadline) {
