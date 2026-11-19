@@ -33,10 +33,14 @@ that a grant seems to allow.
   on the setting) needs a fresh authentication. A server that has no console
   sign-in asks for none, and the change runs with no fresh authentication.
   The server has no console sign-in when it has no provider in its
-  configuration, no dev sign-in, and no stored providers with an HTTPS public
-  URL. The code checks only this condition. It does not read the setting of
-  built-in MFA or the list of SSO providers. This rule stays because such a
-  server has no sign-in step to ask for.
+  configuration, no dev sign-in, and no store that keeps sessions with a
+  valid public URL (https, or http on a loopback host). The sign-in runs
+  with zero stored providers. The dev sign-in counts when it is set. The
+  check does not read the installation kind, but the server accepts a dev
+  sign-in only on an installation of kind dev. The code checks only this
+  condition. It does not read the setting of built-in MFA or the list of SSO
+  providers. This rule stays because such a server has no sign-in step to
+  ask for.
 - The rule has no effective value in the API. The unmounted sign-in routes
   of the server show its condition. Each change that the rule lets through
   writes the normal audit entry of a settings change with the changed keys.
