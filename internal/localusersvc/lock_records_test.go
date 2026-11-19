@@ -174,7 +174,8 @@ func (f *fixture) serviceWithCounter(
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
+		NoPublicURL: false,
+		Store:       f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
 		Reach: noReach(), Subjects: nil, Log: slog.New(slog.NewTextHandler(logs, nil)),
 	})

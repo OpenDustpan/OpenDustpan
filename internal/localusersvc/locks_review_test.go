@@ -223,11 +223,23 @@ func (f *fixture) demoService(t *testing.T, kind installation.Kind) *localusersv
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:   nil,
-		Store: demoFlag{Stores: f.store}, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
-		Audit: f.store, Locks: f.store, Keys: f.store, Settings: f.settings,
-		SSO: func(context.Context) (bool, error) { return false, nil }, Reach: f.storeReach(), Kind: kind, Now: nil,
-		Subjects: f.store,
+		NoPublicURL: false,
+		Log:         nil,
+		Store: demoFlag{
+			Stores: f.store,
+		},
+		Principals: f.principals,
+		Hasher:     f.hasher,
+		Blocklist:  blocklist.Embedded(),
+		Audit:      f.store,
+		Locks:      f.store,
+		Keys:       f.store,
+		Settings:   f.settings,
+		SSO:        func(context.Context) (bool, error) { return false, nil },
+		Reach:      f.storeReach(),
+		Kind:       kind,
+		Now:        nil,
+		Subjects:   f.store,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -470,8 +482,9 @@ func (f *fixture) serviceWithSubjects(t *testing.T, subjects localusersvc.Subjec
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:   nil,
-		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
+		NoPublicURL: false,
+		Log:         nil,
+		Store:       f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: f.store, Keys: f.store, Settings: f.settings,
 		SSO: func(context.Context) (bool, error) { return false, nil }, Reach: f.storeReach(),
 		Kind: installation.KindProduction, Now: nil, Subjects: subjects,
