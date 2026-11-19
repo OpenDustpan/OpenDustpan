@@ -2721,6 +2721,7 @@
           "token.not-found",
           "token.outside-reach",
           "token.requires-sign-in",
+          "token.unknown-kind",
           "token.unsupported",
           "token.wrong-kind",
           "trigger.cycle",
