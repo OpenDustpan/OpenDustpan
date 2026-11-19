@@ -52,7 +52,7 @@ func remoteChecks(
 		return []checkResult{{statusFail, nameServerKind, err.Error()}}
 	}
 
-	token, tokenErr := BackupToken()
+	token, tokenErr := backupTokenFor(rerun)
 	if tokenErr != nil {
 		const skipped = "not checked: the token of the client commands is missing"
 
@@ -169,15 +169,18 @@ func getJSON(ctx context.Context, client *http.Client, endpoint, token string, d
 		return fmt.Errorf("ask the server: %w: check --server", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		message := decodeErrorAnswer(resp)
+		_ = resp.Body.Close() //nolint:errcheck // The answer is an error and the body was read as far as it matters.
+
+		return fmt.Errorf("%w: %s", ErrBackupRead, answerText(resp.StatusCode, message, "check the server log"))
+	}
+
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxClientBodyBytes+1))
 	closeErr := resp.Body.Close()
 
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return fmt.Errorf("read the answer of the server: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: %s", ErrBackupRead, answerText(resp.StatusCode, resp.Status, "check the server log"))
 	}
 
 	if int64(len(raw)) > MaxClientBodyBytes {
