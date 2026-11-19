@@ -239,8 +239,9 @@ func TestLockLimits(t *testing.T) {
 
 	for _, tc := range cases {
 		svc, newErr := localusersvc.New(localusersvc.Config{
-			Log:   nil,
-			Store: f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
+			NoPublicURL: false,
+			Log:         nil,
+			Store:       f.store, Principals: f.principals, Hasher: tc.hasher, Blocklist: blocklist.Embedded(),
 			Audit: f.store, Locks: tc.locks, Keys: f.store, Settings: f.settings, SSO: nil, Kind: "", Now: nil,
 			Reach: noReach(), Subjects: nil,
 		})
@@ -311,8 +312,9 @@ func TestUnlockThatCannotClearChangesNothing(t *testing.T) {
 	f.fail(t, authgate.DefaultNameLimit, "alice")
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:   nil,
-		Store: f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
+		NoPublicURL: false,
+		Log:         nil,
+		Store:       f.store, Principals: f.principals, Hasher: f.hasher, Blocklist: blocklist.Embedded(),
 		Audit: f.store, Locks: brokenClear{NameLockCounter: f.store}, Keys: f.store, Settings: f.settings,
 		SSO: nil, Kind: "", Now: nil, Reach: f.storeReach(), Subjects: f.store,
 	})

@@ -9,6 +9,9 @@ issues its own console session.
 
 - The public URL of the server, with HTTPS. Set it with `--public-url`
   (`DUSTPAN_PUBLIC_URL`). The server refuses the sign-in without it.
+  The password sign-in of a local user also needs it. Without it, the policy
+  shows `enabled: false` with the source `public-url`, and the sign-in answers
+  403 with `local-user.public-url-required`.
 - A client of the server at the provider: a client ID and a client secret.
 - The redirect URI of that client at the provider:
   `<public URL>/api/server/sign-in/<provider ID>/callback`.

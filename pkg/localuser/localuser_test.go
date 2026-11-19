@@ -32,6 +32,7 @@ func TestErrorsAreDistinct(t *testing.T) {
 		localuser.ErrDemoFixed,
 		localuser.ErrBreakGlass,
 		localuser.ErrPasswordSignInOff,
+		localuser.ErrPublicURLRequired,
 		localuser.ErrUnavailable,
 		localuser.ErrHashBusy,
 	}

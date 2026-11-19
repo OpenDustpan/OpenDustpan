@@ -51,6 +51,8 @@ never changes. The body of `POST /runner-pools` has these fields:
 | `isolation` | The isolation kinds that a runner may use. An empty list allows every kind but `process`. |
 | `gitCredentials` | `mode` (`none`, `forge` or `custom`) and `helper`. Only the mode `custom` takes a `helper`: a bare name that starts with `git-credential-`, or a clean absolute path, of letters, digits and the characters `.` `_` `/` `-`. Another helper fails with 400. |
 
+A field that is not valid gets 400 with the code `runner.invalid`. The message names the field and the rule. It never repeats the value that the caller sent.
+
 `PATCH /runner-pools/{pool}` takes the same fields, and every field is optional. A
 field that the body leaves out keeps its value. A `purpose` that differs from
 the pool fails with 409. The answer is the pool, and the change writes one audit

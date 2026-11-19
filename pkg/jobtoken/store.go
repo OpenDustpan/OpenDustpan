@@ -31,17 +31,18 @@ type Store interface {
 	//     job is in another namespace than the fence, or the starter is
 	//     deleted or disabled;
 	//   - ErrAlreadyExists when a record has the digest of t;
+	//   - namespace.ErrNotFound when the namespace of the fence has no row;
 	//   - namespace.ErrFenced when the fence is stale or names another
 	//     namespace than the unit;
 	//   - audit.ErrInvalidEntry when e fails validation or names another
 	//     namespace than the fence.
 	//
 	// When several errors apply, the first rule wins, in this order: ErrInvalid
-	// for a token that fails Validate, audit.ErrInvalidEntry, namespace.ErrFenced,
-	// ErrInvalid for an expiry not after e.At, ErrAlreadyExists, ErrNotFound,
-	// ErrNotLive for a starter that is deleted or disabled, ErrInvalid for a
-	// starter that is not the job starter, then ErrNotLive for a claim or job
-	// that is not live.
+	// for a token that fails Validate, audit.ErrInvalidEntry,
+	// namespace.ErrNotFound, namespace.ErrFenced, ErrInvalid for an expiry not
+	// after e.At, ErrAlreadyExists, ErrNotFound, ErrNotLive for a starter that
+	// is deleted or disabled, ErrInvalid for a starter that is not the job
+	// starter, then ErrNotLive for a claim or job that is not live.
 	Issue(ctx context.Context, t Token, fence namespace.Fence, e audit.Entry) error
 
 	// GetByDigest returns the record whose secret has the digest d, with the
