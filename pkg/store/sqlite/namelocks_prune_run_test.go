@@ -28,7 +28,7 @@ func (c *batchCounter) PruneNameLocks(
 	n, err := c.NameLockCounter.PruneNameLocks(ctx, age, limit, ended, e)
 	c.batches++
 
-	return n, err //nolint:wrapcheck // A test wrapper returns the error of the store as it is.
+	return n, err
 }
 
 // TestNameLockPruneRunLetsOtherWritesCommit seeds old counts for eight full
@@ -57,14 +57,14 @@ func TestNameLockPruneRunLetsOtherWritesCommit(t *testing.T) {
 	}
 
 	at := time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
-	real := localusersvc.NewPruneClock(time.Now)
+	timer := localusersvc.NewPruneClock(time.Now)
 	counter := &batchCounter{NameLockCounter: s, batches: 0}
 	committed := 0
 
 	clock := localusersvc.PruneClock{
-		Now: real.Now,
+		Now: timer.Now,
 		Pause: func(ctx context.Context, d time.Duration) bool {
-			ok := real.Pause(ctx, d)
+			ok := timer.Pause(ctx, d)
 
 			id := "corp-" + strconv.Itoa(committed)
 			p := session.ProviderConfig{

@@ -522,20 +522,10 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, clock Prune
 			return res, nil
 		}
 
-		// A pause that ends early means that ctx ended.
-		paused := clock.Pause(ctx, p.BatchPause)
-
-		// Defense in depth: a pause that ends early reports the end of ctx
-		// too. This check stays so that a clock whose pause ignores ctx
-		// cannot keep the run going after ctx ended.
-		if ctxErr := ctx.Err(); ctxErr != nil || !paused {
+		if err := pauseBetweenBatches(ctx, clock, p.BatchPause); err != nil {
 			res.StopReason = PruneStopContext
 
-			if ctxErr == nil {
-				ctxErr = context.Canceled
-			}
-
-			return res, fmt.Errorf("prune the name counts: stopped between batches: %w", ctxErr)
+			return res, err
 		}
 
 		if !clock.Now().Before(deadline) {
@@ -544,4 +534,25 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, clock Prune
 			return res, nil
 		}
 	}
+}
+
+// pauseBetweenBatches waits the pause of the clock between two batches. It
+// returns an error that wraps the error of ctx when ctx ended.
+func pauseBetweenBatches(ctx context.Context, clock PruneClock, d time.Duration) error {
+	// A pause that ends early means that ctx ended.
+	paused := clock.Pause(ctx, d)
+
+	// Defense in depth: a pause that ends early reports the end of ctx too.
+	// This check stays so that a clock whose pause ignores ctx cannot keep
+	// the run going after ctx ended.
+	ctxErr := ctx.Err()
+	if ctxErr == nil && paused {
+		return nil
+	}
+
+	if ctxErr == nil {
+		ctxErr = context.Canceled
+	}
+
+	return fmt.Errorf("prune the name counts: stopped between batches: %w", ctxErr)
 }
