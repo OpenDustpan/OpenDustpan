@@ -444,7 +444,8 @@ func signInProvider(
 	}
 
 	return serverapi.SignInProvider{
-		Method: method, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
+		Method: method, ID: p.ID, DisplayName: displayName, Issuer: p.Issuer, ClientID: p.ClientID,
+		Scopes: slices.Clone(p.Scopes), AutoCreate: p.AutoCreate, Stored: false,
 	}, nil
 }
 

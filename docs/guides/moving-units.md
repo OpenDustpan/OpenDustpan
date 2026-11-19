@@ -120,7 +120,7 @@ Export and import move the state, and the history where the tool exports it. The
 - **Grants.** Grants on the unit, on its collection and on the source namespace stay with the source. Make the grants that the unit needs in the target namespace.
 - **Sharing rules.** Output sharing rules do not move to the target namespace. Make the sharing rules that the unit needs in the target namespace.
 - **Dependents.** References from other stacks or workspaces to this unit do not change. Update each dependent after the move.
-- **The import hold.** The import hold is a manual lock on each target unit during the import. It does not carry over to the unit after the import ends.
+- **The import hold.** This version has no import hold. The import does not lock the target stack or workspace, and the imports route answers 404. Stop each writer to the target until the import ends.
 
 ## Errors
 

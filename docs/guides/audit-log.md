@@ -421,7 +421,7 @@ Send the access token as `Authorization: token <token>` or `Authorization: Beare
 (up to 200). Both default when missing.
 
 ```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+curl -g -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
 ```
 
@@ -453,23 +453,6 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 namespace oldest first, one JSON object for each line, or one CEF line
 for each entry with `format=cef`. A CEF line does not hold every field that
 the hash covers, so the offline hash check needs `format=json`. It needs the same
-action. Use it to keep a copy of a range, or to check a range with no help
-from the server. The lines hold the previous hash and the hash, so a reader
-can compute each hash again. See
-[Audit export API](../reference/audit-export-api.md) for the query values, the
-fields and the steps of the offline check.
-
-```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/audit/export?organization=acme&fromSequence=100" \
-  > acme-audit.jsonl
-```
-
-Each export writes one entry of the kind `audit-read` in the log that it
-reads. If the server cannot write that entry, it sends no line.
-
-`GET /api/audit/export?organization=<namespace>` sends the entries of the
-namespace oldest first, one JSON object for each line. It needs the same
 action. Use it to keep a copy of a range, or to check a range with no help
 from the server. The lines hold the previous hash and the hash, so a reader
 can compute each hash again. See
@@ -529,6 +512,7 @@ The CLI cannot give a fresh authentication.
 It prints where to approve and ends with an error.
 
 `opendustpan audit-chain status --server https://dustpan.example` shows the state of the chain and whether a change waits.
+The command reads the admin token from `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).

@@ -57,7 +57,7 @@ func testGrantCheckRefuses(t *testing.T, s access.Store) {
 	for i := range objects {
 		obj := objects[i]
 		ns := obj.Namespace()
-		g := newGrant("grt-"+obj.String(), principalSubject("prn-a"), access.RoleViewer, obj)
+		g := newGrant(GrantID(obj.String()), principalSubject("prn-a"), access.RoleViewer, obj)
 
 		err := s.CreateGrant(ctx, g, fenceOf(t, s, ns), scoped(entry(), ns), refuse)
 		if !errors.Is(err, errCheck) {
@@ -86,7 +86,7 @@ func testRevokeCheckRefuses(t *testing.T, s access.Store) {
 	for i := range objects {
 		obj := objects[i]
 		ns := obj.Namespace()
-		g := newGrant("grt-"+obj.String(), principalSubject("prn-a"), access.RoleViewer, obj)
+		g := newGrant(GrantID(obj.String()), principalSubject("prn-a"), access.RoleViewer, obj)
 
 		if err := createGrant(t, s, g, entry()); err != nil {
 			t.Fatalf("create grant on %q: %v", obj.String(), err)

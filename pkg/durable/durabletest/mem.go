@@ -301,22 +301,23 @@ func (m *memDB) start(req durable.StartRequest, now time.Time) (durable.Operatio
 
 	m.nextID++
 	op := &durable.Operation{
-		ID:              durable.ID(fmt.Sprintf("op-%06d", m.nextID)),
-		Key:             req.Key,
-		Kind:            req.Kind,
-		Version:         req.Version,
-		Input:           slices.Clone(req.Input),
-		State:           durable.StatePending,
-		Steps:           nil,
-		Attempt:         0,
-		Expiries:        0,
-		Failures:        0,
-		LastError:       "",
-		Claim:           zeroClaim(),
-		CancelRequested: false,
-		NotBefore:       now,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:               durable.ID(fmt.Sprintf("op-%06d", m.nextID)),
+		Key:              req.Key,
+		Kind:             req.Kind,
+		Version:          req.Version,
+		Input:            slices.Clone(req.Input),
+		State:            durable.StatePending,
+		Steps:            nil,
+		Attempt:          0,
+		Expiries:         0,
+		DeadlineReleases: 0,
+		Failures:         0,
+		LastError:        "",
+		Claim:            zeroClaim(),
+		CancelRequested:  false,
+		NotBefore:        now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	m.ops[op.ID] = op
@@ -527,12 +528,16 @@ func (s memStore) RecordStep(_ context.Context, f durable.StepFence, result []by
 }
 
 func (s memStore) Complete(_ context.Context, c durable.Claim) error {
-	return s.end(c, refuseOnCancel, func(op *durable.Operation, _ time.Time) { op.State = durable.StateSucceeded })
+	return s.end(c, refuseOnCancel, func(op *durable.Operation, _ time.Time) {
+		op.State = durable.StateSucceeded
+		op.DeadlineReleases = 0
+	})
 }
 
 func (s memStore) Fail(_ context.Context, c durable.Claim, f durable.Failure) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.Failures++
+		op.DeadlineReleases = 0
 		op.LastError = f.Message
 		if f.Final {
 			op.State = durable.StateFailed
@@ -549,6 +554,15 @@ func (s memStore) Release(_ context.Context, c durable.Claim) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.State = durable.StatePending
 		op.NotBefore = now
+		op.DeadlineReleases = 0
+	})
+}
+
+func (s memStore) ReleaseAtDeadline(_ context.Context, c durable.Claim) error {
+	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
+		op.State = durable.StatePending
+		op.NotBefore = now
+		op.DeadlineReleases++
 	})
 }
 
@@ -556,6 +570,7 @@ func (s memStore) GiveBack(_ context.Context, c durable.Claim) error {
 	return s.end(c, refuseOnCancel, func(op *durable.Operation, now time.Time) {
 		op.State = durable.StatePending
 		op.NotBefore = now
+		op.DeadlineReleases = 0
 	})
 }
 
@@ -919,6 +934,7 @@ func (s memStore) end(c durable.Claim, onCancel cancelRule, fn func(op *durable.
 			return durable.ErrCanceled
 		}
 
+		op.DeadlineReleases = 0
 		s.db.endCanceled(op, now)
 
 		return nil

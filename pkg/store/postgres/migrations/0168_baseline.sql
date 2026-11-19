@@ -231,6 +231,7 @@ CREATE TABLE durable_operations (
     state text NOT NULL,
     attempt bigint NOT NULL,
     expiries bigint DEFAULT 0 NOT NULL,
+    deadline_releases bigint DEFAULT 0 NOT NULL,
     failures bigint DEFAULT 0 NOT NULL,
     last_error text NOT NULL,
     claim_owner text,
@@ -381,7 +382,8 @@ CREATE TABLE grants (
     created_at_ms bigint NOT NULL,
     created_by text DEFAULT ''::text NOT NULL,
     revoked_at_ms bigint,
-    revoked_by text DEFAULT ''::text NOT NULL
+    revoked_by text DEFAULT ''::text NOT NULL,
+    CONSTRAINT grants_id_check CHECK ((id ~ '^grt-[A-Za-z0-9_.-]{1,60}$'::text))
 );
 
 CREATE TABLE group_mappings (

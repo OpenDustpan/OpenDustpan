@@ -560,7 +560,7 @@ func docTestServer(t *testing.T, issuer string) *dustpan.Server {
 		dustpan.WithIPAllowlists(true),
 		dustpan.WithBackupTarget(backupTarget, "dir:backup-target"),
 		dustpan.WithLDAPProvider(dustpan.LDAPProvider{
-			RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp",
+			RootCAs: nil, CAFile: "", AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp",
 			URL: "ldaps://ldap.example.invalid", BindDN: "cn=dustpan,ou=services,dc=example,dc=org",
 			BindPassword: bindPassword, BaseDN: "ou=people,dc=example,dc=org", UserFilter: "(uid={user})",
 			UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",

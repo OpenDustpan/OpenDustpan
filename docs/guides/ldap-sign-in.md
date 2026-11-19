@@ -26,16 +26,18 @@ opendustpan serve \
   --ldap-user-filter '(&(objectClass=person)(uid={user}))'
 ```
 
-The same settings in the configuration file:
+The same settings in the configuration file. Each key is the flat file key
+of a setting, with a dot in its name. The file takes no nested map: a nested
+`ldap:` block stops the start with the error `config file key has no
+setting: "ldap"`.
 
 ```yaml
-ldap:
-  url: ldaps://ldap.example.com
-  provider: corp-ldap
-  displayName: Corp directory
-  bindDN: cn=dustpan,ou=services,dc=example,dc=com
-  baseDN: ou=people,dc=example,dc=com
-  userFilter: (&(objectClass=person)(uid={user}))
+ldap.url: ldaps://ldap.example.com
+ldap.provider: corp-ldap
+ldap.displayName: Corp directory
+ldap.bindDN: cn=dustpan,ou=services,dc=example,dc=com
+ldap.baseDN: ou=people,dc=example,dc=com
+ldap.userFilter: (&(objectClass=person)(uid={user}))
 ```
 
 The password of the service account comes only from the variable
@@ -60,7 +62,9 @@ shows the provider with the source `static`, the mode `ldap` and the
 effective value of each LDAP setting. It shows the lockout limit as
 `subjectFailureLimit`, and the layer that sets it as
 `subjectFailureLimitSource`: `flag`, `env`, `file` or `default`. It shows
-`"bindPasswordSet": true`, never the password.
+the CA file as `caFile`, the disabled mask as `disabledMask` (a decimal
+text, empty when no mask is set) and the disabled values as
+`disabledValues`. It shows `"bindPasswordSet": true`, never the password.
 
 ## Sign in
 
@@ -227,13 +231,17 @@ The setting `egress.allowPlainConnections` allows a connection with no TLS
 to a host that is not a loopback IP address. It is off by default. The same
 setting allows an SMTP connection with no TLS.
 
-Set it with one call:
+Read the revision from the `ETag` header of `GET /api/dustpan/v1/settings`.
+Set it with one call. The route needs the header `Idempotency-Key`, a new
+random key for each change. Without it, the answer is `400`
+`request.idempotency-key-required`.
 
 ```sh
 curl -X PATCH "$SERVER/api/dustpan/v1/settings" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/merge-patch+json" \
   -H 'If-Match: "<revision>"' \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"egress.allowPlainConnections": true}'
 ```
 

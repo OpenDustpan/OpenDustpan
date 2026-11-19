@@ -1076,3 +1076,18 @@ func TestExactScopeWithinAuthorize(t *testing.T) {
 		})
 	}
 }
+
+// TestWeakTokenErrorGivesTheFix proves that the error for a short token names
+// the one command that makes a token, for one token and for a list.
+func TestWeakTokenErrorGivesTheFix(t *testing.T) {
+	t.Parallel()
+
+	_, errOne := identity.NewStaticToken("admin", "short")
+	_, errList := identity.NewStaticTokens("short")
+
+	for _, err := range []error{errOne, errList} {
+		if !errors.Is(err, identity.ErrWeakToken) || !strings.Contains(err.Error(), "openssl rand -hex 32") {
+			t.Fatalf("short token = %v, want ErrWeakToken with the command that makes a token", err)
+		}
+	}
+}

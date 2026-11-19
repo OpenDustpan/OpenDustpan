@@ -267,6 +267,7 @@ func coveragePasswordProvider() serverapi.PasswordProvider {
 			EmailAttribute: "", NameAttribute: "", Subject: "", DisabledAttribute: "", Groups: "", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
 			StartTLS: false, SubjectFailureLimit: 0, SubjectFailureLimitSource: "",
+			CAFile: "", DisabledMask: "", DisabledValues: nil,
 		},
 	}
 }

@@ -8,35 +8,60 @@ Grants apply at namespace level today: the token needs `blueprint:publish` on
 the namespace that holds the blueprint. A grant on one blueprint comes in a
 later change.
 
-## 1. Read the draft
+## 1. Write the first draft
+
+A new blueprint has no draft, so a read of its draft answers `404` with the
+code `self-service.blueprint-not-found`. Make the first draft with a write.
+The version of a blueprint that has no draft is `0`, so send `If-Match: "0"`.
+Send the whole document as the body:
 
 ```sh
-curl -sS -H "Authorization: Bearer $TOKEN" \
+curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H 'If-Match: "0"' \
+  -H 'Content-Type: application/json' --data-binary @database.json \
   "$SERVER/api/dustpan/v1/self-service/blueprints/$NAMESPACE/database/draft"
 ```
 
-The `ETag` header holds the draft version, in quotes. Keep it for the next
-step.
+The answer is `200` with `{"version": 1}` and the `ETag` header `"1"`.
 
-## 2. Write the draft
+The `name` in the document must be the same as the blueprint name in the path
+(`database` in this example). If the two differ, the answer is `400` with the
+code `self-service.blueprint-invalid`. The same code answers any other
+document that is not valid. The answer does not name the field that failed, so
+check the document against the rules in the
+[self-service API reference](../reference/self-service-api.md) and write it
+again.
 
-Send the whole document as the body. Send the version from step 1 in the
-`If-Match` header:
+A write with no `If-Match` header answers `428`. A write with a version that is
+not the current version answers `409`.
+
+## 2. Change the draft
+
+To change a draft that exists, read it first. Then write it with its version.
 
 ```sh
-curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H 'If-Match: "3"' \
-  --data-binary @database.json \
+curl -sS -i -H "Authorization: Bearer $TOKEN" \
   "$SERVER/api/dustpan/v1/self-service/blueprints/$NAMESPACE/database/draft"
 ```
 
-A draft that changed since step 1 answers `409`. Read the draft again, then
-write it again.
+The `ETag` header holds the draft version, in quotes. Send that version in the
+`If-Match` header of the write:
+
+```sh
+curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H 'If-Match: "1"' \
+  -H 'Content-Type: application/json' --data-binary @database.json \
+  "$SERVER/api/dustpan/v1/self-service/blueprints/$NAMESPACE/database/draft"
+```
+
+Each successful write adds 1 to the draft version. A draft that changed since
+you read it answers `409`. Read the draft again, then write it again.
 
 ## 3. Publish the draft version
 
+Send the draft version that you want to publish. In this example, it is `2`.
+
 ```sh
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"draftVersion": 4}' \
+  -H 'Content-Type: application/json' -d '{"draftVersion": 2}' \
   "$SERVER/api/dustpan/v1/self-service/blueprints/$NAMESPACE/database/versions"
 ```
 

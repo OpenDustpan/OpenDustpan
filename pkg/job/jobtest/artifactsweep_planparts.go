@@ -123,9 +123,23 @@ type failingOperations struct{ err error }
 
 func (f failingOperations) Get(context.Context, durable.ID) (durable.Operation, error) {
 	return durable.Operation{
-		ID: "", Key: "", Kind: "", Version: 0, Input: nil, State: "", Steps: nil, Attempt: 0, Failures: 0,
-		Expiries: 0, LastError: "", Claim: durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}},
-		CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		ID:               "",
+		Key:              "",
+		Kind:             "",
+		Version:          0,
+		Input:            nil,
+		State:            "",
+		Steps:            nil,
+		Attempt:          0,
+		Failures:         0,
+		Expiries:         0,
+		DeadlineReleases: 0,
+		LastError:        "",
+		Claim:            durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}},
+		CancelRequested:  false,
+		NotBefore:        time.Time{},
+		CreatedAt:        time.Time{},
+		UpdatedAt:        time.Time{},
 	}, f.err
 }
 
