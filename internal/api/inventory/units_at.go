@@ -79,7 +79,17 @@ var atGrammar = regexp.MustCompile(
 // when the request has no such value. A time before 1970-01-01T00:00:00Z is
 // refused.
 func atQuery(r *http.Request) (time.Time, bool, error) {
-	values := queryOf(r).All("at")
+	query := queryOf(r)
+
+	// Defense in depth: parseUnitFilter refuses a query string that does not
+	// parse too; this check stays so that the at value is never read from a
+	// query string that did not parse, and so that a change of the order of
+	// the two reads cannot let a second at value through.
+	if query.Err() != nil {
+		return time.Time{}, false, fmt.Errorf("%w: the query string is not valid", errInvalidQuery)
+	}
+
+	values := query.All("at")
 
 	// A repeated name is refused, so that a check of one value never lets
 	// another value reach the store. This holds for an empty value too.

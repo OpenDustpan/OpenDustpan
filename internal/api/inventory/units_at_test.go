@@ -3,6 +3,7 @@ package inventory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -352,8 +353,76 @@ func TestListUnitsAtRepeatedValue(t *testing.T) {
 				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 			}
 
-			assertAtRefusal(t, rec, "", errAtRepeatedText)
+			assertAtRefusal(t, rec, tc.query, errAtRepeatedText)
 		})
+	}
+}
+
+// TestListUnitsAtBadQueryString checks that a query string that does not
+// parse gets 400 with the whole message, whatever the at values are.
+func TestListUnitsAtBadQueryString(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	const wantText = "invalid query parameter: the query string is not valid"
+
+	cases := []struct{ name, query string }{
+		{"a semicolon after a junk value", "at=junk;at=2026-10-10T09:00:00Z"},
+		{"a semicolon between two valid values", "at=2026-10-10T09:00:00Z;at=2026-10-10T10:00:00Z"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+tc.query, "test-token")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+
+			assertAtRefusal(t, rec, tc.query, wantText)
+		})
+	}
+}
+
+// TestListUnitsAtEncodedName checks that an at name with a percent escape is
+// the same name: two values are refused.
+func TestListUnitsAtEncodedName(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	const query = "%61t=2026-10-10T09:00:00Z&at=2026-10-10T10:00:00Z"
+
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+query, "test-token")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+
+	assertAtRefusal(t, rec, query, errAtRepeatedText)
+}
+
+// TestAtQueryBadQueryString checks the refusal of atQuery alone: no
+// parseUnitFilter runs before it, so removing its own check fails this test.
+func TestAtQueryBadQueryString(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"at=junk;at=2026-10-10T09:00:00Z", "at=2026-10-10T09:00:00Z;at=2026-10-10T10:00:00Z"} {
+		r := httptest.NewRequestWithContext(
+			t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/acme/units?"+raw, nil,
+		)
+		r.Pattern = apiinventory.UnitListPattern
+
+		_, ok, err := apiinventory.ReadAtQuery(r)
+		if ok || err == nil {
+			t.Fatalf("%q: ok = %v, err = %v, want a refusal", raw, ok, err)
+		}
+
+		if !errors.Is(err, apiinventory.ErrInvalidQuery) ||
+			!strings.Contains(err.Error(), "the query string is not valid") {
+			t.Fatalf("%q: err = %v, want the bad query string refusal", raw, err)
+		}
 	}
 }
 
