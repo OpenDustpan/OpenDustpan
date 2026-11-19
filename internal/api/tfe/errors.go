@@ -426,6 +426,11 @@ func classifyNotFound(err error) (errorClass, bool) {
 			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),
 			code: errcode.StateVersionNotFound, args: nil,
 		}, true
+	case errors.Is(err, workspace.ErrStateBound):
+		return errorClass{
+			status: http.StatusRequestEntityTooLarge, title: titleTooLarge, detail: err.Error(),
+			code: errcode.StateVersionTooComplex, args: nil,
+		}, true
 	case errors.Is(err, workspace.ErrResourceNotFound):
 		return errorClass{
 			status: http.StatusNotFound, title: notFoundTitle, detail: err.Error(),

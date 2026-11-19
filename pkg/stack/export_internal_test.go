@@ -1,7 +1,11 @@
 package stack
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
@@ -68,11 +72,32 @@ func resourceElements(doc any) []any {
 // ParseRootOutputs returns the root outputs of deployment as the Outputs port
 // reads them, so the external tests reach the parse without a store.
 func ParseRootOutputs(deployment []byte) ([]outputshare.Output, error) {
-	return rootOutputs(deployment)
+	return rootOutputs(context.Background(), deployment)
 }
 
 // MapReplayBound returns the error that the build of update id gives for the
 // replay error err.
 func MapReplayBound(id UpdateID, err error) error {
 	return new(Updates).mapReplayBound(id, err)
+}
+
+// MaskWorkBound runs the work scan of a masked read over v, whose own path
+// has prefix bytes, so the external tests reach it without a deployment.
+func MaskWorkBound(v any, prefix int) error {
+	return checkMaskWork(v, prefix)
+}
+
+// DecodeForTest decodes a JSON text with no bound check, so a test hands the
+// walk a document that the decoder of the reads would refuse.
+func DecodeForTest(text string) (any, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+
+	var doc any
+
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	return doc, nil
 }

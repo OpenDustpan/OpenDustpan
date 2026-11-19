@@ -153,7 +153,11 @@ func TestMaskNestedSecrets(t *testing.T) {
 		`"list":["a",` + secretOf("v1:cipher2") + `]},` +
 		`"outputs":{"token":` + secretOf("v1:cipher3") + `}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::custom:resource:Type::res1")
+	detail, err := stack.ReadStateResource(
+		t.Context(),
+		[]byte(deployment),
+		"urn:pulumi:dev::web::custom:resource:Type::res1",
+	)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}
@@ -186,7 +190,11 @@ func TestMaskEscapesPointerTokens(t *testing.T) {
 		`"inputs":{"a/b":` + secretOf("v1:c1") + `,"c~d":` + secretOf("v1:c2") + `},` +
 		`"outputs":{}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::custom:resource:Type::res1")
+	detail, err := stack.ReadStateResource(
+		t.Context(),
+		[]byte(deployment),
+		"urn:pulumi:dev::web::custom:resource:Type::res1",
+	)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}
@@ -207,7 +215,11 @@ func TestMarkerShapedRealValueStays(t *testing.T) {
 		`"inputs":{"note":{"secret":true,"path":"/real"}},` +
 		`"outputs":{}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::custom:resource:Type::res1")
+	detail, err := stack.ReadStateResource(
+		t.Context(),
+		[]byte(deployment),
+		"urn:pulumi:dev::web::custom:resource:Type::res1",
+	)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}
@@ -235,7 +247,11 @@ func TestDeploymentWithNoSecrets(t *testing.T) {
 		`"parent":"urn:pulumi:dev::web::my:component:Comp::comp",` +
 		`"inputs":{"name":"plain"},"outputs":{"id":"abc"}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::custom:resource:Type::res1")
+	detail, err := stack.ReadStateResource(
+		t.Context(),
+		[]byte(deployment),
+		"urn:pulumi:dev::web::custom:resource:Type::res1",
+	)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}
@@ -257,7 +273,7 @@ func TestDeploymentWithNoSecrets(t *testing.T) {
 		t.Fatalf("outputs %s lost the plain value", raw)
 	}
 
-	outputs, err := stack.ReadStateOutputs([]byte(deployment))
+	outputs, err := stack.ReadStateOutputs(t.Context(), []byte(deployment))
 	if err != nil {
 		t.Fatalf("read outputs: %v", err)
 	}
@@ -275,7 +291,7 @@ func TestStackOutputsMaskSecrets(t *testing.T) {
 		`"type":"pulumi:pulumi:Stack",` +
 		`"outputs":{"password":` + secretOf("v1:outcipher") + `,"greeting":"hello"}}]}`
 
-	outputs, err := stack.ReadStateOutputs([]byte(deployment))
+	outputs, err := stack.ReadStateOutputs(t.Context(), []byte(deployment))
 	if err != nil {
 		t.Fatalf("read outputs: %v", err)
 	}
@@ -444,9 +460,12 @@ func TestReadMissingResource(t *testing.T) {
 
 	deployment := `{"resources":[]}`
 
-	if _, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::x:X::nope"); err == nil {
+	_, err := stack.ReadStateResource(t.Context(), []byte(deployment), "urn:pulumi:dev::web::x:X::nope")
+	if err == nil {
 		t.Fatal("read of a missing resource succeeded, want an error")
-	} else if !errors.Is(err, stack.ErrResourceNotFound) {
+	}
+
+	if !errors.Is(err, stack.ErrResourceNotFound) {
 		t.Fatalf("error = %v, want ErrResourceNotFound", err)
 	}
 }
@@ -460,12 +479,16 @@ func TestMaskedBodiesHoldNoSecrets(t *testing.T) {
 		`"inputs":{"password":` + secretOf("v1:inputcipher") + `},` +
 		`"outputs":{"password":` + secretOf("v1:outputcipher") + `}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev")
+	detail, err := stack.ReadStateResource(
+		t.Context(),
+		[]byte(deployment),
+		"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev",
+	)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}
 
-	outputs, err := stack.ReadStateOutputs([]byte(deployment))
+	outputs, err := stack.ReadStateOutputs(t.Context(), []byte(deployment))
 	if err != nil {
 		t.Fatalf("read outputs: %v", err)
 	}
@@ -492,7 +515,7 @@ func TestSpecialValuesStayUnmasked(t *testing.T) {
 		`"inputs":{"file":` + asset + `,"bundle":` + archive + `,"target":` + ref + `},` +
 		`"outputs":{}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), urn)
+	detail, err := stack.ReadStateResource(t.Context(), []byte(deployment), urn)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}
@@ -525,7 +548,7 @@ func TestSecretNestedInArchiveMasked(t *testing.T) {
 	deployment := `{"resources":[{"urn":"` + urn + `","type":"custom:resource:Type",` +
 		`"inputs":{"bundle":` + archive + `},"outputs":{}}]}`
 
-	detail, err := stack.ReadStateResource([]byte(deployment), urn)
+	detail, err := stack.ReadStateResource(t.Context(), []byte(deployment), urn)
 	if err != nil {
 		t.Fatalf("read resource: %v", err)
 	}

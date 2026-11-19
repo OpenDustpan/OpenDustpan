@@ -241,7 +241,11 @@ func seedRevealVersion(t *testing.T, f revealFixture, provider string) (int64, s
 		t.Fatalf("complete: %v", err)
 	}
 
-	detail, err := stack.ReadStateResource([]byte(deployment), "urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev")
+	detail, err := stack.ReadStateResource(
+		t.Context(),
+		[]byte(deployment),
+		"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev",
+	)
 	if err != nil {
 		t.Fatalf("masked read: %v", err)
 	}

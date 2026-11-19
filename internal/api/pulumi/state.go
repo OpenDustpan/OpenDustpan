@@ -466,7 +466,7 @@ func (h *Handler) getStateResource(
 		return
 	}
 
-	detail, err := stack.ReadStateResource(current.Deployment, r.PathValue("urn"))
+	detail, err := stack.ReadStateResource(ctx, current.Deployment, r.PathValue("urn"))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -611,7 +611,7 @@ func (h *Handler) getStateOutputs(
 		return
 	}
 
-	outputs, err := stack.ReadStateOutputs(current.Deployment)
+	outputs, err := stack.ReadStateOutputs(ctx, current.Deployment)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

@@ -1,6 +1,7 @@
 package pulumi_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -32,6 +33,10 @@ func TestStackAndSecretErrorsCarryACode(t *testing.T) {
 		{
 			"resource not found", stack.ErrResourceNotFound, http.StatusNotFound,
 			errcode.StackResourceNotFound, nil,
+		},
+		{
+			"state past the masked read bound", fmt.Errorf("read resource: %w", stack.ErrStateBound),
+			http.StatusRequestEntityTooLarge, errcode.StackStateTooComplex, nil,
 		},
 		{"has resources", stack.ErrHasResources, http.StatusBadRequest, errcode.StackHasResources, nil},
 		{"already exists", stack.ErrAlreadyExists, http.StatusConflict, errcode.StackAlreadyExists, nil},

@@ -1716,7 +1716,7 @@ func (s *Service) ReadResource(
 		return StateDetail{}, encryptedErr
 	}
 
-	detail, err := ReadStateResource(state, sv.SensitiveMarks, address)
+	detail, err := ReadStateResource(ctx, state, sv.SensitiveMarks, address)
 	if err != nil {
 		return StateDetail{}, fmt.Errorf("read resource of %s: %w", id, err)
 	}

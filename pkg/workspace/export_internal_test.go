@@ -2,7 +2,10 @@ package workspace
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 )
 
 // The reveal lookup over bytes and over an opener, and the masked set, for
@@ -55,4 +58,25 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 	}
 
 	return masked, nil
+}
+
+// InstanceWorkBound runs the work scan of a masked read over one instance, so
+// the external tests reach it without a state.
+func InstanceWorkBound(instance map[string]any, resource, position int) error {
+	return checkInstanceWork(instance, resource, position)
+}
+
+// DecodeForTest decodes a JSON text with no bound check, so a test hands the
+// walk a document that the decoder of the reads would refuse.
+func DecodeForTest(text string) (any, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+
+	var doc any
+
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	return doc, nil
 }

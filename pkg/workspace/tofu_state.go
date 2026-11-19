@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,26 +122,34 @@ func decodeState(state []byte) (any, error) {
 	}
 
 	if !withinDepth(doc, 0) {
-		return nil, fmt.Errorf("decode state: %w", ErrStateTooDeep)
+		return nil, fmt.Errorf("decode state: %w", ErrStateBound)
 	}
 
 	return doc, nil
 }
 
-// maxStateDepth bounds the nesting of a stored state that a read walks. Each
-// marker path holds its whole prefix, so the memory of a read grows with the
-// depth of each value. Real states nest far less.
-const maxStateDepth = 64
+// MaxStateDepth is the deepest nesting of a stored state that a masked read
+// walks. Each marker path holds its whole prefix, so the memory of a read
+// grows with the depth of each value. Real states nest far less. Both tools
+// use this one number.
+const MaxStateDepth = 100
 
-// ErrStateTooDeep reports a state that nests deeper than maxStateDepth. A
-// read refuses it, so a deep document cannot exhaust the memory of the
-// server.
-var ErrStateTooDeep = errors.New("state nests too deeply")
+// maxMaskPathBytes bounds the total length of the value paths that one masked
+// read builds. A document under the version size cap can hold millions of
+// small leaves, each with a long path, so the depth alone does not bound the
+// work. The scan counts the bytes before the walk builds any path.
+const maxMaskPathBytes = 32 << 20
 
-// withinDepth reports whether v nests at most maxStateDepth levels. It stops
+// ErrStateBound reports a state that a masked read refuses because it nests
+// deeper than MaxStateDepth, or because its value paths would hold more than
+// maxMaskPathBytes bytes. The refusal builds no path, so a hostile document
+// cannot exhaust the memory of the server.
+var ErrStateBound = errors.New("state is too deep or too large for a masked read")
+
+// withinDepth reports whether v nests at most MaxStateDepth levels. It stops
 // at the first value past the bound, so its own recursion stays bounded.
 func withinDepth(v any, depth int) bool {
-	if depth > maxStateDepth {
+	if depth > MaxStateDepth {
 		return false
 	}
 
@@ -162,6 +171,68 @@ func withinDepth(v any, depth int) bool {
 	}
 
 	return true
+}
+
+// checkInstanceWork returns ErrStateBound when a masked read of the
+// attributes of one instance would nest deeper than MaxStateDepth or would
+// build more than maxMaskPathBytes bytes of value paths. It builds no path.
+//
+// Defense in depth: the decoder bounds the depth of the whole document too;
+// this scan stays so that a new caller of the walk cannot skip the bound, and
+// it adds the path-byte bound that the decoder does not have.
+func checkInstanceWork(instance map[string]any, resource, position int) error {
+	attributes := instance["attributes"]
+	if attributes == nil {
+		return nil
+	}
+
+	prefix := len(tofuAttributesBase(resource, position))
+	spent := 0
+
+	return scanMaskWork(attributes, prefix, 0, &spent)
+}
+
+// scanMaskWork adds the length of the path of each value under v to spent.
+func scanMaskWork(v any, prefix, depth int, spent *int) error {
+	if depth > MaxStateDepth {
+		return ErrStateBound
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for key, elem := range typed {
+			length := prefix + 1 + len(key) + strings.Count(key, "~") + strings.Count(key, "/")
+
+			if err := scanMaskChild(elem, length, depth, spent); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, elem := range typed {
+			if err := scanMaskChild(elem, prefix+1+len(strconv.Itoa(i)), depth, spent); err != nil {
+				return err
+			}
+		}
+	default:
+		// A scalar has no child.
+	}
+
+	return nil
+}
+
+// scanMaskChild counts the path of one child of length bytes, then scans it.
+func scanMaskChild(elem any, length, depth int, spent *int) error {
+	*spent += length
+	if *spent > maxMaskPathBytes {
+		return ErrStateBound
+	}
+
+	return scanMaskWork(elem, length, depth+1, spent)
+}
+
+// tofuAttributesBase returns the value path of the attributes of one instance.
+func tofuAttributesBase(resource, position int) string {
+	return "/resources/" + strconv.Itoa(resource) + "/instances/" + strconv.Itoa(position) + "/attributes"
 }
 
 // IsClientEncrypted reports whether state is exactly the encryption envelope
@@ -1099,7 +1170,7 @@ func maskOnePointer(attributes any, relative, full string, out *maskCollectors) 
 func maskTofuInstance(
 	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
 ) (any, []string) {
-	base := "/resources/" + strconv.Itoa(resource) + "/instances/" + strconv.Itoa(position) + "/attributes"
+	base := tofuAttributesBase(resource, position)
 
 	attributes := instance["attributes"]
 	if attributes == nil {
@@ -1182,10 +1253,16 @@ func findTofuResource(doc any, address string) (int, map[string]any, error) {
 
 // ReadStateResource returns one resource of state with its instances masked.
 // Missing attributes read as an empty object.
-func ReadStateResource(state []byte, marks SensitiveMarks, address string) (StateDetail, error) {
+func ReadStateResource(
+	ctx context.Context, state []byte, marks SensitiveMarks, address string,
+) (StateDetail, error) {
 	doc, err := decodeState(state)
 	if err != nil {
 		return StateDetail{}, err
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return StateDetail{}, fmt.Errorf("read resource: %w", ctxErr)
 	}
 
 	position, obj, err := findTofuResource(doc, address)
@@ -1205,6 +1282,10 @@ func ReadStateResource(state []byte, marks SensitiveMarks, address string) (Stat
 	}
 
 	for i, instance := range tofuInstances(obj) {
+		if err := checkInstanceWork(instance, position, i); err != nil {
+			return StateDetail{}, err
+		}
+
 		attributes, masked := maskTofuInstance(instance, position, i, tofuInstanceAddress(obj, instance), marks)
 		detail.Instances = append(detail.Instances, StateInstance{Attributes: attributes})
 		detail.Masked = append(detail.Masked, masked...)
@@ -1212,6 +1293,10 @@ func ReadStateResource(state []byte, marks SensitiveMarks, address string) (Stat
 
 	if detail.Masked == nil {
 		detail.Masked = []string{}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return StateDetail{}, fmt.Errorf("read resource: %w", err)
 	}
 
 	return detail, nil
@@ -1933,6 +2018,21 @@ func tofuVersionSideOf(entries []tofuResourceEntry, marks SensitiveMarks) tofuVe
 	}
 }
 
+// checkEntriesWork runs checkInstanceWork over every instance of each side.
+func checkEntriesWork(sides ...[]tofuResourceEntry) error {
+	for _, entries := range sides {
+		for _, entry := range entries {
+			for i, instance := range tofuInstances(entry.obj) {
+				if err := checkInstanceWork(instance, entry.index, i); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // DiffStates returns the diff of two states: from is the older side, to is
 // the newer one. Added holds the sorted addresses only in to, Removed the
 // sorted addresses only in from, and Changed the sorted resources in both
@@ -1967,6 +2067,10 @@ func DiffStates(from, to StateWithMarks, cursor string, size int) (StateDiff, er
 
 	if (fromEntries == nil && fromSkipped) || (toEntries == nil && toSkipped) {
 		return emptyTofuDiff(), nil
+	}
+
+	if err := checkEntriesWork(fromEntries, toEntries); err != nil {
+		return StateDiff{}, err
 	}
 
 	mismatch := collectTofuDiff(

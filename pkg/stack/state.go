@@ -2,6 +2,7 @@ package stack
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,26 +204,34 @@ func decodeDeployment(deployment []byte) (any, error) {
 	}
 
 	if !withinDepth(doc, 0) {
-		return nil, fmt.Errorf("decode deployment: %w", ErrStateTooDeep)
+		return nil, fmt.Errorf("decode deployment: %w", ErrStateBound)
 	}
 
 	return doc, nil
 }
 
-// maxStateDepth bounds the nesting of a stored deployment that a read walks.
-// Each marker path holds its whole prefix, so the memory of a read grows with
-// the depth of each value. Real deployments nest far less.
-const maxStateDepth = 64
+// MaxStateDepth is the deepest nesting of a stored state that a masked read
+// walks. Each marker path holds its whole prefix, so the memory of a read
+// grows with the depth of each value. Real states nest far less. Both tools
+// use this one number.
+const MaxStateDepth = 100
 
-// ErrStateTooDeep reports a deployment that nests deeper than maxStateDepth.
-// A read refuses it, so a deep document cannot exhaust the memory of the
-// server.
-var ErrStateTooDeep = errors.New("state nests too deeply")
+// maxMaskPathBytes bounds the total length of the value paths that one masked
+// read builds. A document under the version size cap can hold millions of
+// small leaves, each with a long path, so the depth alone does not bound the
+// work. The scan counts the bytes before the walk builds any path.
+const maxMaskPathBytes = 32 << 20
 
-// withinDepth reports whether v nests at most maxStateDepth levels. It stops
+// ErrStateBound reports a deployment that a masked read refuses because it
+// nests deeper than MaxStateDepth, or because its value paths would hold more
+// than maxMaskPathBytes bytes. The refusal builds no path, so a hostile
+// document cannot exhaust the memory of the server.
+var ErrStateBound = errors.New("state is too deep or too large for a masked read")
+
+// withinDepth reports whether v nests at most MaxStateDepth levels. It stops
 // at the first value past the bound, so its own recursion stays bounded.
 func withinDepth(v any, depth int) bool {
-	if depth > maxStateDepth {
+	if depth > MaxStateDepth {
 		return false
 	}
 
@@ -244,6 +253,57 @@ func withinDepth(v any, depth int) bool {
 	}
 
 	return true
+}
+
+// checkMaskWork returns ErrStateBound when a masked read of v, whose own path
+// has prefix bytes, would nest deeper than MaxStateDepth or would build more
+// than maxMaskPathBytes bytes of value paths. It builds no path itself.
+//
+// Defense in depth: the decoder bounds the depth of the whole document too;
+// this scan stays so that a new caller of the walk cannot skip the bound, and
+// it adds the path-byte bound that the decoder does not have.
+func checkMaskWork(v any, prefix int) error {
+	spent := 0
+
+	return scanMaskWork(v, prefix, 0, &spent)
+}
+
+// scanMaskWork adds the length of the path of each value under v to spent.
+func scanMaskWork(v any, prefix, depth int, spent *int) error {
+	if depth > MaxStateDepth {
+		return ErrStateBound
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for key, elem := range typed {
+			length := prefix + 1 + len(key) + strings.Count(key, "~") + strings.Count(key, "/")
+
+			if err := scanMaskChild(elem, length, depth, spent); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, elem := range typed {
+			if err := scanMaskChild(elem, prefix+1+len(strconv.Itoa(i)), depth, spent); err != nil {
+				return err
+			}
+		}
+	default:
+		// A scalar has no child.
+	}
+
+	return nil
+}
+
+// scanMaskChild counts the path of one child of length bytes, then scans it.
+func scanMaskChild(elem any, length, depth int, spent *int) error {
+	*spent += length
+	if *spent > maxMaskPathBytes {
+		return ErrStateBound
+	}
+
+	return scanMaskWork(elem, length, depth+1, spent)
 }
 
 // resourceField reads one string field of a resource, or "" when the field
@@ -488,10 +548,14 @@ func findResource(deployment []byte, urn string) (int, map[string]any, error) {
 
 // ReadStateResource returns one resource of deployment with its inputs and
 // outputs masked. Missing inputs or outputs read as empty objects.
-func ReadStateResource(deployment []byte, urn string) (StateDetail, error) {
+func ReadStateResource(ctx context.Context, deployment []byte, urn string) (StateDetail, error) {
 	index, obj, err := findResource(deployment, urn)
 	if err != nil {
 		return StateDetail{}, err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return StateDetail{}, fmt.Errorf("read resource: %w", err)
 	}
 
 	masked := []string{}
@@ -508,6 +572,14 @@ func ReadStateResource(deployment []byte, urn string) (StateDetail, error) {
 
 	base := "/resources/" + strconv.Itoa(index)
 
+	if err := checkMaskWork(inputs, len(base)+len("/inputs")); err != nil {
+		return StateDetail{}, err
+	}
+
+	if err := checkMaskWork(outputs, len(base)+len("/outputs")); err != nil {
+		return StateDetail{}, err
+	}
+
 	detail := StateDetail{
 		URN:      resourceField(obj, "urn"),
 		Type:     resourceField(obj, "type"),
@@ -522,16 +594,24 @@ func ReadStateResource(deployment []byte, urn string) (StateDetail, error) {
 		detail.Masked = []string{}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return StateDetail{}, fmt.Errorf("read resource: %w", err)
+	}
+
 	return detail, nil
 }
 
 // ReadStateOutputs returns the masked outputs of the stack resource of
 // deployment. A deployment without a stack resource or without outputs
 // reads as empty.
-func ReadStateOutputs(deployment []byte) (StateOutputs, error) {
+func ReadStateOutputs(ctx context.Context, deployment []byte) (StateOutputs, error) {
 	doc, err := decodeDeployment(deployment)
 	if err != nil {
 		return StateOutputs{}, err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return StateOutputs{}, fmt.Errorf("read outputs: %w", err)
 	}
 
 	top, ok := doc.(map[string]any)
@@ -554,26 +634,38 @@ func ReadStateOutputs(deployment []byte) (StateOutputs, error) {
 			continue
 		}
 
-		masked := []string{}
-
-		outputs := obj["outputs"]
-		if outputs == nil {
-			outputs = map[string]any{}
-		}
-
-		out := StateOutputs{
-			Outputs: maskValue(outputs, "/resources/"+strconv.Itoa(i)+"/outputs", &masked),
-			Masked:  masked,
-		}
-
-		if out.Masked == nil {
-			out.Masked = []string{}
-		}
-
-		return out, nil
+		return maskStackOutputs(ctx, obj, i)
 	}
 
 	return StateOutputs{Outputs: map[string]any{}, Masked: []string{}}, nil
+}
+
+// maskStackOutputs masks the outputs of the stack resource obj at index. It
+// checks the work bound before the walk and the context after it.
+func maskStackOutputs(ctx context.Context, obj map[string]any, index int) (StateOutputs, error) {
+	masked := []string{}
+
+	outputs := obj["outputs"]
+	if outputs == nil {
+		outputs = map[string]any{}
+	}
+
+	base := "/resources/" + strconv.Itoa(index) + "/outputs"
+
+	if err := checkMaskWork(outputs, len(base)); err != nil {
+		return StateOutputs{}, err
+	}
+
+	out := StateOutputs{
+		Outputs: maskValue(outputs, base, &masked),
+		Masked:  masked,
+	}
+
+	if err := ctx.Err(); err != nil {
+		return StateOutputs{}, fmt.Errorf("read outputs: %w", err)
+	}
+
+	return out, nil
 }
 
 // secretEqual reports whether two secret values hold the same ciphertext.

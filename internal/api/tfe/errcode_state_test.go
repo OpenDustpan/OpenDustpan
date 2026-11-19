@@ -1,6 +1,7 @@
 package tfe_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -82,6 +83,10 @@ func TestStateErrorCodes(t *testing.T) {
 		{
 			"resource not found", workspace.ErrResourceNotFound, http.StatusNotFound,
 			none(errcode.StateVersionResourceNotFound),
+		},
+		{
+			"state past the masked read bound", fmt.Errorf("read resource: %w", workspace.ErrStateBound),
+			http.StatusRequestEntityTooLarge, none(errcode.StateVersionTooComplex),
 		},
 	})
 }

@@ -906,6 +906,10 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 		return nil, false, fmt.Errorf("decode revealed value: %w", err)
 	}
 
+	if err := checkInstanceWork(side.instance, target.resource, target.position); err != nil {
+		return nil, false, err
+	}
+
 	_, masked := maskTofuInstance(side.instance, target.resource, target.position, address, target.marks)
 	if !slices.Contains(masked, target.path) {
 		return nil, false, nil
