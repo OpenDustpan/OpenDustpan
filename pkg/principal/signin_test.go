@@ -69,7 +69,7 @@ func stored(id, subject string) principal.Principal {
 }
 
 func signIn(subject string, create bool, names ...string) principal.SignInInput {
-	return principal.SignInInput{Subject: subject, Source: "", Names: names, Create: create}
+	return principal.SignInInput{Subject: subject, Source: principal.SourceOIDC, Names: names, Create: create}
 }
 
 func TestSignInPrincipalCreates(t *testing.T) {
