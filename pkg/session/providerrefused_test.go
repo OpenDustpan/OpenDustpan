@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -107,7 +108,7 @@ func requireIssuerChangeRefused(t *testing.T, f adminFixture, stored session.Pro
 		t.Fatalf("change of the issuer = %v, want ErrIssuerChanged", err)
 	}
 
-	if strings.Contains(err.Error(), "s3cr3t") || strings.Contains(err.Error(), "--oidc-issuer") {
+	if strings.Contains(err.Error(), "s3cr3t") || strings.Contains(err.Error(), "configuration") {
 		t.Errorf("the text holds the stored issuer or tells to restore it: %v", err)
 	}
 }
@@ -133,5 +134,106 @@ func requireDisableWorks(t *testing.T, f adminFixture, stored session.ProviderCo
 
 	if !f.store.providers["other"].Enabled {
 		t.Error("the other provider changed")
+	}
+}
+
+// TestProviderAdminRefusedRowHostileChanges sends each change that is not a
+// plain disable to a stored row with a refused issuer. Each is refused with no
+// write, no audit entry and no change of the row, and no text holds the issuer.
+func TestProviderAdminRefusedRowHostileChanges(t *testing.T) {
+	t.Parallel()
+
+	const refused = "https://idp.example."
+
+	fixed, value, name, off, on := "https://idp.example/fixed", "x", "x", false, true
+	noScopes := []string{}
+
+	for _, tc := range []struct {
+		change  func(c *session.ProviderChange)
+		wantErr error
+		name    string
+	}{
+		{func(c *session.ProviderChange) { c.Enabled, c.Issuer = &off, &fixed }, session.ErrIssuerChanged, "disable and a new issuer"},
+		{func(c *session.ProviderChange) { c.Enabled, c.ClientSecret = &off, &value }, session.ErrInvalidProvider, "disable and a client secret"},
+		{func(c *session.ProviderChange) { c.Enabled, c.DisplayName = &off, &name }, session.ErrInvalidProvider, "disable and a display name"},
+		{func(c *session.ProviderChange) { c.Enabled, c.Scopes = &off, &noScopes }, session.ErrInvalidProvider, "disable and empty scopes"},
+		{func(c *session.ProviderChange) { c.Enabled = &on }, session.ErrInvalidProvider, "enable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAdminFixture(t)
+			stored := seedRefusedRow(t, f, refused)
+			before, entries := f.store.providers[stored.ID], len(f.store.entries)
+
+			c := session.ProviderChange{
+				Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil,
+				OAuth: noOAuthChange(), AutoCreate: nil, Enabled: nil, Version: stored.Version,
+			}
+			tc.change(&c)
+
+			_, err := f.admin.Update(t.Context(), sessionCallerEntry(), stored.ID, c)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("update = %v, want %v", err, tc.wantErr)
+			}
+
+			if strings.Contains(err.Error(), "idp.example.") {
+				t.Errorf("the error holds the issuer: %v", err)
+			}
+
+			if f.store.disables != 0 || len(f.store.entries) != entries ||
+				!reflect.DeepEqual(f.store.providers[stored.ID], before) {
+				t.Errorf("a refused change wrote: narrowing writes %d, entries %d, row %+v",
+					f.store.disables, len(f.store.entries)-entries, f.store.providers[stored.ID])
+			}
+		})
+	}
+}
+
+// TestProviderAdminRefusedRowDisableSequence disables a refused row with its
+// own issuer value, disables it again with no write, and refuses to enable it.
+func TestProviderAdminRefusedRowDisableSequence(t *testing.T) {
+	t.Parallel()
+
+	const refused = "https://idp.example."
+
+	f := newAdminFixture(t)
+	stored := seedRefusedRow(t, f, refused)
+	off, on, same := false, true, refused
+
+	change := func(version int64, enabled *bool, issuer *string) session.ProviderChange {
+		return session.ProviderChange{
+			Mode: nil, Issuer: issuer, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil,
+			OAuth: noOAuthChange(), AutoCreate: nil, Enabled: enabled, Version: version,
+		}
+	}
+
+	got, err := f.admin.Update(t.Context(), sessionCallerEntry(), stored.ID, change(stored.Version, &off, &same))
+	if err != nil || got.Enabled || f.store.disables != 1 {
+		t.Fatalf("disable with the same issuer = %v, enabled %v, narrowing writes %d, want ok, false, 1",
+			err, got.Enabled, f.store.disables)
+	}
+
+	entries, row := len(f.store.entries), f.store.providers[stored.ID]
+
+	again, err := f.admin.Update(t.Context(), sessionCallerEntry(), stored.ID, change(got.Version, &off, nil))
+	if err != nil || again.Enabled || again.Version != got.Version {
+		t.Fatalf("disable of a disabled row = %v, enabled %v, version %d, want ok, false, %d",
+			err, again.Enabled, again.Version, got.Version)
+	}
+
+	if f.store.disables != 1 || len(f.store.entries) != entries ||
+		!reflect.DeepEqual(f.store.providers[stored.ID], row) {
+		t.Errorf("a disable of a disabled row wrote: narrowing writes %d, entries %d",
+			f.store.disables, len(f.store.entries)-entries)
+	}
+
+	_, err = f.admin.Update(t.Context(), sessionCallerEntry(), stored.ID, change(got.Version, &on, nil))
+	if !errors.Is(err, session.ErrInvalidProvider) {
+		t.Fatalf("enable after the disable = %v, want ErrInvalidProvider", err)
+	}
+
+	if !reflect.DeepEqual(f.store.providers[stored.ID], row) {
+		t.Error("the refused enable changed the row")
 	}
 }

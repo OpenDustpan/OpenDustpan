@@ -68,7 +68,7 @@ func TestBindProviders(t *testing.T) {
 	}
 
 	want := `sign-in provider "corp" has the issuer "https://idp.example" in the database and the issuer ` +
-		`"https://other.example" in the configuration, so set the issuer (--oidc-issuer) back to ` +
+		`"https://other.example" in the configuration, so set the issuer back to ` +
 		`"https://idp.example", or set a new provider ID only if the identity provider changed`
 	if err.Error() != want {
 		t.Errorf("error = %q, want %q", err, want)
@@ -486,5 +486,27 @@ func TestBindProvidersRefusesAHostileIssuer(t *testing.T) {
 				t.Fatalf("the error holds the user information: %v", err)
 			}
 		})
+	}
+}
+
+// TestIssuerChangedErrorNeverEchoesAnInvalidConfiguredIssuer sends a
+// configured issuer that fails the form check, with user information, to
+// BindProviders when the store has another recorded issuer. The check of the
+// form runs before the compare, so the error is ErrIssuer, never
+// ErrIssuerChanged, and holds no part of the configured issuer.
+func TestIssuerChangedErrorNeverEchoesAnInvalidConfiguredIssuer(t *testing.T) {
+	t.Parallel()
+
+	configured := "https://user:" + "s3cr3t" + "@other.example/"
+	store := &memoryProviders{err: nil, issuers: map[string]string{"corp": "https://idp.example"}}
+	p := session.Provider{ID: "corp", Issuer: configured, UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""}
+
+	err := session.BindProviders(t.Context(), store, []session.Provider{p}, time.Now())
+	if err == nil || !errors.Is(err, session.ErrIssuer) || errors.Is(err, session.ErrIssuerChanged) {
+		t.Fatalf("BindProviders = %v, want ErrIssuer and not ErrIssuerChanged", err)
+	}
+
+	if strings.Contains(err.Error(), "s3cr3t") || strings.Contains(err.Error(), "other.example") {
+		t.Fatalf("the error holds the configured issuer: %v", err)
 	}
 }

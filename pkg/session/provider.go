@@ -41,11 +41,11 @@ func (e issuerChangedError) Error() string {
 	// shown, and the advice is not to restore it.
 	if CheckIssuer(e.recorded) != nil {
 		return fmt.Sprintf("sign-in provider %q has an issuer in the database that the server now refuses, so "+
-			"disable the provider and set a new provider ID for the issuer in the configuration", e.id)
+			"disable the provider and make a new provider with a new ID for the issuer", e.id)
 	}
 
 	return fmt.Sprintf("sign-in provider %q has the issuer %q in the database and the issuer %q in the "+
-		"configuration, so set the issuer (--oidc-issuer) back to %q, or set a new provider ID only if the "+
+		"configuration, so set the issuer back to %q, or set a new provider ID only if the "+
 		"identity provider changed", e.id, e.recorded, e.configured, e.recorded)
 }
 

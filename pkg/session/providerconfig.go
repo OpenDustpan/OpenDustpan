@@ -189,7 +189,7 @@ func (p ProviderConfig) validateMode() error {
 // ErrIssuer reports an OpenID Connect issuer URL that the server refuses.
 // Its text never holds the issuer, because the issuer can hold a password.
 var ErrIssuer = errors.New("the issuer must be an absolute https URL, or http on a loopback host, with a host " +
-	"and with no user information, no query and no fragment, so set the issuer (--oidc-issuer) to that form")
+	"and with no user information, no query and no fragment, so set the issuer to that form")
 
 // CheckIssuer returns an error that matches ErrIssuer for an issuer that is
 // not an absolute URL of this form: the scheme is exactly "https", or exactly
