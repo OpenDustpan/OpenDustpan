@@ -153,7 +153,7 @@ func faRestoreStore(t *testing.T) (*sqlite.Store, *sql.DB) {
 
 // faCheckMarker fails unless the state of s holds the marker of want and no
 // open code, and the code table is empty.
-func faCheckMarker(t *testing.T, s *sqlite.Store, conn *sql.DB, want string) {
+func faCheckMarker(t *testing.T, s *sqlite.Store, want string) {
 	t.Helper()
 
 	st, err := s.State(context.Background(), time.Now())
@@ -169,7 +169,7 @@ func faCheckMarker(t *testing.T, s *sqlite.Store, conn *sql.DB, want string) {
 		t.Fatalf("offer = %+v, want none after a restore", *st.Offer)
 	}
 
-	if n := faRestoreCount(t, conn, "first_administrator_codes"); n != 0 {
+	if n := faRestoreCount(t, sqlite.DB(s), "first_administrator_codes"); n != 0 {
 		t.Fatalf("the code table holds %d rows after the restore, want 0", n)
 	}
 }
@@ -201,7 +201,7 @@ func TestRestoreFirstAdministratorMarker(t *testing.T) {
 				faRestoreCode(t, conn)
 			})
 
-			faCheckMarker(t, s, conn, tc.want)
+			faCheckMarker(t, s, tc.want)
 		})
 	}
 }
@@ -226,7 +226,8 @@ func TestRestoreFirstAdministratorEmptiesCode(t *testing.T) {
 
 			restoreFirstAdministrator(t, s, tc.apply, func() { faRestoreCode(t, conn) })
 
-			if n := faRestoreCount(t, conn, "first_administrator_codes"); n != 0 {
+			// The restore swaps the database file, so the handle is read again.
+			if n := faRestoreCount(t, sqlite.DB(s), "first_administrator_codes"); n != 0 {
 				t.Fatalf("the code table holds %d rows after the restore, want 0", n)
 			}
 
