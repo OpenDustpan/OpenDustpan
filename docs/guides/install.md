@@ -1,7 +1,8 @@
 # Install OpenDustpan v0.1.0
 
 This page is for operators who install v0.1.0. It shows how to pull the
-v0.1.0 image and install it with Helm.
+v0.1.0 image, what to use in place of a binary archive, and how to install it
+with Helm.
 
 ## Pull the image
 
@@ -38,6 +39,30 @@ Read the digest of a release in two places:
 - The summary of the release workflow run for the tag, on the GitHub
   Actions page of the repository.
 - The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
+
+## Check the version of the image
+
+The server in the image prints its version. The version is the tag of the
+release:
+
+```sh
+docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version
+```
+
+The output is `v0.1.0`.
+
+## Install from a binary archive
+
+Binary archives and the file `SHA256SUMS` are not available yet. No release
+exists, and the release workflow does not upload an archive. Do not look for a
+download link: none works.
+
+Use one of these ways today:
+
+- Build the server from source. The [quickstart](quickstart.md) shows the
+  commands, with a key-encryption key, a database and a first start.
+- Build the container image from your checkout with
+  `./scripts/build-image-local.sh`. The quickstart shows how to run it.
 
 ## Install with Helm
 
@@ -94,3 +119,78 @@ When a secret is missing, the push step fails with an error that names the
 setup step above. When the token is expired or has no push scope, the login
 step fails with an error that names the rotation step:
 `gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan`.
+
+## Maintainer: publish the release archives
+
+This section is for maintainers who publish releases. Operators who only
+install the chart skip it.
+
+### What the run does
+
+A push of a tag `vX.Y.Z` by a person with release permission starts the
+release run. It is the only start. The run does these steps in order:
+
+1. It builds the four archives and `SHA256SUMS`, and checks them.
+2. It pushes the image and the Helm chart.
+3. It creates a draft release.
+
+The workflow never publishes. A person publishes the draft.
+
+The draft holds five files:
+
+- `opendustpan_<tag>_linux_amd64.tar.gz`
+- `opendustpan_<tag>_linux_arm64.tar.gz`
+- `opendustpan_<tag>_darwin_amd64.tar.gz`
+- `opendustpan_<tag>_darwin_arm64.tar.gz`
+- `SHA256SUMS`
+
+The release page shows no file to operators until a person publishes the draft.
+The chart is not on the release page. It is an OCI artifact in the registry.
+
+### Check and publish the draft
+
+Find the draft with `gh release list --repo OpenDustpan/OpenDustpan`, or on
+the Releases page. Only people with write access see a draft.
+
+Before you publish, read the five file names. Read `SHA256SUMS`: each line is
+`<64 hex>  <name>`, with one line for each archive. Then publish:
+
+```sh
+gh release edit <tag> --draft=false --repo OpenDustpan/OpenDustpan
+```
+
+SHA256SUMS is not a signature. It shows that a file is the same as the file
+that the run built. It does not show who built it.
+
+### When the `release-draft` job fails
+
+The failed job can leave a draft with some files. Delete the draft if it
+exists:
+
+```sh
+gh release delete <tag> --repo OpenDustpan/OpenDustpan
+```
+
+If this command does not find a draft by tag, delete it by release id. Get the
+id first:
+
+```sh
+gh api repos/OpenDustpan/OpenDustpan/releases --paginate --jq '.[] | select(.tag_name=="<tag>") | .id'
+gh api -X DELETE repos/OpenDustpan/OpenDustpan/releases/<id>
+```
+
+Then use "Re-run failed jobs". Do not use "Re-run all jobs". The image and
+chart steps refuse a second push of a released tag, so a full re-run stops
+before the draft job.
+
+The upload script creates nothing when a release for the tag exists, draft or
+published. Its message names `gh release list`. Find the release, then delete
+it or publish it.
+
+### What to read in the first real run
+
+No test shows these before the first tag. Read them in the run log:
+
+- Does the `--verify-tag` flag work?
+- Does the delete of a draft by tag work?
+- Did the archive files move from the build job to the check job?

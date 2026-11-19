@@ -58,6 +58,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		name string
 	}{
 		{name: "update round trip", test: testUpdateRoundTrip},
+		{name: "the state writes of a stack in no collection are refused", test: testNoCollectionRefusesStateWrites},
 		{name: "update keeps the access token that started it", test: testUpdateTokenIDRoundTrip},
 		{
 			name: "a tags update appends its change entry in the same transaction",
@@ -277,6 +278,8 @@ func newFixture(t *testing.T, s UpdatesStore) fixture {
 		t.Fatalf("create stack: %v", err)
 	}
 
+	PlaceStack(t, s, st.Ref)
+
 	return fixture{s: s, ref: st.Ref, fence: ns.Fence()}
 }
 
@@ -288,6 +291,8 @@ func (f fixture) other(t *testing.T) stack.Ref {
 	if err := f.s.CreateStack(t.Context(), st, f.fence); err != nil {
 		t.Fatalf("create stack %s: %v", st.Ref, err)
 	}
+
+	PlaceStack(t, f.s, st.Ref)
 
 	return st.Ref
 }
@@ -429,6 +434,8 @@ func newHistoryFixture(t *testing.T, s HistoryStore) historyFixture {
 	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
 		t.Fatalf("create stack: %v", err)
 	}
+
+	PlaceStack(t, s, st.Ref)
 
 	return historyFixture{s: s, ref: st.Ref, fence: ns.Fence()}
 }
@@ -2453,6 +2460,8 @@ func testRenameRaceWithNewUpdate(t *testing.T, f fixture) {
 			t.Fatalf("create stack %s: %v", st.Ref, err)
 		}
 
+		PlaceStack(t, f.s, st.Ref)
+
 		u := f.create(t, st.Ref, fmt.Sprintf("racer-%d", round), mutating())
 		newRef := stack.Ref{Namespace: st.Ref.Namespace, Project: st.Ref.Project, Stack: stack.Name(name + "-renamed")}
 
@@ -2806,6 +2815,8 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 	if err = f.s.CreateStack(t.Context(), thirdSt, f.fence); err != nil {
 		t.Fatalf("create stack %s: %v", thirdSt.Ref, err)
 	}
+
+	PlaceStack(t, f.s, thirdSt.Ref)
 
 	thirdRef := thirdSt.Ref
 	h := fixture{s: f.s, ref: thirdRef, fence: f.fence}

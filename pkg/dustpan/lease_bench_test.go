@@ -131,6 +131,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	blobs := openBenchBlobs(b)
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:  stacktest.PlacedAll(),
 		Sealer:      secrettest.NewMemorySealer(),
 		ManualLocks: nil, BlobGuard: blobguardtest.None{},
 		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,

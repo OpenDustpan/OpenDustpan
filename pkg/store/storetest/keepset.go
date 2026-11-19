@@ -281,6 +281,8 @@ func addKeepSetStack(t *testing.T, f fixture, ns namespace.Name, name string, ke
 		t.Fatalf("create stack %s: %v", st.Ref, err)
 	}
 
+	PlaceStack(t, f.s, st.Ref)
+
 	ref := st.Ref
 	guard := stack.EmptyGuard()
 	owned := make([]blob.Key, 0, keys)

@@ -92,8 +92,8 @@ func (d *jobDomain) CreateUnit(
 			ID: stack.ID(ident.NewID("stk-")), Version: 0,
 		}
 
-		if err := d.s.CreateStack(ctx, st, fence); err != nil {
-			return identity.Object{}, fmt.Errorf("create stack: %w", err)
+		if err := d.createPlacedStack(ctx, st, fence); err != nil {
+			return identity.Object{}, err
 		}
 	default:
 		return identity.Object{}, fmt.Errorf("%w: tool %q", identity.ErrInvalidObject, tool)
@@ -302,6 +302,20 @@ func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audi
 // reads, as a restore or another version of the server leaves one.
 func (d *jobDomain) DamageJobBody(ctx context.Context, id job.ID) error {
 	return d.s.ExecForTest(ctx, `UPDATE jobs SET body = '{' WHERE id = ?`, string(id))
+}
+
+// createPlacedStack makes st and puts it in a collection: the stores refuse
+// the state writes of a stack in no collection.
+func (d *jobDomain) createPlacedStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
+	if err := d.s.CreateStack(ctx, st, fence); err != nil {
+		return fmt.Errorf("create stack: %w", err)
+	}
+
+	if err := storetest.PlaceStackCtx(ctx, d.s, st.Ref); err != nil {
+		return fmt.Errorf("place stack: %w", err)
+	}
+
+	return nil
 }
 
 // lockForStateWrite returns the workspace of unit, locked for a state write. A

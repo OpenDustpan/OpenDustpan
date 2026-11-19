@@ -128,7 +128,16 @@ func TestRevokedTokenEndsLeaseRequests(t *testing.T) {
 		t,
 		allowAll(),
 		authn,
-		fixtureOptions{manual: nil, checker: authn, limit: 0, cutoff: 0, replayer: nil, guard: nil},
+		fixtureOptions{
+			manual:    nil,
+			checker:   authn,
+			limit:     0,
+			cutoff:    0,
+			replayer:  nil,
+			guard:     nil,
+			placer:    nil,
+			placement: nil,
+		},
 	)
 	paths, lease := startWithToken(t, f, "test-token")
 
@@ -175,7 +184,16 @@ func TestBootstrapTokenUpdateSkipsTokenCheck(t *testing.T) {
 		t,
 		allowAll(),
 		authn,
-		fixtureOptions{manual: nil, checker: authn, limit: 0, cutoff: 0, replayer: nil, guard: nil},
+		fixtureOptions{
+			manual:    nil,
+			checker:   authn,
+			limit:     0,
+			cutoff:    0,
+			replayer:  nil,
+			guard:     nil,
+			placer:    nil,
+			placement: nil,
+		},
 	)
 	paths, lease := startWithToken(t, f, "boot-token")
 

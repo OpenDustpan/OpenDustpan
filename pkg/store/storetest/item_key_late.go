@@ -95,6 +95,8 @@ func newLateFixture(t *testing.T, r LateKeyRig) lateFixture {
 		t.Fatalf("create stack: %v", err)
 	}
 
+	PlaceStack(t, r.Store, st.Ref)
+
 	return lateFixture{fence: ns.Fence(), ref: st.Ref}
 }
 
