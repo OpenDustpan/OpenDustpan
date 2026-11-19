@@ -34,6 +34,24 @@ func listAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
 	return listing.Entries
 }
 
+// listTagAudit returns the audit entries of ns that a tags update writes, the
+// entries of the action unit:manage. The fixture puts its stack in a
+// collection, and that writes entries of its own, so the tests of a tags
+// update look only at the entries of the update.
+func listTagAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
+	t.Helper()
+
+	var entries []audit.Entry
+
+	for _, e := range listAudit(t, s, ns) {
+		if e.Action == renameEntry(ns, stack.Ref{}).Action {
+			entries = append(entries, e)
+		}
+	}
+
+	return entries
+}
+
 // testUpdateTagsAppendsChangeEntry replaces the tags and expects one change
 // entry in the transaction of the update: it names each key that the update
 // adds, removes or changes, holds no tag value, and has the stable stack ID.
@@ -65,7 +83,7 @@ func testUpdateTagsAppendsChangeEntry(t *testing.T, f fixture) {
 		t.Fatalf("update tags again: %v", err)
 	}
 
-	entries := listAudit(t, f.s, ns)
+	entries := listTagAudit(t, f.s, ns)
 	if len(entries) != 2 {
 		t.Fatalf("audit entries = %+v, want one for each update", entries)
 	}
@@ -112,7 +130,7 @@ func testUpdateTagsWithoutChangeAppendsNothing(t *testing.T, f fixture) {
 		}
 	}
 
-	if entries := listAudit(t, f.s, ns); len(entries) != 1 {
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 1 {
 		t.Fatalf("audit entries = %+v, want one: only the first update changes a key", entries)
 	}
 }
@@ -148,7 +166,7 @@ func testUpdateTagsRefusedEntryChangesNothing(t *testing.T, f fixture) {
 		t.Fatalf("tags after the refused update = %v, want %v", after.Tags, before.Tags)
 	}
 
-	if entries := listAudit(t, f.s, ns); len(entries) != 0 {
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 0 {
 		t.Fatalf("audit entries = %+v, want none", entries)
 	}
 }
@@ -188,7 +206,7 @@ func testUpdateTagsHostileKeyChangesNothing(t *testing.T, f fixture) {
 		t.Fatalf("tags after the refused updates = %v, want %v", after.Tags, before.Tags)
 	}
 
-	if entries := listAudit(t, f.s, ns); len(entries) != 0 {
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 0 {
 		t.Fatalf("audit entries = %+v, want none", entries)
 	}
 }
@@ -264,7 +282,7 @@ func testUpdateTagsHostileValueChangesNothing(t *testing.T, f fixture) {
 		t.Fatalf("tags after the refused updates = %v, want %v", after.Tags, before.Tags)
 	}
 
-	if entries := listAudit(t, f.s, ns); len(entries) != 0 {
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 0 {
 		t.Fatalf("audit entries = %+v, want none", entries)
 	}
 }
