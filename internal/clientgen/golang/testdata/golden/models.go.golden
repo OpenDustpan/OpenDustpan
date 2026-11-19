@@ -105,6 +105,7 @@ const (
 	ErrorCodeAuthRateLimited                       ErrorCode = "auth.rate-limited"
 	ErrorCodeAuthUnauthenticated                   ErrorCode = "auth.unauthenticated"
 	ErrorCodeBackupCorrupt                         ErrorCode = "backup.corrupt"
+	ErrorCodeBackupRegistryFilesTooLarge           ErrorCode = "backup.registry-files-too-large"
 	ErrorCodeBackupTooManyUnverified               ErrorCode = "backup.too-many-unverified"
 	ErrorCodeCollectionAlreadyExists               ErrorCode = "collection.already-exists"
 	ErrorCodeCollectionChanged                     ErrorCode = "collection.changed"
