@@ -83,6 +83,10 @@ var (
 	//
 	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
+	// ErrTempAdminRead reports a failed read of the temporary administrator
+	// records during a sign-in. The sign-in is refused: the person may be a
+	// temporary administrator.
+	ErrTempAdminRead = errors.New("read of the temporary administrator failed")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )

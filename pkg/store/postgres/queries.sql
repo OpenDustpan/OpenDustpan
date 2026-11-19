@@ -48,11 +48,12 @@ FROM namespaces
 WHERE name = $1;
 
 -- name: NamespacesWithList :many
--- Lists the namespaces that have an IP allowlist.
+-- Lists the namespaces that have an IP allowlist, at most lim of them.
 SELECT name
 FROM namespaces
 WHERE ip_allowlist <> ''
-ORDER BY name;
+ORDER BY name
+LIMIT sqlc.arg('lim');
 
 -- name: SetNamespaceIPAllowlist :execrows
 -- Replaces the IP allowlist of one namespace (ADR 55, decision 8).

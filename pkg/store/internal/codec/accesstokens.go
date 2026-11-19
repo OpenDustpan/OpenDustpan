@@ -1,7 +1,6 @@
 package codec
 
 import (
-	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -29,7 +28,11 @@ type AccessTokenRow struct {
 // the domain does not know gives accesstoken.ErrUnknownKind and no token.
 func FromAccessTokenRow(row AccessTokenRow) (accesstoken.Token, error) {
 	if !accesstoken.Kind(row.Kind).Valid() {
-		return accesstoken.Token{}, fmt.Errorf("access token %q: %w: %q", row.ID, accesstoken.ErrUnknownKind, row.Kind)
+		return accesstoken.Token{}, &accesstoken.UnknownKindError{
+			ID:          row.ID,
+			PrincipalID: row.PrincipalID,
+			Kind:        row.Kind,
+		}
 	}
 
 	return accesstoken.Token{

@@ -140,15 +140,39 @@ func checkKind(scope Scope, kind Kind) error {
 	}
 }
 
-// checkOwner returns ErrNotFound when the token t does not belong to the
-// person of caller, so an own route tells nothing about another token.
-func (s *Service) checkOwner(ctx context.Context, caller identity.Principal, t Token) error {
+// ownerFirst returns the error of a failed read of a token for an own route.
+// For ScopeOwn and a row of an unknown kind, it checks the owner of the row
+// first, with the owner that the error carries: a caller that is not the
+// owner gets ErrNotFound, the answer for a token that does not exist, and
+// only the owner gets ErrUnknownKind. It fails closed: an unknown-kind error
+// that does not name an owner gives ErrNotFound. Every other error, and
+// every other scope, comes back as it is.
+func (s *Service) ownerFirst(ctx context.Context, caller identity.Principal, scope Scope, err error) error {
+	if scope != ScopeOwn || !errors.Is(err, ErrUnknownKind) {
+		return err
+	}
+
+	var unknown *UnknownKindError
+	if !errors.As(err, &unknown) {
+		return ErrNotFound
+	}
+
+	if ownerErr := s.checkOwner(ctx, caller, unknown.PrincipalID); ownerErr != nil {
+		return ownerErr
+	}
+
+	return err
+}
+
+// checkOwner returns ErrNotFound when a token of the principal principalID
+// does not belong to the person of caller, so an own route tells nothing about another token.
+func (s *Service) checkOwner(ctx context.Context, caller identity.Principal, principalID string) error {
 	own, err := s.ownPrincipal(ctx, caller)
 	if err != nil {
 		return err
 	}
 
-	if t.PrincipalID != own.ID {
+	if principalID != own.ID {
 		return ErrNotFound
 	}
 
@@ -165,7 +189,7 @@ func (s *Service) checkOwner(ctx context.Context, caller identity.Principal, t T
 // of its route: a revoke never raises access.
 func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal, scope Scope, t Token) error {
 	if scope == ScopeOwn {
-		return s.checkOwner(ctx, caller, t)
+		return s.checkOwner(ctx, caller, t.PrincipalID)
 	}
 
 	if scope == ScopeService && t.Kind != KindService && !t.Kind.FromExchange() {
@@ -192,7 +216,7 @@ func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal
 	}
 
 	if scope == ScopeOwn {
-		return s.checkOwner(ctx, caller, t)
+		return s.checkOwner(ctx, caller, t.PrincipalID)
 	}
 
 	if scope == ScopePersonal {

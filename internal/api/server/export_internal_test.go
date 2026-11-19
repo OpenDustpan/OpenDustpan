@@ -169,3 +169,53 @@ func (h *Handler) CompleteLocalForTest(w http.ResponseWriter, r *http.Request, i
 func BodyTooLargeForTest(limit int64) error {
 	return errBodyTooLarge(limit)
 }
+
+// MarkAllTempAdminForTest calls markAllTempAdmin on each body type that holds
+// principals, and returns the bodies in the order of the arguments.
+func MarkAllTempAdminForTest(bodies ...any) []any {
+	out := make([]any, 0, len(bodies))
+	for _, b := range bodies {
+		out = append(out, markAllTempAdmin(b))
+	}
+
+	return out
+}
+
+// PrincipalBodiesForTest returns one body of each type that holds a person.
+func PrincipalBodiesForTest() []any {
+	p := principalResponse{
+		ID: "p1", Subject: "", DisplayName: "", Kind: "person", Source: "", CreatedAt: "", UpdatedAt: "",
+		DisabledAt: nil, Namespace: "", GroupCount: 0, TemporaryAdministrator: false, TemporaryExpiresAt: nil,
+	}
+	m := memberResponse{AddedAt: "", Principal: p}
+
+	return []any{
+		p,
+		principalListResponse{Principals: []principalResponse{p}, NextCursor: "", Total: 1},
+		m,
+		memberListResponse{Members: []memberResponse{m}, NextCursor: "", Total: 1},
+	}
+}
+
+// FlagsOfBodiesForTest returns the banner flag of the person of each body of
+// PrincipalBodiesForTest, in the same order.
+func FlagsOfBodiesForTest(bodies []any) []bool {
+	flags := make([]bool, 0, len(bodies))
+
+	for _, b := range bodies {
+		switch v := b.(type) {
+		case principalResponse:
+			flags = append(flags, v.TemporaryAdministrator)
+		case principalListResponse:
+			flags = append(flags, v.Principals[0].TemporaryAdministrator)
+		case memberResponse:
+			flags = append(flags, v.Principal.TemporaryAdministrator)
+		case memberListResponse:
+			flags = append(flags, v.Members[0].Principal.TemporaryAdministrator)
+		default:
+			flags = append(flags, false)
+		}
+	}
+
+	return flags
+}

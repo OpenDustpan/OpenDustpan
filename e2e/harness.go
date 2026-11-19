@@ -195,9 +195,6 @@ type Env struct {
 	backupDir string
 	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
 	signIn *signInSetup
-	// claimers keeps the job claimer of the in-process server, or is nil for
-	// the binary server.
-	claimers *claimerSlot
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -253,8 +250,6 @@ type serverBuild struct {
 	dbURL string
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
-	// claimers keeps the job claimer of the server, or is nil.
-	claimers *claimerSlot
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -544,7 +539,6 @@ func startInprocessServer(
 
 	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
 	// in-process mode uses the equivalent server option.
-	claimers := newClaimerSlot()
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -556,11 +550,9 @@ func startInprocessServer(
 		publicURL:         inprocessPublicURL(in, ts),
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
-		claimers:          claimers,
 		auditSinks:        in.auditSinks,
 		listener:          nil,
 	})
-	build.claimers = claimers
 
 	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
 
@@ -591,7 +583,6 @@ func startRunInprocessServer(
 		tb.Fatalf("listen for the in-process server: %v", err)
 	}
 
-	claimers := newClaimerSlot()
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -603,11 +594,9 @@ func startRunInprocessServer(
 		publicURL:         "",
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
-		claimers:          claimers,
 		auditSinks:        in.auditSinks,
 		listener:          ln,
 	})
-	build.claimers = claimers
 
 	serverURL := "http://" + ln.Addr().String()
 	client := &http.Client{Timeout: commandTimeout}
@@ -665,7 +654,6 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		store:         in.store,
 		client:        client,
 		inprocess:     build.store,
-		claimers:      build.claimers,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -757,11 +745,9 @@ type serverTokens struct {
 // that reaches it: the SQLite file, or PostgreSQL through a DBProxy, so a
 // step can stop the database for this environment only. The proxy is nil
 // on SQLite.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
 func openServerStore(
 	ctx context.Context, tb testing.TB, store Store, dbPath string,
-) (serverStore, *DBProxy, string) {
+) (*dustpan.BuiltinStore, *DBProxy, string) {
 	tb.Helper()
 
 	switch store {
@@ -773,9 +759,8 @@ func openServerStore(
 
 		return st, proxy, target
 	default:
-		tb.Fatalf("unknown store: %s", store)
-
-		return nil, nil, ""
+		// A panic, not Fatalf, so that no caller sees a nil store.
+		panic(fmt.Sprintf("unknown store: %s", store))
 	}
 }
 
@@ -803,49 +788,12 @@ type serverArgs struct {
 	// issuer is a fake OpenID provider whose keys the server may read on the
 	// loopback, or nil.
 	issuer *OIDCIssuerFake
-	// claimers keeps the job claimer that the in-process server builds, or
-	// is nil.
-	claimers *claimerSlot
 	// auditSinks receive a copy of each audit entry of the in-process server.
 	auditSinks []audit.ShipSink
 	// listener makes the in-process server run its own listener for the
 	// audit shipper, instead of serving its handler directly. It is nil for
 	// the handler mode.
 	listener net.Listener
-}
-
-// profileStoreOptions returns the option that gives the in-process server the
-// profile store of st.
-func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	case *postgres.Store:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	default:
-		return nil
-	}
-}
-
-// blueprintStoreOptions returns the option that gives the in-process server the
-// self-service blueprint store of st, as the built-in stores of the binary do.
-func blueprintStoreOptions(st serverStore) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithSelfServiceBlueprints(s.SelfServiceBlueprints())}
-	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithSelfServiceBlueprints(s.SelfServiceBlueprints())}
-	default:
-		return nil
-	}
 }
 
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
@@ -865,18 +813,10 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 
 // storeOptions returns the options that give the in-process server the optional
 // stores of st and the public URL.
-func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+func storeOptions(builtin *dustpan.BuiltinStore, args serverArgs) []dustpan.Option {
 	return slices.Concat(
-		profileStoreOptions(
-			st,
-			wrapper,
-		),
-		jobStoreOptions(st),
-		claimerOptions(st, args.claimers),
-		savedViewStoreOptions(st),
-		blueprintStoreOptions(st),
-		settingStoreOptions(st), trustRuleStoreOptions(st, args.issuer), registryStoreOptions(st),
-		sinkStoreOptions(st),
+		[]dustpan.Option{dustpan.WithBuiltinStore(builtin)},
+		settingStoreOptions(builtin), trustRuleOptions(args.issuer),
 		publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)
@@ -884,10 +824,10 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 
 // featureStoreOptions returns the options that give the in-process server the
 // stores of the features that the store of the test keeps.
-func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+func featureStoreOptions(tb testing.TB, builtin *dustpan.BuiltinStore, args serverArgs) []dustpan.Option {
 	tb.Helper()
 
-	opts := append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+	opts := append(storeOptions(builtin, args), gitHostOptions(tb)...)
 
 	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
@@ -931,7 +871,8 @@ func checkServerStart(ctx context.Context, tb testing.TB, st serverStore, wrappe
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
-	st, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
+	builtin, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
+	st := adapterStoreOf(builtin).store
 
 	// The first namespace is created through POST /api/server/namespaces
 	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
@@ -957,7 +898,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			featureStoreOptions(tb, st, wrapper, args),
+			featureStoreOptions(tb, builtin, args),
 			[]dustpan.Option{
 				dustpan.WithInstallation(installationName),
 				dustpan.WithNamespaceStore(st),
@@ -996,7 +937,6 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dbProxy:   dbProxy,
 		dbURL:     dbURL,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
-		claimers:  nil,
 	}
 }
 
@@ -1073,24 +1013,46 @@ func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
 	return target, "dir:" + path
 }
 
-// openSQLiteStore opens the SQLite file at dbPath for one test.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
-func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) serverStore {
+// openSQLiteStore opens the built-in store on the SQLite file at dbPath for
+// one test, as the binary does, and closes it when the test ends.
+func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) *dustpan.BuiltinStore {
 	tb.Helper()
 
-	st, err := sqlite.Open(ctx, dbPath)
+	builtin, err := dustpan.OpenStore(ctx, "sqlite:"+dbPath)
 	if err != nil {
 		tb.Fatalf("open sqlite store: %v", err)
 	}
 
 	tb.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
+		if closeErr := builtin.Close(); closeErr != nil {
 			tb.Errorf("close sqlite store: %v", closeErr)
 		}
 	})
 
-	return st
+	return builtin
+}
+
+// adapterHandle holds the adapter store behind a built-in store. It is a
+// struct so that the function that finds it returns no interface.
+type adapterHandle struct {
+	store serverStore
+}
+
+// adapterStoreOf returns the adapter store behind builtin: the steps that seed
+// rows through the ports that the built-in store does not export (the drift
+// results, the notification outbox) need the adapter. It is the same store, not
+// a second handle: SQLite refuses a second handle on one file. The server
+// gets its ports from builtin, never from this value.
+func adapterStoreOf(builtin *dustpan.BuiltinStore) adapterHandle {
+	switch st := builtin.StorePorts.(type) {
+	case *sqlite.Store:
+		return adapterHandle{store: st}
+	case *postgres.Store:
+		return adapterHandle{store: st}
+	default:
+		// A panic, not Fatalf, so that no caller sees a nil store.
+		panic(fmt.Sprintf("the built-in store holds the unknown adapter %T", builtin.StorePorts))
+	}
 }
 
 // openTestBlobStore opens the live blob store of one environment: an
