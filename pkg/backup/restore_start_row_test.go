@@ -36,7 +36,9 @@ func restoreSetupWithoutRow(t *testing.T) *restoreServiceSetup {
 func restoreSetupOver(t *testing.T, state *backup.State) *restoreServiceSetup {
 	t.Helper()
 
-	return newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+	var registered *backup.Service
+
+	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
 		reg := newFakeRegistry()
 
 		exporter := &stubBackupExporter{
@@ -54,6 +56,7 @@ func restoreSetupOver(t *testing.T, state *backup.State) *restoreServiceSetup {
 		}
 
 		cfg.Backups = service
+		registered = service
 
 		if state != nil {
 			reg.mu.Lock()
@@ -65,6 +68,11 @@ func restoreSetupOver(t *testing.T, state *backup.State) *restoreServiceSetup {
 			}
 		}
 	})
+
+	// The service of the setup reads the registry that holds the row.
+	setup.backups = registered
+
+	return setup
 }
 
 func startRequestOf(id backup.ID) backup.RestoreRequest {
