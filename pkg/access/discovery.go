@@ -3,9 +3,7 @@ package access
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -22,8 +20,8 @@ const HeaderDiscoveryGrant = "X-Dustpan-Grant-Id"
 // the scope check with no grant header. With found true, an empty ID means
 // that no grant allows the read, and an error means that the check failed.
 // The ID goes into a response header, so an ID that does not start with
-// GrantIDPrefix, or that is not a valid identifier of at most 64 bytes, is
-// refused with an error that wraps ErrInvalid, never passed on.
+// GrantIDPrefix, that has no byte after it, or that is not a valid identifier
+// of at most 64 bytes, is refused with an error that wraps ErrInvalid, never passed on.
 func DiscoveryGrantID(
 	ctx context.Context, authz identity.Authorizer, p identity.Principal, ns namespace.Name,
 ) (string, bool, error) {
@@ -44,7 +42,7 @@ func DiscoveryGrantID(
 	// Defense in depth: the adapters write the ID to a response header, and
 	// the authorizer that names it is not trusted to give a valid ID. This
 	// check does not rely on the header writer or on the authorizer.
-	if id != "" && (!strings.HasPrefix(id, GrantIDPrefix) || !ident.Valid(id, maxGrantIDLength)) {
+	if id != "" && !validGrantID(id) {
 		return "", true, fmt.Errorf("%w: the grant ID of a discovery answer is not a grant ID", ErrInvalid)
 	}
 
