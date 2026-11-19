@@ -502,7 +502,15 @@ func (s *Service) RequireSucceeded(ctx context.Context, id ID) error {
 		return fmt.Errorf("get backup %s: %w", id, err)
 	}
 
-	return stateRefusal(id, record.State)
+	return record.RequireSucceeded()
+}
+
+// RequireSucceeded returns the refusal for a backup that did not succeed, as
+// Service.RequireSucceeded does, from the record that the caller already
+// holds. A caller that read the record uses it, so that the check needs no
+// second read.
+func (r Record) RequireSucceeded() error {
+	return stateRefusal(r.ID, r.State)
 }
 
 // stateRefusal returns the refusal for a backup in state, or nil for a backup

@@ -540,7 +540,7 @@ func (s *RestoreService) admitStart(
 // with no row can come from another installation, so the target decides: it
 // must hold the live pointer of the backup. An ID that the registry and the
 // target both do not know is ErrNotFound. A read error that is not a missing
-// pointer passes: the restore reports it.
+// pointer refuses: the start does not make a row.
 func (s *RestoreService) requireRestorable(ctx context.Context, id ID) error {
 	err := s.backups.RequireSucceeded(ctx, id)
 	if err == nil || !errors.Is(err, ErrNotFound) {
@@ -550,6 +550,10 @@ func (s *RestoreService) requireRestorable(ctx context.Context, id ID) error {
 	_, pointerErr := readLivePointerLimit(ctx, s.target, id, maxLivePointerBytes)
 	if errors.Is(pointerErr, blob.ErrNotFound) {
 		return fmt.Errorf("backup %s: %w", id, ErrNotFound)
+	}
+
+	if pointerErr != nil {
+		return fmt.Errorf("backup %s: %w", id, pointerErr)
 	}
 
 	return nil

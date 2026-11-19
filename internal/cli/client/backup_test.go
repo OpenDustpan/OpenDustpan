@@ -139,7 +139,9 @@ func TestBackupReadFailureSaysTheBackupContinues(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		},
 		"not JSON": func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("not json")) //nolint:errcheck // The client may close early.
+			if _, err := w.Write([]byte("not json")); err != nil {
+				return
+			}
 		},
 	}
 
@@ -173,7 +175,9 @@ func closeConnection(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	if conn, _, err := hj.Hijack(); err == nil {
-		_ = conn.Close() //nolint:errcheck // The test closes the connection on purpose.
+		if err := conn.Close(); err != nil {
+			return
+		}
 	}
 }
 
@@ -191,7 +195,9 @@ func serveStartThenRead(t *testing.T, read http.HandlerFunc) *httptest.Server {
 
 		w.WriteHeader(http.StatusAccepted)
 
-		_, _ = w.Write([]byte(`{"id":"bkp-run1"}`)) //nolint:errcheck // The client may close early.
+		if _, err := w.Write([]byte(`{"id":"bkp-run1"}`)); err != nil {
+			return
+		}
 	}))
 	t.Cleanup(srv.Close)
 

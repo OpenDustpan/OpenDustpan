@@ -1,13 +1,17 @@
 package backup_test
 
 import (
+	"context"
 	"errors"
+	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -82,6 +86,7 @@ func TestRestoreStartRefusesABackupThatDidNotSucceed(t *testing.T) {
 	}{
 		{"running", backup.StateRunning, backup.ErrStillRunning},
 		{"failed", backup.StateFailed, backup.ErrEndedFailed},
+		{"unknown state", backup.State("bogus"), backup.ErrEndedFailed},
 	}
 
 	for _, tc := range tests {
@@ -90,6 +95,10 @@ func TestRestoreStartRefusesABackupThatDidNotSucceed(t *testing.T) {
 
 			setup := restoreSetupWithRow(t, tc.state)
 			id := backup.MintRestoreID()
+
+			if err := setup.backups.RequireSucceeded(t.Context(), setup.id); !errors.Is(err, tc.want) {
+				t.Fatalf("RequireSucceeded = %v, want %v", err, tc.want)
+			}
 
 			if err := setup.service.Start(t.Context(), id, startRequestOf(setup.id)); !errors.Is(err, tc.want) {
 				t.Fatalf("Start = %v, want %v", err, tc.want)
@@ -127,5 +136,105 @@ func TestRestoreStartRefusesAnUnknownBackup(t *testing.T) {
 
 	if row := pollRestoreSucceeded(t, setup.regs, fresh); row.State != backup.RestoreSucceeded {
 		t.Errorf("restore state = %q, want succeeded", row.State)
+	}
+}
+
+// getFailStore fails the Get of every live pointer with err and passes all
+// other calls to the embedded store.
+type getFailStore struct {
+	blob.Store
+
+	err error
+}
+
+func (s getFailStore) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if strings.HasSuffix(key.String(), "/live.json") {
+		return nil, s.err
+	}
+
+	return s.Store.Get(ctx, key) //nolint:wrapcheck // The test store passes the error of the store.
+}
+
+// TestRestoreStartRefusesAPointerThatCannotBeRead proves that a start for a
+// backup with no row refuses, and makes no restore row, when the live pointer
+// of the target exists but cannot be read. The start must not pass such a
+// pointer to the restore.
+func TestRestoreStartRefusesAPointerThatCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pointerID = "bkp-pointer0001"
+		pointer   = "backups/" + pointerID + "/live.json"
+	)
+
+	tests := []struct {
+		name    string
+		pointer []byte
+		getErr  error
+		want    error
+	}{
+		{"not JSON", []byte("not json"), nil, backup.ErrCorrupt},
+		{"oversize", []byte(`{"attempt":"` + strings.Repeat("a", 2048) + `"}`), nil, backup.ErrCorrupt},
+		{"bad attempt", []byte(`{"attempt":"5/../6"}`), nil, backup.ErrCorrupt},
+		{"target error", nil, errTargetUnavailable, errTargetUnavailable},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+				if tc.getErr != nil {
+					cfg.Target = getFailStore{Store: cfg.Target, err: tc.getErr}
+				}
+			})
+
+			if tc.pointer != nil {
+				setup.target.storeObject(t, pointer, tc.pointer)
+			}
+
+			id := backup.MintRestoreID()
+
+			err := setup.service.Start(t.Context(), id, startRequestOf(pointerID))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Start = %v, want %v", err, tc.want)
+			}
+
+			if _, getErr := setup.regs.GetRestore(t.Context(), id); !errors.Is(getErr, backup.ErrRestoreNotFound) {
+				t.Errorf("restore row of a refused start: %v, want ErrRestoreNotFound", getErr)
+			}
+		})
+	}
+}
+
+// TestRestoreStartRefusesAHostileBackupID proves that a start with a backup ID
+// that is not valid answers ErrInvalidID and makes no restore row, and that
+// the reader of the live pointer refuses the same IDs.
+func TestRestoreStartRefusesAHostileBackupID(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{
+		"bkp-../x", "bkp-a/b", "bkp-a\x00", "bkp-" + strings.Repeat("a", 10_000), "../x", `bkp-a\b`,
+	}
+
+	setup := restoreSetupWithoutRow(t)
+
+	for _, hostile := range ids {
+		id := backup.MintRestoreID()
+
+		err := setup.service.Start(t.Context(), id, startRequestOf(backup.ID(hostile)))
+		if !errors.Is(err, backup.ErrInvalidID) {
+			t.Errorf("Start of %.20q = %v, want ErrInvalidID", hostile, err)
+		}
+
+		if _, getErr := setup.regs.GetRestore(t.Context(), id); !errors.Is(getErr, backup.ErrRestoreNotFound) {
+			t.Errorf("restore row of %.20q: %v, want ErrRestoreNotFound", hostile, getErr)
+		}
+
+		if _, readErr := backup.ReadLiveForTest(t.Context(), setup.target, backup.ID(hostile), 1<<10); !errors.Is(
+			readErr, backup.ErrInvalidID,
+		) {
+			t.Errorf("ReadLiveForTest of %.20q = %v, want ErrInvalidID", hostile, readErr)
+		}
 	}
 }

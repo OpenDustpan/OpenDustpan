@@ -1433,13 +1433,23 @@ func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
 
 	const want = "invalid backup ID: use an ID that opendustpan backup printed"
 
-	for _, id := range []string{"../x", "bkp-a/b", "x"} {
+	for _, id := range []string{"../x", "bkp-a/b", "x", `bkp-a\u0000`} {
 		status, resp := serveRestore(
 			t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
 		)
 		if status != http.StatusBadRequest || !strings.Contains(resp, want) {
-			t.Errorf("POST restores of %q answers %d %s, want 400 that names the ID rule", id, status, resp)
+			t.Errorf("POST restores of %.20q answers %d %.200s, want 400 that names the ID rule", id, status, resp)
 		}
+	}
+
+	// An ID of 10 kB is over the body limit of the route: the body check
+	// refuses it before the ID check.
+	status, resp := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores",
+		`{"backupID":"bkp-`+strings.Repeat("a", 10_000)+`"}`,
+	)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Errorf("POST restores of an ID of 10 kB answers %d %.200s, want 413", status, resp)
 	}
 
 	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
@@ -1535,4 +1545,105 @@ func TestStartRestoreRunningBackupAnswers409(t *testing.T) {
 	}
 
 	close(gate.release)
+}
+
+// getFailTarget fails the Get of every live pointer with errTargetDown and
+// passes all other calls to the embedded store.
+type getFailTarget struct {
+	blob.Store
+}
+
+var errTargetDown = errors.New("target down")
+
+func (s getFailTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if strings.HasSuffix(key.String(), "/live.json") {
+		return nil, errTargetDown
+	}
+
+	return s.Store.Get(ctx, key) //nolint:wrapcheck // The test store passes the error of the store.
+}
+
+// TestStartRestoreUnreadablePointerIsRefused proves that a start for a backup
+// with no row, whose live pointer in the target cannot be read, is refused
+// with a status that is not 202, and makes no restore row.
+func TestStartRestoreUnreadablePointerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const id = "bkp-badpointer0000001"
+
+	tests := []struct {
+		name    string
+		pointer string
+		failGet bool
+		status  int
+	}{
+		{"not JSON", "not json", false, http.StatusInternalServerError},
+		{"oversize", `{"attempt":"` + strings.Repeat("a", 2048) + `"}`, false, http.StatusInternalServerError},
+		{"bad attempt", `{"attempt":"5/../6"}`, false, http.StatusInternalServerError},
+		{"target error", "", true, http.StatusInternalServerError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stores := openBackupDeps(t)
+
+			if tc.pointer != "" {
+				key := blob.Key("backups/" + id + "/live.json")
+				if err := stores.target.Put(t.Context(), key, strings.NewReader(tc.pointer)); err != nil {
+					t.Fatalf("put pointer: %v", err)
+				}
+			}
+
+			var target blob.Store = stores.target
+			if tc.failGet {
+				target = getFailTarget{Store: stores.target}
+			}
+
+			fix := newRestoreFixtureOver(t, stores, target)
+
+			status, body := serveRestore(
+				t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+			)
+			if status == http.StatusAccepted || status != tc.status {
+				t.Fatalf("POST restores answers %d %s, want %d", status, body, tc.status)
+			}
+
+			listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+			if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
+				t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
+			}
+		})
+	}
+}
+
+// TestFailedBackupAnswersWithItsState proves that the check of a backup that
+// ended with an error answers 200 with complete false and a text that says
+// so, and that a start for it answers 409 with the same text and makes no
+// restore row.
+func TestFailedBackupAnswersWithItsState(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	status, body := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+testBackupID.String()+"/check", "")
+	if status != http.StatusOK || !strings.Contains(body, `"complete":false`) ||
+		!strings.Contains(body, "ended with an error") || strings.Contains(body, "corrupt") {
+		t.Fatalf("GET check answers %d %s, want 200 complete false that says the backup ended with an error", status, body)
+	}
+
+	_, before := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+
+	status, body = serveRestore(
+		t, handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+testBackupID.String()+`"}`,
+	)
+	if status != http.StatusConflict || !strings.Contains(body, "ended with an error") {
+		t.Fatalf("POST restores answers %d %s, want 409 that says the backup ended with an error", status, body)
+	}
+
+	status, body = serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if status != http.StatusOK || body != before {
+		t.Fatalf("GET restores answers %d %s, want the list %s that it had before the start", status, body, before)
+	}
 }
