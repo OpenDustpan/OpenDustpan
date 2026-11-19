@@ -206,7 +206,7 @@ func testRefuseSharedCount(t *testing.T) {
 		t.Fatalf("RefuseCall = %v, %v, want no error and no unwritten count", unwritten, err)
 	}
 
-	l, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	l, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server audit: %v", err)
 	}
