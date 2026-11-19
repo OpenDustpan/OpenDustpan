@@ -1008,9 +1008,20 @@ func parseUnitObject(s string) (Object, error) {
 	}, nil
 }
 
-// validUnitName reports whether name is a usable opaque unit name.
+// validUnitName reports whether name is a usable opaque unit name. A name
+// that holds a hidden rune (a control character, a format character such as
+// U+202E, or a line or paragraph separator) is not usable: its text can look
+// different from its bytes when an error, a log or the console shows it.
 func validUnitName(name string) bool {
 	if name == "" || len(name) > MaxUnitLength {
+		return false
+	}
+
+	// Defense in depth: the tool adapters accept only ASCII letters, digits
+	// and a few punctuation characters in a stack or workspace name, so no
+	// stored unit has such a name. This check stays so that a reference from
+	// another caller cannot hold a hidden rune and does not rely on them.
+	if ident.HasHidden(name) {
 		return false
 	}
 
