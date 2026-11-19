@@ -116,9 +116,14 @@ func newFakeGH(t *testing.T, r uploadRun) fakeDirs {
 	}
 
 	// The fake must be executable.
-	writeIn(t, bin, "gh", []byte(uploadFakeGH))
+	binRoot := openRootOf(t, bin)
+	defer closeRoot(t, binRoot)
 
-	if err := os.Chmod(filepath.Join(bin, "gh"), 0o500); err != nil {
+	if err := binRoot.WriteFile("gh", []byte(uploadFakeGH), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := binRoot.Chmod("gh", 0o500); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +183,11 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 
 	// The version and the directory are arguments, with no shell between.
 	cmd := exec.CommandContext( //nolint:gosec // the script of the work tree runs on purpose; the version and the directory are single arguments
-		t.Context(), "bash", filepath.Join(tree, "scripts", "release-upload.sh"), r.version, dir,
+		t.Context(),
+		"bash",
+		filepath.Join(tree, "scripts", "release-upload.sh"),
+		r.version,
+		dir,
 	)
 	cmd.Dir = tree
 	cmd.Env = env
@@ -851,7 +860,13 @@ func TestReleaseRecordCheckTargetKeepsTheVersionOutOfTheShell(t *testing.T) {
 	version := "v1'; touch " + marker + "; '"
 
 	cmd := exec.CommandContext( //nolint:gosec // make of a copy of the work tree runs on purpose; the hostile version is one argument
-		t.Context(), "make", "--no-print-directory", "-C", tree, "release-record-check", "VERSION="+version,
+		t.Context(),
+		"make",
+		"--no-print-directory",
+		"-C",
+		tree,
+		"release-record-check",
+		"VERSION="+version,
 	)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
 
