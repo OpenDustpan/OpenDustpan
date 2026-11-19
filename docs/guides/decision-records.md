@@ -55,5 +55,5 @@ So each read of this route answers 404 until such a decision point ships.
   refuses. It writes no entry for an ID that is not valid or a record that does
   not exist.
 - 503 with the code `gate.unavailable`: the decision record store cannot answer.
-  Check the health of the server with `opendustpan status`, then send the
+  Check the health of the server with `opendustpan health --listen <address>`, then send the
   request again.

@@ -54,4 +54,4 @@ expect a prune before that version ships.
 
 - 503 with the code `gate.unavailable`: the decision record store cannot take
   the write during a state write. Check the health of the server with
-  `opendustpan status`, then try the state write again.
+  `opendustpan health --listen <address>`, then try the state write again.

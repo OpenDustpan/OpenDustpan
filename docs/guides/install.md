@@ -1,43 +1,20 @@
-# Install OpenDustpan v0.1.0
+# Install OpenDustpan from the container image
 
-This page is for operators who install v0.1.0. It shows how to pull the
-v0.1.0 image and install it with Helm.
+No release exists yet. The repository has no tag, so no image and no chart
+are published. This page shows how to build the image from a checkout and
+install it with the Helm chart in the checkout.
 
-## Pull the image
+## Build the image
 
-Pull the pinned tag from the forge container registry:
-
-```sh
-docker pull ghcr.io/opendustpan/opendustpan:v0.1.0
-```
-
-Or pull the same digest from Docker Hub:
+Build the image from the checkout. The script tags it `opendustpan:local`:
 
 ```sh
-docker pull docker.io/opendustpan/opendustpan:v0.1.0
+./scripts/build-image-local.sh
 ```
 
-Both references hold the same digest. Compare them with:
-
-```sh
-docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:v0.1.0
-docker buildx imagetools inspect docker.io/opendustpan/opendustpan:v0.1.0
-```
-
-## Pull by digest
-
-A tag can name another image later. A digest cannot. Name the digest when
-the image of a deployment must stay the same:
-
-```sh
-docker pull ghcr.io/opendustpan/opendustpan@sha256:<digest>
-```
-
-Read the digest of a release in two places:
-
-- The summary of the release workflow run for the tag, on the GitHub
-  Actions page of the repository.
-- The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
+The image holds a one-page placeholder console, because no console release
+exists yet. Push the image to a registry that your cluster can reach, and
+name it in the values below.
 
 ## Install with Helm
 
@@ -53,22 +30,27 @@ kubectl create secret generic opendustpan-key-encryption-key \
   --from-file=key-encryption-key=<file from opendustpan key generate --out>
 ```
 
-Install with the chart default registry:
+Install from the checkout. Set `image.repository` and `image.tag` to the
+image that you pushed:
 
 ```sh
-helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
+helm install opendustpan deploy/helm/opendustpan \
+  --set image.repository=<registry>/opendustpan \
+  --set image.tag=<tag> \
   --set database.existingSecret.name=opendustpan-database \
   --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key
 ```
 
-Or switch to Docker Hub with one more value:
+The [Helm guide](kubernetes.md) shows the other Secrets, storage, upgrade
+and rollback steps.
 
-```sh
-helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
-  --set image.repository=docker.io/opendustpan/opendustpan \
-  --set database.existingSecret.name=opendustpan-database \
-  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key
-```
+## After the first release
+
+The release workflow publishes the image to the forge container registry and
+to Docker Hub, with one digest. Use a digest when the image of a deployment
+must stay the same. Read the digest from the summary of the release workflow
+run for the tag, or from the output of
+`docker buildx imagetools inspect <image>:<tag>`.
 
 ## Maintainer setup: Docker Hub secrets
 
