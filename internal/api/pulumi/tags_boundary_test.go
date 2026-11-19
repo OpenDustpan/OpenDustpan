@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -45,6 +47,9 @@ func checkTagRefusal(t *testing.T, rec *httptest.ResponseRecorder) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("hostile tags answer %d, want %d", rec.Code, http.StatusBadRequest)
 	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusBadRequest, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.StackInvalidTags, Args: nil, RequestBody: nil})
 
 	var got struct {
 		Code    int    `json:"code"`

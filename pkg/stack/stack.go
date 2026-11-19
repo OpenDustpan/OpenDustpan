@@ -874,9 +874,11 @@ func TagChanges(old, next map[string]string) []audit.Change {
 // character such as U+202E) is refused. The error text never holds the
 // rejected name or value.
 //
-// The service and the stores both call it. Defense in depth: each caller
-// checks the tags itself and does not rely on the handler, the service or the
-// audit validation of the keys.
+// The service calls it in UpdateTags and in the create path. Defense in depth:
+// the layers check the tags one by one, and none relies on another. They are
+// the handler (checkTagBoundary), the service (CheckTags), the stores
+// (CheckTagValues in UpdateStackTags and in createStackRows) and the staged
+// check of a restore (checkStagedStackTags).
 func CheckTags(tags map[string]string) error {
 	if len(tags) > maxTags {
 		return fmt.Errorf("%w: more than %d tags", ErrInvalidTags, maxTags)

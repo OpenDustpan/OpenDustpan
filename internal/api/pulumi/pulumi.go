@@ -872,7 +872,7 @@ func tagNameByte(c byte) bool {
 // writeTagRefusal answers 400 with the message of err in the error shape of
 // the Pulumi Cloud-compatible API.
 func (h *Handler) writeTagRefusal(ctx context.Context, w http.ResponseWriter, err error) {
-	h.writeFailure(ctx, w, coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName))
+	h.writeFailure(ctx, w, coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidTags))
 }
 
 type updateStackTagsResponse struct{}
@@ -1386,8 +1386,10 @@ func classifyNamespace(err error) (failure, bool) {
 // error.
 func classifyStack(err error) (failure, bool) {
 	switch {
-	case errors.Is(err, stack.ErrInvalidName), errors.Is(err, stack.ErrInvalidTags):
+	case errors.Is(err, stack.ErrInvalidName):
 		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName), true
+	case errors.Is(err, stack.ErrInvalidTags):
+		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidTags), true
 	case errors.Is(err, stack.ErrNotFound):
 		return coded(http.StatusNotFound, err.Error(), errcode.StackNotFound), true
 	case errors.Is(err, stack.ErrNoState):

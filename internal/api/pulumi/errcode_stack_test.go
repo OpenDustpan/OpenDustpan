@@ -22,7 +22,7 @@ func TestStackAndSecretErrorsCarryACode(t *testing.T) {
 
 	checkErrorAnswers(t, []errorAnswer{
 		{"invalid stack name", stack.ErrInvalidName, http.StatusBadRequest, errcode.StackInvalidName, nil},
-		{"invalid stack tags", stack.ErrInvalidTags, http.StatusBadRequest, errcode.StackInvalidName, nil},
+		{"invalid stack tags", stack.ErrInvalidTags, http.StatusBadRequest, errcode.StackInvalidTags, nil},
 		{"stack not found", stack.ErrNotFound, http.StatusNotFound, errcode.StackNotFound, nil},
 		{"no state", stack.ErrNoState, http.StatusNotFound, errcode.StackNoState, nil},
 		{
