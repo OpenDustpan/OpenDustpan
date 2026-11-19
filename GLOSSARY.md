@@ -1229,6 +1229,10 @@ _Avoid_: Dry run, audit mode, advisory (that is a level of a resource policy rep
 The record of one evaluation of one decision point for one change, with the ID prefix `gdr-` (ADR 229). It holds the fact document and each gate with its version, mode, match and outcome. It also holds the requirements, the warnings, `autoApply`, the state of each fixed control and the result. Each refusal, each approval wait and each warning names its record.
 _Avoid_: Decision log, policy result
 
+**Decision record retention**:
+The installation setting `decisionRecords.retentionHours`: how many hours the server keeps decision records. `0` keeps them forever and is the default. A period is a whole number of hours from 24 to 87600. The setting prunes decision records only and never an audit entry.
+_Avoid_: Audit retention (that is the retention of audit entries)
+
 **Fixed control**:
 A control that refuses on its own, outside the gates (ADR 222 decision 4). The fixed controls are the workspace lock, the manual lock, a freeze with its break-glass and the override switches. They are also the module switches, the quota reservation and the quota counts, the source filter, safe delete and the plan staleness check. The agent controls are fixed controls too: the agent mode, the confirmation step and the secret consent. The decision record shows the state of each fixed control that the server checked.
 _Avoid_: Gate, policy

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -26,17 +27,38 @@ func drainPeriodDeclaration(period time.Duration) setting.Declaration {
 	}
 }
 
+// decisionRecordRetentionDeclaration returns the declaration of the retention
+// period of the decision records, in whole hours. The default "0" keeps the
+// records forever. The setting prunes decision records only and never an audit
+// entry. No job reads it yet, so the setting alone deletes nothing. A change
+// to a shorter period, or from keep-forever to a period, needs a fresh
+// authentication, because it deletes evidence sooner.
+func decisionRecordRetentionDeclaration() setting.Declaration {
+	return setting.Declaration{
+		Key: gate.RetentionKey, Level: setting.LevelInstallation, Kind: setting.KindInt, Default: "0",
+		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
+		// The kind check of the setting package and RetentionCheck both run, so
+		// the declaration does not rely on one of them alone.
+		Check:           gate.RetentionCheck,
+		ReducesSecurity: gate.RetentionReducesSecurity,
+		Doc: "The hours that the server keeps decision records, from 24 to 87600. 0 keeps decision records " +
+			"forever. The setting never deletes an audit entry. No job deletes decision records yet.",
+	}
+}
+
 // settingDeclarations returns the declarations of the settings resource: the
 // declarations of WithSettings and the settings that the server declares
 // itself.
 func settingDeclarations(cfg *settings) []setting.Declaration {
 	allowlist := ipallow.SettingDeclarations()
 
-	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+len(allowlist)+1)
+	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+len(allowlist))
 	out = append(out, cfg.settingsConfig.declarations...)
 	out = append(out, allowlist...)
 
-	return append(out, drainPeriodDeclaration(cfg.drainPeriod))
+	out = append(out, decisionRecordRetentionDeclaration(), drainPeriodDeclaration(cfg.drainPeriod))
+
+	return out
 }
 
 // settingsConfig holds what WithSettings sets.
