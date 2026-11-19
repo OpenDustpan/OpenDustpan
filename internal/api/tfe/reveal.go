@@ -106,16 +106,23 @@ func (h *Handler) revealStateValue(
 	// lookup, so no reveal ever reads the whole state into memory.
 	value, err := workspace.RevealVersion(ctx, h.workspaces, id, path, h.logger)
 	if err != nil {
+		// A state that the bound refuses answers 413 and writes one failure
+		// entry with no path, because the server did not read the state and
+		// so did not check the path against the masked set.
+		if errors.Is(err, workspace.ErrStateBound) {
+			h.logger.WarnContext(ctx, stateBoundMessage, slog.String("state_version", oneLine(id.String())))
+			h.appendRevealEntry(ctx, revealAuditEntry{
+				request: r, principal: p, object: obj, version: id.String(), path: "",
+				outcome: audit.OutcomeFailure,
+			})
+		}
+
 		// A path outside the masked set answers 404 with no audit entry
 		// and no value, so a caller cannot probe paths. A client-encrypted
 		// state answers 409 with no entry either: no value leaves the
 		// server (ADR 41 decision 5). The Pulumi route differs on purpose:
 		// its issue asks for an entry when another secrets provider holds
 		// the value.
-		if errors.Is(err, workspace.ErrStateBound) {
-			h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("state_version", id.String()))
-		}
-
 		h.writeNoStore(ctx, w, err)
 
 		return

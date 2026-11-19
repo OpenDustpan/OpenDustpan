@@ -85,7 +85,8 @@ func TestStateErrorCodes(t *testing.T) {
 			none(errcode.StateVersionResourceNotFound),
 		},
 		{
-			"state past the masked read bound", fmt.Errorf("read resource: %w", workspace.ErrStateBound),
+			"state is too deep or too large for a masked read",
+			fmt.Errorf("read resource: %w", workspace.ErrStateBound),
 			http.StatusRequestEntityTooLarge, none(errcode.StateVersionTooComplex),
 		},
 	})

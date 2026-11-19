@@ -1023,8 +1023,10 @@ func TestRevealPastTheBoundAnswers413AndLogs(t *testing.T) {
 
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
 	handler := newRevealHandler(
-		t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil, nil, logger,
+		t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, entries, nil, logger,
 	)
 
 	status, _, body := sendReveal(
@@ -1036,12 +1038,20 @@ func TestRevealPastTheBoundAnswers413AndLogs(t *testing.T) {
 	}
 
 	line := logs.String()
-	if !strings.Contains(line, `"msg":"state past the masked read bound"`) ||
+	if !strings.Contains(line, `"msg":"state is too deep or too large for a masked read"`) ||
 		!strings.Contains(line, `"state_version":"sv-bound123"`) || !strings.Contains(line, `"level":"WARN"`) {
 		t.Fatalf("log misses the warning of the bound: %q", line)
 	}
 
 	if strings.Contains(line+body, "s3cr3t") {
 		t.Fatalf("log or body holds the value: %q %q", line, body)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeFailure ||
+		entries.entries[0].Kind != audit.KindReveal || entries.entries[0].ValuePath != "" {
+		t.Fatalf("entries = %+v, want one failure entry of the kind reveal with no path", entries.entries)
 	}
 }

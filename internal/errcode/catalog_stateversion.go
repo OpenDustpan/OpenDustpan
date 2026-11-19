@@ -25,8 +25,7 @@ const (
 	StateVersionRevealPathTooLong = "state-version.reveal-path-too-long"
 	// StateVersionStaleSerial means that the serial of the state is not newer than the serial of the current state.
 	StateVersionStaleSerial = "state-version.stale-serial"
-	// StateVersionTooComplex means that the state version nests too deeply or holds too many value paths for a masked
-	// read.
+	// StateVersionTooComplex means that the state of the state version is too deep or too large for a masked read.
 	StateVersionTooComplex = "state-version.too-complex"
 	// StateVersionUploadDenied means that the upload capability of the state version is not valid, has expired, or the
 	// state version takes no upload.
@@ -83,7 +82,7 @@ func stateVersionSpecs() []Spec {
 		},
 		{
 			Code:    StateVersionTooComplex,
-			Meaning: "the state version nests too deeply or holds too many value paths for a masked read",
+			Meaning: "the state of the state version is too deep or too large for a masked read",
 			Args:    nil,
 		},
 		{

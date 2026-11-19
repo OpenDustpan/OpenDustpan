@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -213,6 +214,19 @@ func (h *Handler) getStateResource(
 	})
 }
 
+// stateBoundMessage is the log message of a masked read that the bound
+// refuses.
+const stateBoundMessage = "state is too deep or too large for a masked read"
+
+// oneLine removes CR and LF from a value that goes in a log record, so that
+// an identifier that a client sent cannot split or forge a log line.
+func oneLine(value string) string {
+	// Defense in depth: the route and the store check the format of an
+	// identifier too, and the log handler encodes control characters; this
+	// removal stays so that a new caller cannot write a split log line.
+	return strings.NewReplacer("\r", "", "\n", "").Replace(value)
+}
+
 // writeStateReadError writes the error of a masked state read. A state that
 // the read refuses because it is too deep or too large also logs a warning
 // with the state version, and no value of the state.
@@ -220,7 +234,24 @@ func (h *Handler) writeStateReadError(
 	ctx context.Context, w http.ResponseWriter, err error, id workspace.StateVersionID,
 ) {
 	if errors.Is(err, workspace.ErrStateBound) {
-		h.logger.WarnContext(ctx, "state past the masked read bound", slog.String("state_version", id.String()))
+		h.logger.WarnContext(ctx, stateBoundMessage, slog.String("state_version", oneLine(id.String())))
+	}
+
+	h.writeError(ctx, w, err)
+}
+
+// writeStateDiffError writes the error of a masked state diff. A diff that the
+// bound refuses also logs a warning with both state versions, because the
+// error does not tell which of the two is too deep or too large. It logs no
+// value of the state.
+func (h *Handler) writeStateDiffError(
+	ctx context.Context, w http.ResponseWriter, err error, from, to workspace.StateVersionID,
+) {
+	if errors.Is(err, workspace.ErrStateBound) {
+		h.logger.WarnContext(ctx, stateBoundMessage,
+			slog.String("from_state_version", oneLine(from.String())),
+			slog.String("to_state_version", oneLine(to.String())),
+		)
 	}
 
 	h.writeError(ctx, w, err)

@@ -28,8 +28,8 @@ const (
 	// StackRevealPathTooLong is a reveal request whose value path is longer
 	// than maxBytes bytes.
 	StackRevealPathTooLong = "stack.reveal-path-too-long"
-	// StackStateTooComplex is a state that the masked read refuses because it
-	// nests too deeply or holds too many value paths.
+	// StackStateTooComplex is a state that is too deep or too large for a
+	// masked read.
 	StackStateTooComplex = "stack.state-too-complex"
 )
 
@@ -62,7 +62,7 @@ func stackSpecs() []Spec {
 		{Code: StackResourceNotFound, Meaning: "the state of the stack has no such resource", Args: nil},
 		{
 			Code:    StackStateTooComplex,
-			Meaning: "the state nests too deeply or holds too many value paths for a masked read",
+			Meaning: "the state is too deep or too large for a masked read",
 			Args:    nil,
 		},
 		{

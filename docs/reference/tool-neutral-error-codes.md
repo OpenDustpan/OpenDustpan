@@ -45,6 +45,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 409 | `storecheck.no-target` | The server has no store for the target, for example no backup target |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 409 | `request.idempotency-key-lost` | A newer request took the `Idempotency-Key` before this request ended |
+| 413 | `stack.state-too-complex`, `state-version.too-complex` | The state is too deep or too large for a masked read. It nests more than 100 levels, or the work of the read is more than 128 MiB. `stack.state-too-complex` is the code of a Pulumi stack and of the outputs route. `state-version.too-complex` is the code of an OpenTofu state version |
 | 421 | `namespace.not-home` | The namespace has another primary installation |
 | 429 | `auth.rate-limited` | Too many failed sign-ins from this address |
 | 500 | `server.internal` | An error that the server does not classify. The message is `internal error` |
