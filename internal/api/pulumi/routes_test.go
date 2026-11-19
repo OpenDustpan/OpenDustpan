@@ -1135,6 +1135,40 @@ func TestUpdateStackTagsThroughWrapper(t *testing.T) {
 	checkStackChangeEntry(t, got.entry)
 }
 
+// TestUpdateStackTagsThroughWrapperHostileKey proves a tag name that is not
+// allowed answers 400 and updates nothing, so no audit entry is built.
+func TestUpdateStackTagsThroughWrapperHostileKey(t *testing.T) {
+	t.Parallel()
+
+	bodies := []string{
+		`{"evil\r\nInjected: yes":"v"}`,
+		`{"a\u200bb":"v"}`,
+		`{"bad\ufffdutf":"v"}`,
+		`{"` + strings.Repeat("k", 100000) + `":"v"}`,
+		`{"team":"` + strings.Repeat("v", 257) + `"}`,
+	}
+
+	for _, body := range bodies {
+		handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+		req := httptest.NewRequestWithContext(
+			t.Context(), http.MethodPatch, "/api/stacks/acme/web/prod/tags", strings.NewReader(body),
+		)
+		req.Header.Set("Authorization", "token test-token")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("hostile tags answer %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+
+		if len(stores.tags) != 0 {
+			t.Fatalf("updated tags %d times, want 0", len(stores.tags))
+		}
+	}
+}
+
 // checkStackChangeEntry fails the test unless e is a timed change entry of
 // unit:manage by the test caller on the stack acme/web/prod.
 func checkStackChangeEntry(t *testing.T, e audit.Entry) {

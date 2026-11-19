@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Change is one key of an entry with its values: a setting of a start entry
@@ -32,6 +35,20 @@ type Change struct {
 // MaxChanges caps the changes of one entry, so an entry never grows without
 // a bound.
 const MaxChanges = 256
+
+// MaxChangeKeyLen caps the bytes of one change key, and MaxChangeValueLen
+// caps the bytes of the Old and New text of a change, so a stored entry never
+// holds an unbounded text. MaxChangeValueLen is large because a value can be
+// a list with one item on each line, for example the token managers of a
+// grant.
+const (
+	MaxChangeKeyLen   = 256
+	MaxChangeValueLen = 1 << 20
+)
+
+// maxChangeLabelLen caps the bytes of Layer and TakesEffect, which are short
+// words.
+const maxChangeLabelLen = 256
 
 // EncodeChanges answers the canonical JSON of changes: a list sorted by key,
 // each object with its fields in a fixed order. The same changes always
@@ -94,16 +111,78 @@ func validateChanges(changes []Change) error {
 
 		seen[c.Key] = true
 
-		valid := utf8.ValidString(c.Key) && utf8.ValidString(c.New) && utf8.ValidString(c.Layer) &&
-			utf8.ValidString(c.TakesEffect)
-		if c.Old != nil {
-			valid = valid && utf8.ValidString(*c.Old)
-		}
-
-		if !valid {
-			return fmt.Errorf("%w: change %q is not valid UTF-8", ErrInvalidEntry, c.Key)
+		if err := validateChangeTexts(c); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// validateChangeTexts checks the texts of one change: each is valid UTF-8,
+// holds no hidden character (a control, format or separator character, as a
+// line break), and stays inside its byte bound.
+//
+// Defense in depth: the services that build a change check their own input
+// and the stores check an entry again before they write it. This check stays
+// so that a new writer cannot store a text that a reader shows in a
+// misleading way.
+func validateChangeTexts(c Change) error {
+	// A key, a layer and a takes-effect text are one line. Old and New may hold
+	// line breaks and tabs, because a value can be a list with one item on
+	// each line; any other hidden character is refused there too.
+	oneLine := func(r rune) bool { return ident.IsHiddenRune(r) }
+	multiLine := func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }
+
+	texts := []struct {
+		text   string
+		limit  int
+		hidden func(rune) bool
+	}{
+		{c.Key, MaxChangeKeyLen, oneLine},
+		{c.New, MaxChangeValueLen, multiLine},
+		{c.Layer, maxChangeLabelLen, oneLine},
+		{c.TakesEffect, maxChangeLabelLen, oneLine},
+	}
+	if c.Old != nil {
+		texts = append(texts, struct {
+			text   string
+			limit  int
+			hidden func(rune) bool
+		}{*c.Old, MaxChangeValueLen, multiLine})
+	}
+
+	for _, t := range texts {
+		if !utf8.ValidString(t.text) || strings.IndexFunc(t.text, t.hidden) >= 0 {
+			return fmt.Errorf("%w: change %q holds text that is not valid or has a hidden character",
+				ErrInvalidEntry, printable(c.Key))
+		}
+
+		if len(t.text) > t.limit {
+			return fmt.Errorf("%w: change %q holds a text of more than %d bytes",
+				ErrInvalidEntry, printable(c.Key), t.limit)
+		}
+	}
+
+	return nil
+}
+
+// printable shortens key and replaces each byte that is not printable ASCII,
+// so an error text never holds the hostile text of a key.
+func printable(key string) string {
+	const shown = 40
+
+	out := make([]byte, 0, shown)
+
+	for i := 0; i < len(key) && len(out) < shown; i++ {
+		if key[i] < 0x20 || key[i] > 0x7e {
+			out = append(out, '?')
+
+			continue
+		}
+
+		out = append(out, key[i])
+	}
+
+	return string(out)
 }

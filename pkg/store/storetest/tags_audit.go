@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -144,6 +145,46 @@ func testUpdateTagsRefusedEntryChangesNothing(t *testing.T, f fixture) {
 	after := mustGetFixtureStack(t, f)
 	if len(after.Tags) != len(before.Tags) {
 		t.Fatalf("tags after the refused update = %v, want %v", after.Tags, before.Tags)
+	}
+
+	if entries := listAudit(t, f.s, ns); len(entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none", entries)
+	}
+}
+
+// testUpdateTagsHostileKeyChangesNothing sends tag keys that a reader of the
+// audit log could take for something else: a line break, a hidden character,
+// invalid UTF-8 and a key that is too long. The store checks the entry with
+// the changes that it builds, whatever the caller checked: the update returns
+// audit.ErrInvalidEntry, and the tags and the chain stay as they were.
+func testUpdateTagsHostileKeyChangesNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	ns := f.ref.Namespace
+	before := mustGetFixtureStack(t, f)
+
+	keys := []string{
+		"evil\r\nInjected: yes",
+		"a\u200bb",
+		"bad\xffutf",
+		strings.Repeat("k", audit.MaxChangeKeyLen+1),
+	}
+
+	for _, key := range keys {
+		err := f.s.UpdateStackTags(
+			t.Context(),
+			f.ref,
+			stack.TagUpdate{Tags: map[string]string{key: "v"}, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+			f.fence,
+		)
+		if !errors.Is(err, audit.ErrInvalidEntry) {
+			t.Fatalf("update tags with key %q: err = %v, want ErrInvalidEntry", key, err)
+		}
+	}
+
+	after := mustGetFixtureStack(t, f)
+	if !maps.Equal(after.Tags, before.Tags) {
+		t.Fatalf("tags after the refused updates = %v, want %v", after.Tags, before.Tags)
 	}
 
 	if entries := listAudit(t, f.s, ns); len(entries) != 0 {

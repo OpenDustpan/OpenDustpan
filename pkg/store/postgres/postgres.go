@@ -634,6 +634,17 @@ func appendTagChangeEntry(
 	e.ObjectID = id
 	e.Changes = changes
 
+	// The entry that the caller passed was checked before the changes were set,
+	// so the changes get their own check here. A hostile tag key returns
+	// audit.ErrInvalidEntry, and the transaction rolls back.
+	//
+	// Defense in depth: the service checks the tag names, and the audit package
+	// checks each change text when it validates an entry. This check stays so
+	// that a caller of the store cannot write a change that no other layer saw.
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
 	if _, err := appendAuditEntry(ctx, q, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}

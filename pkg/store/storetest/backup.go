@@ -1444,7 +1444,7 @@ func backupChanges() []audit.Change {
 	old := `say "hi" <&> \ end`
 
 	return []audit.Change{
-		{Key: "region", Old: &old, New: "line\u2028sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
+		{Key: "region", Old: &old, New: "line\u00a0sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
 		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -45,6 +46,12 @@ var (
 const (
 	maxNameLength = 100
 	maxTags       = 64
+
+	// maxTagNameLen and maxTagValueLen are the limits that the Pulumi CLI
+	// and Pulumi Cloud set for a stack tag: the CLI never sends a tag outside
+	// them.
+	maxTagNameLen  = 40
+	maxTagValueLen = 256
 )
 
 // ProjectName is a validated project name.
@@ -408,8 +415,8 @@ func createRows(ctx context.Context, store Store, st Stack, p Placement, fence n
 }
 
 func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p Placement) (Stack, error) {
-	if len(tags) > maxTags {
-		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+	if err := checkTags(tags); err != nil {
+		return Stack{}, err
 	}
 
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
@@ -637,8 +644,8 @@ func (s *Service) PurgeExpired(
 func (s *Service) UpdateTags(
 	ctx context.Context, ref Ref, tags map[string]string, e audit.Entry,
 ) (Stack, error) {
-	if len(tags) > maxTags {
-		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+	if err := checkTags(tags); err != nil {
+		return Stack{}, err
 	}
 
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
@@ -848,4 +855,53 @@ func TagChanges(old, next map[string]string) []audit.Change {
 	slices.SortFunc(changes, func(a, b audit.Change) int { return strings.Compare(a.Key, b.Key) })
 
 	return changes
+}
+
+// checkTags returns ErrInvalidName when tags holds more than maxTags tags,
+// or a tag whose name is not 1 to maxTagNameLen characters of letters,
+// digits and "-", "_", ".", ":", or whose value is not valid UTF-8 text of at
+// most maxTagValueLen bytes without a hidden character. The error text never
+// holds the rejected name.
+//
+// Defense in depth: the stores check the audit entry that names the keys, and
+// the audit package checks each change text. This check stays so that no
+// other layer decides what a tag key may hold.
+func checkTags(tags map[string]string) error {
+	if len(tags) > maxTags {
+		return fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+	}
+
+	for name, value := range tags {
+		if !validTagName(name) {
+			return fmt.Errorf("%w: a tag name must have 1 to %d characters: letters, digits, hyphen, "+
+				"underscore, period or colon", ErrInvalidName, maxTagNameLen)
+		}
+
+		if len(value) > maxTagValueLen || !utf8.ValidString(value) || ident.HasHidden(value) {
+			return fmt.Errorf("%w: the value of a tag is not valid text of at most %d bytes",
+				ErrInvalidName, maxTagValueLen)
+		}
+	}
+
+	return nil
+}
+
+// validTagName reports whether name is an allowed tag name.
+func validTagName(name string) bool {
+	if name == "" || len(name) > maxTagNameLen {
+		return false
+	}
+
+	for i := range len(name) {
+		c := name[i]
+
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+
+	return true
 }

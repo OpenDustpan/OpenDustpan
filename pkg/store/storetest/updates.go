@@ -69,6 +69,10 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 			test: testUpdateTagsRefusedEntryChangesNothing,
 		},
 		{
+			name: "a tags update with a hostile tag key changes nothing",
+			test: testUpdateTagsHostileKeyChangesNothing,
+		},
+		{
 			name: "a tags update whose audit append fails changes nothing",
 			test: testUpdateTagsFailedAppendChangesNothing,
 		},
