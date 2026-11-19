@@ -166,7 +166,8 @@ func (p ProviderConfig) validateMode() error {
 
 		if !ValidIssuer(p.Issuer) {
 			return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
-				"of at most %d bytes", ErrInvalidProvider, maxIssuer)
+				"with no user information, no query and no fragment, of at most %d bytes",
+				ErrInvalidProvider, maxIssuer)
 		}
 
 		return nil
@@ -188,8 +189,10 @@ func (p ProviderConfig) validateMode() error {
 
 // ValidIssuer reports whether issuer is an absolute https URL with a host,
 // or an http URL on a loopback host, with no user, no query and no fragment.
-// It is the one issuer rule: the stored providers, the serve flags and the
-// sign-in client use it, so a configured issuer never fails the client.
+// It is the one issuer rule: the stored providers on write, the serve flags
+// and the sign-in client use it. A stored row is not checked when the store
+// reads it or when a backup restores it, so the client checks the issuer
+// again and refuses a row that fails the rule.
 func ValidIssuer(issuer string) bool {
 	if issuer == "" || len(issuer) > maxIssuer {
 		return false

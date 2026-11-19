@@ -3,9 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -46,7 +44,7 @@ var (
 		"invalid --allowed-origins (DUSTPAN_ALLOWED_ORIGINS): use http:// or https:// with a host and an " +
 			"optional port, in lower case, with no path, query or fragment, for example https://console.example.com",
 	)
-	errTLSFile = errors.New("the TLS file does not exist")
+	errTLSFile = errors.New("the TLS file cannot be found or read")
 )
 
 // checkSignInFlags refuses a sign-in setting that the server refuses later,
@@ -117,9 +115,10 @@ func (f *serveFlags) checkOIDCFlags() error {
 		return errOIDCClientID
 	}
 
-	// The issuer is never printed: it may hold a user name and a password.
+	// The issuer is never printed, not even in part: it may hold a user name,
+	// a password, a query or a fragment with a secret.
 	if !session.ValidIssuer(f.oidcIssuer) {
-		return fmt.Errorf("%w: %s", errOIDCIssuer, redactIssuer(f.oidcIssuer))
+		return errOIDCIssuer
 	}
 
 	return nil
@@ -129,20 +128,6 @@ func (f *serveFlags) checkOIDCFlags() error {
 // dev sign-in or for the local users.
 func reservedProviderID(id string) bool {
 	return id == session.DevProviderID || id == session.LocalProviderID
-}
-
-// redactIssuer returns the issuer for an error text, with its
-// user information removed. A value that does not parse gives a fixed text, so
-// the error never holds a secret.
-func redactIssuer(issuer string) string {
-	u, err := url.Parse(issuer)
-	if err != nil {
-		return "(not a valid URL)"
-	}
-
-	u.User = nil
-
-	return strconv.Quote(u.String())
 }
 
 // checkOriginFlags refuses an --allowed-origins item that the server refuses.
@@ -156,8 +141,8 @@ func (f *serveFlags) checkOriginFlags() error {
 	return nil
 }
 
-// checkTLSFiles refuses a --tls-cert or --tls-key file that does not exist,
-// before the database opens.
+// checkTLSFiles refuses a --tls-cert or --tls-key file that cannot be found or
+// read, before the database opens.
 func (f *serveFlags) checkTLSFiles() error {
 	for _, item := range []struct{ flag, env, path string }{
 		{"--tls-cert", "DUSTPAN_TLS_CERT", f.tlsCert},
@@ -168,7 +153,7 @@ func (f *serveFlags) checkTLSFiles() error {
 		}
 
 		if _, err := os.Stat(item.path); err != nil {
-			return fmt.Errorf("%w: %s: set %s (%s) to a readable PEM file: %w",
+			return fmt.Errorf("%w: %q: set %s (%s) to a readable PEM file: %w",
 				errTLSFile, item.path, item.flag, item.env, unwrapPathError(err))
 		}
 	}

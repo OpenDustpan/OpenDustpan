@@ -184,6 +184,26 @@ func TestServeCheckTLSFilesNamesTheFlag(t *testing.T) {
 	}
 }
 
+// TestServeCheckTLSFilesQuotesThePath proves that a path with CR, LF or
+// another control character cannot split a line of the error text.
+func TestServeCheckTLSFilesQuotesThePath(t *testing.T) {
+	t.Parallel()
+
+	name := "a\r\nX-Injected: y\x01.pem"
+	hostile := filepath.Join(t.TempDir(), name)
+
+	err := parseCheckFlags(t, "--tls-cert", hostile).checkTLSFiles()
+	if err == nil {
+		t.Fatal("checkTLSFiles = nil, want an error")
+	}
+
+	for _, bad := range []string{"\r", "\n", "\x01"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Fatalf("error %q holds the raw character %q", err, bad)
+		}
+	}
+}
+
 // TestLDAPRootsNamesTheWholePath proves that the error for a CA file names
 // the whole path, with the leading separator, and not the last element only.
 func TestLDAPRootsNamesTheWholePath(t *testing.T) {
@@ -239,6 +259,9 @@ func TestServeCheckHostileValues(t *testing.T) {
 		{"issuer query", issuer("https://id.example.com?x=1")},
 		{"issuer fragment", issuer("https://id.example.com#x")},
 		{"issuer CRLF", issuer("https://id.example.com/\r\nX: y")},
+		{"issuer opaque userinfo", issuer("https:user:pass@id.example.com")},
+		{"issuer secret in query", issuer("https://id.example.com/?token=s3cr3t")},
+		{"issuer secret in fragment", issuer("https://id.example.com/#tok=s3cr3t")},
 		{"origin upper case", []string{"--allowed-origins", "https://Console.example.com"}},
 		{"origin default port", []string{"--allowed-origins", "https://a.example.com:443"}},
 		{"origin query", []string{"--allowed-origins", "https://a.example.com?x=1"}},
@@ -254,7 +277,7 @@ func TestServeCheckHostileValues(t *testing.T) {
 				t.Fatalf("check %q = nil, want an error", tt.args)
 			}
 
-			for _, secret := range []string{"secret", "tokenvalue", "\r", "\n", "\x00", "\x01"} {
+			for _, secret := range []string{"secret", "s3cr3t", "pass", "tokenvalue", "\r", "\n", "\x00", "\x01"} {
 				if strings.Contains(err.Error(), secret) {
 					t.Fatalf("error %q holds %q", err, secret)
 				}

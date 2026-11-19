@@ -193,13 +193,14 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: redirect URL is empty", ErrConfig)
 	}
 
-	issuer, err := url.Parse(cfg.Issuer)
-	if err != nil || issuer.Host == "" {
-		return fmt.Errorf("%w: issuer %q is not an absolute URL", ErrConfig, cfg.Issuer)
-	}
-
-	if !secureURL(issuer) {
-		return fmt.Errorf("%w: issuer %q must use https", ErrConfig, cfg.Issuer)
+	// Defense in depth: the stored-provider check and the serve flag check
+	// apply the same rule; this check stays so that a stored or restored
+	// provider row that skipped them still fails here. The error holds no
+	// part of the issuer, which may hold a user name, a password, a query or
+	// a fragment with a secret.
+	if !session.ValidIssuer(cfg.Issuer) {
+		return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
+			"with no user information, no query and no fragment", ErrConfig)
 	}
 
 	return nil

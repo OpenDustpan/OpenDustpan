@@ -62,7 +62,7 @@ func TestNewServerSignInSetup(t *testing.T) {
 				p.Issuer = "http://idp.example"
 
 				return p
-			}()}, want: "must use https",
+			}()}, want: "must be an absolute https URL",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
