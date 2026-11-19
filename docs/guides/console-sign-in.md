@@ -85,7 +85,9 @@ The rules:
   No answer and no audit entry holds the client secret. An answer has
   `clientSecretSet` only.
 - The list also holds the providers of the flags, with the source
-  `static`. The API cannot change them: change the flags instead.
+  `static`. The API cannot change them: change the flags instead. A static
+  provider shows the effective `issuer`, `clientID` and `scopes` of its flags.
+  The `issuer` has no user information, query or fragment.
 - A `PATCH` sends `version`, the version that it read. When the provider
   has another version, the change answers 409. Read the provider again
   and send the change again.

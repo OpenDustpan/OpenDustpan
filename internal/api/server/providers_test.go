@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -99,6 +100,9 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		Method:      method,
 		ID:          id,
 		DisplayName: p.DisplayName,
+		Issuer:      "",
+		ClientID:    "",
+		Scopes:      nil,
 		AutoCreate:  p.AutoCreate,
 		Stored:      true,
 	}, true, nil
@@ -302,6 +306,10 @@ func checkProviderList(t *testing.T, e providerEnv) {
 	if len(list.Providers) != 2 || list.Providers[0].ID != "corp" || list.Providers[0].Source != "static" ||
 		list.Providers[1].ID != "beta" || list.Providers[1].Source != "api" {
 		t.Fatalf("list = %+v, want corp (static) and beta (api)", list.Providers)
+	}
+
+	if corp := list.Providers[0]; corp.Issuer != "https://idp.example" || !slices.Equal(corp.Scopes, []string{"profile"}) {
+		t.Fatalf("corp = %+v, want the issuer and the scopes of the configuration", corp)
 	}
 
 	if strings.Contains(rec.Body.String(), betaSecret) {
