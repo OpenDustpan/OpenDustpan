@@ -154,7 +154,7 @@ func TestCIFilterRunsGoTestsForDocsTheyRead(t *testing.T) {
 
 	for _, path := range docsPathsReadByGoTests() {
 		if !setsCode(rules, path) {
-			t.Errorf("the classify step of .github/workflows/ci.yml does not set code=true for %s, which a Go test reads: "+
+			t.Errorf("ci.yml does not set code=true for %s, which a Go test reads: "+
 				"a docs-only change of it skips the go job", path)
 		}
 	}
