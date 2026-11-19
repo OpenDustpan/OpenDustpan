@@ -128,11 +128,11 @@ type KeepAccessResult struct {
 	ExpiredUpdateLeases int64
 }
 
-// Fencer increments the failover version of every namespace (ADR 38
-// decision 7), so writes that carry a fence from before the restore stop
-// working. The version does not end a Pulumi update lease or a workspace
-// lock: the swap expires the lease of each running update, without ending the
-// update, and releases each workspace lock, in its own transaction.
+// Fencer increments the failover version of every namespace, so writes
+// that carry a fence from before the restore stop working. The version does
+// not end a Pulumi update lease or a workspace lock: the swap transaction
+// expires the lease of each running update, without ending the update, and
+// releases each workspace lock.
 type Fencer interface {
 	// BumpFailoverVersions increments the failover version of every
 	// namespace by one and returns the count of namespaces bumped.

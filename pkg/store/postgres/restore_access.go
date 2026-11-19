@@ -89,9 +89,8 @@ func (s *Store) keepAccessTx(
 // swapSchemas moves the live schema aside, moves the staged schema live,
 // drops the old live schema when names.drop says so and the control schema
 // of the staging area, and fences the restored namespaces, in tx. It sets
-// kept.ExpiredUpdateLeases. The
-// installation, backups and restores tables live in the control schema,
-// which the swap never renames.
+// kept.ExpiredUpdateLeases. The installation, backups and restores tables
+// live in the control schema, which the swap never renames.
 func swapSchemas(
 	ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames, kept *backup.KeepAccessResult,
 ) error {

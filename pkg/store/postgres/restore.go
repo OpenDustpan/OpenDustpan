@@ -327,9 +327,10 @@ type swapNames struct {
 // installation, keeps the durable control tables of the live installation,
 // applies the journaled revocations again, drops the schema previous when
 // names.drop says so and the control schema of the staging area, and fences
-// the restored schema live (see fenceRestored). It sets kept.ExpiredUpdateLeases. The installation, backups,
-// restores and revocation journal tables live in the control schema, which
-// the swap never renames, so they stay across the swap with no copy.
+// the restored schema live (see fenceRestored). It sets
+// kept.ExpiredUpdateLeases. The installation, backups, restores and
+// revocation journal tables live in the control schema, which the swap never
+// renames, so they stay across the swap with no copy.
 //
 // The check of the step fence under the lock of the row of the operation
 // comes after all of this, at the end of the swap transaction. So a renewal

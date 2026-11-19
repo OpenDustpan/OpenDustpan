@@ -232,7 +232,7 @@ restored data. The restore also releases every OpenTofu workspace lock that
 the backup holds. A client that holds a lock from before the restore must take
 a new lock and read the restored state before it writes.
 
-The restore also stops the lease of every Pulumi update that was running when
+The restore also expires the lease of every Pulumi update that was running when
 the backup was made. The update stays `running` and its stack stays locked. The
 client that holds the old lease token cannot renew the lease, save a
 checkpoint or complete the update: each call answers 401 with the error code

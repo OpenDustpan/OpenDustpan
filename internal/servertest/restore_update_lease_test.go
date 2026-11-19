@@ -25,7 +25,15 @@ type leaseCall struct {
 func sendLeaseCall(t *testing.T, c *servertest.Cluster, call leaseCall) (int, string) {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, c.URL(0)+call.path,
+	return sendTokenRequest(t, c, http.MethodPost, call)
+}
+
+// sendTokenRequest sends method to server 0 with the update token as its
+// credential and returns the status and the body.
+func sendTokenRequest(t *testing.T, c *servertest.Cluster, method string, call leaseCall) (int, string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), method, c.URL(0)+call.path,
 		strings.NewReader(call.body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -36,12 +44,12 @@ func sendLeaseCall(t *testing.T, c *servertest.Cluster, call leaseCall) (int, st
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST %s: %v", call.path, err)
+		t.Fatalf("%s %s: %v", method, call.path, err)
 	}
 
 	data, readErr := io.ReadAll(resp.Body)
 	if closeErr := resp.Body.Close(); closeErr != nil || readErr != nil {
-		t.Fatalf("read answer of POST %s: %v %v", call.path, readErr, closeErr)
+		t.Fatalf("read answer of %s %s: %v %v", method, call.path, readErr, closeErr)
 	}
 
 	return resp.StatusCode, string(data)
@@ -167,14 +175,67 @@ func TestRestoreExpiresLeaseOfRunningUpdate(t *testing.T) {
 		t.Fatalf("restore = %q (%s), want succeeded", got.State, got.Error)
 	}
 
-	// The old lease token gets 401 with the code update.lease-expired.
-	status, body = sendLeaseCall(t, c, renew)
-	if status != http.StatusUnauthorized || !strings.Contains(body, `"update.lease-expired"`) {
-		t.Fatalf("renew with the old token after the restore: status %d, body %s, want 401 update.lease-expired",
-			status, body)
+	checkOldTokenExpired(t, c, update)
+	checkCancelUnlocksStack(t, c, update)
+}
+
+// TestRestoreForceExpiresLeaseOfRunningUpdate restores with force while the
+// update still runs: the token that never stopped gets 401 and the code
+// update.lease-expired.
+func TestRestoreForceExpiresLeaseOfRunningUpdate(t *testing.T) {
+	t.Parallel()
+
+	target, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
 	}
 
-	checkCancelUnlocksStack(t, c, update)
+	c := servertest.Start(t, 1, dustpan.WithBackupTarget(target, "test"))
+	update := startRunningUpdate(t, c)
+
+	backupID := startBackup(t, c, 0)
+	if got := waitBackup(t, c, 0, backupID, restoreLimit); got.State != string(backup.StateSucceeded) {
+		t.Fatalf("backup %s = %q (%s), want succeeded", backupID, got.State, got.Error)
+	}
+
+	// The update still runs when the restore starts.
+	id := startRestoreBody(t, c, `{"backupID":"`+backupID+`","force":true}`)
+	if got := waitRestoreEnd(t, c, id); got.State != string(backup.RestoreSucceeded) {
+		t.Fatalf("forced restore = %q (%s), want succeeded", got.State, got.Error)
+	}
+
+	checkOldTokenExpired(t, c, update)
+}
+
+// checkOldTokenExpired checks that the lease token of update, from before the
+// restore, gets 401 with the code update.lease-expired on a renew, a
+// checkpoint and a complete.
+func checkOldTokenExpired(t *testing.T, c *servertest.Cluster, update runningUpdate) {
+	t.Helper()
+
+	calls := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"renew", http.MethodPost, update.path + "/renew_lease", `{"duration":300}`},
+		{"checkpoint", http.MethodPatch, update.path + "/checkpoint", `{"version":3,"deployment":{}}`},
+		{"complete", http.MethodPost, update.path + "/complete", `{"status":"succeeded"}`},
+	}
+
+	for _, call := range calls {
+		status, body := sendTokenRequest(
+			t,
+			c,
+			call.method,
+			leaseCall{path: call.path, token: update.token, body: call.body},
+		)
+		if status != http.StatusUnauthorized || !strings.Contains(body, `"update.lease-expired"`) {
+			t.Errorf("%s with the old token after the restore: status %d, body %s, want 401 update.lease-expired",
+				call.name, status, body)
+		}
+	}
 }
 
 // checkCancelUnlocksStack checks that the restored update keeps the stack
