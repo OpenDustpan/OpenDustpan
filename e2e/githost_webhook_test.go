@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/e2e/githubfake"
@@ -168,15 +169,23 @@ func (s *webhookScenario) deliver(t *testing.T, hookID string, d githubfake.Deli
 	}
 }
 
-// noCommit is the head of a pull request that the steps do not read.
-var noCommit githubfake.Commit //nolint:gochecknoglobals // A zero value for the events of the steps.
+// headOf returns the head commit of a pull request that the steps do not read.
+func headOf(sha string) githubfake.Commit {
+	return githubfake.Commit{
+		ID: sha, Parent: "", Message: "", Time: time.Time{}, Author: "", Committer: "", Verified: false,
+	}
+}
 
 // pullRequest returns the event of a pull request that opened.
 func (s *webhookScenario) pullRequest(number int) githubfake.Event {
 	return s.host.fake.Events().PullRequestEvent(
 		githubfake.ReviewOpened, "acme-org/web",
 		githubfake.PullRequest{
-			Number: number, Head: noCommit, HeadBranch: "feature", BaseBranch: "main", Merged: false,
+			Number:     number,
+			Head:       headOf(strings.Repeat("a", 40)),
+			HeadBranch: "feature",
+			BaseBranch: "main",
+			Merged:     false,
 		},
 		s.sender,
 	)
