@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -156,6 +157,15 @@ func writePoolProxy(ctx context.Context, q *db.Queries, poolID string, w *poolPr
 
 	if current.Version != version {
 		return runner.ErrConflict
+	}
+
+	// Defense in depth: the service clears the credential of a save that moves
+	// the upstream proxy, and the handler never sends a stored credential back.
+	// This check stays so that a caller that skips them never sends a stored
+	// credential to another endpoint. It does not rely on either layer.
+	if len(current.Credential) != 0 && bytes.Equal(current.Credential, w.rec.Credential) &&
+		runner.UpstreamEndpointChanged(current.UpstreamUrl, w.rec.Settings.UpstreamURL()) {
+		return fmt.Errorf("%w: the credential is for another upstream endpoint", runner.ErrInvalid)
 	}
 
 	n, err := q.UpdateRunnerPoolProxySettings(ctx, db.UpdateRunnerPoolProxySettingsParams{

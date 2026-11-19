@@ -90,6 +90,9 @@ type Collector struct {
 	// unchanged.
 	regFiles     map[string][]backup.RegistryFileEntry
 	seenRegFiles map[string]struct{}
+	// regTotals holds the total bytes of the registry files of each
+	// namespace, one count for each content hash.
+	regTotals map[string]int64
 }
 
 // RegistryFiles returns one entry per unique registry file content hash of
@@ -245,8 +248,37 @@ func (c *Collector) Release(row ReleaseRow) error {
 			return fmt.Errorf("%w: registry file %q has an MD5 that is not valid", ErrRow, hash)
 		}
 
+		// The check comes before the first reference of the file, so a file
+		// that a restore refuses stops the backup during the snapshot. The
+		// caller drops the collector after an error.
+		if limitErr := c.checkRegistryFile(hash, row.Release.Files[i].Size, row); limitErr != nil {
+			return limitErr
+		}
+
 		c.add(key.String(), row.Release.Files[i].Size, sum[:])
 		c.addRegistryFile(hash, row.Release.Files[i].Size, row)
+	}
+
+	return nil
+}
+
+// checkRegistryFile refuses a registry file that a restore refuses: a negative
+// size, a size above the limit of one file, or a size that takes the total of
+// the namespace above its limit. A hash that the namespace already holds has
+// its count already, so it adds nothing.
+//
+// Defense in depth: the backup service checks the same limits again before it
+// copies a blob. This check does not rely on that one: it stops a backup
+// whose store snapshot holds such a file, also when a caller uses the
+// collector with no service.
+func (c *Collector) checkRegistryFile(hash string, size int64, row ReleaseRow) error {
+	if _, dup := c.seenRegFiles[row.NamespaceID+"\x00"+hash]; dup {
+		return nil
+	}
+
+	err := backup.CheckRegistryFile(row.Release.Address.Name, row.Release.Version, size, c.regTotals[row.NamespaceID])
+	if err != nil {
+		return fmt.Errorf("registry file %q of namespace %q: %w", hash, row.NamespaceID, err)
 	}
 
 	return nil
@@ -267,7 +299,12 @@ func (c *Collector) addRegistryFile(hash string, size int64, row ReleaseRow) {
 		c.regFiles = make(map[string][]backup.RegistryFileEntry)
 	}
 
+	if c.regTotals == nil {
+		c.regTotals = make(map[string]int64)
+	}
+
 	c.seenRegFiles[seen] = struct{}{}
+	c.regTotals[row.NamespaceID] += size
 	c.regFiles[row.NamespaceID] = append(c.regFiles[row.NamespaceID], backup.RegistryFileEntry{
 		SHA256:  hash,
 		Size:    size,

@@ -69,7 +69,7 @@ func mfaSpecs() []Spec {
 		{
 			Code:    MFAKeyLimit,
 			Meaning: "the person holds the most passkeys that one person can hold",
-			Args:    []Arg{{Name: "limit", Kind: KindQuantity}},
+			Args:    []Arg{{Name: argLimit, Kind: KindQuantity}},
 		},
 		{Code: MFAKeyNotFound, Meaning: "the person has no passkey with this ID", Args: nil},
 		{

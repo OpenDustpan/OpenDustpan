@@ -392,3 +392,33 @@ func checkLockRules(t *testing.T, body []byte) {
 		t.Fatalf("lockRules = %+v, want %+v", got.LockRules, want)
 	}
 }
+
+// TestLocalUsersPolicyShowsTheMissingPublicURL proves the wiring of the
+// service: a server that has no console sign-in shows the password sign-in as
+// off with the source public-url, and a server with a public URL shows it on.
+// Removing the NoPublicURL setting of the server fails this test.
+func TestLocalUsersPolicyShowsTheMissingPublicURL(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+
+	srv, err := dustpan.NewServer(fullServerOptions(t, st, blobs, authn)...)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	off := localServer{handler: startedHandler(t, srv)}
+
+	policy := off.do(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", administrator())
+	wantAnswer(t, "policy without a public URL", policy, http.StatusOK, "")
+
+	if !strings.Contains(policy.Body.String(), `"enabled":false`) ||
+		!strings.Contains(policy.Body.String(), `"enabledSource":"public-url"`) {
+		t.Fatalf("policy without a public URL = %s", policy.Body)
+	}
+
+	on := newLocalServer(t).do(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", administrator())
+	if !strings.Contains(on.Body.String(), `"enabledSource":"default"`) {
+		t.Fatalf("policy with a public URL = %s", on.Body)
+	}
+}
