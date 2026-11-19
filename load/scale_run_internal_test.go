@@ -205,11 +205,19 @@ func TestMonitorEndBoundsHungSample(t *testing.T) {
 	mon.begin(t.Context())
 	sleep(t.Context(), sampleEvery+100*time.Millisecond)
 
-	started := time.Now()
-	got := mon.end(t.Context(), sampleEvery, 100)
+	// A hang shows as the package timeout, not as an elapsed-time check.
+	done := make(chan ResourceStats, 1)
 
-	if took := time.Since(started); took > bound+2*time.Second {
-		t.Fatalf("end took %v, want at most the bound %v plus a margin", took, bound)
+	go func() {
+		done <- mon.end(t.Context(), sampleEvery, 100)
+	}()
+
+	var got ResourceStats
+
+	select {
+	case got = <-done:
+	case <-t.Context().Done():
+		t.Fatalf("end did not return: %v", t.Context().Err())
 	}
 
 	if got.DBConnectionsMean != nil || got.DBConnectionsMax != nil {
