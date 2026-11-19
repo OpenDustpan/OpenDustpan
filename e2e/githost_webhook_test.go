@@ -56,7 +56,7 @@ func TestGitHostWebhookIntake(t *testing.T) {
 
 // webhookScenario holds what the steps share.
 type webhookScenario struct {
-	hostScenario
+	host hostScenario
 
 	hookID string
 	sender githubfake.Sender
@@ -72,7 +72,7 @@ func runGitHostWebhookSteps(t *testing.T, store e2e.Store) {
 	checkReady(ctx, t, env)
 
 	s := &webhookScenario{
-		hostScenario: hostScenario{
+		host: hostScenario{
 			env: env, fake: fake, answers: nil, app: "/api/dustpan/v1/git-host-apps/github",
 			assign: "/api/dustpan/v1/git-host-installations/" + e2e.GitHostInstallationID,
 			conns:  "", create: "",
@@ -88,7 +88,7 @@ func runGitHostWebhookSteps(t *testing.T, store e2e.Store) {
 	s.operatorRotates(t)
 	s.operatorConfirms(t)
 
-	for _, a := range s.answers {
+	for _, a := range s.host.answers {
 		for _, secret := range []string{e2eEventSecret, e2eRotatedSecret, "PRIVATE KEY"} {
 			if strings.Contains(a, secret) {
 				t.Fatalf("an answer holds a secret: %s", a)
@@ -101,12 +101,12 @@ func runGitHostWebhookSteps(t *testing.T, store e2e.Store) {
 func (s *webhookScenario) putBody(t *testing.T, eventSecret string) string {
 	t.Helper()
 
-	key, err := json.Marshal(s.fake.PrivateKeyPEM())
+	key, err := json.Marshal(s.host.fake.PrivateKeyPEM())
 	if err != nil {
 		t.Fatalf("encode the key: %v", err)
 	}
 
-	return `{"appID":"` + e2e.GitHostAppID + `","apiAddress":"` + s.fake.URL() + `","privateKey":` + string(key) +
+	return `{"appID":"` + e2e.GitHostAppID + `","apiAddress":"` + s.host.fake.URL() + `","privateKey":` + string(key) +
 		`,"eventSecret":"` + eventSecret + `"}`
 }
 
@@ -122,7 +122,7 @@ func (s *webhookScenario) readRegistration(t *testing.T) webhookRegistration {
 
 	var reg webhookRegistration
 
-	if err := json.Unmarshal([]byte(s.do(t, http.MethodGet, s.app, "", http.StatusOK)), &reg); err != nil {
+	if err := json.Unmarshal([]byte(s.host.do(t, http.MethodGet, s.host.app, "", http.StatusOK)), &reg); err != nil {
 		t.Fatalf("decode the registration: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func (s *webhookScenario) readRegistration(t *testing.T) webhookRegistration {
 func (s *webhookScenario) operatorRegisters(t *testing.T) {
 	t.Helper()
 
-	created := s.do(t, http.MethodPut, s.app, s.putBody(t, e2eEventSecret), http.StatusCreated)
+	created := s.host.do(t, http.MethodPut, s.host.app, s.putBody(t, e2eEventSecret), http.StatusCreated)
 
 	var reg webhookRegistration
 	if err := json.Unmarshal([]byte(created), &reg); err != nil {
@@ -150,7 +150,7 @@ func (s *webhookScenario) operatorRegisters(t *testing.T) {
 func (s *webhookScenario) operatorAssigns(t *testing.T) {
 	t.Helper()
 
-	s.do(t, http.MethodPut, s.assign, `{"namespace":"`+e2e.Namespace+`"}`, http.StatusCreated)
+	s.host.do(t, http.MethodPut, s.host.assign, `{"namespace":"`+e2e.Namespace+`"}`, http.StatusCreated)
 }
 
 // hook returns the hook of the fake with secret.
@@ -162,18 +162,21 @@ func (s *webhookScenario) hook(secret string) githubfake.Hook {
 func (s *webhookScenario) deliver(t *testing.T, hookID string, d githubfake.Delivery) {
 	t.Helper()
 
-	sent := s.env.DeliverWebhook(t.Context(), t, s.fake, "/webhooks/"+hookID, d)
+	sent := s.host.env.DeliverWebhook(t.Context(), t, s.host.fake, "/webhooks/"+hookID, d)
 	if sent.Status != http.StatusNoContent || len(sent.Answer) != 0 {
 		t.Fatalf("delivery %s answered %d with %q, want 204 and no body", d.ID, sent.Status, sent.Answer)
 	}
 }
 
+// noCommit is the head of a pull request that the steps do not read.
+var noCommit githubfake.Commit //nolint:gochecknoglobals // A zero value for the events of the steps.
+
 // pullRequest returns the event of a pull request that opened.
 func (s *webhookScenario) pullRequest(number int) githubfake.Event {
-	return s.fake.Events().PullRequestEvent(
+	return s.host.fake.Events().PullRequestEvent(
 		githubfake.ReviewOpened, "acme-org/web",
 		githubfake.PullRequest{
-			Number: number, Head: githubfake.Commit{}, HeadBranch: "feature", BaseBranch: "main", Merged: false,
+			Number: number, Head: noCommit, HeadBranch: "feature", BaseBranch: "main", Merged: false,
 		},
 		s.sender,
 	)
@@ -185,7 +188,7 @@ func (s *webhookScenario) pullRequest(number int) githubfake.Event {
 func (s *webhookScenario) githubDelivers(t *testing.T) {
 	t.Helper()
 
-	events := s.fake.Events()
+	events := s.host.fake.Events()
 	hook := s.hook(e2eEventSecret)
 
 	s.deliver(t, s.hookID, events.NewDelivery(hook, events.Ping(hook, s.sender)))
@@ -211,7 +214,7 @@ func (s *webhookScenario) githubDelivers(t *testing.T) {
 func (s *webhookScenario) strangerDelivers(t *testing.T) {
 	t.Helper()
 
-	events := s.fake.Events()
+	events := s.host.fake.Events()
 	good := s.hook(e2eEventSecret)
 
 	s.deliver(t, s.hookID, events.NewDelivery(s.hook(e2eWrongSecret), s.pullRequest(2)))
@@ -238,14 +241,14 @@ func (s *webhookScenario) strangerDelivers(t *testing.T) {
 func (s *webhookScenario) operatorRotates(t *testing.T) {
 	t.Helper()
 
-	s.do(t, http.MethodPut, s.app, s.putBody(t, e2eRotatedSecret), http.StatusOK)
+	s.host.do(t, http.MethodPut, s.host.app, s.putBody(t, e2eRotatedSecret), http.StatusOK)
 
 	reg := s.readRegistration(t)
 	if reg.OldSecretEndsAt == nil || *reg.OldSecretEndsAt <= 0 {
 		t.Fatalf("registration = %+v, want the end of the window", reg)
 	}
 
-	events := s.fake.Events()
+	events := s.host.fake.Events()
 
 	s.deliver(t, s.hookID, events.NewDelivery(s.hook(e2eRotatedSecret), s.pullRequest(4)))
 
@@ -270,18 +273,18 @@ func (s *webhookScenario) operatorRotates(t *testing.T) {
 func (s *webhookScenario) operatorConfirms(t *testing.T) {
 	t.Helper()
 
-	confirm := s.app + "/confirm-rotation"
+	confirm := s.host.app + "/confirm-rotation"
 
-	s.do(t, http.MethodPost, confirm, "", http.StatusOK)
+	s.host.do(t, http.MethodPost, confirm, "", http.StatusOK)
 
 	if reg := s.readRegistration(t); reg.OldSecretEndsAt != nil {
 		t.Fatalf("registration = %+v, want no window", reg)
 	}
 
 	// A second confirm has no window.
-	s.do(t, http.MethodPost, confirm, "", http.StatusConflict)
+	s.host.do(t, http.MethodPost, confirm, "", http.StatusConflict)
 
-	events := s.fake.Events()
+	events := s.host.fake.Events()
 	before := s.rejects(t)["signature"]
 
 	s.deliver(t, s.hookID, events.NewDelivery(s.hook(e2eEventSecret), s.pullRequest(6)))
@@ -303,7 +306,7 @@ var rejectedLine = regexp.MustCompile(`(?m)^dustpan_git_host_event_rejected_tota
 func (s *webhookScenario) rejects(t *testing.T) map[string]int {
 	t.Helper()
 
-	status, body, err := s.env.ServerAPIStatus(t.Context(), http.MethodGet, "/api/server/metrics", "")
+	status, body, err := s.host.env.ServerAPIStatus(t.Context(), http.MethodGet, "/api/server/metrics", "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("read the metrics = %d, %v", status, err)
 	}
@@ -326,12 +329,13 @@ func (s *webhookScenario) rejects(t *testing.T) map[string]int {
 func (s *webhookScenario) rejectEntries(t *testing.T, reason string) int {
 	t.Helper()
 
-	entries, _ := s.env.ServerRecords(t.Context(), t)
+	entries, _ := s.host.env.ServerRecords(t.Context(), t)
 	n := 0
 
 	for i := range entries {
 		e := &entries[i]
-		if e.Action == "git-host-event:receive" && e.Outcome == audit.OutcomeDenied && strings.Contains(e.Reason, reason) {
+		if e.Action == "git-host-event:receive" && e.Outcome == audit.OutcomeDenied &&
+			strings.Contains(e.Reason, reason) {
 			n++
 		}
 	}
@@ -343,7 +347,7 @@ func (s *webhookScenario) rejectEntries(t *testing.T, reason string) int {
 func (s *webhookScenario) oldSecretEntries(t *testing.T) int {
 	t.Helper()
 
-	entries, _ := s.env.ServerRecords(t.Context(), t)
+	entries, _ := s.host.env.ServerRecords(t.Context(), t)
 	n := 0
 
 	for i := range entries {
