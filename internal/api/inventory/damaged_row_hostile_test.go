@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/logtext"
+	"opendustpan.org/opendustpan/internal/logtext/logtexttest"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -386,6 +388,97 @@ func checkDamagedLog(t *testing.T, logText, body, id string) {
 	for _, text := range []string{"evil", "secret", "a:b"} {
 		if strings.Contains(body, text) {
 			t.Errorf("body repeats the stored text %q: %s", text, body)
+		}
+	}
+}
+
+// wrongIDReader is a unit reader that answers each GetUnit with the row it
+// holds, whatever unit ID it was asked for.
+type wrongIDReader struct {
+	coreinventory.Reader
+
+	row coreinventory.Entry
+}
+
+func (w wrongIDReader) GetUnit(context.Context, string) (coreinventory.Entry, error) {
+	return w.row, nil
+}
+
+// TestUnitByIDRechecksUnitID proves, with a store that ignores the unit ID,
+// that the resolver alone refuses a row of another unit ID, for a caller that
+// holds every grant.
+func TestUnitByIDRechecksUnitID(t *testing.T) {
+	t.Parallel()
+
+	acme := unitEntries()["acme"]
+	if len(acme) == 0 {
+		t.Fatal("unitEntries holds no unit of acme")
+	}
+
+	row := acme[0]
+
+	tests := []struct {
+		name string
+		id   string
+		want int
+	}{
+		{"row of another unit ID", "stk-asked", http.StatusNotFound},
+		{"control: row of the unit ID", row.UnitID, http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader := wrongIDReader{Reader: &memReader{entries: unitEntries(), err: nil}, row: row}
+			handler := newUnitHandlerLogged(t, hostileCallers()[0].authz, reader, slog.New(slog.DiscardHandler))
+
+			rec := getUnitByID(t, handler, tc.id, "test-token")
+			if rec.Code != tc.want {
+				t.Errorf("status %d body %q, want %d", rec.Code, rec.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
+// TestUnitByIDLogHoldsNoLineBreak proves that the log line of a damaged row
+// holds no CR and no LF and stays bounded. A text handler would quote a line
+// break, so the test reads the raw values.
+func TestUnitByIDLogHoldsNoLineBreak(t *testing.T) {
+	t.Parallel()
+
+	entries := damagedEntries()
+	acme := entries["acme"]
+	if len(acme) < 3 {
+		t.Fatal("damagedEntries holds fewer than three units of acme")
+	}
+
+	// damagedEntries ends with the rows of a tool, a name and a colon that fail.
+	acme[len(acme)-3].Tool = "evil\r\nERROR forged " + strings.Repeat("x", 5000)
+	acme[len(acme)-2].Name = "a\r\nb//" + strings.Repeat("y", 5000)
+	entries["acme"] = acme
+
+	rec := logtexttest.New()
+	handler := newUnitHandlerLogged(t, hostileCallers()[0].authz, &memReader{entries: entries, err: nil}, rec.Logger())
+
+	for _, id := range []string{damagedToolID, damagedNameID, damagedColonID} {
+		getUnitByID(t, handler, id, "test-token")
+	}
+
+	records := rec.Records()
+	if len(records) == 0 {
+		t.Fatal("no log record for a damaged row")
+	}
+
+	for _, r := range records {
+		for key, value := range r.Attrs {
+			if strings.ContainsAny(value, "\r\n") {
+				t.Errorf("log attribute %s holds a line break: %q", key, value)
+			}
+
+			if len(value) > logtext.MaxBytes+len("...") {
+				t.Errorf("log attribute %s has %d bytes, want at most %d", key, len(value), logtext.MaxBytes+3)
+			}
 		}
 	}
 }

@@ -17,6 +17,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
+	"opendustpan.org/opendustpan/internal/logtext"
+	"opendustpan.org/opendustpan/internal/logtext/logtexttest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -171,6 +173,21 @@ func newSpyHandler(
 ) testHandler {
 	t.Helper()
 
+	logger := slog.New(slog.DiscardHandler)
+	if logs != nil {
+		logger = slog.New(slog.NewTextHandler(logs, nil))
+	}
+
+	return newReaderHandler(t, authz, units, deleted, logger)
+}
+
+// newReaderHandler is newSpyHandler over any unit readers and any logger.
+func newReaderHandler(
+	t *testing.T, authz identity.Authorizer, units coreinventory.Reader, deleted coreinventory.DeletedReader,
+	logger *slog.Logger,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
 	)
@@ -185,11 +202,6 @@ func newSpyHandler(
 	)
 	if err != nil {
 		t.Fatalf("writer: %v", err)
-	}
-
-	logger := slog.New(slog.DiscardHandler)
-	if logs != nil {
-		logger = slog.New(slog.NewTextHandler(logs, nil))
 	}
 
 	handler, err := contextapi.NewHandler(contextapi.Config{
@@ -609,5 +621,171 @@ func TestDamagedRowLogBoundsStoredText(t *testing.T) {
 
 	if logs.Len() == 0 || logs.Len() > 1000 {
 		t.Errorf("log of %d bytes, want 1..1000", logs.Len())
+	}
+}
+
+// blindDeleted is a store of soft-deleted units that ignores the unit IDs and
+// the namespace of each query and returns the rows it holds, like a store whose
+// filter is wrong.
+type blindDeleted struct {
+	coreinventory.DeletedReader
+
+	blind []coreinventory.DeletedEntry
+}
+
+func (b *blindDeleted) QueryDeletedUnits(
+	context.Context, coreinventory.DeletedQuery,
+) (coreinventory.DeletedPage, error) {
+	return coreinventory.DeletedPage{Entries: b.blind, Next: nil, Total: len(b.blind)}, nil
+}
+
+// TestDeletedLookupRechecksUnitAndNamespace proves, with a store that ignores
+// its filter, that the resolver alone refuses a soft-deleted row of another
+// unit of the namespace and a row of the unit ID in another namespace. A
+// caller that holds every grant gets the answer of an unknown unit.
+func TestDeletedLookupRechecksUnitAndNamespace(t *testing.T) {
+	t.Parallel()
+
+	const wanted = "ws-gone"
+
+	otherUnit := goneRow("opentofu", "old", "ws-other")
+	otherNamespace := goneRow("opentofu", "old", wanted)
+	otherNamespace.Namespace = "globex"
+
+	control := goneRow("opentofu", "old", wanted)
+
+	tests := []struct {
+		name string
+		row  coreinventory.DeletedEntry
+		want int
+	}{
+		{"row of another unit, same namespace", otherUnit, http.StatusNotFound},
+		{"row of the unit ID in another namespace", otherNamespace, http.StatusNotFound},
+		{"control: row of the unit and the namespace", control, http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units, _ := hostileUnits()
+			deleted := &blindDeleted{
+				DeletedReader: &spyDeleted{
+					rows: nil, lists: atomic.Int64{}, queries: atomic.Int64{}, lastMu: sync.Mutex{}, last: nil,
+				},
+				blind: []coreinventory.DeletedEntry{tc.row},
+			}
+
+			handler := newReaderHandler(t, newAuthorizer(
+				"namespace:read acme", "unit:read opentofu:acme/old",
+			), units, deleted, slog.New(slog.DiscardHandler))
+
+			got := serve(t, handler, request{
+				method: http.MethodGet, path: unitContextPath("acme", wanted), token: testToken, body: "",
+			})
+			if got.Code != tc.want {
+				t.Errorf("status %d (%s), want %d", got.Code, got.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
+// wrongIDUnits is an inventory that answers each GetUnit with the row it
+// holds, whatever unit ID it was asked for.
+type wrongIDUnits struct {
+	coreinventory.Reader
+
+	row coreinventory.Entry
+}
+
+func (w *wrongIDUnits) GetUnit(context.Context, string) (coreinventory.Entry, error) {
+	return w.row, nil
+}
+
+// TestLiveLookupRechecksUnitID proves, with an inventory that ignores the unit
+// ID, that the resolver alone refuses a live row of another unit ID, for a
+// caller that holds every grant.
+func TestLiveLookupRechecksUnitID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		row  coreinventory.Entry
+		want int
+	}{
+		{"row of another unit, same namespace", liveRow("acme", "opentofu", "net", "ws-other"), http.StatusNotFound},
+		{"control: row of the unit", liveRow("acme", "opentofu", "net", testUnitID), http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, deleted := hostileUnits()
+			units := &wrongIDUnits{
+				Reader: &spyUnits{rows: nil, getErr: nil, lists: atomic.Int64{}, gets: atomic.Int64{}},
+				row:    tc.row,
+			}
+
+			handler := newReaderHandler(t, newAuthorizer(
+				"namespace:read acme", "unit:read opentofu:acme/net",
+			), units, deleted, slog.New(slog.DiscardHandler))
+
+			got := serve(t, handler, request{
+				method: http.MethodGet, path: unitContextPath("acme", testUnitID), token: testToken, body: "",
+			})
+			if got.Code != tc.want {
+				t.Errorf("status %d (%s), want %d", got.Code, got.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
+// TestDamagedRowLogHoldsNoLineBreak proves that the log line of a damaged row
+// holds no CR and no LF and stays bounded, whatever the stored tool and name
+// hold. A text handler would quote a line break, so the test reads the raw
+// values.
+func TestDamagedRowLogHoldsNoLineBreak(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("x", 5000)
+	live := map[string]coreinventory.Entry{
+		"ws-crlf-tool": liveRow("acme", "evil\r\nERROR forged "+long, "net", "ws-crlf-tool"),
+		"ws-crlf-name": liveRow("acme", "opentofu", "a\r\nb//"+long, "ws-crlf-name"),
+	}
+
+	gone := &spyDeleted{
+		rows:    []coreinventory.DeletedEntry{goneRow("evil\r\ntool", "old", "ws-gone-crlf")},
+		lists:   atomic.Int64{},
+		queries: atomic.Int64{},
+		lastMu:  sync.Mutex{},
+		last:    nil,
+	}
+
+	rec := logtexttest.New()
+	units := &spyUnits{rows: live, getErr: nil, lists: atomic.Int64{}, gets: atomic.Int64{}}
+	handler := newReaderHandler(t, newAuthorizer(), units, gone, rec.Logger())
+
+	for _, id := range []string{"ws-crlf-tool", "ws-crlf-name", "ws-gone-crlf"} {
+		serve(t, handler, request{
+			method: http.MethodGet, path: unitContextPath("acme", id), token: testToken, body: "",
+		})
+	}
+
+	records := rec.Records()
+	if len(records) == 0 {
+		t.Fatal("no log record for a damaged row")
+	}
+
+	for _, r := range records {
+		for key, value := range r.Attrs {
+			if strings.ContainsAny(value, "\r\n") {
+				t.Errorf("log attribute %s holds a line break: %q", key, value)
+			}
+
+			if len(value) > logtext.MaxBytes+len("...") {
+				t.Errorf("log attribute %s has %d bytes, want at most %d", key, len(value), logtext.MaxBytes+3)
+			}
+		}
 	}
 }

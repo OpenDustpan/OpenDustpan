@@ -5,18 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/logtext"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 )
 
 // maxUnitIDLength bounds the unit ID of a path. A longer value is no unit ID.
 const maxUnitIDLength = 100
-
-// maxLogTextBytes bounds a stored value that a log line repeats.
-const maxLogTextBytes = 200
 
 // resolveUnitByID returns the unit reference of the live unit whose stable
 // ID is in the path. An unknown ID and a deleted unit give the error that
@@ -39,6 +36,13 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (ident
 		return identity.Object{}, fmt.Errorf("inventory unit: %w", err)
 	}
 
+	// Defense in depth: the store looks a unit up by its ID. A row with
+	// another unit ID must not answer for this path, whatever the store
+	// returned. The path check and the authorization check do not replace it.
+	if e.UnitID != unitID {
+		return identity.Object{}, coreinventory.ErrUnitNotFound
+	}
+
 	obj, err := unitObject(e)
 	if err != nil {
 		// A stored row with a tool or a name that is not valid answers as an
@@ -46,7 +50,7 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (ident
 		// does not tell a caller that the damaged row exists and does not
 		// repeat the stored text. The cause goes to the log.
 		h.logger.WarnContext(r.Context(), "stored unit has no valid object",
-			slog.String("unit_id", logText(e.UnitID)), slog.String("error", logText(err.Error())))
+			slog.String("unit_id", logtext.Clean(e.UnitID)), slog.String("error", logtext.Clean(err.Error())))
 
 		return identity.Object{}, coreinventory.ErrUnitNotFound
 	}
@@ -85,14 +89,4 @@ func (h *Handler) getUnit(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, h.toUnitEntry(e))
-}
-
-// logText cuts a stored value to maxLogTextBytes, so that a damaged row cannot
-// make a log line of any size.
-func logText(s string) string {
-	if len(s) <= maxLogTextBytes {
-		return s
-	}
-
-	return strings.ToValidUTF8(s[:maxLogTextBytes], "") + "..."
 }

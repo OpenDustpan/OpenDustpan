@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/logtext"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -18,9 +18,6 @@ import (
 
 // maxUnitIDLength bounds the unit ID of a path. A longer value is no unit ID.
 const maxUnitIDLength = 100
-
-// maxLogTextBytes bounds a stored value that a log line repeats.
-const maxLogTextBytes = 200
 
 // deletedLookupLimit is the page size of the lookup of one deleted unit. Two
 // rows let a store that breaks the unit ID filter show itself.
@@ -185,17 +182,7 @@ func unitObject(tool string, ns namespace.Name, name, unitID string) (identity.O
 // that the row exists.
 func (h *Handler) damagedRow(r *http.Request, unitID string, cause error) error {
 	h.logger.WarnContext(r.Context(), "stored unit row is not served",
-		slog.String("unit_id", logText(unitID)), slog.String("error", logText(cause.Error())))
+		slog.String("unit_id", logtext.Clean(unitID)), slog.String("error", logtext.Clean(cause.Error())))
 
 	return errNotFound
-}
-
-// logText cuts a stored or path value to maxLogTextBytes, so that a damaged row
-// cannot make a log line of any size.
-func logText(s string) string {
-	if len(s) <= maxLogTextBytes {
-		return s
-	}
-
-	return strings.ToValidUTF8(s[:maxLogTextBytes], "") + "..."
 }

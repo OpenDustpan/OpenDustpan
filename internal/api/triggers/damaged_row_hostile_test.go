@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/triggers"
+	"opendustpan.org/opendustpan/internal/logtext"
+	"opendustpan.org/opendustpan/internal/logtext/logtexttest"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -532,5 +534,79 @@ func TestUnitDamagedObjectIsLoggedNotServed(t *testing.T) {
 	if !strings.Contains(logs.String(), netID) || !strings.Contains(logs.String(), "stored unit has no valid object") ||
 		!strings.Contains(logs.String(), "secret") {
 		t.Errorf("log %q does not name the unit ID and the cause", logs.String())
+	}
+}
+
+// TestUnitDamagedObjectLogIsBounded proves that the log line of a stored unit
+// with no valid object cuts a name of 5000 bytes, and holds no CR and no LF.
+func TestUnitDamagedObjectLogIsBounded(t *testing.T) {
+	t.Parallel()
+
+	long := "a//" + strings.Repeat("n", 5000)
+	for name, unitName := range map[string]string{"long name": long, "name with line breaks": "a//\r\nb" + long} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := logtexttest.New()
+			r := newSpyRigLogged(t, allowEverything{}, func(e coreinventory.Entry) coreinventory.Entry {
+				e.Name = unitName
+
+				return e
+			}, rec.Logger())
+
+			got := ask(t, r, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units/"+netID+"/triggers")
+			if got.code != http.StatusNotFound {
+				t.Fatalf("answer = %d %s, want 404", got.code, got.body)
+			}
+
+			checkBoundedRecords(t, rec, "stored unit has no valid object")
+		})
+	}
+}
+
+// TestTriggerLogHoldsNoLineBreak proves that the log line of a stored trigger
+// that fails its checks holds no CR and no LF from the text of the store error.
+func TestTriggerLogHoldsNoLineBreak(t *testing.T) {
+	t.Parallel()
+
+	rec := logtexttest.New()
+	r := newSpyRigLogged(t, newAuthorizer(holdsAll()...), nil, rec.Logger())
+	r.plantHostile()
+	r.spy.fail["trg-direct"] = fmt.Errorf("get trigger: %w: line one\r\nERROR forged line %s",
+		trigger.ErrInvalid, strings.Repeat("x", 5000))
+
+	ask(t, r, http.MethodGet, triggerURL("acme", netID, "trg-direct"))
+
+	checkBoundedRecords(t, rec, "stored trigger is not served")
+}
+
+// checkBoundedRecords fails when rec holds no record with message, or when an
+// attribute of a record holds a CR, an LF, or more than the bound of a log
+// text.
+func checkBoundedRecords(t *testing.T, rec *logtexttest.Recorder, message string) {
+	t.Helper()
+
+	found := false
+
+	for _, r := range rec.Records() {
+		if r.Message != message {
+			continue
+		}
+
+		found = true
+
+		for key, value := range r.Attrs {
+			if strings.ContainsAny(value, "\r\n") {
+				t.Errorf("log attribute %s holds a line break: %q", key, value)
+			}
+
+			if len(value) > logtext.MaxBytes+len("...") {
+				t.Errorf("log attribute %s has %d bytes, want at most %d", key, len(value), logtext.MaxBytes+3)
+			}
+		}
+	}
+
+	if !found {
+		t.Fatalf("no log record %q", message)
 	}
 }
