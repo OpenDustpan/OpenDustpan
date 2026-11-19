@@ -117,6 +117,16 @@ func BindProviders(ctx context.Context, store ProviderStore, providers []Provide
 			}
 		}
 
+		// Defense in depth: the flag parser, NewServer and the sign-in client
+		// check the issuer too. This check stays so that a caller of the
+		// session layer cannot record an issuer with a query, a fragment or
+		// user information. It does not rely on those checks.
+		if p.Issuer != "" {
+			if err := CheckIssuer(p.Issuer); err != nil {
+				return fmt.Errorf("sign-in provider %q: %w", p.ID, err)
+			}
+		}
+
 		recorded, err := store.BindProvider(ctx, p.ID, p.binding(), at)
 		if err != nil {
 			return fmt.Errorf("record the issuer of sign-in provider %q: %w", p.ID, err)

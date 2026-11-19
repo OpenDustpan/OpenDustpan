@@ -1024,3 +1024,36 @@ func TestNewLazyRefusesConfig(t *testing.T) {
 		t.Fatalf("NewLazy error = %v, want ErrConfig", err)
 	}
 }
+
+// TestNewRefusesAHostileIssuerForm sends an issuer with user information, a
+// query, a fragment or a space to the client, as if the flag parser and the
+// session layer did not check it. The error never holds the user information.
+func TestNewRefusesAHostileIssuerForm(t *testing.T) {
+	t.Parallel()
+
+	for name, issuer := range map[string]string{
+		"query and fragment": "https://idp.example?x=1#f",
+		"query":              "https://idp.example/?x=1",
+		"fragment":           "https://idp.example#f",
+		"empty query":        "https://idp.example?",
+		"empty fragment":     "https://idp.example#",
+		"user information":   "https://user:" + "pw" + "@idp.example",
+		"space":              "https://idp.example/a b",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := oauth.New(t.Context(), oauth.Config{
+				HTTPClient: nil, Now: nil, Issuer: issuer, ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: redirectURI, Scopes: nil,
+			})
+			if !errors.Is(err, oauth.ErrConfig) {
+				t.Fatalf("New error = %v, want ErrConfig", err)
+			}
+
+			if strings.Contains(err.Error(), "pw@") {
+				t.Fatalf("the error holds the user information: %v", err)
+			}
+		})
+	}
+}

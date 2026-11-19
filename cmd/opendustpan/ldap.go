@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -209,6 +210,16 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 		}
 
 		mask = parsed
+	}
+
+	// Defense in depth: NewServer and ldapauth.NewMethod check the subject
+	// attribute too. This check stays so that the start stops at the flag,
+	// with the name of the flag. It does not rely on those checks.
+	if sub := strings.TrimSpace(l.subject); sub != "" && sub != "entryUUID" && sub != "objectGUID" {
+		if subErr := ldapauth.CheckSubjectAttribute(l.subject, l.userNameAttribute, l.emailAttribute,
+			l.nameAttribute); subErr != nil {
+			return none, fmt.Errorf("--ldap-subject: %w", subErr)
+		}
 	}
 
 	// No CA file means the system roots: a nil pool.

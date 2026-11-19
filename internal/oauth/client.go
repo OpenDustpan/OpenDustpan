@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -199,6 +200,12 @@ func (cfg Config) validate() error {
 
 	if !secureURL(issuer) {
 		return fmt.Errorf("%w: issuer %q must use https", ErrConfig, cfg.Issuer)
+	}
+
+	// The text of this error never holds the issuer, because user
+	// information can hold a password.
+	if issuer.User != nil || strings.ContainsAny(cfg.Issuer, "?# \\") || issuer.RawQuery != "" || issuer.Fragment != "" {
+		return fmt.Errorf("%w: the issuer must have no user information, no query and no fragment", ErrConfig)
 	}
 
 	return nil

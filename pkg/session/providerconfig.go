@@ -186,21 +186,38 @@ func (p ProviderConfig) validateMode() error {
 	}
 }
 
-// validIssuer reports whether issuer is an absolute https URL with a host,
-// or an http URL on a loopback host, with no query and no fragment. The
-// sign-in client applies the same scheme rule when it fetches the
-// discovery document, so a stored issuer never fails it.
-func validIssuer(issuer string) bool {
-	if issuer == "" || len(issuer) > maxIssuer {
-		return false
+// ErrIssuer reports an OpenID Connect issuer URL that the server refuses.
+// Its text never holds the issuer, because the issuer can hold a password.
+var ErrIssuer = errors.New("the issuer must be an absolute https URL, or http on a loopback host, with a host " +
+	"and with no user information, no query and no fragment, so set the issuer (--oidc-issuer) to that form")
+
+// CheckIssuer returns an error that matches ErrIssuer for an issuer that is
+// not an absolute https URL with a host, or an http URL on a loopback host.
+// It refuses user information, a query, a fragment, a space, a control
+// character and a text of more than 512 bytes. It does not change the issuer
+// to make it valid.
+func CheckIssuer(issuer string) error {
+	if issuer == "" || len(issuer) > maxIssuer || strings.ContainsAny(issuer, "?# \\") || hasControl(issuer) {
+		return ErrIssuer
 	}
 
 	u, err := url.Parse(issuer)
-	if err != nil || u == nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
-		return false
+	if err != nil || u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return ErrIssuer
 	}
 
-	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
+	if u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname())) {
+		return nil
+	}
+
+	return ErrIssuer
+}
+
+// validIssuer reports whether issuer passes CheckIssuer. The sign-in client
+// applies the same scheme rule when it fetches the discovery document, so a
+// stored issuer never fails it.
+func validIssuer(issuer string) bool {
+	return CheckIssuer(issuer) == nil
 }
 
 // loopbackHost reports whether host is localhost or a loopback IP address.

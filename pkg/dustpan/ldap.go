@@ -108,6 +108,17 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 			}
 		}
 
+		// Defense in depth: the flag parser and ldapauth.NewMethod check the
+		// subject attribute too. This check stays so that an embedder cannot
+		// take a DN, a user name or an email as the subject. It does not rely
+		// on those checks.
+		if sub := subjectOr(p.Subject); sub != string(ldapauth.SubjectEntryUUID) && sub != string(ldapauth.SubjectObjectGUID) {
+			if subErr := ldapauth.CheckSubjectAttribute(sub, p.UserNameAttribute, p.EmailAttribute,
+				p.NameAttribute); subErr != nil {
+				return nil, fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, subErr)
+			}
+		}
+
 		limit, source, limitErr := subjectFailureLimitOf(p)
 		if limitErr != nil {
 			return nil, limitErr

@@ -163,7 +163,7 @@ func TestBindProvidersRefusesAnotherDirectory(t *testing.T) {
 		"another host":                  {next: ldap("corp", "ldaps://ldap.other.example"), refused: true},
 		"another port":                  {next: ldap("corp", "ldaps://ldap.example.org:3636"), refused: true},
 		"another scheme":                {next: ldap("corp", "ldap://ldap.example.org"), refused: true},
-		"an OpenID issuer of that text": {next: session.Provider{ID: "corp", Issuer: "ldaps://ldap.example.org", UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""}, refused: true},
+		"an OpenID issuer of that text": {next: session.Provider{ID: "corp", Issuer: "https://ldap.example.org", UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""}, refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -436,5 +436,47 @@ func TestDirectoryChangedErrorShowsTheNormalizedRow(t *testing.T) {
 	err := session.BindProviders(t.Context(), store, []session.Provider{p}, time.Now())
 	if err == nil || !strings.Contains(err.Error(), `"ldaps://old.example.org"`) {
 		t.Fatalf("BindProviders = %v, want the normalized recorded URL", err)
+	}
+}
+
+// TestBindProvidersRefusesAHostileIssuer sends an issuer with a query, a
+// fragment, user information or another hostile form to BindProviders, as if
+// the flag parser and NewServer did not check it. The store records nothing,
+// and the error never holds the issuer.
+func TestBindProvidersRefusesAHostileIssuer(t *testing.T) {
+	t.Parallel()
+
+	for name, issuer := range map[string]string{
+		"query and fragment": "https://idp.example?x=1#f",
+		"query":              "https://idp.example/?x=1",
+		"fragment":           "https://idp.example#f",
+		"empty query":        "https://idp.example?",
+		"empty fragment":     "https://idp.example#",
+		"user information":   "https://user:" + "pw" + "@idp.example",
+		"space":              "https://idp.example/a b",
+		"control character":  "https://idp.example/\x00",
+		"other scheme":       "ftp://idp.example",
+		"http public host":   "http://idp.example",
+		"no host":            "https://",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &memoryProviders{err: nil, issuers: map[string]string{}}
+			p := session.Provider{ID: "corp", Issuer: issuer, UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""}
+
+			err := session.BindProviders(t.Context(), store, []session.Provider{p}, time.Now())
+			if !errors.Is(err, session.ErrIssuer) {
+				t.Fatalf("BindProviders = %v, want ErrIssuer", err)
+			}
+
+			if len(store.issuers) != 0 {
+				t.Fatalf("the store recorded %v, want nothing", store.issuers)
+			}
+
+			if strings.Contains(err.Error(), "pw@") {
+				t.Fatalf("the error holds the user information: %v", err)
+			}
+		})
 	}
 }

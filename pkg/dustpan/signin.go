@@ -433,6 +433,14 @@ func signInProvider(
 		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, err)
 	}
 
+	// Defense in depth: the flag parser, the sign-in client and
+	// session.BindProviders check the issuer too. This check stays so that an
+	// embedder cannot start with an issuer that has a query, a fragment or
+	// user information. It does not rely on those checks.
+	if issuerErr := session.CheckIssuer(p.Issuer); issuerErr != nil {
+		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, issuerErr)
+	}
+
 	method, err := redirectMethod(client, p.ID, session.MethodOIDC, configuredProviderOn, now)
 	if err != nil {
 		return none, fmt.Errorf("%w: %w", errSignInSetup, err)

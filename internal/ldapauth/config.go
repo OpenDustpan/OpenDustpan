@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -358,6 +359,14 @@ func checkSubject(cfg Config) error {
 		if !validAttributeType(cfg.Subject.Attribute) {
 			return configError("the subject attribute is not a valid attribute type")
 		}
+
+		// Defense in depth: the flag parser and NewServer check the name too.
+		// This check stays so that a caller of NewMethod cannot take a name,
+		// an email or a DN as the subject. It does not rely on those checks.
+		if err := CheckSubjectAttribute(cfg.Subject.Attribute, cfg.UserNameAttribute, cfg.EmailAttribute,
+			cfg.NameAttribute); err != nil {
+			return configError(err.Error())
+		}
 	default:
 		return configError("the subject kind is not known")
 	}
@@ -437,4 +446,37 @@ func plainHostAllowed(host string) bool {
 // is already escaped.
 func groupFilter(g Groups, escapedMember string) string {
 	return "(&" + g.Filter + "(" + g.MemberAttribute + "=" + escapedMember + "))"
+}
+
+// ErrSubjectAttribute reports a subject attribute that can change when a
+// person changes a name, an email or a place in the directory.
+var ErrSubjectAttribute = errors.New("the subject attribute must not be the DN, a user name or an email")
+
+// refusedSubjectAttributes are the attribute names that hold a DN, a user
+// name or an email, in lowercase. The value of each one can change while the
+// person stays the same.
+var refusedSubjectAttributes = []string{
+	"dn", "entrydn", "distinguishedname", "uid", "userid", "samaccountname", "userprincipalname", "mail",
+	"rfc822mailbox",
+}
+
+// CheckSubjectAttribute returns an error that matches ErrSubjectAttribute
+// when name is the DN, a user name or an email attribute, or when it is one
+// of the attributes in taken that the server reads as a user name, an email
+// or a display name. It compares with no regard to case. It does not change
+// name to make it valid.
+func CheckSubjectAttribute(name string, taken ...string) error {
+	if slices.Contains(refusedSubjectAttributes, strings.ToLower(name)) {
+		return fmt.Errorf("%w: %q is not allowed, so name an attribute of the entry that never changes",
+			ErrSubjectAttribute, name)
+	}
+
+	for _, t := range taken {
+		if t != "" && strings.EqualFold(t, name) {
+			return fmt.Errorf("%w: %q is also set as a user name, an email or a display name attribute",
+				ErrSubjectAttribute, name)
+		}
+	}
+
+	return nil
 }
