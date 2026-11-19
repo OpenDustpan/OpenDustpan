@@ -1,88 +1,136 @@
 ---
-version: 6
+version: 7
 ---
 
 ## Why
 
-**Persona: operator.** Operator installs the server from released artifacts. Today the only path is build from source, so the operator cannot trust that a tagged build installs and runs. This change gives a tested image and clear install steps.
+**Persona: operator.** The operator installs the server from a release, not from source. The binary archives and their checks are on main. The image build, the image smoke test and the first install page are on main too. The first image that the tag workflow would build has three faults that no test shows today:
+
+- The tag workflow builds the image with no version argument. The binary of that image prints `dev`, not the tag.
+- The tag workflow passes no console tarball URL and no SHA-256. The Dockerfile then uses its placeholder pin, and the build stops at the download with a curl error that does not name the pin.
+- The install page does not show the binary archive path. No test starts a server from a built archive.
 
 The user path this change must make work:
 
-1. **Docs page.** Read install-from-artifacts docs page and pick image or binary archive.
-2. **CLI.** Pull and run the versioned container image with /data mount.
-3. **API.** Check server health and open console from the running image.
+1. **Docs page.** Read `docs/guides/install.md` and pick the image or the binary archive.
+2. **CLI, image.** Run `docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version` and read `v0.1.0`, the tag.
+3. **CLI, archive.** Download one archive and `SHA256SUMS`, check the checksum, unpack the archive, run `./opendustpan --version` and start `serve`.
+4. **API.** `GET /health/ready` answers 200 on the running server.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Console tarball hash mismatch, build refused. | The build stops with no image. Fix the pinned CONSOLE_TARBALL_SHA256 value or the console tag in the workflow input, then rerun the NEW script `scripts/release-build-image.sh`. | `scripts/release-build-image.sh 0.1.0` |
-| Image smoke test fails to start the server. | The smoke step fails before any persona check. Check the container log for the /data mount permission, then rerun the NEW Make target `make image-smoke VERSION=0.1.0`. | `make image-smoke VERSION=0.1.0` |
-
-Evidence for the claims above:
-
-- Main has an image test that fails closed. Proof: e2e/image_test.go with TestImageFailsClosed at e2e/image_test.go:72
-- Main serves console control paths from the server. Proof: TestConsoleControlPaths at pkg/dustpan/console_control_test.go:14
-- Today the only install path is go build from source. Proof: Milestone roadmap step: Today the only install path is go build from source.
+| The version for a local image build is empty or holds a character outside letters, digits, dots, plus and dash. | `build-image-local.sh` and `smoke-image.sh` refuse before any `docker` call and print the allowed set. The Dockerfile refuses the same value. | `IMAGE_VERSION=v0.1.0 scripts/build-image-local.sh` |
+| The console pin is the placeholder. | The Dockerfile stops in the console stage and says to pin the console tag and SHA-256 in the Dockerfile, or to pass `CONSOLE_URL` and `CONSOLE_SHA256`. | `docker build --build-arg CONSOLE_URL=<https URL> --build-arg CONSOLE_SHA256=<sha256> .` |
+| The console tarball SHA-256 does not match. | The build stops with no image. This is on main (`Dockerfile:56`). The smoke test now proves it. | `make image-smoke` |
+| The archive checksum does not match its `SHA256SUMS` line. | The page says to download the archive again. | `grep ' <archive>$' SHA256SUMS \| sha256sum -c -` |
 
 ## What Changes
 
-- Multi-arch image build from one VERSION with buildx and QEMU and pinned console tarball
-- Artifact install test that runs the persona path against the built image
-- Install-from-artifacts docs page for image and binary archive installs
+- `scripts/build-image-local.sh` and `scripts/smoke-image.sh` take the version from the environment variable `IMAGE_VERSION`, validate it with an allowlist before any `docker` call, and pass it as the build argument. The smoke test checks that `--version` prints that version. `make image-smoke VERSION=v0.1.0` passes it.
+- The Dockerfile validates `VERSION` again in the Go stage and refuses the placeholder console pin with a message that names the pin.
+- `scripts/smoke-image.sh` gets two refusal cases that run a real build: a wrong console SHA-256 and a bad version.
+- A new test builds the release archives in a copy of the work tree, checks the archive of the host platform against `SHA256SUMS`, runs its binary with `--version`, starts `serve` and reads `GET /health/ready`.
+- `docs/guides/install.md` gets the sections "Check the version of the image" and "Install from a binary archive". The commands of the archive section run in the new test.
+- The release workflow passes `--build-arg VERSION` and the console pin to the image build. A person applies this diff: it is under "Workflow patch (apply locally)" in the pull request body, and the task list contains no workflow file.
 
 Out of scope:
 
-- Binary archive build and checksum file from part 1, reused here without change
-- Tagging or publishing a release, including any registry push
-- Image signing and SBOM
-- OS packages
-- Helm chart changes
-- ACME
+- Tagging or publishing a release, and any registry push. `release.yml` already pushes on a tag; this change does not run it.
+- The archive build and `SHA256SUMS`. They are on main and unchanged.
+- Image signing, an SBOM, OS packages, ACME and Helm chart changes.
+- A check that the console tag equals the server tag. No ADR asks for it. The change checks only that the console pin is a pin, not the placeholder.
+- The real console pin. No console release is known to this change (UNVERIFIED: the check of the console repository releases was not possible in the session that wrote this change). The pin lands in the commit that tags, and the new Dockerfile guard stops a tag build before then.
+- A new docs-check skip reason for a download from a release that does not exist yet.
 
 Depends on:
 
-- release-artifacts-binary-archives
-- `release-artifacts-binary-archives` (the part before it in the split)
+- `release-artifacts-binary-archives`. Its code is on main (`scripts/release-build.sh`, `scripts/release-verify.sh`, `Makefile:198-212`, merged in #3263), but its change directory is still in `openspec/changes/`. This change does not archive it.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- Operator must copy one VERSION string across binary, image, and console tarball; the single input removes the copy step but the docs must show it once.
-- QEMU smoke output is long; the docs show the one success line to look for.
+- The operator must see the same version string in the tag, in `--version` of the image and in `--version` of the archive binary. The page shows both commands next to each other.
+- The page says that `SHA256SUMS` is no signature, as ADR 283 decision 4 says. It makes no compliance claim.
+- The archive has no console. The page says to use the image, or `--console-dir` with a console release tarball, for the console.
 
 ## What main already does
 
-Each fact names its file, line and function on main. The change specifies only the difference.
+Each fact names its file, line and function on main (head `8c76edc53`). The change specifies only the difference.
 
-- Main has an image test that checks fail closed behavior. (`e2e/image_test.go:72 (func TestImageFailsClosed)`)
-- Main tests console control paths. (`pkg/dustpan/console_control_test.go:14 (func TestConsoleControlPaths)`)
-- Main keeps the OpenAPI route stable across builds. (`pkg/dustpan/apidesc_test.go:644 (func TestOpenAPIRouteIsTheSameForEveryBuild)`)
+- The Dockerfile stamps the version through `-ldflags "-X main.version=${VERSION}"` in a shell `RUN` (`Dockerfile:25`), with `ARG VERSION=dev` (`Dockerfile:17`). The ARG has no check.
+- The console stage downloads the tarball from `CONSOLE_URL` and checks `CONSOLE_SHA256` with `sha256sum -c` (`Dockerfile:44-45`, `:56`). The defaults are a `v0.1.0` URL and an all-zero SHA-256. The build argument is named `CONSOLE_SHA256`, not `CONSOLE_TARBALL_SHA256`.
+- The base image is distroless static `nonroot`, pinned by digest (`Dockerfile:63`). The image runs as `nonroot:nonroot` (`Dockerfile:79`).
+- `scripts/build-image-local.sh` builds one architecture with `docker build` and `--build-arg VERSION=dev` fixed (`scripts/build-image-local.sh:51-52`). It reads its settings from the environment, not from arguments.
+- `scripts/smoke-image.sh` builds with `VERSION=smoke` fixed (`scripts/smoke-image.sh:80`), checks the fail-closed start (`:102`), the trial command (`:109`), the namespace create (`:150`), the API (`:155`), the console page (`:164`), the healthy status (`:169`), `--version` equal to `smoke` (`:184-185`), the non-root user (`:189`) and the license files (`:201`). `make image-smoke` runs it (`Makefile:449`).
+- `.github/workflows/release.yml` builds `linux/amd64,linux/arm64` with `docker buildx build ... --push .` and no `--build-arg` (`.github/workflows/release.yml:161`). It uses the pinned `docker/setup-qemu-action` (`:84`) and `docker/setup-buildx-action` (`:86`), and pushes to the forge registry and then to Docker Hub.
+- `scripts/release-build.sh` checks the version against `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` (`scripts/release-build.sh:30`), runs the record check, builds four archives and writes `SHA256SUMS` (`:87`). `scripts/release-verify.sh` checks a set (`scripts/release-verify.sh:1-20`). `make release-build` and `make release-verify` call them (`Makefile:198-212`).
+- `TestReleaseArchivesAreReproducible` builds the archives in a copy of the work tree with an extended release record and checks their layout (`internal/releaserecord/release_archives_test.go:32`). `TestReleaseVerifyRefusesBadInput` checks the verify script (`internal/releaserecord/release_verify_test.go:324`). Neither test runs a binary from an archive.
+- The binary prints the stamped version for `--version` (`cmd/opendustpan/commands.go:64`; `cmd/opendustpan/main_test.go:708`). A build with no stamp prints `dev` (`cmd/opendustpan/main.go:144`).
+- `docs/guides/install.md` shows the image pull, the pull by digest, the Helm install and the Docker Hub secrets. It has no binary archive section and no `--version` command. The page is in `docs/commands-pending-pages.txt` (line 19); `docs/commands-checked-pages.txt` is empty, so no docs command is run by `make docs-commands-check` today.
+- An image test reads the Dockerfile and checks the lines that make it fail closed (`e2e/image_test.go:72 (func TestImageFailsClosed)`). It does not run docker. Two tests run the binary with the command of the image (`e2e/image_test.go:120 (func TestImageCommandWithoutKey)`, `e2e/image_test.go:155 (func TestImageTrialCommand)`).
+- The server serves the console control paths (`pkg/dustpan/console_control_test.go:14 (func TestConsoleControlPaths)`).
+- The OpenAPI route is the same for every build (`pkg/dustpan/apidesc_test.go:644 (func TestOpenAPIRouteIsTheSameForEveryBuild)`). This change adds no route, so the API description stays as it is.
+- `GET /health/ready` answers 200 (`pkg/dustpan/workerwatch_internal_test.go:471`).
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed by" chain and the "Current rule" are from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)".
 
-**ADR 27: TLS and release artifacts** (not owner-tagged).
+**ADR 27: TLS and release artifacts** (not owner-tagged; the owner delegated it to an agent session and can supersede it).
 
-- Decisions that apply: 5 (current), 7 (extended).
-- Changed by: ADR 212 changes decision 2; ADR 246 extends decision 8; ADR 278 changes decision 6; ADR 283 changes decision 8; ADR 283 extends decision 7. Chain to the end: ADR 212, ADR 246, ADR 278, ADR 283, ADR 227, ADR 232, ADR 235, ADR 301, ADR 365, ADR 315, ADR 320, ADR 339, ADR 354, ADR 288, ADR 332.
+- Decisions that apply: 4, 5, 7.
+- Changed by: ADR 212 changes decision 2; ADR 246 extends decision 8; ADR 278 changes decision 6; ADR 283 changes decision 8; ADR 283 extends decision 7.
 - Current rule: this ADR, with ADR 212, 246, 278, 283.
-- Quote: "The image supports linux/amd64 and linux/arm64."
-- Quote: "The console static files are in `/console`. They come from a console release tarball."
-- Quote: "The image release workflow needs the GitHub Actions `docker/setup-buildx-action` and `docker/setup-qemu-action`."
-- Effect: This change builds the image as decided and does not publish it. It uses buildx and QEMU only for a local multi-arch build. It pushes to no registry.
+- Quote, decision 4: "The flag `--version` prints the version. The build stamps the value with `-ldflags`."
+- Quote, decision 5: "The image supports linux/amd64 and linux/arm64."
+- Quote, decision 5: "The console static files are in `/console`. They come from a console release tarball. The build pins the tarball by tag and SHA-256. The image build uses no Node."
+- Quote, decision 7: "The image release workflow needs the GitHub Actions `docker/setup-buildx-action` and `docker/setup-qemu-action`."
+- Effect: the change keeps the pin by tag and SHA-256 and the build with no Node. It adds a refusal of the placeholder pin and a check of the version stamp. Decision 6 (archives with a `zip` file) is changed by ADR 278; the change does not touch it.
 - Conflict: none.
 
-**ADR 283: Packaging and installation for v0.1.0** (owner-tagged (all decisions)).
+**ADR 283: Packaging and installation for v0.1.0** (owner-tagged: decisions 1 to 5 carry "(owner)"; decisions 6 and 7 are not tagged).
 
-- Decisions that apply: 3 (current), 4 (current), 5 (current), 6 (current).
-- Changed by: ADR 315 extends. Chain to the end: ADR 315.
-- Current rule: this ADR, with ADR 315.
-- Quote: "The image release workflow uses them to build linux/amd64 and linux/arm64."
-- Quote: "A `v*` tag starts the workflow of the binaries and the image."
-- Effect: This change uses the owner yes for buildx and QEMU with pinned SHAs. It adds only the local image build check of the tagged workflow. It adds no signature, no SBOM, no OS package, and no registry push.
+- Decisions that apply: 3, 4, 5, 6, 7.
+- Changed by: ADR 315 extends. Current rule: this ADR, with ADR 315.
+- Quote, decision 3: "`v0.1.0` ships binary archives, the container image and the Helm chart. It ships no `.deb`, `.rpm` or other OS package."
+- Quote, decision 4: "`v0.1.0` ships the `SHA256SUMS` file of ADR 27 decision 6. It ships no signature of the archives or of the image, and no SBOM."
+- Quote, decision 5: "The image release workflow uses them to build linux/amd64 and linux/arm64."
+- Quote, decision 6: "A `v*` tag starts the workflow of the binaries and the image."
+- Quote, decision 7: "The gate item "Install docs, with TLS" stays."
+- Effect: the change adds no signature, no SBOM and no OS package. The install page says that `SHA256SUMS` is no signature. The change adds an install page section for the archive; the TLS and reverse proxy part of the gate item "Install docs, with TLS" stays with the existing TLS pages and is not in this change.
+- Conflict: none.
+
+**ADR 315: Container registries, the quickstart, the lock event, the history scan and the rules for the docs site** (owner-tagged).
+
+- Decision that applies: 1. Changed by: none in the index. Current rule: this ADR.
+- Quote, decision 1: "Distribution for v0.1.0: forge container registry plus Docker Hub (organization already registered)".
+- Effect: the change keeps both registries as `release.yml` has them and adds no registry.
+- Conflict: none.
+
+**ADR 278: Supported platforms are Linux and macOS** (owner-tagged).
+
+- Decisions that apply: 1, 2.
+- Quote, decision 1: "The supported platforms are Linux and macOS, on `amd64` and `arm64`."
+- Quote, decision 2: "The release build makes no archive for them."
+- Effect: the archive install test runs on Linux and macOS hosts on `amd64` and `arm64` only and skips on any other host. The page shows no Windows command.
+- Conflict: none.
+
+**ADR 214: A user-facing feature needs its docs page in the same pull request** (not owner-tagged; decided by the PM under the owner's decision rule).
+
+- Decisions that apply: 1.
+- Quote, decision 1: "A pull request that adds or changes a feature that a person or a client can see adds or changes its page in the user documentation."
+- Effect: the `--version` command, `IMAGE_VERSION` and the archive path are visible. The two page sections are in the same pull request.
+- Conflict: none.
+
+**ADR 250: Defense in depth for security code** (owner-tagged: "The project owner decided it.").
+
+- Decisions that apply: 1, 2, 4.
+- Quote, decision 1: "Every security-relevant path has at least two independent layers. Each layer must stop the attack alone, without help from the others."
+- Quote, decision 4: "The test sends hostile input directly to that layer, as if every other layer had failed."
+- Effect: the version goes into a shell `RUN` in the Dockerfile, so it is security input. The script and the Dockerfile each validate it, and each has its own test. The archive test reads the checksum and the archive entries as untrusted file data.
 - Conflict: none.
 
 ## Open questions
@@ -91,9 +139,7 @@ none
 
 Questions considered and answered:
 
-- Which tools build the multi-arch image? Buildx and QEMU. ADR 27 decision 7 names them and ADR 283 decision 5 gives the owner yes with SHA pinning.
-- Does the image get a signature or an SBOM? No. ADR 283 decision 4 keeps SHA256SUMS only. Signing and SBOM come later.
-- Does this change add OS packages? No. ADR 283 decision 3 ships binary archives, image and chart only. No deb or rpm.
-- Where does the workflow push the image? No push. ADR 27 decision 8 leaves the registry undecided, and ADR 27 decision 7 keeps the publishing workflow gated. The build runs local buildx only with no push step.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+- Where does the console pin live? In the Dockerfile `CONSOLE_URL` and `CONSOLE_SHA256` defaults. The comment at `Dockerfile:39-42` says so, and ADR 27 decision 5 says "The build pins the tarball by tag and SHA-256." The real values wait for the first console release.
+- Does the image get a signature or an SBOM? No. ADR 283 decision 4.
+- Does the workflow push in this change? No. The workflow patch is applied by a person, and the change runs no tag.
+- Must the console tag equal the server tag? No ADR says so. The change does not decide it.
