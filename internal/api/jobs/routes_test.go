@@ -79,6 +79,8 @@ func (fakeNamespaces) Ping(context.Context) error { return nil }
 type fakeJobs struct {
 	jobs   map[job.ID]job.Job
 	getErr error
+	// getDamagedErr is the answer of GetDamaged when it is set.
+	getDamagedErr error
 	// listed answers List. Nil makes List fail the test of a route that calls it.
 	listed func(job.Filter) job.Page
 	calls  []string
@@ -93,7 +95,15 @@ type fakeDamaged struct {
 }
 
 func newFakeJobs(jobs ...job.Job) *fakeJobs {
-	f := &fakeJobs{jobs: map[job.ID]job.Job{}, getErr: nil, listed: nil, calls: nil, mu: sync.Mutex{}, damaged: nil}
+	f := &fakeJobs{
+		jobs:          map[job.ID]job.Job{},
+		getErr:        nil,
+		getDamagedErr: nil,
+		listed:        nil,
+		calls:         nil,
+		mu:            sync.Mutex{},
+		damaged:       nil,
+	}
 	for i := range jobs {
 		f.jobs[jobs[i].ID] = jobs[i]
 	}
@@ -164,6 +174,10 @@ func (f *fakeJobs) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow
 
 func (f *fakeJobs) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
 	f.note("GetDamaged")
+
+	if f.getDamagedErr != nil {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", f.getDamagedErr
+	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()

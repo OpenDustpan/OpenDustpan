@@ -89,14 +89,9 @@ func (s *service) Cancel(ctx context.Context, a Actor, id ID, reason string) (Jo
 // It returns a Job that holds only what the row proves: the ID, the unit, the
 // state canceled.
 func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason string) (Job, error) {
-	row, ns, err := s.store.GetDamaged(ctx, id)
+	damage, unit, err := s.damagedUnit(ctx, id)
 	if err != nil {
-		return Job{}, fmt.Errorf("get damaged job: %w", err)
-	}
-
-	unit, err := s.units.UnitByID(ctx, ns, row.UnitID)
-	if err != nil {
-		return Job{}, fmt.Errorf("get unit of damaged job: %w", err)
+		return Job{}, err
 	}
 
 	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobRead, unit)
@@ -117,9 +112,9 @@ func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason stri
 		}
 	}
 
-	fence, err := s.fences.Fence(ctx, ns)
+	fence, err := s.fences.Fence(ctx, unit.Namespace())
 	if err != nil {
-		return Job{}, fmt.Errorf("fence of %s: %w", ns, err)
+		return Job{}, fmt.Errorf("fence of %s: %w", unit.Namespace(), err)
 	}
 
 	var j Job
@@ -128,10 +123,14 @@ func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason stri
 
 	entry := s.cancelEntry(&j, a, reason)
 	entry.Changes = append(entry.Changes, audit.Change{
-		Key: "damaged", Old: nil, New: row.Reason, Layer: "", TakesEffect: "",
+		Key: "damaged", Old: nil, New: damage, Layer: "", TakesEffect: "",
 	})
 
 	err = s.store.CancelDamaged(ctx, id, fence, []audit.Entry{entry})
+	if errors.Is(err, ErrInvalid) {
+		return Job{}, errRepaired
+	}
+
 	if err != nil {
 		return Job{}, fmt.Errorf("cancel damaged job: %w", err)
 	}
@@ -235,3 +234,44 @@ func (s *service) changeEntry(
 		Origin: nil,
 	}
 }
+
+// damagedUnit reads the damaged row id and finds the unit that the row names.
+// It returns the reason that the row is damaged and the unit.
+// It checks that the unit is the one that the row names, in the namespace of
+// the row.
+func (s *service) damagedUnit(ctx context.Context, id ID) (string, identity.Object, error) {
+	row, ns, err := s.store.GetDamaged(ctx, id)
+
+	switch {
+	case errors.Is(err, ErrInvalid):
+		// The row was repaired after Get reported it as damaged. The caller
+		// sends the request again and cancels the job through its body.
+		return "", identity.Object{}, errRepaired
+	case err != nil:
+		return "", identity.Object{}, fmt.Errorf("get damaged job: %w", err)
+	}
+
+	unit, err := s.units.UnitByID(ctx, ns, row.UnitID)
+	if err != nil {
+		return "", identity.Object{}, fmt.Errorf("get unit of damaged job: %w", err)
+	}
+
+	// Defense in depth: the resolver looks the unit up by its ID, and the
+	// store looks the row up by its ID alone. This check stays so that a
+	// resolver or a store that answers for another namespace or another unit
+	// cannot move the checks of the caller to a unit that the row does not name. It
+	// does not rely on the checks of the resolver, of the store or of the
+	// route of the API.
+	if unit.Namespace() != ns || unit.UnitID() == "" || unit.UnitID() != row.UnitID {
+		return "", identity.Object{}, ErrNotFound
+	}
+
+	return row.Reason, unit, nil
+}
+
+// errRepaired is the answer when the row of a job was repaired between the
+// read that reported it as damaged and the cancel. It is an ErrConflict.
+var errRepaired = fmt.Errorf(
+	"%w: the stored job was repaired while it was canceled; send the request again",
+	ErrConflict,
+)

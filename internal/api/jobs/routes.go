@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -369,10 +371,19 @@ func (h *Handler) damagedTarget(ctx context.Context, ns namespace.Namespace, id 
 	}
 
 	unit, err := h.unitRef(ctx, ns.Name, row.UnitID)
-	if err != nil {
+
+	switch {
+	case errors.Is(err, errUnitUnresolved), errors.Is(err, inventory.ErrUnitNotFound):
 		// An unknown unit answers as an unknown job: the caller learns
 		// nothing about the row.
 		return target{}, errNotFound
+	case err != nil:
+		// A failure of the inventory is not "no such job". The log holds the
+		// job ID and the error, and no content of the row.
+		h.logger.ErrorContext(ctx, "find the unit of a damaged job failed",
+			slog.String("job", string(id)), slog.String("error", err.Error()))
+
+		return target{}, fmt.Errorf("find unit of damaged job: %w", err)
 	}
 
 	var stub job.Job
