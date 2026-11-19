@@ -197,6 +197,12 @@ func BackupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 // token, as the server signs each token in as a distinct administrator. No
 // token is an error that names both settings and the one command that helps.
 func BackupToken() (string, error) {
+	return backupTokenFor("run opendustpan backup again")
+}
+
+// backupTokenFor is BackupToken with the one command that helps given by the
+// caller, so that the error of each command names that command.
+func backupTokenFor(rerun string) (string, error) {
 	tokens, err := LoadAdminTokensFrom(os.LookupEnv)
 	if err != nil && !errors.Is(err, ErrAdminTokenMissing) {
 		return "", err
@@ -209,10 +215,11 @@ func BackupToken() (string, error) {
 	}
 
 	return "", fmt.Errorf(
-		"%w: set %s or %s and run opendustpan backup again",
+		"%w: set %s or %s and %s",
 		ErrBackupNoToken,
 		AdminTokenEnvVar,
 		AdminTokenFileEnvVar,
+		rerun,
 	)
 }
 
