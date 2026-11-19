@@ -46,8 +46,8 @@ that its group or other users can read. Run `chmod 600` on the file.
 | (no flag) | `DUSTPAN_OIDC_CLIENT_SECRET` | (none) |
 | (no flag) | `DUSTPAN_OIDC_CLIENT_SECRET_FILE` | (none) |
 
-The server keeps each space of the client secret. From the file, it removes
-only one line ending at the end of the file.
+The server keeps each space of the client secret. From the file, it ignores
+one line ending at the end of the file.
 
 The issuer must use HTTPS. The server reads the discovery document of the
 provider at the first sign-in, not at start. So the server starts while the

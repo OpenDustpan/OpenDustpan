@@ -699,45 +699,54 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET",
 		"The client secret of the server at the OpenID Connect provider. Required when you set "+
-			"`--oidc-issuer` and no secret file. The server removes leading and trailing white space, "+
-			"and refuses a secret with a control character in it. "+
+			"`--oidc-issuer` and no secret file. A space at the start or at the end is part of the secret. "+
+			"The server uses the value exactly as it is, and refuses a value with a control character in it. "+
 			"When you set both, this variable wins over `DUSTPAN_OIDC_CLIENT_SECRET_FILE`.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_LDAP_BIND_PASSWORD",
 		"The password of the service account of the LDAP sign-in. Required when you set `--ldap-url` and "+
-			"no password file. No flag and no configuration file key sets it.",
+			"no password file. No flag and no configuration file key sets it. A space at the start or at the end "+
+			"is part of the password. The server uses the value exactly as it is, and refuses a value with a control character in it.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_LDAP_BIND_PASSWORD_FILE",
 		"A file that holds the password of the service account of the LDAP sign-in. Only its owner can "+
-			"read it. When you set both, `DUSTPAN_LDAP_BIND_PASSWORD` wins.",
+			"read it. A space at the start or at the end is part of the password. The server ignores one final "+
+			"line ending (LF or CR LF) of the file, and refuses a password with a control character in it. "+
+			"When you set both, `DUSTPAN_LDAP_BIND_PASSWORD` wins.",
 	),
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
 		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
-			"The server removes leading and trailing white space, such as a final line break, "+
-			"and refuses a secret with a control character in it. "+
+			"A space at the start or at the end is part of the secret. The server ignores one final line "+
+			"ending (LF or CR LF) of the file, and refuses a secret with a control character in it. "+
 			"When you set both, `DUSTPAN_OIDC_CLIENT_SECRET` wins.",
 	),
 	envSetting(
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET",
 		"The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. "+
-			"Required when `--audit-sink` names a webhook and you set no secret file.",
+			"Required when `--audit-sink` names a webhook and you set no secret file. A space at the start or at the end "+
+			"is part of the secret. The server uses the value exactly as it is, and refuses a value with a control character in it.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE",
 		"A file that holds the webhook secret. Only its owner can read it. "+
+			"A space at the start or at the end is part of the secret. The server ignores one final line "+
+			"ending (LF or CR LF) of the file, and refuses a secret with a control character in it. "+
 			"When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins.",
 	),
 	envSetting(
 		"DUSTPAN_LOG_WEBHOOK_SECRET",
 		"The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. "+
-			"Required when `--log-sink` names a webhook and you set no secret file.",
+			"Required when `--log-sink` names a webhook and you set no secret file. A space at the start or at the end "+
+			"is part of the secret. The server uses the value exactly as it is, and refuses a value with a control character in it.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_LOG_WEBHOOK_SECRET_FILE",
 		"A file that holds the log webhook secret. Only its owner can read it. "+
+			"A space at the start or at the end is part of the secret. The server ignores one final line "+
+			"ending (LF or CR LF) of the file, and refuses a secret with a control character in it. "+
 			"When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins.",
 	),
 	envSetting(

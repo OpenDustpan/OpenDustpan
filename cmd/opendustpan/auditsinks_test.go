@@ -897,3 +897,66 @@ func TestSecretFromRefusesWhiteSpaceOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestSecretFromAcceptsOneLineEndingOnly proves that a file loses one final
+// line ending and no more, and that a lone CR is not a line ending.
+func TestSecretFromAcceptsOneLineEndingOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for _, tc := range []struct {
+		name    string
+		content string
+		wantErr error
+	}{
+		{"lone CR", "pass\r", errSecretControlChar},
+		{"two LF", "pass\n\n", errSecretControlChar},
+		{"CR LF then LF", "pass\r\n\n", errSecretControlChar},
+		{"two CR then LF", "pass\r\r\n", errSecretControlChar},
+		{"empty", "", errNoOIDCSecret},
+		{"LF only", "\n", errNoOIDCSecret},
+		{"CR LF only", "\r\n", errNoOIDCSecret},
+		{"two LF only", "\n\n", errNoOIDCSecret},
+		{"space tab LF", " \t\n", errNoOIDCSecret},
+	} {
+		t.Run("file "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-"))
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatalf("write secret file: %v", err)
+			}
+
+			got, err := secretFrom(
+				envOf(map[string]string{oidcSecretFileEnvVar: path}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %q, %v; want %v", got, err, tc.wantErr)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		value   string
+		wantErr error
+	}{
+		{"LF", "pass\n", errSecretControlChar},
+		{"CR", "pass\r", errSecretControlChar},
+		{"space tab", " \t", errNoOIDCSecret},
+	} {
+		t.Run("variable "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := secretFrom(
+				envOf(map[string]string{oidcSecretEnvVar: tc.value}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %q, %v; want %v", got, err, tc.wantErr)
+			}
+		})
+	}
+}

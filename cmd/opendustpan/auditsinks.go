@@ -542,10 +542,15 @@ func secretTextFrom(
 		return nil, "", fmt.Errorf("%s: read file: %w", fileEnv, err)
 	}
 
-	// Remove one line ending at the end of the file (the editor case). Keep
-	// every other character, spaces included.
-	secret := strings.TrimSuffix(string(raw), "\n")
-	secret = strings.TrimSuffix(secret, "\r")
+	// Drop one line ending at the end of the file (the editor case): LF or
+	// CR LF. A lone final CR is not a line ending, so it stays and the
+	// control character check refuses it. Keep every other character,
+	// spaces included.
+	secret := string(raw)
+	if s, ok := strings.CutSuffix(secret, "\n"); ok {
+		secret = strings.TrimSuffix(s, "\r")
+	}
+
 	if strings.TrimSpace(secret) == "" {
 		return nil, "", fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
 	}
