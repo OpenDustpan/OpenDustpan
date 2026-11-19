@@ -182,6 +182,43 @@ A version that is not finalized answers 404 with the code
 `state-version.not-found`. A lock that another principal holds answers 409 with
 the code `workspace.locked`.
 
+## Masked reads of state
+
+The routes that read a resource, diff two states, or reveal one value open the
+state and mask its secret values. These routes are:
+
+- OpenTofu: `GET /api/v2/state-versions/{state_version_id}/resources`, `GET
+  /api/v2/state-versions/{state_version_id}/resources/{address}`, `GET
+  /api/v2/state-versions/{state_version_id}/diff` and `POST
+  /api/v2/state-versions/{state_version_id}/actions/reveal`.
+- Pulumi: `GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources`,
+  the route of one resource, `GET /api/stacks/{namespace}/{project}/{stack}/state/diff`
+  and `POST /api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal`.
+
+The server refuses a state for a masked read in three cases. The state is too
+deep when it nests more than 100 levels. The state is too large when the work
+of one masked read is more than 128 MiB. A diff counts the work of both states
+together. In the third case, the state is neither too deep nor too large, but
+a sensitive mark of the state names a value that the server cannot find with
+one rule. This happens when a mark has more than 101 tokens, or when a mark
+goes below a dynamic wrapper (an object that has only the keys `value` and
+`type`) and the wrapper has two readings that both fit, or the mark needs a
+second wrapper. The server does not guess, because a guess can show a secret.
+The answer is 413 with the error code `state-version.too-complex` for OpenTofu
+and `stack.state-too-complex` for Pulumi. For the third case, the detail of
+the answer says that a sensitive mark names a value that the server cannot
+find with one rule. The detail does not repeat the mark. The answer holds no
+value of the state.
+
+A refused reveal writes one audit entry of the kind `reveal` with the outcome
+`failure` and no value path. The server also writes one warning to its log with
+the state version. A refused diff logs both state versions, because the answer
+does not tell which of the two states is too deep or too large.
+
+To get the state itself, use the routes that do not mask: the download of a
+state version for OpenTofu, and the export of a stack for Pulumi. Both need
+`unit:read-secrets` when they answer secret values.
+
 ## Related
 
 - [Check an install with doctor](doctor.md) shows each check and its command.

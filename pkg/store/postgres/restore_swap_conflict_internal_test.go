@@ -23,16 +23,24 @@ const sqlstateDeadlock = "40P01"
 const conflictWait = 30 * time.Second
 
 // swapDeadlockWait is the deadlock timeout of the connections of the swap.
-// PostgreSQL ends the transaction whose timer ends first while a cycle
-// exists. The swap waits first, so with this timeout, the swap is the one
-// that ends if the second transaction closes the cycle before the timer ends.
-// The wait is long enough for a machine under load.
-const swapDeadlockWait = 5 * time.Second
+// PostgreSQL checks for a cycle once, when the timer of a waiting transaction
+// ends. The swap waits first, so its timer ends first. The check ends the
+// swap only if the second transaction closed the cycle before that moment.
+// If the second transaction is late by more than this time, the swap finds no
+// cycle, never checks again, and the check of the second transaction ends the
+// second transaction. The test holds only if the second transaction asks for
+// its lock less than this time after the swap starts to wait. The test cannot
+// wait for the second transaction first: the cycle exists only after the swap
+// waits, and the timer of the swap starts when it waits. The delay is a poll
+// of 5 ms and one statement, so the margin is much more than a loaded machine
+// needs.
+const swapDeadlockWait = 20 * time.Second
 
 // otherDeadlockWait is the deadlock timeout of the second transaction. It is
 // much longer than swapDeadlockWait, so the timer of the second transaction
-// never ends before the timer of the swap.
-const otherDeadlockWait = 60 * time.Second
+// never ends before the timer of the swap, also if the second transaction
+// closes the cycle late.
+const otherDeadlockWait = 300 * time.Second
 
 // errSwapNotWaiting reports that no swap waited for the lock of the second
 // transaction in time.

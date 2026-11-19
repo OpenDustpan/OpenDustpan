@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -139,6 +140,8 @@ type swapPlan struct {
 	// after runs in the fence transaction of the staged file, after the copy
 	// of the control tables: the record of the step in the staged file, so
 	// the rename makes it live with the restored data.
+	// kept holds the count of the dropped temp_admins rows and the count of
+	// the update leases that the fence expired.
 	after func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error
 }
 
@@ -151,8 +154,9 @@ type swapPlan struct {
 // image before the rename means the atomic rename carries fenced versions: a
 // crash after the rename cannot leave restored data with old failover
 // versions. It returns the count of the dropped temp_admins rows of a swap
-// that keeps the access tables.
-func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
+// that keeps the access tables, and the count of the update leases that the
+// fence expired.
+func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAccessResult, error) {
 	// The audit chain record is bookkeeping of this installation: the
 	// staged file takes the value of the live database. The control tables
 	// stay across the swap with the live rows, so the running restore row
@@ -160,7 +164,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 	// because the read takes the read lock.
 	keep, err := s.liveBookkeeping(ctx)
 	if err != nil {
-		return 0, err
+		return backup.KeepAccessResult{}, err
 	}
 
 	// Hold the write lock from the fence through the swap, so a durable
@@ -171,21 +175,21 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 
 	if plan.before != nil {
 		if beforeErr := plan.before(ctx); beforeErr != nil {
-			return 0, beforeErr
+			return backup.KeepAccessResult{}, beforeErr
 		}
 	}
 
 	// A binary below the minimum of the live database must not swap in a
 	// file that it built.
 	if minErr := s.checkSwapMinimumLocked(ctx); minErr != nil {
-		return 0, minErr
+		return backup.KeepAccessResult{}, minErr
 	}
 
 	// The check covers the whole staging area, also the access tables that
 	// a swap that keeps them does not take, and runs before any write to the
 	// staged file.
 	if checkErr := s.checkSwapDevLocked(ctx, plan.staged); checkErr != nil {
-		return 0, checkErr
+		return backup.KeepAccessResult{}, checkErr
 	}
 
 	// A swap that keeps live rows works on a copy of the staged file, made
@@ -199,22 +203,28 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 	}
 
 	if err != nil {
-		return 0, err
+		return backup.KeepAccessResult{}, err
 	}
 
-	var after func(context.Context, *sql.Tx) error
+	var after func(context.Context, *sql.Tx, int64) error
 
 	if plan.after != nil {
-		kept := backup.KeepAccessResult{DroppedTempAdmins: dropped}
-		after = func(ctx context.Context, tx *sql.Tx) error { return plan.after(ctx, tx, kept) }
+		after = func(ctx context.Context, tx *sql.Tx, expired int64) error {
+			return plan.after(
+				ctx,
+				tx,
+				backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired},
+			)
+		}
 	}
 
-	if err := s.fenceStagedFile(ctx, work, s.path, keep, after); err != nil {
-		return 0, err
+	expired, err := s.fenceStagedFile(ctx, work, s.path, keep, after)
+	if err != nil {
+		return backup.KeepAccessResult{}, err
 	}
 
 	if err := s.swapDatabaseLocked(ctx, work); err != nil {
-		return 0, err
+		return backup.KeepAccessResult{}, err
 	}
 
 	if work != plan.staged {
@@ -222,7 +232,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 		removeSnapshot(plan.staged)
 	}
 
-	return dropped, nil
+	return backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired}, nil
 }
 
 // keepOnWorkCopy makes the file that one swap attempt changes, keeps the live
@@ -313,17 +323,18 @@ func (s *Store) keepLive(ctx context.Context, path string, plan swapPlan) (int64
 // of the live database into it, in one transaction. The caller holds the
 // store write lock, so the copy has the last committed control rows. It
 // opens the file in rollback-journal mode, so no write-ahead-log sidecar
-// survives the fence to leak beside the renamed database.
+// survives the fence to leak beside the renamed database. It returns the
+// count of the update leases that the fence expired.
 func (s *Store) fenceStagedFile(
-	ctx context.Context, path, live string, keep bookkeeping, after func(context.Context, *sql.Tx) error,
-) error {
+	ctx context.Context, path, live string, keep bookkeeping, after func(context.Context, *sql.Tx, int64) error,
+) (int64, error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("fence staged namespaces: %w", err)
+		return 0, fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
 	conn, err := openFencedStaged(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	defer func() {
@@ -333,7 +344,7 @@ func (s *Store) fenceStagedFile(
 	}()
 
 	if attachErr := attachLiveDatabase(ctx, conn, live); attachErr != nil {
-		return attachErr
+		return 0, attachErr
 	}
 
 	return applyStagedFence(ctx, conn, s.logger, keep, after)
@@ -387,36 +398,38 @@ func attachLiveDatabase(ctx context.Context, conn *sql.DB, live string) error {
 
 // applyStagedFence fences the staged namespaces, writes the bookkeeping row,
 // resets the runtime rows, copies the control tables and applies the journaled
-// revocations again, in one transaction.
+// revocations again, in one transaction. It returns the count of the update
+// leases that it expired.
 func applyStagedFence(
 	ctx context.Context, conn *sql.DB, logger *slog.Logger, keep bookkeeping,
-	after func(context.Context, *sql.Tx) error,
-) error {
+	after func(context.Context, *sql.Tx, int64) error,
+) (int64, error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("fence staged namespaces: %w", err)
+		return 0, fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
 	const fence = `UPDATE main.namespaces SET failover_version = failover_version + 1`
 
 	if _, execErr := tx.ExecContext(ctx, fence); execErr != nil {
-		return errors.Join(fmt.Errorf("fence staged namespaces: %w", execErr), tx.Rollback())
+		return 0, errors.Join(fmt.Errorf("fence staged namespaces: %w", execErr), tx.Rollback())
 	}
 
-	if err := releaseStagedWorkspaceLocks(ctx, tx); err != nil {
-		return errors.Join(err, tx.Rollback())
+	expired, err := releaseStagedLeases(ctx, tx)
+	if err != nil {
+		return 0, errors.Join(err, tx.Rollback())
 	}
 
 	if err := writeStagedBookkeeping(ctx, tx, keep); err != nil {
-		return errors.Join(err, tx.Rollback())
+		return 0, errors.Join(err, tx.Rollback())
 	}
 
 	if err := resetStagedRuntimeRows(ctx, tx); err != nil {
-		return errors.Join(err, tx.Rollback())
+		return 0, errors.Join(err, tx.Rollback())
 	}
 
 	if err := copyControlTables(ctx, tx); err != nil {
-		return errors.Join(err, tx.Rollback())
+		return 0, errors.Join(err, tx.Rollback())
 	}
 
 	// The staged access tables come from the backup. Apply again the
@@ -424,24 +437,35 @@ func applyStagedFence(
 	// bring back a session or a token that an operator ended. The swap must
 	// not lower the working break-glass count below the floor.
 	if err := replayStagedRevocations(ctx, tx); err != nil {
-		return errors.Join(err, tx.Rollback())
+		return 0, errors.Join(err, tx.Rollback())
 	}
 
 	if err := deriveUnitState(ctx, tx, logger); err != nil {
-		return errors.Join(err, tx.Rollback())
+		return 0, errors.Join(err, tx.Rollback())
 	}
 
 	if after != nil {
-		if err := after(ctx, tx); err != nil {
-			return errors.Join(err, tx.Rollback())
+		if err := after(ctx, tx, expired); err != nil {
+			return 0, errors.Join(err, tx.Rollback())
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("fence staged namespaces: %w", err)
+		return 0, fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
-	return nil
+	return expired, nil
+}
+
+// releaseStagedLeases releases the locks of the workspaces and expires the
+// leases of the running updates that the staged file holds from before the
+// restore, in tx. It returns the count of the expired update leases.
+func releaseStagedLeases(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if err := releaseStagedWorkspaceLocks(ctx, tx); err != nil {
+		return 0, err
+	}
+
+	return expireStagedUpdateLeases(ctx, tx)
 }
 
 // releaseStagedWorkspaceLocks releases every workspace lock of the staged
@@ -467,6 +491,33 @@ WHERE tool = ?`
 	}
 
 	return nil
+}
+
+// expireStagedUpdateLeases expires the lease of every running update of the
+// staged file, in tx, and returns the count of the expired leases. The backup
+// holds the lease columns of an update that ran when the backup was made, and
+// the restore writes them back. Without this step the CLI that holds the lease
+// token from before the restore could save checkpoints and renew its lease
+// again. The update stays running and keeps its stack locked, as for any
+// update whose lease ran out: an operator ends it with a cancel, which builds
+// the journal. The digest stays, so a retried completion still finds its
+// record.
+func expireStagedUpdateLeases(ctx context.Context, tx *sql.Tx) (int64, error) {
+	const expire = `UPDATE main.updates
+SET lease_expires_at_ms = 0, revision = revision + 1
+WHERE status = ?`
+
+	res, err := tx.ExecContext(ctx, expire, string(stack.StatusRunning))
+	if err != nil {
+		return 0, fmt.Errorf("expire staged update leases: %w", err)
+	}
+
+	expired, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count staged update leases: %w", err)
+	}
+
+	return expired, nil
 }
 
 // resetStagedRuntimeRows clears the audit sink cursors and leases of the

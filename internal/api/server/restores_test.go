@@ -412,12 +412,10 @@ func (g *gatedRestoreTarget) Ping(ctx context.Context) error {
 // TestStartRestoreAnswersAcceptedAndSecondConflicts proves the start route
 // answers 202 with the restore ID only (never a pre-backup ID: the service
 // takes that backup only after the checks pass) and that a second start
-// while one runs answers 409. The backup ID names no backup, so the
-// background restore fails once the gate opens; the GET proves the failure
-// lands in the row without driver text or capability paths. The gate holds
-// the first restore before it reads the target, so the second start meets a
-// running restore on every run: without it the missing backup fails faster
-// than the second POST arrives and the test flakes.
+// while one runs answers 409. The gate holds the first restore, which
+// restores a real backup, before it reads the target, so the second start
+// meets a running restore on every run. The second backup ID names no backup:
+// the conflict answer comes before any read of it.
 func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	t.Parallel()
 
@@ -431,6 +429,16 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 		}
 	}()
 
+	// The backup runs over the plain target, so the first restore finds a
+	// live pointer and a manifest and the gate holds it. A backup that does
+	// not exist fails the restore at its first read, before the gate.
+	plain := newRestoreFixtureOver(t, stores, stores.target)
+
+	backupID := backup.ID("bkp-gated0000000000001")
+	if _, err := plain.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup %s: %v", backupID, err)
+	}
+
 	fix := newRestoreFixtureOver(
 		t,
 		stores,
@@ -438,7 +446,7 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	)
 
 	status, startBody := serveRestore(
-		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+backupID.String()+`"}`,
 	)
 	if status != http.StatusAccepted {
 		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusAccepted, startBody)
@@ -468,21 +476,13 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	close(gate)
 	released = true
 
-	failed := waitRestoreState(t, fix.handler, doc.ID, "failed")
-	if failed.Error == "" {
-		t.Fatalf("failed restore %s holds no error text", doc.ID)
+	done := waitRestoreState(t, fix.handler, doc.ID, "succeeded")
+	if done.Error != "" {
+		t.Fatalf("succeeded restore %s holds the error text %q", doc.ID, done.Error)
 	}
 
-	if strings.Contains(failed.Error, "backups/") {
-		t.Fatalf("failed restore error %q holds a capability path", failed.Error)
-	}
-
-	if failed.PreBackupID != "" {
-		t.Fatalf("failed check restores pre-backup ID = %q, want empty", failed.PreBackupID)
-	}
-
-	if failed.RequestedBy != "tester" {
-		t.Fatalf("restore requestedBy = %q, want tester", failed.RequestedBy)
+	if done.RequestedBy != "tester" {
+		t.Fatalf("restore requestedBy = %q, want tester", done.RequestedBy)
 	}
 }
 

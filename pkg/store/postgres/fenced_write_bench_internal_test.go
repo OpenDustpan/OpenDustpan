@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -70,6 +71,8 @@ func benchStore(b *testing.B) *Store {
 	if _, execErr := conn.Exec(b.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
 		b.Fatalf("create schema: %v", execErr)
 	}
+
+	pgtest.DropSchemaAtCleanup(b, base, name)
 
 	u, err := url.Parse(base)
 	if err != nil {

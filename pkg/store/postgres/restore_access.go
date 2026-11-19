@@ -27,14 +27,14 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 		staging: s.stagingSchema, previous: "", keepAccess: true, keepSettings: nil, before: nil, after: nil,
 	}
 
-	dropped, err := s.swapStaging(ctx, plan)
+	kept, err := s.swapStaging(ctx, plan)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
 	s.stagingSchema = ""
 
-	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
+	return kept, nil
 }
 
 // keepAccessTx runs the rest of a swap that keeps the access tables, in tx,
@@ -43,17 +43,19 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 // against the staged namespaces and units, and swaps the schemas. Principals
 // merge by ID: existing ones are updated, extra ones are deleted, and missing
 // ones are inserted last. It locks the live access tables first, so a revoke
-// between the copy and the swap cannot be lost. It returns the count of the
-// dropped temp_admins rows.
+// between the copy and the swap cannot be lost. It sets kept to the count of
+// the dropped temp_admins rows and to the count of the expired update leases.
 func (s *Store) keepAccessTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	srv serverAuditTx,
-	live string,
-	plan swapPlan,
-) (int64, error) {
+	in swapInTarget,
+	kept *backup.KeepAccessResult,
+) error {
+	live, plan := in.live, in.plan
+
 	if err := lockLiveAccessTables(ctx, tx, live); err != nil {
-		return 0, err
+		return err
 	}
 
 	if s.keepAccessHook != nil {
@@ -61,7 +63,7 @@ func (s *Store) keepAccessTx(
 	}
 
 	if err := keepAccessTables(ctx, tx, live, plan.staging); err != nil {
-		return 0, err
+		return err
 	}
 
 	// The swap takes temp_admins from the backup and keeps the live
@@ -70,25 +72,30 @@ func (s *Store) keepAccessTx(
 	// not hold.
 	dropped, err := dropDanglingTempAdmins(ctx, tx, plan.staging)
 	if err != nil {
-		return 0, err
+		return err
 	}
+
+	kept.DroppedTempAdmins = dropped
 
 	previous, drop := previousSchema(live, plan.previous)
 
-	return dropped, swapSchemas(
+	return swapSchemas(
 		ctx,
 		tx,
 		srv,
 		swapNames{live: live, previous: previous, staging: plan.staging, drop: drop},
+		kept,
 	)
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,
 // drops the old live schema when names.drop says so and the control schema
-// of the staging area, and fences the restored namespaces, in tx. The
-// installation, backups and restores tables live in the control schema,
-// which the swap never renames.
-func swapSchemas(ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames) error {
+// of the staging area, and fences the restored namespaces, in tx. It sets
+// kept.ExpiredUpdateLeases. The installation, backups and restores tables
+// live in the control schema, which the swap never renames.
+func swapSchemas(
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames, kept *backup.KeepAccessResult,
+) error {
 	live, previous, staging := names.live, names.previous, names.staging
 
 	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
@@ -113,7 +120,7 @@ func swapSchemas(ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNa
 		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
-	return fenceRestored(ctx, tx, live)
+	return fenceRestored(ctx, tx, live, kept)
 }
 
 // lockLiveAccessTables locks every live access table in share mode, so no

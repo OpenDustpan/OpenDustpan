@@ -1541,6 +1541,39 @@ func testOtherNamespace(t *testing.T, h Harness) {
 	}
 }
 
+func testCreatePoolNamespaceMismatch(t *testing.T, h Harness) {
+	t.Helper()
+
+	_ = setUp(t, h)
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	// The pool names acme, and the fence is the fence of globex.
+	_, err = h.Pools.CreatePool(t.Context(), newPool("acme", "stray", runner.PurposeJobs), other, entries(other))
+	wantErr(t, "CreatePool with the fence of another namespace", err, runner.ErrInvalid)
+
+	for _, ns := range []namespace.Name{"acme", "globex"} {
+		list, listErr := h.Pools.Pools(t.Context(), ns)
+		if listErr != nil {
+			t.Fatalf("Pools of %s: %v", ns, listErr)
+		}
+
+		for i := range list {
+			if list[i].Name == "stray" {
+				t.Fatalf("Pools of %s holds the refused pool %+v", ns, list[i])
+			}
+		}
+	}
+
+	audit, err := h.Domain.AuditEntries(t.Context(), "globex")
+	if err != nil || len(audit) != 0 {
+		t.Fatalf("AuditEntries of globex = %d, %v, want none", len(audit), err)
+	}
+}
+
 func testPoolStoreCrossNamespaceUpdateRefused(t *testing.T, h Harness) {
 	t.Helper()
 

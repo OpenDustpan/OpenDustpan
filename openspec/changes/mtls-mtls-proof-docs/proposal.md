@@ -28,7 +28,7 @@ Evidence for the claims above:
 
 - Milestone 4 step 9 asks for an mTLS workload that gets a token and runs the CLIs, with refusals for a foreign CA, an expired certificate, and an unmatched ID. Proof: Context pack roadmap step: A workload with a client certificate from the trust bundle, with a SPIFFE ID in the URI SAN that a trust rule names, gets an access token, and the CLIs run with it.
 - A workload token exchange e2e test exists in main. Proof: e2e/workload_test.go:38
-- A trust token lifetime test exists in main. Proof: pkg/accesstoken/trust_token_test.go:59
+- A trust token lifetime test exists in main. Proof: pkg/accesstoken/trust_token_test.go:85
 - The trust rule exchange route is in the coverage matrix. Proof: POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange
 
 ## What Changes
@@ -63,7 +63,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Workload token exchange e2e test exists. (`e2e/workload_test.go:38`)
-- Trust token lifetime test exists. (`pkg/accesstoken/trust_token_test.go:59`)
+- Trust token lifetime test exists. (`pkg/accesstoken/trust_token_test.go:85`)
 - Dev cert bundle helper test exists. (`cmd/opendustpan/devtls_test.go:270`)
 - Request log client IP test exists. (`pkg/dustpan/client_address_test.go:188`)
 
@@ -107,6 +107,10 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "An exchange that checks a TLS client certificate against the trust rules issues a stored access token of the kind `mtls-exchange` for the principal of the rule."
 - Effect: The e2e steps and the docs page name the kind `mtls-exchange` and the credential `trust-token`.
 - Conflict: none.
+
+## Dependencies
+
+This change starts only after the mTLS exchange change has its part 3 (the listener that asks for a client certificate) on main, and after the owner decides the source of the revocation answer. Until both are true, a real call answers 401 `mtls.revocation-unknown` and the proof cannot pass.
 
 ## Open questions
 

@@ -624,7 +624,7 @@ func GrantRef(g Grant) string {
 // read: "grant:<id>", or "grant:invalid" for a text that is not a grant ID,
 // so request text never reaches the audit log.
 func GrantIDRef(id string) string {
-	if strings.HasPrefix(id, grantIDPrefix) && ident.Valid(id, maxGrantIDLength) {
+	if validGrantID(id) {
 		return "grant:" + id
 	}
 
@@ -633,6 +633,22 @@ func GrantIDRef(id string) string {
 
 // maxGrantIDLength bounds a grant ID, in bytes.
 const maxGrantIDLength = 64
+
+// minGrantIDSuffixLength is the least number of bytes that a grant ID holds
+// after GrantIDPrefix. The bare prefix names no grant.
+const minGrantIDSuffixLength = 1
+
+// validGrantID reports whether id has the shape of a grant ID: the prefix in
+// lowercase, at least minGrantIDSuffixLength bytes after it, and at most
+// maxGrantIDLength bytes in all, of valid identifier characters (ASCII
+// letters, digits, '-', '_' and '.'). The server makes IDs of lowercase
+// letters and digits, but a stored or restored grant may hold the other valid
+// identifier characters, so this rule is the same as ident.Valid.
+func validGrantID(id string) bool {
+	return strings.HasPrefix(id, grantIDPrefix) &&
+		len(id) >= len(grantIDPrefix)+minGrantIDSuffixLength &&
+		ident.Valid(id, maxGrantIDLength)
+}
 
 // change completes the entry of the caller for one change of the record
 // object at the time at.

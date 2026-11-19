@@ -105,6 +105,8 @@ var (
 	ErrEnrollmentRequired = errors.New("enroll a factor to continue")
 	// ErrLastCredential reports the removal of the last passkey of a local
 	// user who has no password.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrLastCredential = errors.New("the change removes the last sign-in credential")
 	// ErrUnavailable reports that the store cannot answer. Each sign-in
 	// fails closed on it.

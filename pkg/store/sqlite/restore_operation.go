@@ -854,12 +854,12 @@ func (s *Store) ApplyRestoreArea(
 		},
 	}
 
-	dropped, err := s.swapStaged(ctx, plan)
+	kept, err := s.swapStaged(ctx, plan)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
+	return kept, nil
 }
 
 // checkSwapState checks that the installation is in maintenance mode and that
