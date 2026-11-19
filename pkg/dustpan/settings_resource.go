@@ -1,7 +1,6 @@
 package dustpan
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
@@ -28,9 +27,9 @@ func drainPeriodDeclaration(period time.Duration) setting.Declaration {
 	}
 }
 
-// errRetentionRange is the reason of a refused retention value. The numbers
-// are MinRetentionHours and MaxRetentionHours of the gate package.
-var errRetentionRange = errors.New("give 0 (keep forever) or a whole number of hours from 24 to 87600")
+// errRetentionRange is the reason of a refused retention value.
+var errRetentionRange = fmt.Errorf("give 0 (keep forever) or a whole number of hours from %d to %d",
+	gate.MinRetentionHours, gate.MaxRetentionHours)
 
 // retentionCheck runs the check of the gate package and gives the settings
 // resource a reason that holds no package prefix and does not repeat the key:
@@ -57,8 +56,9 @@ func decisionRecordRetentionDeclaration() setting.Declaration {
 		// the declaration does not rely on one of them alone.
 		Check:           retentionCheck,
 		ReducesSecurity: gate.RetentionReducesSecurity,
-		Doc: "The hours that the server keeps decision records, from 24 to 87600. 0 keeps decision records " +
-			"forever. The setting never deletes an audit entry. No job deletes decision records yet.",
+		Doc: fmt.Sprintf("The hours that the server keeps decision records, from %d to %d. 0 keeps decision "+
+			"records forever. The setting never deletes an audit entry. No job deletes decision records yet.",
+			gate.MinRetentionHours, gate.MaxRetentionHours),
 	}
 }
 

@@ -1,6 +1,7 @@
 package dustpan_test
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -113,6 +114,13 @@ func refuseHostileRetention(t *testing.T, base, etag string) {
 		// refuses names the key.
 		if strings.Contains(answer, "settings.value-invalid") && !strings.Contains(answer, gate.RetentionKey) {
 			t.Errorf("answer to %s = %s, want it to name the key", body, answer)
+		}
+
+		// The reason shows the bounds of the gate package, so that a change of
+		// a bound shows in the text.
+		wantRange := fmt.Sprintf("from %d to %d", gate.MinRetentionHours, gate.MaxRetentionHours)
+		if value == `23` && !strings.Contains(answer, wantRange) {
+			t.Errorf("answer to %s = %s, want it to hold %q", body, answer, wantRange)
 		}
 	}
 }
