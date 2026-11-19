@@ -7,6 +7,9 @@ database:
 keyEncryptionKey:
   existingSecret:
     name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
 s3:
   endpoint: https://s3.example
   region: eu-west-1

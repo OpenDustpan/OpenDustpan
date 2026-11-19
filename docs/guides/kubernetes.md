@@ -12,7 +12,7 @@ The chart always runs `opendustpan serve`. It uses an external PostgreSQL databa
 
 ## Make the Secrets
 
-The chart never holds a secret. Each secret comes from a Secret that exists before the install. The install fails when the names of the first two Secrets are empty.
+The chart never holds a secret. Each secret comes from a Secret that exists before the install. The install fails when the name of one of the first three Secrets is empty.
 
 1. Make the key-encryption key one time. Keep a copy outside the cluster. A lost key loses every secret.
 
@@ -20,22 +20,23 @@ The chart never holds a secret. Each secret comes from a Secret that exists befo
    opendustpan key generate --out key-encryption-key
    ```
 
-2. Make the two Secrets that every install needs.
+2. Make the three Secrets that every install needs.
 
    ```sh
    kubectl create secret generic opendustpan-database \
      --from-literal=database-url='postgres://opendustpan@db.example:5432/opendustpan?sslmode=verify-full'
    kubectl create secret generic opendustpan-key-encryption-key \
      --from-file=key-encryption-key=key-encryption-key
+   kubectl create secret generic opendustpan-admin-token \
+     --from-literal=admin-token="$(openssl rand -hex 32)"
    ```
 
-The two Secrets must not be the same Secret and key. The templates refuse that case.
+The database Secret and the key Secret must not be the same Secret and key. The templates refuse that case. The server exits with `no admin token is set` without the admin token, so the chart refuses an empty `adminToken.existingSecret.name`.
 
 Other Secrets are optional:
 
 | Secret | Value | Use |
 | --- | --- | --- |
-| Bootstrap admin tokens | `adminToken.existingSecret` | The first administrator tokens, comma-separated. |
 | S3 credentials | `s3.credentials.existingSecret` | Access key and secret key. With no Secret, the server uses its default credential chain, for example a role that `serviceAccount.annotations` gives to the pod. |
 | Built-in TLS | `server.tls.existingSecret` | A `kubernetes.io/tls` Secret. |
 | Backup token | `backup.schedule.tokenSecret` | An access token that may start a backup. Do not use a bootstrap admin token. |
@@ -53,6 +54,9 @@ database:
 keyEncryptionKey:
   existingSecret:
     name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
 ```
 
 ```sh

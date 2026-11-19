@@ -18,16 +18,20 @@ name it in the values below.
 
 ## Install with Helm
 
-Make the two Secrets first. The chart refuses an install without both
-names: `database.existingSecret.name` holds the PostgreSQL URL and
+Make the three Secrets first. The chart refuses an install without all
+three names: `database.existingSecret.name` holds the PostgreSQL URL,
 `keyEncryptionKey.existingSecret.name` holds the key from
-`opendustpan key generate`.
+`opendustpan key generate`, and `adminToken.existingSecret.name` holds the
+bootstrap admin token. The server exits with `no admin token is set` without
+the token.
 
 ```sh
 kubectl create secret generic opendustpan-database \
   --from-literal=database-url='postgres://opendustpan@db.example:5432/opendustpan?sslmode=verify-full'
 kubectl create secret generic opendustpan-key-encryption-key \
   --from-file=key-encryption-key=<file from opendustpan key generate --out>
+kubectl create secret generic opendustpan-admin-token \
+  --from-literal=admin-token="$(openssl rand -hex 32)"
 ```
 
 Install from the checkout. Set `image.repository` and `image.tag` to the
@@ -38,7 +42,8 @@ helm install opendustpan deploy/helm/opendustpan \
   --set image.repository=<registry>/opendustpan \
   --set image.tag=<tag> \
   --set database.existingSecret.name=opendustpan-database \
-  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key
+  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
+  --set adminToken.existingSecret.name=opendustpan-admin-token
 ```
 
 The [Helm guide](kubernetes.md) shows the other Secrets, storage, upgrade

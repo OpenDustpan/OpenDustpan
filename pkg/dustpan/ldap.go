@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
@@ -60,8 +61,11 @@ type LDAPProvider struct {
 	GroupNameAttribute     string
 	DisabledValues         []string
 	DisabledMask           uint64
-	StartTLS               bool
-	AutoCreate             bool
+	// CAFile is the path of the file that RootCAs came from. It is for the
+	// list of the sign-in providers only: the server reads no file from it.
+	CAFile     string
+	StartTLS   bool
+	AutoCreate bool
 	// SubjectFailureLimit is the limit of the count of the subject from
 	// every source: 1 to 100. Zero uses the default of 5. The count of the
 	// person from one source locks the person after 10 failures. The count
@@ -140,6 +144,9 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 				GroupMemberAttribute:   p.GroupMemberAttribute,
 				GroupMemberOfAttribute: p.GroupMemberOfAttribute,
 				GroupNameAttribute:     p.GroupNameAttribute,
+				CAFile:                 p.CAFile,
+				DisabledMask:           maskText(p.DisabledMask),
+				DisabledValues:         slices.Clone(p.DisabledValues),
 				StartTLS:               p.StartTLS,
 				SubjectFailureLimit:    limit,
 				SubjectFailureLimitSource: string(
@@ -266,4 +273,14 @@ func rangeTexts(ranges []netip.Prefix) []string {
 	}
 
 	return out
+}
+
+// maskText returns the decimal text of mask for the list of the sign-in
+// providers, and an empty text for zero, which means no mask.
+func maskText(mask uint64) string {
+	if mask == 0 {
+		return ""
+	}
+
+	return strconv.FormatUint(mask, 10)
 }

@@ -148,6 +148,16 @@ func TestKeyGenerateRefusesBadInput(t *testing.T) {
 	}
 }
 
+// checkKeyExistsText fails when err states the cause more than once or names a
+// system call.
+func checkKeyExistsText(t *testing.T, err error) {
+	t.Helper()
+
+	if strings.Contains(err.Error(), "openat") || strings.Count(err.Error(), "exists") != 1 {
+		t.Fatalf("error = %q, want one statement of the cause and no system call", err)
+	}
+}
+
 // TestKeyGenerateNeverOverwrites proves that a file at the path stays as it
 // is, also when the path is a symbolic link to a file or to a missing file:
 // the command writes nothing through the link.
@@ -184,6 +194,8 @@ func TestKeyGenerateNeverOverwrites(t *testing.T) {
 		if !strings.Contains(err.Error(), "set --out to a new path") {
 			t.Fatalf("error = %q, want the setting that helps", err)
 		}
+
+		checkKeyExistsText(t, err)
 	}
 
 	for _, path := range []string{existing, target} {

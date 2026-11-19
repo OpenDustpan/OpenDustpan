@@ -132,7 +132,7 @@ func TestStoreCheckPrintsTheReport(t *testing.T) {
 	err := runStoreCheck(
 		t.Context(),
 		[]string{"--server", fake.server.URL, "--target", "blobs"},
-		storeCheckTestToken,
+		fixedStoreCheckToken,
 		&stdout,
 		&stderr,
 	)
@@ -185,7 +185,7 @@ func TestStoreCheckExitsWithAnErrorWhenACaseFailsOrTheCheckFails(t *testing.T) {
 
 			args := []string{"--server", fake.server.URL, "--target", "blobs"}
 
-			err := runStoreCheck(t.Context(), args, storeCheckTestToken, &stdout, &stderr)
+			err := runStoreCheck(t.Context(), args, fixedStoreCheckToken, &stdout, &stderr)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -210,7 +210,7 @@ func TestStoreCheckSendsNoRequestForATargetThatIsNotOnTheList(t *testing.T) {
 
 			args := []string{"--server", fake.server.URL, "--target", target}
 
-			err := runStoreCheck(t.Context(), args, storeCheckTestToken, &stdout, &stderr)
+			err := runStoreCheck(t.Context(), args, fixedStoreCheckToken, &stdout, &stderr)
 			if !errors.Is(err, ErrStoreCheckTarget) {
 				t.Fatalf("err = %v, want ErrStoreCheckTarget", err)
 			}
@@ -233,7 +233,7 @@ func TestStoreCheckReportsTheRefusalOfTheServer(t *testing.T) {
 	err := runStoreCheck(
 		t.Context(),
 		[]string{"--server", fake.server.URL, "--target", "backup"},
-		storeCheckTestToken,
+		fixedStoreCheckToken,
 		&stdout,
 		&stderr,
 	)
@@ -251,7 +251,7 @@ func TestStoreCheckNeedsAServerAndRefusesOversizedAnswers(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 
-	err := runStoreCheck(t.Context(), []string{"--target", "blobs"}, storeCheckTestToken, &stdout, &stderr)
+	err := runStoreCheck(t.Context(), []string{"--target", "blobs"}, fixedStoreCheckToken, &stdout, &stderr)
 	if !errors.Is(err, ErrStoreCheckNeedsServer) {
 		t.Fatalf("err = %v, want ErrStoreCheckNeedsServer", err)
 	}
@@ -261,7 +261,7 @@ func TestStoreCheckNeedsAServerAndRefusesOversizedAnswers(t *testing.T) {
 	err = runStoreCheck(
 		t.Context(),
 		[]string{"--server", fake.server.URL, "--target", "blobs"},
-		storeCheckTestToken,
+		fixedStoreCheckToken,
 		&stdout,
 		&stderr,
 	)
@@ -272,7 +272,7 @@ func TestStoreCheckNeedsAServerAndRefusesOversizedAnswers(t *testing.T) {
 	err = runStoreCheck(
 		t.Context(),
 		[]string{"--server", fake.server.URL, "--target", "blobs", "extra"},
-		storeCheckTestToken,
+		fixedStoreCheckToken,
 		&stdout,
 		&stderr,
 	)
@@ -280,3 +280,6 @@ func TestStoreCheckNeedsAServerAndRefusesOversizedAnswers(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUsage", err)
 	}
 }
+
+// fixedStoreCheckToken is a token loader that gives storeCheckTestToken.
+func fixedStoreCheckToken(string) (string, error) { return storeCheckTestToken, nil }
