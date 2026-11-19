@@ -106,7 +106,7 @@ func newLDAPRouteEnvAt(t *testing.T, url string) ldapRouteEnv {
 			CAFile:                    "",
 			DisabledMask:              "",
 			DisabledValues:            nil,
-			SubjectFailureLimit: 7,
+			SubjectFailureLimit:       7,
 			SubjectFailureLimitSource: "file",
 		},
 	}})
