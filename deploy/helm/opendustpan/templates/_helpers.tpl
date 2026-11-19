@@ -124,15 +124,11 @@ app.kubernetes.io/part-of: opendustpan
     secretKeyRef:
       name: {{ .Values.keyEncryptionKey.existingSecret.name | quote }}
       key: {{ .Values.keyEncryptionKey.existingSecret.key | quote }}
-{{- with .Values.adminToken.existingSecret }}
-{{- if .name }}
 - name: DUSTPAN_ADMIN_TOKEN
   valueFrom:
     secretKeyRef:
-      name: {{ .name | quote }}
-      key: {{ .key | quote }}
-{{- end }}
-{{- end }}
+      name: {{ .Values.adminToken.existingSecret.name | quote }}
+      key: {{ .Values.adminToken.existingSecret.key | quote }}
 {{- with .Values.s3.credentials.existingSecret }}
 {{- if .name }}
 - name: AWS_ACCESS_KEY_ID
@@ -167,6 +163,9 @@ and key, and values that the release needs.
 {{- $kek := .Values.keyEncryptionKey.existingSecret -}}
 {{- if or (not $db.name) (not $kek.name) -}}
 {{- fail "database.existingSecret.name and keyEncryptionKey.existingSecret.name are required: make the two Secrets and set both names" -}}
+{{- end -}}
+{{- if not .Values.adminToken.existingSecret.name -}}
+{{- fail "adminToken.existingSecret.name is empty. The server does not start without an admin token. Set adminToken.existingSecret.name to opendustpan-admin-token, then make the Secret with this command: kubectl create secret generic opendustpan-admin-token --from-literal=admin-token=$(openssl rand -hex 32)" -}}
 {{- end -}}
 {{- if and (eq $db.name $kek.name) (eq $db.key $kek.key) -}}
 {{- fail "database.existingSecret and keyEncryptionKey.existingSecret name the same Secret and key: use two different Secrets or keys" -}}

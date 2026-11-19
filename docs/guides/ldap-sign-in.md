@@ -62,7 +62,9 @@ shows the provider with the source `static`, the mode `ldap` and the
 effective value of each LDAP setting. It shows the lockout limit as
 `subjectFailureLimit`, and the layer that sets it as
 `subjectFailureLimitSource`: `flag`, `env`, `file` or `default`. It shows
-`"bindPasswordSet": true`, never the password.
+the CA file as `caFile`, the disabled mask as `disabledMask` (a decimal
+text, empty when no mask is set) and the disabled values as
+`disabledValues`. It shows `"bindPasswordSet": true`, never the password.
 
 ## Sign in
 

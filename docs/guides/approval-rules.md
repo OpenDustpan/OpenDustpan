@@ -120,7 +120,8 @@ request changed the default, the server answers 409 and changes nothing.
 
 `DELETE` on the same path removes the default and answers 204. It answers 204
 also when the namespace sets no default. After that, the namespace needs no
-approval again. `DELETE` also takes `If-Match`.
+approval again. `DELETE` also takes `If-Match`. A namespace that does not
+exist answers 404 to each of these requests.
 
 ## Store an approval rule
 
@@ -155,6 +156,7 @@ reserved. The body must not hold an `id`.
 
 - `GET .../approval-rules` lists the rules stored in this namespace, ordered by
   ID. It does not list rules of a wider scope. The answer is `{"rules":[...]}`.
+  It answers 404 when the namespace does not exist.
 - `GET .../approval-rules/<id>` reads one rule. It answers 404 for an unknown ID.
 - `DELETE .../approval-rules/<id>` removes the rule and answers 204. If a stored
   gate names the rule, the server answers 422 and keeps the rule.

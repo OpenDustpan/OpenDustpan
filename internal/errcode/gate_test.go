@@ -150,6 +150,7 @@ func ungated() map[string]string {
 		"apidesc":       "the API description; it writes no error answer",
 		"auditrequired": "a helper of the adapters; it writes no error answer",
 		"faultlog":      "a helper of the adapters; it writes the log line of a failure and no error answer",
+		"githubwebhook": "the intake of the Git host events; it answers 204 with no body for every request, so it has no error answer",
 		"idempotent":    "a helper of the adapters; its errors reach the error writer of each adapter",
 		"refusal":       "a helper of the adapters; its errors reach the classify functions of each adapter",
 		"tofuhttp":      "the OpenTofu HTTP backend; OpenTofu fixes its error shapes, which have no code field",

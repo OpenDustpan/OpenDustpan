@@ -124,18 +124,23 @@ jobs:
             case "$f" in
               .github/*|Makefile|go.mod|go.sum) run_all "$f changed" ;;
             esac
-            # Docs only: docs/, openspec/, .repowise/ and Markdown files at the
-            # root. Go tests read the three docs files below, so they are code.
-            # No Go code reads openspec/.
+            # Docs only: openspec/, .repowise/ and Markdown files at the root.
+            # Go tests read docs/: the route test reads docs/guides and
+            # docs/reference, and the ADR number test walks every .md file
+            # under docs/. So a path under docs/ is code. No Go code reads
+            # openspec/.
             case "$f" in
-              docs/tfe-api.md|docs/reference/configuration.md|docs/reference/helm-values.md) code=true ;;
-              docs/*|openspec/*|.repowise/*) ;;
+              docs/*) code=true ;;
+              openspec/*|.repowise/*) ;;
               */*) code=true ;;
               *.md) ;;
               *) code=true ;;
             esac
             case "$f" in
               e2e/*|internal/api/pulumi/*|internal/api/tfe/*|internal/pulumijournal/*|pkg/dustpan/*|cmd/opendustpan/*|pkg/store/*/migrations/*|scripts/e2e-*|scripts/toxiproxy.sh) e2e=true ;;
+              # The e2e tests read these docs: the page tests, the page lists
+              # and the check of the commands in the pages.
+              docs/guides/*|docs/reference/*|docs/commands-*.txt|README.md) e2e=true ;;
             esac
             case "$f" in
               pkg/store/*|internal/store/*|internal/pgtest/*|pkg/*test/*) store=true ;;

@@ -746,9 +746,13 @@ func classifyRequest(err error) (failure, bool) {
 // classifyRegistry maps the backup and restore registry errors to their
 // status and message. Registry and target failures may hold driver text, so
 // only the sentinel decides the status and the message. A missing backup
-// answers 404 and a second start 409.
+// answers 404, a second start 409, and a backup that runs or failed 409.
 func classifyRegistry(err error) failure {
 	switch {
+	case errors.Is(err, backup.ErrStillRunning):
+		return failCoded(http.StatusConflict, backup.ErrStillRunning.Error(), errcode.BackupStillRunning)
+	case errors.Is(err, backup.ErrEndedFailed):
+		return failCoded(http.StatusConflict, backup.ErrEndedFailed.Error(), errcode.BackupEndedFailed)
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return fail(http.StatusConflict, "a backup is already running")
 	case errors.Is(err, backup.ErrRestoreRunning):

@@ -73,12 +73,28 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 	e := newProviderEnvWith(t, []apiserver.PasswordProvider{{
 		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true, SubjectFailureLimit: 7,
 		LDAP: apiserver.LDAPSettings{
-			AllowedRanges: nil,
-			URL:           dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
-			UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
-			NameAttribute: "", Subject: "entryUUID", DisabledAttribute: "", Groups: "off", GroupBaseDN: "",
-			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
-			StartTLS: false, SubjectFailureLimit: 7, SubjectFailureLimitSource: "file",
+			AllowedRanges:             nil,
+			URL:                       dir.LDAPSURL(),
+			BindDN:                    ldaptest.ServiceDN,
+			BaseDN:                    ldaptest.BaseDN,
+			UserFilter:                "(&(objectClass=person)(uid={user}))",
+			UserNameAttribute:         "uid",
+			EmailAttribute:            "",
+			NameAttribute:             "",
+			Subject:                   "entryUUID",
+			DisabledAttribute:         "",
+			Groups:                    "off",
+			GroupBaseDN:               "",
+			GroupFilter:               "",
+			GroupMemberAttribute:      "",
+			GroupMemberOfAttribute:    "",
+			GroupNameAttribute:        "",
+			StartTLS:                  false,
+			CAFile:                    "",
+			DisabledMask:              "",
+			DisabledValues:            nil,
+			SubjectFailureLimit:       7,
+			SubjectFailureLimitSource: "file",
 		},
 	}})
 
@@ -199,8 +215,8 @@ func ldapRefusals() []ldapRefusal {
 		},
 		{
 			name: "oversized body", path: ldapRoutePath,
-			body: signInBody("alice", strings.Repeat("a", 9*1024)), code: "request.body-invalid",
-			status: http.StatusBadRequest, spends: 1,
+			body: signInBody("alice", strings.Repeat("a", 9*1024)), code: "request.body-too-large",
+			status: http.StatusRequestEntityTooLarge, spends: 1,
 		},
 	}
 }

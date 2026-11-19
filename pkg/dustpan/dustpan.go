@@ -47,6 +47,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
+	"opendustpan.org/opendustpan/internal/api/githubwebhook"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
@@ -1225,6 +1226,9 @@ type adapters struct {
 	chain       *auditChain
 	// signIn is the console sign-in, or nil with no provider.
 	signIn *serverapi.SignIn
+	// gitHostWebhook takes the deliveries of the webhook of a Git host. It is
+	// nil when no Git host store is set.
+	gitHostWebhook http.Handler
 }
 
 // signInSessions returns the session service of the console sign-in, or
@@ -1294,16 +1298,15 @@ func newAdapters(
 
 	mounted := adapters{
 		neutralHandlers: neutral,
-		pulumi:          api,
-		tfe:             tfeAPI,
-		tofuHTTP:        tofuHTTPAPI,
-		server:          parts.handler,
-		ready:           newReadiness(cfg, observed, chain),
-		maintenance:     watcher,
-		restores:        parts.restores,
-		storeChecks:     parts.storeChecks,
-		chain:           chain,
-		signIn:          signIn,
+		pulumi:          api, tfe: tfeAPI, tofuHTTP: tofuHTTPAPI,
+		server:         parts.handler,
+		ready:          newReadiness(cfg, observed, chain),
+		maintenance:    watcher,
+		restores:       parts.restores,
+		storeChecks:    parts.storeChecks,
+		chain:          chain,
+		signIn:         signIn,
+		gitHostWebhook: parts.webhook,
 	}
 
 	// The server refuses to start with a route under the prefix that has no
@@ -1758,7 +1761,7 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	if cfg.secretWrapper == nil {
 		return baseurl.Resolver{}, fmt.Errorf(
 			"%w: WithSecretWrapper: the server needs a key-encryption key to seal OpenTofu state and "+
-				"Pulumi secrets (ADR 41)",
+				"Pulumi secrets",
 			ErrMissingOption,
 		)
 	}
@@ -1888,6 +1891,15 @@ func newWorkspaceService(
 	return workspaces, nil
 }
 
+// noCollections is the membership of a store that holds no collections.
+type noCollections struct{}
+
+// CollectionOf implements stack.Membership. It answers that no collection
+// holds the stack.
+func (noCollections) CollectionOf(context.Context, stack.Ref) (string, bool, error) {
+	return "", false, nil
+}
+
 // clockOf returns the clock of the server settings, defaulting to time.Now
 // like the update service does. The journal replayer stamps the manifest of
 // each checkpoint it builds with it.
@@ -1918,6 +1930,15 @@ func newUpdateService(
 
 	attachBlobGuard(cfg)
 
+	// A store that holds no collections cannot place a stack, so every stack
+	// is in no collection for it and every update write is refused: the
+	// update service fails closed.
+	var membership stack.Membership = noCollections{}
+
+	if units, ok := cfg.namespaceStore.(stack.UnitCollections); ok {
+		membership = stack.NewCollectionMembership(units)
+	}
+
 	sealer, err := newItemSealer(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -1925,6 +1946,7 @@ func newUpdateService(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
+		Membership:         membership,
 		Checkpoints:        cfg.checkpointStore,
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,
@@ -2970,7 +2992,7 @@ type installationDeps struct {
 // tool-neutral installation API, in this order. It is assembly: it calls the
 // constructors of the backup area and of the installation area.
 func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts, error) {
-	none := installationParts{handler: nil, restores: nil, storeChecks: nil}
+	none := installationParts{handler: nil, restores: nil, storeChecks: nil, webhook: nil}
 
 	restores, err := newRestoreService(restoreInputs{
 		settings: cfg.backup, store: cfg.namespaceStore, blobs: cfg.blobStore, watch: cfg.watch,
@@ -3004,7 +3026,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	gitHost, idem, err := newGitHostParts(cfg, deps)
+	gitHost, err := newGitHostParts(cfg, deps)
 	if err != nil {
 		return none, err
 	}
@@ -3027,8 +3049,8 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
-		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost,
-		idempotency: idem, extras: extras,
+		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost.service,
+		idempotency: gitHost.idem, extras: extras,
 		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
 		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
 		version: cfg.version, logger: cfg.logger, now: cfg.now,
@@ -3037,7 +3059,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks}, nil
+	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks, webhook: gitHost.webhook}, nil
 }
 
 // installationParts holds what newInstallationAPI builds: the installation API
@@ -3046,6 +3068,9 @@ type installationParts struct {
 	handler     http.Handler
 	restores    *backup.RestoreService
 	storeChecks *storecheck.Service
+	// webhook takes the deliveries of the Git host webhook, or is nil when no
+	// Git host store is set.
+	webhook http.Handler
 }
 
 // forgeLinkStore is what a SQL store gives for the links from Git host accounts
@@ -3902,6 +3927,19 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// discovery document of the TFE adapter.
 	if a.issuer != nil {
 		mux.Handle("/oidc/", metrics.AdapterServer, withJSONMethodNotAllowed(a.issuer))
+	}
+	// The deliveries of the webhook of a Git host live outside the versioned
+	// API: the operator writes the path in the settings of the GitHub App. The
+	// route needs no sign-in, because the signature is its credential. Unlike
+	// the issuer routes, it writes (the receipt and the audit entries), so it
+	// is refused in maintenance mode like the tool adapters. A refused delivery
+	// answers 503, and the sender can deliver it again later. Any other method
+	// and any other path under the prefix answer the same for every hook ID.
+	if a.gitHostWebhook != nil {
+		mux.Handle(
+			githubwebhook.Prefix, metrics.AdapterServer,
+			withMaintenance(withJSONMethodNotAllowed(a.gitHostWebhook), a.maintenance, shapeWebhook, cfg.logger),
+		)
 	}
 	mountTofuRegistry(mux, a, cfg)
 

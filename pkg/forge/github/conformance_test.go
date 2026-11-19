@@ -2,10 +2,14 @@ package github_test
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +26,10 @@ type hostFixture struct {
 	host *githubfake.Fake
 	repo string
 	auth forge.AuthKind
+
+	// mu guards secrets, the secret of each delivery that the fixture made.
+	mu      sync.Mutex
+	secrets map[string][]byte
 }
 
 // partyLogin returns the login that the fake shows for a party of a pushed
@@ -301,12 +309,92 @@ func (x *hostFixture) Oversize(context.Context) (func(), error) {
 	return x.host.Oversize(oversizeBytes), nil
 }
 
-func (x *hostFixture) Event(context.Context, forge.EventKind, []byte) (forge.EventRequest, error) {
-	return forge.EventRequest{}, errNotImplemented
+// hookID is the ID of the hook of the events that the fixture makes.
+const hookID = 1
+
+// eventSender is the account that causes the events of the fixture.
+func eventSender() githubfake.Sender { return githubfake.Sender{ID: 31337, Login: "octo"} }
+
+func (x *hostFixture) Event(_ context.Context, kind forge.EventKind, secret []byte) (forge.EventRequest, error) {
+	return x.deliver(x.eventOf(kind), secret), nil
 }
 
-func (x *hostFixture) Redeliver(context.Context, forge.EventRequest) (forge.EventRequest, error) {
-	return forge.EventRequest{}, errNotImplemented
+func (x *hostFixture) RawEvent(
+	_ context.Context, kind forge.EventKind, body, secret []byte,
+) (forge.EventRequest, error) {
+	name := x.eventOf(kind).Name
+
+	return x.deliver(githubfake.RawEvent(name, body), secret), nil
+}
+
+func (x *hostFixture) Redeliver(_ context.Context, r forge.EventRequest) (forge.EventRequest, error) {
+	id := ""
+	if values := r.Header["X-Github-Delivery"]; len(values) == 1 {
+		id = values[0]
+	}
+
+	x.mu.Lock()
+	secret, found := x.secrets[id]
+	x.mu.Unlock()
+
+	if !found {
+		return forge.EventRequest{}, fmt.Errorf("%w: no delivery %q", errNotImplemented, id)
+	}
+
+	d := x.host.Redeliver(githubfake.Hook{ID: hookID, Secret: secret}, githubfake.Delivery{
+		ID: id, Header: http.Header(r.Header), Body: r.Body,
+	})
+
+	return forge.EventRequest{Header: d.Header, Body: d.Body}, nil
+}
+
+// TokenAccess asks the fake with the token: it reads the head of main, and it
+// posts a branch at a commit that does not exist. A token that may write gets
+// the answer 422 of the validation, and a token that may not gets another
+// answer. The post changes nothing.
+func (x *hostFixture) TokenAccess(ctx context.Context, token []byte, repo string) (forgetest.Access, error) {
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs: x.host.CertPool(), MinVersion: tls.VersionTLS12,
+	}}}
+	defer client.CloseIdleConnections()
+
+	probe := func(method, path, body string) (int, error) {
+		req, err := http.NewRequestWithContext(ctx, method, x.host.URL()+path, strings.NewReader(body))
+		if err != nil {
+			return 0, fmt.Errorf("build the probe: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+string(token))
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, fmt.Errorf("send the probe: %w", err)
+		}
+
+		_, copyErr := io.Copy(io.Discard, resp.Body)
+		closeErr := resp.Body.Close()
+
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			return 0, fmt.Errorf("read the probe answer: %w", err)
+		}
+
+		return resp.StatusCode, nil
+	}
+
+	read, err := probe(http.MethodGet, "/repos/"+repo+"/commits/main", "")
+	if err != nil {
+		return forgetest.Access{}, err
+	}
+
+	write, err := probe(http.MethodPost, "/repos/"+repo+"/git/refs",
+		`{"ref":"refs/heads/probe","sha":"`+strings.Repeat("0", 40)+`"}`)
+	if err != nil {
+		return forgetest.Access{}, err
+	}
+
+	return forgetest.Access{
+		Read: read == http.StatusOK, Write: write == http.StatusUnprocessableEntity || write == http.StatusCreated,
+	}, nil
 }
 
 func (x *hostFixture) Refuse(context.Context) error {
@@ -327,6 +415,52 @@ func (x *hostFixture) Garble(context.Context) (func(), error) { return x.host.Ga
 
 func (x *hostFixture) Unavailable(_ context.Context, retryAfter time.Duration) (func(), error) {
 	return x.host.Unavailable(retryAfter), nil
+}
+
+// eventOf returns the fake event of kind. A kind that the port does not name
+// gives an event of that name with an empty object.
+func (x *hostFixture) eventOf(kind forge.EventKind) githubfake.Event {
+	switch kind {
+	case forge.EventPing:
+		return x.host.Ping(githubfake.Hook{ID: hookID, Secret: nil}, eventSender())
+	case forge.EventReview:
+		return x.host.PullRequestEvent(githubfake.ReviewOpened, x.repo, githubfake.PullRequest{
+			Number: 1,
+			Head: githubfake.Commit{
+				ID:        strings.Repeat("a", 40),
+				Parent:    "",
+				Message:   "",
+				Author:    "",
+				Committer: "",
+				Verified:  false,
+				Time:      time.Time{},
+			},
+			HeadBranch: "feature",
+			BaseBranch: "main",
+			Merged:     false,
+		}, eventSender())
+	}
+
+	return githubfake.RawEvent(string(kind), []byte("{}"))
+}
+
+// remember keeps the secret of a delivery, so that Redeliver signs it again.
+func (x *hostFixture) remember(id string, secret []byte) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+
+	if x.secrets == nil {
+		x.secrets = map[string][]byte{}
+	}
+
+	x.secrets[id] = secret
+}
+
+func (x *hostFixture) deliver(ev githubfake.Event, secret []byte) forge.EventRequest {
+	d := x.host.NewDelivery(githubfake.Hook{ID: hookID, Secret: secret}, ev)
+	x.remember(d.ID, secret)
+
+	return forge.EventRequest{Header: d.Header, Body: d.Body}
 }
 
 const conformanceRepo = "acme/infra"
@@ -442,7 +576,8 @@ func conformanceHarness(auth forge.AuthKind) forgetest.Factory {
 			Forge:       fg,
 			Account:     account,
 			Repo:        conformanceRepo,
-			Fixture:     &hostFixture{host: host, repo: conformanceRepo, auth: auth},
+			Fixture:     &hostFixture{host: host, repo: conformanceRepo, auth: auth, mu: sync.Mutex{}, secrets: nil},
+			Now:         func() time.Time { return githubfake.Epoch().Add(time.Minute) },
 		}
 	}
 }

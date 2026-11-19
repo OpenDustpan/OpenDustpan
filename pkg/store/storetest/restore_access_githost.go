@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -21,7 +22,7 @@ const (
 // keepGitHostPorts holds the Git host store and the namespace that the
 // assignments name, or a nil store when the store keeps no Git host data.
 type keepGitHostPorts struct {
-	store forge.AssignmentStore
+	store forge.Store
 	ns    namespace.Name
 }
 
@@ -68,6 +69,42 @@ func mutateKeepGitHost(t *testing.T, ports keepGitHostPorts) {
 	if _, err := ports.store.PutAssignment(ctx, live, 0, keepGitHostEntry("git-host-installation:assign")); err != nil {
 		t.Fatalf("assign the live installation: %v", err)
 	}
+
+	stored, recErr := ports.store.RecordEventReceipt(ctx, restoreReceipt())
+	if recErr != nil || !stored {
+		t.Fatalf("record the receipt of the live delivery = %v, %v; want true", stored, recErr)
+	}
+}
+
+// restoreReceipt returns the receipt that the live installation holds before a
+// restore. A restore leaves the table of receipts empty, so the same receipt is
+// new again after it.
+func restoreReceipt() forge.EventReceipt {
+	return forge.EventReceipt{
+		ReceivedAt: now(), Audit: nil, Kind: forge.KindGitHub, DeliveryID: "restore-delivery",
+		BodyDigest: strings.Repeat("ab", 32), InstallationID: keepLiveInstallation, EventKind: forge.EventReview,
+		Repo: "acme/widgets", ReviewID: "7",
+	}
+}
+
+// checkReceiptsEmptied proves that a restore left the table of event receipts
+// empty: the receipt of before the restore is new again, and a second one is a
+// duplicate.
+func checkReceiptsEmptied(t *testing.T, ports keepGitHostPorts) {
+	t.Helper()
+
+	stored, err := ports.store.RecordEventReceipt(t.Context(), restoreReceipt())
+	if err != nil || !stored {
+		t.Fatalf(
+			"record the receipt of before the restore = %v, %v; want true (the restore emptied the table)",
+			stored,
+			err,
+		)
+	}
+
+	if stored, err = ports.store.RecordEventReceipt(t.Context(), restoreReceipt()); err != nil || stored {
+		t.Fatalf("record the same receipt again = %v, %v; want false", stored, err)
+	}
 }
 
 // checkKeptGitHost proves that a restore without server:restore-access kept
@@ -94,6 +131,8 @@ func checkKeptGitHost(t *testing.T, ports keepGitHostPorts) {
 	if got.Namespace != ports.ns {
 		t.Fatalf("live assignment namespace = %q, want %q", got.Namespace, ports.ns)
 	}
+
+	checkReceiptsEmptied(t, ports)
 }
 
 // checkReplacedGitHost proves that a restore with server:restore-access
@@ -115,6 +154,8 @@ func checkReplacedGitHost(t *testing.T, ports keepGitHostPorts) {
 	if got.Namespace != ports.ns {
 		t.Fatalf("restored assignment namespace = %q, want %q", got.Namespace, ports.ns)
 	}
+
+	checkReceiptsEmptied(t, ports)
 
 	if _, err := ports.store.GetAssignment(ctx, keepLiveInstallation); !errors.Is(err, forge.ErrAssignmentNotFound) {
 		t.Fatalf("get the live assignment after a replacing restore = %v, want ErrAssignmentNotFound", err)

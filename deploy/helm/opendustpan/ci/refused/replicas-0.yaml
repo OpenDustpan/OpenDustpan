@@ -6,4 +6,7 @@ database:
 keyEncryptionKey:
   existingSecret:
     name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
 replicas: 0

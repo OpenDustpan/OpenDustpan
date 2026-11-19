@@ -252,8 +252,8 @@ func TestLocalPasswordRoutes(t *testing.T) {
 			code:   "request.body-invalid",
 		},
 		{
-			name: "too large", body: `{"userName":"alice","password":"` + strings.Repeat("a", 9000) + `"}`, status: 400,
-			code: "request.body-invalid",
+			name: "too large", body: `{"userName":"alice","password":"` + strings.Repeat("a", 9000) + `"}`, status: 413,
+			code: "request.body-too-large",
 		},
 	})
 
