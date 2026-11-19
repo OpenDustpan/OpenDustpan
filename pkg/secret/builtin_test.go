@@ -257,7 +257,7 @@ func TestCheckWrapper(t *testing.T) {
 			t.Fatalf("check a half-rotated store: err = %v, want it to name the rewrap command", err)
 		}
 
-		if regexp.MustCompile(`\b(ADR|RFC) [0-9]+`).MatchString(err.Error()) {
+		if regexp.MustCompile(`\b(ADR|RFC) \d+`).MatchString(err.Error()) {
 			t.Fatalf("check a half-rotated store: err = %q, want no internal reference", err)
 		}
 	})

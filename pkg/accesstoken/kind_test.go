@@ -146,7 +146,7 @@ func TestKindForWorkloadErrorHasNoInternalReference(t *testing.T) {
 		t.Fatalf("KindFor(workload) error = %v, want ErrNoTokenForKind", err)
 	}
 
-	if regexp.MustCompile(`\b(ADR|RFC) [0-9]+`).MatchString(err.Error()) {
+	if regexp.MustCompile(`\b(ADR|RFC) \d+`).MatchString(err.Error()) {
 		t.Fatalf("KindFor(workload) error = %q, want no internal reference", err)
 	}
 }
