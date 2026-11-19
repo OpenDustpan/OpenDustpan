@@ -1752,12 +1752,11 @@ func rawSum(content string) [md5.Size]byte {
 
 func newState(lineage string, serial int64, content string) workspace.NewState {
 	return workspace.NewState{
-		Lineage:           lineage,
-		MD5:               sum(content),
-		Outputs:           nil,
-		Serial:            serial,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: lineage,
+		MD5:     sum(content),
+		Outputs: nil,
+		Serial:  serial,
+		Force:   false,
 	}
 }
 
@@ -1872,12 +1871,11 @@ func TestStateVersions(t *testing.T) {
 		{
 			name: "bad md5",
 			in: workspace.NewState{
-				Lineage:           "l1",
-				MD5:               "nope",
-				Outputs:           nil,
-				Serial:            2,
-				Force:             false,
-				RequireCollection: false,
+				Lineage: "l1",
+				MD5:     "nope",
+				Outputs: nil,
+				Serial:  2,
+				Force:   false,
 			},
 			content: "",
 			want:    workspace.ErrInvalidState,
@@ -1886,12 +1884,11 @@ func TestStateVersions(t *testing.T) {
 		{
 			name: "forced other lineage",
 			in: workspace.NewState{
-				Lineage:           "l9",
-				MD5:               sum("{\"v\":9}"),
-				Outputs:           nil,
-				Serial:            1,
-				Force:             true,
-				RequireCollection: false,
+				Lineage: "l9",
+				MD5:     sum("{\"v\":9}"),
+				Outputs: nil,
+				Serial:  1,
+				Force:   true,
 			},
 			content: "{\"v\":9}",
 			want:    nil,
@@ -1907,12 +1904,11 @@ func TestStateVersions(t *testing.T) {
 	// The outputs document has its own 16 MiB limit, separate from the state
 	// limit the "too large" case above proves.
 	oversized := workspace.NewState{
-		Lineage:           "l1",
-		MD5:               sum("{\"v\":3}"),
-		Outputs:           make([]byte, (16<<20)+1),
-		Serial:            3,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: "l1",
+		MD5:     sum("{\"v\":3}"),
+		Outputs: make([]byte, (16<<20)+1),
+		Serial:  3,
+		Force:   false,
 	}
 
 	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", oversized, authority(forcedOnly(), nil))
@@ -1935,12 +1931,11 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 	enableForced(t, f)
 
 	forced := workspace.NewState{
-		Lineage:           "l9",
-		MD5:               sum("{\"v\":9}"),
-		Outputs:           nil,
-		Serial:            1,
-		Force:             true,
-		RequireCollection: false,
+		Lineage: "l9",
+		MD5:     sum("{\"v\":9}"),
+		Outputs: nil,
+		Serial:  1,
+		Force:   true,
 	}
 
 	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
@@ -4921,12 +4916,11 @@ func uploadSealedState(t *testing.T, f fixture, content, outputValue string) wor
 	}
 
 	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
-		Lineage:           "l1",
-		MD5:               sum(content),
-		Outputs:           sealedOutputsDoc(outputValue),
-		Serial:            1,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: "l1",
+		MD5:     sum(content),
+		Outputs: sealedOutputsDoc(outputValue),
+		Serial:  1,
+		Force:   false,
 	}, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -5047,12 +5041,11 @@ func TestSealedDownloadTamper(t *testing.T) {
 		`{"sensitive":"s3cr3t-state-attribute"}]}`
 
 	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
-		Lineage:           "l1",
-		MD5:               sum(content),
-		Outputs:           nil,
-		Serial:            1,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: "l1",
+		MD5:     sum(content),
+		Outputs: nil,
+		Serial:  1,
+		Force:   false,
 	}, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)

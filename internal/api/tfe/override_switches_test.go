@@ -57,7 +57,7 @@ func (w switchedWorkspaces) GetByID(ctx context.Context, id workspace.ID) (works
 	return ws, nil
 }
 
-func (w switchedWorkspaces) BeginState(
+func (w switchedWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, in workspace.NewState, auth workspace.Authority,
 ) (workspace.PendingState, error) {
 	w.mu.Lock()

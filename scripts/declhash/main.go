@@ -71,9 +71,7 @@ func main() {
 			case *ast.FuncDecl:
 				name := d.Name.Name
 				if d.Recv != nil {
-					name = "(" + string(
-						src[fset.Position(d.Recv.List[0].Type.Pos()).Offset:fset.Position(d.Recv.List[0].Type.End()).Offset],
-					) + ")." + name
+					name = "(" + string(src[fset.Position(d.Recv.List[0].Type.Pos()).Offset:fset.Position(d.Recv.List[0].Type.End()).Offset]) + ")." + name
 				}
 				emit("func "+name, text(d.Doc, d.Pos(), d.End()))
 			case *ast.GenDecl:

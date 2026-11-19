@@ -205,12 +205,11 @@ func prepareLargeWorkspace(
 	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5.
 
 	pending, beginErr := f.base.srv.Workspaces().BeginState(ctx, ws.ID, "admin", workspace.NewState{
-		Lineage:           "l1",
-		MD5:               hex.EncodeToString(sum[:]),
-		Outputs:           nil,
-		Serial:            serial,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: "l1",
+		MD5:     hex.EncodeToString(sum[:]),
+		Outputs: nil,
+		Serial:  serial,
+		Force:   false,
 	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if beginErr != nil {
 		t.Fatalf("begin state: %v", beginErr)
@@ -418,12 +417,11 @@ func checkTFEFollowUp(t *testing.T, small largeOutputsFixture, ws workspace.Work
 	followSum := md5.Sum([]byte(follow)) //nolint:gosec // The TFE protocol names state by MD5.
 
 	followPending, beginErr := small.base.srv.Workspaces().BeginState(t.Context(), ws.ID, "admin", workspace.NewState{
-		Lineage:           "l1",
-		MD5:               hex.EncodeToString(followSum[:]),
-		Outputs:           nil,
-		Serial:            1,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: "l1",
+		MD5:     hex.EncodeToString(followSum[:]),
+		Outputs: nil,
+		Serial:  1,
+		Force:   false,
 	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if beginErr != nil {
 		t.Fatalf("begin follow-up state: %v", beginErr)

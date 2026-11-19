@@ -100,12 +100,11 @@ func declareOutputsVersion(
 	t.Helper()
 
 	pending, beginErr := svc.BeginState(t.Context(), ws.ID, memHolder, workspace.NewState{
-		Lineage:           memLineage,
-		MD5:               hexSum,
-		Outputs:           nil,
-		Serial:            serial,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: memLineage,
+		MD5:     hexSum,
+		Outputs: nil,
+		Serial:  serial,
+		Force:   false,
 	}, authority(noOverrides(), nil))
 	if beginErr != nil {
 		t.Fatalf("begin state: %v", beginErr)
@@ -410,12 +409,11 @@ func beginSmallOutputs(
 	lockOutputsWorkspace(t, svc, ws)
 
 	pending, beginErr := svc.BeginState(t.Context(), ws.ID, memHolder, workspace.NewState{
-		Lineage:           memLineage,
-		MD5:               memSumHex(doc),
-		Outputs:           nil,
-		Serial:            1,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: memLineage,
+		MD5:     memSumHex(doc),
+		Outputs: nil,
+		Serial:  1,
+		Force:   false,
 	}, authority(noOverrides(), nil))
 	if beginErr != nil {
 		t.Fatalf("begin state: %v", beginErr)

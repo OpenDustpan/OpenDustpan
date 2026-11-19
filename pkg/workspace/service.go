@@ -1147,6 +1147,25 @@ type PendingState struct {
 func (s *Service) BeginState(
 	ctx context.Context, id ID, holder string, in NewState, auth Authority,
 ) (PendingState, error) {
+	return s.beginState(ctx, id, holder, in, auth, false)
+}
+
+// BeginStateInCollection is BeginState for a workspace that a collection must
+// hold. It returns an error that matches collection.ErrNoCollection, and
+// writes nothing, when no collection holds the workspace. The membership comes
+// from the read of the workspace that the declare makes anyway, so the check
+// adds no round trip. The HTTP handler of the declare calls only this method.
+func (s *Service) BeginStateInCollection(
+	ctx context.Context, id ID, holder string, in NewState, auth Authority,
+) (PendingState, error) {
+	return s.beginState(ctx, id, holder, in, auth, true)
+}
+
+// beginState is the declare behind BeginState and BeginStateInCollection.
+// requireCollection refuses the declare when no collection holds the workspace.
+func (s *Service) beginState(
+	ctx context.Context, id ID, holder string, in NewState, auth Authority, requireCollection bool,
+) (PendingState, error) {
 	sum, err := in.parse()
 	if err != nil {
 		return PendingState{}, err
@@ -1161,9 +1180,10 @@ func (s *Service) BeginState(
 	// carries the membership, so the check adds no round trip.
 	//
 	// Defense in depth: the handler, the authorizer and the gates also refuse
-	// a write to a workspace in no collection; this check stays so that a new
-	// caller of the service cannot skip it.
-	if in.RequireCollection && !w.InCollection {
+	// a write to a workspace in no collection. The handler can reach only
+	// BeginStateInCollection, which sets requireCollection; this check stays
+	// so that a new caller of beginState cannot skip it.
+	if requireCollection && !w.InCollection {
 		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, collection.ErrNoCollection)
 	}
 
@@ -2239,12 +2259,11 @@ func (s *Service) copyState(
 	// The hex MD5 in NewState is display only; createPending stores the
 	// validated sum passed alongside it, which is src.MD5 here.
 	pending, err := s.createPending(ctx, w, NewState{
-		Lineage:           src.Lineage,
-		MD5:               hex.EncodeToString(src.MD5[:]),
-		Outputs:           outputs,
-		Serial:            src.Serial,
-		Force:             true,
-		RequireCollection: false,
+		Lineage: src.Lineage,
+		MD5:     hex.EncodeToString(src.MD5[:]),
+		Outputs: outputs,
+		Serial:  src.Serial,
+		Force:   true,
 	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false, origin: identity.StateOrigin{Job: "", Commit: ""}})
 	if err != nil {
 		return StateVersion{}, err

@@ -383,7 +383,6 @@ func (r *outputShareRig) saveWorkspaceState(t *testing.T, unit identity.Object, 
 
 	pending, err := r.svc.Workspaces.BeginState(ctx, id, "saver", workspace.NewState{
 		Lineage: "lineage-1", MD5: md5Hex(content), Outputs: nil, Serial: serial, Force: false,
-		RequireCollection: false,
 	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if err != nil {
 		t.Fatalf("declare state of %s: %v", unit, err)

@@ -200,7 +200,7 @@ func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.
 	return nil, workspace.ErrStateVersionNotFound
 }
 
-func (coverageWorkspaces) BeginState(
+func (coverageWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	var none workspace.PendingState

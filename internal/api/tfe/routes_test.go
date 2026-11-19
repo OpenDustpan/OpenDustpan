@@ -436,7 +436,7 @@ func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.Sta
 // BeginState declares a pending version with a fresh capability. The stub
 // ignores the lock and echoes the declared values: route tests prove
 // authorization, not the state rules.
-func (stubWorkspaces) BeginState(
+func (stubWorkspaces) BeginStateInCollection(
 	_ context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	upload, err := token.New()
@@ -1851,7 +1851,7 @@ func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.Sta
 	return workspace.StateVersion{}, errTestInternal
 }
 
-func (errorWorkspaces) BeginState(
+func (errorWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, errTestInternal

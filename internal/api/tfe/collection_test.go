@@ -2,7 +2,6 @@ package tfe_test
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -55,21 +54,15 @@ func newPlacedHandler(t *testing.T, placer *tofuunit.Placer, workspaces tfe.Work
 // that answer; this stub proves that the handler maps it.
 type noCollectionWorkspaces struct{ stubWorkspaces }
 
-var errRequireCollectionUnset = errors.New("the handler did not set RequireCollection")
-
 func (noCollectionWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, collection.ErrNoCollection
 }
 
-func (noCollectionWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, in workspace.NewState, _ workspace.Authority,
+func (noCollectionWorkspaces) BeginStateInCollection(
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
-	if !in.RequireCollection {
-		return workspace.PendingState{}, errRequireCollectionUnset
-	}
-
 	return workspace.PendingState{}, collection.ErrNoCollection
 }
 

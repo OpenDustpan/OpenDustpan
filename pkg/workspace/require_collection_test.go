@@ -108,9 +108,12 @@ func TestBeginStateRequireCollection(t *testing.T) {
 			}
 
 			in := newState("l1", 1, "{\"v\":1}")
-			in.RequireCollection = tc.require
+			begin := f.svc.BeginState
+			if tc.require {
+				begin = f.svc.BeginStateInCollection
+			}
 
-			_, err := f.svc.BeginState(t.Context(), f.ws.ID, "alice", in, authority(forcedOnly(), nil))
+			_, err := begin(t.Context(), f.ws.ID, "alice", in, authority(forcedOnly(), nil))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}

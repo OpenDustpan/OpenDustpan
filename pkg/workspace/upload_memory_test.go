@@ -609,12 +609,11 @@ func memWarmTFE(t *testing.T, svc *workspace.Service, ws workspace.Workspace) {
 	warm := memWarmDoc()
 
 	pending, beginErr := svc.BeginState(ctx, ws.ID, memHolder, workspace.NewState{
-		Lineage:           memLineage,
-		MD5:               memSumHex(warm),
-		Outputs:           nil,
-		Serial:            1,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: memLineage,
+		MD5:     memSumHex(warm),
+		Outputs: nil,
+		Serial:  1,
+		Force:   false,
 	}, authority(noOverrides(), nil))
 	if beginErr != nil {
 		t.Fatalf("begin warm state: %v", beginErr)
@@ -767,12 +766,11 @@ func runMemTFECase(t *testing.T, variant, sealedName string, svc *workspace.Serv
 	memCheckSize(t, variant, size)
 
 	pending, beginErr := svc.BeginState(ctx, ws.ID, memHolder, workspace.NewState{
-		Lineage:           memLineage,
-		MD5:               hexSum,
-		Outputs:           nil,
-		Serial:            measuredSerial,
-		Force:             false,
-		RequireCollection: false,
+		Lineage: memLineage,
+		MD5:     hexSum,
+		Outputs: nil,
+		Serial:  measuredSerial,
+		Force:   false,
 	}, authority(noOverrides(), nil))
 	if beginErr != nil {
 		t.Fatalf("begin state: %v", beginErr)
@@ -872,12 +870,11 @@ func BenchmarkUpload32MiB(b *testing.B) {
 		hexSum, _, _ := memBodyMD5(b, "resources", serial)
 
 		pending, beginErr := svc.BeginState(ctx, ws.ID, memHolder, workspace.NewState{
-			Lineage:           memLineage,
-			MD5:               hexSum,
-			Outputs:           nil,
-			Serial:            serial,
-			Force:             false,
-			RequireCollection: false,
+			Lineage: memLineage,
+			MD5:     hexSum,
+			Outputs: nil,
+			Serial:  serial,
+			Force:   false,
 		}, authority(noOverrides(), nil))
 		if beginErr != nil {
 			b.Fatalf("begin state: %v", beginErr)

@@ -133,7 +133,7 @@ func (s *Service) checkStreamAdmission(
 	unlocked, used, err := declareOverrides(
 		w,
 		in.Holder,
-		NewState{Lineage: "", MD5: "", Outputs: nil, Serial: 0, Force: false, RequireCollection: false},
+		NewState{Lineage: "", MD5: "", Outputs: nil, Serial: 0, Force: false},
 		nil,
 		auth.Allow,
 	)

@@ -21723,7 +21723,7 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 
 const readWorkspace = `-- name: ReadWorkspace :one
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id,
-       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id) AS in_collection
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id AND m.namespace = w.namespace) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = $1 AND w.name = $2 AND w.deleted_at_ms IS NULL
@@ -21774,7 +21774,7 @@ func (q *Queries) ReadWorkspace(ctx context.Context, arg ReadWorkspaceParams) (R
 
 const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
 SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id,
-       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id) AS in_collection
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id AND m.namespace = w.namespace) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.id = $1 AND num_nulls(w.deleted_at_ms) = 1

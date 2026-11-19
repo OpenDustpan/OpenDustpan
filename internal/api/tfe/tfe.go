@@ -174,9 +174,12 @@ type StateReader interface {
 // itself and its JSON rendering through separate single-use capabilities
 // minted at creation.
 type StateWriter interface {
-	// BeginState declares a new state version for the workspace. The caller
-	// must hold the lock; holder is the subject of the calling principal.
-	BeginState(
+	// BeginStateInCollection declares a new state version for the workspace.
+	// The caller must hold the lock; holder is the subject of the calling
+	// principal. It returns an error that matches collection.ErrNoCollection
+	// when no collection holds the workspace. The interface has no unchecked
+	// declare, so a handler cannot skip the collection check.
+	BeginStateInCollection(
 		ctx context.Context,
 		id workspace.ID,
 		holder string,

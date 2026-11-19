@@ -88,12 +88,11 @@ func parseStateVersionCreate(body []byte) (workspace.NewState, error) {
 	force := attrs.Force != nil && *attrs.Force
 
 	return workspace.NewState{
-		Lineage:           *attrs.Lineage,
-		MD5:               *attrs.MD5,
-		Outputs:           outputs,
-		Serial:            *attrs.Serial,
-		Force:             force,
-		RequireCollection: false,
+		Lineage: *attrs.Lineage,
+		MD5:     *attrs.MD5,
+		Outputs: outputs,
+		Serial:  *attrs.Serial,
+		Force:   force,
 	}, nil
 }
 
@@ -201,8 +200,6 @@ func (h *Handler) createStateVersion(
 		return
 	}
 
-	in.RequireCollection = true
-
 	allow, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -222,7 +219,7 @@ func (h *Handler) createStateVersion(
 
 	// The job of a job token is the origin of the declared version, which the
 	// finalize of that version reads. Any other token passes no job.
-	pending, err := h.workspaces.BeginState(workspace.WithJob(ctx, p.JobTokenID()), id, p.Subject, in, auth)
+	pending, err := h.workspaces.BeginStateInCollection(workspace.WithJob(ctx, p.JobTokenID()), id, p.Subject, in, auth)
 	if err != nil {
 		h.rules().RecordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))

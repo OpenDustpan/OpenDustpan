@@ -787,7 +787,7 @@ func (p pagingWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.
 	return workspace.StateVersion{}, workspace.ErrNoState
 }
 
-func (p pagingWorkspaces) BeginState(
+func (p pagingWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, workspace.ErrNotLocked
