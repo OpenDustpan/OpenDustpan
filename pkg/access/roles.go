@@ -104,6 +104,7 @@ func viewerActions() []identity.Action {
 		identity.ActionUnitReadOutputs,
 		identity.ActionProfileRead,
 		identity.ActionNamespaceReadGates,
+		identity.ActionNamespaceReadRunners,
 		identity.ActionViewCreate,
 		identity.ActionViewRead,
 		identity.ActionViewDelete,
@@ -135,6 +136,8 @@ func maintainerActions() []identity.Action {
 		identity.ActionNamespaceReadGitHostConnections,
 		identity.ActionNamespaceUseGitHostConnection,
 		identity.ActionNamespaceReadPlacementRules,
+		identity.ActionUnitDefineSteps,
+		identity.ActionNamespaceManageRunners,
 	)
 }
 
