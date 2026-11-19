@@ -1090,7 +1090,24 @@ func (s *RestoreService) stepSwap(ctx context.Context, sc durable.StepContext, i
 		return nil, err
 	}
 
-	if _, err := s.live.ApplyRestoreArea(ctx, sc.Fence, area, in.KeepAccessTables); err != nil {
+	// The setting is read here, once, at the start of the swap: a change after
+	// the read does not alter this apply. Only a restore that would keep the
+	// access tables can widen, so the setting never gives a caller a right
+	// that the route did not check (server:restore).
+	keep, widened := in.KeepAccessTables, false
+	if keep && s.widenedAccess(ctx) {
+		keep, widened = false, true
+	}
+
+	if widened {
+		// The event stays in the restore record across the swap, and the
+		// after-apply step writes it to the audit log.
+		if err := s.live.RecordRestoreEvent(ctx, sc.Fence, in.ID, widenedAccessAuditObject(in)); err != nil {
+			return nil, fmt.Errorf("record the widened access of restore %s: %w", in.ID, err)
+		}
+	}
+
+	if _, err := s.live.ApplyRestoreArea(ctx, sc.Fence, area, keep); err != nil {
 		return nil, fmt.Errorf("apply staged data for restore %s: %w", in.ID, err)
 	}
 

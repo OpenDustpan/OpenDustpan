@@ -143,6 +143,11 @@ type RestoreConfig struct {
 	RetryBase time.Duration
 	Now       func() time.Time
 	Logger    *slog.Logger
+	// AccessSetting reads the stored text of the restore access setting at
+	// the swap, or is nil when the installation keeps no settings. A nil
+	// reader, a read error and text that is not true or false all keep the
+	// access tables of a restore without server:restore-access.
+	AccessSetting func(ctx context.Context) (string, error)
 }
 
 // DefaultCleanupLockWait bounds the wait of each drop of the cleanup step for
@@ -174,6 +179,8 @@ type RestoreService struct {
 	now          func() time.Time
 	logger       *slog.Logger
 	runner       *durable.Runner
+
+	accessSetting func(ctx context.Context) (string, error)
 }
 
 // NewRestoreService returns a RestoreService. Live, Operations, Backups,
@@ -228,6 +235,8 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		now:          now,
 		logger:       cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
 		runner:       nil,
+
+		accessSetting: cfg.AccessSetting,
 	}
 
 	runner, err := s.newRunner(cfg)

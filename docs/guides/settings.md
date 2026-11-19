@@ -93,6 +93,13 @@ Each refusal changes nothing. Read the resource again with
 | `415` | `request.content-type-unsupported` | The content type is not `application/merge-patch+json`. |
 | `422` | `request.idempotency-key-reused` | The key was used with another request. Send a new key. |
 
+## The restore access setting
+
+The key `restore.replace-access-tables` is a boolean with the default `false`.
+When it is `true`, each holder of `server:restore` replaces the access tables in
+a restore. A change needs `server:manage-settings`, `server:restore-access` and
+a fresh console sign-in. See [Restore access setting](restore-access-setting.md).
+
 ## The temporary administrator session limit
 
 The key `tempadmin.session-limit` is planned. It sets how long a temporary

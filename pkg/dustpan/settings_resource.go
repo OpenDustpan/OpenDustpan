@@ -1,9 +1,11 @@
 package dustpan
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -92,4 +94,24 @@ func newSettingService(cfg *settings, namespaces setting.Namespaces) *setting.Se
 	}
 
 	return setting.NewService(cfg.settingsConfig.store, registry, cfg.settingsConfig.static, namespaces, cfg.now)
+}
+
+// restoreAccessSettingReader returns the reader of the stored text of the
+// restore access setting, or nil when the server keeps no settings. A key that
+// the declarations do not hold makes the reader fail, and the restore then
+// keeps the access tables.
+func restoreAccessSettingReader(cfg *settings) func(context.Context) (string, error) {
+	svc := newSettingService(cfg, nil)
+	if svc == nil {
+		return nil
+	}
+
+	return func(ctx context.Context) (string, error) {
+		item, err := svc.Effective(ctx, setting.InstallationScope(), backup.SettingRestoreAccessTables)
+		if err != nil {
+			return "", fmt.Errorf("read the restore access setting: %w", err)
+		}
+
+		return item.Value, nil
+	}
 }

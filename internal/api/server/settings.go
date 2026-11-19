@@ -13,6 +13,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -437,6 +439,12 @@ func (h *Handler) writeSettingsPatch(
 		return
 	}
 
+	if authErr := h.authorizeSettingEdits(ctx, p, obj, patch); authErr != nil {
+		h.refuseSettings(w, r, p, obj, authErr)
+
+		return
+	}
+
 	res, err := h.applySettings(r, p, obj, patch, revision)
 	if err != nil {
 		h.refuseSettings(w, r, p, obj, err)
@@ -452,6 +460,46 @@ func (h *Handler) writeSettingsPatch(
 	}
 
 	writeAnswer(w, answer)
+}
+
+// settingExtraActions maps an installation setting to the action that a change
+// of it needs besides server:manage-settings. The restore access setting
+// widens which restores replace the access tables, so only a holder of the
+// action that guards that replace may change it.
+//
+//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
+var settingExtraActions = map[string]identity.Action{
+	backup.SettingRestoreAccessTables: identity.ActionServerRestoreAccess,
+}
+
+// authorizeSettingEdits checks, at the point of use, the extra action of each
+// edit of patch on the installation. The route authorized server:manage-settings
+// already. Defense in depth: this check does not rely on the route row, the
+// fresh-step rule of the settings service or the restore step, and it fails
+// closed when the server has no authorizer. A denied edit changes nothing.
+func (h *Handler) authorizeSettingEdits(
+	ctx context.Context, p identity.Principal, obj identity.Object, patch setting.Patch,
+) error {
+	if obj.Namespace() != "" {
+		return nil
+	}
+
+	for _, edit := range patch {
+		action, ok := settingExtraActions[edit.Key]
+		if !ok {
+			continue
+		}
+
+		if h.authz == nil {
+			return identity.ErrDenied
+		}
+
+		if err := h.authz.Authorize(ctx, p, action, identity.ServerObject()); err != nil {
+			return fmt.Errorf("change setting %s: %w", edit.Key, err)
+		}
+	}
+
+	return nil
 }
 
 // readSettingsPatch reads and checks the request of a PATCH: the content type,

@@ -721,6 +721,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
+		AccessSetting:   nil,
 	}
 	change(&cfg)
 
@@ -901,6 +902,7 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new second service: %v", err)
@@ -1021,6 +1023,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1250,6 +1253,7 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1385,6 +1389,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1472,6 +1477,7 @@ func restoreServiceWithHook(
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service with a hook: %v", err)
@@ -1509,6 +1515,7 @@ func restoreServiceAdmitting(
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service with an admit hook: %v", err)
@@ -1699,6 +1706,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1800,6 +1808,7 @@ func TestRestoreRefusesOtherFormat(t *testing.T) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)

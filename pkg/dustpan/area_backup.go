@@ -221,6 +221,9 @@ type restoreInputs struct {
 	lease        time.Duration
 	now          func() time.Time
 	logger       *slog.Logger
+	// accessSetting reads the stored text of the restore access setting, or is
+	// nil when the installation keeps no settings.
+	accessSetting func(ctx context.Context) (string, error)
 }
 
 // newRestoreService builds the installation restore service when a backup
@@ -296,6 +299,8 @@ func newRestoreService(in restoreInputs) (*backup.RestoreService, error) {
 		RetryBase:       0,
 		Now:             in.now,
 		Logger:          in.logger,
+
+		AccessSetting: in.accessSetting,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)

@@ -147,6 +147,7 @@ func newRestoreFixtureWorkers(
 		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1023,6 +1024,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1163,6 +1165,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		RetryBase:       time.Millisecond,
 		Now:             nil,
 		Logger:          nil,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)

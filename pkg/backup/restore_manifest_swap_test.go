@@ -82,6 +82,7 @@ func runSwappedManifestRestore(t *testing.T, from int) {
 		Lease:           0,
 		CleanupLockWait: 0,
 		RetryBase:       time.Millisecond,
+		AccessSetting:   nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
