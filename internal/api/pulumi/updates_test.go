@@ -720,7 +720,7 @@ func newUpdateFixtureWithAuthenticator(
 	sealer := secrettest.NewMemorySealer()
 	auditLog := newTestAudit()
 
-	membership := stacktest.PlacedAll()
+	var membership stack.Membership = stacktest.PlacedAll()
 	if opts.placement != nil {
 		membership = opts.placement
 		mem.placement = opts.placement
