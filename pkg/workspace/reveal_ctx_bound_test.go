@@ -131,3 +131,46 @@ func TestRevealRefusesDeepInstanceOfFullDecode(t *testing.T) {
 		t.Fatalf("err = %v, want ErrStateBound", err)
 	}
 }
+
+// revealContextChecks is the count of context checks of a live reveal with
+// marks, the last one after the last pass. The test fixes the count, so that a
+// removed check, among them the last one, fails the test. Add or remove a check
+// on purpose, and change the count with it.
+const revealContextChecks = 4
+
+// TestRevealChecksContextAfterTheLastPass proves that a context that ends at
+// the last context check of the reveal, the one after the last pass, gives an
+// error and no value. The context reports its end from check number N on,
+// where N is the count of checks of a live reveal, so only that last check can
+// stop the answer.
+func TestRevealChecksContextAfterTheLastPass(t *testing.T) {
+	t.Parallel()
+
+	state := []byte(revealState())
+	path := "/resources/0/instances/0/attributes/input"
+	open := func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(state)), nil
+	}
+
+	live := &cancelOnCall{from: 0, calls: 0}
+
+	value, _, err := workspace.RevealValueFromOpenerContext(live, open, revealMarks(), path)
+	if err != nil || value == nil {
+		t.Fatalf("live context: value = %v, err = %v, want the value", value, err)
+	}
+
+	if live.calls != revealContextChecks {
+		t.Fatalf("the reveal checked the context %d times, want %d", live.calls, revealContextChecks)
+	}
+
+	ctx := &cancelOnCall{from: revealContextChecks, calls: 0}
+
+	value, masked, err := workspace.RevealValueFromOpenerContext(ctx, open, revealMarks(), path)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("value = %v, err = %v, want context.Canceled", value, err)
+	}
+
+	if value != nil || masked != nil {
+		t.Fatalf("value = %v, masked = %v, want none", value, masked)
+	}
+}

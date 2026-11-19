@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -873,5 +874,73 @@ func TestSecretCiphertextOfCanceledContextReturnsNoSecret(t *testing.T) {
 
 	if cipher != nil || paths != nil {
 		t.Fatalf("canceled lookup returned ciphertext %q and paths %q", cipher, paths)
+	}
+}
+
+// errCallsContext is a context whose Err reports cancellation from call
+// number from on, and counts the calls.
+type errCallsContext struct {
+	from  int
+	calls int
+}
+
+func (c *errCallsContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (c *errCallsContext) Done() <-chan struct{} { return nil }
+
+func (c *errCallsContext) Value(any) any { return nil }
+
+func (c *errCallsContext) Err() error {
+	c.calls++
+	if c.from > 0 && c.calls >= c.from {
+		return context.Canceled
+	}
+
+	return nil
+}
+
+// TestSecretCiphertextOfCanceledContextStopsTheDrain proves a call that the
+// caller leaves stops during the drain of a deployment with many tokens, and
+// not after the stream of the whole deployment. The deployment holds a second
+// resource of 20000 tokens after the secret. A live context is checked during
+// the drain and once at the end. A context that ends at the second check ends
+// the lookup at that check: the call makes no further check, and returns no
+// ciphertext.
+func TestSecretCiphertextOfCanceledContextStopsTheDrain(t *testing.T) {
+	t.Parallel()
+
+	const tokens = 20000
+
+	deployment := []byte(strings.Replace(revealDeployment("cipher-bytes"), `"greeting":"hi"}}]}`,
+		`"greeting":"hi"}},{"urn":"u","type":"t","inputs":{"big":[`+strings.Repeat("0,", tokens)+`0]}}]}`, 1))
+
+	masked, err := stack.MaskedPaths(deployment)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	live := &errCallsContext{from: 0, calls: 0}
+
+	if cipher, _, liveErr := stack.SecretCiphertextOf(live, deployment, masked[0]); liveErr != nil || cipher == nil {
+		t.Fatalf("live context: cipher = %q, err = %v, want the ciphertext", cipher, liveErr)
+	}
+
+	if live.calls < 3 {
+		t.Fatalf("the lookup checked the context %d times, want a check during the drain", live.calls)
+	}
+
+	ctx := &errCallsContext{from: 2, calls: 0}
+
+	cipher, paths, err := stack.SecretCiphertextOf(ctx, deployment, masked[0])
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+
+	if cipher != nil || paths != nil {
+		t.Fatalf("canceled lookup returned ciphertext %q and paths %q", cipher, paths)
+	}
+
+	if ctx.calls != 2 {
+		t.Fatalf("the lookup checked the context %d times, want it to stop at check 2", ctx.calls)
 	}
 }

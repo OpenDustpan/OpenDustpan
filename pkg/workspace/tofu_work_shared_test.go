@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -113,7 +114,7 @@ func TestMaskWrapperChainIsLinear(t *testing.T) {
 
 	const depth = 60
 
-	instance, err := workspace.DecodeForTest(`{"attributes":` + nestedWrapper(depth) + `}`)
+	instance, err := workspace.DecodeForTest(`{"attributes":{"in":` + nestedWrapper(depth) + `}}`)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestMaskWrapperChainIsLinear(t *testing.T) {
 		t.Fatalf("instance is %T, want an object", instance)
 	}
 
-	pointer := strings.Repeat("/value", depth-1) + "/missing"
+	pointer := "/in" + strings.Repeat("/value", depth-1) + "/missing"
 	marks := workspace.SensitiveMarks{"terraform_data.x": {pointer}}
 
 	result, err := workspace.MaskInstanceWorkForTest(t.Context(), object, "terraform_data.x", marks)
@@ -182,14 +183,114 @@ func TestMaskWrapperTakesOneTransparentLevel(t *testing.T) {
 }
 
 // TestMaskWrapperNeedingTwoWrappersFailsClosed proves that a pointer that only
-// a second wrapper resolves never answers the marked value in clear. The
-// value "hunter2" sits below two wrappers; the mark names it as if one wrapper
-// stood there.
+// a second wrapper resolves never answers the marked value in clear, wherever
+// the first wrapper stands: below an object member, as a list element, below a
+// member or an index of another wrapper, and as the attributes themselves. The
+// value "hunter2" sits where a mark names it; each row also fixes the marker
+// paths that the read answers.
 func TestMaskWrapperNeedingTwoWrappersFailsClosed(t *testing.T) {
 	t.Parallel()
 
+	const base = "/resources/0/instances/0/attributes"
+
+	tests := []struct {
+		name       string
+		attributes string
+		mark       string
+		want       []string
+	}{
+		{
+			name:       "second wrapper below the member of a wrapper",
+			attributes: `{"in":{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}}`,
+			mark:       "/in/k",
+			want:       []string{base + "/in/k"},
+		},
+		{
+			name:       "second wrapper below a key of a wrapper",
+			attributes: `{"a":{"value":{"x":{"value":{"k":"hunter2"},"type":"x"}},"type":"x"}}`,
+			mark:       "/a/x/k",
+			want:       []string{base + "/a/x/k"},
+		},
+		{
+			name:       "second wrapper below an index of a wrapper",
+			attributes: `{"a":{"value":{"l":[{"value":{"k":"hunter2"},"type":"x"}]},"type":"x"}}`,
+			mark:       "/a/l/0/k",
+			want:       []string{base + "/a/l/0/k"},
+		},
+		{
+			name:       "wrapper as a list element resolves",
+			attributes: `{"a":[{"value":{"k":"hunter2"},"type":"x"}]}`,
+			mark:       "/a/0/k",
+			want:       []string{base + "/a/0/k"},
+		},
+		{
+			name:       "two wrappers as a list element",
+			attributes: `{"a":[{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}]}`,
+			mark:       "/a/0/k",
+			want:       []string{base + "/a/0/k"},
+		},
+		{
+			name:       "attributes that are a wrapper resolve",
+			attributes: `{"value":{"k":"hunter2"},"type":"x"}`,
+			mark:       "/k",
+			want:       []string{base + "/k"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := maskAttributesForTest(t, tt.attributes, tt.mark)
+
+			if strings.Contains(fmt.Sprint(result.Attributes), "hunter2") {
+				t.Fatalf("attributes = %v, want no clear secret", result.Attributes)
+			}
+
+			got := slices.Sorted(slices.Values(result.Masked))
+			want := slices.Sorted(slices.Values(tt.want))
+
+			if !slices.Equal(got, want) {
+				t.Fatalf("masked = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// maskAttributesForTest masks the attributes of one terraform_data instance
+// with one kept mark.
+func maskAttributesForTest(t *testing.T, attributes, mark string) workspace.MaskResult {
+	t.Helper()
+
+	instance, err := workspace.DecodeForTest(`{"attributes":` + attributes + `}`)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	object, ok := instance.(map[string]any)
+	if !ok {
+		t.Fatalf("instance is %T, want an object", instance)
+	}
+
+	marks := workspace.SensitiveMarks{"terraform_data.x": {mark}}
+
+	result, err := workspace.MaskInstanceWorkForTest(t.Context(), object, "terraform_data.x", marks)
+	if err != nil {
+		t.Fatalf("mask: %v", err)
+	}
+
+	return result
+}
+
+// TestMaskAttributesThatAreWrapperOfWrapperRefuseTheRead proves that a pointer
+// that only a second wrapper resolves, below attributes that are themselves a
+// wrapper, ends the read with ErrStateBound: no route names the attributes, so
+// no marker can replace them, and the read never answers the secret.
+func TestMaskAttributesThatAreWrapperOfWrapperRefuseTheRead(t *testing.T) {
+	t.Parallel()
+
 	instance, err := workspace.DecodeForTest(
-		`{"attributes":{"in":{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}}}`,
+		`{"attributes":{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}}`,
 	)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -200,22 +301,71 @@ func TestMaskWrapperNeedingTwoWrappersFailsClosed(t *testing.T) {
 		t.Fatalf("instance is %T, want an object", instance)
 	}
 
-	marks := workspace.SensitiveMarks{"terraform_data.x": {"/in/k"}}
+	marks := workspace.SensitiveMarks{"terraform_data.x": {"/k"}}
 
 	result, err := workspace.MaskInstanceWorkForTest(t.Context(), object, "terraform_data.x", marks)
-	if err != nil {
-		t.Fatalf("mask: %v", err)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("err = %v, want ErrStateBound", err)
 	}
 
 	if strings.Contains(fmt.Sprint(result.Attributes), "hunter2") {
-		t.Fatalf("attributes = %v, want no clear secret", result.Attributes)
+		t.Fatalf("attributes = %v, want no clear secret with the error", result.Attributes)
+	}
+}
+
+// TestRouteStepChargesTheBudget proves that each resolved step of a pointer
+// spends from the budget of the read: a pointer that resolves with a fresh
+// budget fails with ErrStateBound when the budget is almost spent.
+func TestRouteStepChargesTheBudget(t *testing.T) {
+	t.Parallel()
+
+	node := map[string]any{"a": "v"}
+
+	if err := workspace.ResolvePointerWithSpentForTest(node, []string{"a"}, 0); err != nil {
+		t.Fatalf("fresh budget: err = %v, want nil", err)
 	}
 
-	// The marker path names the pointer; the marker itself replaces the whole
-	// first wrapper.
-	want := "/resources/0/instances/0/attributes/in/k"
-	if len(result.Masked) != 1 || result.Masked[0] != want {
-		t.Fatalf("masked = %v, want [%s]", result.Masked, want)
+	err := workspace.ResolvePointerWithSpentForTest(node, []string{"a"}, workspace.MaxMaskWorkBytesForTest-1)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("almost spent budget: err = %v, want ErrStateBound", err)
+	}
+}
+
+// TestRoutePointerBeyondTheDepthBoundIsRefused proves that a pointer of more
+// tokens than MaxStateDepth+1 fails with ErrStateBound before any step, so no
+// state that the read accepts is walked by it.
+func TestRoutePointerBeyondTheDepthBoundIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tokens := make([]string, workspace.MaxStateDepth+2)
+	for i := range tokens {
+		tokens[i] = "a"
+	}
+
+	err := workspace.ResolvePointerWithSpentForTest(map[string]any{"a": "v"}, tokens, 0)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("err = %v, want ErrStateBound", err)
+	}
+}
+
+// TestRevealRefusesFallbackRoute proves that a pointer that falls back to its
+// wrapper never reveals the wrapper: the masked read masks the whole wrapper,
+// and the reveal answers not found, so the audit names one value only.
+func TestRevealRefusesFallbackRoute(t *testing.T) {
+	t.Parallel()
+
+	state := []byte(`{"version":4,"resources":[{"mode":"managed","type":"terraform_data","name":"x",` +
+		`"instances":[{"attributes":{"in":{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}}}]}]}`)
+	marks := workspace.SensitiveMarks{"terraform_data.x": {"/in/k"}}
+	path := "/resources/0/instances/0/attributes/in/k"
+
+	value, _, err := workspace.RevealValue(state, marks, path)
+	if !errors.Is(err, workspace.ErrResourceNotFound) {
+		t.Fatalf("value = %v, err = %v, want ErrResourceNotFound", value, err)
+	}
+
+	if value != nil {
+		t.Fatalf("value = %v, want none", value)
 	}
 }
 

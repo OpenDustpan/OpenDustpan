@@ -960,68 +960,98 @@ func routePhysical(work *maskWork, node any, tokens, route []string) (physicalRo
 	return physicalRoute{route: route, ok: true, metWrapper: metWrapper}, nil
 }
 
-// routeTokens returns the physical route of tokens under node, or false when
-// the node does not hold the path. It resolves each pointer once, with no
-// search that backs up: the walk takes physical steps, and the first object
-// that is a dynamic wrapper below an object member decides the rest. At most
-// one wrapper is transparent for each pointer. A wrapper whose own member the
-// next token names reads as a plain object when the rest of the pointer
-// resolves that way, and else the wrapper is transparent: one extra "value"
-// step enters the wrapped value. The rest of the pointer then resolves with
-// physical steps only. The work of a pointer is at most twice its length, and
-// each step is charged to the budget of work. List indexes parse with Atoi.
-// The route holds the keys read from objects, the decimal index of each list
-// step, and the extra "value" step when the wrapper rule applies. No tokens is
-// an empty route and true. It never changes the tree.
-func routeTokens(work *maskWork, node any, tokens []string) ([]string, bool, error) {
+// tokenRoute is the result of the resolution of a pointer. When resolved is
+// false the node does not hold the path. When fellBack is true the pointer met
+// a dynamic wrapper that it could not resolve, and route is the route to the
+// first wrapper that the walk met, which may be empty when the start node is
+// that wrapper. The mask then replaces the whole wrapper, and the reveal
+// refuses the pointer, because the route names more than the pointer does.
+type tokenRoute struct {
+	route    []string
+	resolved bool
+	fellBack bool
+}
+
+// unresolvedRoute is the result for a node that does not hold the path.
+func unresolvedRoute() tokenRoute {
+	return tokenRoute{route: nil, resolved: false, fellBack: false}
+}
+
+// routeTokens returns the physical route of tokens under node, or an
+// unresolved result when the node does not hold the path under any reading. It
+// resolves each pointer once, with no search that backs up: the walk takes
+// physical steps, and the first object that is a dynamic wrapper decides the
+// rest. The start node, an object member and a list element are all checked
+// for it, so a wrapper has one rule wherever it stands. At most one wrapper is
+// transparent for each pointer. A wrapper whose own member the next token
+// names reads as a plain object when the rest of the pointer resolves that
+// way, and else the wrapper is transparent: one extra "value" step enters the
+// wrapped value. The rest of the pointer then resolves with physical steps
+// only. The work of a pointer is at most twice its length, and each step is
+// charged to the budget of work. A pointer of more than MaxStateDepth+1
+// tokens fails with ErrStateBound before any step, because no state that the
+// read accepts holds such a path. List indexes parse with Atoi. The route
+// holds the keys read from objects, the decimal index of each list step, and
+// the extra "value" step when the wrapper rule applies. Fail closed: when the
+// wrapper rule does not resolve the pointer and a try met a second wrapper,
+// the result is the route to the first wrapper with fellBack set, never an
+// unresolved result. No tokens is an empty route and resolved. It never
+// changes the tree.
+func routeTokens(work *maskWork, node any, tokens []string) (tokenRoute, error) {
+	if len(tokens) > MaxStateDepth+1 {
+		return unresolvedRoute(), fmt.Errorf("pointer of %d tokens: %w", len(tokens), ErrStateBound)
+	}
+
 	route := make([]string, 0, len(tokens)+1)
+
+	if wrapped, isMap := node.(map[string]any); len(tokens) > 0 && isMap && isDynamicWrapper(wrapped) {
+		return routeWrapper(work, wrapped, tokens, route)
+	}
 
 	for i, token := range tokens {
 		if err := work.step(token); err != nil {
-			return nil, false, err
+			return unresolvedRoute(), err
 		}
-
-		_, parentIsMap := node.(map[string]any)
 
 		next, key, ok := routeStep(node, token)
 		if !ok {
-			return nil, false, nil
+			return unresolvedRoute(), nil
 		}
 
 		route = append(route, key)
 		node = next
 
 		if i == len(tokens)-1 {
-			return route, true, nil
+			return tokenRoute{route: route, resolved: true, fellBack: false}, nil
 		}
 
-		if wrapped, isMap := next.(map[string]any); parentIsMap && isMap && isDynamicWrapper(wrapped) {
+		if wrapped, isMap := next.(map[string]any); isMap && isDynamicWrapper(wrapped) {
 			return routeWrapper(work, wrapped, tokens[i+1:], route)
 		}
 	}
 
-	return route, true, nil
+	return tokenRoute{route: route, resolved: true, fellBack: false}, nil
 }
 
-// routeWrapper resolves rest below the dynamic wrapper wrapped. When the first
-// token of rest is a member of the wrapper, it tries the wrapper as a plain
-// object first. It then makes the wrapper transparent, with one extra "value"
-// step. Both tries take physical steps only, so no pointer takes a second
-// wrapper and the work does not grow with the product of the depth and the
-// count of wrappers.
+// routeWrapper resolves rest below the dynamic wrapper wrapped, which sits at
+// route. When the first token of rest is a member of the wrapper, it tries the
+// wrapper as a plain object first. It then makes the wrapper transparent, with
+// one extra "value" step. Both tries take physical steps only, so no pointer
+// takes a second wrapper and the work does not grow with the product of the
+// depth and the count of wrappers.
 //
 // Fail closed: when neither try resolves the pointer and a try met a second
 // dynamic wrapper, the pointer may name a value that only a second wrapper
-// reaches. The route then ends at the first wrapper, and the caller masks the
-// whole wrapper. The read never answers a value that a mark may name, and it
-// answers no more than the one wrapper of the pointer.
-func routeWrapper(work *maskWork, wrapped map[string]any, rest, route []string) ([]string, bool, error) {
+// reaches. The result then ends at the wrapper with fellBack set, and the
+// caller masks the whole wrapper. The read never answers a value that a mark
+// may name, and it answers no more than the one wrapper of the pointer.
+func routeWrapper(work *maskWork, wrapped map[string]any, rest, route []string) (tokenRoute, error) {
 	metWrapper := false
 
 	if _, member := wrapped[rest[0]]; member {
 		first, err := routePhysical(work, wrapped, rest, route)
 		if err != nil || first.ok {
-			return first.route, first.ok, err
+			return tokenRoute{route: first.route, resolved: first.ok, fellBack: false}, err
 		}
 
 		metWrapper = first.metWrapper
@@ -1029,15 +1059,15 @@ func routeWrapper(work *maskWork, wrapped map[string]any, rest, route []string) 
 
 	second, err := routePhysical(work, wrapped["value"], rest, append(slices.Clip(route), "value"))
 	if err != nil || second.ok {
-		return second.route, second.ok, err
+		return tokenRoute{route: second.route, resolved: second.ok, fellBack: false}, err
 	}
 
 	inner, innerIsMap := wrapped["value"].(map[string]any)
 	if metWrapper || second.metWrapper || (innerIsMap && isDynamicWrapper(inner)) {
-		return route, true, nil
+		return tokenRoute{route: route, resolved: true, fellBack: true}, nil
 	}
 
-	return nil, false, nil
+	return unresolvedRoute(), nil
 }
 
 // routeSet holds the physical routes that a mask applied, as a trie of
@@ -1155,14 +1185,16 @@ func maskRoute(node any, route []string, path string) bool {
 // lookupTokens returns the value at tokens under node, or false when the node
 // does not hold the path. It resolves the tokens once, like the mask, and
 // charges the steps to the budget of work. The caller snapshots what a mark
-// masks with it.
+// masks with it. A pointer that fell back to its wrapper names no value of
+// its own, so it reads as not found: the reveal never answers the whole
+// wrapper for one pointer.
 func lookupTokens(work *maskWork, node any, tokens []string) (any, bool, error) {
-	route, resolved, err := routeTokens(work, node, tokens)
-	if err != nil || !resolved {
+	resolved, err := routeTokens(work, node, tokens)
+	if err != nil || !resolved.resolved || resolved.fellBack {
 		return nil, false, err
 	}
 
-	value, found := lookupRoute(node, route)
+	value, found := lookupRoute(node, resolved.route)
 
 	return value, found, nil
 }
@@ -1537,13 +1569,23 @@ type pointerList struct {
 func maskOnePointer(work *maskWork, attributes any, name pointerName, out *maskCollectors) error {
 	relative, full := name.relative, name.full
 
-	route, resolved, err := routeTokens(work, attributes, splitPointer(relative))
+	resolved, err := routeTokens(work, attributes, splitPointer(relative))
 	if err != nil {
 		return err
 	}
 
-	if !resolved {
+	if !resolved.resolved {
 		return nil
+	}
+
+	route := resolved.route
+
+	// The attributes themselves are a wrapper that the pointer could not
+	// resolve. No route can name the attributes, so a marker cannot replace
+	// them, and the read refuses the state instead of answering a value that a
+	// mark may name.
+	if resolved.fellBack && len(route) == 0 {
+		return fmt.Errorf("pointer %q below attributes that are a dynamic wrapper: %w", relative, ErrStateBound)
 	}
 
 	below, steps := out.applied.below(route)

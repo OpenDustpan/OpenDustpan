@@ -159,8 +159,8 @@ const revealLeadTokens = 3
 // decodable ciphertext fails with ErrInvalidUpdate. A path that goes deeper
 // than MaxStateDepth below the section of the resource fails with
 // ErrStateBound, as the masked read refuses such a value. A canceled ctx
-// fails the lookup after the stream of the whole deployment, and the call
-// returns no ciphertext.
+// fails the lookup, at the latest after the stream of the whole deployment,
+// and the call returns no ciphertext.
 func SecretCiphertextOf(ctx context.Context, deployment []byte, path string) ([]byte, []string, error) {
 	tokens, ok := splitRevealPath(path)
 	if !ok || len(tokens) < 3 || tokens[0] != "resources" ||
@@ -346,13 +346,14 @@ func streamSecretCipher(ctx context.Context, deployment []byte, at secretTarget)
 
 	// The resource element and the rest of the document stream after the
 	// answer, so the decoder checks every member.
-	if err := drainAfterElement(dec); err != nil {
+	if err := drainAfterElement(ctx, dec); err != nil {
 		return nil, err
 	}
 
-	// A canceled call returns no ciphertext. The check follows the drain, the
-	// longest step of the lookup, so a call that the caller left does not hand
-	// out a secret.
+	// A canceled call returns no ciphertext. The drain, the longest step of
+	// the lookup, checks the context every few thousand tokens and stops early.
+	// This last check stays so that a call that ends after the last of those
+	// checks never hands out a secret.
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("reveal secret: %w", err)
 	}
@@ -388,19 +389,29 @@ func seekMember(
 	}
 }
 
+// drainContextTokens is the count of tokens between two checks of the context
+// while the lookup drains the rest of the deployment.
+const drainContextTokens = 4096
+
 // drainAfterElement skips the resource element at the decoder position, the
-// rest of the resources array and the rest of the top-level object. It keeps
-// nothing.
-func drainAfterElement(dec *jsontext.Decoder) error {
-	if err := skipStreamed(dec); err != nil {
-		return err
+// rest of the resources array and the rest of the top-level object, token by
+// token, so the decoder checks every member. It keeps nothing. It checks ctx
+// every drainContextTokens tokens, so a call that the caller left stops
+// before the whole deployment streams.
+func drainAfterElement(ctx context.Context, dec *jsontext.Decoder) error {
+	for count := 1; dec.StackDepth() > 0; count++ {
+		if _, err := dec.ReadToken(); err != nil {
+			return decodeDeploymentFailed(err)
+		}
+
+		if count%drainContextTokens == 0 {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("reveal secret: %w", err)
+			}
+		}
 	}
 
-	if err := drainStreamedArray(dec); err != nil {
-		return err
-	}
-
-	return drainStreamedObject(dec)
+	return nil
 }
 
 // drainStreamedArray skips the rest of the streamed array that dec streams.
