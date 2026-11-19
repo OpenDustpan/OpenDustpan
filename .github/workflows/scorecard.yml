@@ -1,0 +1,49 @@
+# OpenSSF Scorecard examines the security practices of the repository and
+# publishes the result to the public Scorecard API. The results also go to
+# code scanning (Security > Code scanning). Actions are pinned to commit SHAs;
+# the comment names the release.
+#
+# The Scorecard API accepts a published result only from a restricted
+# workflow: no top-level env or defaults, no write permission at the top
+# level, no env, defaults, services or containers in the job, and only the
+# approved actions in the job. Keep this file to these steps.
+name: scorecard
+
+on:
+  push:
+    branches: [ main ]
+  # Each week on Monday, so that the result shows a change of the repository
+  # settings that no push makes.
+  schedule:
+    - cron: "41 4 * * 1"
+
+permissions: {}
+
+jobs:
+  analysis:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      # The upload-sarif step sends the results to code scanning.
+      security-events: write
+      # The OIDC token that proves the origin of the published result.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: results.sarif
