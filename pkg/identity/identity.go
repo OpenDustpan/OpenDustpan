@@ -1311,7 +1311,11 @@ var _ Authenticator = (*StaticToken)(nil)
 // NewStaticToken returns an authenticator accepting token for an admin named subject.
 func NewStaticToken(subject, token string) (*StaticToken, error) {
 	if len(token) < minTokenLength {
-		return nil, fmt.Errorf("%w: need at least %d bytes", ErrWeakToken, minTokenLength)
+		return nil, fmt.Errorf(
+			"%w: need at least %d bytes: make one with: openssl rand -hex 32",
+			ErrWeakToken,
+			minTokenLength,
+		)
 	}
 
 	return &StaticToken{
@@ -1373,7 +1377,8 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 	for i, raw := range tokens {
 		token := strings.TrimSpace(raw)
 		if len(token) < minTokenLength {
-			return nil, fmt.Errorf("%w: token %d needs at least %d bytes", ErrWeakToken, i+1, minTokenLength)
+			return nil, fmt.Errorf("%w: token %d needs at least %d bytes: make one with: openssl rand -hex 32",
+				ErrWeakToken, i+1, minTokenLength)
 		}
 
 		sum := sha256.Sum256([]byte(token))

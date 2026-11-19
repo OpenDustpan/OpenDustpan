@@ -353,7 +353,7 @@ func testUpdateMTLS(t *testing.T, h Harness) {
 	mustCreate(t, h, r)
 
 	next := changed(r)
-	next.SpiffeIDPattern = "spiffe://example.org/ns/acme/*"
+	next.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/deploy"
 	next.Bundle = own
 
 	got, err := h.Store.Update(t.Context(), nsAcme, next, fence, updateEntry(nsAcme, r.ID))
