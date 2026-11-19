@@ -52,3 +52,14 @@ that a grant seems to allow.
 - A restore stops with the code `principal.no-working-break-glass` when it
   lowers the count of working break-glass accounts and leaves fewer than two
   ([Other paths](../guides/break-glass-accounts.md#other-paths)).
+
+## Background operations
+
+- A background operation (a durable operation) whose holder cannot renew its
+  claim in time is released at the local deadline of the claim. The server
+  counts these releases in a row for each operation. A
+  successful renewal sets the count to 0. At 5 releases in a row, the next
+  claim ends the operation failed. The last error of the operation names the
+  cause: "durable operation holders could not renew the claim in time too
+  often". The server also logs one warning for each release. No grant, setting
+  or administrator changes the limit of 5.

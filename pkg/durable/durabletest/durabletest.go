@@ -155,6 +155,10 @@ func Run(t *testing.T, newHarness Factory) {
 		{"extend to a shorter lease moves the expiry earlier", testExtendShorter},
 		{"a release by a non-holder changes nothing", testReleaseByNonHolder},
 		{"a release returns the operation to pending", testRelease},
+		{"a release at the deadline counts, and only a renewal resets the count", testReleaseAtDeadline},
+		{"a renewal sets the deadline releases to 0", testExtendResetsDeadlineReleases},
+		{"a release at the deadline by a non-holder changes nothing", testReleaseAtDeadlineNonHolder},
+		{"a release at the deadline during a cancel ends canceled and does not count", testReleaseAtDeadlineCanceled},
 		{"a give-back returns the operation to pending, and a non-holder changes nothing", testGiveBack},
 		{"a give-back during a cancel is ErrCanceled and changes nothing", testGiveBackCanceled},
 		{"a recorded step stays done after a takeover", testStepDoneAfterTakeover},
@@ -737,6 +741,117 @@ func testRelease(t *testing.T, h Harness) {
 	if again.Claim.Token <= held.Claim.Token || again.Attempt != 2 {
 		t.Fatalf("claim after a release = %+v (attempt %d), want a token above %d and attempt 2", again.Claim,
 			again.Attempt, held.Claim.Token)
+	}
+}
+
+// testReleaseAtDeadline proves the count of deadline releases in a row: each
+// ReleaseAtDeadline adds one, a plain Release and a retry leave it, and an
+// Extend sets it to 0.
+func testReleaseAtDeadline(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	op := mustStart(t, a, "k", kindA)
+
+	if op.DeadlineReleases != 0 {
+		t.Fatalf("deadline releases of a new operation = %d, want 0", op.DeadlineReleases)
+	}
+
+	for want := 1; want <= 2; want++ {
+		held := mustClaim(t, a, ownerA, longLease, kindA)
+
+		if err := a.ReleaseAtDeadline(t.Context(), held.Claim); err != nil {
+			t.Fatalf("ReleaseAtDeadline by the holder: %v", err)
+		}
+
+		got := mustGet(t, b, op.ID)
+		if got.DeadlineReleases != want || got.State != durable.StatePending || !noClaim(got.Claim) ||
+			got.Failures != 0 || got.Expiries != 0 {
+			t.Fatalf("operation after %d release(s) at the deadline = %+v, want count %d, pending, no claim, "+
+				"no failure, no expiry", want, got, want)
+		}
+	}
+
+	held := mustClaim(t, b, ownerB, longLease, kindA)
+	if held.DeadlineReleases != 2 {
+		t.Fatalf(
+			"deadline releases after a claim = %d, want 2: a claim must not reset the count",
+			held.DeadlineReleases,
+		)
+	}
+
+	if err := b.Release(t.Context(), held.Claim); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	if got := mustGet(t, a, op.ID); got.DeadlineReleases != 2 {
+		t.Fatalf("deadline releases after a plain Release = %d, want 2", got.DeadlineReleases)
+	}
+}
+
+// testExtendResetsDeadlineReleases proves that a renewal sets the count of
+// deadline releases to 0, and that a claim alone does not.
+func testExtendResetsDeadlineReleases(t *testing.T, h Harness) {
+	t.Helper()
+
+	a := h.Open(t, 0)
+	op := mustStart(t, a, "k", kindA)
+
+	held := mustClaim(t, a, ownerA, longLease, kindA)
+	if err := a.ReleaseAtDeadline(t.Context(), held.Claim); err != nil {
+		t.Fatalf("ReleaseAtDeadline: %v", err)
+	}
+
+	held = mustClaim(t, a, ownerA, longLease, kindA)
+
+	if _, err := a.Extend(t.Context(), held.Claim, longLease); err != nil {
+		t.Fatalf("Extend: %v", err)
+	}
+
+	if got := mustGet(t, a, op.ID); got.DeadlineReleases != 0 {
+		t.Fatalf("deadline releases after a renewal = %d, want 0", got.DeadlineReleases)
+	}
+}
+
+func testReleaseAtDeadlineNonHolder(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	mustStart(t, a, "k", kindA)
+	held := mustClaim(t, a, ownerA, longLease, kindA)
+
+	forged := held.Claim
+	forged.Token++
+	forged.Owner = ownerB
+
+	if err := b.ReleaseAtDeadline(t.Context(), forged); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("ReleaseAtDeadline with a token that is not live: error = %v, want ErrClaimLost", err)
+	}
+
+	got := mustGet(t, b, held.ID)
+	if got.DeadlineReleases != 0 || got.State != durable.StateRunning || !sameClaim(got.Claim, held.Claim) {
+		t.Fatalf("operation after a release at the deadline by a non-holder = %+v, want no change", got)
+	}
+}
+
+func testReleaseAtDeadlineCanceled(t *testing.T, h Harness) {
+	t.Helper()
+
+	a := h.Open(t, 0)
+	mustStart(t, a, "k", kindA)
+	held := mustClaim(t, a, ownerA, longLease, kindA)
+
+	if err := a.Cancel(t.Context(), held.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if err := a.ReleaseAtDeadline(t.Context(), held.Claim); err != nil {
+		t.Fatalf("ReleaseAtDeadline during a cancel: %v", err)
+	}
+
+	got := mustGet(t, a, held.ID)
+	if got.State != durable.StateCanceled || got.DeadlineReleases != 0 {
+		t.Fatalf("operation after a release at the deadline during a cancel = %+v, want canceled with count 0", got)
 	}
 }
 

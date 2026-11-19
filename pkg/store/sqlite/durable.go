@@ -57,7 +57,7 @@ var errUnknownDurableState = errors.New("durable operation row has an unknown st
 
 // durableColumns selects every column of durable_operations, in the order of
 // db.DurableOperation.
-const durableColumns = `SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, ` +
+const durableColumns = `SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, ` +
 	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, ` +
 	`updated_at_ms`
 
@@ -426,6 +426,8 @@ func (o *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 		row.ClaimExpiresAtMs = sql.NullInt64{Int64: now + durationMs(lease), Valid: true}
 		row.UpdatedAtMs = now
+		// A renewal in time shows that the store answers.
+		row.DeadlineReleases = 0
 
 		if err := writeDurable(ctx, q, row); err != nil {
 			return err
@@ -468,6 +470,11 @@ func (o *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable
 // Release implements durable.Store.
 func (o *DurableOperations) Release(ctx context.Context, c durable.Claim) error {
 	return o.store.endAttempt(ctx, c, releaseEnd, o.store.inControlTx)
+}
+
+// ReleaseAtDeadline implements durable.Store.
+func (o *DurableOperations) ReleaseAtDeadline(ctx context.Context, c durable.Claim) error {
+	return o.store.endAttempt(ctx, c, deadlineReleaseEnd, o.store.inControlTx)
 }
 
 // GiveBack implements durable.Store.
@@ -525,6 +532,17 @@ func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error)
 	row.NotBeforeMs = now
 
 	return clearClaim(row, now), nil
+}
+
+// deadlineReleaseEnd is the rule of durable.Store.ReleaseAtDeadline: the end
+// of Release, with one more deadline release when the operation returns to
+// pending. A cancel that it finds ends the operation without one.
+func deadlineReleaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
+	if !row.CancelRequested {
+		row.DeadlineReleases++
+	}
+
+	return releaseEnd(row, now)
 }
 
 // giveBackEnd is the rule of durable.Store.GiveBack.
@@ -903,6 +921,7 @@ func writeDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) e
 		State:            row.State,
 		Attempt:          row.Attempt,
 		Expiries:         row.Expiries,
+		DeadlineReleases: row.DeadlineReleases,
 		Failures:         row.Failures,
 		LastError:        row.LastError,
 		ClaimOwner:       row.ClaimOwner,
@@ -979,22 +998,23 @@ func loadDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) (d
 	}
 
 	return durable.Operation{
-		ID:              durable.ID(row.ID),
-		Key:             row.StartKey,
-		Kind:            durable.Kind(row.Kind),
-		Version:         int(row.Version),
-		Input:           input,
-		State:           durable.State(row.State),
-		Steps:           records,
-		Attempt:         int(row.Attempt),
-		Failures:        int(row.Failures),
-		Expiries:        int(row.Expiries),
-		LastError:       row.LastError,
-		Claim:           claimOf(row),
-		CancelRequested: row.CancelRequested,
-		NotBefore:       time.UnixMilli(row.NotBeforeMs).UTC(),
-		CreatedAt:       time.UnixMilli(row.CreatedAtMs).UTC(),
-		UpdatedAt:       time.UnixMilli(row.UpdatedAtMs).UTC(),
+		ID:               durable.ID(row.ID),
+		Key:              row.StartKey,
+		Kind:             durable.Kind(row.Kind),
+		Version:          int(row.Version),
+		Input:            input,
+		State:            durable.State(row.State),
+		Steps:            records,
+		Attempt:          int(row.Attempt),
+		Failures:         int(row.Failures),
+		Expiries:         int(row.Expiries),
+		DeadlineReleases: int(row.DeadlineReleases),
+		LastError:        row.LastError,
+		Claim:            claimOf(row),
+		CancelRequested:  row.CancelRequested,
+		NotBefore:        time.UnixMilli(row.NotBeforeMs).UTC(),
+		CreatedAt:        time.UnixMilli(row.CreatedAtMs).UTC(),
+		UpdatedAt:        time.UnixMilli(row.UpdatedAtMs).UTC(),
 	}, nil
 }
 
@@ -1015,9 +1035,24 @@ func queryDurableRows(ctx context.Context, tx *sql.Tx, query string, args []any)
 		var row db.DurableOperation
 
 		err := rows.Scan(
-			&row.ID, &row.StartKey, &row.Kind, &row.Input, &row.Version, &row.State, &row.Attempt, &row.Expiries,
-			&row.Failures, &row.LastError, &row.ClaimOwner, &row.ClaimToken, &row.ClaimExpiresAtMs,
-			&row.CancelRequested, &row.NotBeforeMs, &row.CreatedAtMs, &row.UpdatedAtMs,
+			&row.ID,
+			&row.StartKey,
+			&row.Kind,
+			&row.Input,
+			&row.Version,
+			&row.State,
+			&row.Attempt,
+			&row.Expiries,
+			&row.DeadlineReleases,
+			&row.Failures,
+			&row.LastError,
+			&row.ClaimOwner,
+			&row.ClaimToken,
+			&row.ClaimExpiresAtMs,
+			&row.CancelRequested,
+			&row.NotBeforeMs,
+			&row.CreatedAtMs,
+			&row.UpdatedAtMs,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("read durable operation: %w", err)

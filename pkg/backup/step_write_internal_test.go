@@ -321,13 +321,25 @@ func stepOperation(opID durable.ID) durable.Operation {
 	input := []byte(`{"id":"` + stepID.String() + `","startedAt":"2026-01-01T00:00:00Z"}`)
 
 	return durable.Operation{
-		ID: opID, Key: OperationKey(stepID), Kind: OperationKind, Version: OperationVersion,
-		Input: input, State: durable.StateRunning, Steps: nil, Attempt: 1, Failures: 0, Expiries: 0,
-		LastError: "",
+		ID:               opID,
+		Key:              OperationKey(stepID),
+		Kind:             OperationKind,
+		Version:          OperationVersion,
+		Input:            input,
+		State:            durable.StateRunning,
+		Steps:            nil,
+		Attempt:          1,
+		Failures:         0,
+		Expiries:         0,
+		DeadlineReleases: 0,
+		LastError:        "",
 		Claim: durable.Claim{
 			Operation: opID, Owner: "test", Token: 0, ExpiresAt: time.Time{},
 		},
-		CancelRequested: false, NotBefore: time.Time{}, CreatedAt: claimTestTime(), UpdatedAt: claimTestTime(),
+		CancelRequested: false,
+		NotBefore:       time.Time{},
+		CreatedAt:       claimTestTime(),
+		UpdatedAt:       claimTestTime(),
 	}
 }
 

@@ -231,6 +231,7 @@ CREATE TABLE durable_operations (
     state text NOT NULL,
     attempt bigint NOT NULL,
     expiries bigint DEFAULT 0 NOT NULL,
+    deadline_releases bigint DEFAULT 0 NOT NULL,
     failures bigint DEFAULT 0 NOT NULL,
     last_error text NOT NULL,
     claim_owner text,

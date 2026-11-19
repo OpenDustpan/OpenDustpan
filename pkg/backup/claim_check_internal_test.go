@@ -27,7 +27,7 @@ func (f *fakeClaimOps) Get(context.Context, durable.ID) (durable.Operation, erro
 	if f.err != nil {
 		return durable.Operation{
 			ID: "", Key: "", Kind: "", Version: 0, Input: nil, State: "", Steps: nil,
-			Attempt: 0, Failures: 0, Expiries: 0, LastError: "",
+			Attempt: 0, Failures: 0, Expiries: 0, DeadlineReleases: 0, LastError: "",
 			Claim: durable.Claim{
 				Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{},
 			},
@@ -43,7 +43,7 @@ func (f *fakeClaimOps) Get(context.Context, durable.ID) (durable.Operation, erro
 func claimOp(id durable.ID, state durable.State, token int64, cancel bool) durable.Operation {
 	return durable.Operation{
 		ID: id, Key: "op-claim-check", Kind: "backup", Version: 1, Input: nil, State: state,
-		Steps: nil, Attempt: 1, Failures: 0, Expiries: 0, LastError: "",
+		Steps: nil, Attempt: 1, Failures: 0, Expiries: 0, DeadlineReleases: 0, LastError: "",
 		Claim:           durable.Claim{Operation: id, Owner: "test", Token: token, ExpiresAt: claimTestTime()},
 		CancelRequested: cancel, NotBefore: time.Time{}, CreatedAt: claimTestTime(), UpdatedAt: claimTestTime(),
 	}
@@ -53,7 +53,7 @@ func claimOp(id durable.ID, state durable.State, token int64, cancel bool) durab
 func pendingOp(id durable.ID, state durable.State) durable.Operation {
 	return durable.Operation{
 		ID: id, Key: "op-claim-check", Kind: "backup", Version: 1, Input: nil, State: state,
-		Steps: nil, Attempt: 0, Failures: 0, Expiries: 0, LastError: "",
+		Steps: nil, Attempt: 0, Failures: 0, Expiries: 0, DeadlineReleases: 0, LastError: "",
 		Claim: durable.Claim{
 			Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{},
 		},

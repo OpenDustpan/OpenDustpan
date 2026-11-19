@@ -418,9 +418,9 @@ func pgControlTables() []pgCopyTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries", "failures",
-				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
-				"not_before_ms", "created_at_ms", "updated_at_ms",
+				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries",
+				"deadline_releases", "failures", "last_error", "claim_owner", "claim_token",
+				"claim_expires_at_ms", "cancel_requested", "not_before_ms", "created_at_ms", "updated_at_ms",
 			},
 			orderBy: []string{"id"},
 		},

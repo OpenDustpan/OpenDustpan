@@ -301,22 +301,23 @@ func (m *memDB) start(req durable.StartRequest, now time.Time) (durable.Operatio
 
 	m.nextID++
 	op := &durable.Operation{
-		ID:              durable.ID(fmt.Sprintf("op-%06d", m.nextID)),
-		Key:             req.Key,
-		Kind:            req.Kind,
-		Version:         req.Version,
-		Input:           slices.Clone(req.Input),
-		State:           durable.StatePending,
-		Steps:           nil,
-		Attempt:         0,
-		Expiries:        0,
-		Failures:        0,
-		LastError:       "",
-		Claim:           zeroClaim(),
-		CancelRequested: false,
-		NotBefore:       now,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:               durable.ID(fmt.Sprintf("op-%06d", m.nextID)),
+		Key:              req.Key,
+		Kind:             req.Kind,
+		Version:          req.Version,
+		Input:            slices.Clone(req.Input),
+		State:            durable.StatePending,
+		Steps:            nil,
+		Attempt:          0,
+		Expiries:         0,
+		DeadlineReleases: 0,
+		Failures:         0,
+		LastError:        "",
+		Claim:            zeroClaim(),
+		CancelRequested:  false,
+		NotBefore:        now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	m.ops[op.ID] = op
@@ -504,6 +505,7 @@ func (s memStore) Extend(_ context.Context, c durable.Claim, lease time.Duration
 	}
 
 	op.Claim.ExpiresAt = now.Add(lease)
+	op.DeadlineReleases = 0
 	op.UpdatedAt = now
 
 	return op.Claim, nil
@@ -549,6 +551,14 @@ func (s memStore) Release(_ context.Context, c durable.Claim) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.State = durable.StatePending
 		op.NotBefore = now
+	})
+}
+
+func (s memStore) ReleaseAtDeadline(_ context.Context, c durable.Claim) error {
+	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
+		op.State = durable.StatePending
+		op.NotBefore = now
+		op.DeadlineReleases++
 	})
 }
 

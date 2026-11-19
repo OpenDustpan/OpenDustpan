@@ -15,14 +15,17 @@ import (
 
 // Defaults of RunnerConfig.
 const (
-	DefaultLease           = 30 * time.Second
-	DefaultPollEvery       = time.Second
-	DefaultMaxAttempts     = 5
-	DefaultExpiryLimit     = 3
-	DefaultBackoffBase     = time.Second
-	DefaultBackoffMax      = 5 * time.Minute
-	DefaultClaimBackoffMax = 30 * time.Second
-	DefaultWriteTimeout    = 5 * time.Second
+	DefaultLease       = 30 * time.Second
+	DefaultPollEvery   = time.Second
+	DefaultMaxAttempts = 5
+	DefaultExpiryLimit = 3
+	// DefaultDeadlineReleaseLimit is the default of
+	// RunnerConfig.DeadlineReleaseLimit.
+	DefaultDeadlineReleaseLimit = 5
+	DefaultBackoffBase          = time.Second
+	DefaultBackoffMax           = 5 * time.Minute
+	DefaultClaimBackoffMax      = 30 * time.Second
+	DefaultWriteTimeout         = 5 * time.Second
 	// renewShare is the part of the lease between two renewals by default:
 	// three renewals fit in one lease.
 	renewShare = 3
@@ -46,6 +49,9 @@ var (
 	// ErrExpiryLimit reports an operation whose holders stopped without an
 	// end write as often as the limit allows.
 	ErrExpiryLimit = errors.New("durable operation holders stopped without an end write too often")
+	// ErrDeadlineReleaseLimit reports an operation whose holders released it
+	// at the local deadline of their claim as often as the limit allows.
+	ErrDeadlineReleaseLimit = errors.New("durable operation holders could not renew the claim in time too often")
 	// ErrStepPanic reports a step that panicked.
 	ErrStepPanic = errors.New("durable operation step panicked")
 	// ErrDeferred reports an attempt that the runner released without a
@@ -122,6 +128,12 @@ type RunnerConfig struct {
 	// write. At a claim that reaches it, the runner ends the operation
 	// failed.
 	ExpiryLimit int
+	// DeadlineReleaseLimit is the number of releases in a row that a holder
+	// may make because it could not renew its claim in time. A renewal that
+	// succeeds resets the count. At a claim that reaches the limit, the
+	// runner ends the operation failed with ErrDeadlineReleaseLimit. The
+	// default is DefaultDeadlineReleaseLimit.
+	DeadlineReleaseLimit int
 	// Backoff is the delay before the retry of a failed attempt.
 	Backoff Backoff
 	// ClaimBackoff is the delay after a claim that failed with an error, for
@@ -238,6 +250,10 @@ func withDefaults(cfg RunnerConfig) RunnerConfig {
 
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = DefaultMaxAttempts
+	}
+
+	if cfg.DeadlineReleaseLimit <= 0 {
+		cfg.DeadlineReleaseLimit = DefaultDeadlineReleaseLimit
 	}
 
 	if cfg.ExpiryLimit <= 0 {
@@ -468,6 +484,11 @@ func (r *Runner) check(ctx context.Context, op Operation, log *slog.Logger) (boo
 	case op.Expiries >= r.cfg.ExpiryLimit:
 		r.fail(ctx, op.Claim, op, Permanent(fmt.Errorf("%w: %d holders stopped, and the limit is %d",
 			ErrExpiryLimit, op.Expiries, r.cfg.ExpiryLimit)), log)
+
+		return true, nil
+	case op.DeadlineReleases >= r.cfg.DeadlineReleaseLimit:
+		r.fail(ctx, op.Claim, op, Permanent(fmt.Errorf("%w: %d releases in a row, and the limit is %d",
+			ErrDeadlineReleaseLimit, op.DeadlineReleases, r.cfg.DeadlineReleaseLimit)), log)
 
 		return true, nil
 	case op.Version > spec.Version:
@@ -755,8 +776,10 @@ func (r *Runner) release(ctx context.Context, claim Claim, log *slog.Logger) {
 
 // releaseBefore releases the claim after the runner stopped its work near the
 // end of the lease. The release must arrive before end, the expiry of the
-// claim: then the operation returns to pending and its Expiries does not
-// grow. After end, the store answers ErrClaimLost and changes nothing.
+// claim: then the operation returns to pending, its Expiries does not grow,
+// and its DeadlineReleases grows, so that DeadlineReleaseLimit can stop a
+// holder that never renews in time. After end, the store answers
+// ErrClaimLost and changes nothing.
 func (r *Runner) releaseBefore(ctx context.Context, claim Claim, end time.Time, log *slog.Logger) {
 	left := time.Until(end)
 	if left <= 0 {
@@ -768,7 +791,8 @@ func (r *Runner) releaseBefore(ctx context.Context, claim Claim, end time.Time, 
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(r.cfg.WriteTimeout, left))
 	defer cancel()
 
-	r.end(wctx, log, "release", r.cfg.Store.Release(wctx, claim))
+	log.WarnContext(ctx, "durable operation released at its lease deadline")
+	r.end(wctx, log, "release at deadline", r.cfg.Store.ReleaseAtDeadline(wctx, claim))
 }
 
 // writeContext returns the context of a write that ends an attempt: not
@@ -805,6 +829,7 @@ func ErrorClass(err error) string {
 		{ErrNewerVersion, "newer_version"},
 		{ErrOlderVersion, "older_version"},
 		{ErrExpiryLimit, "expiry_limit"},
+		{ErrDeadlineReleaseLimit, "deadline_release_limit"},
 		{ErrStepPanic, "step_panic"},
 		{ErrInvalid, "invalid"},
 		{ErrNotFound, "not_found"},
