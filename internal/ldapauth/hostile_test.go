@@ -75,6 +75,8 @@ func TestNewMethodRefusesASettingThatIsNotValid(t *testing.T) {
 		"a URL with a path":       func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:636/dc=example" },
 		"a URL with user info":    func(c *ldapauth.Config) { c.URL = "ldaps://admin@127.0.0.1:636" },
 		"a URL with a query":      func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:636?x" },
+		"port 0":                  func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:0" },
+		"a port above 65535":      func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:65536" },
 		"an ldapi URL":            func(c *ldapauth.Config) { c.URL = "ldapi:///var/run/slapd" },
 		"StartTLS on ldaps":       func(c *ldapauth.Config) { c.StartTLS = true },
 		"an empty bind password":  func(c *ldapauth.Config) { c.BindPassword = session.NewPassword("") },

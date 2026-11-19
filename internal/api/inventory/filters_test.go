@@ -203,8 +203,8 @@ func TestUnitListFilterErrors(t *testing.T) {
 		{name: "reference with a bad escape", query: "reference=%zz"},
 		{name: "label with a bad escape", query: "label=a%zz"},
 		{name: "semicolon in the query", query: "label=a%3Db;label=c%3Dd"},
-		{name: "label with the at value", query: "label=app%3Dweb&at=1"},
-		{name: "reference with the at value", query: "reference=pulumi:acme/web/dev&at=1"},
+		{name: "label with the at value", query: "label=app%3Dweb&at=2026-10-10T09:00:00Z"},
+		{name: "reference with the at value", query: "reference=pulumi:acme/web/dev&at=2026-10-10T09:00:00Z"},
 	}
 
 	for _, tc := range cases {
@@ -238,9 +238,9 @@ func TestUnitListFilterAtMessage(t *testing.T) {
 		name  string
 		query string
 	}{
-		{name: "label with the at value", query: "label=app%3Dweb&at=1"},
-		{name: "reference with the at value", query: "reference=pulumi:acme/web/dev&at=1"},
-		{name: "state with the at value", query: "state=locked&at=1"},
+		{name: "label with the at value", query: "label=app%3Dweb&at=2026-10-10T09:00:00Z"},
+		{name: "reference with the at value", query: "reference=pulumi:acme/web/dev&at=2026-10-10T09:00:00Z"},
+		{name: "state with the at value", query: "state=locked&at=2026-10-10T09:00:00Z"},
 	}
 
 	for _, tc := range cases {

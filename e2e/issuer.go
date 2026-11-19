@@ -126,7 +126,7 @@ func (e *Env) TofuDirWithToken(tb testing.TB, token string) string {
 	dir := tb.TempDir()
 
 	e.write(tb, filepath.Join(dir, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
-	e.write(tb, filepath.Join(dir, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), token))
+	e.write(tb, filepath.Join(dir, "tofurc"), tofuRC(tb, e.Host(), token))
 
 	return dir
 }

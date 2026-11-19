@@ -84,8 +84,10 @@ func TestWorkerOnlyStartBindsNoSignInProviders(t *testing.T) {
 			srv := testServer(nil, "a")
 			srv.components, srv.now = tc.set, time.Now
 			srv.signInProviders = providerBinding{
-				store:     failingBindings{ProviderStore: nil},
-				providers: []session.Provider{{ID: "corp", Issuer: "", UserinfoURL: "", SubjectClaim: ""}},
+				store: failingBindings{ProviderStore: nil},
+				providers: []session.Provider{
+					{ID: "corp", Issuer: "", UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""},
+				},
 			}
 
 			err := srv.bindSignInProviders(t.Context())

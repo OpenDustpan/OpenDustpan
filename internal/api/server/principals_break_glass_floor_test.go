@@ -417,6 +417,7 @@ func floorHandler(
 		},
 		logger:         slog.New(recorder),
 		onAuditFailure: hook,
+		tempAdmins:     nil,
 	})
 
 	return h, recorder, failures

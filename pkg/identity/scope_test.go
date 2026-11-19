@@ -121,6 +121,12 @@ func TestScopeContains(t *testing.T) {
 	gammaUnit := scopeUnit(t, "gamma", "web/prod")
 	bot := identity.PrincipalObject("prn-bot")
 	otherBot := identity.PrincipalObject("prn-other")
+	acmeDev := identity.NamespaceObject("acme-dev")
+	acm := identity.NamespaceObject("acm")
+	acmeDevUnit := scopeUnit(t, "acme-dev", "web/prod")
+	acmUnit := scopeUnit(t, "acm", "web/prod")
+	// A unit of acme whose name looks like the namespace beta.
+	acmeUnitNamedBeta := scopeUnit(t, "acme", "beta/prod")
 
 	explicit := identity.Scope{
 		Namespaces:  []identity.Object{acme},
@@ -158,6 +164,68 @@ func TestScopeContains(t *testing.T) {
 			want:   false,
 		},
 		{name: "another namespace is held", scope: identity.Every("acme"), object: beta, want: true},
+		{name: "a longer name is not a left-out namespace", scope: identity.Every("acme"), object: acmeDev, want: true},
+		{name: "a prefix is not a left-out namespace", scope: identity.Every("acme"), object: acm, want: true},
+		{
+			name:   "a unit of a longer name is not a left-out namespace",
+			scope:  identity.Every("acme"),
+			object: acmeDevUnit,
+			want:   true,
+		},
+		{
+			name:   "a unit of a prefix is not a left-out namespace",
+			scope:  identity.Every("acme"),
+			object: acmUnit,
+			want:   true,
+		},
+		{
+			name:   "a unit named like another namespace stays in its left-out namespace",
+			scope:  identity.Every("acme"),
+			object: acmeUnitNamedBeta,
+			want:   false,
+		},
+		{
+			name:   "two left-out namespaces hold neither namespace",
+			scope:  identity.Every("acme", "beta"),
+			object: beta,
+			want:   false,
+		},
+		{
+			name:   "two left-out namespaces hold no unit of the first",
+			scope:  identity.Every("acme", "beta"),
+			object: acmeUnit,
+			want:   false,
+		},
+		{
+			name:   "two left-out namespaces hold no unit of the second",
+			scope:  identity.Every("acme", "beta"),
+			object: betaUnit,
+			want:   false,
+		},
+		{
+			name:   "two left-out namespaces hold no collection",
+			scope:  identity.Every("acme", "beta"),
+			object: betaCollection,
+			want:   false,
+		},
+		{
+			name:   "two left-out namespaces hold a principal",
+			scope:  identity.Every("acme", "beta"),
+			object: bot,
+			want:   true,
+		},
+		{
+			name:   "two left-out namespaces hold the server",
+			scope:  identity.Every("acme", "beta"),
+			object: identity.ServerObject(),
+			want:   true,
+		},
+		{
+			name:   "two left-out namespaces hold the caller",
+			scope:  identity.Every("acme", "beta"),
+			object: identity.CallerObject(),
+			want:   true,
+		},
 		{name: "a principal is held", scope: identity.Every("acme"), object: bot, want: true},
 		{name: "the server is held", scope: identity.Every("acme"), object: identity.ServerObject(), want: true},
 		{name: "the caller is held", scope: identity.Every("acme"), object: identity.CallerObject(), want: true},

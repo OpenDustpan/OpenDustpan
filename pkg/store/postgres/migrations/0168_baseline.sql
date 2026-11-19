@@ -2211,6 +2211,12 @@ CREATE INDEX inventory_labels_namespace ON inventory_labels USING btree (namespa
 
 CREATE INDEX inventory_labels_value ON inventory_labels USING btree (namespace, label_key, label_value, unit_id COLLATE "C");
 
+-- The units that a lock holds, in the order of the unit list. The locked filter
+-- of the unit list reads this index first, so the cost follows the count of
+-- locked units and not the count of units. The predicate is the lock test of
+-- the filter.
+CREATE INDEX inventory_locked ON inventory USING btree (namespace, unit_id COLLATE "C") WHERE (COALESCE(lock_holder, '') <> '' OR lock_since_ms IS NOT NULL OR COALESCE(lock_operation, '') <> '');
+
 CREATE INDEX inventory_namespace_unit_id ON inventory USING btree (namespace, unit_id COLLATE "C");
 
 CREATE INDEX inventory_unit_id ON inventory USING btree (unit_id);
@@ -2308,6 +2314,8 @@ CREATE INDEX sessions_principal ON sessions USING btree (principal_id, created_a
 CREATE INDEX sign_in_failures_window_end ON sign_in_failures USING btree (window_end_ms);
 
 CREATE INDEX sign_in_requests_expiry ON sign_in_requests USING btree (expires_at_ms);
+
+CREATE INDEX stack_tags_name_value ON stack_tags USING btree (name, value, stack_id);
 
 CREATE UNIQUE INDEX stacks_id ON stacks USING btree (id);
 

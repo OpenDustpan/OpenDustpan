@@ -130,6 +130,29 @@ func newKindSWEnv(
 ) swEnv {
 	t.Helper()
 
+	return newBreakGlassSWEnv(t, swSetup{
+		units: units, engineErr: engineErr, wrap: wrap, kinds: kinds, breakGlass: nil, now: nil,
+	})
+}
+
+// swSetup is what newBreakGlassSWEnv builds a service from. A nil breakGlass
+// wires no pass store, and a nil now is time.Now.
+type swSetup struct {
+	units      gate.UnitSource
+	engineErr  error
+	wrap       func(*sqlite.Store) gate.Store
+	kinds      gate.KindReader
+	breakGlass gate.BreakGlassStore
+	now        func() time.Time
+}
+
+// newBreakGlassSWEnv is newKindSWEnv with the pass store and the clock of
+// setup.
+func newBreakGlassSWEnv(t *testing.T, setup swSetup) swEnv {
+	t.Helper()
+
+	units, engineErr, wrap, kinds := setup.units, setup.engineErr, setup.wrap, setup.kinds
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -194,7 +217,8 @@ func newKindSWEnv(
 		Fences:     swFences{nss: nss},
 		KindReader: kinds,
 		IsDev:      principalpkg.IsDevSubject,
-		Now:        nil,
+		BreakGlass: setup.breakGlass,
+		Now:        setup.now,
 		Log:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -707,11 +731,17 @@ func TestBreakGlassChangeFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
+
 	c := swChange(t, e.fence)
 	c.BreakGlass = "audit-1"
 
 	if _, err := e.svc.Evaluate(t.Context(), c); !errors.Is(err, gate.ErrUnavailable) {
-		t.Fatalf("Evaluate(break-glass) = %v, want ErrUnavailable: no break-glass is implemented", err)
+		t.Fatalf("Evaluate(break-glass, gate in error, no pass store) = %v, want ErrUnavailable", err)
+	}
+
+	if recs := e.records(t); len(recs) != 0 {
+		t.Fatalf("records = %d, want none: a refusal with no pass store writes no decision record", len(recs))
 	}
 }
 

@@ -657,7 +657,7 @@ func checkCacheDir(root *os.Root, want map[string]archiveEntry) error {
 		}
 
 		if name == "." {
-			return nil
+			return checkRootDir(root)
 		}
 
 		entry, ok := want[name]
@@ -703,6 +703,34 @@ func checkCacheEntry(root *os.Root, name string, want archiveEntry) error {
 func checkDir(name string, info fs.FileInfo) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%w: cached %q is not a directory", ErrCacheMismatch, name)
+	}
+
+	// The full mode, as for a file. Extraction sets this mode on each
+	// directory it makes, whatever mode the archive gives. A directory that
+	// group or other users can write lets them change the cached CLI after
+	// the check.
+	if info.Mode() != fs.ModeDir|dirMode {
+		return fmt.Errorf("%w: cached directory %q has mode %v, want %v",
+			ErrCacheMismatch, name, info.Mode(), fs.ModeDir|fs.FileMode(dirMode))
+	}
+
+	return nil
+}
+
+// checkRootDir refuses an extracted directory that group or other users can
+// write, or that has a setuid, setgid or sticky bit. Defense in depth: the
+// directories below it get their own exact-mode check; this check does not
+// rely on it. The root keeps the mode of its staging directory, so it can
+// have fewer permission bits than the other directories.
+func checkRootDir(root *os.Root) error {
+	info, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("inspect cached CLI directory: %w", err)
+	}
+
+	if info.Mode()&^fs.ModePerm != fs.ModeDir || info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%w: cached CLI directory has mode %v, want no write for group or other",
+			ErrCacheMismatch, info.Mode())
 	}
 
 	return nil
@@ -929,7 +957,7 @@ func extractEntry(root *os.Root, hdr *tar.Header, body io.Reader) error {
 
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		if err := root.MkdirAll(name, dirMode); err != nil {
+		if err := makeDirs(root, name); err != nil {
 			return fmt.Errorf("%w: %q: %w", ErrUnsafeArchive, hdr.Name, err)
 		}
 
@@ -941,8 +969,25 @@ func extractEntry(root *os.Root, hdr *tar.Header, body io.Reader) error {
 	}
 }
 
+// makeDirs makes name and its parents, and sets the mode of each exactly. The
+// umask can remove bits from the mode of MkdirAll, and the cache check
+// compares the mode.
+func makeDirs(root *os.Root, name string) error {
+	if err := root.MkdirAll(name, dirMode); err != nil {
+		return fmt.Errorf("make directory: %w", err)
+	}
+
+	for dir := name; dir != "." && dir != "/"; dir = path.Dir(dir) {
+		if err := root.Chmod(dir, dirMode); err != nil {
+			return fmt.Errorf("set the mode of %q: %w", dir, err)
+		}
+	}
+
+	return nil
+}
+
 func writeFile(root *os.Root, name string, src io.Reader, size int64) error {
-	if err := root.MkdirAll(path.Dir(name), dirMode); err != nil {
+	if err := makeDirs(root, path.Dir(name)); err != nil {
 		return fmt.Errorf("%w: %q: %w", ErrUnsafeArchive, name, err)
 	}
 

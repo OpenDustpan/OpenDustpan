@@ -137,9 +137,12 @@ func toDeliveryDocument(d *notify.Delivery) deliveryDocument {
 		Version: d.Version,
 	}
 
+	// A stopped delivery with no stop time shows no redeliverableAt.
 	if d.State != notify.DeliveryPending && notify.RedeliveriesRemaining(*d) > 0 {
-		at := notify.RedeliverableAt(*d).UTC()
-		doc.RedeliverableAt = &at
+		if at, ok := notify.RedeliverableAt(*d); ok {
+			at = at.UTC()
+			doc.RedeliverableAt = &at
+		}
 	}
 
 	return doc

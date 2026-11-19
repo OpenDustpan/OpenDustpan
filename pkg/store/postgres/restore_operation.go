@@ -858,12 +858,12 @@ func (s *Store) ApplyRestoreArea(
 		},
 	}
 
-	dropped, err := s.swapStaging(ctx, plan)
+	kept, err := s.swapStaging(ctx, plan)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	return backup.KeepAccessResult{DroppedTempAdmins: dropped}, nil
+	return kept, nil
 }
 
 // checkSwapStart runs the checks at the start of the swap of area a with the
