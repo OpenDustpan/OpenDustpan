@@ -9,6 +9,8 @@ const (
 	TokenEnded = "token.ended"
 	// TokenInvalid is an access token that the server cannot use for the request.
 	TokenInvalid = "token.invalid"
+	// TokenIssueFailed means that the server could not store the access token or its audit entry, so it made no token.
+	TokenIssueFailed = "token.issue-failed"
 	// TokenKindHasNone means that the kind of the principal gets no access token.
 	TokenKindHasNone = "token.kind-has-none"
 	// TokenCallerNotPerson means that the caller is not a person with a principal record.
@@ -31,6 +33,11 @@ func tokenSpecs() []Spec {
 		{Code: TokenAlreadyExists, Meaning: "an access token with the same identity exists", Args: nil},
 		{Code: TokenEnded, Meaning: "the access token ended, so the request cannot change it", Args: nil},
 		{Code: TokenInvalid, Meaning: "the access token is not valid for this request", Args: nil},
+		{
+			Code:    TokenIssueFailed,
+			Meaning: "the server could not store the access token or its audit entry, so it made no token",
+			Args:    nil,
+		},
 		{Code: TokenKindHasNone, Meaning: "the kind of the principal gets no access token", Args: nil},
 		{Code: TokenCallerNotPerson, Meaning: "the caller is not a person with a principal record", Args: nil},
 		{Code: TokenNotFound, Meaning: "the access token does not exist", Args: nil},
