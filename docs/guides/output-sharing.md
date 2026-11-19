@@ -77,6 +77,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | 404 | The caller holds `unit:read-outputs`, and the stack or workspace has no state yet because no update or upload has written one. The message names the unit and says that it has no state yet. The request writes no denial entry. |
 | 409 | The client encrypted the state of the workspace. The server cannot read the outputs of such a state. It answers 409 with the code `unit.client-encrypted` to every caller, also to a caller that holds `unit:read`. It never answers an empty list for such a state. |
 | 409 | A new state came in while the server checked or read the outputs. Send the request again. |
+| 413 | The state is too deep or too large for a masked read. The error code is `stack.state-too-complex`. The state nests more than 100 levels, or the work of the read is more than 128 MiB. The server answers no output. |
 
 ## What a person with only `unit:read-outputs` can read
 

@@ -95,6 +95,18 @@ type Collector struct {
 	regTotals map[string]int64
 }
 
+// NewCollector returns a collector whose references start with first, in
+// that order. The collector takes the slice: the caller does not use it after
+// the call. The keys of first are not in the set that the collector uses to
+// drop a key that two rows name, so first keeps every reference it holds. A
+// caller that reads rows with its own query gives them here, so that the
+// references of all rows stay in one slice and no copy of it is made.
+func NewCollector(first []backup.BlobRef) *Collector {
+	return &Collector{
+		refs: first, added: nil, unverified: nil, regFiles: nil, seenRegFiles: nil, regTotals: nil,
+	}
+}
+
 // RegistryFiles returns one entry per unique registry file content hash of
 // each namespace, keyed by the stable namespace ID.
 func (c *Collector) RegistryFiles() map[string][]backup.RegistryFileEntry {
@@ -122,9 +134,12 @@ func (c *Collector) BackupRefs() BackupRefs {
 	return BackupRefs{Refs: c.Refs(), RegistryFiles: c.RegistryFiles(), Unverified: c.Unverified()}
 }
 
-// Refs returns the references that the backup copies, in the order added.
+// Refs returns the references that the backup copies, in the order added. The
+// slice is the one that the collector holds, so it makes no copy of a list that
+// can hold a million references: the caller does not add rows to the collector
+// after it changes the slice.
 func (c *Collector) Refs() []backup.BlobRef {
-	return slices.Clone(c.refs)
+	return c.refs
 }
 
 // Unverified returns the keys that rows name and that the backup does not

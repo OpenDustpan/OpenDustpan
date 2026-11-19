@@ -59,6 +59,11 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			"reach exceeded", accesstoken.ErrReachExceeded, http.StatusForbidden,
 			errcode.TokenReachExceeded, nil, "",
 		},
+		{
+			"token of an unknown kind", fmt.Errorf("%w: %q: tok-secret-row", accesstoken.ErrUnknownKind, "trust"),
+			http.StatusConflict, errcode.TokenUnknownKind, nil,
+			"the access token has a kind that this version does not know",
+		},
 		{"token ended", accesstoken.ErrEnded, http.StatusConflict, errcode.TokenEnded, nil, ""},
 		{"token exists", accesstoken.ErrAlreadyExists, http.StatusConflict, errcode.TokenAlreadyExists, nil, ""},
 		{

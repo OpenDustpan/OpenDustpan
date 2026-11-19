@@ -19,6 +19,9 @@ const (
 	TokenReachExceeded = "token.outside-reach"
 	// TokenRequiresSignIn means that the request needs a console sign-in, and an access token cannot do it.
 	TokenRequiresSignIn = "token.requires-sign-in"
+	// TokenUnknownKind means that the access token has a kind that this version does not know, so the request cannot
+	// change it.
+	TokenUnknownKind = "token.unknown-kind"
 	// TokenUnsupported means that the store of the server keeps no access tokens.
 	TokenUnsupported = "token.unsupported"
 	// TokenWrongKind means that the kind of the access token does not fit the route.
@@ -42,6 +45,11 @@ func tokenSpecs() []Spec {
 		{
 			Code:    TokenRequiresSignIn,
 			Meaning: "the request needs a console sign-in, and an access token cannot do it",
+			Args:    nil,
+		},
+		{
+			Code:    TokenUnknownKind,
+			Meaning: "the access token has a kind that this version does not know, so the request cannot change it",
 			Args:    nil,
 		},
 		{Code: TokenUnsupported, Meaning: "the store of the server keeps no access tokens", Args: nil},

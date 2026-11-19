@@ -524,7 +524,6 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		certBundle:    "",
 		dbProxy:       nil,
 		signIn:        nil,
-		claimers:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {

@@ -77,14 +77,28 @@ const (
 	// a count only when its lock ended and its level is past its reset time
 	// too.
 	NamePruneAge = DefaultNameGlobalMaxLockFor + DefaultNameGlobalResetAfter
-	// MaxNamePruneRows is the most counts that one run of the prune deletes.
-	// The next run deletes the rest.
+	// NamePruneMaxRun is the longest time that one scheduled prune keeps
+	// starting new batches while each batch deletes its full limit. The
+	// run checks it between two batches. A batch that is in progress at the
+	// bound finishes. A run that reaches the bound ends with no error, and
+	// the next run, one interval later, continues.
+	NamePruneMaxRun = 5 * time.Minute
+	// NamePruneBatchPause is the time that a run waits between two batches.
+	// The store has one writer, so a run with no pause keeps the write lock
+	// for almost all of its time, and the other writes (sign-in failure
+	// counts, audit entries, lease renewals) wait for it. The pause is longer
+	// than the longest sleep of the busy handler of SQLite (100 ms), so a
+	// writer that waits for the lock gets a turn inside each pause.
+	NamePruneBatchPause = 150 * time.Millisecond
+	// MaxNamePruneRows is the most counts that one batch of the prune
+	// deletes. When a batch deletes 10000 counts, the run waits 150
+	// milliseconds and starts another batch.
 	MaxNamePruneRows = 10000
 	// MaxNamePruneEnded is the most counts with a lock that ended, and that no
-	// attempt saw, that one run of the prune deletes. Each such count gets
+	// attempt saw, that one batch of the prune deletes. Each such count gets
 	// the audit entry of the end of its lock, so this bound is also the
-	// most entries of that kind that one run appends. The next run deletes
-	// the rest.
+	// most entries of that kind that one batch appends. A later batch or
+	// run deletes the rest.
 	MaxNamePruneEnded = 1000
 )
 
@@ -182,7 +196,7 @@ type NameLockCounter interface {
 	// the audit entry of the end of its lock (see EndedEntry, built from e
 	// with the action ActionNameLockEnded). The same transaction appends e
 	// with the changes of PrunedChanges. The scheduled prune of the server
-	// calls it, so each run, its entries of the end of a lock and its audit
+	// calls it, so each batch, its entries of the end of a lock and its audit
 	// entry commit together or not at all. It returns ErrInvalidLock for a
 	// request that CheckPruneRequest refuses, and audit.ErrInvalidEntry for
 	// an entry that fails validation; both change nothing.

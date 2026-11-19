@@ -60,6 +60,10 @@ func Run(t *testing.T, newStore Factory) {
 	}{
 		{name: "token round trip", test: testRoundTrip},
 		{name: "a stored token of an unknown kind is ErrUnknownKind", test: testUnknownKind},
+		{
+			name: "a revoke of a stored token of an unknown kind is ErrUnknownKind and changes nothing",
+			test: testRevokeUnknownKind,
+		},
 		{name: "the list skips a stored token of an unknown kind", test: testListSkipsUnknownKind},
 		{name: "the list pages reach each token past unknown kinds", test: testListPagesPastUnknownKind},
 		{name: "a write of an unknown kind is ErrUnknownKind and stores nothing", test: testWriteRefusesUnknownKind},
@@ -1513,6 +1517,83 @@ func testUnknownKind(t *testing.T, s Store) {
 	if m.Token.ID != "" {
 		t.Errorf("get by digest returned the token %q, want no token", m.Token.ID)
 	}
+}
+
+// testRevokeUnknownKind checks that a revoke by ID of a stored row of a kind
+// that this version does not know ends in ErrUnknownKind, names the row, writes
+// no audit entry and no revoke time, and that the row never signs in.
+// Hostile cases: a kind of another version, an empty kind, a kind in another
+// case, and a kind with white space.
+func testRevokeUnknownKind(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustPrincipal(t, s, "prn-1", "ci-deploy", principal.KindService)
+
+	kinds := []string{"trust", "", "PERSONAL", " service", "service\n", "unknown"}
+	for i, kind := range kinds {
+		id := "tok-old-" + strconv.Itoa(i)
+		tok := newToken(id, "prn-1", i+1)
+		tok.Kind = accesstoken.Kind(kind)
+		mustRawToken(t, s, tok, digest(i+1))
+	}
+
+	before := auditObjects(t, s)
+
+	for i, kind := range kinds {
+		id := "tok-old-" + strconv.Itoa(i)
+
+		err := s.RevokeToken(ctx, id, entryAt(id, at(5)))
+		wantErr(t, "revoke a token of the kind "+strconv.Quote(kind), err, accesstoken.ErrUnknownKind)
+
+		if err != nil && !strings.Contains(err.Error(), id) {
+			t.Errorf("revoke of %q: error %q does not name the row", id, err)
+		}
+
+		m, err := s.GetTokenByDigest(ctx, digest(i+1))
+		wantErr(t, "get by digest after the revoke of "+id, err, accesstoken.ErrUnknownKind)
+
+		if m.Token.ID != "" {
+			t.Errorf("get by digest after the revoke of %q returned the token %q", id, m.Token.ID)
+		}
+	}
+
+	if after := auditObjects(t, s); !slices.Equal(before, after) {
+		t.Errorf("entry objects after the refused revokes = %q, want %q", after, before)
+	}
+
+	// A token of a known kind still revokes, so the refusal is by kind.
+	mustToken(t, s, newToken("tok-ok", "prn-1", 20), digest(20))
+
+	if err := s.RevokeToken(ctx, "tok-ok", entryAt("tok-ok", at(6))); err != nil {
+		t.Fatalf("revoke a token of a known kind: %v", err)
+	}
+}
+
+// auditObjects returns the sorted objects of the entries of @server, or nil
+// when the store keeps no audit log to read.
+func auditObjects(t *testing.T, s Store) []string {
+	t.Helper()
+
+	entries, ok := s.(auditLister)
+	if !ok {
+		return nil
+	}
+
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	objects := make([]string, 0, len(listing.Entries))
+	for i := range listing.Entries {
+		objects = append(objects, listing.Entries[i].Object)
+	}
+
+	slices.Sort(objects)
+
+	return objects
 }
 
 // mustRawToken stores tok with the raw insert of the store.

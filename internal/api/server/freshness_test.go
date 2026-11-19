@@ -827,7 +827,7 @@ func TestFreshAuthFailsClosedWhenThePolicyReadFails(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, idempotency: false,
+		hostile: nil, passwords: nil, idempotency: false, failTempAdminRead: false,
 		failPolicyRead: func() error {
 			if down.Load() {
 				return errPolicyStoreDown

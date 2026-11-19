@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,9 +73,15 @@ func TestMarksReportsFailedReads(t *testing.T) {
 		wantPG   bool
 		wantSt   bool
 	}{
-		{"a running instance", blankMonitor(nil, []*serverProc{running}, 0), true, false, false},
-		{"an instance that does not run", blankMonitor(nil, []*serverProc{running, stopped}, 0), false, false, false},
-		{"no instance", blankMonitor(nil, nil, 0), false, false, false},
+		{"a running instance", blankMonitor(nil, nil, []*serverProc{running}, 0), true, false, false},
+		{
+			"an instance that does not run",
+			blankMonitor(nil, nil, []*serverProc{running, stopped}, 0),
+			false,
+			false,
+			false,
+		},
+		{"no instance", blankMonitor(nil, nil, nil, 0), false, false, false},
 		{
 			"a PID that is not ours",
 			monitorWithPIDs(running, 1<<30, 1<<30),
@@ -141,6 +148,128 @@ func TestMonitorWindowOnPostgres(t *testing.T) {
 	}
 
 	checkUnmeasured(t, got, []string{"storeCores"})
+}
+
+func TestMonitorEndDuringSample(t *testing.T) {
+	t.Parallel()
+
+	pgURL := os.Getenv(postgresURLEnv)
+	if pgURL == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the monitor against PostgreSQL")
+	}
+
+	mon, err := newMonitor(t.Context(), pgURL, nil, 0)
+	if err != nil {
+		t.Fatalf("newMonitor: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := mon.close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	})
+
+	// A sample query that takes 1 s, so that end runs while it is in flight.
+	mon.sampleSQL = "SELECT count(*) FROM (SELECT pg_sleep(1)) AS slow"
+
+	mon.begin(t.Context())
+	generateTransactions(t, pgURL, 50)
+	sleep(t.Context(), sampleEvery+300*time.Millisecond)
+
+	got := mon.end(t.Context(), sampleEvery, 100)
+
+	if got.DBTransactionsPerSec == nil {
+		t.Fatalf("the transaction rate was not measured: %+v", got)
+	}
+}
+
+func TestMonitorEndBoundsHungSample(t *testing.T) {
+	t.Parallel()
+
+	pgURL := os.Getenv(postgresURLEnv)
+	if pgURL == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the monitor against PostgreSQL")
+	}
+
+	mon, err := newMonitor(t.Context(), pgURL, nil, 0)
+	if err != nil {
+		t.Fatalf("newMonitor: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := mon.close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	})
+
+	// A sample query that outlasts the bound by far.
+	const bound = 700 * time.Millisecond
+
+	mon.sampleTimeout = bound
+	mon.sampleSQL = "SELECT count(*) FROM (SELECT pg_sleep(60)) AS hung"
+
+	mon.begin(t.Context())
+	sleep(t.Context(), sampleEvery+100*time.Millisecond)
+
+	// A hang shows as the package timeout, not as an elapsed-time check.
+	done := make(chan ResourceStats, 1)
+
+	go func() {
+		done <- mon.end(t.Context(), sampleEvery, 100)
+	}()
+
+	var got ResourceStats
+
+	select {
+	case got = <-done:
+	case <-t.Context().Done():
+		t.Fatalf("end did not return: %v", t.Context().Err())
+	}
+
+	if got.DBConnectionsMean != nil || got.DBConnectionsMax != nil {
+		t.Fatalf("the hung sample has a value, want none: %+v", got)
+	}
+
+	// The canceled sample closes the connection of the sampler only. The
+	// transaction read of end uses another connection and still works.
+	if got.DBTransactionsPerSec == nil {
+		t.Fatalf("the transaction rate is missing after the canceled sample: %+v", got)
+	}
+
+	if !slices.Contains(got.Unmeasured, "dbConnections") {
+		t.Fatalf("Unmeasured = %v, want %q", got.Unmeasured, "dbConnections")
+	}
+
+	if slices.Contains(got.Unmeasured, "dbTransactionsPerSec") {
+		t.Fatalf("Unmeasured = %v, do not want %q", got.Unmeasured, "dbTransactionsPerSec")
+	}
+}
+
+func TestMonitorEndTwiceAndBeforeBegin(t *testing.T) {
+	t.Parallel()
+
+	pgURL := os.Getenv(postgresURLEnv)
+	if pgURL == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the monitor against PostgreSQL")
+	}
+
+	mon, err := newMonitor(t.Context(), pgURL, nil, 0)
+	if err != nil {
+		t.Fatalf("newMonitor: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := mon.close(context.Background()); closeErr != nil {
+			t.Logf("close: %v", closeErr)
+		}
+	})
+
+	// Before begin: no sampler runs and no stop channel exists.
+	mon.end(t.Context(), sampleEvery, 1)
+
+	mon.begin(t.Context())
+	mon.end(t.Context(), sampleEvery, 1)
+	mon.end(t.Context(), sampleEvery, 1)
 }
 
 // generateTransactions runs n transactions on a connection of its own. The
@@ -466,7 +595,7 @@ func TestParseHarnessFlagsScale(t *testing.T) {
 // monitorWithPIDs answers a monitor over proc that reads the CPU of the
 // process pgRoot as PostgreSQL and of the process storePID as the store.
 func monitorWithPIDs(proc *serverProc, pgRoot, storePID int) *monitor {
-	mon := blankMonitor(nil, []*serverProc{proc}, storePID)
+	mon := blankMonitor(nil, nil, []*serverProc{proc}, storePID)
 	mon.pgRoot = pgRoot
 
 	return mon

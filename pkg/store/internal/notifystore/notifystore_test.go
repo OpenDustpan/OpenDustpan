@@ -121,3 +121,31 @@ func TestStoredRowsAreUntrusted(t *testing.T) {
 		t.Fatalf("Delivery with no creation time = %v, want ErrCorrupt", err)
 	}
 }
+
+// TestDeliveryStoppedWithNoTimeIsCorrupt gives the reader a stopped row with
+// delivered_at_ms 0, as if every other check had failed.
+func TestDeliveryStoppedWithNoTimeIsCorrupt(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []notify.DeliveryState{notify.DeliveryDone, notify.DeliveryAbandoned, notify.DeliverySkipped} {
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+
+			d := notifystore.DeliveryRow{
+				ID: "dlv-1", Scope: "shop", NotificationID: "ntf-1", SubscriptionID: "sub-1", SinkID: "snk-1",
+				Contact: "", Principal: "alice", State: string(state), Attempts: 1, CreatedAtMs: 1, Redeliveries: 0,
+				NextAtMs: 1, LastError: "", DeliveredAtMs: 0, Owner: "", LeaseUntilMs: 0, Version: 1,
+			}
+
+			if _, err := notifystore.Delivery(d); !errors.Is(err, notifystore.ErrCorrupt) {
+				t.Fatalf("Delivery %s with delivered_at_ms 0 = %v, want ErrCorrupt", state, err)
+			}
+
+			d.DeliveredAtMs = 2
+
+			if _, err := notifystore.Delivery(d); err != nil {
+				t.Fatalf("Delivery %s with a time = %v, want nil", state, err)
+			}
+		})
+	}
+}

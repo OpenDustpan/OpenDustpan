@@ -489,7 +489,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
-A new namespace audit log starts with the grant of its creator.
+The audit log of a new namespace holds no entry until the first change in it. The creation of the namespace is an entry in the `@server` scope, with the action `server:create-namespace`.
 
 ## Turn the chain on or off
 
@@ -755,6 +755,15 @@ It answers 201 with the number of the new epoch, and it writes a change entry in
 It answers 409 when signed checkpoints are off.
 Each server process reads the new epoch at its next check.
 A mark from an older epoch stops nothing in the new epoch.
+
+A stored mark ends only when the current epoch is higher than the epoch of the mark.
+If you turn off signed checkpoints, or you replace the blob store, the epoch goes back to 0.
+The old marks then keep `dustpan_audit_chain_invalid` at 1 or more.
+To end them, turn signed checkpoints on, and then send the request above.
+Each request starts the epoch after the current one.
+Send it again until the epoch number is higher than the epoch of the highest mark, because a mark of the same epoch still stands.
+Each request writes a change entry.
+No other API clears a mark.
 
 ## What the chain protects against
 
