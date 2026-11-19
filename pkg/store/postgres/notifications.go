@@ -1293,9 +1293,7 @@ func (k NotificationStore) Redeliver(
 			return sendErr
 		}
 
-		n, err := q.RedeliverNotificationDelivery(ctx, db.RedeliverNotificationDeliveryParams{
-			ID: id, Scope: scope.String(), MaxRedeliveries: notify.MaxAttempts,
-		})
+		n, err := redeliverRow(ctx, q, id, scope)
 		if err != nil {
 			return fmt.Errorf("redeliver: %w", err)
 		}
@@ -1310,6 +1308,21 @@ func (k NotificationStore) Redeliver(
 
 		return finishCompletion(ctx, q, id)
 	})
+}
+
+// redeliverRow runs the update of a redeliver of the delivery id in scope and
+// returns the count of rows that it changed. The update alone refuses a
+// delivery that is pending or that has MaxAttempts redeliveries. The caller has
+// checked this in Go too; the limit here stays as a second layer.
+func redeliverRow(ctx context.Context, q *db.Queries, id string, scope namespace.Name) (int64, error) {
+	n, err := q.RedeliverNotificationDelivery(ctx, db.RedeliverNotificationDeliveryParams{
+		ID: id, Scope: scope.String(), MaxRedeliveries: notify.MaxAttempts,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update delivery: %w", err)
+	}
+
+	return n, nil
 }
 
 // checkRedeliver returns the refusal of a redeliver of d at now, or nil. The

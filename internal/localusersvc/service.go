@@ -133,6 +133,11 @@ type Config struct {
 	// SSO reports whether the installation has an identity provider: a
 	// provider of the configuration or an enabled stored provider.
 	SSO func(ctx context.Context) (bool, error)
+	// NoPublicURL says that the server has no public URL, so the console
+	// cannot start a password sign-in: the session cookie and the check of
+	// the request origin need it. It turns the password sign-in off, with the
+	// source SourcePublicURL, whatever the setting says.
+	NoPublicURL bool
 	// Reach reads the reach of a principal for the check of a reset. A
 	// config with a nil field makes each reset fail closed.
 	Reach access.ReachConfig
@@ -153,20 +158,21 @@ var ErrMissingDependency = errors.New("localusersvc: missing dependency")
 
 // Service is the service of the local users.
 type Service struct {
-	store      Stores
-	principals Principals
-	hasher     localuser.PasswordHasher
-	blocklist  localuser.Blocklist
-	audit      Auditor
-	locks      authgate.NameLockCounter
-	keys       NameKeys
-	settings   Settings
-	sso        func(ctx context.Context) (bool, error)
-	reach      access.ReachConfig
-	subjects   Subjects
-	now        func() time.Time
-	log        *slog.Logger
-	kind       installation.Kind
+	store       Stores
+	principals  Principals
+	hasher      localuser.PasswordHasher
+	blocklist   localuser.Blocklist
+	audit       Auditor
+	locks       authgate.NameLockCounter
+	keys        NameKeys
+	settings    Settings
+	sso         func(ctx context.Context) (bool, error)
+	noPublicURL bool
+	reach       access.ReachConfig
+	subjects    Subjects
+	now         func() time.Time
+	log         *slog.Logger
+	kind        installation.Kind
 
 	dummyMu sync.Mutex
 	dummy   localuser.PasswordHash
@@ -212,7 +218,7 @@ func New(cfg Config) (*Service, error) {
 		locks:      cfg.Locks,
 		keys:       cfg.Keys,
 		settings:   cfg.Settings,
-		sso:        cfg.SSO, reach: cfg.Reach, subjects: cfg.Subjects,
+		sso:        cfg.SSO, noPublicURL: cfg.NoPublicURL, reach: cfg.Reach, subjects: cfg.Subjects,
 		now:     now,
 		kind:    cfg.Kind,
 		dummyMu: sync.Mutex{},
@@ -237,6 +243,9 @@ const (
 	SourceDefault Source = "default"
 	// SourceSet means that a setting gives the value.
 	SourceSet Source = "set"
+	// SourcePublicURL means that the server has no public URL, so the
+	// password sign-in is off whatever the setting says.
+	SourcePublicURL Source = "public-url"
 )
 
 // Policy is the effective password policy of the installation.
@@ -291,7 +300,18 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 		return Policy{}, err
 	}
 
-	return policyOf(sso, enabled, minText, lettersText, lifetimeText)
+	p, err := policyOf(sso, enabled, minText, lettersText, lifetimeText)
+	if err != nil {
+		return Policy{}, err
+	}
+
+	// The server cannot start a sign-in without a public URL. The policy shows
+	// the effective value and its cause, so a person can ask why it is off.
+	if s.noPublicURL {
+		p.Enabled, p.EnabledSource = false, SourcePublicURL
+	}
+
+	return p, nil
 }
 
 // policyOf builds the policy from the text of each setting. A value that is
@@ -359,12 +379,17 @@ func (s *Service) value(ctx context.Context, key string) (string, error) {
 	return item.Value, nil
 }
 
-// requireEnabled returns ErrPasswordSignInOff while the password sign-in is
-// off, and the policy otherwise.
+// requireEnabled returns ErrPublicURLRequired while the server has no public
+// URL, ErrPasswordSignInOff while the password sign-in is off, and the policy
+// otherwise.
 func (s *Service) requireEnabled(ctx context.Context) (Policy, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
 		return Policy{}, err
+	}
+
+	if p.EnabledSource == SourcePublicURL {
+		return Policy{}, localuser.ErrPublicURLRequired
 	}
 
 	if !p.Enabled {

@@ -355,11 +355,12 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 		Subject: subject, Source: source, Names: a.Names, Create: req.Provider.AutoCreate,
 	})
 	if reason := principalRefusal(err); reason != "" {
-		return none, s.refuse(
-			ctx,
-			req,
-			&refusal{reason: reason, answer: AnswerRefused, idpSubject: a.Subject, cause: nil},
-		)
+		if reason == ReasonTargetLookup {
+			s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
+				slog.String("provider", req.Provider.ID), slog.String("cause", causeType(err)))
+		}
+
+		return none, s.refuse(ctx, req, principalRefusalOf(reason, a.Subject, err))
 	}
 
 	if err != nil {
@@ -373,7 +374,7 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 	target, targetErr := s.isTarget(ctx, &p, subject)
 	if targetErr != nil {
 		s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
-			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+			slog.String("provider", req.Provider.ID), slog.String("cause", causeType(targetErr)))
 
 		return none, s.refuse(ctx, req, &refusal{
 			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject, cause: targetErr,
@@ -761,11 +762,73 @@ func principalRefusal(err error) string {
 		return ReasonDisabled
 	case errors.Is(err, principal.ErrNotSignInTarget):
 		return ReasonNotTarget
+	case errors.Is(err, principal.ErrTempAdminRead):
+		return ReasonTargetLookup
 	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject):
 		return ReasonSubject
 	default:
 		return ""
 	}
+}
+
+// causeType returns the Go type of the innermost error of err that is not a
+// wrapper. The log holds the type only: the text of a store error can hold
+// driver text.
+func causeType(err error) string {
+	last, leaf := "", ""
+
+	for e := err; e != nil; {
+		switch t := fmt.Sprintf("%T", e); t {
+		case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.joinError":
+		case "*errors.errorString":
+			leaf = t
+		default:
+			last = t
+		}
+
+		if next := errors.Unwrap(e); next != nil {
+			e = next
+
+			continue
+		}
+
+		// errors.Unwrap returned nil, so e has no single cause, and As can
+		// match only e itself.
+		var multi interface{ Unwrap() []error }
+		if !errors.As(e, &multi) {
+			return firstSet(last, leaf)
+		}
+
+		errs := multi.Unwrap()
+		if len(errs) == 0 {
+			return firstSet(last, leaf)
+		}
+
+		e = errs[len(errs)-1]
+	}
+
+	return firstSet(last, leaf)
+}
+
+// firstSet returns a if it is not empty, and b otherwise.
+func firstSet(a, b string) string {
+	if a != "" {
+		return a
+	}
+
+	return b
+}
+
+// principalRefusalOf returns the refusal for the reason of principalRefusal.
+// A failed read of the temporary administrators is a failure, not a denial:
+// the server could not decide. It keeps the cause, and the sign-in stays
+// refused (fail closed).
+func principalRefusalOf(reason, idpSubject string, err error) *refusal {
+	if reason == ReasonTargetLookup {
+		return &refusal{reason: reason, answer: AnswerFailed, idpSubject: idpSubject, cause: err}
+	}
+
+	return &refusal{reason: reason, answer: AnswerRefused, idpSubject: idpSubject, cause: nil}
 }
 
 // startChanges returns the changes of the audit entry of a session: the kind

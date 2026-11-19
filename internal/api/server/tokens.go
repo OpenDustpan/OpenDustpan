@@ -255,7 +255,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 		var none audit.Entry
 
 		if res, err := h.runTokenOp(w, r, op, p, none); err == nil {
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, readResult)
 		}
 	}
 }
@@ -277,7 +277,7 @@ func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHand
 
 		if err == nil {
 			w.Header().Set("Cache-Control", "no-store")
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, committedWrite)
 		}
 	}
 }

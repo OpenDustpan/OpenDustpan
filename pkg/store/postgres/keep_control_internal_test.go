@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -63,6 +64,8 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	for _, m := range all {
 		stmts = append(stmts, m.SQL)
 	}
+
+	pgtest.DropSchemaAtCleanup(t, testPostgresURL(t), name)
 
 	for _, stmt := range stmts {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {

@@ -551,11 +551,14 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, disableJournalingFlag)
 	}
 
+	// The recording proxy on loopback fronts the binary, so the binary trusts
+	// it to name the client address in X-Forwarded-For. It does so on every
+	// backend, because a step can turn an IP allowlist on with a setting and
+	// then send requests from another loopback address.
+	args = append(args, "--trusted-proxies", "127.0.0.1/32")
+
 	if cfg.ipAllowlists {
-		// The recording proxy on loopback fronts the binary, so the binary
-		// trusts it to name the client address in X-Forwarded-For.
-		args = append(args, "--ip-allowlists", "--ip-allowlists-include-bootstrap",
-			"--trusted-proxies", "127.0.0.1/32")
+		args = append(args, "--ip-allowlists", "--ip-allowlists-include-bootstrap")
 	}
 
 	if cfg.blobStore != "" {

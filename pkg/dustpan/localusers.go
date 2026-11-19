@@ -259,13 +259,16 @@ func newLocalUserService(
 	svc, err := localusersvc.New(localusersvc.Config{
 		Store:      store,
 		Principals: principals,
-		Hasher:     hasher,
-		Blocklist:  blocklist.Embedded(),
-		Audit:      entries,
-		Locks:      locks,
-		Keys:       keys,
-		Settings:   settingsPort,
-		SSO:        identityProviders(cfg, signIn), Reach: reach, Subjects: subjects,
+		// Without a console sign-in the server has no session origin: the
+		// policy shows the cause.
+		NoPublicURL: signIn == nil,
+		Hasher:      hasher,
+		Blocklist:   blocklist.Embedded(),
+		Audit:       entries,
+		Locks:       locks,
+		Keys:        keys,
+		Settings:    settingsPort,
+		SSO:         identityProviders(cfg, signIn), Reach: reach, Subjects: subjects,
 		Kind: cfg.installationKind,
 		Now:  cfg.now,
 		Log:  cfg.logger,

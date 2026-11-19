@@ -156,6 +156,9 @@ var (
 	// ErrPasswordSignInOff reports a password sign-in while the installation
 	// setting for local password sign-in is off.
 	ErrPasswordSignInOff = errors.New("password sign-in is off on this installation")
+	// ErrPublicURLRequired reports a password sign-in or a redeem of a code on
+	// a server that has no public URL: the console sign-in cannot start.
+	ErrPublicURLRequired = errors.New("password sign-in is off because the server has no usable public URL")
 	// ErrUnavailable reports that the store or the hasher cannot answer.
 	// The sign-in fails closed on it.
 	ErrUnavailable = errors.New("local user store unavailable")

@@ -9,6 +9,9 @@ issues its own console session.
 
 - The public URL of the server, with HTTPS. Set it with `--public-url`
   (`DUSTPAN_PUBLIC_URL`). The server refuses the sign-in without it.
+  The password sign-in of a local user also needs it. Without it, the policy
+  shows `enabled: false` with the source `public-url`, and the sign-in answers
+  403 with `local-user.public-url-required`.
 - A client of the server at the provider: a client ID and a client secret.
 - The redirect URI of that client at the provider:
   `<public URL>/api/server/sign-in/<provider ID>/callback`.
@@ -45,6 +48,9 @@ that its group or other users can read. Run `chmod 600` on the file.
 | `--oidc-no-auto-create` | `DUSTPAN_OIDC_NO_AUTO_CREATE` | `false` |
 | (no flag) | `DUSTPAN_OIDC_CLIENT_SECRET` | (none) |
 | (no flag) | `DUSTPAN_OIDC_CLIENT_SECRET_FILE` | (none) |
+
+The server keeps each space of the client secret. From the file, it ignores
+one line ending at the end of the file.
 
 The issuer must use HTTPS. The server reads the discovery document of the
 provider at the first sign-in, not at start. So the server starts while the
