@@ -12,8 +12,6 @@ import (
 	"opendustpan.org/opendustpan/e2e/githubfake"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/forge"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (
@@ -117,21 +115,12 @@ func NewEnvWithGitHost(ctx context.Context, tb testing.TB, store Store, fake *Gi
 	return NewEnvWithRealTimeSignIn(ctx, tb, NoCLI(), store)
 }
 
-// gitHostOptions returns the options that give the in-process server of tb the
-// Git host store of st, and the fake of tb when it has one.
-func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
+// gitHostOptions returns the options that make the Git host store of the
+// in-process server of tb use the fake of tb, or nil when tb has no fake.
+func gitHostOptions(tb testing.TB) []dustpan.Option {
 	tb.Helper()
 
 	var opts []dustpan.Option
-
-	switch s := st.(type) {
-	case *sqlite.Store:
-		opts = append(opts, dustpan.WithGitHostStore(s.GitHost()))
-	case *postgres.Store:
-		opts = append(opts, dustpan.WithGitHostStore(s.GitHost()))
-	default:
-		return nil
-	}
 
 	v, found := gitHostFakes.Load(tb)
 	if !found {

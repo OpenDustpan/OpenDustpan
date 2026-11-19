@@ -7329,8 +7329,8 @@ func (q *Queries) GetJobPlan(ctx context.Context, arg GetJobPlanParams) (GetJobP
 }
 
 const getJobToken = `-- name: GetJobToken :one
-SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
-       CAST(u.name AS TEXT) AS unit_name,
+SELECT t.digest, n.name AS namespace, COALESCE(st.namespace, ws.namespace) AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(COALESCE(st.project || '/' || st.name, ws.name) AS TEXT) AS unit_name,
        t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
        o.state AS operation_state, o.claim_token AS operation_claim_token,
        o.claim_expires_at_ms AS operation_claim_expires_at_ms,
@@ -7340,19 +7340,16 @@ SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_i
        s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
 FROM job_tokens AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
-JOIN (
-    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
-    FROM stacks WHERE deleted_at_ms IS NULL
-    UNION ALL
-    SELECT id, 'opentofu' AS tool, namespace, name
-    FROM workspaces WHERE deleted_at_ms IS NULL
-) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+LEFT JOIN stacks AS st
+    ON st.id = t.unit_id AND t.unit_tool = 'pulumi' AND st.deleted_at_ms IS NULL
+LEFT JOIN workspaces AS ws
+    ON ws.id = t.unit_id AND t.unit_tool = 'opentofu' AND ws.deleted_at_ms IS NULL
 JOIN durable_operations AS o ON o.id = t.claim_operation
 JOIN jobs AS j ON j.id = t.job_id
 JOIN namespaces AS jn ON jn.id = j.namespace_id
 JOIN principals AS js ON js.subject = json_extract(j.body, '$.startedBy') AND js.deleted_at_ms IS NULL
 JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
-WHERE t.digest = ?1
+WHERE t.digest = ?1 AND (st.id IS NOT NULL OR ws.id IS NOT NULL)
 `
 
 type GetJobTokenRow struct {
@@ -7386,6 +7383,9 @@ type GetJobTokenRow struct {
 
 // Defense in depth: the service checks the unit ID too. Resolve only a live
 // unit row so that a restored token cannot reach a removed unit by name.
+// SQLite has no lateral join. Each left join reads one row by its unit ID index
+// and only for the tool of the token, so no join scans a table. The WHERE
+// clause drops a token whose unit row is missing or removed.
 func (q *Queries) GetJobToken(ctx context.Context, digest string) (GetJobTokenRow, error) {
 	row := q.db.QueryRowContext(ctx, getJobToken, digest)
 	var i GetJobTokenRow
@@ -20287,11 +20287,12 @@ SELECT name
 FROM namespaces
 WHERE ip_allowlist <> ''
 ORDER BY name
+LIMIT ?1
 `
 
-// Lists the namespaces that have an IP allowlist.
-func (q *Queries) NamespacesWithList(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, namespacesWithList)
+// Lists the namespaces that have an IP allowlist, at most lim of them.
+func (q *Queries) NamespacesWithList(ctx context.Context, lim int64) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, namespacesWithList, lim)
 	if err != nil {
 		return nil, err
 	}
@@ -21370,6 +21371,7 @@ SET state = ?1, attempts = ?2, next_at_ms = ?3,
 WHERE notification_deliveries.id = ?6 AND notification_deliveries.scope = ?7
   AND notification_deliveries.owner = ?8 AND notification_deliveries.version = ?9
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > ?10
+  AND (?1 = 'pending' OR ?5 > 0)
 `
 
 type RecordNotificationAttemptParams struct {
@@ -21386,7 +21388,8 @@ type RecordNotificationAttemptParams struct {
 }
 
 // Stores the result for the live claim only: the owner and the version of the
-// stored claim, and a lease that has not passed at now_ms.
+// stored claim, and a lease that has not passed at now_ms. A stopped state
+// needs a delivered time above zero: the wait of a redeliver starts there.
 func (q *Queries) RecordNotificationAttempt(ctx context.Context, arg RecordNotificationAttemptParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, recordNotificationAttempt,
 		arg.State,

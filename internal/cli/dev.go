@@ -134,13 +134,7 @@ func DevEnvs() []*Setting {
 // file of the administrator token. An operator shell or a CI job often
 // exports them for serve, and dev must never use them.
 func DevSecretEnvs() []string {
-	var names []string
-
-	for _, s := range Settings {
-		if s.Env != "" && s.Sensitive {
-			names = append(names, s.Env)
-		}
-	}
+	names := SensitiveEnvs()
 
 	names = append(names, devAdminTokenFileEnv)
 	slices.Sort(names)

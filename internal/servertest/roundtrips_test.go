@@ -1516,6 +1516,9 @@ const attemptClaimTrips = 23
 // trigger rows reads the clock of the store in one statement, once for each
 // restore.
 //
+// The fixed part also holds updateLeaseExpireTrips: the swap expires the
+// update leases in one statement.
+//
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
 //
@@ -1537,7 +1540,8 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips - eventReceiptTrips,
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
+			updateLeaseExpireTrips - eventReceiptTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1550,6 +1554,12 @@ func restoreModel() costModel {
 // reads it only for its column check, 1 round trip, so it costs 1 less than the
 // 2 that perOther gives.
 const eventReceiptTrips = 1
+
+// updateLeaseExpireTrips is the number of round trips of the statement that
+// expires the lease of every running update in the swap transaction. It is one
+// statement for the restore, not one for each stack or update, so the count
+// does not grow with the units.
+const updateLeaseExpireTrips = 1
 
 // unitStateTrips is the number of round trips by which the state version of
 // each unit changes the fixed part. The restore derives the versions with one

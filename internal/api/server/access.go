@@ -177,7 +177,7 @@ func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 		var none audit.Entry
 
 		if res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); ok {
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, readResult)
 		}
 	}
 }
@@ -196,7 +196,7 @@ func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHa
 		}
 
 		if ok {
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, committedWrite)
 		}
 	}
 }
@@ -807,7 +807,7 @@ func (h *Handler) serveRevokeGrantByID(
 		return
 	}
 
-	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)))
+	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)), committedWrite)
 }
 
 // classifyAccess maps the role and grant errors to their status and
