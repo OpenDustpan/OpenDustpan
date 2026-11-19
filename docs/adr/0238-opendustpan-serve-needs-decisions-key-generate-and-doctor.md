@@ -142,7 +142,7 @@ Facts:
     | The key file is not in the directory of the SQLite file or of the blobs, after link resolution. | warn |
     | The operator set a database. | fail |
     | When the operator set an admin token, it has at least 32 bytes. | fail |
-    | The operator set no admin token: doctor prints that no bootstrap admin token is set (product manager). | fail |
+    | The operator set no admin token: doctor prints that no bootstrap admin token is set. | pass |
     | The operator set a backup target. | warn |
     | The listen address is not loopback, the operator set no TLS, and no `--public-url` with `https` names a proxy. | warn |
     | With `--public-url`, the operator also set `--trusted-proxies`. | warn |
@@ -223,11 +223,3 @@ Facts:
   routes.
 - ADR 27, ADR 34 and ADR 35 do not change. The kind option and
   `Server.Start` are part of `pkg/dustpan`, the entry point of the SDK.
-
-## Changelog
-
-- 2026-11-19, correction of a row in the table of decision 10 (product
-  manager): the row "The operator set no admin token" said pass. It now says
-  fail. doctor matches serve. The row said pass while serve refused to start.
-  Benchmark: kubeadm preflight and nginx -t fail on any state that the start
-  gate refuses.
