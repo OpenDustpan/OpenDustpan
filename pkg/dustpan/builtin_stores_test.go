@@ -91,7 +91,44 @@ func newBuiltinSQLiteFixture(t *testing.T) fixture {
 func TestWithSQLiteAlone(t *testing.T) {
 	t.Parallel()
 
-	f := newBuiltinSQLiteFixture(t)
+	runStackUpdateAndStateWrite(t, newBuiltinSQLiteFixture(t))
+}
+
+// TestOpenStoreWithBuiltinStore proves the path of an embedder: OpenStore opens
+// the store, WithBuiltinStore sets every store option from it, and one Pulumi
+// stack update and one OpenTofu state write go through the HTTP API and read
+// back.
+func TestOpenStoreWithBuiltinStore(t *testing.T) {
+	t.Parallel()
+
+	store, err := dustpan.OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	opts := append(builtinServerOptions(t), dustpan.WithBuiltinStore(store))
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ts := httptest.NewServer(startedHandler(t, srv))
+	t.Cleanup(ts.Close)
+
+	runStackUpdateAndStateWrite(t, fixture{store: nil, server: ts, srv: srv})
+}
+
+// runStackUpdateAndStateWrite runs one Pulumi stack update and one OpenTofu
+// state write against f and reads both back.
+func runStackUpdateAndStateWrite(t *testing.T, f fixture) {
+	t.Helper()
 
 	status, body := serveServerAPI(t, f, http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`)
 	if status != http.StatusCreated {

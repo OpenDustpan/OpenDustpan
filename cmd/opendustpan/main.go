@@ -61,8 +61,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 var (
@@ -1654,10 +1652,10 @@ var openStore = func(
 
 	opened, err := dustpan.OpenStore(ctx, database, opts...)
 	if err != nil {
-		if errors.Is(err, postgres.ErrFailoverSetting) {
+		if errors.Is(err, dustpan.ErrStoreFailoverSetting) {
 			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreFailoverSettingInvalid, err)
 		}
-		if errors.Is(err, postgres.ErrServerVersion) {
+		if errors.Is(err, dustpan.ErrStoreServerVersion) {
 			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreServerVersionUnsupported, err)
 		}
 
@@ -1678,7 +1676,7 @@ type appliedMigrationsReader interface {
 // minimum binary version. A dev build counts as newer than every release, so
 // the minimum never refuses it.
 func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsReader) {
-	if !schema.IsDevBuild(version) {
+	if !dustpan.IsDevBuildVersion(version) {
 		return
 	}
 
@@ -1690,7 +1688,7 @@ func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsR
 		return
 	}
 
-	minimum, err := schema.HighestMinimum(minimums)
+	minimum, err := dustpan.HighestMinimumBinaryVersion(minimums)
 	if err != nil || minimum == "" {
 		return
 	}
