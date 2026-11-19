@@ -52,6 +52,18 @@ When `scripts/release-upload.sh` runs, it SHALL check the version, run `scripts/
 - **WHEN** `SHA256SUMS` names another file, lacks an archive, repeats a line, or holds any other line, or the directory holds an extra file or a link
 - **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
 
+#### Scenario: A directory name that another set can answer to
+- **WHEN** `CDPATH` holds a directory with a second good set of the same name, or the directory argument is `-` and `OLDPWD` is a second good set
+- **THEN** the script checks and uploads the same directory: it makes no `gh` call, or the `gh` call runs in the checked directory, also when `release-verify.sh` is replaced by a script that passes.
+
+#### Scenario: A hidden byte in SHA256SUMS
+- **WHEN** a `SHA256SUMS` line is followed by a NUL byte and more bytes, or by a carriage return, or the file has no final newline
+- **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
+
+#### Scenario: A hostile directory name in a message
+- **WHEN** the directory argument is not a directory and holds a newline
+- **THEN** the refusal is one line and holds no byte of the argument.
+
 #### Scenario: A bad version
 - **WHEN** the version holds `$(id)`, a backtick, a semicolon, a space, a newline, a leading dash, a suffix, or more than 64 characters
 - **THEN** the script exits with a non-zero status, names the allowed form and makes no `gh` call.

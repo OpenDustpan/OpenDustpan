@@ -16,6 +16,10 @@
 # gh release edit <version> --draft=false.
 set -euo pipefail
 
+# CDPATH makes cd search other directories. This script never wants that: the
+# directory that it checks must be the directory that it uploads.
+unset CDPATH
+
 if [[ $# -ne 2 ]]; then
   echo "usage: release-upload.sh <version> <dir>" >&2
   exit 1
@@ -44,14 +48,27 @@ fi
 # check stays so that the repository name in a message or in an API path never
 # holds an unchecked value. It relies on no other layer.
 repo="${GH_REPO:-}"
-if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+if [[ ! "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   refuse "GH_REPO is not owner/name; set GH_REPO to owner/name"
 fi
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The path of this script, made unambiguous and resolved once: a leading "./"
+# keeps cd from reading a name such as "-" as OLDPWD.
+here="${BASH_SOURCE[0]%/*}"
+[[ "${BASH_SOURCE[0]}" == */* ]] || here="."
+[[ "$here" == /* ]] || here="./$here"
+here="$(cd -P -- "$here" && pwd -P)"
 help="rebuild the set, then run make release-verify VERSION=$version"
 
-[[ -d "$dir" ]] || refuse "missing file: $dir is not a directory; $help"
+# The set directory is resolved once, to an absolute path, before any check.
+# Every check, the cd of the checksum step and the gh call use this one value,
+# so the checked directory and the uploaded directory cannot differ. The
+# message names no caller value: the value is not checked yet.
+[[ -n "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
+[[ "$dir" == /* ]] || dir="./$dir"
+[[ -d "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
+dir="$(cd -P -- "$dir" && pwd -P)" || refuse "missing file: the set directory is not a directory; $help"
+[[ -d "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
 
 # The first check: the verify script of the build. Defense in depth: the
 # verify job runs it too, and the checks below do not rely on it; this call
@@ -90,7 +107,12 @@ done
 # in the form <64 lowercase hex>, two spaces, the archive name, and no other
 # line. sha256sum --check --strict checks only the listed files, so a line for
 # a path outside the set would pass it. A refused line is never repaired.
+# mapfile drops a NUL byte and the rest of its line, so the lines are not
+# trusted until the file equals its lines, byte for byte, each with one newline.
 mapfile -t sum_lines <"$dir/SHA256SUMS"
+if ! printf '%s\n' "${sum_lines[@]}" | cmp -s - "$dir/SHA256SUMS"; then
+  refuse "SHA256SUMS does not match the files: the file holds a byte outside its lines; $help"
+fi
 [[ ${#sum_lines[@]} -eq ${#archives[@]} ]] || refuse "SHA256SUMS does not match the files: it must hold exactly one line for each of the four archives; $help"
 for line in "${sum_lines[@]}"; do
   ok=0
@@ -107,7 +129,7 @@ for name in "${archives[@]}"; do
   [[ "$count" -eq 1 ]] || refuse "SHA256SUMS does not match the files: $name has no line or more than one; $help"
 done
 
-if ! (cd "$dir" && sha256sum --check --strict --quiet SHA256SUMS >/dev/null 2>&1); then
+if ! (cd -- "$dir" && sha256sum --check --strict --quiet SHA256SUMS >/dev/null 2>&1); then
   refuse "SHA256SUMS does not match the files; $help"
 fi
 

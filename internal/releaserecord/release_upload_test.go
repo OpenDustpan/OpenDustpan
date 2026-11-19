@@ -56,7 +56,8 @@ type uploadRun struct {
 	createCode    string
 	set           string // the directory of the set; empty makes a good set
 	edit          func(t *testing.T, dir string)
-	replaceVerify bool // replace scripts/release-verify.sh by a script that exits 0
+	replaceVerify bool   // replace scripts/release-verify.sh by a script that exits 0
+	hostile       string // how the directory argument is made hostile: cdpath, dash, newline; empty for none
 }
 
 // uploadResult is what one run of the script did.
@@ -169,6 +170,8 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 		r.edit(t, dir)
 	}
 
+	dirArg, hostileEnv := hostileDir(t, r.hostile, tree, dir)
+
 	env := []string{
 		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + fake,
@@ -179,17 +182,18 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 		env = append(env, "GH_REPO="+*r.repo)
 	}
 
+	env = append(env, hostileEnv...)
+
 	var stdout, stderr bytes.Buffer
 
-	// The version and the directory are arguments, with no shell between.
-	cmd := exec.CommandContext( //nolint:gosec // the script of the work tree runs on purpose; the version and the directory are single arguments
-		t.Context(),
-		"bash",
-		filepath.Join(tree, "scripts", "release-upload.sh"),
-		r.version,
-		dir,
+	// The script of the work tree runs on purpose. The version and the
+	// directory come from the environment (RELEASE_VERSION, RELEASE_DIR), so
+	// that the command line holds no variable; each is one quoted argument.
+	cmd := exec.CommandContext(
+		t.Context(), "bash", "-c", `exec bash scripts/release-upload.sh "$RELEASE_VERSION" "$RELEASE_DIR"`,
 	)
 	cmd.Dir = tree
+	env = append(env, "RELEASE_VERSION="+r.version, "RELEASE_DIR="+dirArg)
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -215,6 +219,51 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 	}
 
 	return res
+}
+
+// otherSet writes a second good set whose bytes differ from the set of
+// writeSet(t, nil).
+func otherSet(t *testing.T) string {
+	t.Helper()
+
+	entries := goodEntries(verifyVersion)
+	entries[2] = fileEntry("README.md", "another readme", 0o644)
+
+	return writeSet(t, entries)
+}
+
+// hostileDir returns the directory argument for the script and the extra
+// environment. The argument names dir only through a path that a hostile
+// environment can send to another set: "cdpath" gives a relative name and a
+// CDPATH that holds another set of that name; "dash" gives "-" and an OLDPWD
+// that is another set; "newline" gives a missing directory whose name forges a
+// log line.
+func hostileDir(t *testing.T, kind, tree, dir string) (string, []string) {
+	t.Helper()
+
+	switch kind {
+	case "cdpath":
+		if err := os.Symlink(dir, filepath.Join(tree, "set")); err != nil {
+			t.Fatal(err)
+		}
+
+		cdpath := t.TempDir()
+		if err := os.Symlink(otherSet(t), filepath.Join(cdpath, "set")); err != nil {
+			t.Fatal(err)
+		}
+
+		return "set", []string{"CDPATH=" + cdpath}
+	case "dash":
+		if err := os.Symlink(dir, filepath.Join(tree, "-")); err != nil {
+			t.Fatal(err)
+		}
+
+		return "-", []string{"OLDPWD=" + otherSet(t)}
+	case "newline":
+		return "missing\nrelease-upload: forged line", nil
+	}
+
+	return dir, nil
 }
 
 // readCalls returns the recorded calls of the fake gh.
@@ -263,7 +312,7 @@ func createCalls(calls [][]string) [][]string {
 func goodRun() uploadRun {
 	return uploadRun{
 		version: verifyVersion, repo: new(uploadRepo), apiOut: "", apiCode: "", createCode: "", set: "", edit: nil,
-		replaceVerify: false,
+		replaceVerify: false, hostile: "",
 	}
 }
 
@@ -494,6 +543,10 @@ func TestReleaseUploadRefusesABadRepo(t *testing.T) {
 		{"no name", new("owner/")},
 		{"no slash", new("owner")},
 		{"flag", new("--repo=x/y")},
+		{"parent segments", new("../..")},
+		{"dot segments", new("./.")},
+		{"dot owner", new("../name")},
+		{"dot name", new("owner/..")},
 	}
 
 	for _, tt := range tests {
@@ -574,6 +627,27 @@ func TestReleaseUploadRefusesAChangedSet(t *testing.T) {
 
 			return "# " + sum
 		})},
+		{"NUL byte and junk after a line", editSums(func(l []string) []string {
+			l[0] += "\x00junk"
+
+			return l
+		})},
+		{"NUL byte at the end of a line", editSums(func(l []string) []string {
+			l[3] += "\x00"
+
+			return l
+		})},
+		{"carriage return at the end of a line", editSums(func(l []string) []string {
+			l[1] += "\r"
+
+			return l
+		})},
+		{"no newline at the end of the file", func(t *testing.T, dir string) {
+			t.Helper()
+
+			sums := readIn(t, dir, "SHA256SUMS")
+			writeIn(t, dir, "SHA256SUMS", sums[:len(sums)-1])
+		}},
 		{"extra blank line", extraSumsLine(func(t *testing.T, _, _ string) string {
 			t.Helper()
 
@@ -631,6 +705,66 @@ func extraSumsLine(line func(t *testing.T, dir, sum string) string) func(t *test
 		sums := readIn(t, dir, "SHA256SUMS")
 
 		writeIn(t, dir, "SHA256SUMS", append(sums, []byte(line(t, dir, sum)+"\n")...))
+	}
+}
+
+// TestReleaseUploadChecksWhatItUploads gives the script a directory argument
+// that another set can answer to. The set that the script checks must be the
+// set that gh uploads from: either no gh call is made, or the gh call runs in
+// the checked directory. Each case runs with the real verify script and with a
+// replaced one.
+func TestReleaseUploadChecksWhatItUploads(t *testing.T) {
+	t.Parallel()
+	skipUpload(t)
+
+	for _, hostile := range []string{"cdpath", "dash"} {
+		for _, replaced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s replaced %v", hostile, replaced), func(t *testing.T) {
+				t.Parallel()
+
+				r := goodRun()
+				r.hostile = hostile
+				r.replaceVerify = replaced
+				r.set = writeSet(t, nil)
+				res := runUpload(t, r)
+
+				if len(res.calls) == 0 {
+					return
+				}
+
+				if res.cwd == "" {
+					t.Fatalf("gh calls with no create call: %q", res.calls)
+				}
+
+				if got, want := evalDir(t, res.cwd), evalDir(t, r.set); got != want {
+					t.Errorf("gh ran in %s, want the checked set %s", got, want)
+				}
+			})
+		}
+	}
+}
+
+// TestReleaseUploadRefusesAMissingDirectoryWithoutEchoingIt checks that the
+// refusal of a missing directory prints no byte of the caller's value.
+func TestReleaseUploadRefusesAMissingDirectoryWithoutEchoingIt(t *testing.T) {
+	t.Parallel()
+	skipUpload(t)
+
+	for _, replaced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replaced %v", replaced), func(t *testing.T) {
+			t.Parallel()
+
+			r := goodRun()
+			r.hostile = "newline"
+			r.replaceVerify = replaced
+			res := runUpload(t, r)
+
+			checkRefusal(t, res, 0, "missing file: the set directory is not a directory")
+
+			if strings.Contains(res.stderr, "forged") {
+				t.Errorf("stderr echoes the directory: %q", res.stderr)
+			}
+		})
 	}
 }
 
@@ -859,16 +993,16 @@ func TestReleaseRecordCheckTargetKeepsTheVersionOutOfTheShell(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
 	version := "v1'; touch " + marker + "; '"
 
-	cmd := exec.CommandContext( //nolint:gosec // make of a copy of the work tree runs on purpose; the hostile version is one argument
-		t.Context(),
-		"make",
-		"--no-print-directory",
-		"-C",
-		tree,
-		"release-record-check",
-		"VERSION="+version,
+	// Make of a copy of the work tree runs on purpose. The tree and the
+	// hostile version come from the environment (RELEASE_TREE,
+	// RELEASE_VERSION); the version is one quoted argument.
+	cmd := exec.CommandContext(
+		t.Context(), "bash", "-c",
+		`exec make --no-print-directory -C "$RELEASE_TREE" release-record-check "VERSION=$RELEASE_VERSION"`,
 	)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "RELEASE_TREE=" + tree, "RELEASE_VERSION=" + version,
+	}
 
 	out, err := cmd.CombinedOutput()
 	if err == nil {
