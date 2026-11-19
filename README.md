@@ -363,6 +363,8 @@ How-to guides:
   tokens, rotation, inactivity, expiry warnings and the token policy.
 - [Collections and placement rules](docs/guides/collections-and-placement.md): make
   a collection, move a unit into it, and write the rules that place new stacks.
+- [Restore access setting](docs/guides/restore-access-setting.md): let each holder of
+  `server:restore` replace the access tables in a restore.
 - [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
   namespace, read the effective state, and recover from a lock-out.
 - [Runner pools](docs/guides/runner-pools.md): make a pool and a join token, list
