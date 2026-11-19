@@ -120,6 +120,26 @@ func wantReviewEvent() forge.Event {
 // sigOf returns the signature header of r.
 func sigOf(r forge.EventRequest) string { return http.Header(r.Header).Get(headerSignature) }
 
+// sizeCases are the requests at the bound of the body. Each one has a valid
+// signature of its own body, so only the size can refuse it.
+func sizeCases() []verifierCase {
+	pad := func(n int) forge.EventRequest {
+		return review(reviewBody + strings.Repeat(" ", n-len(reviewBody)))
+	}
+	wr := wantReviewEvent()
+
+	return []verifierCase{
+		{"body of the bound, signed", pad(forge.MaxEventBodyBytes), secrets(secretCurrent), nil, &wr},
+		{
+			"body of the bound plus one, signed",
+			pad(forge.MaxEventBodyBytes + 1),
+			secrets(secretCurrent),
+			forge.ErrInvalid,
+			nil,
+		},
+	}
+}
+
 // signatureCases are the hostile requests for the signature header.
 func signatureCases() []verifierCase {
 	good := review(reviewBody)
@@ -435,7 +455,7 @@ func eventCases() []verifierCase {
 func TestParseEventVerifier(t *testing.T) {
 	t.Parallel()
 
-	tests := slices.Concat(signatureCases(), secretListCases(), deliveryCases(), eventCases())
+	tests := slices.Concat(signatureCases(), secretListCases(), deliveryCases(), eventCases(), sizeCases())
 
 	o := openHost(t, forge.AuthApp)
 	opener := newHostOpener(t, o.host)

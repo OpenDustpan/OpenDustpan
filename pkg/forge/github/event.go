@@ -60,6 +60,9 @@ func (*gitHub) ParseEvent(_ context.Context, r forge.EventRequest, secrets [][]b
 // equal compares two digests. The production value is hmac.Equal, which takes
 // the same time for any content. A test gives a counting function.
 //
+// It returns ErrInvalid for a body above forge.MaxEventBodyBytes, before it
+// computes any digest.
+//
 // It ignores a secret shorter than forge.MinEventSecretBytes, as it ignores an
 // empty one. It computes and compares the digest of each usable secret before
 // it decides, so that the time does not tell which secret matched. The
@@ -68,6 +71,15 @@ func (*gitHub) ParseEvent(_ context.Context, r forge.EventRequest, secrets [][]b
 func parseEvent(
 	r forge.EventRequest, secrets [][]byte, equal func(a, b []byte) bool,
 ) (forge.Event, error) {
+	// Defense in depth: the handler and the service bound the body too. This
+	// check stays so that a caller of the verifier cannot make it hash a body
+	// of any length. It does not rely on the handler or on the service.
+	if len(r.Body) > forge.MaxEventBodyBytes {
+		return forge.Event{}, fmt.Errorf(
+			"%w: the body has %d bytes, the most is %d", forge.ErrInvalid, len(r.Body), forge.MaxEventBodyBytes,
+		)
+	}
+
 	sent, ok := signatureOf(r.Header)
 	if !ok {
 		return forge.Event{}, signatureError()

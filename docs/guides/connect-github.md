@@ -321,6 +321,13 @@ restore leaves the table empty. A retry of GitHub keeps its delivery ID, so the
 server drops it. A body that is sent again with a new delivery ID is dropped for
 the same 24 hours, because the delivery ID is not under the signature.
 
+The check for a repeat covers 24 hours only. GitHub signs no timestamp. A person
+who holds a signed delivery, for example from a leaked log, can send it again
+and the server accepts it again after the receipt ends, 24 hours later. The
+receipt is a hint, so the effect is that a later feature reads the object from
+GitHub again. Keep the logs of your reverse proxy private and rotate the event
+secret if a signed delivery leaks.
+
 ### Rotate the event secret
 
 GitHub needs a moment to hold a new secret, so the server accepts the old secret

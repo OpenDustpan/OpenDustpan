@@ -666,6 +666,12 @@ func TestNewServiceNeedsItsDependencies(t *testing.T) {
 		"check":        func(c *forge.Config) { c.CheckURL = nil },
 		"openers":      func(c *forge.Config) { c.Openers = nil },
 		"a nil opener": func(c *forge.Config) { c.Openers = []forge.Opener{nil} },
+		"a typed nil opener": func(c *forge.Config) {
+			var typed *recorder
+
+			c.Openers = []forge.Opener{typed}
+		},
+		"an opener with no kind": func(c *forge.Config) { c.Openers = []forge.Opener{noKindOpener{Opener: r.opener}} },
 	} {
 		cfg := full
 		edit(&cfg)
@@ -924,3 +930,8 @@ func TestNewServiceRefusesCheckLimitsThatAreNotPositive(t *testing.T) {
 		})
 	}
 }
+
+// noKindOpener is an Opener whose Kind is empty.
+type noKindOpener struct{ forge.Opener }
+
+func (noKindOpener) Kind() forge.Kind { return "" }

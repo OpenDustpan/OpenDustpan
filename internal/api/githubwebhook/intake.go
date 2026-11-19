@@ -25,8 +25,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// MaxBodyBytes is the largest body that the handler reads.
-const MaxBodyBytes = 2 << 20
+// MaxBodyBytes is the largest body that the handler reads. It is the bound of
+// the service and of the verifiers too.
+const MaxBodyBytes = forge.MaxEventBodyBytes
 
 // Prefix is the path prefix that the root mux mounts the handler for.
 const Prefix = "/webhooks/"

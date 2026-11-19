@@ -178,14 +178,20 @@ One hostile table for each layer. Each row is a test that sends the input to tha
 | Valid signature, event `push`, `issues`, `pull_request` with action `labeled` | ErrUnsupported |
 | Valid signature, delivery ID missing, two values, not a UUID, a value with CR LF | ErrInvalid |
 | Valid signature, repository name with `..`, a leading slash, a backslash, 3 parts | ErrInvalid |
+| Valid signature, body of `forge.MaxEventBodyBytes` plus 1 byte (before any digest) | ErrInvalid |
+| Valid signature, body of exactly `forge.MaxEventBodyBytes` bytes | accepted |
 
 **Timing-safe compare (`pkg/forge/github`)**: a test replaces the digest compare input with a signature that matches 0, 16 and 31 of 32 bytes and checks the same error and that the code path calls `hmac.Equal` once for each usable secret (a counting seam in the unexported function). Each guard has a test that fails when the guard is removed: the test for the size check of the secret fails when the guard that skips a short secret goes.
+
+**Handler (`internal/api/githubwebhook`)**: the reader stops at `forge.MaxEventBodyBytes` (2 MiB), also for a chunked body with no length, and the delivery counts as `too-large`. The service and the adapter bound the body again, and do not rely on the handler.
 
 **Service (`pkg/forge`, the NEW ReceiveEvent)**
 
 | Hostile input | Expected reason |
 | --- | --- |
 | Hook ID of 31, 33 characters, upper case, `../x`, 4 KiB long, NUL | `unknown-hook`, no store call |
+| Body of `forge.MaxEventBodyBytes` plus 1 byte, valid signature | `too-large`, before the registration is read and before any secret opens |
+| Body of exactly `forge.MaxEventBodyBytes` bytes, valid signature | accepted |
 | Valid form, other value than the stored one | `unknown-hook` |
 | No registration | `no-registration` |
 | Registration row with a partial old set (store returns ErrInvalid) | `other` |

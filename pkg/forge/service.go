@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strconv"
 	"time"
@@ -113,17 +114,36 @@ type Service struct {
 	logger     *slog.Logger
 }
 
+// nilOpener reports whether o is a nil interface or an interface that holds a
+// nil pointer. Kind is never called on either.
+func nilOpener(o Opener) bool {
+	if o == nil {
+		return true
+	}
+
+	v := reflect.ValueOf(o)
+
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
 // openersByKind maps each opener to its kind. It returns ErrMissingDependency
-// for a nil opener.
+// for a nil opener, for an interface that holds a nil pointer, and for an
+// opener whose Kind is empty. Another typed nil, for example a nil map or a
+// nil function value, is a fault of the caller that this check does not find.
 func openersByKind(list []Opener) (map[Kind]Opener, error) {
 	openers := make(map[Kind]Opener, len(list))
 
 	for _, o := range list {
-		if o == nil {
+		if nilOpener(o) {
 			return nil, fmt.Errorf("%w: Git host adapter is nil", ErrMissingDependency)
 		}
 
-		openers[o.Kind()] = o
+		kind := o.Kind()
+		if kind == "" {
+			return nil, fmt.Errorf("%w: Git host adapter has no kind", ErrMissingDependency)
+		}
+
+		openers[kind] = o
 	}
 
 	return openers, nil

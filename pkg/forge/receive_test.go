@@ -271,6 +271,49 @@ func TestReceiveEventAnEventWithNoDeliveryIDIsMalformed(t *testing.T) {
 	wantRefusal(t, err, forge.EventReasonMalformed)
 }
 
+// padded returns r with a body of n bytes: its text, then spaces.
+func padded(r forge.EventRequest, n int) forge.EventRequest {
+	body := append([]byte(nil), r.Body...)
+	if len(body) < n {
+		body = append(body, strings.Repeat(" ", n-len(body))...)
+	}
+
+	return forge.EventRequest{Header: r.Header, Body: body}
+}
+
+// TestReceiveEventTheBodyBound sends a body of one byte above the bound with a
+// valid signature. The service refuses it before it reads the registration or
+// opens a secret. A body of exactly the bound is accepted.
+func TestReceiveEventTheBodyBound(t *testing.T) {
+	t.Parallel()
+
+	t.Run("max+1 is refused before any secret opens", func(t *testing.T) {
+		t.Parallel()
+		r, hook := intake(t)
+
+		_, err := r.svc.ReceiveEvent(t.Context(), hook, padded(request(secretCanary), forge.MaxEventBodyBytes+1))
+		wantRefusal(t, err, forge.EventReasonTooLarge)
+
+		if n := len(r.events().secretsOfCalls()); n != 0 {
+			t.Fatalf("the verifier ran %d times for a body above the bound", n)
+		}
+
+		if r.store.receiptCalls != 0 {
+			t.Fatal("a body above the bound reached the receipt store")
+		}
+	})
+
+	t.Run("max is accepted", func(t *testing.T) {
+		t.Parallel()
+		r, hook := intake(t)
+
+		_, err := r.svc.ReceiveEvent(t.Context(), hook, padded(request(secretCanary), forge.MaxEventBodyBytes))
+		if err != nil {
+			t.Fatalf("a body of the bound: %v", err)
+		}
+	})
+}
+
 func TestReceiveEventNoVerifierFailsClosed(t *testing.T) {
 	t.Parallel()
 	r, hook := intake(t)

@@ -59,7 +59,7 @@ func verifyReason(err error) string {
 // ReceiveEvent checks and records one delivery of the hook hookID. It returns
 // the receipt, or an *EventRefusalError whose Reason is one of the EventReason
 // constants. It runs these steps and stops at the first refusal: the form and
-// the value of the hook ID, the registration, the address digest, the
+// the value of the hook ID, the size of the body (at most MaxEventBodyBytes), the registration, the address digest, the
 // signature (the current secret, then the old secret in its window), the kind
 // of the event, the installation map and the primary installation of its
 // namespace, and the receipt with the rule of duplicates. The signature is the
@@ -73,6 +73,14 @@ func (s *Service) ReceiveEvent(ctx context.Context, hookID string, r EventReques
 	// to the store.
 	if !ValidHookID(hookID) {
 		return EventReceipt{}, refuse(EventReasonUnknownHook)
+	}
+
+	// Defense in depth: the handler bounds the body when it reads it, and the
+	// verifier of an adapter bounds it before the digest. This check stays so
+	// that a caller of the service cannot make it hash or open a secret for a
+	// body of any length. It does not rely on the handler or on the adapter.
+	if len(r.Body) > MaxEventBodyBytes {
+		return EventReceipt{}, refuse(EventReasonTooLarge)
 	}
 
 	reg, err := s.loadRegistration(ctx, hookID)

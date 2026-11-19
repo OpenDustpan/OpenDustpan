@@ -1320,6 +1320,11 @@ type EventRequest struct {
 	Body   []byte
 }
 
+// MaxEventBodyBytes is the largest body of an event that any layer accepts:
+// the handler reads no more, the service refuses more, and the verifier of an
+// adapter refuses more before it computes a digest.
+const MaxEventBodyBytes = 2 << 20
+
 // EventKind is the kind of a forge event.
 type EventKind string
 
