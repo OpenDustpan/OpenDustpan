@@ -76,6 +76,13 @@ The routes need the action `unit:set-context` on the unit. The `writer`,
 A soft-deleted unit refuses a `PATCH` with 409. It accepts a `DELETE`. A
 restore of the unit brings its context back.
 
+## Context of a collection
+
+This version has no route that sets the context of a collection. A request such
+as `PATCH /api/dustpan/v1/namespaces/<namespace>/collections/<collection>/context`
+answers 404 with the code `server.route-not-found`. So the collection step of
+the chain below holds no value, until a route that sets it exists.
+
 ## Read the context of a unit
 
 `GET /api/dustpan/v1/namespaces/<namespace>/units/<unit ID>/context` answers the
