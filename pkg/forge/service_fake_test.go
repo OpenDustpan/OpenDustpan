@@ -268,6 +268,10 @@ func (m memNamespaces) GetNamespace(_ context.Context, name namespace.Name) (nam
 	return n, nil
 }
 
+func (m memNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return m.GetNamespace(ctx, name)
+}
+
 // memAudit is an audit.Store that keeps what it appends.
 type memAudit struct {
 	mu      sync.Mutex
@@ -363,6 +367,8 @@ type openCall struct {
 }
 
 func (r *recorder) Kind() forge.Kind { return forge.KindGitHub }
+
+func (r *recorder) Events() forge.Events { return nil }
 
 //nolint:ireturn // The port is the interface: the adapter type stays hidden.
 func (r *recorder) Open(_ context.Context, c forge.Connection, cred forge.Credential) (forge.Forge, error) {

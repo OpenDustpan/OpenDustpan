@@ -715,6 +715,10 @@ func TestAnIDThatIsNotValidIsNotFound(t *testing.T) {
 // failingNamespaces is a forge.Namespaces that cannot read a namespace.
 type failingNamespaces struct{}
 
+func (failingNamespaces) WritableHere(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, errBoom
+}
+
 func (failingNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{}, errBoom
 }

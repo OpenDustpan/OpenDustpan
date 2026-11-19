@@ -47,6 +47,12 @@ var (
 	// ErrVersionConflict reports a change or a delete whose expected version
 	// differs from the stored version.
 	ErrVersionConflict = errors.New("the object changed after it was read")
+	// ErrNoRotation reports a confirmation of a rotation of the event secret
+	// when the registration has no open window.
+	ErrNoRotation = errors.New("the registration has no open event secret rotation")
+	// ErrReceiptsFull reports that the table of event receipts is at its bound
+	// after it purged the receipts that expired.
+	ErrReceiptsFull = errors.New("the event receipts are at their bound")
 	// ErrAddressChanged reports a stored credential whose address digest differs
 	// from the address and the parameters now. The server never sends such a
 	// credential.
@@ -215,7 +221,13 @@ type Registration struct {
 	AddressDigest     string
 	SealedKey         []byte
 	SealedEventSecret []byte
-	Version           int64
+	// OldEventSecretSetID, OldSealedEventSecret and OldEventSecretEndsAt hold
+	// the former event secret during a rotation. The three are all zero (no
+	// window) or all set. The old secret is sealed like the current one.
+	OldEventSecretSetID  string
+	OldSealedEventSecret []byte
+	OldEventSecretEndsAt time.Time
+	Version              int64
 }
 
 // Digest returns the address digest of the values of r. The server stores it

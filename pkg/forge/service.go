@@ -39,10 +39,14 @@ const (
 	ReasonAddressRefused = "address-refused"
 )
 
-// Namespaces reads the namespace that a write fences. namespace.Store
+// Namespaces reads the namespace that a write fences. namespace.Service
 // implements it.
 type Namespaces interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+	// WritableHere returns the namespace when this installation is its primary
+	// installation. It returns namespace.ErrNotHome when another installation
+	// is.
+	WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
 // SecretSealer seals and opens the values of installation scopes. Each value

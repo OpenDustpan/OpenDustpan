@@ -52,6 +52,9 @@ type RegistrationView struct {
 	BaseURL     string
 	HookID      string
 	Version     int64
+	// OldEventSecretEndsAt is the effective end of the window of the old event
+	// secret. It is the zero time when no window is open or the end passed.
+	OldEventSecretEndsAt time.Time
 }
 
 // View returns r without its sealed key and its sealed event secret.

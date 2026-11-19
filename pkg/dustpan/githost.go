@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/pkg/forge/github"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -214,7 +215,7 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 	}
 
 	svc, err := forge.NewService(forge.Config{
-		Store: cfg.gitHost.store, Namespaces: cfg.namespaceStore, Secrets: secrets, Audit: entries,
+		Store: cfg.gitHost.store, Namespaces: gitHostNamespaces{deps.services.namespaces}, Secrets: secrets, Audit: entries,
 		Openers: []forge.Opener{opener},
 		CheckURL: func(raw string) error {
 			return rules.CheckURL(raw, egress.HTTPSOnly)
@@ -230,4 +231,20 @@ func newGitHostService(cfg *settings, deps installationDeps) (*forge.Service, er
 	}
 
 	return svc, nil
+}
+
+// gitHostNamespaces gives the namespace service the port that the Git host
+// service reads. The service has Get and WritableHere. The port names the read
+// GetNamespace, as the store does.
+type gitHostNamespaces struct{ svc *namespace.Service }
+
+// GetNamespace returns the namespace called name, or namespace.ErrNotFound.
+func (g gitHostNamespaces) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return g.svc.Get(ctx, name)
+}
+
+// WritableHere returns the namespace when this installation is its primary
+// installation, or namespace.ErrNotHome.
+func (g gitHostNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return g.svc.WritableHere(ctx, name)
 }

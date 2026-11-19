@@ -104,6 +104,17 @@ func (hostSealer) OpenBound(_ context.Context, _ string, binding, ciphertext []b
 	return out, nil
 }
 
+// hostNamespaces gives the namespace service the port of the Git host service.
+type hostNamespaces struct{ svc *namespace.Service }
+
+func (h hostNamespaces) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return h.svc.Get(ctx, name)
+}
+
+func (h hostNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return h.svc.WritableHere(ctx, name)
+}
+
 // hostOpener is a forge.Opener whose Forge answers what the test sets.
 type hostOpener struct {
 	mu       sync.Mutex
@@ -113,6 +124,8 @@ type hostOpener struct {
 }
 
 func (o *hostOpener) Kind() forge.Kind { return forge.KindGitHub }
+
+func (o *hostOpener) Events() forge.Events { return nil }
 
 //nolint:ireturn // The port is the interface.
 func (o *hostOpener) Open(context.Context, forge.Connection, forge.Credential) (forge.Forge, error) {
@@ -265,7 +278,7 @@ func newHostEnvWrapped(
 	rules := egress.Rules{Allow: nil, LoopbackForTests: false}
 
 	svc, err := forge.NewService(forge.Config{
-		Store: wrap(st.GitHost()), Namespaces: st, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
+		Store: wrap(st.GitHost()), Namespaces: hostNamespaces{svc: nss}, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
 		CheckURL: func(raw string) error {
 			if env.refuseAddress.Load() {
 				return errHostAddress

@@ -206,6 +206,10 @@ type Opener interface {
 	// kind, an auth kind that the adapter does not support, a missing
 	// parameter, or a secret that it cannot parse.
 	Open(ctx context.Context, c Connection, cred Credential) (Forge, error)
+	// Events returns the verifier of the events of the kind. It needs no
+	// connection and makes no call to the forge: the server checks the
+	// signature of an event before it knows which installation sent it.
+	Events() Events
 }
 
 // Forge is one forge connection with one credential set. Each method takes
@@ -428,9 +432,11 @@ type Events interface {
 	// ParseEvent checks the signature or the token of r against each of
 	// secrets, which are the active event secrets of the app registration
 	// or of the hook, and returns the event. The event is valid when it
-	// matches any one of them. It ignores an empty secret. It returns
+	// matches any one of them. It ignores an empty secret and a secret
+	// shorter than MinEventSecretBytes. It returns
 	// ErrSignature for a request that matches none of them, and for a list
-	// with no secret or with empty secrets only. It returns ErrInvalid for a
+	// with no secret, with empty secrets only, or with secrets shorter than
+	// MinEventSecretBytes only. It returns ErrInvalid for a
 	// body that it cannot parse, and ErrUnsupported for a kind of event
 	// that the port does not name. It makes no call to the forge. An
 	// event is a hint: the server reads the object through the API before
