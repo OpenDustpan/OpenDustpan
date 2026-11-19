@@ -4,8 +4,8 @@
 // personal access token).
 //
 // The adapter does Check, Head, ReadFile, Compare, Commit, FindCommit,
-// OpenReview, ReadReview, CloseReview, DeleteBranch and SetStatus now. Each other
-// method returns forge.ErrUnsupported, and Capabilities does not list it, until
+// OpenReview, ReadReview, CloseReview, DeleteBranch, SetStatus, RepoToken and
+// ParseEvent now. Each other method returns forge.ErrUnsupported, and Capabilities does not list it, until
 // the method lands. Every request
 // goes through the egress rules: the address of the API passes the URL
 // check when a connection opens and the address check when the network
@@ -148,7 +148,9 @@ func (o *Opener) CloseIdleConnections() {
 func (*Opener) Kind() forge.Kind { return forge.KindGitHub }
 
 // Events returns the verifier of the events of GitHub. It makes no call.
-func (*Opener) Events() forge.Events { return &gitHub{} }
+func (*Opener) Events() forge.Events { //nolint:ireturn // The port returns the Events interface.
+	return eventVerifier{}
+}
 
 // Open returns the Forge of c with the credential cred. It makes no call to
 // GitHub. It returns forge.ErrInvalid for a connection of another kind, an
@@ -289,6 +291,10 @@ const (
 // connection always lists them, because a token shows no permissions. It lists
 // forge.CapStatus for a connection with push access, unless the last Check
 // showed an installation without the permission to write the commit statuses.
+// It lists forge.CapEvents always: the check of an event makes no call. It
+// lists forge.CapGitAccess for both auth kinds, and forge.CapRepoToken for an
+// app connection, under the same condition as forge.CapFiles, because the
+// token of the git protocol reads the contents.
 func (f *gitHub) Capabilities() forge.Capabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -297,8 +303,14 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 	caps := forge.Capabilities{}
 
 	if !app || f.contents != contentsMissing {
-		caps = append(caps, forge.CapFiles, forge.CapCompare, forge.CapTree)
+		caps = append(caps, forge.CapFiles, forge.CapCompare, forge.CapTree, forge.CapGitAccess)
+
+		if app {
+			caps = append(caps, forge.CapRepoToken)
+		}
 	}
+
+	caps = append(caps, forge.CapEvents)
 
 	return append(caps, f.pushCapabilities()...)
 }
@@ -306,16 +318,6 @@ func (f *gitHub) Capabilities() forge.Capabilities {
 // unsupported returns the error of a method that the adapter does not have.
 func unsupported(method string) error {
 	return fmt.Errorf("%w: GitHub %s is not available yet", forge.ErrUnsupported, method)
-}
-
-// RepoToken returns forge.ErrUnsupported.
-func (*gitHub) RepoToken(context.Context, string) (forge.Token, error) {
-	return forge.Token{}, unsupported("RepoToken")
-}
-
-// ParseEvent returns forge.ErrUnsupported.
-func (*gitHub) ParseEvent(context.Context, forge.EventRequest, [][]byte) (forge.Event, error) {
-	return forge.Event{}, unsupported("ParseEvent")
 }
 
 // RotateSelf returns forge.ErrUnsupported: GitHub has no call that rotates

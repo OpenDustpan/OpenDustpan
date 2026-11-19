@@ -209,6 +209,14 @@ func (f *fake) Event(context.Context, forge.EventKind, []byte) (forge.EventReque
 	return forge.EventRequest{}, errNotImplemented
 }
 
+func (f *fake) RawEvent(context.Context, forge.EventKind, []byte, []byte) (forge.EventRequest, error) {
+	return forge.EventRequest{}, errNotImplemented
+}
+
+func (f *fake) TokenAccess(context.Context, []byte, string) (forgetest.Access, error) {
+	return forgetest.Access{}, errNotImplemented
+}
+
 func (f *fake) Redeliver(context.Context, forge.EventRequest) (forge.EventRequest, error) {
 	return forge.EventRequest{}, errNotImplemented
 }

@@ -49,6 +49,7 @@ func TestRunSkipsCasesWithNoBody(t *testing.T) {
 			Account:     forge.Account{ID: "", Login: "", ExpiresAt: time.Time{}, NoExpiry: false, Scopes: nil},
 			Repo:        "",
 			Fixture:     nil,
+			Now:         nil,
 		}
 	})
 
