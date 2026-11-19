@@ -48,13 +48,22 @@ kubectl create secret generic opendustpan-admin-token \
   --from-literal=admin-token="$(openssl rand -hex 32)"
 ```
 
-Install from the checkout. Set `image.repository` and `image.tag` to the
-image that you pushed:
+Put the image that you pushed in a values file. Set `image.repository` and
+`image.tag` to its name and tag:
+
+```sh
+cat > image-values.yaml <<'EOF'
+image:
+  repository: <registry>/opendustpan
+  tag: <tag>
+EOF
+```
+
+Install from the checkout with the values file:
 
 ```sh
 helm install opendustpan deploy/helm/opendustpan \
-  --set image.repository=<registry>/opendustpan \
-  --set image.tag=<tag> \
+  --values image-values.yaml \
   --set database.existingSecret.name=opendustpan-database \
   --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
   --set adminToken.existingSecret.name=opendustpan-admin-token
@@ -66,10 +75,45 @@ and rollback steps.
 ## After the first release
 
 The release workflow publishes the image to the forge container registry and
-to Docker Hub, with one digest. Use a digest when the image of a deployment
-must stay the same. Read the digest from the summary of the release workflow
-run for the tag, or from the output of
-`docker buildx imagetools inspect <image>:<tag>`.
+to Docker Hub, with one digest. A person publishes the draft release, and
+the chart is an OCI artifact in the registry. The commands below work only
+after the first release.
+
+### Pull the image
+
+Pull the pinned tag from the forge container registry:
+
+```sh
+docker pull ghcr.io/opendustpan/opendustpan:v0.1.0
+```
+
+Or pull the same digest from Docker Hub:
+
+```sh
+docker pull docker.io/opendustpan/opendustpan:v0.1.0
+```
+
+Both references hold the same digest. Compare them with:
+
+```sh
+docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:v0.1.0
+docker buildx imagetools inspect docker.io/opendustpan/opendustpan:v0.1.0
+```
+
+### Pull by digest
+
+A tag can name another image later. A digest cannot. Name the digest when
+the image of a deployment must stay the same:
+
+```sh
+docker pull ghcr.io/opendustpan/opendustpan@sha256:<digest>
+```
+
+Read the digest of a release in two places:
+
+- The summary of the release workflow run for the tag, on the GitHub
+  Actions page of the repository.
+- The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
 
 ### Check the version of the image
 
@@ -81,6 +125,28 @@ docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version
 ```
 
 The output is `v0.1.0`.
+
+### Install the chart from the registry
+
+Make the three Secrets as shown above. Then install with the chart default
+registry:
+
+```sh
+helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
+  --set database.existingSecret.name=opendustpan-database \
+  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
+  --set adminToken.existingSecret.name=opendustpan-admin-token
+```
+
+Or switch to Docker Hub with one more value:
+
+```sh
+helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
+  --set image.repository=docker.io/opendustpan/opendustpan \
+  --set database.existingSecret.name=opendustpan-database \
+  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
+  --set adminToken.existingSecret.name=opendustpan-admin-token
+```
 
 ## Maintainer setup: Docker Hub secrets
 
