@@ -60,7 +60,14 @@ func TestStaticProviderOfHidesIssuerSecrets(t *testing.T) {
 	hostile := fakecred.URL("https", "user", "pw-secret", "idp.example", "") + "/r?token=tok-secret#frag-secret"
 
 	got := staticProviderOf(SignInProvider{
-		Method: nil, ID: "corp", DisplayName: "", Issuer: hostile, ClientID: "", Scopes: nil, AutoCreate: false, Stored: false,
+		Method:      nil,
+		ID:          "corp",
+		DisplayName: "",
+		Issuer:      hostile,
+		ClientID:    "",
+		Scopes:      nil,
+		AutoCreate:  false,
+		Stored:      false,
 	})
 	if got.Issuer != "https://idp.example/r" {
 		t.Fatalf("issuer = %q, want %q", got.Issuer, "https://idp.example/r")
