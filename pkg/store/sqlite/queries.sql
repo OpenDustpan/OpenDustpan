@@ -4415,6 +4415,26 @@ WHERE installation_id = sqlc.arg(installation_id) AND (CAST(sqlc.arg(if_version)
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (CAST(sqlc.arg(if_version) AS INTEGER) = 0 OR version = CAST(sqlc.arg(if_version) AS INTEGER));
 
+-- name: DeleteFirstAdministratorCode :execrows
+DELETE FROM first_administrator_codes WHERE id = 1;
+
+-- name: GetFirstAdministratorCode :one
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1;
+
+-- name: GetFirstAdministratorMarker :one
+SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1;
+
+-- name: InsertFirstAdministratorMarker :exec
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(grant_id), sqlc.arg(session_id), sqlc.arg(created_by), sqlc.arg(made_at_ms));
+
+-- name: ReplaceFirstAdministratorCode :exec
+INSERT INTO first_administrator_codes (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(digest), sqlc.arg(created_by), sqlc.arg(reason), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms))
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = excluded.digest,
+  created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
+  expires_at_ms = excluded.expires_at_ms;
+
 -- name: PurgeGitHostEventReceipts :execrows
 DELETE FROM git_host_event_receipts WHERE received_at_ms < sqlc.arg(before_ms);
 
