@@ -87,9 +87,20 @@ func MaskedPageAt(key []byte, paths []string, offset int) (MaskedPage, error) {
 	return maskedPageOf(key, bind, paths, offset, time.Unix(0, 0))
 }
 
-// VerifyCursorOffset checks raw as the masked read does before it pages, for
-// a unit, a version and a caller. The tests call it alone, so the check of the
-// cursor answers without the guard of the page behind it.
-func VerifyCursorOffset(key []byte, raw, unit, version, subject string, now time.Time) (int, error) {
-	return verifyCursor(key, raw, cursorPayload{Unit: unit, Version: version, Subject: subject, Offset: 0, Expiry: 0}, now)
+// CursorCheck names what a test cursor must bind: the unit, the version and
+// the caller, and the time of the check.
+type CursorCheck struct {
+	Unit    string
+	Version string
+	Subject string
+	Now     time.Time
+}
+
+// VerifyCursorOffset checks raw as the masked read does before it pages. The
+// tests call it alone, so the check of the cursor answers without the guard of
+// the page behind it.
+func VerifyCursorOffset(key []byte, raw string, want CursorCheck) (int, error) {
+	bind := cursorPayload{Unit: want.Unit, Version: want.Version, Subject: want.Subject, Offset: 0, Expiry: 0}
+
+	return verifyCursor(key, raw, bind, want.Now)
 }

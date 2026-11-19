@@ -525,12 +525,6 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 		return nil, fmt.Errorf("%w: resources has an entry that the server cannot read", ErrUnreadableState)
 	}
 
-	for _, entry := range entries {
-		if err := checkTofuInstanceShapes(entry.obj, marks); err != nil {
-			return nil, err
-		}
-	}
-
 	if err := maskedCheckWork(entries, marks); err != nil {
 		return nil, err
 	}
@@ -614,7 +608,8 @@ type maskedWork struct {
 	countLeaves bool
 }
 
-// maskedCheckWork refuses a state whose markers or paths are over the bounds.
+// maskedCheckWork refuses a state whose instances it cannot read, and a state
+// whose markers or paths are over the bounds.
 // It builds no path: it carries the length of the path of each value as a
 // number. With no kept marks every leaf is a marker; with marks the markers
 // come from the pointers that the instance names.
@@ -622,6 +617,10 @@ func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
 	work := maskedWork{markers: 0, pathBytes: 0, nodes: 0, countLeaves: len(marks) == 0}
 
 	for _, entry := range entries {
+		if err := checkTofuInstanceShapes(entry.obj, marks); err != nil {
+			return err
+		}
+
 		for i, instance := range tofuInstances(entry.obj) {
 			base := len("/resources/") + len(strconv.Itoa(entry.index)) +
 				len("/instances/") + len(strconv.Itoa(i)) + len("/attributes")

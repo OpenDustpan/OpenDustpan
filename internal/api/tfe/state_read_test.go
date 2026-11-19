@@ -434,17 +434,19 @@ func TestGetStateResourceWithoutMarks(t *testing.T) {
 
 	checkDetailMarker(t, attributes, "id")
 
-	for _, key := range []string{"input", "output"} {
-		wrapped, ok := attributes[key].(map[string]any)
-		if !ok {
-			t.Fatalf("%s = %v, want the wrapped object", key, attributes[key])
-		}
+	// sensitive_attributes names input as a whole: one marker, no key below it.
+	checkDetailMarker(t, attributes, "input")
 
-		checkDetailMarker(t, wrapped, "value")
+	wrapped, ok := attributes["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want the wrapped object", attributes["output"])
 	}
 
-	if len(doc.Data.Attributes.Masked) != 6 {
-		t.Errorf("masked = %q, want every attribute leaf", doc.Data.Attributes.Masked)
+	checkDetailMarker(t, wrapped, "value")
+
+	if len(doc.Data.Attributes.Masked) != 5 {
+		t.Errorf("masked = %q, want id, input, output value, output type and triggers_replace",
+			doc.Data.Attributes.Masked)
 	}
 
 	checkNoSecret(t, body)

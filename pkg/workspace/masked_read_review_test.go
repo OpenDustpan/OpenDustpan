@@ -317,11 +317,12 @@ func TestMaskedReadsRefuseUnreadableInstanceShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := workspace.MaskedPaths([]byte(tc.state), tc.marks); !errors.Is(err, workspace.ErrUnreadableState) {
+			_, err := workspace.MaskedPaths([]byte(tc.state), tc.marks)
+			if !errors.Is(err, workspace.ErrUnreadableState) {
 				t.Errorf("masked paths: err = %v, want ErrUnreadableState", err)
 			}
 
-			_, err := workspace.ReadStateResource(t.Context(), []byte(tc.state), tc.marks, "t.n")
+			_, err = workspace.ReadStateResource(t.Context(), []byte(tc.state), tc.marks, "t.n")
 			if !errors.Is(err, workspace.ErrUnreadableState) {
 				t.Errorf("read resource: err = %v, want ErrUnreadableState", err)
 			}
@@ -342,7 +343,7 @@ func TestMaskedPathsMalformedOutputs(t *testing.T) {
 		state := `{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"l","outputs":` + outputs +
 			`,"resources":[]}`
 
-		_, err := workspace.MaskedStatePaths(t.Context(), []byte(state), nil)
+		_, err := workspace.MaskedPathsWithOutputs(t.Context(), []byte(state), nil)
 		if !errors.Is(err, workspace.ErrUnreadableState) {
 			t.Errorf("outputs %s: err = %v, want ErrUnreadableState", outputs, err)
 

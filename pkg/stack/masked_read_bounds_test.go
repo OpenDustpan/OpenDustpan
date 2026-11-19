@@ -681,13 +681,14 @@ func TestVerifyCursorRefusesNegativeOffset(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	check := stack.CursorCheck{Unit: "u", Version: "1", Subject: "s", Now: now}
 
 	for _, offset := range []int{-1, -1000} {
 		raw := mintCursor(t, testCursorKey(), testCursor{
 			unit: "u", version: "1", subject: "s", offset: offset, expiry: now.Add(time.Minute),
 		})
 
-		if _, err := stack.VerifyCursorOffset(testCursorKey(), raw, "u", "1", "s", now); !errors.Is(err, stack.ErrBadPath) {
+		if _, err := stack.VerifyCursorOffset(testCursorKey(), raw, check); !errors.Is(err, stack.ErrBadPath) {
 			t.Fatalf("offset %d: err = %v, want the bad path of the read", offset, err)
 		}
 	}
@@ -696,7 +697,7 @@ func TestVerifyCursorRefusesNegativeOffset(t *testing.T) {
 		unit: "u", version: "1", subject: "s", offset: 2, expiry: now.Add(time.Minute),
 	})
 
-	if got, err := stack.VerifyCursorOffset(testCursorKey(), valid, "u", "1", "s", now); err != nil || got != 2 {
+	if got, err := stack.VerifyCursorOffset(testCursorKey(), valid, check); err != nil || got != 2 {
 		t.Fatalf("valid cursor: offset %d, err %v, want 2 and nil", got, err)
 	}
 }

@@ -987,13 +987,13 @@ type maskTicker struct {
 
 // newCtxTicker returns a ticker that expires when ctx is done.
 func newCtxTicker(ctx context.Context) *maskTicker {
-	return &maskTicker{nodes: 0, expired: func() bool { return ctx.Err() != nil }}
+	return &maskTicker{nodes: 0, expired: func() bool { return ctx.Err() != nil }, failed: false}
 }
 
 // newUnboundedTicker returns a ticker that never expires, for a masking that
 // has no deadline of its own: the callers hold other bounds on the work.
 func newUnboundedTicker() *maskTicker {
-	return &maskTicker{nodes: 0, expired: func() bool { return false }}
+	return &maskTicker{nodes: 0, expired: func() bool { return false }, failed: false}
 }
 
 // tick counts one node. It answers ErrReadDeadline when the ticker expired.
@@ -1196,13 +1196,15 @@ func maskUnmarkedInstance(
 	skip := make(map[string]bool, len(applied))
 
 	for _, route := range applied {
-		path := base
+		var path strings.Builder
+
+		path.WriteString(base)
 
 		for _, token := range route {
-			path += "/" + escapeTofuPointerToken(token)
+			path.WriteString("/" + escapeTofuPointerToken(token))
 		}
 
-		skip[path] = true
+		skip[path.String()] = true
 	}
 
 	out, err := maskAllLeaves(attributes, base, &masked, ticker, skip)
@@ -2130,6 +2132,17 @@ func tofuVersionSideOf(entries []tofuResourceEntry, marks SensitiveMarks) tofuVe
 	}
 }
 
+// collectTofuDiffContext is collectTofuDiff under ctx. It fails closed: a
+// context that is done gives ErrReadDeadline and no diff, as a masked copy that
+// the deadline cut short holds no marker.
+func collectTofuDiffContext(ctx context.Context, from, to tofuVersionSide) (tofuDiffMismatch, error) {
+	if ctx.Err() != nil {
+		return tofuDiffMismatch{}, ErrReadDeadline
+	}
+
+	return collectTofuDiff(newCtxTicker(ctx), from, to)
+}
+
 // DiffStates returns the diff of two states: from is the older side, to is
 // the newer one. Added holds the sorted addresses only in to, Removed the
 // sorted addresses only in from, and Changed the sorted resources in both
@@ -2166,16 +2179,8 @@ func DiffStates(ctx context.Context, from, to StateWithMarks, cursor string, siz
 		return emptyTofuDiff(), nil
 	}
 
-	// Fail closed: an expired context gives no diff, as a masked copy that the
-	// deadline cut short holds no marker.
-	if ctx.Err() != nil {
-		return StateDiff{}, ErrReadDeadline
-	}
-
-	mismatch, err := collectTofuDiff(
-		newCtxTicker(ctx),
-		tofuVersionSideOf(fromEntries, from.Marks),
-		tofuVersionSideOf(toEntries, to.Marks),
+	mismatch, err := collectTofuDiffContext(
+		ctx, tofuVersionSideOf(fromEntries, from.Marks), tofuVersionSideOf(toEntries, to.Marks),
 	)
 	if err != nil {
 		return StateDiff{}, err
