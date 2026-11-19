@@ -833,7 +833,17 @@ func tagGateUnit(t *testing.T, s GateStore, tc gateUnitCase, fence namespace.Fen
 		t.Fatalf("ParseRef() = %v", err)
 	}
 
-	if err = s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "core"}, gateTime(), fence); err != nil {
+	err = s.UpdateStackTags(
+		t.Context(),
+		ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"team": "core"},
+			UpdatedAt: gateTime(),
+			Entry:     renameEntry(ref.Namespace, ref),
+		},
+		fence,
+	)
+	if err != nil {
 		t.Fatalf("UpdateStackTags() = %v", err)
 	}
 

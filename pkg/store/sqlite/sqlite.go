@@ -758,11 +758,19 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 }
 
 // UpdateStackTags implements stack.Store: it replaces every tag row of the
-// stack, keyed by its stable ID, and stamps updatedAt. The inventory entry is
-// written in the same transaction.
+// stack, keyed by its stable ID, and stamps u.UpdatedAt. The inventory entry is
+// written in the same transaction, and so is the audit entry u.Entry with one change
+// for each tag key that the update adds, removes or changes. An update that
+// changes no key appends no entry.
 func (s *Store) UpdateStackTags(
-	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
+	ctx context.Context, ref stack.Ref, u stack.TagUpdate, fence namespace.Fence,
 ) error {
+	// Defense in depth: the service and the handler build a valid entry too;
+	// this check stays so that a new caller cannot skip the audit entry.
+	if err := checkFencedEntry(fence, u.Entry); err != nil {
+		return err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -780,19 +788,28 @@ func (s *Store) UpdateStackTags(
 			return fmt.Errorf("select stack ID: %w", err)
 		}
 
+		before, err := stackTags(ctx, q, id)
+		if err != nil {
+			return err
+		}
+
 		if err := q.DeleteStackTags(ctx, id); err != nil {
 			return fmt.Errorf("delete stack tags: %w", err)
 		}
 
 		touchErr := q.TouchStack(ctx, db.TouchStackParams{
-			UpdatedAtMs: codec.Millis(updatedAt),
+			UpdatedAtMs: codec.Millis(u.UpdatedAt),
 			ID:          id,
 		})
 		if touchErr != nil {
 			return fmt.Errorf("stamp stack: %w", touchErr)
 		}
 
-		if err := insertStackTags(ctx, q, id, tags); err != nil {
+		if err := insertStackTags(ctx, q, id, u.Tags); err != nil {
+			return err
+		}
+
+		if err := appendTagChangeEntry(ctx, q, u.Entry, id, stack.TagChanges(before, u.Tags)); err != nil {
 			return err
 		}
 
@@ -800,9 +817,28 @@ func (s *Store) UpdateStackTags(
 			ctx,
 			q,
 			ref,
-			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+			unitWrite{unitID: id, atMs: codec.Millis(u.UpdatedAt), kind: inventory.ChangeChanged},
 		)
 	})
+}
+
+// appendTagChangeEntry appends e with the stable stack ID and changes, in the
+// transaction of q. It appends nothing when changes is empty.
+func appendTagChangeEntry(
+	ctx context.Context, q *db.Queries, e audit.Entry, id string, changes []audit.Change,
+) error {
+	if len(changes) == 0 {
+		return nil
+	}
+
+	e.ObjectID = id
+	e.Changes = changes
+
+	if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // insertStackTags writes one row per tag, keyed by the stack ID. A nil or

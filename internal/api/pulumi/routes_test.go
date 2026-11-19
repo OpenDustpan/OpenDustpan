@@ -161,15 +161,16 @@ func (stubStackStore) RenameStack(
 }
 
 func (stubStackStore) UpdateStackTags(
-	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.TagUpdate, _ namespace.Fence,
 ) error {
 	return nil
 }
 
 // taggedStack is one UpdateStackTags call: the stack and its new tags.
 type taggedStack struct {
-	tags map[string]string
-	ref  stack.Ref
+	tags  map[string]string
+	ref   stack.Ref
+	entry audit.Entry
 }
 
 // renamedStack records one rename call: the old reference, the new name and
@@ -229,9 +230,9 @@ func (s *recordingStackStore) RenameStack(
 }
 
 func (s *recordingStackStore) UpdateStackTags(
-	_ context.Context, ref stack.Ref, tags map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, ref stack.Ref, u stack.TagUpdate, _ namespace.Fence,
 ) error {
-	s.tags = append(s.tags, taggedStack{ref: ref, tags: tags})
+	s.tags = append(s.tags, taggedStack{ref: ref, tags: u.Tags, entry: u.Entry})
 
 	return nil
 }
@@ -1129,6 +1130,20 @@ func TestUpdateStackTagsThroughWrapper(t *testing.T) {
 
 	if len(got.tags) != 1 || got.tags["team"] != "e2e" {
 		t.Fatalf("updated tags %v, want map[team:e2e]", got.tags)
+	}
+
+	checkStackChangeEntry(t, got.entry)
+}
+
+// checkStackChangeEntry fails the test unless e is a timed change entry of
+// unit:manage by the test caller on the stack acme/web/prod.
+func checkStackChangeEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Kind != audit.KindChange || e.Action != string(identity.ActionUnitManage) ||
+		e.Object != "pulumi:acme/web/prod" || e.Namespace != "acme" ||
+		e.Subject != "tester" || e.Outcome != audit.OutcomeSuccess || e.At.IsZero() {
+		t.Fatalf("audit entry = %+v, want a timed change by unit:manage on pulumi:acme/web/prod", e)
 	}
 }
 

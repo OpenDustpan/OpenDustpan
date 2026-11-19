@@ -166,7 +166,7 @@ func (coverageStackStore) RenameStack(
 }
 
 func (coverageStackStore) UpdateStackTags(
-	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.TagUpdate, _ namespace.Fence,
 ) error {
 	return nil
 }

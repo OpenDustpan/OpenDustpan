@@ -790,7 +790,9 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 
 type updateStackTagsResponse struct{}
 
-func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) updateStackTags(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
 	ctx := r.Context()
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
@@ -817,7 +819,14 @@ func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ iden
 		return
 	}
 
-	if _, err := h.stacks.UpdateTags(ctx, ref, tags); err != nil {
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: p,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
+
+	if _, err := h.stacks.UpdateTags(ctx, ref, tags, entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return

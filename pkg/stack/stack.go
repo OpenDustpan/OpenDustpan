@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -249,11 +251,14 @@ type Store interface {
 	ForceDeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
 	DeletedStore
 	// UpdateStackTags replaces the tags of the stack identified by ref with
-	// tags, keyed by its stable ID, and stamps updatedAt. It returns
-	// ErrNotFound, namespace.ErrNotFound or namespace.ErrFenced.
-	UpdateStackTags(
-		ctx context.Context, ref Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
-	) error
+	// u.Tags, keyed by its stable ID, and stamps u.UpdatedAt. It appends the
+	// audit entry u.Entry in the same fenced transaction, with the stable stack ID and
+	// one change for each tag key that the update adds, removes or gives
+	// another value (see TagChanges). A replace that changes no key writes no
+	// audit entry. It returns ErrNotFound, namespace.ErrNotFound,
+	// namespace.ErrFenced or audit.ErrInvalidEntry if e fails validation or
+	// names another namespace.
+	UpdateStackTags(ctx context.Context, ref Ref, u TagUpdate, fence namespace.Fence) error
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
 	// row stay with the stack. It appends the audit entry e in the same fenced
@@ -626,9 +631,11 @@ func (s *Service) PurgeExpired(
 // UpdateTags replaces the tags of the stack identified by ref with tags, as
 // the Pulumi CLI sends them on PATCH, and returns the updated stack. An empty
 // or nil map clears every tag. The write is fenced on the namespace's
-// failover version and only allowed in its primary installation.
+// failover version and only allowed in its primary installation. The update
+// and the audit entry e, stamped with the time of the update, commit together
+// or not at all. The entry names the tag keys that changed, never their values.
 func (s *Service) UpdateTags(
-	ctx context.Context, ref Ref, tags map[string]string,
+	ctx context.Context, ref Ref, tags map[string]string, e audit.Entry,
 ) (Stack, error) {
 	if len(tags) > maxTags {
 		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
@@ -641,7 +648,11 @@ func (s *Service) UpdateTags(
 
 	now := s.now().UTC()
 
-	storeErr := s.store.UpdateStackTags(ctx, ref, maps.Clone(tags), now, ns.Fence())
+	e.At = now
+
+	update := TagUpdate{Tags: maps.Clone(tags), UpdatedAt: now, Entry: e}
+
+	storeErr := s.store.UpdateStackTags(ctx, ref, update, ns.Fence())
 	if storeErr != nil {
 		return Stack{}, fmt.Errorf("update tags of %s: %w", ref, storeErr)
 	}
@@ -779,4 +790,62 @@ func refuseRestoreUnderNamespaceLock(ctx context.Context, locks ManualLocks, ns 
 		Lock: l, Unit: collection.UnitRef{Namespace: ns, Tool: InventoryTool, Name: id.String()},
 		Noun: "stack", Name: ns.String() + "/" + id.String(),
 	}
+}
+
+// TagUpdate is one replace of the tags of a stack: the new tags, the time of
+// the update, and the audit entry that the store appends in the same
+// transaction.
+type TagUpdate struct {
+	Tags      map[string]string
+	UpdatedAt time.Time
+	Entry     audit.Entry
+}
+
+// Words that a tag change records instead of a tag value.
+const (
+	tagSet    = "set"
+	tagNotSet = "not set"
+)
+
+// TagChanges returns the audit changes of a replace of the tags old with the
+// tags next: one change for each key that the replace adds, removes or gives
+// another value. A change is named "tags.<key>". It records only "set" or
+// "not set" for the old and the new side, never a tag value, because a tag
+// value can hold a secret. The result is sorted by key and is empty when the
+// replace changes no key.
+func TagChanges(old, next map[string]string) []audit.Change {
+	var changes []audit.Change
+
+	for _, key := range slices.Sorted(maps.Keys(old)) {
+		if v, kept := next[key]; kept && v == old[key] {
+			continue
+		}
+
+		was := tagSet
+		now := tagNotSet
+
+		if _, kept := next[key]; kept {
+			now = tagSet
+		}
+
+		changes = append(changes, audit.Change{
+			Key: "tags." + key, Old: &was, New: now, Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(next)) {
+		if _, had := old[key]; had {
+			continue
+		}
+
+		was := tagNotSet
+
+		changes = append(changes, audit.Change{
+			Key: "tags." + key, Old: &was, New: tagSet, Layer: "", TakesEffect: "",
+		})
+	}
+
+	slices.SortFunc(changes, func(a, b audit.Change) int { return strings.Compare(a.Key, b.Key) })
+
+	return changes
 }
