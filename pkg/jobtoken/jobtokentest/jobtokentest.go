@@ -145,7 +145,7 @@ const (
 	// oneMillisecond is one millisecond.
 	oneMillisecond = time.Millisecond
 	// caseCount is the number of cases of the suite.
-	caseCount = 61
+	caseCount = 62
 )
 
 // issueTime returns the time of the cases.
