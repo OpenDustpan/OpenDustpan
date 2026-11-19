@@ -159,6 +159,15 @@ func TestMtlsExchangeChainHostile(t *testing.T) {
 	future := good
 	future.notBefore, future.notAfter = now.Add(time.Hour), now.Add(2*time.Hour)
 
+	// These two fail the time check first: the SPIFFE ID check and the roots
+	// check would give another error. They tell the time check of VerifyChain
+	// apart from the time check of x509.
+	expiredNoURI := expired
+	expiredNoURI.uris = nil
+
+	futureNoURI := future
+	futureNoURI.uris = nil
+
 	twoURIs := good
 	twoURIs.uris = []string{spiffeWorker, "spiffe://example.org/ns/acme/sa/other"}
 
@@ -196,6 +205,15 @@ func TestMtlsExchangeChainHostile(t *testing.T) {
 		{"other CA", [][]byte{other.leaf(t, good)}, pool(ca), noRevocation, trustrulesvc.ErrUnknownIssuer},
 		{"expired", [][]byte{ca.leaf(t, expired)}, pool(ca), noRevocation, trustrulesvc.ErrExpired},
 		{"not yet valid", [][]byte{ca.leaf(t, future)}, pool(ca), noRevocation, trustrulesvc.ErrNotYetValid},
+		{"expired, no URI", [][]byte{ca.leaf(t, expiredNoURI)}, pool(ca), noRevocation, trustrulesvc.ErrExpired},
+		{
+			"not yet valid, no URI",
+			[][]byte{ca.leaf(t, futureNoURI)},
+			pool(ca),
+			noRevocation,
+			trustrulesvc.ErrNotYetValid,
+		},
+		{"expired, nil roots", [][]byte{ca.leaf(t, expired)}, nil, noRevocation, trustrulesvc.ErrExpired},
 		{
 			"revoked",
 			[][]byte{ca.leaf(t, good)},

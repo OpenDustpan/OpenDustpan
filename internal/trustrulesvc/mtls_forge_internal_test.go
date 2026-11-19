@@ -82,7 +82,11 @@ func TestMtlsActiveRoots(t *testing.T) {
 		}
 	}
 
+	empty := bundle("trb-one", 1, 1)
+	empty.Versions[0].Certificates = nil
+
 	for name, b := range map[string]trustrule.Bundle{
+		"an active version that holds no certificate":                 empty,
 		"no active version, and a version numbered 0 that holds a CA": bundle("trb-one", 0, 0),
 		"a bundle ID that is not valid":                               bundle("bad", 1, 1),
 	} {

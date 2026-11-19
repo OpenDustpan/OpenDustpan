@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 )
 
 // lenientIssuer is a token issuer that does not check the leaf end time: it
@@ -82,8 +83,14 @@ func TestMtlsRefuseCall(t *testing.T) {
 		e := newMtlsEnv(t)
 		x := e.exchanger(nil)
 
-		err := x.RefuseCall(t.Context(), "acme", emptyEntry(), trustrulesvc.ErrRateLimited)
-		e.mustRefuse(err, trustrulesvc.ErrRateLimited, "acme", e.worker)
+		if err := x.RefuseCall(t.Context(), "acme", emptyEntry(), trustrulesvc.ErrRateLimited); err != nil {
+			t.Fatalf("RefuseCall: %v, want nil", err)
+		}
+
+		entries := e.exchangeEntries("acme")
+		if len(entries) != 1 || entries[0].Outcome != audit.OutcomeDenied || entries[0].Reason == "" {
+			t.Fatalf("entries = %+v, want one denial entry with a reason", entries)
+		}
 
 		if entries := e.exchangeEntries("acme"); entries[0].Reason == "" {
 			t.Fatalf("entry = %+v, want a reason", entries[0])

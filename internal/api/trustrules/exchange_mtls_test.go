@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,6 +155,16 @@ func noRevocation(*x509.Certificate) error { return nil }
 func (e *env) newMtlsServer(o mtlsOpts) *mtlsServer {
 	e.t.Helper()
 
+	return e.newMtlsServerWith(o, nil)
+}
+
+// newMtlsServerWith is newMtlsServer, and the mTLS exchanger reads its
+// namespaces through wrap when wrap is not nil.
+func (e *env) newMtlsServerWith(
+	o mtlsOpts, wrap func(trustrulesvc.Namespaces) trustrulesvc.Namespaces,
+) *mtlsServer {
+	e.t.Helper()
+
 	namespaces, err := namespace.NewService(namespace.Config{Store: e.store, Now: nil, Installation: installationName})
 	if err != nil {
 		e.t.Fatalf("namespace service: %v", err)
@@ -184,8 +195,13 @@ func (e *env) newMtlsServer(o mtlsOpts) *mtlsServer {
 		exchanges = failingExchanges{ExchangeStore: exchanges}
 	}
 
+	var mtlsNamespaces trustrulesvc.Namespaces = namespaces
+	if wrap != nil {
+		mtlsNamespaces = wrap(namespaces)
+	}
+
 	mtls, err := trustrulesvc.NewMtlsExchanger(trustrulesvc.MtlsConfig{
-		Rules: e.store.TrustRules(), Exchanges: exchanges, Bundles: e.store.TrustRules(), Namespaces: namespaces,
+		Rules: e.store.TrustRules(), Exchanges: exchanges, Bundles: e.store.TrustRules(), Namespaces: mtlsNamespaces,
 		Principals: e.store, Tokens: e.tokens, Audit: e.store, ServerAudit: e.store, Refusals: nil,
 		Revocation: o.revocation, Now: testNow, Log: nil,
 	})
@@ -713,4 +729,102 @@ func TestExchangeMtlsRateLimitAudit(t *testing.T) {
 			t.Fatalf("after call %d: %d denial entries, want 1", i, got)
 		}
 	}
+}
+
+// countingNamespaces counts the namespace reads of the mTLS exchanger and
+// fails the ones of WritableHere when fail is not nil.
+type countingNamespaces struct {
+	trustrulesvc.Namespaces
+
+	writable atomic.Int64
+	fail     error
+}
+
+func (c *countingNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	c.writable.Add(1)
+
+	if c.fail != nil {
+		return namespace.Namespace{}, c.fail
+	}
+
+	return c.Namespaces.WritableHere(ctx, name)
+}
+
+// TestExchangeMtlsRefusedFloodReads makes many calls over the limit. The
+// answer of each is 429, and the namespace is read for the first refusal of
+// the window only, so a flood costs no store read for each call.
+func TestExchangeMtlsRefusedFloodReads(t *testing.T) {
+	t.Parallel()
+
+	e, ca, _ := mtlsFixture(t)
+
+	counter := &countingNamespaces{Namespaces: nil, writable: atomic.Int64{}, fail: nil}
+
+	m := e.newMtlsServerWith(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false},
+		func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
+			counter.Namespaces = n
+
+			return counter
+		})
+	cert := ca.goodLeaf(t)
+
+	if status, _, body := m.call(t, mtlsExchangeURL, &cert, nil); status != http.StatusCreated {
+		t.Fatalf("first call = %d %s, want 201", status, body)
+	}
+
+	before := counter.writable.Load()
+
+	for i := 2; i <= 12; i++ {
+		status, _, body := m.call(t, mtlsExchangeURL, &cert, nil)
+		if status != http.StatusTooManyRequests || errorCode(t, body) != "mtls.rate-limited" {
+			t.Fatalf("call %d = %d %s, want 429 mtls.rate-limited", i, status, body)
+		}
+	}
+
+	if got := counter.writable.Load() - before; got != 1 {
+		t.Fatalf("%d namespace reads for 11 refused calls, want 1", got)
+	}
+}
+
+// TestExchangeMtlsRefusedAnswer checks that the answer to a call that the
+// guard refuses is the answer of the guard, also when the denial entry
+// cannot be written.
+func TestExchangeMtlsRefusedAnswer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a store error of the namespace read still answers 429", func(t *testing.T) {
+		t.Parallel()
+
+		e, ca, _ := mtlsFixture(t)
+		m := e.newMtlsServerWith(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false},
+			func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
+				return &countingNamespaces{Namespaces: n, writable: atomic.Int64{}, fail: errDisk}
+			})
+		cert := ca.goodLeaf(t)
+
+		// The first call passes the guard and then fails at the namespace
+		// read of Verify. The second is over the limit.
+		m.call(t, mtlsExchangeURL, &cert, nil)
+
+		status, _, body := m.call(t, mtlsExchangeURL, &cert, nil)
+		if status != http.StatusTooManyRequests || errorCode(t, body) != "mtls.rate-limited" {
+			t.Fatalf("answer = %d %s, want 429 mtls.rate-limited", status, body)
+		}
+	})
+
+	t.Run("an unknown namespace still answers 429", func(t *testing.T) {
+		t.Parallel()
+
+		e, ca, _ := mtlsFixture(t)
+		m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false})
+		cert := ca.goodLeaf(t)
+		path := "/api/dustpan/v1/namespaces/nowhere/trust-rules/exchange"
+
+		m.call(t, path, &cert, nil)
+
+		status, _, body := m.call(t, path, &cert, nil)
+		if status != http.StatusTooManyRequests || errorCode(t, body) != "mtls.rate-limited" {
+			t.Fatalf("answer = %d %s, want 429 mtls.rate-limited", status, body)
+		}
+	})
 }

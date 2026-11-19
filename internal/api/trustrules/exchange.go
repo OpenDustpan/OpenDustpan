@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -142,11 +143,20 @@ func (h *Handler) exchangeMtls(w http.ResponseWriter, r *http.Request, name name
 
 	// Each call counts, also one with no certificate: it is the call that
 	// costs the server no work, and the one that a flood sends.
-	if err := h.mtlsGuard.Admit(clientip.String(r), r.ContentLength); err != nil {
-		// The refusal writes a denial entry through the limiter of the
-		// exchanger, so a flood writes one entry and a count for each window.
-		// An unknown namespace has no audit log: its answer replaces this one.
-		h.writeMtlsError(ctx, w, h.mtls.RefuseCall(ctx, name, h.requestEntry(r), err))
+	if first, err := h.mtlsGuard.Admit(clientip.String(r), r.ContentLength); err != nil {
+		// The first refusal of a window writes a denial entry through the
+		// limiter of the exchanger. The guard counts the later ones in
+		// memory, so a flood costs no store read for each call. The answer
+		// is always the cause of the guard: a failure of the entry does not
+		// change it.
+		if first {
+			if refuseErr := h.mtls.RefuseCall(ctx, name, h.requestEntry(r), err); refuseErr != nil {
+				h.logger.WarnContext(ctx, "the denial entry of a refused mTLS call failed",
+					slog.String("namespace", string(name)), slog.String("error", refuseErr.Error()))
+			}
+		}
+
+		h.writeMtlsError(ctx, w, err)
 
 		return
 	}

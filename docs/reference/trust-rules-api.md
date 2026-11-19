@@ -229,8 +229,8 @@ The answer is 201 with `Cache-Control: no-store`, in the form of the token
 exchange above. The token never lives longer than the leaf certificate. Each
 exchange writes the audit entry `trust-rule:exchange`, and each refusal writes
 an audit entry with the outcome `denied`. This includes a refusal for the rate
-limit or the body size. For each window, the server writes the first refusal
-and counts the others. A call to a namespace that does not exist writes no
+limit. For each window, the server writes the first refusal and counts the
+others in memory, so a flood of refused calls causes no store read. A call to a namespace that does not exist writes no
 entry, because that namespace has no audit log.
 
 | Status | `errorCode` | Cause |

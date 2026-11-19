@@ -47,10 +47,12 @@ type MtlsGuard struct {
 	lastCleanup time.Time
 }
 
-// guardWindow counts the calls since start.
+// guardWindow counts the calls since start. refused is true after the guard
+// reported the first refusal of the window.
 type guardWindow struct {
-	start time.Time
-	count int
+	start   time.Time
+	count   int
+	refused bool
 }
 
 // NewMtlsGuard returns an MtlsGuard, or trustrule.ErrMissingDependency for a
@@ -73,8 +75,8 @@ func NewMtlsGuard(cfg MtlsGuardConfig) (*MtlsGuard, error) {
 		now:         now,
 		mu:          sync.Mutex{},
 		keys:        make(map[string]*guardWindow),
-		overflow:    guardWindow{start: time.Time{}, count: 0},
-		global:      guardWindow{start: time.Time{}, count: 0},
+		overflow:    guardWindow{start: time.Time{}, count: 0, refused: false},
+		global:      guardWindow{start: time.Time{}, count: 0, refused: false},
 		lastCleanup: time.Time{},
 	}, nil
 }
@@ -85,11 +87,14 @@ func NewMtlsGuard(cfg MtlsGuardConfig) (*MtlsGuard, error) {
 // certificate counts too: it is the call that needs no work of the server and
 // the one that a flood sends. The key is an address of the caller: it is not
 // trusted, so the guard bounds the memory that keys take.
-func (g *MtlsGuard) Admit(key string, bodyLen int64) error {
-	if bodyLen < 0 || bodyLen > g.cfg.MaxBodyBytes {
-		return fmt.Errorf("%w: %d bytes, at most %d", ErrBodyTooLarge, bodyLen, g.cfg.MaxBodyBytes)
-	}
-
+//
+// first is true for the first refusal of a window and false for each later
+// one, so the caller does work for a refusal at most once for each window:
+// the guard counts the others in memory. While all keys together are over
+// the limit, the window of all keys is the one that counts, so a flood from
+// many keys also gives one first refusal for each window. first is false when
+// err is nil.
+func (g *MtlsGuard) Admit(key string, bodyLen int64) (bool, error) {
 	if len(key) > maxGuardKeyBytes {
 		sum := sha256.Sum256([]byte(key))
 		key = hex.EncodeToString(sum[:])
@@ -100,14 +105,30 @@ func (g *MtlsGuard) Admit(key string, bodyLen int64) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	globalOK := g.count(&g.global, now) <= g.cfg.GlobalLimit
-	keyOK := g.count(g.windowOf(key, now), now) <= g.cfg.Limit
+	keyWindow := g.windowOf(key, now)
+	globalOver := g.count(&g.global, now) > g.cfg.GlobalLimit
+	keyOver := g.count(keyWindow, now) > g.cfg.Limit
 
-	if !globalOK || !keyOK {
-		return ErrRateLimited
+	var err error
+
+	switch {
+	case bodyLen < 0 || bodyLen > g.cfg.MaxBodyBytes:
+		err = fmt.Errorf("%w: %d bytes, at most %d", ErrBodyTooLarge, bodyLen, g.cfg.MaxBodyBytes)
+	case globalOver || keyOver:
+		err = ErrRateLimited
+	default:
+		return false, nil
 	}
 
-	return nil
+	w := keyWindow
+	if globalOver {
+		w = &g.global
+	}
+
+	first := !w.refused
+	w.refused = true
+
+	return first, err
 }
 
 // Tracked returns the number of keys that the guard holds, for metrics and
@@ -123,7 +144,7 @@ func (g *MtlsGuard) Tracked() int {
 // is over, and returns the count of the window.
 func (g *MtlsGuard) count(w *guardWindow, now time.Time) int {
 	if w.start.IsZero() || !now.Before(w.start.Add(g.cfg.Window)) {
-		w.start, w.count = now, 0
+		w.start, w.count, w.refused = now, 0, false
 	}
 
 	w.count++
@@ -154,7 +175,7 @@ func (g *MtlsGuard) windowOf(key string, now time.Time) *guardWindow {
 		return &g.overflow
 	}
 
-	w := &guardWindow{start: time.Time{}, count: 0}
+	w := &guardWindow{start: time.Time{}, count: 0, refused: false}
 	g.keys[key] = w
 
 	return w

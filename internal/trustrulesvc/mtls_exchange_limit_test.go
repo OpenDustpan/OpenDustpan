@@ -2,6 +2,7 @@ package trustrulesvc_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,7 +64,7 @@ func countLimited(g *trustrulesvc.MtlsGuard, n int, key func(int) string) int {
 	var limited int
 
 	for i := range n {
-		if err := g.Admit(key(i), 0); errors.Is(err, trustrulesvc.ErrRateLimited) {
+		if _, err := g.Admit(key(i), 0); errors.Is(err, trustrulesvc.ErrRateLimited) {
 			limited++
 		}
 	}
@@ -93,15 +94,15 @@ func testFloodNoCertificate(t *testing.T) {
 func testOversizeBody(t *testing.T) {
 	t.Parallel()
 
-	g := newGuard(t, newClock(), nil)
+	g := newGuard(t, newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 10, 1000 })
 
 	for _, n := range []int64{1025, 1 << 40, -1} {
-		if err := g.Admit("k", n); !errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
+		if _, err := g.Admit("k", n); !errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
 			t.Fatalf("body %d: error = %v", n, err)
 		}
 	}
 
-	if err := g.Admit("k", 1024); err != nil {
+	if _, err := g.Admit("k", 1024); err != nil {
 		t.Fatalf("body at the cap: %v", err)
 	}
 }
@@ -128,13 +129,13 @@ func testKeyLimit(t *testing.T) {
 		t.Fatalf("limited = %d, want 1", n)
 	}
 
-	if err := g.Admit("b", 0); err != nil {
+	if _, err := g.Admit("b", 0); err != nil {
 		t.Fatalf("other key: %v", err)
 	}
 
 	clock.advance(time.Minute)
 
-	if err := g.Admit("a", 0); err != nil {
+	if _, err := g.Admit("a", 0); err != nil {
 		t.Fatalf("after the window: %v", err)
 	}
 }
@@ -192,7 +193,7 @@ func testConcurrentLimit(t *testing.T) {
 
 	for range 50 {
 		wg.Go(func() {
-			if g.Admit("same", 0) == nil {
+			if _, err := g.Admit("same", 0); err == nil {
 				allowed.Add(1)
 			}
 		})
@@ -225,4 +226,86 @@ func TestMtlsGuardConfig(t *testing.T) {
 			t.Errorf("%s: error = %v", name, err)
 		}
 	}
+}
+
+// TestMtlsGuardFirstRefusal checks that Admit reports the first refusal of a
+// window once, so the caller does work for a flood at most once for each
+// window.
+func TestMtlsGuardFirstRefusal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one first refusal for each window of a key", testFirstRefusalPerWindow)
+	t.Run("one first refusal while all keys are over the global limit", testFirstRefusalGlobal)
+	t.Run("an admitted call is never a first refusal", testAdmittedNotFirst)
+	t.Run("an oversize body is a first refusal once for each window", testFirstRefusalOversize)
+}
+
+func testFirstRefusalPerWindow(t *testing.T) {
+	t.Parallel()
+
+	clock := newClock()
+	g := newGuard(t, clock, func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 2, 1000 })
+
+	if got := countFirst(g, 20, func(int) string { return "a" }); got != 1 {
+		t.Fatalf("first refusals = %d, want 1", got)
+	}
+
+	clock.advance(time.Minute)
+
+	if got := countFirst(g, 20, func(int) string { return "a" }); got != 1 {
+		t.Fatalf("first refusals in the next window = %d, want 1", got)
+	}
+}
+
+func testFirstRefusalGlobal(t *testing.T) {
+	t.Parallel()
+
+	g := newGuard(t, newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 1, 3 })
+
+	got := countFirst(g, 100, func(i int) string { return fmt.Sprintf("key-%d", i) })
+	if got != 1 {
+		t.Fatalf("first refusals = %d, want 1", got)
+	}
+}
+
+func testAdmittedNotFirst(t *testing.T) {
+	t.Parallel()
+
+	g := newGuard(t, newClock(), nil)
+
+	if first, err := g.Admit("a", 0); first || err != nil {
+		t.Fatalf("first = %v, err = %v, want false and nil", first, err)
+	}
+}
+
+func testFirstRefusalOversize(t *testing.T) {
+	t.Parallel()
+
+	g := newGuard(t, newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 100, 1000 })
+
+	var got int
+
+	for range 10 {
+		if first, err := g.Admit("a", 1<<40); first && errors.Is(err, trustrulesvc.ErrBodyTooLarge) {
+			got++
+		}
+	}
+
+	if got != 1 {
+		t.Fatalf("first refusals = %d, want 1", got)
+	}
+}
+
+// countFirst makes n calls of Admit with the keys that key returns, and
+// returns the number of first refusals.
+func countFirst(g *trustrulesvc.MtlsGuard, n int, key func(int) string) int {
+	var got int
+
+	for i := range n {
+		if first, err := g.Admit(key(i), 0); first && err != nil {
+			got++
+		}
+	}
+
+	return got
 }

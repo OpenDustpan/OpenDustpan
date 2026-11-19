@@ -488,11 +488,13 @@ func (e *MtlsExchanger) Verify(ctx context.Context, in *MtlsVerifyInput) (Verifi
 }
 
 // RefuseCall writes the denial entry of a call that the guard refused before
-// Verify ran, for example a call over the rate limit, and returns cause. The
-// entry goes through the same limiter as the other refusals of the namespace:
-// the first refusal of a window writes an entry, and the later ones are
-// counted. An unknown namespace has no audit log, so the answer is the error
-// of the namespace and no entry is written.
+// Verify ran, for example a call over the rate limit. cause is the refusal of
+// the guard. The entry goes through the same limiter as the other refusals of
+// the namespace. RefuseCall returns only the failures of the write, never
+// cause: the caller answers with cause whatever happens here. An unknown
+// namespace has no audit log, so the result is the error of the namespace and
+// no entry is written. The caller calls RefuseCall for the first refusal of
+// each window only, because each call reads the namespace.
 func (e *MtlsExchanger) RefuseCall(
 	ctx context.Context, name namespace.Name, request audit.Entry, cause error,
 ) error {
@@ -501,7 +503,9 @@ func (e *MtlsExchanger) RefuseCall(
 		return namespaceError(err)
 	}
 
-	return e.refuse(ctx, ns, request, nil, cause)
+	in := ExchangeInput{Namespace: ns.Name, Token: "", Rule: "", Request: request}
+
+	return errors.Join(writeFailures(e.refuser.refuse(ctx, ns, in, nil, cause))...)
 }
 
 // namespaceError turns the error of a namespace read into the answer of the
