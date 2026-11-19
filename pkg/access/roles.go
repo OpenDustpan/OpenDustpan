@@ -29,7 +29,8 @@ const (
 	RoleWriter = "writer"
 	// RoleMaintainer writes, and makes, renames, deletes, restores, unlocks
 	// and moves units, and manages collections. It cannot purge a deleted
-	// unit: a purge cannot be undone, so only the admin role holds it.
+	// unit: a purge cannot be undone, so only the admin role holds it. It also
+	// manages runner pools and runners, and defines custom steps.
 	RoleMaintainer = "maintainer"
 	// RoleAdmin holds every data action on its object: it also manages
 	// access, the override switches, forced and unlocked writes, the purge of
@@ -77,7 +78,7 @@ var builtInDescriptions = []struct {
 	{RoleWriter, "Reads, runs updates, plans and applies, reads secret values, and sets the context of units."},
 	{
 		RoleMaintainer,
-		"Writes, and makes, renames, deletes, restores, unlocks and moves units, and manages collections.",
+		"Writes, and makes, renames, deletes, restores, unlocks and moves units, manages collections and runner pools, and defines custom steps.",
 	},
 	{RoleAdmin, "Holds every action inside its object, access management included."},
 	{

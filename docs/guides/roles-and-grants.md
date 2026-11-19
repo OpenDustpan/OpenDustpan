@@ -36,12 +36,12 @@ server does not store them, and an operator cannot change them.
 
 | Role | What it holds |
 | --- | --- |
-| `viewer` | Read the namespace, the collections, the units, the outputs that the sharing rules allow, the profiles and the gates, and manage its own saved views. |
+| `viewer` | Read the namespace, the collections, the units, the outputs that the sharing rules allow, the profiles and the gates. Read the runner pools, the runners and the source filter (`namespace:read-runners`). Manage its own saved views. |
 | `auditor` | Everything in `viewer`, plus the audit log and the access of each object. |
 | `secret-viewer` | Everything in `viewer`, plus read the secrets of a unit. |
 | `planner` | Everything in `viewer`, plus plan jobs and their logs. |
 | `writer` | Everything in `viewer`, plus write, encrypt and decrypt state, read secrets and set the context of a unit. |
-| `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. |
+| `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. It manages runner pools and runners (`namespace:manage-runners`), and defines custom steps (`unit:define-steps`). |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
 | `installation-operator` | Every action of the operator family for the installation. |
 | `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. It makes the tokens of each service principal whose reach is inside its own reach. |
