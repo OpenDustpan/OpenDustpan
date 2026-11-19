@@ -261,6 +261,7 @@ func newReachPrincipalHandlerWithLogger(
 		authenticator:  tokenAuthenticator{},
 		logger:         logger,
 		onAuditFailure: nil,
+		tempAdmins:     nil,
 	})
 }
 
@@ -271,6 +272,7 @@ type principalHandlerOptions struct {
 	authenticator  identity.Authenticator
 	logger         *slog.Logger
 	onAuditFailure func()
+	tempAdmins     tempadmin.Reader
 }
 
 // newReachPrincipalHandlerWith builds a Handler like newReachPrincipalHandler
@@ -313,7 +315,7 @@ func newReachPrincipalHandlerWith(
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		Now:              opts.now,
-		TempAdmins:       nil,
+		TempAdmins:       opts.tempAdmins,
 		Authenticator:    opts.authenticator,
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           opts.logger,

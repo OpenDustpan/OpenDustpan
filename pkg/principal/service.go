@@ -658,7 +658,8 @@ type SignInInput struct {
 // It returns ErrNotFound when no principal has the subject and in.Create
 // is false, ErrDisabled for a disabled principal, ErrNotSignInTarget for a
 // principal that is not a person, a principal of a namespace, a
-// break-glass account or a temporary administrator, and ErrInvalid or
+// break-glass account or a temporary administrator, ErrTempAdminRead when
+// the read of the temporary administrators fails, and ErrInvalid or
 // ErrReservedSubject for a subject that is not valid.
 func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInInput) (Principal, bool, error) {
 	// Defense in depth: Validate refuses the subject too, but only for a
@@ -919,7 +920,7 @@ func (s *Service) signInTarget(ctx context.Context, p Principal) error {
 
 	temp, err := s.tempAdmins.IsTempAdmin(ctx, p.ID)
 	if err != nil {
-		return fmt.Errorf("read temporary administrator of %s: %w", Ref(p.ID), err)
+		return fmt.Errorf("%w: %s: %w", ErrTempAdminRead, Ref(p.ID), err)
 	}
 
 	if temp {

@@ -13,6 +13,14 @@ import (
 // ErrDisabled reports that IP allowlists are off for this installation.
 var ErrDisabled = errors.New("ipallow: IP allowlists are off for this installation")
 
+// MaxNamespacesWithList is the most namespaces that Store.NamespacesWithList
+// returns. A read of more namespaces with a list fails with ErrTooManyLists.
+const MaxNamespacesWithList = 1000
+
+// ErrTooManyLists reports that more than MaxNamespacesWithList namespaces
+// have a list. A caller fails closed: it does not cover every object.
+var ErrTooManyLists = errors.New("ipallow: too many namespaces have an IP allowlist")
+
 // Store is the persistence port of the lists. It is served by the SQL
 // adapters from the same connection as the other ports.
 type Store interface {
@@ -28,7 +36,9 @@ type Store interface {
 	SetNamespaceList(ctx context.Context, ns namespace.Name, l List, fence namespace.Fence, e audit.Entry) error
 	// NamespacesWithList returns the names of the namespaces that have a
 	// non-zero list, in name order, and an empty slice when no namespace has
-	// a list. It returns namespace.ErrInvalidName (wrapped) when a stored name
+	// a list. It returns at most MaxNamespacesWithList names; when more
+	// namespaces have a list it returns ErrTooManyLists (wrapped) and no names.
+	// It returns namespace.ErrInvalidName (wrapped) when a stored name
 	// is not a valid namespace name, and a wrapped store error when the read
 	// fails. A caller fails closed on any error: it treats the set of left-out
 	// namespaces as unknown and does not cover every object.

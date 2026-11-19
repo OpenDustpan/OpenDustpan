@@ -54,3 +54,23 @@ func RemapCacheMember(wantMember, wantBinary string) error {
 func PinnedSums(tool Tool) map[string]string {
 	return maps.Clone(tool.pinned)
 }
+
+// ArchiveNameFor returns the archive name of tool version for goos and arch,
+// so a test can check the pinned sum of each platform that CI may run on, not
+// only the platform of the test host.
+func ArchiveNameFor(tool Tool, version, goos, arch string) string {
+	return tool.archive(version, goos, arch)
+}
+
+// ExpandVersions returns the versions that value of the version variable of
+// tool selects, as Tool.Versions does for the environment, without a read of
+// the environment. An empty value selects the defaults.
+func ExpandVersions(tool Tool, value string) []string {
+	return tool.expandVersions(value)
+}
+
+// VersionsEnv returns the name of the environment variable that selects the
+// versions of tool.
+func VersionsEnv(tool Tool) string {
+	return tool.versionsEnv
+}

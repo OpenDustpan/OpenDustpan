@@ -284,6 +284,9 @@ func (h *Handler) resolveJob(r *http.Request) (target, error) {
 	}
 
 	ns, err := h.namespaces.Get(r.Context(), name)
+	// Defense in depth: writeError maps the raw namespace.ErrNotFound to the
+	// same 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, namespace.ErrNotFound) {
 		return target{}, errNotFound
 	}
@@ -298,6 +301,9 @@ func (h *Handler) resolveJob(r *http.Request) (target, error) {
 	}
 
 	j, err := h.jobs.Get(r.Context(), job.ID(raw))
+	// Defense in depth: writeError maps the raw job.ErrNotFound to the same
+	// 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, job.ErrNotFound) {
 		return target{}, errNotFound
 	}

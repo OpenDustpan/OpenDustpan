@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
 const (
@@ -94,7 +94,7 @@ func openProxiedPostgresStore(
 	ctx context.Context,
 	tb testing.TB,
 	base string,
-) (*postgres.Store, *DBProxy) {
+) (*dustpan.BuiltinStore, *DBProxy) {
 	tb.Helper()
 
 	if base == "" {
@@ -108,14 +108,17 @@ func openProxiedPostgresStore(
 	directURI := schemaURL(tb, base, schema)
 	proxy, proxiedURI := startDBProxy(ctx, tb, directURI)
 
-	st, err := postgres.Open(ctx, proxiedURI)
+	st, err := dustpan.OpenStore(ctx, proxiedURI)
 	if err != nil {
 		dropSchema(ctx, tb, base, schema)
 		tb.Fatalf("open postgres store through proxy: %v", err)
 	}
 
 	tb.Cleanup(func() {
-		st.CloseContext(ctx)
+		if closeErr := st.Close(); closeErr != nil {
+			tb.Errorf("close postgres store: %v", closeErr)
+		}
+
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 

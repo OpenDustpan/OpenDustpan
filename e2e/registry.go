@@ -11,22 +11,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
-
-// registryStoreOptions returns the option that gives the in-process server the
-// registry stores of st.
-func registryStoreOptions(st serverStore) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
-	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
-	default:
-		return nil
-	}
-}
 
 // publicURLOptions returns the option that sets the public URL, or none for an
 // empty URL.
