@@ -124,15 +124,18 @@ func freePort(t *testing.T) string {
 	return port
 }
 
-// binaryVersion runs the unpacked binary with --version. The path goes in the
-// environment, so that the command line holds no variable, and no argument
-// passes through a shell.
+// binaryVersion runs the unpacked binary with --version. The command takes an
+// argument list, so no argument passes through a shell.
 func binaryVersion(t *testing.T, dir string) string {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), "sh", "-c", `exec "$SERVER_BIN" --version`)
+	cmd := exec.CommandContext( //nolint:gosec // The test runs the binary that it unpacked.
+		t.Context(),
+		filepath.Join(dir, "opendustpan"),
+		"--version",
+	)
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "SERVER_BIN=" + filepath.Join(dir, "opendustpan")}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir}
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -186,20 +189,18 @@ func startServe(t *testing.T, dir string) serveInstance {
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
-	cmd := exec.CommandContext(
+	cmd := exec.CommandContext( //nolint:gosec // The test runs the binary that it unpacked.
 		ctx,
-		"sh",
-		"-c",
-		`exec "$SERVER_BIN" serve --listen "$SERVER_LISTEN" --database "$SERVER_DATABASE"`,
+		filepath.Join(dir, "opendustpan"),
+		"serve",
+		"--listen", "127.0.0.1:"+port,
+		"--database", "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"),
 	)
 	cmd.Dir = dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + dir,
-		"SERVER_BIN=" + filepath.Join(dir, "opendustpan"),
-		"SERVER_LISTEN=127.0.0.1:" + port,
-		"SERVER_DATABASE=sqlite:" + filepath.Join(t.TempDir(), "dustpan.db"),
 		"DUSTPAN_KEY_ENCRYPTION_KEY=" + randomText(t, 32, base64.StdEncoding.EncodeToString),
 		"DUSTPAN_ADMIN_TOKEN=" + randomText(t, 32, hex.EncodeToString),
 	}
@@ -335,8 +336,8 @@ func syntheticArchive(t *testing.T, name string) (string, []byte) {
 	return dir, raw.Bytes()
 }
 
-// guideBlocks answers the sh blocks of one section of the install page.
-func guideBlocks(t *testing.T, heading string) []string {
+// installGuide answers the text of the install page.
+func installGuide(t *testing.T) string {
 	t.Helper()
 
 	root := openRootOf(t, "../..")
@@ -347,72 +348,63 @@ func guideBlocks(t *testing.T, heading string) []string {
 		t.Fatal(err)
 	}
 
-	blocks := []string{}
-	current := []string{}
-	inside, fenced := false, false
+	return string(raw)
+}
 
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		switch {
-		case strings.HasPrefix(line, "## "):
-			inside, fenced = line == "## "+heading, false
-		case !inside:
-		case line == "```sh":
-			fenced, current = true, current[:0]
-		case line == "```" && fenced:
-			fenced = false
-			blocks = append(blocks, strings.Join(current, "\n")+"\n")
-		case fenced:
-			current = append(current, line)
-		default:
+// archiveSection answers the text of the section "Install from a binary
+// archive" of the install page, up to the next section.
+func archiveSection(t *testing.T) string {
+	t.Helper()
+
+	_, rest, found := strings.Cut(installGuide(t), "\n## Install from a binary archive\n")
+	if !found {
+		t.Fatal("the install page has no section \"Install from a binary archive\"")
+	}
+
+	section, _, _ := strings.Cut(rest, "\n## ")
+
+	return section
+}
+
+// TestInstallGuideArchiveSectionPromisesNoDownload checks that the install
+// page says that binary archives are not available yet, and that it holds no
+// shell block and no download address for an archive: no release exists, and
+// the release workflow uploads no archive.
+func TestInstallGuideArchiveSectionPromisesNoDownload(t *testing.T) {
+	t.Parallel()
+
+	section := archiveSection(t)
+
+	if !strings.Contains(section, "not available yet") {
+		t.Error("the archive section does not say that binary archives are not available yet")
+	}
+
+	for _, banned := range []string{"```sh", "releases/download", "curl", "tar -xzf", "sha256sum"} {
+		if strings.Contains(section, banned) {
+			t.Errorf("the archive section holds %q: the page must not promise a download", banned)
 		}
 	}
 
-	if len(blocks) == 0 {
-		t.Fatalf("the install page has no section %q with sh blocks", heading)
-	}
-
-	return blocks
-}
-
-// guideBlockWith answers the one block that holds want.
-func guideBlockWith(t *testing.T, blocks []string, want string) string {
-	t.Helper()
-
-	var found []string
-
-	for _, block := range blocks {
-		if strings.Contains(block, want) {
-			found = append(found, block)
+	for _, want := range []string{"quickstart.md", "build-image-local.sh"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("the archive section does not point to %q, which works today", want)
 		}
 	}
 
-	if len(found) != 1 {
-		t.Fatalf("the section has %d blocks with %q, want 1", len(found), want)
+	if strings.Contains(installGuide(t), "releases/download") {
+		t.Error("the install page holds a release download address")
 	}
-
-	return found[0]
 }
 
-// runGuideBlock runs one block of the page with sh in dir, with the
-// placeholders replaced. On a host with no sha256sum, it uses the command that
-// the page names for macOS. The text of the block goes in the environment.
-func runGuideBlock(t *testing.T, dir, block string, platform hostPlatform) (string, error) {
+// refuseChecksumCase sends one hostile pair of a SHA256SUMS file and an
+// archive to the checksum step. The archive is a valid archive, so only the
+// checksum can refuse it.
+func refuseChecksumCase(t *testing.T, label, name string, tc checksumCase) {
 	t.Helper()
 
-	script := strings.NewReplacer("<version>", installTestVersion, "<os>", platform.os, "<arch>", platform.arch).
-		Replace(block)
-
-	if _, err := exec.LookPath("sha256sum"); err != nil {
-		script = strings.ReplaceAll(script, "sha256sum -c -", "shasum -a 256 -c -")
+	if err := verifyArchiveSum(tc.sums, name, tc.archive); err == nil {
+		t.Errorf("verifyArchiveSum accepted the case %q", label)
 	}
-
-	cmd := exec.CommandContext(t.Context(), "sh", "-e", "-c", `eval "$GUIDE_BLOCK"`)
-	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GUIDE_BLOCK=" + script}
-
-	out, err := cmd.CombinedOutput()
-
-	return string(out), err
 }
 
 // checksumCase is one hostile pair of a SHA256SUMS file and an archive.
@@ -421,44 +413,13 @@ type checksumCase struct {
 	archive []byte
 }
 
-// refuseChecksumCase sends one case to the checksum step alone and to the
-// documented check command alone. The archive is a valid archive, so only the
-// checksum can refuse it.
-func refuseChecksumCase(t *testing.T, label, name, check string, tc checksumCase) {
-	t.Helper()
-
-	if err := verifyArchiveSum(tc.sums, name, tc.archive); err == nil {
-		t.Errorf("verifyArchiveSum accepted the case %q", label)
-	}
-
-	work := t.TempDir()
-	root := openRootOf(t, work)
-
-	defer closeRoot(t, root)
-
-	if err := root.WriteFile("SHA256SUMS", tc.sums, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := root.WriteFile(name, tc.archive, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	platform := hostPlatform{os: runtime.GOOS, arch: runtime.GOARCH}
-	if out, err := runGuideBlock(t, work, check, platform); err == nil {
-		t.Errorf("the documented check command accepted the case %q:\n%s", label, out)
-	}
-}
-
 // TestReleaseArchiveInstallRefusesAWrongChecksum sends a damaged archive and
-// hostile SHA256SUMS files to the checksum step and to the documented check
-// command, each on its own. The unpack step is not used.
+// hostile SHA256SUMS files to the checksum step. The unpack step is not used.
 func TestReleaseArchiveInstallRefusesAWrongChecksum(t *testing.T) {
 	t.Parallel()
 
 	platform := hostPlatform{os: runtime.GOOS, arch: runtime.GOARCH}
 	name := platform.archiveName()
-	check := guideBlockWith(t, guideBlocks(t, "Install from a binary archive"), "sha256sum -c")
 
 	dir, archive := syntheticArchive(t, name)
 	sums := readIn(t, dir, "SHA256SUMS")
@@ -466,19 +427,25 @@ func TestReleaseArchiveInstallRefusesAWrongChecksum(t *testing.T) {
 	flipped := bytes.Clone(archive)
 	flipped[len(flipped)/2] ^= 0x01
 
+	good := strings.TrimSpace(string(sums))
+	bad := strings.Repeat("0", 64) + "  " + name
+
 	cases := map[string]checksumCase{
 		"flipped byte":         {sums, flipped},
 		"line of another name": {[]byte(strings.Replace(string(sums), name, "other.tar.gz", 1)), archive},
 		"short hash":           {[]byte("abcd  " + name + "\n"), archive},
 		"empty file":           {nil, archive},
-		"hash of other bytes":  {[]byte(strings.Repeat("0", 64) + "  " + name + "\n"), archive},
+		"hash of other bytes":  {[]byte(bad + "\n"), archive},
+		"good line then bad":   {[]byte(good + "\n" + bad + "\n"), archive},
+		"bad line then good":   {[]byte(bad + "\n" + good + "\n"), archive},
+		"two good lines":       {[]byte(good + "\n" + good + "\n"), archive},
 	}
 
 	for label, tc := range cases {
 		t.Run(label, func(t *testing.T) {
 			t.Parallel()
 
-			refuseChecksumCase(t, label, name, check, tc)
+			refuseChecksumCase(t, label, name, tc)
 		})
 	}
 
@@ -488,33 +455,5 @@ func TestReleaseArchiveInstallRefusesAWrongChecksum(t *testing.T) {
 		if err := verifyArchiveSum(sums, name, archive); err != nil {
 			t.Errorf("verifyArchiveSum refused a good set: %v", err)
 		}
-
-		if out, err := runGuideBlock(t, dir, check, platform); err != nil {
-			t.Errorf("the documented check command refused a good set: %v\n%s", err, out)
-		}
 	})
-}
-
-// TestInstallGuideArchiveBlocksRun takes the check block and the unpack block
-// of the section "Install from a binary archive" from the install page,
-// replaces the placeholders and runs them with sh in the directory of a built
-// set. Then it runs the unpacked binary.
-func TestInstallGuideArchiveBlocksRun(t *testing.T) {
-	t.Parallel()
-
-	platform := hostArchivePlatform(t)
-	blocks := guideBlocks(t, "Install from a binary archive")
-	set := buildArchiveSet(t)
-
-	for _, want := range []string{"sha256sum -c", "tar -xzf"} {
-		block := guideBlockWith(t, blocks, want)
-		if out, err := runGuideBlock(t, set, block, platform); err != nil {
-			t.Fatalf("the block with %q failed: %v\n%s", want, err, out)
-		}
-	}
-
-	dir := filepath.Join(set, "opendustpan-"+installTestVersion)
-	if got := binaryVersion(t, dir); got != installTestVersion {
-		t.Fatalf("the unpacked binary printed %q for --version, want %q", got, installTestVersion)
-	}
 }

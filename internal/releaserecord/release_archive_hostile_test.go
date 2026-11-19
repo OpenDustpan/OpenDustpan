@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,4 +177,98 @@ func TestReleaseArchiveUnpackRefusesHostileEntries(t *testing.T) {
 	t.Run("allowlist alone", checkAllowlistAlone)
 	t.Run("root writer alone", checkRootWriterAlone)
 	t.Run("whole step", checkWholeStep)
+}
+
+// archiveOfFiles makes a gzip tar of regular files below third_party_licenses,
+// each with a body of size bytes.
+func archiveOfFiles(t *testing.T, count, size int) []byte {
+	t.Helper()
+
+	var raw bytes.Buffer
+
+	zw := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(zw)
+	body := bytes.Repeat([]byte("x"), size)
+
+	for i := range count {
+		hdr := &tar.Header{
+			Name: fmt.Sprintf("third_party_licenses/f%d", i), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(size),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return raw.Bytes()
+}
+
+// TestReleaseArchiveUnpackBoundsTheArchive sends an archive with more entries
+// than the limit, and an archive with more bytes than the total limit, to the
+// unpack step. Each must be refused, and the limit itself must pass.
+func TestReleaseArchiveUnpackBoundsTheArchive(t *testing.T) {
+	t.Parallel()
+
+	t.Run("more entries than the limit", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		if err := unpackArchive(root, archiveOfFiles(t, archiveFileLimit+1, 1)); err == nil {
+			t.Errorf("the unpack step accepted %d entries", archiveFileLimit+1)
+		}
+	})
+
+	t.Run("entries at the limit", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		if err := unpackArchive(root, archiveOfFiles(t, archiveFileLimit, 1)); err != nil {
+			t.Errorf("the unpack step refused %d entries: %v", archiveFileLimit, err)
+		}
+	})
+
+	t.Run("more bytes than the total limit", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		if err := unpackArchiveLimited(root, archiveOfFiles(t, 4, 100), 10, 399); err == nil {
+			t.Error("the unpack step accepted 400 bytes with a total limit of 399")
+		}
+	})
+
+	t.Run("bytes at the total limit", func(t *testing.T) {
+		t.Parallel()
+
+		_, root := targetRoot(t)
+		defer closeRoot(t, root)
+
+		if err := unpackArchiveLimited(root, archiveOfFiles(t, 4, 100), 10, 400); err != nil {
+			t.Errorf("the unpack step refused 400 bytes with a total limit of 400: %v", err)
+		}
+	})
+
+	t.Run("the total limit is bound by the entry limit", func(t *testing.T) {
+		t.Parallel()
+
+		if archiveTotalLimit < archiveEntryLimit {
+			t.Errorf("the total limit %d is below the limit of one entry %d", archiveTotalLimit, archiveEntryLimit)
+		}
+	})
 }

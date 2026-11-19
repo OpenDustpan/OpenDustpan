@@ -112,7 +112,7 @@ if docker build --progress=plain -t "$IMAGE-refused" \
   docker rmi -f "$IMAGE-refused" >/dev/null 2>&1 || true
   fail "the build finished with a console checksum that does not match the tarball"
 fi
-grep -q "FAILED" "$WORK/wrongsha.out" \
+grep -Eq ': FAILED$|computed checksum did NOT match' "$WORK/wrongsha.out" \
   || fail "the build with a wrong console checksum did not stop at the checksum check: $(tail -n 5 "$WORK/wrongsha.out")"
 
 echo "smoke-image: checking that the Dockerfile refuses a bad VERSION"
@@ -125,7 +125,7 @@ if docker build --progress=plain -t "$IMAGE-refused" \
   docker rmi -f "$IMAGE-refused" >/dev/null 2>&1 || true
   fail "the build finished with a VERSION outside the allowlist"
 fi
-grep -q "build argument VERSION must be" "$WORK/badversion.out" \
+grep -Eq '^#[0-9]+ [0-9.]+ Dockerfile: build argument VERSION must be' "$WORK/badversion.out" \
   || fail "the build with a bad VERSION did not stop at the VERSION check: $(tail -n 5 "$WORK/badversion.out")"
 
 echo "smoke-image: generating a self-signed certificate"

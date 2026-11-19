@@ -217,6 +217,127 @@ func TestImageDockerfileChecksVersion(t *testing.T) {
 	}
 }
 
+// versionCheckBody answers the shell text of the RUN step that tests VERSION:
+// the lines from the RUN line that holds the case test up to the first line
+// that does not end in a backslash, with the word RUN and the trailing
+// backslashes removed.
+func versionCheckBody(t *testing.T, lines []string) string {
+	t.Helper()
+
+	start := lineIndex(lines, `RUN case "${VERSION}" in`)
+	if start < 0 {
+		t.Fatal(`the Dockerfile has no RUN step that starts with case "${VERSION}" in`)
+	}
+
+	var body []string
+
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		if i == start {
+			line = strings.TrimPrefix(line, "RUN ")
+		}
+
+		continued := strings.HasSuffix(line, "\\")
+		body = append(body, strings.TrimSuffix(line, "\\"))
+
+		if !continued {
+			break
+		}
+	}
+
+	return strings.Join(body, "\n")
+}
+
+// runVersionCheck runs the body with sh and answers the exit code and the
+// output. VERSION is in the environment, as the build argument is in a RUN
+// step. The command takes an argument list: no shell parses the value.
+func runVersionCheck(t *testing.T, body, version string) (int, string) {
+	t.Helper()
+
+	cmd := exec.CommandContext( //nolint:gosec // The body is the Dockerfile RUN text; the hostile value is in the environment.
+		t.Context(),
+		"sh",
+		"-c",
+		body,
+	)
+	cmd.Env = []string{"LC_ALL=C", "PATH=" + os.Getenv("PATH"), "VERSION=" + version}
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0, string(out)
+	}
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("run the VERSION check: %v", err)
+	}
+
+	return exitErr.ExitCode(), string(out)
+}
+
+// TestImageDockerfileVersionCheckRuns takes the shell text of the VERSION test
+// out of the Dockerfile and runs it with sh over hostile and good values. The
+// test fails when a part of the allowlist is removed from the Dockerfile.
+func TestImageDockerfileVersionCheckRuns(t *testing.T) {
+	t.Parallel()
+
+	body := versionCheckBody(t, dockerfileLines(t))
+
+	bad := map[string]string{
+		"empty but set":    "",
+		"space":            "v0.1 0",
+		"double quote":     `v0.1.0"`,
+		"single quote":     `v0.1.0'`,
+		"command":          "$(id)",
+		"variable":         "${HOME}",
+		"backtick":         "`id`",
+		"semicolon":        "v0.1.0;id",
+		"newline":          "v0.1.0\nid",
+		"leading dash":     "-x",
+		"leading dot":      ".x",
+		"leading plus":     "+x",
+		"leading underbar": "_x",
+		"65 characters":    "v" + strings.Repeat("1", 64),
+		"slash":            "v0/1",
+		"backslash":        `v0\1`,
+		"non ASCII letter": "v0.1.0\u00e9",
+	}
+
+	for label, value := range bad {
+		t.Run("bad/"+label, func(t *testing.T) {
+			t.Parallel()
+
+			code, out := runVersionCheck(t, body, value)
+			if code != 1 {
+				t.Errorf("VERSION %q: exit code %d, want 1\n%s", value, code, out)
+			}
+
+			if !strings.Contains(out, "build argument VERSION must be") {
+				t.Errorf("VERSION %q: the message does not name the build argument:\n%s", value, out)
+			}
+		})
+	}
+
+	good := map[string]string{
+		"release":       "v0.1.0",
+		"dev":           "dev",
+		"git describe":  "v0.1.0-3-gabc123-dirty",
+		"build meta":    "v0.1.0+meta",
+		"digit":         "0",
+		"64 characters": strings.Repeat("a", 64),
+	}
+
+	for label, value := range good {
+		t.Run("good/"+label, func(t *testing.T) {
+			t.Parallel()
+
+			if code, out := runVersionCheck(t, body, value); code != 0 {
+				t.Errorf("VERSION %q: exit code %d, want 0\n%s", value, code, out)
+			}
+		})
+	}
+}
+
 // TestImageDockerfileRefusesPlaceholderPin reads the Dockerfile and checks that
 // the console stage tests CONSOLE_SHA256 for 64 zeros before the download, and
 // that the message names the Dockerfile pin and the two build arguments.
