@@ -185,6 +185,11 @@ spec:
                 secretKeyRef:
                   name: "opendustpan-key-encryption-key"
                   key: "key-encryption-key"
+            - name: DUSTPAN_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-admin-token"
+                  key: "admin-token"
           ports:
             - name: http
               containerPort: 8080
