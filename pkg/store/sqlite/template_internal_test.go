@@ -61,7 +61,7 @@ func internalTemplate() (string, error) {
 
 // copyInternalTemplate copies the migrated empty database to dst, with its
 // write-ahead log and shared memory files when present.
-func copyInternalTemplate(t *testing.T, dst string) {
+func copyInternalTemplate(t testing.TB, dst string) {
 	t.Helper()
 
 	src, err := internalTemplate()
@@ -79,7 +79,7 @@ func copyInternalTemplate(t *testing.T, dst string) {
 }
 
 // copyInternalFile copies one file from src to dst.
-func copyInternalFile(t *testing.T, src, dst string) {
+func copyInternalFile(t testing.TB, src, dst string) {
 	t.Helper()
 
 	in, err := os.Open(src) //nolint:gosec // Test copies its own template file to a temporary path.
@@ -112,7 +112,7 @@ func copyInternalFile(t *testing.T, src, dst string) {
 
 // openInternalTemplated opens a fresh store from the template copy in a
 // temporary directory.
-func openInternalTemplated(t *testing.T) *Store {
+func openInternalTemplated(t testing.TB) *Store {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
