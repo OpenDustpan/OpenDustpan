@@ -3,6 +3,7 @@ package inventory
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -22,7 +23,19 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (ident
 		return identity.Object{}, fmt.Errorf("inventory unit: %w", err)
 	}
 
-	return unitObject(e)
+	obj, err := unitObject(e)
+	if err != nil {
+		// A stored row with a tool or a name that is not valid answers as an
+		// unknown unit, before any authorization check, so that the answer
+		// does not tell a caller that the damaged row exists and does not
+		// repeat the stored text. The cause goes to the log.
+		h.logger.WarnContext(r.Context(), "stored unit has no valid object",
+			slog.String("unit_id", e.UnitID), slog.String("error", err.Error()))
+
+		return identity.Object{}, coreinventory.ErrUnitNotFound
+	}
+
+	return obj, nil
 }
 
 // getUnit answers GET /api/dustpan/v1/namespaces/-/units/{unitID} with the unit entry that

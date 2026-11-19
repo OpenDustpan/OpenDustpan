@@ -3,6 +3,7 @@ package objectcontext
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/graph"
@@ -71,30 +72,38 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (targe
 
 	unitID := r.PathValue("unit_id")
 
-	live, err := h.units.ListUnits(r.Context(), ns.Name)
-	if err != nil {
-		return target{}, fmt.Errorf("list units: %w", err)
+	// The unit ID is unique in the installation, so one indexed read finds the
+	// unit. The read never loads the units of the namespace before any
+	// authorization check.
+	live, err := h.units.GetUnit(r.Context(), unitID)
+	if err == nil {
+		// Defense in depth: GetUnit names no namespace. A unit of another
+		// namespace must not answer under this one, whatever the caller may
+		// read there.
+		if live.Namespace != ns.Name || live.UnitID != unitID {
+			return target{}, errNotFound
+		}
+
+		return h.liveTarget(r, ns, live)
 	}
 
-	for i := range live {
-		if live[i].UnitID == unitID {
-			return h.liveTarget(ns, live[i])
-		}
+	if !errors.Is(err, coreinventory.ErrUnitNotFound) {
+		return target{}, fmt.Errorf("get unit: %w", err)
 	}
 
 	return h.deletedTargetByID(r, ns, unitID)
 }
 
 // liveTarget returns the target of the live unit e.
-func (h *Handler) liveTarget(ns namespace.Namespace, e coreinventory.Entry) (target, error) {
+func (h *Handler) liveTarget(r *http.Request, ns namespace.Namespace, e coreinventory.Entry) (target, error) {
 	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: e.Tool, ID: e.UnitID})
 	if ref.Validate() != nil {
-		return target{}, errNotFound
+		return target{}, h.damagedRow(r, e.UnitID, ref.Validate())
 	}
 
 	obj, err := unitObject(e.Tool, ns.Name, e.Name, e.UnitID)
 	if err != nil {
-		return target{}, err
+		return target{}, h.damagedRow(r, e.UnitID, err)
 	}
 
 	return target{ns: ns, obj: obj, ref: ref, unit: &e, deleted: nil, lookupErr: nil}, nil
@@ -110,7 +119,7 @@ func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, uni
 
 	for i := range all {
 		if all[i].UnitID == unitID {
-			return h.goneTarget(ns, all[i])
+			return h.goneTarget(r, ns, all[i])
 		}
 	}
 
@@ -118,15 +127,15 @@ func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, uni
 }
 
 // goneTarget returns the target of the soft-deleted unit gone.
-func (h *Handler) goneTarget(ns namespace.Namespace, gone coreinventory.DeletedEntry) (target, error) {
+func (h *Handler) goneTarget(r *http.Request, ns namespace.Namespace, gone coreinventory.DeletedEntry) (target, error) {
 	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: gone.Tool, ID: gone.UnitID})
 	if ref.Validate() != nil {
-		return target{}, errNotFound
+		return target{}, h.damagedRow(r, gone.UnitID, ref.Validate())
 	}
 
 	obj, err := unitObject(gone.Tool, ns.Name, gone.Name, gone.UnitID)
 	if err != nil {
-		return target{}, err
+		return target{}, h.damagedRow(r, gone.UnitID, err)
 	}
 
 	return target{ns: ns, obj: obj, ref: ref, unit: nil, deleted: &gone, lookupErr: nil}, nil
@@ -140,4 +149,15 @@ func unitObject(tool string, ns namespace.Name, name, unitID string) (identity.O
 	}
 
 	return obj.WithUnitID(unitID), nil
+}
+
+// damagedRow logs the cause of a stored unit row that fails its checks and
+// returns errNotFound. The row answers as an unknown unit, before any
+// authorization check, so that a caller with no right on the unit cannot tell
+// that the row exists.
+func (h *Handler) damagedRow(r *http.Request, unitID string, cause error) error {
+	h.logger.WarnContext(r.Context(), "stored unit row is not served",
+		slog.String("unit_id", unitID), slog.String("error", cause.Error()))
+
+	return errNotFound
 }
