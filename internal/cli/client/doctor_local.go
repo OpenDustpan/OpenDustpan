@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 const (
@@ -130,15 +131,20 @@ func databaseCheck(d doctorSettings) checkResult {
 	return checkResult{statusPass, nameDatabase, "the database is set"}
 }
 
-// adminTokenCheck checks that each bootstrap admin token has at least 32
-// bytes. No token is a pass: the operator may sign in another way. The
-// detail never shows a token.
+// adminTokenCheck checks that the operator set a bootstrap admin token and
+// that each token has at least 32 bytes. It reads the tokens with
+// LoadAdminTokensFrom, the function that serve calls, so doctor fails when
+// serve exits with ErrAdminTokenMissing. The detail never shows a token.
 func adminTokenCheck(d doctorSettings) checkResult {
 	tokens, err := LoadAdminTokensFrom(d.lookup)
 
 	switch {
 	case errors.Is(err, ErrAdminTokenMissing):
-		return checkResult{statusPass, nameAdminToken, "no bootstrap admin token is set"}
+		return checkResult{
+			statusFail,
+			nameAdminToken,
+			err.Error() + ". To make a token, run: openssl rand -hex 32",
+		}
 	case err != nil:
 		return checkResult{statusFail, nameAdminToken, err.Error()}
 	}
@@ -154,6 +160,13 @@ func adminTokenCheck(d doctorSettings) checkResult {
 				),
 			}
 		}
+	}
+
+	// Serve builds its tokens with the same constructor, so a duplicate fails
+	// here and in serve with the same text. The error names the index of the
+	// token and never holds a token value.
+	if _, err := identity.NewStaticTokens(tokens...); err != nil {
+		return checkResult{statusFail, nameAdminToken, err.Error()}
 	}
 
 	return checkResult{

@@ -98,11 +98,14 @@ keyEncryptionKey:
     # The key in the Secret that holds the base64 key.
     key: key-encryption-key
 
-# Optional bootstrap admin tokens, comma-separated, from a Secret. The pod
-# gets them in DUSTPAN_ADMIN_TOKEN. Empty name means no bootstrap admin
-# token.
+# Required. The bootstrap admin tokens, comma-separated, from a Secret that
+# exists before the install. The pod gets them in DUSTPAN_ADMIN_TOKEN. `serve`
+# exits with "no admin token is set" without a token, so the chart refuses an
+# empty name. The chart never makes a token. Make one with
+# `openssl rand -hex 32`, and put it in the Secret.
 adminToken:
   existingSecret:
+    # Required. The name of a Secret in the namespace of the release.
     name: ""
     key: admin-token
 
