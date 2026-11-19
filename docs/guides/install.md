@@ -1,7 +1,8 @@
 # Install OpenDustpan v0.1.0
 
 This page is for operators who install v0.1.0. It shows how to pull the
-v0.1.0 image and install it with Helm.
+v0.1.0 image, what to use in place of a binary archive, and how to install it
+with Helm.
 
 ## Pull the image
 
@@ -38,6 +39,30 @@ Read the digest of a release in two places:
 - The summary of the release workflow run for the tag, on the GitHub
   Actions page of the repository.
 - The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
+
+## Check the version of the image
+
+The server in the image prints its version. The version is the tag of the
+release:
+
+```sh
+docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version
+```
+
+The output is `v0.1.0`.
+
+## Install from a binary archive
+
+Binary archives and the file `SHA256SUMS` are not available yet. No release
+exists, and the release workflow does not upload an archive. Do not look for a
+download link: none works.
+
+Use one of these ways today:
+
+- Build the server from source. The [quickstart](quickstart.md) shows the
+  commands, with a key-encryption key, a database and a first start.
+- Build the container image from your checkout with
+  `./scripts/build-image-local.sh`. The quickstart shows how to run it.
 
 ## Install with Helm
 

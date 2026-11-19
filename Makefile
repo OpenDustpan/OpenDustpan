@@ -449,8 +449,16 @@ build-launcher: ## Build the launcher binary, static with no cgo.
 demo: build ## Run the server with the web console and demo data on 127.0.0.1:8080 (needs Go, Node and npm; not part of check).
 	CONSOLE_REPO="$(CONSOLE_REPO)" CONSOLE_REF="$(CONSOLE_REF)" DEMO_PORT="$(DEMO_PORT)" ./scripts/demo.sh
 
-image-smoke: ## Build the container image and run the local smoke test (needs docker; not part of check).
+# The image version is VERSION=vX.Y.Z on the command line, as for
+# release-record-check. The value goes to the script through the environment,
+# so that a shell never reads it as code.
+image-smoke: export IMAGE_VERSION_ARG := $(VERSION)
+image-smoke: ## Build the container image and run the local smoke test: optional VERSION=vX.Y.Z (needs docker; not part of check).
+ifeq ($(origin VERSION),command line)
+	IMAGE_VERSION="$$IMAGE_VERSION_ARG" ./scripts/smoke-image.sh
+else
 	./scripts/smoke-image.sh
+endif
 
 compose-smoke: ## Start the stack of deploy/compose and drive the real Pulumi CLI and OpenTofu against it (needs docker with compose and openssl; not part of check).
 	E2E_COMPOSE=1 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...
