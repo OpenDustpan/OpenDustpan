@@ -118,6 +118,7 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"staticSignInProviders": "api",
 	},
 	"ldapProviders": {
+		"bindingOf":         "api",
 		"hasStaticSignIn":   "api",
 		"identityProviders": "api",
 		"ldapIDs":           "api",
