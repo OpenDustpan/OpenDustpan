@@ -815,6 +815,15 @@ func (s *Service) breakGlassKey(c Change) (BreakGlassKey, bool, error) {
 		return noBreakGlassKey(), false, nil
 	}
 
+	// Boundary check of the audit entry ID. The ID goes into the decision
+	// record, so an ID with a control or hidden character, bad UTF-8 or too
+	// many characters is refused before any store call. Defense in depth: the
+	// handler that reads the ID may check it too; this check does not rely on
+	// it, and it runs before the key and Consume.
+	if err := checkBreakGlassText("the audit entry ID", c.BreakGlass, breakGlassRefMax); err != nil {
+		return noBreakGlassKey(), false, err
+	}
+
 	if _, ok := s.breakGlass.(unwiredBreakGlassStore); ok {
 		return noBreakGlassKey(), false, fmt.Errorf(
 			"%w: a break-glass for a gate in error needs a pass store, and none is wired", ErrUnavailable,
@@ -866,6 +875,10 @@ func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key Br
 	switch {
 	case err == nil:
 		r.refusal = nil
+		// The gate still errs, and its error stays in the unit results of
+		// the record. The write passes, so the result is a warning, which
+		// the state guard admits.
+		rec.Result = ResultWarn
 		rec.BreakGlass = r.change.BreakGlass
 		rec.Warnings = append(rec.Warnings, "a break-glass pass let the write through a gate in error")
 		r.warnings = rec.Warnings

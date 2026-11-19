@@ -17,6 +17,10 @@ const (
 
 	// breakGlassReasonMax is the longest reason of a pass, in characters.
 	breakGlassReasonMax = 500
+
+	// breakGlassRefMax is the longest audit entry ID of a break-glass, in
+	// characters.
+	breakGlassRefMax = 128
 )
 
 // BreakGlassKey is the tuple that a pass is for: the holder, the stable ID of

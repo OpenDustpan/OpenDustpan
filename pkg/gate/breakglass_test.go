@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,11 +74,22 @@ func TestBreakGlassErrorPassesOnce(t *testing.T) {
 		t.Fatalf("Evaluate(error gate, valid pass) = %v, want nil", err)
 	}
 
-	if d.Result != gate.ResultError {
-		t.Errorf("Decision.Result = %q, want error: the gate still errs", d.Result)
+	// The state guard admits only allow and warn, so a passed write is a
+	// warning. The gate error stays in the unit results of the record.
+	if d.Result != gate.ResultWarn {
+		t.Errorf("Decision.Result = %q, want warn: the write passed", d.Result)
 	}
 
 	rec := e.newestRecord(t)
+	if rec.Result != gate.ResultWarn {
+		t.Errorf("Record.Result = %q, want warn", rec.Result)
+	}
+
+	hasErr := func(g gate.PolicyResult) bool { return g.Error }
+	if len(rec.Units) != 1 || !slices.ContainsFunc(rec.Units[0].Gates, hasErr) {
+		t.Errorf("Record.Units = %+v, want the gate error in the unit results", rec.Units)
+	}
+
 	if rec.BreakGlass != "audit-1" {
 		t.Errorf("Record.BreakGlass = %q, want audit-1: the next record names the break-glass", rec.BreakGlass)
 	}
@@ -249,6 +261,17 @@ func TestBreakGlassDenyStillRefuses(t *testing.T) {
 
 				e.putRule(t)
 				e.putGate(t, newSWGate(atUnit, "needs-two", "", gate.ApprovalOutcome("two-eyes"), "review"))
+			},
+			want: gate.ErrRuleFailed,
+		},
+		// An approval gate whose message does not render still matched with
+		// an approval: a pass must not pass it.
+		"an approval whose message does not render": {
+			extra: func(t *testing.T, e bgEnv) {
+				t.Helper()
+
+				e.putRule(t)
+				e.putGate(t, newSWGate(atUnit, "needs-two", "", gate.ApprovalOutcome("two-eyes"), "review {{unit.nothing}}"))
 			},
 			want: gate.ErrRuleFailed,
 		},
@@ -502,6 +525,11 @@ func TestBreakGlassHostileStoreRefuses(t *testing.T) {
 
 			return bgPass(t, "alice", gate.OperationDestroy, web, bgNow())
 		},
+		"a pass of another unit": func(t *testing.T) gate.BreakGlassPass {
+			t.Helper()
+
+			return bgPass(t, "alice", gate.OperationApply, bgUnit(t, "other", "ws-test-other"), bgNow())
+		},
 		"an expired pass": func(t *testing.T) gate.BreakGlassPass {
 			t.Helper()
 
@@ -530,6 +558,59 @@ func TestBreakGlassHostileStoreRefuses(t *testing.T) {
 
 		if rec := e.newestRecord(t); rec.BreakGlass != "" {
 			t.Errorf("%s: Record.BreakGlass = %q, want none", name, rec.BreakGlass)
+		}
+	}
+}
+
+// TestBreakGlassWarnMessageFailureStillPasses checks that a matched warn gate
+// whose message does not render is a gate in error that a pass lets through:
+// only a deny or an approval that matched blocks the pass.
+func TestBreakGlassWarnMessageFailureStillPasses(t *testing.T) {
+	t.Parallel()
+
+	e := newBGEnv(t)
+	e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
+	e.putGate(t, newSWGate(atUnit, "careful", "", gate.OutcomeWarn, "take care of {{unit.nothing}}"))
+	e.issue(t, "alice", gate.OperationApply, bgUnit(t, "web", "ws-test-web"))
+
+	d, err := e.svc.Evaluate(t.Context(), e.change(t))
+	if err != nil {
+		t.Fatalf("Evaluate = %v, want nil: a warn gate in error passes with a pass", err)
+	}
+
+	if d.Result != gate.ResultWarn || e.store.unused() != 0 {
+		t.Errorf("Result = %q, unused = %d, want warn and 0", d.Result, e.store.unused())
+	}
+}
+
+// TestBreakGlassBadAuditIDRefuses sends a hostile audit entry ID to the
+// service. Each one refuses with ErrInvalid before the store is read, and no
+// pass is used.
+func TestBreakGlassBadAuditIDRefuses(t *testing.T) {
+	t.Parallel()
+
+	for name, id := range map[string]string{
+		"newline":       "audit\n1",
+		"NUL":           "audit\x001",
+		"escape":        "audit\x1b[31m1",
+		"bidi override": "audit\u202e1",
+		"too long":      strings.Repeat("a", 129),
+		"invalid UTF-8": "audit\xff1",
+	} {
+		e := newBGEnv(t)
+		e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
+		e.issue(t, "alice", gate.OperationApply, bgUnit(t, "web", "ws-test-web"))
+
+		c := e.change(t)
+		c.BreakGlass = id
+
+		if _, err := e.svc.Evaluate(t.Context(), c); !errors.Is(err, gate.ErrInvalid) {
+			t.Errorf("%s: Evaluate = %v, want ErrInvalid", name, err)
+		}
+
+		if e.store.unused() != 1 || e.store.consumes.Load() != 0 || len(e.records(t)) != 0 {
+			t.Errorf("%s: unused = %d, consumes = %d, records = %d, want 1, 0 and 0",
+				name, e.store.unused(), e.store.consumes.Load(), len(e.records(t)))
 		}
 	}
 }
