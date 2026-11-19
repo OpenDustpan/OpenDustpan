@@ -130,8 +130,28 @@ func TestBreakGlassReplayRefuses(t *testing.T) {
 		}
 	}
 
-	if rec := e.newestRecord(t); rec.Result != gate.ResultError {
-		t.Errorf("refused record Result = %q, want error", rec.Result)
+	// Both records have the same time (fixed clock), so pick the refused
+	// record by the ID that the refusal names.
+	if refusal == nil {
+		return
+	}
+
+	var found bool
+
+	for _, r := range e.records(t) {
+		if r.ID != refusal.Record {
+			continue
+		}
+
+		found = true
+
+		if r.Result != gate.ResultError {
+			t.Errorf("refused record Result = %q, want error", r.Result)
+		}
+	}
+
+	if !found {
+		t.Errorf("no record with ID %q: the refusal names a missing record", refusal.Record)
 	}
 }
 
