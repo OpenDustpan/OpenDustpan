@@ -809,7 +809,7 @@ func (s *Store) removeAreas(drop func(backup.StagingArea) bool) error {
 // file, in its fence transaction. The rename then makes the record live with
 // the restored data, or neither.
 func (s *Store) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
 	path, err := s.areaPath(a)
 	if err != nil {
@@ -822,7 +822,7 @@ func (s *Store) ApplyRestoreArea(
 	)
 
 	plan := swapPlan{
-		staged: path, keepAccess: keepAccess,
+		staged: path, keepAccess: d.KeepAccessTables, keepSettings: d.KeepSettingKeys,
 		before: func(ctx context.Context) error {
 			// The fence comes first, before the first change, so a cancel
 			// before the swap and the swap have one winner.
@@ -854,7 +854,7 @@ func (s *Store) ApplyRestoreArea(
 			}, nil)
 		},
 		after: func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error {
-			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
+			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, d))
 		},
 	}
 

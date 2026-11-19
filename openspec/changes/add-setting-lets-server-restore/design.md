@@ -5,7 +5,8 @@ Restore must not replace the access tables by default. An installation setting w
 ## Decisions
 
 1. **API-only key in generic settings.** The setting is a stored installation boolean, default false, with no flag, env or file layer. The change path is PATCH /api/dustpan/v1/settings, gated on server:manage-settings plus server:restore-access with a fresh session step. This writer rule is provisional until the owner reviews it.
-2. **Snapshot read at apply time.** The restore apply step reads the stored value once at the start of the apply transaction. A read failure or unknown text fails closed. The two-path check runs in the same write transaction.
+2. **Snapshot read at apply time.** The restore swap step reads the stored value once, when it starts, and makes one decision. The store records the decision in the result of the swap step, in the same transaction as the swap. Nothing is stored before that transaction, so a retry of the step decides again and the record always names the swap that happened. The after-apply step writes the audit entries from the recorded decision. A read failure or unknown text fails closed. The two-path check runs in the same write transaction.
+3. **A restore keeps the live row of the key.** The settings table is not an access table, so a backup could set the key. A restore keeps the live row of the key, and of every key that the list in pkg/backup names, unless the caller holds server:restore-access. The route decides whether the caller holds the action, and the service gives the decision to the store. A caller with server:restore-access takes the value of the backup, and a change of the value writes a setting-change audit entry with the old and the new value.
 
 ## Structure
 

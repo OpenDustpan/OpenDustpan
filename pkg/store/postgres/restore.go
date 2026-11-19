@@ -101,7 +101,7 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 	staging := s.stagingSchema
 
-	plan := swapPlan{staging: staging, previous: "", keepAccess: false, before: nil, after: nil}
+	plan := swapPlan{staging: staging, previous: "", keepAccess: false, keepSettings: nil, before: nil, after: nil}
 	if _, err := s.swapStaging(ctx, plan); err != nil {
 		return err
 	}
@@ -122,6 +122,9 @@ type swapPlan struct {
 	previous string
 	// keepAccess keeps the current rows of the access tables.
 	keepAccess bool
+	// keepSettings lists the keys of the installation settings whose live rows
+	// replace the staged rows, with or without keepAccess.
+	keepSettings []string
 	// before runs in the swap transaction after the swap lock and before
 	// the first change: the first check of the step fence, with no lock on
 	// the row of the operation, and the check of the installation state.
@@ -280,6 +283,13 @@ type swapInTarget struct {
 func (s *Store) swapIn(
 	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
 ) error {
+	// Defense in depth: the service and the restore route decide which keys a
+	// caller may take from a backup; this layer keeps the live row of each
+	// named key itself and refuses a key that is not on the list.
+	if err := keepLiveSettings(ctx, tx, in.live, in.plan.staging, in.plan.keepSettings); err != nil {
+		return err
+	}
+
 	if in.plan.keepAccess {
 		n, err := s.keepAccessTx(ctx, tx, srv, in.live, in.plan)
 

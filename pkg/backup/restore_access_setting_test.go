@@ -85,7 +85,8 @@ func TestRestoreAccessSettingOnReplaces(t *testing.T) {
 	}
 
 	objects := auditObjects(setup.live.devSnapshot().appends)
-	if !strings.Contains(objects, "replaced the access tables because the setting "+backup.SettingRestoreAccessTables) {
+	want := "replaced because " + backup.SettingRestoreAccessTables + " is on and the caller lacks server:restore-access"
+	if !strings.Contains(objects, want) {
 		t.Fatalf("no restore entry names the widened path: %v", objects)
 	}
 }

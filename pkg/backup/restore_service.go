@@ -821,6 +821,8 @@ type restoreOutcome struct {
 	state   RestoreState
 	errText string
 	full    error
+	// access is what the swap did to the access tables, from its record.
+	access string
 }
 
 // logObjectPath matches a quoted backup-target object path, for example
@@ -966,10 +968,7 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 		pre = record.PreBackupID.String()
 	}
 
-	accessMode := "replaced"
-	if out.req.KeepAccessTables {
-		accessMode = "kept"
-	}
+	accessMode := out.access
 
 	attrs := []slog.Attr{
 		slog.String("restore_id", out.id.String()),

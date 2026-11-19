@@ -114,7 +114,7 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 		return backup.ErrCorrupt
 	}
 
-	plan := swapPlan{staged: s.stagingPath, keepAccess: false, before: nil, after: nil}
+	plan := swapPlan{staged: s.stagingPath, keepAccess: false, keepSettings: nil, before: nil, after: nil}
 	if _, err := s.swapStaged(ctx, plan); err != nil {
 		return err
 	}
@@ -130,6 +130,9 @@ type swapPlan struct {
 	staged string
 	// keepAccess keeps the current rows of the access tables.
 	keepAccess bool
+	// keepSettings lists the keys of the installation settings whose live rows
+	// replace the staged rows, with or without keepAccess.
+	keepSettings []string
 	// before runs under the store write lock, before the first change to
 	// the staged file: the check of the step fence on the live database.
 	before func(ctx context.Context) error
@@ -185,19 +188,9 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 		return 0, checkErr
 	}
 
-	var dropped int64
-
-	if plan.keepAccess {
-		if keepErr := s.keepLiveAccessTables(ctx, plan.staged); keepErr != nil {
-			return 0, keepErr
-		}
-
-		// The swap takes temp_admins from the backup and keeps the live
-		// principals, so a staged row can name a principal that the live
-		// principals table does not hold.
-		if dropped, err = dropDanglingTempAdmins(ctx, plan.staged); err != nil {
-			return 0, err
-		}
+	dropped, err := s.keepLive(ctx, plan)
+	if err != nil {
+		return 0, err
 	}
 
 	var after func(context.Context, *sql.Tx) error
@@ -216,6 +209,31 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (int64, error) {
 	}
 
 	return dropped, nil
+}
+
+// keepLive keeps the live rows that plan names in the staged file: first the
+// rows of the settings keys, then, with plan.keepAccess, the access tables.
+// It returns the count of the dropped temp_admins rows.
+func (s *Store) keepLive(ctx context.Context, plan swapPlan) (int64, error) {
+	// Defense in depth: the service and the restore route decide which keys a
+	// caller may take from a backup; this layer keeps the live row of each
+	// named key itself and refuses a key that is not on the list.
+	if err := s.keepLiveSettings(ctx, plan.staged, plan.keepSettings); err != nil {
+		return 0, err
+	}
+
+	if !plan.keepAccess {
+		return 0, nil
+	}
+
+	if err := s.keepLiveAccessTables(ctx, plan.staged); err != nil {
+		return 0, err
+	}
+
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals, so a staged row can name a principal that the live
+	// principals table does not hold.
+	return dropDanglingTempAdmins(ctx, plan.staged)
 }
 
 // fenceStagedFile fences the staged file at path, copies the control tables

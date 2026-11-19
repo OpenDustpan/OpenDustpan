@@ -963,11 +963,11 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables will be replaced"},
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "the caller holds server:restore-access"},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables will be kept",
+			want: "the caller lacks server:restore-access",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1102,11 +1102,15 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{
+			name: "replaces with restore-access", deny: map[identity.Action]bool{},
+			want: "access tables replaced; setting restore.replace-access-tables " +
+				"taken from the backup (the live value was not read before the swap)",
+		},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables kept",
+			want: "access tables kept; setting restore.replace-access-tables kept (the live value was not read)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

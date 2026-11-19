@@ -63,6 +63,7 @@ func TestItemKeyBackupRestore(t *testing.T) {
 			RetryBase:       time.Millisecond,
 			Now:             nil,
 			Logger:          nil,
+			AccessSetting:   nil,
 		})
 		if err != nil {
 			t.Fatalf("new restore service: %v", err)

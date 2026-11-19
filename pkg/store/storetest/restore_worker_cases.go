@@ -283,6 +283,7 @@ func (r *workerRig) service(t *testing.T, w workerService) *backup.RestoreServic
 		Leases: r.st, Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
 		AllowDevBackups: false, AllowDevHint: "", Owner: w.owner, Lease: r.lease,
 		CleanupLockWait: w.lockWait, RetryBase: time.Millisecond, Now: nil, Logger: nil,
+		AccessSetting: nil,
 	})
 	if err != nil {
 		t.Fatalf("restore service of %s: %v", w.owner, err)
@@ -1022,7 +1023,7 @@ type swapKiller struct {
 
 // ApplyRestoreArea implements backup.RestoreStaging.
 func (k swapKiller) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
 	swapCtx, cancel := context.WithCancel(ctx)
 	timer := time.AfterFunc(time.Millisecond, cancel)
@@ -1030,7 +1031,7 @@ func (k swapKiller) ApplyRestoreArea(
 	defer timer.Stop()
 	defer cancel()
 
-	_, err := k.RestoreLive.ApplyRestoreArea(swapCtx, f, a, keepAccess)
+	_, err := k.RestoreLive.ApplyRestoreArea(swapCtx, f, a, d)
 
 	k.gate.crash(ctx)
 

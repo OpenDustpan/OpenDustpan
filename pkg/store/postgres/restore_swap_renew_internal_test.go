@@ -63,7 +63,7 @@ func checkRenewalDuringSwap(t *testing.T, keepAccess bool) {
 	done := make(chan error, 1)
 
 	go func() {
-		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, keepAccess)
+		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(keepAccess))
 		done <- applyErr
 	}()
 
@@ -124,7 +124,7 @@ func TestSlowRestoreSwapKeepsItsClaim(t *testing.T) {
 	}
 
 	swap := func(ctx context.Context, sc durable.StepContext) ([]byte, error) {
-		_, applyErr := s.ApplyRestoreArea(ctx, sc.Fence, staged.Area, false)
+		_, applyErr := s.ApplyRestoreArea(ctx, sc.Fence, staged.Area, backup.PlainSwap(false))
 
 		return nil, applyErr
 	}
@@ -243,7 +243,7 @@ func checkChangeDuringSwap(
 	done := make(chan error, 1)
 
 	go func() {
-		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false)
+		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(false))
 		done <- applyErr
 	}()
 

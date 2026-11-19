@@ -198,6 +198,13 @@ func (h *Handler) startRestore(
 	id := backup.MintRestoreID()
 	keepAccess := !canReplaceAccess(ctx, h, p)
 
+	// The entry records the decision of canReplaceAccess, not a claim about
+	// the swap: the swap writes its own entry with the result.
+	callerAccess := "the caller holds server:restore-access"
+	if keepAccess {
+		callerAccess = "the caller lacks server:restore-access"
+	}
+
 	startErr := h.restores.Start(ctx, id, backup.RestoreRequest{
 		BackupID:         backup.ID(req.BackupID),
 		PreBackupID:      "",
@@ -212,15 +219,10 @@ func (h *Handler) startRestore(
 		return
 	}
 
-	accessMode := "replaced"
-	if keepAccess {
-		accessMode = "kept"
-	}
-
 	h.appendServerChange(r, p, serverChange{
 		at:      time.Now().UTC(),
 		action:  identity.ActionServerRestore,
-		object:  restoreAuditObject(id.String(), req.BackupID, accessMode),
+		object:  restoreAuditObject(id.String(), req.BackupID, callerAccess),
 		outcome: audit.OutcomeSuccess,
 	})
 
@@ -254,11 +256,13 @@ func canReplaceAccess(
 	return true
 }
 
-// restoreAuditObject names the request of one restore for its audit entry,
-// with whether the restore will replace or keep the access tables. The entry
-// records that the server accepted the request, not how the restore ends.
-func restoreAuditObject(restoreID, backupID, accessMode string) string {
-	return "restore " + restoreID + " of backup " + backupID + " requested (access tables will be " + accessMode + ")"
+// restoreAuditObject names the request of one restore for its audit entry. It
+// records that the server accepted the request and whether the caller holds
+// server:restore-access. It does not claim what the swap does to the access
+// tables: a caller without the action replaces them when the restore access
+// setting is on at the swap, and the entry of the swap records the result.
+func restoreAuditObject(restoreID, backupID, callerAccess string) string {
+	return "restore " + restoreID + " of backup " + backupID + " requested (" + callerAccess + ")"
 }
 
 // parseStartRestoreRequest decodes the start body: the whole body must be one

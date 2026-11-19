@@ -67,3 +67,15 @@ When a restore replaces the access tables because the setting is on, the server 
 #### Scenario: Widened path recorded
 - **WHEN** a widened restore commits
 - **THEN** the restore entry names the widened path
+
+### Requirement: Restore keeps the live setting row
+
+While the caller of a restore does not hold server:restore-access, the server SHALL keep the live row of the restore access setting and SHALL NOT take the value from the backup.
+
+#### Scenario: Backup with true, caller without the action
+- **WHEN** a backup holds the value true and a caller with only server:restore restores it
+- **THEN** the live value stays unchanged
+
+#### Scenario: Backup value, caller with the action
+- **WHEN** a caller with server:restore-access restores a backup that holds another value
+- **THEN** the server takes the value of the backup and writes a setting-change audit entry with the old and the new value

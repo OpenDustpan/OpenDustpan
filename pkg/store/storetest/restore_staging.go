@@ -22,6 +22,7 @@ func restoreStagingCases() []restoreCase {
 		{name: "the swap of a staging area checks the fence in its transaction", test: testRestoreAreaSwapFenced},
 		{name: "a cancel before the swap and the swap have one winner", test: testRestoreAreaSwapCanceled},
 		{name: "cleanup drops the areas of its restore and of ended restores", test: testRestoreAreaCleanup},
+		{name: "a swap keeps the live row of a kept setting key", test: testRestoreSwapKeepsSettingRow},
 		{
 			name: "a restore drops the issuer keys of each namespace of another installation",
 			test: testRestoreAreaDropsIssuerKeys,
@@ -183,7 +184,9 @@ func testRestoreAreaRefusesBadName(t *testing.T, newStore RestoreFactory) {
 			t.Fatalf("stage into %+v: error = %v, want ErrInvalidRestoreID", area, err)
 		}
 
-		_, err := r.staging.ApplyRestoreArea(t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, false)
+		_, err := r.staging.ApplyRestoreArea(
+			t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, backup.PlainSwap(false),
+		)
 		if !errors.Is(err, backup.ErrInvalidRestoreID) {
 			t.Fatalf("swap of %+v: error = %v, want ErrInvalidRestoreID", area, err)
 		}
@@ -221,7 +224,9 @@ func testRestoreAreaSwapFenced(t *testing.T, newStore RestoreFactory) {
 	// A takeover: the first holder releases, and a second holder claims.
 	taken := replaceClaim(t, durableOps, r.held)
 
-	_, err := r.staging.ApplyRestoreArea(t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, false)
+	_, err := r.staging.ApplyRestoreArea(
+		t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, backup.PlainSwap(false),
+	)
 	if !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("swap by the replaced holder: error = %v, want ErrClaimLost", err)
 	}
@@ -235,7 +240,7 @@ func testRestoreAreaSwapFenced(t *testing.T, newStore RestoreFactory) {
 	// The swap runs only in maintenance mode: in normal mode the live holder
 	// is refused too, and nothing changes.
 	swap := taken.Claim.Step(backup.RestoreStepSwap)
-	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, false); !errors.Is(
+	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, backup.PlainSwap(false)); !errors.Is(
 		err, maintenance.ErrStateChanged,
 	) {
 		t.Fatalf("swap in normal mode: error = %v, want ErrStateChanged", err)
@@ -251,7 +256,7 @@ func testRestoreAreaSwapFenced(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("enter maintenance mode: %v", err)
 	}
 
-	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, false); err != nil {
+	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, backup.PlainSwap(false)); err != nil {
 		t.Fatalf("swap by the live holder: %v", err)
 	}
 
@@ -286,7 +291,9 @@ func testRestoreAreaSwapCanceled(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("cancel before the swap: %v", err)
 	}
 
-	_, err := r.staging.ApplyRestoreArea(t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, false)
+	_, err := r.staging.ApplyRestoreArea(
+		t.Context(), r.held.Claim.Step(backup.RestoreStepSwap), area, backup.PlainSwap(false),
+	)
 	if !errors.Is(err, durable.ErrCanceled) {
 		t.Fatalf("swap after the cancel: error = %v, want ErrCanceled", err)
 	}
@@ -477,7 +484,7 @@ func runIssuerDropCase(t *testing.T, newStore RestoreFactory, tc *issuerDropCase
 	}
 
 	swap := r.held.Claim.Step(backup.RestoreStepSwap)
-	if _, err = r.staging.ApplyRestoreArea(t.Context(), swap, area, false); err != nil {
+	if _, err = r.staging.ApplyRestoreArea(t.Context(), swap, area, backup.PlainSwap(false)); err != nil {
 		t.Fatalf("%s: swap: %v", tc.name, err)
 	}
 

@@ -466,10 +466,10 @@ func (h *Handler) writeSettingsPatch(
 // of it needs besides server:manage-settings. The restore access setting
 // widens which restores replace the access tables, so only a holder of the
 // action that guards that replace may change it.
-//
-//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
-var settingExtraActions = map[string]identity.Action{
-	backup.SettingRestoreAccessTables: identity.ActionServerRestoreAccess,
+func settingExtraActions() map[string]identity.Action {
+	return map[string]identity.Action{
+		backup.SettingRestoreAccessTables: identity.ActionServerRestoreAccess,
+	}
 }
 
 // authorizeSettingEdits checks, at the point of use, the extra action of each
@@ -484,8 +484,10 @@ func (h *Handler) authorizeSettingEdits(
 		return nil
 	}
 
+	extra := settingExtraActions()
+
 	for _, edit := range patch {
-		action, ok := settingExtraActions[edit.Key]
+		action, ok := extra[edit.Key]
 		if !ok {
 			continue
 		}

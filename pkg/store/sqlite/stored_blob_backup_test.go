@@ -87,6 +87,7 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live, Leases: st,
 		Target: in.Target, Key: in.Key, Installation: "test", AfterApply: nil, Admit: nil, AllowDevBackups: false,
 		AllowDevHint: "", Owner: "", Lease: 0, CleanupLockWait: 0, RetryBase: time.Millisecond, Now: nil, Logger: nil,
+		AccessSetting: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)

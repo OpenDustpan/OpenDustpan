@@ -433,7 +433,7 @@ func (m applyMode) apply(ctx context.Context, l *restoreServiceLive) (backup.Kee
 // ApplyRestoreArea implements backup.RestoreStaging over the applies of the
 // fake.
 func (l *restoreServiceLive) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
 	if err := l.checkFence(ctx, f, a.Restore); err != nil {
 		return backup.KeepAccessResult{}, err
@@ -443,12 +443,27 @@ func (l *restoreServiceLive) ApplyRestoreArea(
 		return backup.KeepAccessResult{}, fmt.Errorf("swap in state %q: %w", state, maintenance.ErrStateChanged)
 	}
 
-	kept, err := applyMode{keepAccess: keepAccess}.apply(ctx, l)
+	l.mu.Lock()
+	l.swapAttempts++
+	attempt, hook := l.swapAttempts, l.swapHook
+	l.mu.Unlock()
+
+	if hook != nil {
+		if err := hook(attempt); err != nil {
+			return backup.KeepAccessResult{}, err
+		}
+	}
+
+	kept, err := applyMode{keepAccess: d.KeepAccessTables}.apply(ctx, l)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept))
+	l.mu.Lock()
+	l.decisions = append(l.decisions, d)
+	l.mu.Unlock()
+
+	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept, d))
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging.

@@ -808,7 +808,7 @@ func (s *Store) dropAreas(ctx context.Context, drop func(backup.StagingArea) boo
 
 // ApplyRestoreArea implements backup.RestoreStaging.
 func (s *Store) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
 	schema, err := areaSchema(a)
 	if err != nil {
@@ -833,7 +833,7 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	plan := swapPlan{
-		staging: schema, previous: previous, keepAccess: keepAccess,
+		staging: schema, previous: previous, keepAccess: d.KeepAccessTables, keepSettings: d.KeepSettingKeys,
 		before: func(tx pgx.Tx) error {
 			return s.checkSwapStart(ctx, s.queries.WithTx(tx), f, a, staged)
 		},
@@ -854,7 +854,7 @@ func (s *Store) ApplyRestoreArea(
 				return fenceErr
 			}
 
-			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
+			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, d))
 		},
 	}
 

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -73,12 +76,28 @@ func RestoreAccessSettingDeclarations() []setting.Declaration {
 	}
 }
 
-// widenedAccess reports whether the restore access setting is on now. It
-// fails closed: no reader, a read error, or a stored value that is not true or
-// false all answer false, so the restore keeps the access tables.
-func (s *RestoreService) widenedAccess(ctx context.Context) bool {
+// KeptSettingKeys returns the keys of the installation settings whose live
+// rows a restore keeps when its caller does not hold server:restore-access.
+// Each of these keys widens a later restore, so a backup must not set it
+// through the restore of the settings table. A key that needs an extra
+// action to change is in this list.
+func KeptSettingKeys() []string {
+	return []string{SettingRestoreAccessTables}
+}
+
+// IsKeptSettingKey reports whether key is one of KeptSettingKeys. The stores
+// check each key of a swap with it, so a swap cannot keep or replace a row
+// that this package did not name.
+func IsKeptSettingKey(key string) bool {
+	return key == SettingRestoreAccessTables
+}
+
+// readAccessSetting returns the stored text of the restore access setting.
+// ok is false when the service has no reader or the read fails: the caller
+// then fails closed.
+func (s *RestoreService) readAccessSetting(ctx context.Context) (string, bool) {
 	if s.accessSetting == nil {
-		return false
+		return "", false
 	}
 
 	text, err := s.accessSetting(ctx)
@@ -86,9 +105,16 @@ func (s *RestoreService) widenedAccess(ctx context.Context) bool {
 		s.logger.LogAttrs(ctx, slog.LevelWarn, "restore keeps the access tables: the setting cannot be read",
 			slog.String("setting", SettingRestoreAccessTables))
 
-		return false
+		return "", false
 	}
 
+	return text, true
+}
+
+// widenedAccess reports whether the restore access setting is on in text. It
+// fails closed: text that is not true or false answers false, so the restore
+// keeps the access tables.
+func (s *RestoreService) widenedAccess(ctx context.Context, text string) bool {
 	value, err := newRestoreAccessSetting(text)
 	if err != nil {
 		s.logger.LogAttrs(ctx, slog.LevelWarn, "restore keeps the access tables: the setting value is not valid",
@@ -100,11 +126,105 @@ func (s *RestoreService) widenedAccess(ctx context.Context) bool {
 	return value.on
 }
 
-// widenedAccessAuditObject names the widened path of restore in for its audit
-// entry: the access tables are replaced for a caller without
-// server:restore-access, because the setting is on.
-func widenedAccessAuditObject(in restoreInput) string {
-	return "restore " + in.ID.String() + " of backup " + in.BackupID.String() +
-		" replaced the access tables because the setting " + SettingRestoreAccessTables +
-		" is on (the caller did not hold server:restore-access)"
+// swapDecision makes the one decision of the apply of in. A request that keeps
+// the access tables came from a caller without server:restore-access. That
+// caller replaces the access tables only when the setting is on in text. Only
+// a caller with server:restore-access takes the row of the setting from the
+// backup, so every other caller keeps the live row of each kept key.
+func (s *RestoreService) swapDecision(ctx context.Context, in restoreInput) SwapDecision {
+	text, ok := s.readAccessSetting(ctx)
+	d := PlainSwap(in.KeepAccessTables)
+
+	if ok {
+		d.SettingBefore = text
+	}
+
+	if !in.KeepAccessTables {
+		return d
+	}
+
+	d.KeepSettingKeys = KeptSettingKeys()
+
+	if ok && s.widenedAccess(ctx, text) {
+		d.KeepAccessTables, d.Widened = false, true
+	}
+
+	return d
+}
+
+// accessModeText names what the swap did to the access tables, for the audit
+// entry and the log line, from the decision that the swap recorded. Without a
+// recorded swap the restore did not change them.
+func accessModeText(op durable.Operation) string {
+	rec, ok := op.Step(RestoreStepSwap)
+	if !ok {
+		return "unchanged"
+	}
+
+	d, err := DecodeRestoreSwapDecision(rec.Result)
+
+	var mode string
+
+	switch {
+	case err != nil:
+		return "unknown"
+	case d.KeepAccessTables:
+		mode = "kept"
+	case d.Widened:
+		mode = "replaced because " + SettingRestoreAccessTables + " is on and the caller lacks server:restore-access"
+	default:
+		mode = "replaced"
+	}
+
+	return mode + "; setting " + SettingRestoreAccessTables + " " + settingModeText(d)
+}
+
+// settingModeText says what the swap did to the row of the restore access
+// setting, with the live value before the swap.
+func settingModeText(d SwapDecision) string {
+	value := "the live value was not read"
+	if d.SettingBefore != "" {
+		value = "the live value was " + d.SettingBefore
+	}
+
+	if len(d.KeepSettingKeys) > 0 {
+		return "kept (" + value + ")"
+	}
+
+	return "taken from the backup (" + value + " before the swap)"
+}
+
+// settingAuditEntry returns the setting-change entry of a restore that took a
+// new value of the restore access setting from its backup, or false when the
+// swap kept the live row or the value is the same. The entry has the form of a
+// change by the settings API: the key, the old and the new value.
+func (s *RestoreService) settingAuditEntry(
+	ctx context.Context, op durable.Operation, in restoreInput,
+) (audit.Entry, bool) {
+	var none audit.Entry
+
+	rec, ok := op.Step(RestoreStepSwap)
+	if !ok {
+		return none, false
+	}
+
+	d, err := DecodeRestoreSwapDecision(rec.Result)
+	if err != nil || len(d.KeepSettingKeys) > 0 || s.accessSetting == nil {
+		return none, false
+	}
+
+	after, err := s.accessSetting(ctx)
+	if err != nil || d.SettingBefore == "" || after == d.SettingBefore {
+		return none, false
+	}
+
+	old := d.SettingBefore
+	entry := s.restoreAuditEntry(in, "installation settings")
+	entry.Action = string(identity.ActionServerManageSettings)
+	entry.Reason = "restore " + in.ID.String() + " took the value from backup " + in.BackupID.String()
+	entry.Changes = []audit.Change{{
+		Key: SettingRestoreAccessTables, Old: &old, New: after, Layer: "database", TakesEffect: "",
+	}}
+
+	return entry, true
 }
