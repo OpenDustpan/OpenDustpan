@@ -148,7 +148,7 @@ func TestStepSwapFailsTheOperationAtOnce(t *testing.T) {
 		Lease: time.Minute, RenewEvery: 0, PollEvery: time.Millisecond, MaxAttempts: 50, ExpiryLimit: 50,
 		Backoff:      durable.Backoff{Base: time.Millisecond, Max: time.Millisecond},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0}, WriteTimeout: time.Second, Deferred: nil,
-		StopOnRenewalError: false, Logger: nil,
+		StopOnRenewalError: false, Logger: nil, Rand: nil,
 	})
 	if err != nil {
 		t.Fatalf("new runner: %v", err)

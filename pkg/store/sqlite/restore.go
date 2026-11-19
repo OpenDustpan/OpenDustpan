@@ -335,7 +335,7 @@ func checkWorkCopy(path string) error {
 	}
 
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || uint64(stat.Nlink) != 1 { //nolint:unconvert // The type of Nlink differs between Linux and macOS.
+	if !ok || stat.Nlink != 1 {
 		return fmt.Errorf("work copy has more than one hard link: %w", backup.ErrCorrupt)
 	}
 

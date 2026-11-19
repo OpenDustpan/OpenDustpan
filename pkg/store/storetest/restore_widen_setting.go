@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/setting"
@@ -94,13 +95,7 @@ func runWidenSettingCase(t *testing.T, newStore RestoreFactory, tc *widenSetting
 		t.Fatalf("create the marker group: %v", err)
 	}
 
-	switch {
-	case tc.absent:
-	case tc.raw:
-		setRawRestoreAccessSetting(t, dst.SettingPorts().Store, tc.live)
-	default:
-		setRestoreAccessSetting(t, dst.SettingPorts().Store, tc.live)
-	}
+	seedLiveSetting(t, dst.SettingPorts().Store, tc)
 
 	area := r.stage(t, r.held.Claim.Token)
 
@@ -124,12 +119,36 @@ func runWidenSettingCase(t *testing.T, newStore RestoreFactory, tc *widenSetting
 		t.Fatalf("marker group kept = %v, want %v (error %v)", markerErr == nil, tc.wantMarker, markerErr)
 	}
 
-	op, getErr := r.dst.DurableOperationsPort().Get(t.Context(), swap.Operation)
-	if getErr != nil {
-		t.Fatalf("get operation: %v", getErr)
+	if got := swapRecorded(t, r.dst.DurableOperationsPort(), swap.Operation); got != tc.wantSwapped {
+		t.Fatalf("swap step recorded = %v, want %v", got, tc.wantSwapped)
+	}
+}
+
+// seedLiveSetting writes the live row of the restore access setting that tc
+// names: none, text that the declaration refuses, or a value that the
+// settings service accepts.
+func seedLiveSetting(t *testing.T, store setting.Store, tc *widenSettingCase) {
+	t.Helper()
+
+	switch {
+	case tc.absent:
+	case tc.raw:
+		setRawRestoreAccessSetting(t, store, tc.live)
+	default:
+		setRestoreAccessSetting(t, store, tc.live)
+	}
+}
+
+// swapRecorded reports whether the swap step of operation id is recorded.
+func swapRecorded(t *testing.T, ops durable.Store, id durable.ID) bool {
+	t.Helper()
+
+	op, err := ops.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
 	}
 
-	if _, recorded := op.Step(backup.RestoreStepSwap); recorded != tc.wantSwapped {
-		t.Fatalf("swap step recorded = %v, want %v", recorded, tc.wantSwapped)
-	}
+	_, recorded := op.Step(backup.RestoreStepSwap)
+
+	return recorded
 }

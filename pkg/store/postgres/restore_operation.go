@@ -907,7 +907,11 @@ func checkWidenedSetting(ctx context.Context, tx pgx.Tx, d backup.SwapDecision) 
 	case err == nil && backup.EffectiveRestoreAccessSettingText(value) == "true":
 		return nil
 	case err == nil || errors.Is(err, pgx.ErrNoRows):
-		return fmt.Errorf("widen the swap while %s is not true: %w", backup.SettingRestoreAccessTables, backup.ErrCorrupt)
+		return fmt.Errorf(
+			"widen the swap while %s is not true: %w",
+			backup.SettingRestoreAccessTables,
+			backup.ErrCorrupt,
+		)
 	default:
 		return fmt.Errorf("read live setting row: %w", backup.ErrExportRead)
 	}

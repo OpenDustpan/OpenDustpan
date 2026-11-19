@@ -833,7 +833,7 @@ func (s *Store) ApplyRestoreArea(
 		before: func(ctx context.Context) error {
 			// The fence comes first, before the first change, so a cancel
 			// before the swap and the swap have one winner.
-			err := s.runTx(ctx, func(q *db.Queries) error {
+			txErr := s.runTx(ctx, func(q *db.Queries) error {
 				var fenceErr error
 
 				row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore)
@@ -843,8 +843,8 @@ func (s *Store) ApplyRestoreArea(
 
 				return checkSwapState(ctx, q, a, path)
 			}, nil)
-			if err != nil {
-				return err
+			if txErr != nil {
+				return txErr
 			}
 
 			return s.checkWidenedSetting(ctx, d)
@@ -891,7 +891,11 @@ func (s *Store) checkWidenedSetting(ctx context.Context, d backup.SwapDecision) 
 	case err == nil && backup.EffectiveRestoreAccessSettingText(value) == "true":
 		return nil
 	case err == nil || errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("widen the swap while %s is not true: %w", backup.SettingRestoreAccessTables, backup.ErrCorrupt)
+		return fmt.Errorf(
+			"widen the swap while %s is not true: %w",
+			backup.SettingRestoreAccessTables,
+			backup.ErrCorrupt,
+		)
 	default:
 		return fmt.Errorf("read live setting row: %w", backup.ErrExportRead)
 	}

@@ -172,59 +172,81 @@ func TestWorkCopyPathStaysInTheDirectory(t *testing.T) {
 	}
 }
 
+// writeProtected writes a read-only file that holds "keep", for the files that
+// a hostile name points at.
+func writeProtected(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(path, []byte("keep"), 0o400); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+
+	return path
+}
+
+// placeLinkToFile puts a symbolic link to a file at work.
+func placeLinkToFile(t *testing.T, work string) string {
+	t.Helper()
+
+	victim := writeProtected(t)
+	if err := os.Symlink(victim, work); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	return victim
+}
+
+// placeLinkToNothing puts a symbolic link to a missing file at work.
+func placeLinkToNothing(t *testing.T, work string) string {
+	t.Helper()
+
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), work); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	return ""
+}
+
+// placeDirectory puts a directory at work.
+func placeDirectory(t *testing.T, work string) string {
+	t.Helper()
+
+	if err := os.Mkdir(work, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	return ""
+}
+
+// placeHardLink puts a second hard link to a file at work.
+func placeHardLink(t *testing.T, work string) string {
+	t.Helper()
+
+	victim := writeProtected(t)
+	if err := os.Link(victim, work); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	return victim
+}
+
 // TestCheckWorkCopyRefusesHostileFiles proves that the check after VACUUM INTO
 // refuses a file that is not the regular file of this swap: a symbolic link
 // that another process put at the name after the clear (to a file and to
 // nothing), a directory and a file with a second hard link. The file behind
-// each link stays as it is.
+// each link keeps its mode.
 func TestCheckWorkCopyRefusesHostileFiles(t *testing.T) {
 	t.Parallel()
 
-	victim := func(t *testing.T) string {
-		t.Helper()
-
-		path := filepath.Join(t.TempDir(), "victim")
-		if err := os.WriteFile(path, []byte("keep"), 0o644); err != nil { //nolint:gosec // The test needs a wide mode to show the check keeps it.
-			t.Fatalf("write victim: %v", err)
-		}
-
-		return path
-	}
-
 	for _, tc := range []struct {
 		name  string
-		place func(t *testing.T, work string) (victimPath string)
+		place func(t *testing.T, work string) string
 	}{
-		{"a link to a file", func(t *testing.T, work string) string {
-			v := victim(t)
-			if err := os.Symlink(v, work); err != nil {
-				t.Fatalf("symlink: %v", err)
-			}
-
-			return v
-		}},
-		{"a link to nothing", func(t *testing.T, work string) string {
-			if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), work); err != nil {
-				t.Fatalf("symlink: %v", err)
-			}
-
-			return ""
-		}},
-		{"a directory", func(t *testing.T, work string) string {
-			if err := os.Mkdir(work, 0o700); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-
-			return ""
-		}},
-		{"a second hard link", func(t *testing.T, work string) string {
-			v := victim(t)
-			if err := os.Link(v, work); err != nil {
-				t.Fatalf("link: %v", err)
-			}
-
-			return v
-		}},
+		{name: "a link to a file", place: placeLinkToFile},
+		{name: "a link to nothing", place: placeLinkToNothing},
+		{name: "a directory", place: placeDirectory},
+		{name: "a second hard link", place: placeHardLink},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -241,20 +263,20 @@ func TestCheckWorkCopyRefusesHostileFiles(t *testing.T) {
 			}
 
 			info, err := os.Stat(behind)
-			if err != nil || info.Mode().Perm() != 0o644 {
-				t.Errorf("the file behind the name: %v, %v; want mode 0644 unchanged", info, err)
+			if err != nil || info.Mode().Perm() != 0o400 {
+				t.Errorf("the file behind the name: %v, %v; want mode 0400 unchanged", info, err)
 			}
 		})
 	}
 }
 
 // TestCheckWorkCopySetsTheMode proves that the check sets mode 0600 on a
-// regular file with one link, whatever mode VACUUM INTO gave it.
+// regular file with one link, whatever mode it had.
 func TestCheckWorkCopySetsTheMode(t *testing.T) {
 	t.Parallel()
 
 	work := filepath.Join(t.TempDir(), "work")
-	if err := os.WriteFile(work, []byte("copy"), 0o644); err != nil { //nolint:gosec // The test needs a wide mode to show the check narrows it.
+	if err := os.WriteFile(work, []byte("copy"), 0o400); err != nil {
 		t.Fatalf("write work copy: %v", err)
 	}
 
