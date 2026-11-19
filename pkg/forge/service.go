@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strconv"
 	"time"
@@ -39,10 +40,14 @@ const (
 	ReasonAddressRefused = "address-refused"
 )
 
-// Namespaces reads the namespace that a write fences. namespace.Store
+// Namespaces reads the namespace that a write fences. namespace.Service
 // implements it.
 type Namespaces interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
+	// WritableHere returns the namespace when this installation is its primary
+	// installation. It returns namespace.ErrNotHome when another installation
+	// is.
+	WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
 // SecretSealer seals and opens the values of installation scopes. Each value
@@ -109,6 +114,41 @@ type Service struct {
 	logger     *slog.Logger
 }
 
+// nilOpener reports whether o is a nil interface or an interface that holds a
+// nil pointer. Kind is never called on either.
+func nilOpener(o Opener) bool {
+	if o == nil {
+		return true
+	}
+
+	v := reflect.ValueOf(o)
+
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
+// openersByKind maps each opener to its kind. It returns ErrMissingDependency
+// for a nil opener, for an interface that holds a nil pointer, and for an
+// opener whose Kind is empty. Another typed nil, for example a nil map or a
+// nil function value, is a fault of the caller that this check does not find.
+func openersByKind(list []Opener) (map[Kind]Opener, error) {
+	openers := make(map[Kind]Opener, len(list))
+
+	for _, o := range list {
+		if nilOpener(o) {
+			return nil, fmt.Errorf("%w: Git host adapter is nil", ErrMissingDependency)
+		}
+
+		kind := o.Kind()
+		if kind == "" {
+			return nil, fmt.Errorf("%w: Git host adapter has no kind", ErrMissingDependency)
+		}
+
+		openers[kind] = o
+	}
+
+	return openers, nil
+}
+
 // NewService returns a Service. It returns ErrMissingDependency when a
 // required dependency is missing.
 func NewService(cfg Config) (*Service, error) {
@@ -127,9 +167,9 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: Git host adapter", ErrMissingDependency)
 	}
 
-	openers := make(map[Kind]Opener, len(cfg.Openers))
-	for _, o := range cfg.Openers {
-		openers[o.Kind()] = o
+	openers, err := openersByKind(cfg.Openers)
+	if err != nil {
+		return nil, err
 	}
 
 	now := cfg.Now
@@ -142,7 +182,7 @@ func NewService(cfg Config) (*Service, error) {
 		limits = *cfg.CheckLimits
 	}
 
-	if err := limits.Validate(); err != nil {
+	if err = limits.Validate(); err != nil {
 		return nil, fmt.Errorf("check limits: %w", err)
 	}
 

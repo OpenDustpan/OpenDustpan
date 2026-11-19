@@ -106,6 +106,7 @@ func newRevealFixtureWithSessions(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -145,7 +146,7 @@ func newRevealFixtureWithSessions(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

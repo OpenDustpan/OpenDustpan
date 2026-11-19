@@ -289,6 +289,13 @@ func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte)
 
 // sealValue seals p with aead and binds it to aad. The result is the
 // format byte, the nonce and the sealed value.
+//
+// Each value gets a random 96-bit GCM nonce under the long-lived data key
+// of its scope. The chance of a nonce collision stays negligible until one
+// key seals on the order of 2^32 values. The config values of one scope
+// stay far below that bound. A per-value derived key, as SealStream uses,
+// or a rotation of the data key removes the bound if a scope ever comes
+// near it.
 func sealValue(aead cipher.AEAD, aad, p []byte) ([]byte, error) {
 	nonce := make([]byte, aead.NonceSize(), 1+aead.NonceSize()+len(p)+aead.Overhead())
 	if _, err := rand.Read(nonce); err != nil {

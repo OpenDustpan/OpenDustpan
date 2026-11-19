@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/internal/textbody"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -368,11 +369,16 @@ func noReferrer(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
-// decodeLocalUserBody decodes the strict JSON body of r into v. A body that
-// is not one JSON object with the fields of v answers errLocalUserBody, and
-// never echoes the body: it may hold a password or a code.
+// decodeLocalUserBody decodes the strict JSON body of r into v. A body over
+// maxLocalUserBody answers 413 with the limit. A body that is not one JSON
+// object with the fields of v answers errLocalUserBody. No answer echoes the
+// body: it may hold a password or a code.
 func decodeLocalUserBody(w http.ResponseWriter, r *http.Request, v any) error {
 	if err := textbody.Decode(w, r, maxLocalUserBody, v); err != nil {
+		if _, tooLarge := errors.AsType[*textbody.TooLargeError](err); tooLarge {
+			return errBodyTooLarge(maxLocalUserBody)
+		}
+
 		return errLocalUserBody
 	}
 
@@ -877,7 +883,23 @@ func localUserErrors() []localUserMapping {
 				message: "the server is busy: try again in a few seconds",
 			},
 		},
-	}, changeErrors(), credentialErrors())
+	}, changeErrors(), reasonErrors(), credentialErrors())
+}
+
+// reasonErrors returns the answers of the refusals of the reason of an
+// administrator change: no reason, and a reason that the audit log refuses.
+func reasonErrors() []localUserMapping {
+	return []localUserMapping{
+		{localuser.ErrReasonRequired, &codedError{
+			status: http.StatusBadRequest, code: errcode.LocalUserReasonRequired, args: nil,
+			message: "the change needs a reason",
+		}},
+		{audit.ErrInvalidReason, &codedError{
+			status: http.StatusBadRequest, code: errcode.AuditReasonInvalid, args: nil,
+			message: "the reason is not valid: use " + strconv.Itoa(audit.MaxReasonLen) +
+				" characters or fewer, with no control or hidden character",
+		}},
+	}
 }
 
 // changeErrors returns the answers of the refusals of a change that the
@@ -929,10 +951,6 @@ func credentialErrors() []localUserMapping {
 		{localuser.ErrOwnAccount, &codedError{
 			status: http.StatusForbidden, code: errcode.LocalUserOwnAccount, args: nil,
 			message: "an administrator cannot reset or remove the own password: use POST /api/dustpan/v1/me/password",
-		}},
-		{localuser.ErrReasonRequired, &codedError{
-			status: http.StatusBadRequest, code: errcode.LocalUserReasonRequired, args: nil,
-			message: "the change needs a reason",
 		}},
 		{localuser.ErrLastCredential, &codedError{
 			status: http.StatusConflict, code: errcode.LocalUserLastCredential, args: nil,

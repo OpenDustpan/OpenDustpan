@@ -98,6 +98,7 @@ func harness(auth forge.AuthKind) forgetest.Factory {
 			},
 			Repo:    "acme/infra",
 			Fixture: f,
+			Now:     nil,
 		}
 	}
 }
@@ -490,26 +491,27 @@ func TestStatusMapping(t *testing.T) {
 	}
 }
 
-// TestUnusedMethodsAreUnsupported checks that the methods that are not in
-// this version name GitHub in their error, and that the adapter lists the
-// capabilities of the files, of the comparison, of the tree, of the commits, of
-// the review requests, of the statuses and of the comments only.
-func TestUnusedMethodsAreUnsupported(t *testing.T) {
+// TestCapabilitiesOfTheAdapter checks the capabilities that the adapter lists
+// for an app connection with push access: the files, the comparison, the tree,
+// the token of the git protocol, the events, the commits, the review requests,
+// the statuses and the comments. RotateSelf has no capability and returns
+// forge.ErrUnsupported.
+func TestCapabilitiesOfTheAdapter(t *testing.T) {
 	t.Parallel()
 
 	h := harness(forge.AuthApp)(t)
 
 	caps := h.Forge.Capabilities()
 	want := forge.Capabilities{
-		forge.CapFiles, forge.CapCompare, forge.CapTree, forge.CapCommit, forge.CapReview, forge.CapStatus,
-		forge.CapComment,
+		forge.CapFiles, forge.CapCompare, forge.CapTree, forge.CapGitAccess, forge.CapRepoToken, forge.CapEvents,
+		forge.CapCommit, forge.CapReview, forge.CapStatus, forge.CapComment,
 	}
 	if !slices.Equal(caps, want) {
 		t.Fatalf("Capabilities = %v, want %v", caps, want)
 	}
 
-	_, err := h.Forge.RepoToken(t.Context(), "acme/infra")
+	_, err := h.Forge.RotateSelf(t.Context(), time.Time{})
 	if !errors.Is(err, forge.ErrUnsupported) || !strings.Contains(err.Error(), "GitHub") {
-		t.Fatalf("RepoToken = %v", err)
+		t.Fatalf("RotateSelf = %v", err)
 	}
 }
