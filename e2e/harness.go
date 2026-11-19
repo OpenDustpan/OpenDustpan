@@ -2742,8 +2742,8 @@ func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
 
 	cert := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: ts.Certificate().Raw})
 	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
-	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
-	e.write(tb, filepath.Join(e.home, "tofurc-b"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.tokenB))
+	e.write(tb, filepath.Join(e.home, "tofurc"), tofuRC(tb, e.Host(), e.token))
+	e.write(tb, filepath.Join(e.home, "tofurc-b"), tofuRC(tb, e.Host(), e.tokenB))
 	e.write(tb, filepath.Join(e.project, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
 }
 

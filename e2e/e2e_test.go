@@ -70,16 +70,12 @@ var errUnexpected = errors.New("unexpected output")
 func cacheDir(t *testing.T) string {
 	t.Helper()
 
-	if dir := os.Getenv("E2E_CACHE_DIR"); dir != "" {
-		return dir
-	}
-
-	base, err := os.UserCacheDir()
+	dir, err := e2e.CacheDir()
 	if err != nil {
-		t.Fatalf("find user cache dir: %v", err)
+		t.Fatalf("find cache dir: %v", err)
 	}
 
-	return filepath.Join(base, "opendustpan-e2e")
+	return dir
 }
 
 // fetchers holds one Fetcher for each cache directory. A Fetcher checks each
@@ -6782,7 +6778,8 @@ func maskedCloudConfig(host, workspace string) string {
   }
   required_providers {
     random = {
-      source = "hashicorp/random"
+      source  = "hashicorp/random"
+      version = %q
     }
   }
 }
@@ -6811,7 +6808,7 @@ output "secret_out" {
   value     = var.secret_input
   sensitive = true
 }
-`, host, e2e.Namespace, workspace)
+`, host, e2e.Namespace, workspace, e2e.RandomProviderVersion)
 }
 
 // maskedApplyEnv returns the step environment that sets the sensitive
