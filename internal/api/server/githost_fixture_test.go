@@ -431,7 +431,8 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 	rememberSessions(handler, sessions)
 
 	return &hostEnv{
-		handler: handler, store: st, opener: opener, refuseAddress: nil, mu: sync.Mutex{}, refused: nil,
+		handler: handler, store: st, opener: opener, refuseAddress: nil, stepSeconds: nil, mu: sync.Mutex{},
+		refused: nil,
 	}
 }
 

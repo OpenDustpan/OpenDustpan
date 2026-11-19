@@ -94,9 +94,9 @@ func TestBackupCoverageFailsOnAddedEmptiedColumn(t *testing.T) {
 		}
 	}()
 
-	if _, execErr := conn.Exec(
-		t.Context(), `ALTER TABLE git_host_event_receipts ADD COLUMN spike_new_col text`,
-	); execErr != nil {
+	const alter = `ALTER TABLE git_host_event_receipts ADD COLUMN spike_new_col text`
+
+	if _, execErr := conn.Exec(t.Context(), alter); execErr != nil {
 		t.Fatalf("add column: %v", execErr)
 	}
 
@@ -109,7 +109,8 @@ func TestBackupCoverageFailsOnAddedEmptiedColumn(t *testing.T) {
 		t.Fatalf("coverage after an added emptied column: err = %v, want ErrCoverage", err)
 	}
 
-	if !strings.Contains(err.Error(), `"git_host_event_receipts"`) || !strings.Contains(err.Error(), `"spike_new_col"`) {
+	msg := err.Error()
+	if !strings.Contains(msg, `"git_host_event_receipts"`) || !strings.Contains(msg, `"spike_new_col"`) {
 		t.Fatalf("coverage error = %v, want the table %q and the column %q",
 			err, "git_host_event_receipts", "spike_new_col")
 	}

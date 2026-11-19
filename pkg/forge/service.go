@@ -113,6 +113,22 @@ type Service struct {
 	logger     *slog.Logger
 }
 
+// openersByKind maps each opener to its kind. It returns ErrMissingDependency
+// for a nil opener.
+func openersByKind(list []Opener) (map[Kind]Opener, error) {
+	openers := make(map[Kind]Opener, len(list))
+
+	for _, o := range list {
+		if o == nil {
+			return nil, fmt.Errorf("%w: Git host adapter is nil", ErrMissingDependency)
+		}
+
+		openers[o.Kind()] = o
+	}
+
+	return openers, nil
+}
+
 // NewService returns a Service. It returns ErrMissingDependency when a
 // required dependency is missing.
 func NewService(cfg Config) (*Service, error) {
@@ -131,13 +147,9 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: Git host adapter", ErrMissingDependency)
 	}
 
-	openers := make(map[Kind]Opener, len(cfg.Openers))
-	for _, o := range cfg.Openers {
-		if o == nil {
-			return nil, fmt.Errorf("%w: Git host adapter is nil", ErrMissingDependency)
-		}
-
-		openers[o.Kind()] = o
+	openers, err := openersByKind(cfg.Openers)
+	if err != nil {
+		return nil, err
 	}
 
 	now := cfg.Now
@@ -150,7 +162,7 @@ func NewService(cfg Config) (*Service, error) {
 		limits = *cfg.CheckLimits
 	}
 
-	if err := limits.Validate(); err != nil {
+	if err = limits.Validate(); err != nil {
 		return nil, fmt.Errorf("check limits: %w", err)
 	}
 

@@ -78,7 +78,8 @@ func TestBackupCoverageFailsOnAddedEmptiedColumn(t *testing.T) {
 		t.Fatalf("coverage after an added emptied column: err = %v, want ErrCoverage", err)
 	}
 
-	if !strings.Contains(err.Error(), `"git_host_event_receipts"`) || !strings.Contains(err.Error(), `"spike_new_col"`) {
+	msg := err.Error()
+	if !strings.Contains(msg, `"git_host_event_receipts"`) || !strings.Contains(msg, `"spike_new_col"`) {
 		t.Fatalf("coverage error = %v, want the table %q and the column %q",
 			err, "git_host_event_receipts", "spike_new_col")
 	}
@@ -183,7 +184,11 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 // addSpikeColumn adds the probe column to stacks with no store open. The
 // seed store is closed before this runs and the test store opens after, so
 // no guard checkpoint can hold the write lock during the alter.
-func addSpikeColumn(t *testing.T, path string) { addSpikeColumnTo(t, path, "stacks") }
+func addSpikeColumn(t *testing.T, path string) {
+	t.Helper()
+
+	addSpikeColumnTo(t, path, "stacks")
+}
 
 // addSpikeColumnTo adds the column spike_new_col to table, as addSpikeColumn
 // does. The name of table is a constant of the test, never an input.
@@ -201,7 +206,9 @@ func addSpikeColumnTo(t *testing.T, path, table string) {
 		}
 	}()
 
-	if _, execErr := conn.ExecContext(t.Context(), `ALTER TABLE `+table+` ADD COLUMN spike_new_col TEXT`); execErr != nil {
+	alter := `ALTER TABLE ` + table + ` ADD COLUMN spike_new_col TEXT`
+
+	if _, execErr := conn.ExecContext(t.Context(), alter); execErr != nil {
 		t.Fatalf("add column: %v", execErr)
 	}
 }
