@@ -4,7 +4,7 @@ version: 7
 
 ## Why
 
-**Persona: operator.** The operator installs the server from a release, not from source. The binary archives and their checks are on main. The image build, the image smoke test and the first install page are on main too. The first image that the tag workflow would build has three faults that no test shows today:
+**Persona: operator.** The operator installs the server from a release, not from source. The scripts that build and check the binary archives are on main. The upload of the archives to a release is not: `.github/workflows/release.yml` builds and pushes the image only. The image build, the image smoke test and the first install page are on main too. The first image that the tag workflow would build has three faults that no test shows today:
 
 - The tag workflow builds the image with no version argument. The binary of that image prints `dev`, not the tag.
 - The tag workflow passes no console tarball URL and no SHA-256. The Dockerfile then uses its placeholder pin, and the build stops at the download with a curl error that does not name the pin.
@@ -33,12 +33,12 @@ Errors the person may hit, and the one command that helps:
 - `scripts/smoke-image.sh` gets two refusal cases that run a real build: a wrong console SHA-256 and a bad version.
 - A new test builds the release archives in a copy of the work tree, checks the archive of the host platform against `SHA256SUMS`, runs its binary with `--version`, starts `serve` and reads `GET /health/ready`.
 - `docs/guides/install.md` gets the sections "Check the version of the image" and "Install from a binary archive". The commands of the archive section run in the new test.
-- The release workflow passes `--build-arg VERSION` and the console pin to the image build. A person applies this diff: it is under "Workflow patch (apply locally)" in the pull request body, and the task list contains no workflow file.
+- The release workflow passes `--build-arg VERSION` to the image build. The Dockerfile pin stays the single source of the console pin, so the workflow passes no console argument. A person applies this diff: it is under "Workflow patch (apply locally)" in the pull request body, and the task list contains no workflow file.
 
 Out of scope:
 
 - Tagging or publishing a release, and any registry push. `release.yml` already pushes on a tag; this change does not run it.
-- The archive build and `SHA256SUMS`. They are on main and unchanged.
+- The archive build and `SHA256SUMS` scripts. They are on main and unchanged. The upload of the archives and of `SHA256SUMS` to a release is not on main and is not in this change. ADR 283 (owner-tagged) decisions 3 and 4 say that `v0.1.0` ships the archives and `SHA256SUMS`. A follow-up change that adds the archive build, verify and upload to the tag workflow must land before the `v0.1.0` tag. The install page does not promise an archive download until then.
 - Image signing, an SBOM, OS packages, ACME and Helm chart changes.
 - A check that the console tag equals the server tag. No ADR asks for it. The change checks only that the console pin is a pin, not the placeholder.
 - The real console pin. No console release is known to this change (UNVERIFIED: the check of the console repository releases was not possible in the session that wrote this change). The pin lands in the commit that tags, and the new Dockerfile guard stops a tag build before then.
