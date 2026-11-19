@@ -1914,28 +1914,44 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 func (s *Service) putManifest(ctx context.Context, key blob.Key, manifest Manifest, blobs []ManifestBlob) error {
 	reader, writer := io.Pipe()
 
-	done := make(chan struct{})
+	// The channel holds the encoder result, so the goroutine never waits for a
+	// receiver.
+	errc := make(chan error, 1)
 
 	go func() {
-		defer close(done)
+		encErr := writeManifestJSON(writer, manifest, blobs)
 
 		// CloseWithError(nil) is a normal end of the stream.
-		if closeErr := writer.CloseWithError(writeManifestJSON(writer, manifest, blobs)); closeErr != nil {
-			_ = closeErr
-		}
+		_ = writer.CloseWithError(encErr)
+
+		errc <- encErr
 	}()
 
 	putErr := s.target.Put(ctx, key, reader)
 
-	// Closing the reader stops the encoder when Put returns before it read
-	// the whole stream, so the goroutine never waits for a reader that left.
-	if closeErr := reader.Close(); closeErr != nil {
-		_ = closeErr
+	// PipeReader.Close always returns nil. It stops the encoder when Put
+	// returns before it read the whole stream, so the goroutine never waits
+	// for a reader that left.
+	closeErr := reader.Close()
+
+	encErr := <-errc
+
+	if putErr != nil {
+		return putErr
 	}
 
-	<-done
+	// A target that returns nil after a partial read must not make a partial
+	// manifest valid: an encoder error, or io.ErrClosedPipe after an early
+	// return of Put, fails the write.
+	if encErr != nil {
+		return fmt.Errorf("encode manifest: %w", encErr)
+	}
 
-	return putErr
+	if closeErr != nil {
+		return fmt.Errorf("close manifest stream: %w", closeErr)
+	}
+
+	return nil
 }
 
 // manifestWriteBuffer is the size of the buffer of the manifest stream.

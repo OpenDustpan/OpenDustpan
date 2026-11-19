@@ -18,7 +18,7 @@ import (
 // benchBlobsEnv names the variable that sets the number of blob references
 // that BenchmarkManifestBlobs uses. The default is small; set it to 1000000
 // for the large case.
-const benchBlobsEnv = "DUSTPAN_BENCH_BLOBS"
+const benchBlobsEnv = "DUSTPAN_TEST_BENCH_BLOBS"
 
 // discardTarget is a blob store that reads each object it is given and keeps
 // nothing. Only Put is used.

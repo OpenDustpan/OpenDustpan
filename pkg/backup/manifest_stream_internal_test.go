@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -176,5 +177,91 @@ func emptySummary() Summary {
 	return Summary{
 		Dialect: "", PrimaryInstallations: nil, WrapperIDs: nil, RowCounts: nil, Blobs: nil, RegistryFiles: nil,
 		Unverified: nil, SchemaVersion: 0,
+	}
+}
+
+// shortReadTarget is a blob store whose Put reads n bytes of the stream and
+// returns nil.
+type shortReadTarget struct {
+	blob.Store
+
+	n int64
+}
+
+// Put implements blob.Store.
+func (s shortReadTarget) Put(_ context.Context, _ blob.Key, r io.Reader) error {
+	_, err := io.CopyN(io.Discard, r, s.n)
+	if err != nil {
+		return fmt.Errorf("short read: %w", err)
+	}
+
+	return nil
+}
+
+// TestPutManifestRejectsPartialRead checks that a target that reads a part of
+// the stream and returns nil does not make a partial manifest valid.
+func TestPutManifestRejectsPartialRead(t *testing.T) {
+	t.Parallel()
+
+	blobs := make([]ManifestBlob, 1000)
+	for i := range blobs {
+		blobs[i] = ManifestBlob{Key: "k", Size: 1, MD5: "00", Sealed: false}
+	}
+
+	key, err := blob.ParseKey("backups/bkp-x/1/manifest.json")
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+
+	s := serviceOver(shortReadTarget{Store: nil, n: 100})
+
+	if err := s.putManifest(t.Context(), key, streamManifest(), blobs); err == nil {
+		t.Error("putManifest = nil after a read of 100 bytes, want an error")
+	}
+}
+
+// drainTarget is a blob store whose Put reads the stream to its end or its
+// first error and returns nil in both cases. It keeps the read error in
+// readErr.
+type drainTarget struct {
+	blob.Store
+
+	readErr *error
+}
+
+// Put implements blob.Store.
+func (d drainTarget) Put(_ context.Context, _ blob.Key, r io.Reader) error {
+	// The target returns nil after a failed stream on purpose: a target must
+	// not hide an encoder error from the caller.
+	_, *d.readErr = io.Copy(io.Discard, r)
+
+	return nil
+}
+
+// TestPutManifestReturnsEncoderError checks that an encoder error reaches the
+// caller when Put returns nil.
+func TestPutManifestReturnsEncoderError(t *testing.T) {
+	t.Parallel()
+
+	key, err := blob.ParseKey("backups/bkp-x/1/manifest.json")
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+
+	var readErr error
+
+	s := serviceOver(drainTarget{Store: nil, readErr: &readErr})
+
+	// time.Time refuses to encode a year after 9999, so json.Marshal of the
+	// manifest fails in writeManifestJSON before the first write.
+	manifest := streamManifest()
+	manifest.CreatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if err := s.putManifest(t.Context(), key, manifest, nil); err == nil {
+		t.Error("putManifest = nil, want the encoder error")
+	}
+
+	if readErr == nil {
+		t.Error("the target read no error, so the test did not fail the stream")
 	}
 }

@@ -14,7 +14,7 @@ import (
 // benchChunksEnv names the variable that sets the number of log chunks that
 // BenchmarkBackupBlobRefs seeds. The default is small; set it to 1000000 for
 // the large case.
-const benchChunksEnv = "DUSTPAN_BENCH_CHUNKS"
+const benchChunksEnv = "DUSTPAN_TEST_BENCH_CHUNKS"
 
 // benchLogs is the number of logs that the seeded chunks belong to.
 const benchLogs = 100

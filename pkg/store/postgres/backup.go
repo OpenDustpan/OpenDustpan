@@ -983,7 +983,7 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		return pgAttrs{}, fmt.Errorf("select backup blobs: %w", err)
 	}
 
-	blobs := make([]backup.BlobRef, 0, len(rows))
+	rowRefs := make([]backup.BlobRef, 0, len(rows))
 
 	for _, row := range rows {
 		ref, refErr := backupBlobRef(row)
@@ -991,18 +991,18 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 			return pgAttrs{}, refErr
 		}
 
-		blobs = append(blobs, ref)
+		rowRefs = append(rowRefs, ref)
 	}
 
 	// The collector starts with the references of the rows above, so all
 	// references stay in one slice and the sort below orders it in place.
-	collector := blobrefs.NewCollector(blobs)
+	collector := blobrefs.NewCollector(rowRefs)
 	if addErr := addStoredBlobRefs(ctx, qr, pgIdent, collector); addErr != nil {
 		return pgAttrs{}, addErr
 	}
 
 	gathered := collector.BackupRefs()
-	blobs = gathered.Refs
+	blobs := gathered.Refs
 	slices.SortFunc(blobs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
 	var version int64
@@ -1217,19 +1217,19 @@ func summarizeStagingIn(
 		counts[table] = count
 	}
 
-	blobs, err := stagingBlobRefs(ctx, q, staging)
+	stagedRefs, err := stagingBlobRefs(ctx, q, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
 
 	stagedTable := func(table string) string { return stagingTable(staging, table) }
 
-	collector := blobrefs.NewCollector(blobs)
+	collector := blobrefs.NewCollector(stagedRefs)
 	if addErr := addStoredBlobRefs(ctx, q, stagedTable, collector); addErr != nil {
 		return backup.Summary{}, addErr
 	}
 
-	blobs = collector.Refs()
+	blobs := collector.Refs()
 
 	version, err := stagingSchemaVersion(ctx, q, staging)
 	if err != nil {
