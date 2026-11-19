@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -57,6 +58,8 @@ func openStagingTestStore(t *testing.T) *postgres.Store {
 	if _, execErr := conn.Exec(t.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
 		t.Fatalf("create schema: %v", execErr)
 	}
+
+	pgtest.DropSchemaAtCleanup(t, base, name)
 
 	u, parseErr := url.Parse(base)
 	if parseErr != nil {
