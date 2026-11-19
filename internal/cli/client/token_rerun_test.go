@@ -15,9 +15,6 @@ import (
 // TestMissingTokenNamesTheFailedCommand checks that the no-token error of each
 // client command names that command and not the backup command.
 func TestMissingTokenNamesTheFailedCommand(t *testing.T) {
-	t.Setenv(client.AdminTokenEnvVar, "")
-	t.Setenv(client.AdminTokenFileEnvVar, "")
-
 	const server = "http://127.0.0.1:9"
 
 	cases := []struct {
@@ -64,7 +61,8 @@ func TestMissingTokenNamesTheFailedCommand(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			t.Setenv(client.AdminTokenEnvVar, "")
+			t.Setenv(client.AdminTokenFileEnvVar, "")
 
 			var stdout, stderr bytes.Buffer
 
