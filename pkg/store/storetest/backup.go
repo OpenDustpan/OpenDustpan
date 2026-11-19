@@ -608,7 +608,8 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		CreatedAt: now(), UpdatedAt: now(), KeyCreatedAt: now(), EventSecretCreatedAt: now(), Kind: forge.KindGitHub,
 		AppID: "12345", BaseURL: apiURL, HookID: forge.NewHookID(), KeySetID: forge.NewSetID(),
 		EventSecretSetID: forge.NewSetID(), AddressDigest: forge.AddressDigest(forge.KindGitHub, apiURL, "12345"),
-		SealedKey: []byte("sealed-key"), SealedEventSecret: []byte("sealed-event-secret"), Version: 1,
+		SealedKey: []byte("sealed-key"), SealedEventSecret: []byte("sealed-event-secret"), OldEventSecretSetID: "",
+		OldSealedEventSecret: nil, OldEventSecretEndsAt: time.Time{}, Version: 1,
 	}
 
 	_, err := store.PutRegistration(t.Context(), reg, 0, entry(audit.ServerScope, "git-host-app:put"))
