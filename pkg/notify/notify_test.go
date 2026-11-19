@@ -1047,7 +1047,7 @@ func TestAttemptValidate(t *testing.T) {
 	ok := notify.Attempt{
 		ID: "dlv-1", Owner: "i-1", Version: 2, Now: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
 		State: notify.DeliveryAbandoned, Attempts: 1, NextAt: time.Time{}, LastError: notify.ClassPermanent,
-		DeliveredAt: time.Time{},
+		DeliveredAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
 	}
 
 	cases := []struct {
@@ -1067,6 +1067,16 @@ func TestAttemptValidate(t *testing.T) {
 		{"no owner", func(a *notify.Attempt) { a.Owner = "" }, false},
 		{"no time", func(a *notify.Attempt) { a.Now = time.Time{} }, false},
 		{"negative attempts", func(a *notify.Attempt) { a.Attempts = -1 }, false},
+		{"abandoned with no delivered time", func(a *notify.Attempt) { a.DeliveredAt = time.Time{} }, false},
+		{"delivered with no delivered time", func(a *notify.Attempt) {
+			a.State, a.DeliveredAt = notify.DeliveryDone, time.Time{}
+		}, false},
+		{"skipped with no delivered time", func(a *notify.Attempt) {
+			a.State, a.DeliveredAt = notify.DeliverySkipped, time.Time{}
+		}, false},
+		{"pending with no delivered time", func(a *notify.Attempt) {
+			a.State, a.DeliveredAt = notify.DeliveryPending, time.Time{}
+		}, true},
 	}
 
 	for _, tc := range cases {
