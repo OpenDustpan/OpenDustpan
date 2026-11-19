@@ -1538,7 +1538,7 @@ const attemptClaimTrips = 23
 func restoreModel() costModel {
 	return costModel{
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
-			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
+			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips,
@@ -1612,6 +1612,12 @@ const stagedJobCheckTrips = 1
 // query, once for each restore. The count is fixed: it does not grow with the
 // units or the tables.
 const stagedPrincipalCheckTrips = 2
+
+// stagedGrantIDCheckTrips is the number of round trips of the staged check of
+// the grant IDs: checkStagedGrantIDs reads the IDs of the staging schema in
+// one query, once for each restore. The count is fixed: it does not grow with
+// the units or the tables.
+const stagedGrantIDCheckTrips = 1
 
 // stagedTriggerClockTrips is the number of round trips that the staged check of
 // the trigger rows adds for the clock: it reads the clock of the store in one
