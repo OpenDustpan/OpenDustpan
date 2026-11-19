@@ -115,16 +115,20 @@ func TestBreakGlassReplayRefuses(t *testing.T) {
 		t.Fatalf("second Evaluate = %v, want ErrRuleFailed: a pass is used once", err)
 	}
 
-	named := 0
+	var refusal *gate.RefusalError
+	if !errors.As(err, &refusal) || !slices.Contains(refusal.Messages, "No valid break-glass pass: it is missing, used or expired.") {
+		t.Errorf("refusal = %v, want the message \"No valid break-glass pass...\"", err)
+	}
 
+	// Both records name the attempt. The result tells them apart.
 	for _, r := range e.records(t) {
-		if r.BreakGlass != "" {
-			named++
+		if r.BreakGlass != "audit-1" {
+			t.Errorf("Record.BreakGlass = %q (result %q), want audit-1: a refused attempt is named too", r.BreakGlass, r.Result)
 		}
 	}
 
-	if named != 1 {
-		t.Errorf("records that name a break-glass = %d, want 1: the refusal names none", named)
+	if rec := e.newestRecord(t); rec.Result != gate.ResultError {
+		t.Errorf("refused record Result = %q, want error", rec.Result)
 	}
 }
 
@@ -552,12 +556,19 @@ func TestBreakGlassHostileStoreRefuses(t *testing.T) {
 		e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
 		e.issue(t, "alice", gate.OperationApply, web)
 
-		if _, err := e.svc.Evaluate(t.Context(), e.change(t)); !errors.Is(err, gate.ErrUnavailable) {
+		_, err := e.svc.Evaluate(t.Context(), e.change(t))
+		if !errors.Is(err, gate.ErrUnavailable) {
 			t.Errorf("%s: Evaluate = %v, want ErrUnavailable", name, err)
 		}
 
-		if rec := e.newestRecord(t); rec.BreakGlass != "" {
-			t.Errorf("%s: Record.BreakGlass = %q, want none", name, rec.BreakGlass)
+		var refusal *gate.RefusalError
+		if !errors.As(err, &refusal) ||
+			!slices.Contains(refusal.Messages, "The break-glass pass could not be checked, so the write is refused.") {
+			t.Errorf("%s: refusal = %v, want the message \"The break-glass pass could not be checked...\"", name, err)
+		}
+
+		if rec := e.newestRecord(t); rec.BreakGlass != "audit-1" {
+			t.Errorf("%s: Record.BreakGlass = %q, want audit-1: the refused record names the attempt", name, rec.BreakGlass)
 		}
 	}
 }
@@ -596,6 +607,11 @@ func TestBreakGlassBadAuditIDRefuses(t *testing.T) {
 		"bidi override": "audit\u202e1",
 		"too long":      strings.Repeat("a", 129),
 		"invalid UTF-8": "audit\xff1",
+		"space":         "audit 1",
+		"slash":         "audit/1",
+		"non-ASCII":     "audité",
+		"leading dash":  "-audit",
+		"leading dot":   ".audit",
 	} {
 		e := newBGEnv(t)
 		e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))

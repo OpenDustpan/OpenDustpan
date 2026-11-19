@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -815,13 +816,16 @@ func (s *Service) breakGlassKey(c Change) (BreakGlassKey, bool, error) {
 		return noBreakGlassKey(), false, nil
 	}
 
-	// Boundary check of the audit entry ID. The ID goes into the decision
-	// record, so an ID with a control or hidden character, bad UTF-8 or too
-	// many characters is refused before any store call. Defense in depth: the
-	// handler that reads the ID may check it too; this check does not rely on
-	// it, and it runs before the key and Consume.
-	if err := checkBreakGlassText("the audit entry ID", c.BreakGlass, breakGlassRefMax); err != nil {
-		return noBreakGlassKey(), false, err
+	// Boundary check of the audit entry ID, by allowlist: 1 to
+	// breakGlassRefMax ASCII letters, digits, -, _ and ., not starting with -
+	// or . . The ID goes into the decision record, so any other ID is refused
+	// before any store call. Defense in depth: the handler that reads the ID
+	// may check it too; this check does not rely on it, and it runs before the
+	// key and Consume.
+	if !ident.Valid(c.BreakGlass, breakGlassRefMax) {
+		return noBreakGlassKey(), false, fmt.Errorf(
+			"%w: the audit entry ID of a break-glass: %w", ErrInvalid, ident.Check(c.BreakGlass, breakGlassRefMax),
+		)
 	}
 
 	if _, ok := s.breakGlass.(unwiredBreakGlassStore); ok {
@@ -862,6 +866,10 @@ func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key Br
 		return
 	}
 
+	// The record names the attempt, so a refused attempt is visible too.
+	// Result says whether the pass passed.
+	rec.BreakGlass = r.change.BreakGlass
+
 	now := r.svc.now()
 	pass, err := r.svc.breakGlass.Consume(ctx, key, now)
 
@@ -879,11 +887,10 @@ func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key Br
 		// the record. The write passes, so the result is a warning, which
 		// the state guard admits.
 		rec.Result = ResultWarn
-		rec.BreakGlass = r.change.BreakGlass
 		rec.Warnings = append(rec.Warnings, "a break-glass pass let the write through a gate in error")
 		r.warnings = rec.Warnings
 	case errors.Is(err, ErrNotFound):
-		r.refusal.Messages = append(r.refusal.Messages, "no valid break-glass pass: it is missing, used or expired")
+		r.refusal.Messages = append(r.refusal.Messages, "No valid break-glass pass: it is missing, used or expired.")
 	default:
 		r.refusal = &RefusalError{
 			Err: fmt.Errorf("%w: break-glass pass: %w", ErrUnavailable, err), Record: "",
