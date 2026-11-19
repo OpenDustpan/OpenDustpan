@@ -1046,8 +1046,15 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		keep bool
 		want string
 	}{
-		{name: "replaces access tables", keep: false, want: "access tables replaced"},
-		{name: "keeps access tables", keep: true, want: "access tables kept"},
+		{
+			name: "replaces access tables", keep: false,
+			want: "access tables replaced; setting restore.replace-access-tables " +
+				"taken from the backup (the live value was not read before the swap)",
+		},
+		{
+			name: "keeps access tables", keep: true,
+			want: "access tables kept; setting restore.replace-access-tables kept (the live value was not read)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
