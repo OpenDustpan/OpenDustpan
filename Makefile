@@ -188,9 +188,12 @@ openspec-validate: ## Validate every OpenSpec change and spec (openspec validate
 # version, a record with a CR or a NUL byte, and a missing record. With
 # VERSION=vX.Y.Z on the command line it checks the record for that tag, as a
 # release does. A VERSION in the environment does not change the mode.
+ifeq ($(origin VERSION),command line)
+release-record-check: export RELEASE_VERSION := $(VERSION)
+endif
 release-record-check: ## Check the release record: the cases that need no tag, or VERSION=vX.Y.Z for a tag.
 ifeq ($(origin VERSION),command line)
-	./scripts/check-release-record.sh '$(VERSION)'
+	./scripts/check-release-record.sh "$$RELEASE_VERSION"
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
