@@ -109,14 +109,17 @@ func TestNoWorkerRefusesAfterTwoLeasesAndNotBefore(t *testing.T) {
 // and only renews its claim keeps the gate open, while other work waits
 // unclaimed longer than 2 lease periods. The heartbeats run on a clock that
 // the test moves, so a stall of the test on a loaded machine cannot open a
-// gap between two renewals. The clock starts at the real time, because the
-// store stamps the waiting operation with its own clock.
+// gap between two renewals. The test starts both operations first and then
+// creates the clock at the real time, because the store stamps each operation
+// with its own clock. A stall of the test cannot make the waiting operation
+// younger than the clock.
 func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 	t.Parallel()
 
 	st := openTestStore(t)
 	store := st.DurableOperations()
 	startOldOperation(t, store)
+	startOldOperation2(t, store)
 
 	clock := &testClock{mu: sync.Mutex{}, now: time.Now().UTC()}
 	api, tracked := clockedWatches(store, clock)
@@ -129,8 +132,6 @@ func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-
-	startOldOperation2(t, store)
 
 	held := claim.Claim
 	end := clock.Now().Add(beatWait + beatLease)
