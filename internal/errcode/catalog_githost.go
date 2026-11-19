@@ -8,6 +8,9 @@ const (
 	GitHostAppBudgetSpent = "git-host.app-budget-spent"
 	// GitHostAppNotRegistered means that the operator has not registered the GitHub App.
 	GitHostAppNotRegistered = "git-host.app-not-registered"
+	// GitHostAppNoRotation means that the registration of the GitHub App has no open rotation of the event secret,
+	// so there is nothing to confirm.
+	GitHostAppNoRotation = "git-host.app-no-rotation"
 	// GitHostInstallationNotAssigned means that the operator did not assign the installation of the Git host to the
 	// namespace.
 	GitHostInstallationNotAssigned = "git-host.installation-not-assigned"
@@ -49,6 +52,7 @@ func gitHostSpecs() []Spec {
 			Meaning: "the calls that the key of the GitHub App signed in the current window reached the limit of the budget",
 			Args:    nil,
 		},
+		{Code: GitHostAppNoRotation, Meaning: "the registration of the GitHub App has no open rotation of the event secret", Args: nil},
 		{Code: GitHostAppNotRegistered, Meaning: "the operator has not registered the GitHub App", Args: nil},
 		{
 			Code:    GitHostInstallationNotAssigned,

@@ -205,7 +205,7 @@ func classifyGitHostConflict(err error) (failure, bool) {
 		errors.Is(err, forge.ErrDefaultConnection), errors.Is(err, forge.ErrRegistrationInUse):
 		return fail(http.StatusConflict, rootText(err)), true
 	case errors.Is(err, forge.ErrNoRotation):
-		return fail(http.StatusConflict, forge.ErrNoRotation.Error()), true
+		return failCoded(http.StatusConflict, forge.ErrNoRotation.Error(), errcode.GitHostAppNoRotation), true
 	case errors.Is(err, forge.ErrVersionConflict):
 		return fail(http.StatusPreconditionFailed, forge.ErrVersionConflict.Error()), true
 	default:

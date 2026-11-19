@@ -1537,13 +1537,19 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips,
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips - eventReceiptTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// eventReceiptTrips is the number of round trips that the table of the Git host
+// event receipts takes off the fixed part. A restore leaves the table empty and
+// reads it only for its column check, 1 round trip, so it costs 1 less than the
+// 2 that perOther gives.
+const eventReceiptTrips = 1
 
 // unitStateTrips is the number of round trips by which the state version of
 // each unit changes the fixed part. The restore derives the versions with one

@@ -2446,6 +2446,7 @@
           "gate.unavailable",
           "gate.version-conflict",
           "git-host.app-budget-spent",
+          "git-host.app-no-rotation",
           "git-host.app-not-registered",
           "git-host.installation-not-assigned",
           "git-host.link-account-invalid",
