@@ -15,11 +15,11 @@ Use one access token for the source namespace and one for the target namespace. 
      "https://dustpan.example.com/api/dustpan/v1/namespaces/acme/units"
    ```
 
-2. Choose a target name that is free in the target namespace. A deleted unit holds its name until its retention period ends. List the deleted units of the target namespace when you are not sure that the name is free.
+2. Choose a target name that no live stack or workspace holds in the target namespace. A deleted stack or workspace does not hold its name, so you can use that name. The deleted one stays restorable until its retention period ends. A restore of it under its old name then answers 409 `unit.name-taken`, and you must send a new name. See [Deleted units](deleted-units.md). List the stacks and workspaces of the target namespace when you are not sure that the name is free.
 
    ```sh
    curl -sS -H "Authorization: Bearer $TOKEN" \
-     "https://dustpan.example.com/api/dustpan/v1/namespaces/target/deleted-units"
+     "https://dustpan.example.com/api/dustpan/v1/namespaces/target/units"
    ```
 
 3. Stop each pipeline that writes to the source unit. The import does not lock the source.
@@ -126,7 +126,7 @@ Export and import move the state, and the history where the tool exports it. The
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The target name already holds a unit, deleted units included | The Pulumi stack init fails, or the replay script skips each version that the target holds. Deleted units hold the name too. List deleted units, then pick a free target name. | `GET /api/dustpan/v1/namespaces/{namespace}/deleted-units` |
+| A live stack or workspace in the target namespace already holds the target name | The Pulumi stack init fails with 409 `stack.already-exists`, or the replay script skips each version that the target holds. A deleted stack or workspace does not hold the name. List them, then pick a free target name. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 | The source unit is not found in its namespace | The server answers 404. Check the source name in the unit list of the source namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 
 ## After the move

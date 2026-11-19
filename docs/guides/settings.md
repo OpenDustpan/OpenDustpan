@@ -31,12 +31,20 @@ revision of the resource. Each item has these fields:
 | Field | Meaning |
 | --- | --- |
 | `key` | The name of the setting. |
+| `scope` | The scope that declares the setting. |
+| `kind` | The kind of the value: `string`, `int` or `bool`. |
 | `value` | The effective value. It is `null` for a secret. |
+| `default` | The value that the setting has when no other layer sets it. It is `null` for a secret. |
 | `source` | The layer that gives the value: `default`, `database`, `file`, `env` or `flag`. |
 | `locked` | `true` when the static layer sets the key. A locked key shows `lockedBy`. |
 | `shadowed` | `true` when a database value exists, but a static value hides it. |
 | `databaseValue` | The database value, or `null`. |
+| `apply` | When a change takes effect: `live` at once, or `restart` after the server starts again. |
+| `secret` | `true` when the value is a secret. The API never shows it. |
+| `set` | `true` when a value exists. For a secret, it shows that the static layer gave a value. |
+| `databaseLayer` | `true` when a database value can set the key. `false` means that only a flag, a variable or the file sets it. |
 | `mayReduceSecurity` | `true` when a change can make the scope less secure. |
+| `description` | A short text that says what the setting does and what values it takes. |
 
 For a namespace, send the same request to the namespace path. A namespace that
 does not exist gets `404`.
@@ -50,7 +58,7 @@ value sets the database value. A key with `null` deletes it.
 curl -si -X PATCH -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/merge-patch+json" \
   -H 'If-Match: "3"' \
-  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Idempotency-Key: change-$(date +%s)" \
   -d '{"branding.preset":"high-contrast"}' \
   https://dustpan.example.com/api/dustpan/v1/settings
 ```
@@ -71,9 +79,19 @@ The answer is `200` with the new resource and the new `ETag`. The rules:
 
 A change that makes the scope less secure needs a fresh sign-in. The field
 `mayReduceSecurity` of a setting shows which settings can do this. An access
-token never gives a fresh sign-in. Make the change in the console, or with a
-console session that signed in a short time ago. When the installation has no
-console sign-in, the change needs no fresh sign-in.
+token never gives a fresh sign-in, also the bootstrap admin token. Make the
+change in the console, or with a console session that signed in a short time
+ago. When the installation has no console sign-in, the change needs no fresh
+sign-in.
+
+For the key `signIn.localPassword.enabled`, the server counts a change to
+`"true"`, or to empty, as a change that reduces security. A change to
+`"false"` is not. So the bootstrap admin token can set the key to `"false"`.
+The same token then gets 403 with `mfa.fresh-step-required` when it sets the
+key to `"true"` or to `null`. Only a console session with a recent sign-in
+can turn the password sign-in on again. If the password sign-in was the only
+sign-in, no person can start such a session, and no API route turns the
+setting on again.
 
 ## Refusals
 
@@ -95,9 +113,16 @@ Each refusal changes nothing. Read the resource again with
 
 ## The temporary administrator session limit
 
-The key `tempadmin.session-limit` is planned. It sets how long a temporary
-administrator record and its token last. The planned default is 1 hour, and the
-planned range is 1 millisecond to 24 hours. The key is not declared yet, so the
-settings resource does not list it, and a record still ends 24 hours after its
-creation, or at the maximum of the token policy when that is shorter. The key
-ships when the project owner confirms the change of the record lifetime.
+The key `tempadmin.session-limit` sets how long a new temporary administrator
+record and its token last. The installation settings list it. The default is
+`1h0m0s`, the value is a duration from 1 millisecond to 24 hours, and a change
+applies at once (`apply` is `live`). The key has `mayReduceSecurity` set, so a
+change needs a fresh sign-in.
+
+A record that exists keeps its end time. A new record ends after the limit, or
+at the maximum of the token policy when that is shorter.
+
+A stored value that the server cannot read as a duration in this range stops
+the creation of a new record. To delete such a value, stop the server and run
+`opendustpan host create-temp-admin --reset-session-limit --reason <text> --database <database>`
+on the host. The command deletes the stored value and writes an audit entry.
