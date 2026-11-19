@@ -703,3 +703,145 @@ func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 		t.Fatalf("close the server: %v", closeErr)
 	}
 }
+
+// openAdoptedStore opens the built-in store at database for a test that gives
+// it to WithBuiltinStore. The test closes it.
+func openAdoptedStore(t *testing.T, database string) *dustpan.BuiltinStore {
+	t.Helper()
+
+	st, err := dustpan.OpenStore(t.Context(), database)
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+
+	return st
+}
+
+// newAdoptingServer returns a server that adopts st with WithBuiltinStore and
+// the extra options. The test closes the server.
+func newAdoptingServer(t *testing.T, st *dustpan.BuiltinStore, extra ...dustpan.Option) *dustpan.Server {
+	t.Helper()
+
+	opts := builtinServerOptions(t)
+	opts = append(opts, dustpan.WithBuiltinStore(st))
+	opts = append(opts, extra...)
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	return srv
+}
+
+// checkStoreAnswers reads through st and fails the test when st does not
+// answer. A closed store does not answer.
+func checkStoreAnswers(t *testing.T, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	if _, err := st.GetNamespace(t.Context(), "acme"); !errors.Is(err, namespace.ErrNotFound) {
+		t.Fatalf("read through the store = %v, want the store to answer with not found", err)
+	}
+}
+
+// adoptedStoreOpeners holds the opens of an adopted store of each dialect. The
+// PostgreSQL case skips without the test database.
+func adoptedStoreOpeners() map[string]func(t *testing.T) string {
+	return map[string]func(t *testing.T) string{
+		"sqlite": func(t *testing.T) string {
+			t.Helper()
+
+			return "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+		},
+		"postgres": func(t *testing.T) string {
+			t.Helper()
+
+			base := os.Getenv(postgresURLEnv)
+			if base == "" {
+				t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
+			}
+
+			return isolatedPostgresURL(t, base)
+		},
+	}
+}
+
+// closeServerThenStore closes the server, checks that the store still
+// answers, and closes the store.
+func closeServerThenStore(t *testing.T, srv *dustpan.Server, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close the server: %v", err)
+	}
+
+	checkStoreAnswers(t, st)
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close the store: %v", err)
+	}
+}
+
+// closeStoreThenServer closes the store, then the server.
+func closeStoreThenServer(t *testing.T, srv *dustpan.Server, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close the store: %v", err)
+	}
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close the server after the store: %v", err)
+	}
+}
+
+// closeEachTwice closes the server twice, checks that the store still answers,
+// and closes the store twice.
+func closeEachTwice(t *testing.T, srv *dustpan.Server, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	for range 2 {
+		if err := srv.Close(); err != nil {
+			t.Fatalf("close the server: %v", err)
+		}
+	}
+
+	checkStoreAnswers(t, st)
+
+	for range 2 {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close the store: %v", err)
+		}
+	}
+}
+
+// TestAdoptedStoreOwnership proves, for each dialect, that Close of the server
+// leaves a store that WithBuiltinStore adopted open in any order of the two
+// Close calls, and that a second Close of the server or of the store answers
+// nil.
+func TestAdoptedStoreOwnership(t *testing.T) {
+	t.Parallel()
+
+	orders := map[string]func(*testing.T, *dustpan.Server, *dustpan.BuiltinStore){
+		"server close before store close":             closeServerThenStore,
+		"store close before server close":             closeStoreThenServer,
+		"double close of the server and of the store": closeEachTwice,
+	}
+
+	for dialect, database := range adoptedStoreOpeners() {
+		for order, run := range orders {
+			t.Run(dialect+"/"+order, func(t *testing.T) {
+				t.Parallel()
+
+				st := openAdoptedStore(t, database(t))
+				t.Cleanup(func() {
+					if err := st.Close(); err != nil {
+						t.Errorf("close the store at cleanup: %v", err)
+					}
+				})
+
+				run(t, newAdoptingServer(t, st), st)
+			})
+		}
+	}
+}
