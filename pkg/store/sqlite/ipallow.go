@@ -51,8 +51,8 @@ func (s *Store) NamespacesWithList(ctx context.Context) ([]namespace.Name, error
 		return nil, fmt.Errorf("select namespaces with an IP allowlist: %w", err)
 	}
 
-	// Defense in depth: the query has its own LIMIT; this check stays so that
-	// a change of the query cannot make the read unbounded.
+	// The query reads at most Max+1 rows, so that the read stays bounded. A row
+	// past Max means that more namespaces have a list: refuse.
 	if len(names) > ipallow.MaxNamespacesWithList {
 		return nil, fmt.Errorf("%w: more than %d", ipallow.ErrTooManyLists, ipallow.MaxNamespacesWithList)
 	}

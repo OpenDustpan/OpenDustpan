@@ -15,10 +15,13 @@ import (
 // of the namespace deny.
 type denyNamespace struct {
 	deny namespace.Name
+	// unitsOnly makes Authorize deny only the unit objects of deny. The
+	// namespace object of deny stays allowed.
+	unitsOnly bool
 }
 
 func (d denyNamespace) Authorize(_ context.Context, _ identity.Principal, _ identity.Action, o identity.Object) error {
-	if o.Namespace() == d.deny {
+	if o.Namespace() == d.deny && (!d.unitsOnly || o.IsUnit()) {
 		return identity.ErrDenied
 	}
 
@@ -55,12 +58,20 @@ func TestCheckListWithinAuthorizeCatchesALeak(t *testing.T) {
 	}
 
 	cases := []struct {
-		name    string
-		deny    namespace.Name
-		wantErr bool
+		name      string
+		deny      namespace.Name
+		unitsOnly bool
+		wantErr   bool
 	}{
-		{name: "Authorize denies a unit that the list holds", deny: "acme", wantErr: true},
-		{name: "Authorize denies only objects that the list leaves out", deny: "beta", wantErr: false},
+		{name: "Authorize denies a unit that the list holds", deny: "acme", unitsOnly: false, wantErr: true},
+		{
+			name: "Authorize denies only the unit of a namespace that the list holds",
+			deny: "acme", unitsOnly: true, wantErr: true,
+		},
+		{
+			name: "Authorize denies only objects that the list leaves out",
+			deny: "beta", unitsOnly: false, wantErr: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -68,7 +79,7 @@ func TestCheckListWithinAuthorizeCatchesALeak(t *testing.T) {
 			t.Parallel()
 
 			err := listWithinAuthorizeError(t.Context(), ListCheck{
-				Authorizer: denyNamespace{deny: tc.deny},
+				Authorizer: denyNamespace{deny: tc.deny, unitsOnly: tc.unitsOnly},
 				Principal:  alice,
 				Action:     identity.ActionUnitRead,
 				Every:      every,

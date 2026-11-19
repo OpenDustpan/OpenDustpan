@@ -217,9 +217,9 @@ setting changes it, and the API does not show it yet.
 
 When more than 1000 namespaces have a list, the read fails with the error
 `ipallow: too many namespaces have an IP allowlist`. The server fails closed:
-it does not cover every object. Once a list check calls the read, a principal
-whose scope covers every object is refused on every list while more than 1000
-namespaces have a list. To end the refusal, delete the lists that you do not
+it does not cover every object. Once a list check calls the read, the server
+refuses a principal whose scope covers every object on every list while more
+than 1000 namespaces have a list. To end the refusal, delete the lists that you do not
 need until 1000 namespaces or fewer have a list.
 
 ## Errors
