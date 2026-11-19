@@ -55,32 +55,41 @@ func TestApplyBreakGlassOnlyPassesRuleFailed(t *testing.T) {
 	}
 }
 
+var errEngineDown = errors.New("engine down")
+
 // TestDecideOnlyErrors calls decide directly and checks that onlyErrors is
 // true only when a gate in error is the sole reason of the refusal. Each row
 // holds one term of the rule: a deny, an engine failure, no error, an
-// approval.
+// approval, a blocked gate.
 func TestDecideOnlyErrors(t *testing.T) {
 	t.Parallel()
 
 	for name, tc := range map[string]struct {
-		total      unitEffect
-		engineDown bool
-		want       bool
+		denies, errs, approvals int
+		blocked, engineDown     bool
+		want                    bool
 	}{
-		"errors only":      {total: unitEffect{errs: []string{"e"}}, want: true},
-		"denies and errs":  {total: unitEffect{denies: []string{"d"}, errs: []string{"e"}}, want: false},
-		"errs, engineDown": {total: unitEffect{errs: []string{"e"}}, engineDown: true, want: false},
-		"no errs, no deny": {total: unitEffect{}, want: false},
-		"approvals + errs": {total: unitEffect{approvals: []string{"a"}, errs: []string{"e"}}, want: false},
-		"blocked + errs":   {total: unitEffect{blocked: true, errs: []string{"e"}}, want: false},
+		"errors only":      {denies: 0, errs: 1, approvals: 0, blocked: false, engineDown: false, want: true},
+		"denies and errs":  {denies: 1, errs: 1, approvals: 0, blocked: false, engineDown: false, want: false},
+		"errs, engineDown": {denies: 0, errs: 1, approvals: 0, blocked: false, engineDown: true, want: false},
+		"no errs, no deny": {denies: 0, errs: 0, approvals: 0, blocked: false, engineDown: false, want: false},
+		"approvals + errs": {denies: 0, errs: 1, approvals: 1, blocked: false, engineDown: false, want: false},
+		"blocked + errs":   {denies: 0, errs: 1, approvals: 0, blocked: true, engineDown: false, want: false},
 	} {
+		total := unitEffect{
+			denies:    make([]string, tc.denies),
+			errs:      make([]string, tc.errs),
+			approvals: make([]string, tc.approvals),
+			warns:     nil,
+			blocked:   tc.blocked,
+		}
+
 		var (
 			run stateWriteRun
 			rec Record
 		)
 
-		run.engineErr = errors.New("engine down")
-		total := tc.total
+		run.engineErr = errEngineDown
 
 		run.decide(&rec, &total, tc.engineDown)
 

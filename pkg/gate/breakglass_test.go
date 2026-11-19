@@ -116,14 +116,17 @@ func TestBreakGlassReplayRefuses(t *testing.T) {
 	}
 
 	var refusal *gate.RefusalError
-	if !errors.As(err, &refusal) || !slices.Contains(refusal.Messages, "No valid break-glass pass: it is missing, used or expired.") {
-		t.Errorf("refusal = %v, want the message \"No valid break-glass pass...\"", err)
+	const noValidMessage = "No valid break-glass pass: it is missing, used or expired."
+
+	if !errors.As(err, &refusal) || !slices.Contains(refusal.Messages, noValidMessage) {
+		t.Errorf("refusal = %v, want the message %q", err, noValidMessage)
 	}
 
 	// Both records name the attempt. The result tells them apart.
 	for _, r := range e.records(t) {
 		if r.BreakGlass != "audit-1" {
-			t.Errorf("Record.BreakGlass = %q (result %q), want audit-1: a refused attempt is named too", r.BreakGlass, r.Result)
+			t.Errorf("Record.BreakGlass = %q (result %q), want audit-1: a refused attempt is named too",
+				r.BreakGlass, r.Result)
 		}
 	}
 
@@ -568,7 +571,8 @@ func TestBreakGlassHostileStoreRefuses(t *testing.T) {
 		}
 
 		if rec := e.newestRecord(t); rec.BreakGlass != "audit-1" {
-			t.Errorf("%s: Record.BreakGlass = %q, want audit-1: the refused record names the attempt", name, rec.BreakGlass)
+			t.Errorf("%s: Record.BreakGlass = %q, want audit-1: the refused record names the attempt",
+				name, rec.BreakGlass)
 		}
 	}
 }
