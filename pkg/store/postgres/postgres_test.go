@@ -1959,6 +1959,8 @@ func emptySchemaURL(tb testing.TB, base string) string {
 		tb.Fatalf("create schema: %v", execErr)
 	}
 
+	pgtest.DropSchemaAtCleanup(tb, base, name)
+
 	u, parseErr := url.Parse(base)
 	if parseErr != nil {
 		tb.Fatalf("parse %s: %v", envURL, parseErr)

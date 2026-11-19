@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -91,6 +92,8 @@ func planSchemaURL(t *testing.T, base string) string {
 	if _, execErr := conn.Exec(t.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
 		t.Fatalf("create schema: %v", execErr)
 	}
+
+	pgtest.DropSchemaAtCleanup(t, base, name)
 
 	u, err := url.Parse(base)
 	if err != nil {
