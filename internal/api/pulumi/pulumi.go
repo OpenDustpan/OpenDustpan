@@ -42,6 +42,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -829,6 +830,13 @@ func checkTagBoundary(tags map[string]string) error {
 			return fmt.Errorf("%w: the value of a tag must be valid UTF-8 text of at most %d bytes",
 				errTagBoundary, maxTagValueBytes)
 		}
+
+		// A value may hold a line break or a tab, and no other hidden rune:
+		// the same rule as the audit change texts, so that no layer decides
+		// alone what a stored tag value may hold.
+		if strings.IndexFunc(value, func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }) >= 0 {
+			return fmt.Errorf("%w: the value of a tag must not hold a control or hidden character", errTagBoundary)
+		}
 	}
 
 	return nil
@@ -1378,7 +1386,7 @@ func classifyNamespace(err error) (failure, bool) {
 // error.
 func classifyStack(err error) (failure, bool) {
 	switch {
-	case errors.Is(err, stack.ErrInvalidName):
+	case errors.Is(err, stack.ErrInvalidName), errors.Is(err, stack.ErrInvalidTags):
 		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName), true
 	case errors.Is(err, stack.ErrNotFound):
 		return coded(http.StatusNotFound, err.Error(), errcode.StackNotFound), true

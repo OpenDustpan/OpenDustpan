@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -179,6 +180,82 @@ func testUpdateTagsHostileKeyChangesNothing(t *testing.T, f fixture) {
 		)
 		if !errors.Is(err, audit.ErrInvalidEntry) {
 			t.Fatalf("update tags with key %q: err = %v, want ErrInvalidEntry", key, err)
+		}
+	}
+
+	after := mustGetFixtureStack(t, f)
+	if !maps.Equal(after.Tags, before.Tags) {
+		t.Fatalf("tags after the refused updates = %v, want %v", after.Tags, before.Tags)
+	}
+
+	if entries := listAudit(t, f.s, ns); len(entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none", entries)
+	}
+}
+
+// hostileTagValues are tag values that no store may write: a value over the
+// limit, a NUL (PostgreSQL refuses it, SQLite stores it), a right-to-left
+// override, a carriage return, an escape and invalid UTF-8.
+func hostileTagValues() map[string]string {
+	return map[string]string{
+		"100 KiB":       strings.Repeat("v", 100<<10),
+		"257 bytes":     strings.Repeat("v", 257),
+		"NUL":           "a\x00b",
+		"U+202E":        "a\u202eb",
+		"CR":            "a\rb",
+		"ESC":           "a\x1bb",
+		"invalid UTF-8": "a\xffb",
+	}
+}
+
+// testUpdateTagsHostileValueChangesNothing sends hostile tag values straight
+// to UpdateStackTags, CreateStack and CreateStackPlaced, as if the handler
+// and the service had not checked them. Each write returns stack.ErrInvalidTags,
+// never a driver error, and the tags, the stacks and the chain stay as they were.
+func testUpdateTagsHostileValueChangesNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	ns := f.ref.Namespace
+	before := mustGetFixtureStack(t, f)
+
+	for label, value := range hostileTagValues() {
+		err := f.s.UpdateStackTags(
+			t.Context(),
+			f.ref,
+			stack.TagUpdate{Tags: map[string]string{"k": value}, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+			f.fence,
+		)
+		if !errors.Is(err, stack.ErrInvalidTags) {
+			t.Fatalf("update tags with a %s value: err = %v, want ErrInvalidTags", label, err)
+		}
+
+		fresh := newStack(ns, "web", "created-"+strings.NewReplacer(" ", "-", "+", "").Replace(strings.ToLower(label)))
+		fresh.Tags = map[string]string{"k": value}
+
+		err = f.s.CreateStack(t.Context(), fresh, f.fence)
+		if !errors.Is(err, stack.ErrInvalidTags) {
+			t.Fatalf("create stack with a %s value: err = %v, want ErrInvalidTags", label, err)
+		}
+
+		placed, ok := f.s.(stack.PlacedStore)
+		if !ok {
+			continue
+		}
+
+		placement := stack.Placement{
+			Collection:   collection.Ref{Namespace: ns, Name: "payments"},
+			CollectionID: "col-hostile",
+			Entry:        renameEntry(ns, fresh.Ref),
+		}
+
+		err = placed.CreateStackPlaced(t.Context(), fresh, placement, f.fence)
+		if !errors.Is(err, stack.ErrInvalidTags) {
+			t.Fatalf("create placed stack with a %s value: err = %v, want ErrInvalidTags", label, err)
+		}
+
+		_, err = f.s.GetStack(t.Context(), fresh.Ref)
+		if !errors.Is(err, stack.ErrNotFound) {
+			t.Fatalf("get stack after the refused create with a %s value: err = %v, want ErrNotFound", label, err)
 		}
 	}
 

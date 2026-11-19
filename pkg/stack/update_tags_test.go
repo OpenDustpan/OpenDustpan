@@ -113,7 +113,7 @@ func TestUpdateTagsStampsTheEntry(t *testing.T) {
 }
 
 // TestUpdateTagsRefusesHostileTags proves that UpdateTags and CreatePlaced
-// return ErrInvalidName, and call no store, for too many tags and for a tag
+// return ErrInvalidTags, and call no store, for too many tags and for a tag
 // name or value that is not allowed.
 func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 	t.Parallel()
@@ -136,6 +136,10 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 		{"space in the name", map[string]string{"a b": "v"}},
 		{"value over 256 bytes", map[string]string{"k": strings.Repeat("v", 257)}},
 		{"value with invalid UTF-8", map[string]string{"k": "\xff"}},
+		{"value with NUL", map[string]string{"k": "a\x00b"}},
+		{"value with CR", map[string]string{"k": "a\rb"}},
+		{"value with ESC", map[string]string{"k": "a\x1bb"}},
+		{"value with U+202E", map[string]string{"k": "a\u202eb"}},
 	}
 
 	for _, tc := range cases {
@@ -145,8 +149,8 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 			svc, rec, ref := tagService(t, time.Unix(100, 0))
 
 			_, err := svc.UpdateTags(t.Context(), ref, tc.tags, zeroEntry())
-			if !errors.Is(err, stack.ErrInvalidName) {
-				t.Fatalf("UpdateTags err = %v, want ErrInvalidName", err)
+			if !errors.Is(err, stack.ErrInvalidTags) {
+				t.Fatalf("UpdateTags err = %v, want ErrInvalidTags", err)
 			}
 
 			if strings.ContainsAny(err.Error(), "\r\n"+string(rune(0x200b))) || strings.Contains(err.Error(), "\xff") {
@@ -162,7 +166,7 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 
 // TestCreatePlacedRefusesHostileTags proves that CreatePlaced checks the tags
 // itself: with a complete placement and a store that accepts any placement, a
-// hostile tag returns ErrInvalidName and the stack does not exist.
+// hostile tag returns ErrInvalidTags and the stack does not exist.
 func TestCreatePlacedRefusesHostileTags(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +179,10 @@ func TestCreatePlacedRefusesHostileTags(t *testing.T) {
 		{"41-byte name", map[string]string{strings.Repeat("k", 41): "v"}},
 		{"value over 256 bytes", map[string]string{"k": strings.Repeat("v", 257)}},
 		{"value with invalid UTF-8", map[string]string{"k": "\xff"}},
+		{"value with NUL", map[string]string{"k": "a\x00b"}},
+		{"value with CR", map[string]string{"k": "a\rb"}},
+		{"value with ESC", map[string]string{"k": "a\x1bb"}},
+		{"value with U+202E", map[string]string{"k": "a\u202eb"}},
 	}
 
 	for _, tc := range cases {
@@ -190,8 +198,8 @@ func TestCreatePlacedRefusesHostileTags(t *testing.T) {
 			}
 
 			_, err := svc.CreatePlaced(t.Context(), ref, tc.tags, placement)
-			if !errors.Is(err, stack.ErrInvalidName) {
-				t.Fatalf("CreatePlaced err = %v, want ErrInvalidName", err)
+			if !errors.Is(err, stack.ErrInvalidTags) {
+				t.Fatalf("CreatePlaced err = %v, want ErrInvalidTags", err)
 			}
 
 			if _, getErr := svc.Get(t.Context(), ref); !errors.Is(getErr, stack.ErrNotFound) {

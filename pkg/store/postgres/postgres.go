@@ -480,6 +480,14 @@ func placementMove(st stack.Stack, p stack.Placement) collection.Move {
 // createStackRows inserts the stack, its tags and its inventory entry in the
 // transaction of q.
 func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack) error {
+	// Defense in depth: the handler and the service check the tags too. This
+	// check stays so that a new caller of the store cannot write a tag value
+	// that one dialect refuses or stores in another way than the other
+	// dialect does; it does not rely on them.
+	if err := stack.CheckTagValues(st.Tags); err != nil {
+		return err
+	}
+
 	row := codec.ToStackRow(st)
 
 	n, err := q.CreateStack(ctx, db.CreateStackParams(row))
@@ -556,6 +564,14 @@ func (s *Store) UpdateStackTags(
 	// Defense in depth: the service and the handler build a valid entry too;
 	// this check stays so that a new caller cannot skip the audit entry.
 	if err := checkFencedEntry(fence, u.Entry); err != nil {
+		return err
+	}
+
+	// Defense in depth: the handler and the service check the tags too. This
+	// check stays so that a new caller of the store cannot write a tag value
+	// that one dialect refuses or stores in another way than the other
+	// dialect does; it does not rely on them.
+	if err := stack.CheckTagValues(u.Tags); err != nil {
 		return err
 	}
 

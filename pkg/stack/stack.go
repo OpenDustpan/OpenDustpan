@@ -33,6 +33,10 @@ var (
 	ErrAlreadyExists = errors.New("stack already exists")
 	// ErrInvalidName reports a project or stack name that fails validation.
 	ErrInvalidName = errors.New("invalid project or stack name")
+	// ErrInvalidTags reports a tag map that fails validation: too many tags, a
+	// tag name that is not allowed, or a tag value that is too long, not valid
+	// UTF-8 or holds a hidden character other than a line break or a tab.
+	ErrInvalidTags = errors.New("invalid stack tags")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 	// ErrHasResources reports that a stack still manages resources, so a
@@ -198,6 +202,8 @@ type PlacedStore interface {
 	// collection.ErrPlacementCollectionMissing when the collection does not
 	// exist, collection.ErrCollectionChanged when it has another ID than
 	// p.CollectionID, and the errors of a refused join (for example a gate).
+	// Like CreateStack, it returns ErrInvalidTags, and writes nothing, for a
+	// tag value that CheckTagValues refuses.
 	CreateStackPlaced(ctx context.Context, st Stack, p Placement, fence namespace.Fence) error
 }
 
@@ -208,7 +214,8 @@ type PlacedStore interface {
 type Store interface {
 	// CreateStack persists st if fence matches the namespace's current failover
 	// version. It returns ErrAlreadyExists, namespace.ErrNotFound or
-	// namespace.ErrFenced.
+	// namespace.ErrFenced, or ErrInvalidTags for a tag value that
+	// CheckTagValues refuses.
 	CreateStack(ctx context.Context, st Stack, fence namespace.Fence) error
 	// GetStack returns the stack identified by ref, or ErrNotFound.
 	GetStack(ctx context.Context, ref Ref) (Stack, error)
@@ -264,7 +271,8 @@ type Store interface {
 	// another value (see TagChanges). A replace that changes no key writes no
 	// audit entry. It returns ErrNotFound, namespace.ErrNotFound,
 	// namespace.ErrFenced or audit.ErrInvalidEntry if e fails validation or
-	// names another namespace.
+	// names another namespace. It returns ErrInvalidTags, and writes nothing,
+	// for a tag value that CheckTagValues refuses.
 	UpdateStackTags(ctx context.Context, ref Ref, u TagUpdate, fence namespace.Fence) error
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
@@ -415,7 +423,7 @@ func createRows(ctx context.Context, store Store, st Stack, p Placement, fence n
 }
 
 func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p Placement) (Stack, error) {
-	if err := checkTags(tags); err != nil {
+	if err := CheckTags(tags); err != nil {
 		return Stack{}, err
 	}
 
@@ -644,7 +652,7 @@ func (s *Service) PurgeExpired(
 func (s *Service) UpdateTags(
 	ctx context.Context, ref Ref, tags map[string]string, e audit.Entry,
 ) (Stack, error) {
-	if err := checkTags(tags); err != nil {
+	if err := CheckTags(tags); err != nil {
 		return Stack{}, err
 	}
 
@@ -857,34 +865,72 @@ func TagChanges(old, next map[string]string) []audit.Change {
 	return changes
 }
 
-// checkTags returns ErrInvalidName when tags holds more than maxTags tags,
+// CheckTags returns ErrInvalidTags when tags holds more than maxTags tags,
 // or a tag whose name is not 1 to maxTagNameLen characters of letters,
 // digits and "-", "_", ".", ":", or whose value is not valid UTF-8 text of at
 // most maxTagValueLen bytes. A value may hold a line break or a tab: the
-// Pulumi CLI sends a multi-line description unchanged. The error text never
-// holds the rejected name.
+// Pulumi CLI sends a multi-line description unchanged. Any other hidden
+// character (a control character such as NUL, CR or ESC, or a format
+// character such as U+202E) is refused. The error text never holds the
+// rejected name or value.
 //
-// Defense in depth: the stores check the audit entry that names the keys, and
-// the audit package checks each change text. This check stays so that no
-// other layer decides what a tag key may hold.
-func checkTags(tags map[string]string) error {
+// The service and the stores both call it. Defense in depth: each caller
+// checks the tags itself and does not rely on the handler, the service or the
+// audit validation of the keys.
+func CheckTags(tags map[string]string) error {
 	if len(tags) > maxTags {
-		return fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+		return fmt.Errorf("%w: more than %d tags", ErrInvalidTags, maxTags)
 	}
 
 	for name, value := range tags {
 		if !validTagName(name) {
 			return fmt.Errorf("%w: a tag name must have 1 to %d characters: letters, digits, hyphen, "+
-				"underscore, period or colon", ErrInvalidName, maxTagNameLen)
+				"underscore, period or colon", ErrInvalidTags, maxTagNameLen)
 		}
 
-		if len(value) > maxTagValueLen || !utf8.ValidString(value) {
-			return fmt.Errorf("%w: the value of a tag is not valid text of at most %d bytes",
-				ErrInvalidName, maxTagValueLen)
+		if err := checkTagValue(value); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// CheckTagValues returns ErrInvalidTags when a value of tags is not valid
+// UTF-8 text of at most maxTagValueLen bytes, or holds a hidden character
+// other than a line break or a tab. It does not check the tag names: the
+// audit validation of the keys does that in the stores. The stores call it
+// before the first write, so that a value that one SQL dialect refuses and
+// another one stores never reaches a driver. The error text never holds a
+// value.
+func CheckTagValues(tags map[string]string) error {
+	for _, value := range tags {
+		if err := checkTagValue(value); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkTagValue returns ErrInvalidTags when value may not be a tag value.
+func checkTagValue(value string) error {
+	if len(value) > maxTagValueLen || !utf8.ValidString(value) {
+		return fmt.Errorf("%w: the value of a tag is not valid text of at most %d bytes",
+			ErrInvalidTags, maxTagValueLen)
+	}
+
+	if strings.IndexFunc(value, hiddenTagRune) >= 0 {
+		return fmt.Errorf("%w: the value of a tag holds a control or hidden character", ErrInvalidTags)
+	}
+
+	return nil
+}
+
+// hiddenTagRune reports whether r may not be in a tag value: a hidden rune
+// other than a line break or a tab.
+func hiddenTagRune(r rune) bool {
+	return ident.IsHiddenRuneExcept(r, '\n', '\t')
 }
 
 // validTagName reports whether name is an allowed tag name.
