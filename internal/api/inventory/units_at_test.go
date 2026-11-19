@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -283,6 +284,79 @@ func TestListUnitsAtOmitsUnitsTheCallerCannotRead(t *testing.T) {
 	}
 }
 
+const (
+	// The whole message of each refusal. The tests spell the text out, so a
+	// change of the answer fails them.
+	errAtFormatText      = "invalid query parameter: at must be an RFC 3339 time, for example 2026-10-18T09:30:00Z"
+	errAtBeforeEpochText = "invalid query parameter: at must not be before 1970-01-01T00:00:00Z"
+	errAtRepeatedText    = "invalid query parameter: send at most one at query value"
+)
+
+// assertAtRefusal checks a 400 answer: the whole message equals the constant
+// text, the body holds no byte below 0x20 except the final line feed of the
+// JSON encoder, and the body holds no part of the raw input.
+func assertAtRefusal(t *testing.T, rec *httptest.ResponseRecorder, rawQuery, wantText string) {
+	t.Helper()
+
+	var doc struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, rec.Body.String())
+	}
+
+	if doc.Message != wantText {
+		t.Fatalf("message = %q, want %q", doc.Message, wantText)
+	}
+
+	body := strings.TrimSuffix(rec.Body.String(), "\n")
+	for i := range len(body) {
+		if body[i] < 0x20 {
+			t.Fatalf("body holds byte 0x%02x at %d: %q", body[i], i, body)
+		}
+	}
+
+	raw, err := url.QueryUnescape(rawQuery)
+	if err != nil {
+		t.Fatalf("unescape %q: %v", rawQuery, err)
+	}
+
+	// A value of 4096 digits or a piece of a header: none of it may come back.
+	for _, piece := range []string{strings.TrimSpace(raw), "X-Evil"} {
+		if piece != "" && strings.Contains(raw, piece) && strings.Contains(body, piece) {
+			t.Fatalf("body repeats the input %q: %q", piece, body)
+		}
+	}
+}
+
+// TestListUnitsAtRepeatedValue checks that a request with more than one at
+// value gets 400, whatever the values are.
+func TestListUnitsAtRepeatedValue(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	cases := []struct{ name, query string }{
+		{"a valid value and a junk value", "at=2026-10-10T09:00:00Z&at=junk"},
+		{"an empty value and a valid value", "at=&at=2026-10-10T09:00:00Z"},
+		{"two valid values", "at=2026-10-10T09:00:00Z&at=2026-10-10T10:00:00Z"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+tc.query, "test-token")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+
+			assertAtRefusal(t, rec, "", errAtRepeatedText)
+		})
+	}
+}
+
 func TestListUnitsAtErrors(t *testing.T) {
 	t.Parallel()
 
@@ -294,74 +368,215 @@ func TestListUnitsAtErrors(t *testing.T) {
 		name    string
 		at      string
 		want    int
+		// wantText is the whole message of a 400 answer.
+		wantText string
 	}{
 		{
-			name:    "a store with no change log",
-			handler: withoutHistory,
-			at:      "2026-10-10T09:00:00Z",
-			want:    http.StatusNotImplemented,
-		},
-		{name: "a time that is not a time", handler: withHistory, at: "yesterday", want: http.StatusBadRequest},
-		{name: "Unix milliseconds", handler: withHistory, at: "1700000000000", want: http.StatusBadRequest},
-		{name: "a negative number", handler: withHistory, at: "-5", want: http.StatusBadRequest},
-		{name: "a date with no time", handler: withHistory, at: "2026-10-10", want: http.StatusBadRequest},
-		{name: "no zone", handler: withHistory, at: "2026-10-10T09:00:00", want: http.StatusBadRequest},
-		{name: "a lower case t", handler: withHistory, at: "2026-10-10t09:00:00Z", want: http.StatusBadRequest},
-		{name: "a lower case z", handler: withHistory, at: "2026-10-10T09:00:00z", want: http.StatusBadRequest},
-		{name: "a space for the T", handler: withHistory, at: "2026-10-10%2009:00:00Z", want: http.StatusBadRequest},
-		{name: "a comma fraction", handler: withHistory, at: "2026-10-10T09:00:00,5Z", want: http.StatusBadRequest},
-		{
-			name:    "a fraction of 10 digits",
-			handler: withHistory,
-			at:      "2026-10-10T09:00:00.1234567890Z",
-			want:    http.StatusBadRequest,
-		},
-		{name: "an empty fraction", handler: withHistory, at: "2026-10-10T09:00:00.Z", want: http.StatusBadRequest},
-		{
-			name:    "an offset with no colon",
-			handler: withHistory,
-			at:      "2026-10-10T09:00:00%2B0200",
-			want:    http.StatusBadRequest,
+			name:     "a store with no change log",
+			handler:  withoutHistory,
+			at:       "2026-10-10T09:00:00Z",
+			want:     http.StatusNotImplemented,
+			wantText: "",
 		},
 		{
-			name:    "an offset of 24 hours",
-			handler: withHistory,
-			at:      "2026-10-10T09:00:00%2B24:00",
-			want:    http.StatusBadRequest,
+			name:     "a time that is not a time",
+			handler:  withHistory,
+			at:       "yesterday",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
 		},
-		{name: "a leap second", handler: withHistory, at: "2026-12-31T23:59:60Z", want: http.StatusBadRequest},
-		{name: "a month 13", handler: withHistory, at: "2026-13-10T09:00:00Z", want: http.StatusBadRequest},
 		{
-			name:    "a day that does not exist",
-			handler: withHistory,
-			at:      "2026-02-30T09:00:00Z",
-			want:    http.StatusBadRequest,
+			name:     "Unix milliseconds",
+			handler:  withHistory,
+			at:       "1700000000000",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
 		},
-		{name: "a year with 5 digits", handler: withHistory, at: "12026-10-10T09:00:00Z", want: http.StatusBadRequest},
-		{name: "before 1970", handler: withHistory, at: "1969-12-31T23:59:59Z", want: http.StatusBadRequest},
 		{
-			name:    "before 1970 by an offset",
-			handler: withHistory,
-			at:      "1970-01-01T00:00:00%2B01:00",
-			want:    http.StatusBadRequest,
+			name:     "a negative number",
+			handler:  withHistory,
+			at:       "-5",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
 		},
-		{name: "year 0", handler: withHistory, at: "0000-01-01T00:00:00Z", want: http.StatusBadRequest},
-		{name: "a leading space", handler: withHistory, at: "%202026-10-10T09:00:00Z", want: http.StatusBadRequest},
-		{name: "a trailing new line", handler: withHistory, at: "2026-10-10T09:00:00Z%0A", want: http.StatusBadRequest},
 		{
-			name:    "a CR LF inside",
-			handler: withHistory,
-			at:      "2026-10-10T09:00:00Z%0D%0AX-Evil:1",
-			want:    http.StatusBadRequest,
+			name:     "a date with no time",
+			handler:  withHistory,
+			at:       "2026-10-10",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
 		},
-		{name: "a NUL byte", handler: withHistory, at: "2026-10-10T09:00:00Z%00", want: http.StatusBadRequest},
-		{name: "a long value", handler: withHistory, at: strings.Repeat("9", 4096), want: http.StatusBadRequest},
-		{name: "a digit overflow", handler: withHistory, at: "99999999999999999999999999", want: http.StatusBadRequest},
-		{name: "the far future", handler: withHistory, at: "9999-12-31T23:59:59Z", want: http.StatusOK},
-		{name: "the epoch", handler: withHistory, at: "1970-01-01T00:00:00Z", want: http.StatusOK},
-		{name: "a fraction", handler: withHistory, at: "2026-10-10T09:00:00.123456789Z", want: http.StatusOK},
-		{name: "an offset", handler: withHistory, at: "2026-10-10T11:00:00%2B02:00", want: http.StatusOK},
-		{name: "a negative offset", handler: withHistory, at: "2026-10-10T04:00:00-05:00", want: http.StatusOK},
+		{
+			name:     "no zone",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a lower case t",
+			handler:  withHistory,
+			at:       "2026-10-10t09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a lower case z",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a space for the T",
+			handler:  withHistory,
+			at:       "2026-10-10%2009:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a comma fraction",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00,5Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a fraction of 10 digits",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00.1234567890Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "an empty fraction",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00.Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "an offset with no colon",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00%2B0200",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "an offset of 24 hours",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00%2B24:00",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a leap second",
+			handler:  withHistory,
+			at:       "2026-12-31T23:59:60Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a month 13",
+			handler:  withHistory,
+			at:       "2026-13-10T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a day that does not exist",
+			handler:  withHistory,
+			at:       "2026-02-30T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a year with 5 digits",
+			handler:  withHistory,
+			at:       "12026-10-10T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "before 1970",
+			handler:  withHistory,
+			at:       "1969-12-31T23:59:59Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtBeforeEpochText,
+		},
+		{
+			name:     "before 1970 by an offset",
+			handler:  withHistory,
+			at:       "1970-01-01T00:00:00%2B01:00",
+			want:     http.StatusBadRequest,
+			wantText: errAtBeforeEpochText,
+		},
+		{
+			name:     "year 0",
+			handler:  withHistory,
+			at:       "0000-01-01T00:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtBeforeEpochText,
+		},
+		{
+			name:     "a leading space",
+			handler:  withHistory,
+			at:       "%202026-10-10T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a trailing new line",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00Z%0A",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a CR LF inside",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00Z%0D%0AX-Evil:1",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a NUL byte",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00Z%00",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a long value",
+			handler:  withHistory,
+			at:       strings.Repeat("9", 4096),
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a digit overflow",
+			handler:  withHistory,
+			at:       "99999999999999999999999999",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{name: "the far future", handler: withHistory, at: "9999-12-31T23:59:59Z", want: http.StatusOK, wantText: ""},
+		{name: "the epoch", handler: withHistory, at: "1970-01-01T00:00:00Z", want: http.StatusOK, wantText: ""},
+		{
+			name:     "a fraction",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00.123456789Z",
+			want:     http.StatusOK,
+			wantText: "",
+		},
+		{name: "an offset", handler: withHistory, at: "2026-10-10T11:00:00%2B02:00", want: http.StatusOK, wantText: ""},
+		{
+			name:     "a negative offset",
+			handler:  withHistory,
+			at:       "2026-10-10T04:00:00-05:00",
+			want:     http.StatusOK,
+			wantText: "",
+		},
 	}
 
 	for _, tc := range cases {
@@ -373,8 +588,8 @@ func TestListUnitsAtErrors(t *testing.T) {
 				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
 			}
 
-			if tc.want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "RFC 3339") {
-				t.Fatalf("error text = %s, want it to name RFC 3339", rec.Body.String())
+			if tc.want == http.StatusBadRequest {
+				assertAtRefusal(t, rec, tc.at, tc.wantText)
 			}
 		})
 	}

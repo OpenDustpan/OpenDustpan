@@ -53,6 +53,17 @@ type listUnitsAtResponse struct {
 // RFC 3339 time.
 const errAtFormat = "at must be an RFC 3339 time, for example 2026-10-18T09:30:00Z"
 
+// errAtBeforeEpoch is the text of the 400 answer for an at value that is a
+// valid RFC 3339 time before the Unix epoch.
+const errAtBeforeEpoch = "at must not be before 1970-01-01T00:00:00Z"
+
+// errAtRepeated is the text of the 400 answer for a request with more than one
+// at query value.
+const errAtRepeated = "send at most one at query value"
+
+// atMaxLength is the length of the longest at value that atGrammar matches.
+const atMaxLength = 35
+
 // atGrammar is the allowlist for the at value: a date, the letter T, a time
 // with an optional fraction of 1 to 9 digits, and Z or a numeric offset. It is
 // stricter than time.Parse, which also takes a comma as the fraction mark and
@@ -68,10 +79,19 @@ var atGrammar = regexp.MustCompile(
 // when the request has no such value. A time before 1970-01-01T00:00:00Z is
 // refused.
 func atQuery(r *http.Request) (time.Time, bool, error) {
-	raw := queryOf(r).Get("at")
-	if raw == "" {
+	values := queryOf(r).All("at")
+
+	// A repeated name is refused, so that a check of one value never lets
+	// another value reach the store. This holds for an empty value too.
+	if len(values) > 1 {
+		return time.Time{}, false, fmt.Errorf("%w: %s", errInvalidQuery, errAtRepeated)
+	}
+
+	if len(values) == 0 || values[0] == "" {
 		return time.Time{}, false, nil
 	}
+
+	raw := values[0]
 
 	at, err := parseAt(raw)
 	if err != nil {
@@ -83,6 +103,13 @@ func atQuery(r *http.Request) (time.Time, bool, error) {
 
 // parseAt checks one at value with the allowlist and reads it.
 func parseAt(raw string) (time.Time, error) {
+	// Defense in depth: the anchored grammar below bounds the length too; this
+	// check stays so that the regular expression never reads a long value, and
+	// so that a change of the grammar cannot lift the bound.
+	if len(raw) > atMaxLength {
+		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtFormat)
+	}
+
 	if !atGrammar.MatchString(raw) {
 		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtFormat)
 	}
@@ -94,7 +121,7 @@ func parseAt(raw string) (time.Time, error) {
 
 	ms := t.UnixMilli()
 	if ms < 0 {
-		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtFormat)
+		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtBeforeEpoch)
 	}
 
 	return time.UnixMilli(ms).UTC(), nil
