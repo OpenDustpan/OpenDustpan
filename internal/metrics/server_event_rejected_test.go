@@ -29,7 +29,7 @@ func eventRejectedLine(reason string, n int) string {
 func TestGitHostEventRejected(t *testing.T) {
 	t.Parallel()
 
-	m := metrics.NewServerMetrics("dev", time.Now())
+	m := metrics.NewServerMetrics("dev", time.UnixMilli(1))
 	m.ObserveRequest("server", "POST /webhooks/{hookID}", "POST", 204, time.Millisecond)
 
 	// Each known reason counts under its own label.

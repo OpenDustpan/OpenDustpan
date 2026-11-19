@@ -260,7 +260,8 @@ func TestRegistrationShowsOldSecretEndsAt(t *testing.T) {
 	}
 
 	// The window is 7 days from now, in Unix milliseconds.
-	wantEnd := time.Now().Add(7 * 24 * time.Hour)
+	// The server reads its own clock in this test, so the check needs the wall clock too.
+	wantEnd := time.Now().Add(7 * 24 * time.Hour) // nosemgrep: semgrep.tests-no-wall-clock
 	if got := time.UnixMilli(ends); got.Before(wantEnd.Add(-time.Minute)) || got.After(wantEnd.Add(time.Minute)) {
 		t.Fatalf("oldSecretEndsAt = %v, want about %v", got, wantEnd)
 	}
@@ -306,7 +307,7 @@ func TestRegistrationHidesAnEndedWindow(t *testing.T) {
 		t.Fatalf("get registration: %v", err)
 	}
 
-	reg.OldEventSecretEndsAt = time.Now().Add(-time.Hour)
+	reg.OldEventSecretEndsAt = time.UnixMilli(1)
 
 	if _, err = e.store.GitHost().PutRegistration(t.Context(), reg, reg.Version, hostRegistrationEntry()); err != nil {
 		t.Fatalf("put registration: %v", err)

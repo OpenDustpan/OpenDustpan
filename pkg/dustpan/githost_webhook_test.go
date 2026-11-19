@@ -156,9 +156,8 @@ func TestWebhookWaitsInMaintenanceMode(t *testing.T) {
 func waitForWebhookStatus(t *testing.T, ts *httptest.Server, want int, check func(http.Header, string)) {
 	t.Helper()
 
-	deadline := time.Now().Add(30 * time.Second)
-
-	for time.Now().Before(deadline) {
+	// 600 tries of 50 ms are 30 seconds.
+	for range 600 {
 		status, header, body := webhookPost(t, ts, "/webhooks/"+webhookHook)
 		if status == want {
 			check(header, body)
