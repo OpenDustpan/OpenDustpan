@@ -294,9 +294,9 @@ func (h *Handler) runBulk(
 
 	run.call.finish()
 
-	// The answer is a replay only when no item ran again. A first call runs
-	// every item, so it is never a replay.
-	if run.call != nil && !run.ran && (run.replayed || !run.call.started) {
+	// The answer is a replay only when an item answered its stored result and
+	// no item ran again. A first call runs every item, so it is never a replay.
+	if run.call != nil && !run.ran && run.replayed {
 		w.Header().Set(idempotent.ReplayedHeader, "true")
 	}
 
@@ -337,6 +337,22 @@ func (h *Handler) bulkItem(
 	}
 
 	unit := bulkTarget{id: id, obj: obj, pos: pos}
+
+	// Defense in depth: Service.Lock and Service.Unlock check unit:lock too.
+	// This check stays so that an Authorizer that fails, and not only one that
+	// denies, writes one audit entry and fails the item closed, and it relies
+	// on neither the service nor the store. A refusal here is recorded by the
+	// guard, so the item writes one entry and the service is not called. The
+	// check runs before the replay record of a keyed item, so a replay checks
+	// unit:lock again before the stored result.
+	if err := h.guard.Authorize(r.Context(), r, p, identity.ActionUnitLock, unit.obj); err != nil {
+		out := h.bulkFailure(r, id, err)
+		if !storableFailure(out) {
+			run.ran = true
+		}
+
+		return out
+	}
 
 	if run.call == nil {
 		return h.bulkApply(r, p, unit, run)
@@ -397,15 +413,6 @@ func (h *Handler) bulkUnit(
 func (h *Handler) bulkApply(r *http.Request, p identity.Principal, unit bulkTarget, run *bulkRun) bulkResult {
 	ctx := r.Context()
 
-	// Defense in depth: Service.Lock and Service.Unlock check unit:lock too.
-	// This check stays so that an Authorizer that fails, and not only one that
-	// denies, writes one audit entry and fails the item closed, and it relies
-	// on neither the service nor the store. A refusal here is recorded by the
-	// guard, so the item writes one entry and the service is not called.
-	if err := h.guard.Authorize(ctx, r, p, identity.ActionUnitLock, unit.obj); err != nil {
-		return h.bulkFailure(r, unit.id, err)
-	}
-
 	if run.unlock {
 		if err := h.unlockOne(ctx, r, p, unit.obj); err != nil {
 			return h.bulkLockFailure(r, p, unit, err)
@@ -423,15 +430,26 @@ func (h *Handler) bulkApply(r *http.Request, p identity.Principal, unit bulkTarg
 }
 
 // bulkLockFailure makes the result of an item that the lock service refused. The
-// check of unit:lock in bulkApply already wrote the entry of a refusal that it
+// check of unit:lock in bulkItem already wrote the entry of a refusal that it
 // decided. A denial that only the service decides writes one entry here, as
 // the route check of a single call does.
 func (h *Handler) bulkLockFailure(r *http.Request, p identity.Principal, unit bulkTarget, err error) bulkResult {
-	if errors.Is(err, identity.ErrDenied) {
+	switch {
+	case errors.Is(err, identity.ErrDenied):
 		h.guard.Record(r.Context(), r, p, refusal.Denial{
 			Action:       identity.ActionUnitLock,
 			Object:       unit.obj,
 			Reason:       reasonBulkLockDenied,
+			ReasonWithin: nil,
+			Window:       0,
+		})
+	case errors.Is(err, manuallock.ErrAuthorizerFailed):
+		// The Authorizer failed inside the service after the check of the item
+		// passed. The item fails closed and writes one entry.
+		h.guard.Record(r.Context(), r, p, refusal.Denial{
+			Action:       identity.ActionUnitLock,
+			Object:       unit.obj,
+			Reason:       refusal.ReasonFailed,
 			ReasonWithin: nil,
 			Window:       0,
 		})

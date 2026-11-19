@@ -357,6 +357,10 @@ func (s *Service) authorize(ctx context.Context, p identity.Principal, action id
 	}
 
 	if err := s.authorizer.Authorize(ctx, p, action, obj); err != nil {
+		if !errors.Is(err, identity.ErrDenied) {
+			return fmt.Errorf("authorize %s on %s: %w: %w", action, t, ErrAuthorizerFailed, err)
+		}
+
 		return fmt.Errorf("authorize %s on %s: %w", action, t, err)
 	}
 

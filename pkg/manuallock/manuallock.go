@@ -58,6 +58,9 @@ var (
 	// ErrInvalidTarget reports a target that names no unit, no collection and
 	// no namespace.
 	ErrInvalidTarget = errors.New("invalid manual lock: name a stack, workspace, collection or namespace")
+	// ErrAuthorizerFailed reports an Authorizer that failed with an error that
+	// is not a refusal. The service refuses the call.
+	ErrAuthorizerFailed = errors.New("authorizer failed")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )

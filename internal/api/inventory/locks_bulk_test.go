@@ -25,6 +25,7 @@ import (
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -120,7 +121,7 @@ func bulkUnitRef(i int) string { return fmt.Sprintf("pulumi:acme/web/bulk-%03d",
 func newBulkFixture(t *testing.T, authz identity.Authorizer, n int) bulkFixture {
 	t.Helper()
 
-	return newBulkFixtureWith(t, authz, n, bulkOptions{noRecords: false, wrap: nil})
+	return newBulkFixtureWith(t, authz, n, bulkOptions{noRecords: false, wrap: nil, limiter: nil})
 }
 
 // bulkOptions changes the fixture: noRecords leaves out the replay records, and
@@ -128,6 +129,8 @@ func newBulkFixture(t *testing.T, authz identity.Authorizer, n int) bulkFixture 
 type bulkOptions struct {
 	noRecords bool
 	wrap      func(coreinventory.Reader) coreinventory.Reader
+	// limiter is the denial limiter of the handler. Nil takes the default.
+	limiter *denylimit.Limiter
 }
 
 // newBulkFixtureWith is newBulkFixture with the options.
@@ -184,7 +187,7 @@ func newBulkFixtureWith(t *testing.T, authz identity.Authorizer, n int, opts bul
 		Deleted: &memDeleted{entries: nil}, History: nil, Lifecycles: testLifecycles(),
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: locks, Records: nil,
 		Moves: nil, Authenticator: subjectAuthenticator{}, Authorizer: authz, Audit: orTestAudit(auditStore),
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, PublicURL: "",
+		OnAuditFailure: nil, DenialLimiter: opts.limiter, Sessions: nil, PublicURL: "",
 		Logger: slog.New(slog.DiscardHandler), Now: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	}
 	if !opts.noRecords {
@@ -703,7 +706,7 @@ func TestBulkLockReplayServerError(t *testing.T) {
 func TestBulkLockReplayNoPort(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixtureWith(t, plainAuthz(), 1, bulkOptions{noRecords: true, wrap: nil})
+	f := newBulkFixtureWith(t, plainAuthz(), 1, bulkOptions{noRecords: true, wrap: nil, limiter: nil})
 
 	rec := f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(1)...), "Idempotency-Key", "k3")
 	if rec.Code != http.StatusBadRequest || f.held() != 0 {
@@ -884,7 +887,7 @@ func TestBulkLockIDCheckBeforeLookup(t *testing.T) {
 		t,
 		plainAuthz(),
 		1,
-		bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
+		bulkOptions{noRecords: false, limiter: nil, wrap: func(r coreinventory.Reader) coreinventory.Reader {
 			log.Reader = r
 
 			return log
@@ -1164,7 +1167,7 @@ func TestBulkLockUnitIDMustMatch(t *testing.T) {
 		t,
 		plainAuthz(),
 		2,
-		bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
+		bulkOptions{noRecords: false, limiter: nil, wrap: func(r coreinventory.Reader) coreinventory.Reader {
 			return wrongIDReader{Reader: r, from: bulkUnitID(0), to: bulkUnitID(1)}
 		}},
 	)
@@ -1404,7 +1407,11 @@ func TestBulkLockAuthorizerFails(t *testing.T) {
 			path, body = bulkUnlockPath, bulkUnlockBody(idsUpTo(3)...)
 		}
 
-		f := newBulkFixture(t, failingLockAuthz{Authorizer: plainAuthz(), object: bulkUnitRef(1)}, 3)
+		// The explicit limiter shows a second Record: the limiter holds back a
+		// repeat of the key and counts it as pending.
+		lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+		f := newBulkFixtureWith(t, failingLockAuthz{Authorizer: plainAuthz(), object: bulkUnitRef(1)}, 3,
+			bulkOptions{noRecords: false, wrap: nil, limiter: lim})
 		if unlock {
 			// Alice holds the locks, so the unlock reaches the check of unit:lock.
 			f.store.mu.Lock()
@@ -1436,6 +1443,10 @@ func TestBulkLockAuthorizerFails(t *testing.T) {
 			t.Fatalf("unlock=%v: denied audit entries = %+v, want one with reason %q",
 				unlock, entries, refusal.ReasonFailed)
 		}
+
+		if pending := lim.Drain(); len(pending) != 0 {
+			t.Fatalf("unlock=%v: the limiter holds %+v: the item recorded more than once", unlock, pending)
+		}
 	}
 }
 
@@ -1447,12 +1458,19 @@ func TestBulkLockRefusalOneEntry(t *testing.T) {
 	authz := bulkAuthz{
 		deny: map[string]bool{grant(identity.ActionUnitLock, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
 	}
-	f := newBulkFixture(t, authz, 3)
+	// The explicit limiter shows a second Record: the limiter holds back a
+	// repeat of the key and counts it as pending.
+	lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	f := newBulkFixtureWith(t, authz, 3, bulkOptions{noRecords: false, wrap: nil, limiter: lim})
 	bulkAnswerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...)))
 
 	entries := f.audit.denied()
 	if len(entries) != 1 || !strings.HasPrefix(entries[0].Reason, refusal.ReasonPolicy) {
 		t.Fatalf("denied audit entries = %+v, want one with reason %q", entries, refusal.ReasonPolicy)
+	}
+
+	if pending := lim.Drain(); len(pending) != 0 {
+		t.Fatalf("the limiter holds %+v: the refusal recorded more than once", pending)
 	}
 }
 
@@ -1710,7 +1728,7 @@ func TestBulkLockReplayedHeaderPreRecord(t *testing.T) {
 			t,
 			plainAuthz(),
 			2,
-			bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
+			bulkOptions{noRecords: false, limiter: nil, wrap: func(r coreinventory.Reader) coreinventory.Reader {
 				return failingUnitReader{Reader: r, id: bulkUnitID(1), fail: fail}
 			}},
 		)
@@ -2033,4 +2051,206 @@ func latencyPostgresURL(t *testing.T, base string) string {
 	})
 
 	return pgtest.MigratedURLWithTimeout(t, base, template, time.Minute)
+}
+
+// seedAliceLocks makes alice the holder of the locks on units 0 to n-1.
+func (f bulkFixture) seedAliceLocks(t *testing.T, n int) {
+	t.Helper()
+
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	for i := range n {
+		f.store.locks[mustUnit(t, i).String()] = manuallock.Lock{
+			Target: mustUnit(t, i), Holder: "alice", Since: time.Time{}, Reason: "held",
+		}
+	}
+}
+
+// bulkCase is the path and the body of a bulk lock or a bulk unlock of n units.
+func bulkCase(unlock bool, n int) (string, string) {
+	if unlock {
+		return bulkUnlockPath, bulkUnlockBody(idsUpTo(n)...)
+	}
+
+	return bulkLockPath, bulkLockBody(bulkReason, idsUpTo(n)...)
+}
+
+// TestBulkLockReplayAfterLockRevoked: a replay checks unit:lock again before it
+// answers the stored result. The first keyed call is ok. Then unit:lock is
+// refused. The replay gives 403, writes exactly one denied entry with the
+// reason refusal.ReasonPolicy and leaves the lock store as it was.
+func TestBulkLockReplayAfterLockRevoked(t *testing.T) {
+	t.Parallel()
+
+	for _, unlock := range []bool{false, true} {
+		authz := plainAuthz()
+		authz.deny = map[string]bool{}
+		f := newBulkFixture(t, authz, 2)
+
+		if unlock {
+			f.seedAliceLocks(t, 2)
+		}
+
+		path, body := bulkCase(unlock, 1)
+
+		first := bulkAnswerOf(t, f.keyedPost(t, path, body, "klr"))
+		wantOK(t, &first.Results[0])
+
+		heldBefore := f.held()
+		entriesBefore := f.lockEntries()
+
+		authz.deny[grant(identity.ActionUnitLock, bulkUnitRef(0))] = true
+
+		rec := f.keyedPost(t, path, body, "klr")
+		got := bulkAnswerOf(t, rec)
+
+		if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusForbidden {
+			t.Fatalf("unlock=%v: replay result = %+v, want 403", unlock, got.Results[0])
+		}
+
+		if got.Results[0].Lock != nil {
+			t.Fatalf("unlock=%v: the replay answered the stored lock %+v", unlock, got.Results[0].Lock)
+		}
+
+		denied := f.audit.denied()
+		if len(denied) != 1 || denied[0].Action != string(identity.ActionUnitLock) ||
+			!strings.HasPrefix(denied[0].Reason, refusal.ReasonPolicy) {
+			t.Fatalf("unlock=%v: denied audit entries = %+v, want one unit:lock entry with reason %q",
+				unlock, denied, refusal.ReasonPolicy)
+		}
+
+		if f.held() != heldBefore || f.lockEntries() != entriesBefore {
+			t.Fatalf("unlock=%v: the replay changed the lock store", unlock)
+		}
+
+		if h := rec.Header().Get("Idempotent-Replayed"); h != "" {
+			t.Fatalf("unlock=%v: Idempotent-Replayed = %q, want none: the item was refused, not replayed", unlock, h)
+		}
+	}
+}
+
+// serviceOnlyAuthz makes the first unit:lock check pass and the second one call
+// second. The first check is the pre-check of the item. The second is the check
+// in the lock service.
+func serviceOnlyAuthz(second func(deny map[string]bool)) bulkAuthz {
+	authz := plainAuthz()
+	authz.deny = map[string]bool{}
+	authz.onLock = func(n int) {
+		if n == 2 {
+			second(authz.deny)
+		}
+	}
+
+	return authz
+}
+
+// TestBulkLockServiceDenialRecorded: a denial that only the lock service decides
+// gives 403 and exactly one denied entry with the reason reasonBulkLockDenied.
+// The test fails when bulkLockFailure does not record this denial.
+func TestBulkLockServiceDenialRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, unlock := range []bool{false, true} {
+		authz := serviceOnlyAuthz(func(deny map[string]bool) {
+			deny[grant(identity.ActionUnitLock, bulkUnitRef(0))] = true
+		})
+		lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+		f := newBulkFixtureWith(t, authz, 1, bulkOptions{noRecords: false, wrap: nil, limiter: lim})
+
+		if unlock {
+			f.seedAliceLocks(t, 1)
+		}
+
+		path, body := bulkCase(unlock, 1)
+		got := bulkAnswerOf(t, f.post(t, "alice", path, body))
+
+		if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusForbidden {
+			t.Fatalf("unlock=%v: result = %+v, want 403", unlock, got.Results[0])
+		}
+
+		denied := f.audit.denied()
+		if len(denied) != 1 || denied[0].Action != string(identity.ActionUnitLock) ||
+			!strings.HasPrefix(denied[0].Reason, "unit:lock denied for a unit of a bulk call") {
+			t.Fatalf("unlock=%v: denied audit entries = %+v, want one with the service denial reason", unlock, denied)
+		}
+
+		if pending := lim.Drain(); len(pending) != 0 {
+			t.Fatalf("unlock=%v: the limiter holds %+v: more than one record", unlock, pending)
+		}
+	}
+}
+
+// TestBulkLockServiceAuthorizerFails: an Authorizer that fails inside the lock
+// service, after the pre-check passed, gives 500 and one entry with the reason
+// refusal.ReasonFailed.
+func TestBulkLockServiceAuthorizerFails(t *testing.T) {
+	t.Parallel()
+
+	for _, unlock := range []bool{false, true} {
+		var calls atomic.Int64
+
+		authz := failOnSecondLockAuthz{Authorizer: plainAuthz(), n: &calls}
+		lim := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+		f := newBulkFixtureWith(t, authz, 1, bulkOptions{noRecords: false, wrap: nil, limiter: lim})
+
+		if unlock {
+			f.seedAliceLocks(t, 1)
+		}
+
+		path, body := bulkCase(unlock, 1)
+		got := bulkAnswerOf(t, f.post(t, "alice", path, body))
+
+		if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusInternalServerError {
+			t.Fatalf("unlock=%v: result = %+v, want 500", unlock, got.Results[0])
+		}
+
+		denied := f.audit.denied()
+		if len(denied) != 1 || !strings.HasPrefix(denied[0].Reason, refusal.ReasonFailed) {
+			t.Fatalf("unlock=%v: denied audit entries = %+v, want one with reason %q",
+				unlock, denied, refusal.ReasonFailed)
+		}
+
+		if pending := lim.Drain(); len(pending) != 0 {
+			t.Fatalf("unlock=%v: the limiter holds %+v: more than one record", unlock, pending)
+		}
+	}
+}
+
+// failOnSecondLockAuthz fails the second unit:lock check with a plain error.
+type failOnSecondLockAuthz struct {
+	identity.Authorizer
+
+	n *atomic.Int64
+}
+
+func (a failOnSecondLockAuthz) Authorize(
+	ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if action == identity.ActionUnitLock && a.n.Add(1) == 2 {
+		return errStoreDown
+	}
+
+	return a.Authorizer.Authorize(ctx, p, action, obj)
+}
+
+// TestBulkLockReplayedHeaderNeedsReplay: the header is on the answer only when
+// at least one item answered its stored result. A retry in which every item
+// fails before the record has no replayed item and no header.
+func TestBulkLockReplayedHeaderNeedsReplay(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 2)
+	body := bulkLockBody(bulkReason, "u-missing", "u-other")
+
+	bulkAnswerOf(t, f.keyedPost(t, bulkLockPath, body, "khn"))
+
+	rec := f.keyedPost(t, bulkLockPath, body, "khn")
+	got := bulkAnswerOf(t, rec)
+
+	wantError(t, &got.Results[0], http.StatusNotFound, "lock.target-not-found")
+
+	if h := rec.Header().Get("Idempotent-Replayed"); h != "" {
+		t.Fatalf("retry with no replayed item: Idempotent-Replayed = %q, want none", h)
+	}
 }
