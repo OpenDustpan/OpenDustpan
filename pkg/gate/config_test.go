@@ -173,6 +173,49 @@ func newConfigService(t *testing.T) (*gate.ConfigService, *recordingStore) {
 	return svc, st
 }
 
+// TestConfigServiceReadsRefuseAnUnknownNamespace proves that each read of a
+// namespace that does not exist returns namespace.ErrNotFound. The store of
+// the test answers each read with no configuration, so a read that skips the
+// namespace check returns another error.
+func TestConfigServiceReadsRefuseAnUnknownNamespace(t *testing.T) {
+	t.Parallel()
+
+	scope := gate.NamespaceScope("zed")
+
+	tests := []struct {
+		name string
+		run  func(*gate.ConfigService) error
+	}{
+		{"approval default", func(s *gate.ConfigService) error {
+			_, err := s.ApprovalDefault(t.Context(), scope)
+
+			return err
+		}},
+		{"approval rules", func(s *gate.ConfigService) error {
+			_, err := s.ApprovalRules(t.Context(), scope)
+
+			return err
+		}},
+		{"approval rule", func(s *gate.ConfigService) error {
+			_, err := s.ApprovalRule(t.Context(), scope, "platform")
+
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, _ := newConfigService(t)
+
+			if err := tt.run(svc); !errors.Is(err, namespace.ErrNotFound) {
+				t.Fatalf("read = %v, want namespace.ErrNotFound", err)
+			}
+		})
+	}
+}
+
 // callerEntry is the entry that an adapter hands over. It holds values that
 // the service must replace.
 func callerEntry() audit.Entry {
