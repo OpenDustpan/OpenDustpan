@@ -44,18 +44,30 @@ func (issuerChangedError) Unwrap() error { return ErrIssuerChanged }
 // Provider is one provider of the console sign-in: its ID and what
 // identifies its people. For an OpenID provider that is its Issuer. For a
 // plain OAuth 2.0 provider, Issuer is empty, and its UserinfoURL and
-// SubjectClaim identify its people instead.
+// SubjectClaim identify its people instead. For an LDAP provider, Issuer is
+// empty and DirectoryURL, the URL of its directory, identifies its people.
 type Provider struct {
 	ID           string
 	Issuer       string
 	UserinfoURL  string
 	SubjectClaim string
+	DirectoryURL string
 }
+
+// directoryBindingPrefix starts the binding of an LDAP provider, so that the
+// binding of a directory is never the issuer of another kind of provider.
+const directoryBindingPrefix = "ldap:"
 
 // binding returns the form in which a store records p: the issuer in the
 // form of NormalizeIssuer, or for a plain OAuth 2.0 provider the user-info
-// URL in the form of NormalizeEndpoint, then "#", then the subject claim.
+// URL in the form of NormalizeEndpoint, then "#", then the subject claim, or
+// for an LDAP provider "ldap:" and the directory URL in the form of
+// NormalizeIssuer.
 func (p Provider) binding() string {
+	if p.DirectoryURL != "" {
+		return directoryBindingPrefix + NormalizeIssuer(p.DirectoryURL)
+	}
+
 	if p.Issuer == "" {
 		return NormalizeEndpoint(p.UserinfoURL) + "#" + p.SubjectClaim
 	}
@@ -95,6 +107,10 @@ func BindProviders(ctx context.Context, store ProviderStore, providers []Provide
 			continue
 		}
 
+		if p.DirectoryURL != "" {
+			return directoryChangedError{id: p.ID, recorded: recorded, configured: p.binding()}
+		}
+
 		if p.Issuer == "" {
 			return identityChangedError{id: p.ID, recorded: recorded, configured: p.binding()}
 		}
@@ -121,6 +137,27 @@ func (e identityChangedError) Error() string {
 
 // Unwrap returns ErrIssuerChanged.
 func (identityChangedError) Unwrap() error { return ErrIssuerChanged }
+
+// directoryChangedError is the refusal of an LDAP provider whose directory
+// URL is not the one that the store recorded for its ID. Its text is one
+// sentence that names the provider ID, both URLs and the fix: a person of
+// another directory with the same subject would sign in as the old
+// principal.
+type directoryChangedError struct {
+	id, recorded, configured string
+}
+
+func (e directoryChangedError) Error() string {
+	recorded := strings.TrimPrefix(e.recorded, directoryBindingPrefix)
+
+	return fmt.Sprintf("sign-in provider %q has the directory URL %q in the database and the directory URL %q in "+
+		"the configuration, so set the URL (--ldap-url) back to %q, or set a new provider ID (--ldap-provider) "+
+		"only if the directory changed", e.id, recorded, strings.TrimPrefix(e.configured, directoryBindingPrefix),
+		recorded)
+}
+
+// Unwrap returns ErrIssuerChanged.
+func (directoryChangedError) Unwrap() error { return ErrIssuerChanged }
 
 // NormalizeIssuer returns issuer with a lowercase scheme and host and with
 // no trailing slash. An issuer that is not a URL keeps its text, with no
