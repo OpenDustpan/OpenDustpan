@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -133,7 +134,6 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 		{"empty name", map[string]string{"": "v"}},
 		{"41-byte name", map[string]string{strings.Repeat("k", 41): "v"}},
 		{"space in the name", map[string]string{"a b": "v"}},
-		{"value with a line break", map[string]string{"k": "a\nb"}},
 		{"value over 256 bytes", map[string]string{"k": strings.Repeat("v", 257)}},
 		{"value with invalid UTF-8", map[string]string{"k": "\xff"}},
 	}
@@ -157,9 +157,46 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 				t.Fatalf("store updates = %d, want 0", rec.count())
 			}
 
-			_, err = svc.CreatePlaced(t.Context(), ref, tc.tags, zeroPlacement())
-			if err == nil {
-				t.Fatal("CreatePlaced accepted the tags")
+		})
+	}
+}
+
+// TestCreatePlacedRefusesHostileTags proves that CreatePlaced checks the tags
+// itself: with a complete placement and a store that accepts any placement, a
+// hostile tag returns ErrInvalidName and the stack does not exist.
+func TestCreatePlacedRefusesHostileTags(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		tags map[string]string
+	}{
+		{"name with CR LF", map[string]string{"evil\r\nInjected: yes": "v"}},
+		{"empty name", map[string]string{"": "v"}},
+		{"41-byte name", map[string]string{strings.Repeat("k", 41): "v"}},
+		{"value over 256 bytes", map[string]string{"k": strings.Repeat("v", 257)}},
+		{"value with invalid UTF-8", map[string]string{"k": "\xff"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, ref := permissiveService(t)
+
+			placement := stack.Placement{
+				Collection:   collection.Ref{Namespace: "acme", Name: "payments"},
+				CollectionID: "col-1",
+				Entry:        zeroEntry(),
+			}
+
+			_, err := svc.CreatePlaced(t.Context(), ref, tc.tags, placement)
+			if !errors.Is(err, stack.ErrInvalidName) {
+				t.Fatalf("CreatePlaced err = %v, want ErrInvalidName", err)
+			}
+
+			if _, getErr := svc.Get(t.Context(), ref); !errors.Is(getErr, stack.ErrNotFound) {
+				t.Fatalf("Get after the refused create = %v, want stack.ErrNotFound", getErr)
 			}
 		})
 	}
@@ -175,7 +212,9 @@ func TestUpdateTagsAcceptsPulumiTags(t *testing.T) {
 	tags := map[string]string{
 		"pulumi:project":        "web",
 		"pulumi:runtime":        "nodejs",
-		"pulumi:description":    strings.Repeat("d", 256),
+		"pulumi:description":    "a\nb\tc",
+		"pulumi:long":           strings.Repeat("d", 256),
+		"vcs:root":              "a\nb\tc",
 		"github:owner":          "x",
 		strings.Repeat("n", 40): "",
 		"a_b-c.d":               "v",
@@ -195,11 +234,4 @@ func zeroEntry() audit.Entry {
 	var e audit.Entry
 
 	return e
-}
-
-// zeroPlacement answers a placement with no field set.
-func zeroPlacement() stack.Placement {
-	var p stack.Placement
-
-	return p
 }

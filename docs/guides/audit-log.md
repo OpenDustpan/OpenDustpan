@@ -68,7 +68,12 @@ person starts through the API has that person as the subject.
 
 A stack rename writes one entry with the old and the new name in `changes`.
 
-A change of stack tags writes one entry with the action `unit:manage`. Its `changes` holds `tags.<key>` for each key that the change adds, removes or gives another value. Each change says `set` or `not set`, never the tag value. A key that keeps its name and gets another value shows `set` before and `set` after. A change that changes no key writes no entry.
+A change of stack tags writes one entry with the action `unit:manage`.
+Its `changes` holds `tags.<key>` for each key that the change adds,
+deletes or gives another value. Each change says `set` or `not set`,
+never the tag value. A key that keeps its name and gets another value
+shows `set` before and `set` after. A change that changes no key writes
+no entry.
 
 Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and

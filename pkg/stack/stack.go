@@ -860,7 +860,8 @@ func TagChanges(old, next map[string]string) []audit.Change {
 // checkTags returns ErrInvalidName when tags holds more than maxTags tags,
 // or a tag whose name is not 1 to maxTagNameLen characters of letters,
 // digits and "-", "_", ".", ":", or whose value is not valid UTF-8 text of at
-// most maxTagValueLen bytes without a hidden character. The error text never
+// most maxTagValueLen bytes. A value may hold a line break or a tab: the
+// Pulumi CLI sends a multi-line description unchanged. The error text never
 // holds the rejected name.
 //
 // Defense in depth: the stores check the audit entry that names the keys, and
@@ -877,7 +878,7 @@ func checkTags(tags map[string]string) error {
 				"underscore, period or colon", ErrInvalidName, maxTagNameLen)
 		}
 
-		if len(value) > maxTagValueLen || !utf8.ValidString(value) || ident.HasHidden(value) {
+		if len(value) > maxTagValueLen || !utf8.ValidString(value) {
 			return fmt.Errorf("%w: the value of a tag is not valid text of at most %d bytes",
 				ErrInvalidName, maxTagValueLen)
 		}

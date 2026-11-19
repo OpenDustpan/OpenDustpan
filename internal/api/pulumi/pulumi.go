@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -760,6 +761,12 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
+	if err := checkTagBoundary(req.Tags); err != nil {
+		h.writeTagRefusal(ctx, w, err)
+
+		return
+	}
+
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), req.StackName)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -786,6 +793,55 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, createStackResponse{})
+}
+
+// The limits of the tags that the Pulumi CLI sets: at most maxTagCount tags,
+// a name of 1 to maxTagNameBytes bytes of letters, digits and "-", "_", ".",
+// ":", and a value of at most maxTagValueBytes bytes of UTF-8 text. A value
+// may hold a line break: the CLI sends a multi-line description unchanged.
+const (
+	maxTagCount      = 64
+	maxTagNameBytes  = 40
+	maxTagValueBytes = 256
+)
+
+// checkTagBoundary refuses tags that break the limits above. The text of the
+// error never holds a rejected name or value.
+//
+// Defense in depth: the stack service and the audit validation check the
+// same tags. This check stays so that a new route or a change in the service
+// cannot let a hostile tag past the HTTP boundary; it does not rely on them.
+func checkTagBoundary(tags map[string]string) error {
+	if len(tags) > maxTagCount {
+		return fmt.Errorf("tags: more than %d tags", maxTagCount)
+	}
+
+	for name, value := range tags {
+		if name == "" || len(name) > maxTagNameBytes {
+			return fmt.Errorf("tags: a tag name must have 1 to %d bytes", maxTagNameBytes)
+		}
+
+		for i := range len(name) {
+			c := name[i]
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
+				c != '-' && c != '_' && c != '.' && c != ':' {
+				return errors.New("tags: a tag name may hold letters, digits, hyphen, underscore, period or colon only")
+			}
+		}
+
+		if len(value) > maxTagValueBytes || !utf8.ValidString(value) {
+			return fmt.Errorf("tags: the value of a tag must be valid UTF-8 text of at most %d bytes",
+				maxTagValueBytes)
+		}
+	}
+
+	return nil
+}
+
+// writeTagRefusal answers 400 with the message of err in the error shape of
+// the Pulumi Cloud-compatible API.
+func (h *Handler) writeTagRefusal(ctx context.Context, w http.ResponseWriter, err error) {
+	h.writeFailure(ctx, w, coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName))
 }
 
 type updateStackTagsResponse struct{}
@@ -815,6 +871,12 @@ func (h *Handler) updateStackTags(
 	var tags map[string]string
 	if err := json.Unmarshal(body, &tags); err != nil {
 		h.writeInvalidBody(ctx, w)
+
+		return
+	}
+
+	if err := checkTagBoundary(tags); err != nil {
+		h.writeTagRefusal(ctx, w, err)
 
 		return
 	}
