@@ -357,7 +357,7 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 	if reason := principalRefusal(err); reason != "" {
 		if reason == ReasonTargetLookup {
 			s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
-				slog.String("provider", req.Provider.ID), slog.String("error", err.Error()))
+				slog.String("provider", req.Provider.ID), slog.String("cause", causeType(err)))
 		}
 
 		return none, s.refuse(ctx, req, principalRefusalOf(reason, a.Subject, err))
@@ -374,7 +374,7 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 	target, targetErr := s.isTarget(ctx, &p, subject)
 	if targetErr != nil {
 		s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
-			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+			slog.String("provider", req.Provider.ID), slog.String("cause", causeType(targetErr)))
 
 		return none, s.refuse(ctx, req, &refusal{
 			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject, cause: targetErr,
@@ -769,6 +769,49 @@ func principalRefusal(err error) string {
 	default:
 		return ""
 	}
+}
+
+// causeType returns the Go type of the innermost error of err that is not a
+// wrapper. The log holds the type only: the text of a store error can hold
+// driver text.
+func causeType(err error) string {
+	last, leaf := "", ""
+
+	for e := err; e != nil; {
+		switch t := fmt.Sprintf("%T", e); t {
+		case "*fmt.wrapError", "*fmt.wrapErrors", "*errors.joinError":
+		case "*errors.errorString":
+			leaf = t
+		default:
+			last = t
+		}
+
+		//nolint:errorlint // The walk must see an error that wraps several errors, which errors.As cannot name by type.
+		switch u := e.(type) {
+		case interface{ Unwrap() error }:
+			e = u.Unwrap()
+		case interface{ Unwrap() []error }:
+			errs := u.Unwrap()
+			if len(errs) == 0 {
+				return firstSet(last, leaf)
+			}
+
+			e = errs[len(errs)-1]
+		default:
+			return firstSet(last, leaf)
+		}
+	}
+
+	return firstSet(last, leaf)
+}
+
+// firstSet returns a if it is not empty, and b otherwise.
+func firstSet(a, b string) string {
+	if a != "" {
+		return a
+	}
+
+	return b
 }
 
 // principalRefusalOf returns the refusal for the reason of principalRefusal.

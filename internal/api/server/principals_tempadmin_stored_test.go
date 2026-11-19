@@ -1,15 +1,19 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 const storedPrincipalWarning = "the temporary administrator read failed after a principal write"
@@ -140,6 +144,57 @@ func TestReadStaysAnErrorOnFailedTempAdminRead(t *testing.T) {
 	}
 }
 
+// memberDocMarked is a group member on the wire with the banner flag.
+type memberDocMarked struct {
+	Principal markedPrincipalDoc `json:"principal"`
+}
+
+// TestMemberAddOnFailedTempAdminRead proves that a member add answers the
+// stored member with the person marked (fail closed) when the read of the
+// temporary administrator records fails, and that the list of members of the
+// group is a read: it answers 500. It fails when the memberResponse or the
+// memberListResponse case of markAllTempAdmin is removed.
+func TestMemberAddOnFailedTempAdminRead(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	log := &capturedLog{mu: sync.Mutex{}, records: nil}
+	opts := principalHandlerOptions{
+		now: nil, authenticator: nil, logger: slog.New(log), onAuditFailure: nil,
+		tempAdmins: failingTempAdmins{err: tempAdminReadError{}},
+	}
+	h := newReachPrincipalHandlerWith(t, svc, st, routeReach(st), opts)
+
+	var person markedPrincipalDoc
+
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"person"}`, http.StatusCreated,
+	}, &person)
+
+	var group groupDoc
+
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups", `{"name":"Ops","description":"Runs it"}`, http.StatusCreated,
+	}, &group)
+
+	path := "/api/server/groups/" + group.ID + "/members"
+
+	var member memberDocMarked
+
+	mustCall(t, h, apiCall{http.MethodPost, path, `{"principalID":"` + person.ID + `"}`, http.StatusCreated}, &member)
+
+	if member.Principal.ID != person.ID || !member.Principal.TemporaryAdministrator ||
+		member.Principal.TemporaryExpiresAt != nil {
+		t.Errorf("added member = %+v, want the person marked with no expiry", member.Principal)
+	}
+
+	status, body := call(t, h, apiCall{http.MethodGet, path, "", http.StatusInternalServerError})
+	if status != http.StatusInternalServerError || !json.Valid([]byte(body)) {
+		t.Errorf("GET %s = %d %s, want 500 with a JSON error", path, status, body)
+	}
+}
+
 // checkStoredPrincipalWarnings proves the warnings of the log: want of them,
 // each with the principal ID and the error type only, and no record with the
 // text of the failed read.
@@ -208,5 +263,73 @@ func checkStoredPrincipalEntries(t *testing.T, st *sqlite.Store, id string, writ
 
 	if count != writes {
 		t.Fatalf("entries for the principal = %d, want %d", count, writes)
+	}
+}
+
+// countingTempAdmins is a temporary administrator reader that counts its
+// reads of the list.
+type countingTempAdmins struct {
+	lists *atomic.Int64
+}
+
+func (c countingTempAdmins) GetTempAdminBySubject(context.Context, string) (tempadmin.TempAdmin, error) {
+	return tempadmin.TempAdmin{}, tempadmin.ErrNotFound
+}
+
+func (c countingTempAdmins) ListTempAdmins(context.Context) ([]tempadmin.TempAdmin, error) {
+	c.lists.Add(1)
+
+	return nil, nil
+}
+
+// TestBodyWithoutPrincipalsSkipsTempAdminRead proves that a result whose body
+// holds no principal does not read the temporary administrator records, and
+// that a result with a person reads them once. It fails when the check of the
+// body type is removed from markTempAdmin.
+func TestBodyWithoutPrincipalsSkipsTempAdminRead(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	lists := &atomic.Int64{}
+	opts := principalHandlerOptions{
+		now: nil, authenticator: nil, logger: slog.New(slog.DiscardHandler), onAuditFailure: nil,
+		tempAdmins: countingTempAdmins{lists: lists},
+	}
+	h := newReachPrincipalHandlerWith(t, svc, st, routeReach(st), opts)
+
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups", `{"name":"Ops","description":"Runs it"}`, http.StatusCreated,
+	}, nil)
+
+	if got := lists.Load(); got != 0 {
+		t.Fatalf("reads after a group create = %d, want 0", got)
+	}
+
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"person"}`, http.StatusCreated,
+	}, nil)
+
+	if got := lists.Load(); got != 1 {
+		t.Fatalf("reads after a principal create = %d, want 1", got)
+	}
+}
+
+// TestMarkAllTempAdminMarksEveryBody proves that the fail-closed mark covers
+// each body type that holds a person, and no person of another kind. It fails
+// when a case is removed from markAllTempAdmin.
+func TestMarkAllTempAdminMarksEveryBody(t *testing.T) {
+	t.Parallel()
+
+	marked := apiserver.MarkAllTempAdminForTest(apiserver.PrincipalBodiesForTest()...)
+
+	for i, flag := range apiserver.FlagsOfBodiesForTest(marked) {
+		if !flag {
+			t.Errorf("body %d (%T): person not marked", i, marked[i])
+		}
+	}
+
+	if len(marked) != 4 {
+		t.Fatalf("bodies = %d, want 4", len(marked))
 	}
 }
