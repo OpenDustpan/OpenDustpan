@@ -226,7 +226,8 @@ principal has the source `oauth`. The person can sign in, but can do
 nothing until an administrator gives a role. A grant needs a console session
 with a recent sign-in (see "Tokens from a console session"). The bootstrap
 admin token has no console session, so `POST` on a grant answers 403 with
-`mfa.fresh-step-required`. `opendustpan host create-temp-admin` also does not
+`mfa.fresh-step-required`. The token can make principals and local users, but
+it cannot give them a role. `opendustpan host create-temp-admin` also does not
 help: its token is an access token, and it gets the same 403 on a grant. Make
 the first administrator with the one-time code of the installation
 ([Make the first administrator](first-administrator.md)). That administrator

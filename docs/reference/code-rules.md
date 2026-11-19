@@ -16,9 +16,8 @@ suffix" for each reason that gets this text.
 
 - The bootstrap admin token holds every action on the installation by a code
   rule, with no stored grant record. It stays valid until the operator deletes it
-  from the configuration and restarts the server. It does not end on the first
-  sign-in of a person, or when the first administrator is made (see First
-  administrator).
+  from the configuration and restarts the server. It does not end when the first
+  administrator is made (see First administrator).
   The access-review export shows it as a row with source `"code-rule"` and
   rule `"bootstrap admin token"`, with no grant ID, no creator and no time.
 
