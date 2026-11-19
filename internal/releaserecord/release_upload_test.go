@@ -721,31 +721,36 @@ func TestReleaseUploadChecksWhatItUploads(t *testing.T) {
 		for _, replaced := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s replaced %v", hostile, replaced), func(t *testing.T) {
 				t.Parallel()
-
-				r := goodRun()
-				r.hostile = hostile
-				r.replaceVerify = replaced
-				r.set = writeSet(t, nil)
-				res := runUpload(t, r)
-
-				// Both sets are good, so a refusal is a wrong result.
-				if res.code != 0 {
-					t.Fatalf("exit %d, want 0; stderr: %q", res.code, res.stderr)
-				}
-
-				if got := len(createCalls(res.calls)); got != 1 {
-					t.Fatalf("%d release create calls, want 1: %q", got, res.calls)
-				}
-
-				if res.cwd == "" {
-					t.Fatalf("no create call ran in a directory: %q", res.calls)
-				}
-
-				if got, want := evalDir(t, res.cwd), evalDir(t, r.set); got != want {
-					t.Errorf("gh ran in %s, want the checked set %s", got, want)
-				}
+				checkUploadsCheckedSet(t, hostile, replaced)
 			})
 		}
+	}
+}
+
+func checkUploadsCheckedSet(t *testing.T, hostile string, replaced bool) {
+	t.Helper()
+
+	r := goodRun()
+	r.hostile = hostile
+	r.replaceVerify = replaced
+	r.set = writeSet(t, nil)
+	res := runUpload(t, r)
+
+	// Both sets are good, so a refusal is a wrong result.
+	if res.code != 0 {
+		t.Fatalf("exit %d, want 0; stderr: %q", res.code, res.stderr)
+	}
+
+	if got := len(createCalls(res.calls)); got != 1 {
+		t.Fatalf("%d release create calls, want 1: %q", got, res.calls)
+	}
+
+	if res.cwd == "" {
+		t.Fatalf("no create call ran in a directory: %q", res.calls)
+	}
+
+	if got, want := evalDir(t, res.cwd), evalDir(t, r.set); got != want {
+		t.Errorf("gh ran in %s, want the checked set %s", got, want)
 	}
 }
 
@@ -797,6 +802,7 @@ func TestReleaseUploadRefusesAnUnreadableDirectoryWithoutEchoingIt(t *testing.T)
 			}
 
 			t.Cleanup(func() {
+				//nolint:gosec // A directory needs the search bit to be removed again.
 				if err := os.Chmod(r.set, 0o700); err != nil {
 					t.Error(err)
 				}
