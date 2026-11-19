@@ -7,7 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ type unitAtBody struct {
 // unitsAtBody is the decoded view at a time.
 type unitsAtBody struct {
 	Units   []unitAtBody `json:"units"`
-	At      int64        `json:"at"`
+	At      string       `json:"at"`
 	Purged  int          `json:"purged"`
 	Omitted int          `json:"omitted"`
 }
@@ -161,14 +162,14 @@ func TestListUnitsAt(t *testing.T) {
 	t.Parallel()
 
 	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
-	at := strconv.FormatInt(atTime(5).UnixMilli(), 10)
+	at := atTime(5).Format(time.RFC3339Nano)
 
 	rec, got := getUnitsAt(t, handler, at)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
 
-	if got.At != atTime(5).UnixMilli() || got.Purged != 1 || got.Omitted != 0 || len(got.Units) != 2 {
+	if got.At != atTime(5).Format(time.RFC3339Nano) || got.Purged != 1 || got.Omitted != 0 || len(got.Units) != 2 {
 		t.Fatalf("view = %+v, want 2 units, 1 purged, none omitted", got)
 	}
 
@@ -249,7 +250,7 @@ func TestListUnitsAtPoints(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec, got := getUnitsAt(t, handler, strconv.FormatInt(tc.at.UnixMilli(), 10))
+			rec, got := getUnitsAt(t, handler, tc.at.Format(time.RFC3339Nano))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 			}
@@ -272,7 +273,7 @@ func TestListUnitsAtOmitsUnitsTheCallerCannotRead(t *testing.T) {
 	authz := denyUnits{deny: map[string]bool{"opentofu:acme/network": true}}
 	handler := newHistoryHandler(t, seededHistory(), authz)
 
-	rec, got := getUnitsAt(t, handler, strconv.FormatInt(atTime(5).UnixMilli(), 10))
+	rec, got := getUnitsAt(t, handler, atTime(5).Format(time.RFC3339Nano))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
@@ -294,9 +295,73 @@ func TestListUnitsAtErrors(t *testing.T) {
 		at      string
 		want    int
 	}{
-		{name: "a time that is not a number", handler: withHistory, at: "yesterday", want: http.StatusBadRequest},
-		{name: "a negative time", handler: withHistory, at: "-5", want: http.StatusBadRequest},
-		{name: "a store with no change log", handler: withoutHistory, at: "100", want: http.StatusNotImplemented},
+		{
+			name:    "a store with no change log",
+			handler: withoutHistory,
+			at:      "2026-10-10T09:00:00Z",
+			want:    http.StatusNotImplemented,
+		},
+		{name: "a time that is not a time", handler: withHistory, at: "yesterday", want: http.StatusBadRequest},
+		{name: "Unix milliseconds", handler: withHistory, at: "1700000000000", want: http.StatusBadRequest},
+		{name: "a negative number", handler: withHistory, at: "-5", want: http.StatusBadRequest},
+		{name: "a date with no time", handler: withHistory, at: "2026-10-10", want: http.StatusBadRequest},
+		{name: "no zone", handler: withHistory, at: "2026-10-10T09:00:00", want: http.StatusBadRequest},
+		{name: "a lower case t", handler: withHistory, at: "2026-10-10t09:00:00Z", want: http.StatusBadRequest},
+		{name: "a lower case z", handler: withHistory, at: "2026-10-10T09:00:00z", want: http.StatusBadRequest},
+		{name: "a space for the T", handler: withHistory, at: "2026-10-10%2009:00:00Z", want: http.StatusBadRequest},
+		{name: "a comma fraction", handler: withHistory, at: "2026-10-10T09:00:00,5Z", want: http.StatusBadRequest},
+		{
+			name:    "a fraction of 10 digits",
+			handler: withHistory,
+			at:      "2026-10-10T09:00:00.1234567890Z",
+			want:    http.StatusBadRequest,
+		},
+		{name: "an empty fraction", handler: withHistory, at: "2026-10-10T09:00:00.Z", want: http.StatusBadRequest},
+		{
+			name:    "an offset with no colon",
+			handler: withHistory,
+			at:      "2026-10-10T09:00:00%2B0200",
+			want:    http.StatusBadRequest,
+		},
+		{
+			name:    "an offset of 24 hours",
+			handler: withHistory,
+			at:      "2026-10-10T09:00:00%2B24:00",
+			want:    http.StatusBadRequest,
+		},
+		{name: "a leap second", handler: withHistory, at: "2026-12-31T23:59:60Z", want: http.StatusBadRequest},
+		{name: "a month 13", handler: withHistory, at: "2026-13-10T09:00:00Z", want: http.StatusBadRequest},
+		{
+			name:    "a day that does not exist",
+			handler: withHistory,
+			at:      "2026-02-30T09:00:00Z",
+			want:    http.StatusBadRequest,
+		},
+		{name: "a year with 5 digits", handler: withHistory, at: "12026-10-10T09:00:00Z", want: http.StatusBadRequest},
+		{name: "before 1970", handler: withHistory, at: "1969-12-31T23:59:59Z", want: http.StatusBadRequest},
+		{
+			name:    "before 1970 by an offset",
+			handler: withHistory,
+			at:      "1970-01-01T00:00:00%2B01:00",
+			want:    http.StatusBadRequest,
+		},
+		{name: "year 0", handler: withHistory, at: "0000-01-01T00:00:00Z", want: http.StatusBadRequest},
+		{name: "a leading space", handler: withHistory, at: "%202026-10-10T09:00:00Z", want: http.StatusBadRequest},
+		{name: "a trailing new line", handler: withHistory, at: "2026-10-10T09:00:00Z%0A", want: http.StatusBadRequest},
+		{
+			name:    "a CR LF inside",
+			handler: withHistory,
+			at:      "2026-10-10T09:00:00Z%0D%0AX-Evil:1",
+			want:    http.StatusBadRequest,
+		},
+		{name: "a NUL byte", handler: withHistory, at: "2026-10-10T09:00:00Z%00", want: http.StatusBadRequest},
+		{name: "a long value", handler: withHistory, at: strings.Repeat("9", 4096), want: http.StatusBadRequest},
+		{name: "a digit overflow", handler: withHistory, at: "99999999999999999999999999", want: http.StatusBadRequest},
+		{name: "the far future", handler: withHistory, at: "9999-12-31T23:59:59Z", want: http.StatusOK},
+		{name: "the epoch", handler: withHistory, at: "1970-01-01T00:00:00Z", want: http.StatusOK},
+		{name: "a fraction", handler: withHistory, at: "2026-10-10T09:00:00.123456789Z", want: http.StatusOK},
+		{name: "an offset", handler: withHistory, at: "2026-10-10T11:00:00%2B02:00", want: http.StatusOK},
+		{name: "a negative offset", handler: withHistory, at: "2026-10-10T04:00:00-05:00", want: http.StatusOK},
 	}
 
 	for _, tc := range cases {
@@ -307,7 +372,33 @@ func TestListUnitsAtErrors(t *testing.T) {
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
 			}
+
+			if tc.want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "RFC 3339") {
+				t.Fatalf("error text = %s, want it to name RFC 3339", rec.Body.String())
+			}
 		})
+	}
+}
+
+// TestListUnitsAtOffsetsAgree checks that the same instant, in UTC and with an
+// offset, gives the same view, and that the answer at is a UTC RFC 3339 time
+// that is cut to whole milliseconds.
+func TestListUnitsAtOffsetsAgree(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	_, utc := getUnitsAt(t, handler, "2026-10-10T09:05:00Z")
+	_, offset := getUnitsAt(t, handler, "2026-10-10T11:05:00%2B02:00")
+	_, frac := getUnitsAt(t, handler, "2026-10-10T09:05:00.0009Z")
+
+	if len(utc.Units) == 0 || !reflect.DeepEqual(utc, offset) || !reflect.DeepEqual(utc, frac) {
+		t.Fatalf("views differ: utc %+v, offset %+v, fraction %+v", utc, offset, frac)
+	}
+
+	got, err := time.Parse(time.RFC3339Nano, utc.At)
+	if err != nil || !got.Equal(atTime(5)) || !strings.HasSuffix(utc.At, "Z") {
+		t.Fatalf("at = %q (%v), want %s in UTC", utc.At, err, atTime(5).Format(time.RFC3339Nano))
 	}
 }
 
@@ -316,7 +407,7 @@ func TestListUnitsAtNeedsNamespaceRead(t *testing.T) {
 
 	handler := newHistoryHandler(t, seededHistory(), stubAuthorizer{})
 
-	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at=100", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at=2026-10-10T09:00:00Z", "test-token")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
 	}
@@ -334,7 +425,7 @@ func TestListUnitsAtConsoleURL(t *testing.T) {
 		selectiveAuthorizer{deny: nil},
 		"https://dustpan.example.com",
 	)
-	at := strconv.FormatInt(atTime(5).UnixMilli(), 10)
+	at := atTime(5).Format(time.RFC3339Nano)
 
 	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at="+at, "test-token")
 	if rec.Code != http.StatusOK {
