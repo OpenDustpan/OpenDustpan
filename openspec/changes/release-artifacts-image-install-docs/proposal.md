@@ -7,13 +7,13 @@ version: 7
 **Persona: operator.** The operator installs the server from a release, not from source. The scripts that build and check the binary archives are on main. The upload of the archives to a release is not: `.github/workflows/release.yml` builds and pushes the image only. The image build, the image smoke test and the first install page are on main too. The first image that the tag workflow would build has three faults that no test shows today:
 
 - The tag workflow builds the image with no version argument. The binary of that image prints `dev`, not the tag.
-- The tag workflow passes no console tarball URL and no SHA-256. The Dockerfile then uses its placeholder pin, and the build stops at the download with a curl error that does not name the pin.
+- The Dockerfile pin for the console tarball is a placeholder (an all-zero SHA-256). The build stops at the download with a curl error that does not name the pin. The fault is the placeholder pin, not the missing console tarball URL: the workflow must pass no console argument.
 - The install page does not say how to install from a binary archive. No test starts a server from a built archive.
 
 The user path this change must make work:
 
 1. **Docs page.** Read `docs/guides/install.md` and pick the image, and read in the archive section what to use until archives are available.
-2. **CLI, image.** Run `docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version` and read `v0.1.0`, the tag.
+2. **CLI, image.** Build with `IMAGE_VERSION=v0.1.0 ./scripts/build-image-local.sh` and read `v0.1.0` from `--version` (a release image: `docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version`).
 3. **Docs page, archive.** Read the section "Install from a binary archive". It says that archives and `SHA256SUMS` are not available yet, gives no download address, and points to the quickstart and to `./scripts/build-image-local.sh`.
 4. **API.** `GET /health/ready` answers 200 on the running server.
 
@@ -32,7 +32,7 @@ Errors the person may hit, and the one command that helps:
 - `scripts/smoke-image.sh` gets two refusal cases that run a real build: a wrong console SHA-256 and a bad version.
 - A new test builds the release archives in a copy of the work tree, checks the archive of the host platform against `SHA256SUMS`, runs its binary with `--version`, starts `serve` and reads `GET /health/ready`.
 - `docs/guides/install.md` gets the section "Check the version of the image" and the section "Install from a binary archive". The archive section says that archives and `SHA256SUMS` are not available yet, gives no download address, and points to the quickstart and the local image build script. A test checks this.
-- The release workflow passes `--build-arg VERSION` to the image build. The Dockerfile pin stays the single source of the console pin, so the workflow passes no console argument. A person applies this diff: it is under "Workflow patch (apply locally)" in the pull request body, and the task list contains no workflow file.
+- The release workflow passes `--build-arg VERSION` to the image build. The Dockerfile pin stays the single source of the console pin, so the workflow passes no console argument. A person applies this diff: it is under "Workflow patch (a person applies it)" in the pull request body, and the task list contains no workflow file.
 
 Out of scope:
 

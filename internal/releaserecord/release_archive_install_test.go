@@ -371,7 +371,7 @@ func TestInstallGuideArchiveSectionPromisesNoDownload(t *testing.T) {
 		t.Error("the archive section does not say that binary archives are not available yet")
 	}
 
-	for _, banned := range []string{"```sh", "releases/download", "curl", "tar -xzf", "sha256sum"} {
+	for _, banned := range []string{"```", "releases/download", "curl", "tar -xzf", "sha256sum"} {
 		if strings.Contains(section, banned) {
 			t.Errorf("the archive section holds %q: the page must not promise a download", banned)
 		}
