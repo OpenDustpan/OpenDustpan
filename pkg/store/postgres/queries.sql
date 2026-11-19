@@ -844,6 +844,10 @@ LEFT JOIN namespaces AS ns ON ns.name = i.namespace
 LEFT JOIN manual_locks AS nl ON nl.kind = 'namespace' AND nl.object_id = ns.id
 WHERE i.unit_id = $1;
 
+-- name: GetUnitNamespaceByID :one
+-- The namespace of the live unit with a stable ID, which is unique in the installation.
+SELECT namespace FROM inventory WHERE unit_id = $1;
+
 -- name: ListInventoryUnitLabels :many
 -- Every label of one live unit.
 SELECT label_key, label_value

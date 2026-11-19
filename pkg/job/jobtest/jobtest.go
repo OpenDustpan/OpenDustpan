@@ -130,6 +130,7 @@ func createRuleCases() []suiteCase {
 		{"a key with another request hash conflicts", testCreateKeyHashConflict},
 		{"a job that waits for approval is stored awaiting-approval", testCreateAwaitingApproval},
 		{"a job in another first state is refused", testCreateBadState},
+		{"a job with the unit ID of a unit of another namespace, or of no live unit, is refused", testUnitIDOfOtherNamespace},
 	}
 }
 

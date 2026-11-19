@@ -10613,6 +10613,18 @@ func (q *Queries) GetUnitDefaults(ctx context.Context, namespace string) (GetUni
 	return i, err
 }
 
+const getUnitNamespaceByID = `-- name: GetUnitNamespaceByID :one
+SELECT namespace FROM inventory WHERE unit_id = $1
+`
+
+// The namespace of the live unit with a stable ID, which is unique in the installation.
+func (q *Queries) GetUnitNamespaceByID(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRow(ctx, getUnitNamespaceByID, unitID)
+	var namespace string
+	err := row.Scan(&namespace)
+	return namespace, err
+}
+
 const getUnitOutputSeq = `-- name: GetUnitOutputSeq :one
 SELECT item_seq
 FROM object_context

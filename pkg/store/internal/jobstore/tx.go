@@ -160,6 +160,11 @@ type Tx interface {
 	// covers the unit, and ErrUnitNotInInventory when the inventory holds no
 	// such unit.
 	CoveringLocks(ctx context.Context, ns namespace.Name, unitID string) ([]manuallock.Lock, error)
+	// UnitNamespace returns the namespace of the live unit with the stable
+	// unit ID unitID, and false when no live unit has that ID. It reads in
+	// the transaction of the write, so a unit that another transaction
+	// removes or moves is seen as the transaction sees it.
+	UnitNamespace(ctx context.Context, unitID string) (namespace.Name, bool, error)
 	// StateVersion returns the current state version of the unit of the
 	// namespace ns, or empty.
 	StateVersion(ctx context.Context, ns namespace.Name, unitID string) (string, error)

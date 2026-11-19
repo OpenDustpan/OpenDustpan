@@ -82,6 +82,10 @@ func createIn(ctx context.Context, tx Tx, j *job.Job, d *durable.StartRequest, e
 		return first, false, err
 	}
 
+	if err := checkUnitNamespace(ctx, tx, j); err != nil {
+		return job.Job{}, false, err
+	}
+
 	if limitErr := checkLimits(ctx, tx, j.Spec.Unit.Namespace(), j.Spec.Unit.UnitID()); limitErr != nil {
 		return job.Job{}, false, limitErr
 	}
@@ -476,6 +480,33 @@ func checkNewJob(j *job.Job, d *durable.StartRequest, fence namespace.Fence) err
 	default:
 		return nil
 	}
+}
+
+// checkUnitNamespace returns job.ErrInvalid unless the live unit with the
+// unit ID of j is in the namespace of its unit reference, which checkNewJob
+// has already compared with the fence. It reads in the write transaction.
+//
+// Defense in depth: checkNewJob and the service compare the namespace of the
+// reference, and neither reads the unit. This check stays so that a reference
+// that names one namespace cannot carry the unit ID of a unit in another one.
+// It fails closed: an unknown unit ID refuses the job.
+func checkUnitNamespace(ctx context.Context, tx Tx, j *job.Job) error {
+	ns, ok, err := tx.UnitNamespace(ctx, j.Spec.Unit.UnitID())
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return fmt.Errorf("%w: job %s names unit ID %q, which no live unit has", job.ErrInvalid, j.ID,
+			j.Spec.Unit.UnitID())
+	}
+
+	if ns != j.Spec.Unit.Namespace() {
+		return fmt.Errorf("%w: job %s names unit ID %q, which is not a unit of namespace %q", job.ErrInvalid, j.ID,
+			j.Spec.Unit.UnitID(), j.Spec.Unit.Namespace())
+	}
+
+	return nil
 }
 
 // checkEntries returns the audit error for an entry that fails validation or

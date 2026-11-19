@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -203,6 +204,63 @@ func testCreateBadState(t *testing.T, h Harness) {
 		if !errors.Is(err, job.ErrInvalid) {
 			t.Errorf("Create in state %q = %v, want ErrInvalid", state, err)
 		}
+	}
+}
+
+// testUnitIDOfOtherNamespace proves that a create refuses a job whose unit
+// reference names the namespace of the fence but carries the unit ID of a
+// unit of another namespace, or of no live unit, and that it stores nothing.
+func testUnitIDOfOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "beta")
+	if err != nil {
+		t.Fatalf("CreateNamespace = %v", err)
+	}
+
+	foreign, err := h.Domain.CreateUnit(t.Context(), other, "opentofu", "network")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	gone, err := h.Domain.CreateUnit(t.Context(), f.fence, "pulumi", "web/gone")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	if err := h.Domain.RemoveUnit(t.Context(), f.fence, gone); err != nil {
+		t.Fatalf("RemoveUnit = %v", err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		unit identity.Object
+	}{
+		{"the unit ID of a unit of another namespace", f.unit.WithUnitID(foreign.UnitID())},
+		{"the unit ID of a unit that left the inventory", gone},
+		{"an unknown unit ID", f.unit.WithUnitID("unt-unknown")},
+	} {
+		j := newJob(tt.unit, job.OperationPlan, "")
+
+		for _, d := range []*durable.StartRequest{nil, dispatchOf(j)} {
+			if _, _, err := h.Jobs.Create(t.Context(), *j, d, f.fence, nil); !errors.Is(err, job.ErrInvalid) {
+				t.Errorf("%s: Create (dispatch %t) = %v, want ErrInvalid", tt.name, d != nil, err)
+			}
+		}
+
+		if _, err := h.Jobs.Get(t.Context(), j.ID); !errors.Is(err, job.ErrNotFound) {
+			t.Errorf("%s: Get after the refused create = %v, want ErrNotFound", tt.name, err)
+		}
+	}
+
+	page, err := h.Jobs.List(t.Context(), job.Filter{
+		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: 0, After: "",
+		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
+	})
+	if err != nil || len(page.Jobs) != 0 {
+		t.Errorf("List after the refused creates = %+v, %v; want no job", page, err)
 	}
 }
 

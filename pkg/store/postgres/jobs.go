@@ -398,6 +398,25 @@ func (t *jobTx) CoveringLocks(ctx context.Context, ns namespace.Name, unitID str
 	return locks, err
 }
 
+// UnitNamespace implements jobstore.Tx.
+func (t *jobTx) UnitNamespace(ctx context.Context, unitID string) (namespace.Name, bool, error) {
+	name, err := t.q.GetUnitNamespaceByID(ctx, unitID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("select namespace of unit: %w", err)
+	}
+
+	ns, err := namespace.ParseName(name)
+	if err != nil {
+		return "", false, fmt.Errorf("namespace of unit %s: %w", unitID, err)
+	}
+
+	return ns, true, nil
+}
+
 // StateVersion implements jobstore.Tx.
 func (t *jobTx) StateVersion(ctx context.Context, ns namespace.Name, unitID string) (string, error) {
 	row, ok, err := unitState(ctx, t.q, ns.String(), unitID)

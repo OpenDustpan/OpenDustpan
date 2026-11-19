@@ -758,6 +758,10 @@ func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence
 		return err
 	}
 
+	if err := m.checkUnitNamespace(j); err != nil {
+		return err
+	}
+
 	for i := range e {
 		if err := e[i].Validate(); err != nil {
 			return fmt.Errorf("audit entry %d: %w", i, err)
@@ -769,6 +773,19 @@ func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence
 
 	if !queued && !waits {
 		return job.ErrInvalid
+	}
+
+	return nil
+}
+
+// checkUnitNamespace returns job.ErrInvalid unless the unit with the unit ID
+// of j is in the inventory, in the namespace of its unit reference. An unknown
+// unit ID refuses the job. The caller holds m.mu.
+func (m *memDB) checkUnitNamespace(j *job.Job) error {
+	ref, ok := m.units[j.Spec.Unit.UnitID()]
+	if !ok || ref.Namespace != j.Spec.Unit.Namespace() {
+		return fmt.Errorf("%w: job %s names a unit ID that is not a live unit of namespace %q", job.ErrInvalid, j.ID,
+			j.Spec.Unit.Namespace())
 	}
 
 	return nil
