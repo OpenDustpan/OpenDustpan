@@ -187,13 +187,13 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 	var stdout, stderr bytes.Buffer
 
 	// The script of the work tree runs on purpose. The version and the
-	// directory come from the environment (RELEASE_VERSION, RELEASE_DIR), so
+	// directory come from the environment (TEST_RELEASE_VERSION, TEST_RELEASE_DIR), so
 	// that the command line holds no variable; each is one quoted argument.
 	cmd := exec.CommandContext(
-		t.Context(), "bash", "-c", `exec bash scripts/release-upload.sh "$RELEASE_VERSION" "$RELEASE_DIR"`,
+		t.Context(), "bash", "-c", `exec bash scripts/release-upload.sh "$TEST_RELEASE_VERSION" "$TEST_RELEASE_DIR"`,
 	)
 	cmd.Dir = tree
-	env = append(env, "RELEASE_VERSION="+r.version, "RELEASE_DIR="+dirArg)
+	env = append(env, "TEST_RELEASE_VERSION="+r.version, "TEST_RELEASE_DIR="+dirArg)
 	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -710,8 +710,8 @@ func extraSumsLine(line func(t *testing.T, dir, sum string) string) func(t *test
 
 // TestReleaseUploadChecksWhatItUploads gives the script a directory argument
 // that another set can answer to. The set that the script checks must be the
-// set that gh uploads from: either no gh call is made, or the gh call runs in
-// the checked directory. Each case runs with the real verify script and with a
+// set that gh uploads from: the script exits 0, makes one create call, and the
+// call runs in the checked directory. Each case runs with the real verify script and with a
 // replaced one.
 func TestReleaseUploadChecksWhatItUploads(t *testing.T) {
 	t.Parallel()
@@ -728,12 +728,17 @@ func TestReleaseUploadChecksWhatItUploads(t *testing.T) {
 				r.set = writeSet(t, nil)
 				res := runUpload(t, r)
 
-				if len(res.calls) == 0 {
-					return
+				// Both sets are good, so a refusal is a wrong result.
+				if res.code != 0 {
+					t.Fatalf("exit %d, want 0; stderr: %q", res.code, res.stderr)
+				}
+
+				if got := len(createCalls(res.calls)); got != 1 {
+					t.Fatalf("%d release create calls, want 1: %q", got, res.calls)
 				}
 
 				if res.cwd == "" {
-					t.Fatalf("gh calls with no create call: %q", res.calls)
+					t.Fatalf("no create call ran in a directory: %q", res.calls)
 				}
 
 				if got, want := evalDir(t, res.cwd), evalDir(t, r.set); got != want {
@@ -762,6 +767,46 @@ func TestReleaseUploadRefusesAMissingDirectoryWithoutEchoingIt(t *testing.T) {
 			checkRefusal(t, res, 0, "missing file: the set directory is not a directory")
 
 			if strings.Contains(res.stderr, "forged") {
+				t.Errorf("stderr echoes the directory: %q", res.stderr)
+			}
+		})
+	}
+}
+
+// TestReleaseUploadRefusesAnUnreadableDirectoryWithoutEchoingIt checks that a
+// directory that exists but cannot be entered gets the fixed refusal, and that
+// bash prints no byte of the caller's value to stderr.
+func TestReleaseUploadRefusesAnUnreadableDirectoryWithoutEchoingIt(t *testing.T) {
+	t.Parallel()
+	skipUpload(t)
+
+	if os.Getuid() == 0 {
+		t.Skip("root can enter a directory with mode 000")
+	}
+
+	for _, replaced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replaced %v", replaced), func(t *testing.T) {
+			t.Parallel()
+
+			r := goodRun()
+			r.replaceVerify = replaced
+			r.set = writeSet(t, nil)
+
+			if err := os.Chmod(r.set, 0); err != nil {
+				t.Fatal(err)
+			}
+
+			t.Cleanup(func() {
+				if err := os.Chmod(r.set, 0o700); err != nil {
+					t.Error(err)
+				}
+			})
+
+			res := runUpload(t, r)
+
+			checkRefusal(t, res, 0, "missing file: the set directory is not a directory")
+
+			if strings.Contains(res.stderr, r.set) {
 				t.Errorf("stderr echoes the directory: %q", res.stderr)
 			}
 		})
@@ -995,13 +1040,13 @@ func TestReleaseRecordCheckTargetKeepsTheVersionOutOfTheShell(t *testing.T) {
 
 	// Make of a copy of the work tree runs on purpose. The tree and the
 	// hostile version come from the environment (RELEASE_TREE,
-	// RELEASE_VERSION); the version is one quoted argument.
+	// TEST_RELEASE_VERSION); the version is one quoted argument.
 	cmd := exec.CommandContext(
 		t.Context(), "bash", "-c",
-		`exec make --no-print-directory -C "$RELEASE_TREE" release-record-check "VERSION=$RELEASE_VERSION"`,
+		`exec make --no-print-directory -C "$RELEASE_TREE" release-record-check "VERSION=$TEST_RELEASE_VERSION"`,
 	)
 	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "RELEASE_TREE=" + tree, "RELEASE_VERSION=" + version,
+		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "RELEASE_TREE=" + tree, "TEST_RELEASE_VERSION=" + version,
 	}
 
 	out, err := cmd.CombinedOutput()

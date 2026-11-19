@@ -57,7 +57,7 @@ fi
 here="${BASH_SOURCE[0]%/*}"
 [[ "${BASH_SOURCE[0]}" == */* ]] || here="."
 [[ "$here" == /* ]] || here="./$here"
-here="$(cd -P -- "$here" && pwd -P)"
+here="$(cd -P -- "$here" 2>/dev/null && pwd -P)" || refuse "missing file: the directory of this script cannot be read"
 help="rebuild the set, then run make release-verify VERSION=$version"
 
 # The set directory is resolved once, to an absolute path, before any check.
@@ -67,7 +67,7 @@ help="rebuild the set, then run make release-verify VERSION=$version"
 [[ -n "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
 [[ "$dir" == /* ]] || dir="./$dir"
 [[ -d "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
-dir="$(cd -P -- "$dir" && pwd -P)" || refuse "missing file: the set directory is not a directory; $help"
+dir="$(cd -P -- "$dir" 2>/dev/null && pwd -P)" || refuse "missing file: the set directory is not a directory; $help"
 [[ -d "$dir" ]] || refuse "missing file: the set directory is not a directory; $help"
 
 # The first check: the verify script of the build. Defense in depth: the
@@ -107,10 +107,11 @@ done
 # in the form <64 lowercase hex>, two spaces, the archive name, and no other
 # line. sha256sum --check --strict checks only the listed files, so a line for
 # a path outside the set would pass it. A refused line is never repaired.
-# mapfile drops a NUL byte and the rest of its line, so the lines are not
-# trusted until the file equals its lines, byte for byte, each with one newline.
+# mapfile drops a NUL byte and the rest of its line, and keeps a carriage
+# return. The cmp check covers a NUL byte and a missing final newline; the line
+# allowlist below covers a carriage return.
 mapfile -t sum_lines <"$dir/SHA256SUMS"
-if ! printf '%s\n' "${sum_lines[@]}" | cmp -s - "$dir/SHA256SUMS"; then
+if ! printf '%s\n' "${sum_lines[@]}" | cmp -s -- - "$dir/SHA256SUMS"; then
   refuse "SHA256SUMS does not match the files: the file holds a byte outside its lines; $help"
 fi
 [[ ${#sum_lines[@]} -eq ${#archives[@]} ]] || refuse "SHA256SUMS does not match the files: it must hold exactly one line for each of the four archives; $help"
@@ -119,7 +120,7 @@ for line in "${sum_lines[@]}"; do
   for name in "${archives[@]}"; do
     [[ "$line" =~ ^[0-9a-f]{64}\ \ ${name//./\.}$ ]] && ok=1
   done
-  ((ok)) || refuse "SHA256SUMS does not match the files: a line is not <64 hex>, two spaces and an archive name; $help"
+  ((ok)) || refuse "SHA256SUMS does not match the files: a line is not <64 lowercase hex>, two spaces and an archive name; $help"
 done
 for name in "${archives[@]}"; do
   count=0

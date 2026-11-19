@@ -42,7 +42,7 @@ When the archives and the registry pushes pass, the release workflow SHALL creat
 
 ### Requirement: The upload checks the set itself
 
-When `scripts/release-upload.sh` runs, it SHALL check the version, run `scripts/release-verify.sh`, check the shape of the set against an allowlist (exactly the five names as regular files, exactly one SHA256SUMS line for each archive and no other line), and run `sha256sum --check --strict SHA256SUMS` on the files in its directory, and call `gh` only after all pass.
+When `scripts/release-upload.sh` runs, it SHALL check the version, run `scripts/release-verify.sh`, check the shape of the set against an allowlist (exactly the five names as regular files, exactly one SHA256SUMS line for each archive and no other line), and run `sha256sum --check --strict SHA256SUMS` on the files in its directory, and call `gh` only after all pass. The directory argument may be a link; the script resolves it once and uses the resolved path for every step.
 
 #### Scenario: A changed archive
 - **WHEN** one byte of an archive differs from its `SHA256SUMS` line
