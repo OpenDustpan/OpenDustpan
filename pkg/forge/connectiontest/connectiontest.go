@@ -9,6 +9,7 @@ package connectiontest
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -18,11 +19,19 @@ import (
 // Harness is one fresh, empty store for one subtest. Namespace makes the
 // namespace called name and returns its current fence. Audit returns the audit
 // entries of a scope, oldest first. The scope is a namespace or
-// audit.ServerScope.
+// audit.ServerScope. SeedReceipts writes n event receipts of the GitHub kind
+// that carry receivedAt, with delivery IDs and body digests that no other
+// case uses, in one write that skips the checks of RecordEventReceipt. The
+// bound cases need it, because n is the bound of the table. BreakAuditAppends
+// makes every later insert of an audit entry fail inside its transaction, as
+// only SQL can; the cases that prove a change and its entry commit together
+// need it, and skip without it.
 type Harness struct {
-	Store     forge.Store
-	Namespace func(t *testing.T, name string) namespace.Fence
-	Audit     func(t *testing.T, scope namespace.Name) []audit.Entry
+	Store             forge.Store
+	Namespace         func(t *testing.T, name string) namespace.Fence
+	Audit             func(t *testing.T, scope namespace.Name) []audit.Entry
+	SeedReceipts      func(t *testing.T, n int, receivedAt time.Time)
+	BreakAuditAppends func(t *testing.T)
 }
 
 // Factory returns a fresh harness for one subtest.
@@ -69,5 +78,9 @@ func cases() []suiteCase {
 		registrationCases(),
 		// The installation-to-namespace map.
 		assignmentCases(),
+		// The old event secret of the registration and its confirmation.
+		rotationCases(),
+		// The event receipts: the hint and the replay rule.
+		receiptCases(),
 	)
 }

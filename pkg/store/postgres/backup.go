@@ -561,6 +561,14 @@ func pgEmptiedTables() []pgCopyTable {
 			orderBy: []string{pgColOwner},
 		},
 		{
+			table: backup.TableGitHostEventReceipts,
+			columns: []string{
+				pgColKind, "delivery_id", "body_digest", pgColInstallationID, "event_kind", "repo", "review_id",
+				"received_at_ms",
+			},
+			orderBy: []string{pgColKind, "delivery_id"},
+		},
+		{
 			table:   backup.TableLocalUserResets,
 			columns: pgLocalUserResetColumns(),
 			orderBy: []string{"id"},

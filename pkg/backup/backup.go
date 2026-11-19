@@ -69,7 +69,10 @@ const (
 // block with the lease tables, but a restore keeps its live rows: see
 // ControlTables.
 const (
-	TableDurableHeartbeats    = "durable_heartbeats"
+	TableDurableHeartbeats = "durable_heartbeats"
+	// TableGitHostEventReceipts holds the receipts of the verified deliveries of
+	// the last 24 hours: a hint and not state. A restore leaves it empty.
+	TableGitHostEventReceipts = "git_host_event_receipts"
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
 	TableJobTokens            = "job_tokens"

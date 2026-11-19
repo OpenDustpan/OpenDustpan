@@ -4825,20 +4825,23 @@ WHERE git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHER
 
 -- name: GetGitHostRegistration :one
 SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 FROM git_host_app_registrations
 WHERE kind = sqlc.arg(kind);
 
 -- name: InsertGitHostRegistration :execrows
 INSERT INTO git_host_app_registrations (
     kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 )
 VALUES (
     sqlc.arg(kind), sqlc.arg(app_id), sqlc.arg(base_url), sqlc.arg(hook_id), sqlc.arg(sealed_key),
     sqlc.arg(key_set_id), sqlc.arg(key_created_at_ms), sqlc.arg(sealed_event_secret),
     sqlc.arg(event_secret_set_id), sqlc.arg(event_secret_created_at_ms), sqlc.arg(address_digest), 1,
-    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms),
+    sqlc.narg(old_event_secret_ends_at_ms), sqlc.narg(old_event_secret_set_id), sqlc.narg(old_sealed_event_secret)
 )
 ON CONFLICT (kind) DO NOTHING;
 
@@ -4849,8 +4852,18 @@ SET app_id = sqlc.arg(app_id), base_url = sqlc.arg(base_url), sealed_key = sqlc.
     key_set_id = sqlc.arg(key_set_id), key_created_at_ms = sqlc.arg(key_created_at_ms),
     sealed_event_secret = sqlc.arg(sealed_event_secret), event_secret_set_id = sqlc.arg(event_secret_set_id),
     event_secret_created_at_ms = sqlc.arg(event_secret_created_at_ms), address_digest = sqlc.arg(address_digest),
+    old_event_secret_ends_at_ms = sqlc.narg(old_event_secret_ends_at_ms),
+    old_event_secret_set_id = sqlc.narg(old_event_secret_set_id),
+    old_sealed_event_secret = sqlc.narg(old_sealed_event_secret),
     version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_app_registrations.created_at_ms)
 WHERE kind = sqlc.arg(kind) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: ConfirmGitHostRotation :execrows
+-- Ends the window of the old event secret. It writes only while a window is open.
+UPDATE git_host_app_registrations
+SET old_event_secret_ends_at_ms = NULL, old_event_secret_set_id = NULL, old_sealed_event_secret = NULL,
+    version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_app_registrations.created_at_ms)
+WHERE kind = sqlc.arg(kind) AND old_event_secret_ends_at_ms IS NOT NULL AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
 -- name: DeleteGitHostRegistration :execrows
 DELETE FROM git_host_app_registrations
@@ -4888,6 +4901,27 @@ WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::big
 -- name: DeleteGitHostInstallation :execrows
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: LockGitHostEventReceipts :exec
+-- Makes the writers of receipts take turns, so the bound is exact. Readers do not wait.
+LOCK TABLE git_host_event_receipts IN SHARE ROW EXCLUSIVE MODE;
+
+-- name: PurgeGitHostEventReceipts :execrows
+DELETE FROM git_host_event_receipts WHERE received_at_ms < sqlc.arg(before_ms)::bigint;
+
+-- name: CountGitHostEventReceipts :one
+SELECT COUNT(*) FROM git_host_event_receipts;
+
+-- name: InsertGitHostEventReceipt :execrows
+-- A receipt that hits the key of the delivery ID or the key of the body digest writes nothing.
+INSERT INTO git_host_event_receipts (
+    kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms
+)
+VALUES (
+    sqlc.arg(kind), sqlc.arg(delivery_id), sqlc.arg(body_digest), sqlc.arg(installation_id), sqlc.arg(event_kind),
+    sqlc.arg(repo), sqlc.arg(review_id), sqlc.arg(received_at_ms)
+)
+ON CONFLICT DO NOTHING;
 
 -- name: CountOpenForgeLinkRequests :one
 SELECT COUNT(*) AS open_requests FROM forge_link_requests

@@ -789,6 +789,28 @@ func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIde
 	return result.RowsAffected()
 }
 
+const confirmGitHostRotation = `-- name: ConfirmGitHostRotation :execrows
+UPDATE git_host_app_registrations
+SET old_event_secret_ends_at_ms = NULL, old_event_secret_set_id = NULL, old_sealed_event_secret = NULL,
+    version = version + 1, updated_at_ms = MAX(CAST(?1 AS INTEGER), git_host_app_registrations.created_at_ms)
+WHERE kind = ?2 AND old_event_secret_ends_at_ms IS NOT NULL AND (CAST(?3 AS INTEGER) = 0 OR version = CAST(?3 AS INTEGER))
+`
+
+type ConfirmGitHostRotationParams struct {
+	UpdatedAtMs int64
+	Kind        string
+	IfVersion   int64
+}
+
+// Ends the window of the old event secret. It writes only while a window is open.
+func (q *Queries) ConfirmGitHostRotation(ctx context.Context, arg ConfirmGitHostRotationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, confirmGitHostRotation, arg.UpdatedAtMs, arg.Kind, arg.IfVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const confirmJobLogChunk = `-- name: ConfirmJobLogChunk :execrows
 UPDATE job_log_chunks
 SET confirmed = 1, stored_size = ?1, stored_md5 = ?2,
@@ -1074,6 +1096,17 @@ WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
 
 func (q *Queries) CountGitHostConnections(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countGitHostConnections, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGitHostEventReceipts = `-- name: CountGitHostEventReceipts :one
+SELECT COUNT(*) FROM git_host_event_receipts
+`
+
+func (q *Queries) CountGitHostEventReceipts(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGitHostEventReceipts)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -6556,7 +6589,8 @@ func (q *Queries) GetGitHostInstallation(ctx context.Context, installationID str
 
 const getGitHostRegistration = `-- name: GetGitHostRegistration :one
 SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 FROM git_host_app_registrations
 WHERE kind = ?1
 `
@@ -6579,6 +6613,9 @@ func (q *Queries) GetGitHostRegistration(ctx context.Context, kind string) (GitH
 		&i.Version,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.OldEventSecretEndsAtMs,
+		&i.OldEventSecretSetID,
+		&i.OldSealedEventSecret,
 	)
 	return i, err
 }
@@ -11156,6 +11193,46 @@ func (q *Queries) InsertGitHostConnection(ctx context.Context, arg InsertGitHost
 	return result.RowsAffected()
 }
 
+const insertGitHostEventReceipt = `-- name: InsertGitHostEventReceipt :execrows
+INSERT INTO git_host_event_receipts (
+    kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms
+)
+VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8
+)
+ON CONFLICT DO NOTHING
+`
+
+type InsertGitHostEventReceiptParams struct {
+	Kind           string
+	DeliveryID     string
+	BodyDigest     string
+	InstallationID string
+	EventKind      string
+	Repo           string
+	ReviewID       string
+	ReceivedAtMs   int64
+}
+
+// A receipt that hits the key of the delivery ID or the key of the body digest writes nothing.
+func (q *Queries) InsertGitHostEventReceipt(ctx context.Context, arg InsertGitHostEventReceiptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertGitHostEventReceipt,
+		arg.Kind,
+		arg.DeliveryID,
+		arg.BodyDigest,
+		arg.InstallationID,
+		arg.EventKind,
+		arg.Repo,
+		arg.ReviewID,
+		arg.ReceivedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertGitHostInstallation = `-- name: InsertGitHostInstallation :execrows
 INSERT INTO git_host_installations (installation_id, namespace_id, version, created_at_ms, updated_at_ms)
 SELECT ?1, n.id, 1, ?2, ?3
@@ -11187,13 +11264,15 @@ func (q *Queries) InsertGitHostInstallation(ctx context.Context, arg InsertGitHo
 const insertGitHostRegistration = `-- name: InsertGitHostRegistration :execrows
 INSERT INTO git_host_app_registrations (
     kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 )
 VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8,
     ?9, ?10, ?11, 1,
-    ?12, ?13
+    ?12, ?13,
+    ?14, ?15, ?16
 )
 ON CONFLICT (kind) DO NOTHING
 `
@@ -11212,6 +11291,9 @@ type InsertGitHostRegistrationParams struct {
 	AddressDigest          string
 	CreatedAtMs            int64
 	UpdatedAtMs            int64
+	OldEventSecretEndsAtMs sql.NullInt64
+	OldEventSecretSetID    sql.NullString
+	OldSealedEventSecret   []byte
 }
 
 func (q *Queries) InsertGitHostRegistration(ctx context.Context, arg InsertGitHostRegistrationParams) (int64, error) {
@@ -11229,6 +11311,9 @@ func (q *Queries) InsertGitHostRegistration(ctx context.Context, arg InsertGitHo
 		arg.AddressDigest,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.OldEventSecretEndsAtMs,
+		arg.OldEventSecretSetID,
+		arg.OldSealedEventSecret,
 	)
 	if err != nil {
 		return 0, err
@@ -20799,6 +20884,18 @@ func (q *Queries) PublishUnitState(ctx context.Context, arg PublishUnitStatePara
 	return err
 }
 
+const purgeGitHostEventReceipts = `-- name: PurgeGitHostEventReceipts :execrows
+DELETE FROM git_host_event_receipts WHERE received_at_ms < ?1
+`
+
+func (q *Queries) PurgeGitHostEventReceipts(ctx context.Context, beforeMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeGitHostEventReceipts, beforeMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const purgeStack = `-- name: PurgeStack :execrows
 DELETE FROM stacks
 WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
@@ -24017,8 +24114,11 @@ SET app_id = ?1, base_url = ?2, sealed_key = ?3,
     key_set_id = ?4, key_created_at_ms = ?5,
     sealed_event_secret = ?6, event_secret_set_id = ?7,
     event_secret_created_at_ms = ?8, address_digest = ?9,
-    version = version + 1, updated_at_ms = MAX(CAST(?10 AS INTEGER), git_host_app_registrations.created_at_ms)
-WHERE kind = ?11 AND (CAST(?12 AS INTEGER) = 0 OR version = CAST(?12 AS INTEGER))
+    old_event_secret_ends_at_ms = ?10,
+    old_event_secret_set_id = ?11,
+    old_sealed_event_secret = ?12,
+    version = version + 1, updated_at_ms = MAX(CAST(?13 AS INTEGER), git_host_app_registrations.created_at_ms)
+WHERE kind = ?14 AND (CAST(?15 AS INTEGER) = 0 OR version = CAST(?15 AS INTEGER))
 `
 
 type UpdateGitHostRegistrationParams struct {
@@ -24031,6 +24131,9 @@ type UpdateGitHostRegistrationParams struct {
 	EventSecretSetID       string
 	EventSecretCreatedAtMs int64
 	AddressDigest          string
+	OldEventSecretEndsAtMs sql.NullInt64
+	OldEventSecretSetID    sql.NullString
+	OldSealedEventSecret   []byte
 	UpdatedAtMs            int64
 	Kind                   string
 	IfVersion              int64
@@ -24048,6 +24151,9 @@ func (q *Queries) UpdateGitHostRegistration(ctx context.Context, arg UpdateGitHo
 		arg.EventSecretSetID,
 		arg.EventSecretCreatedAtMs,
 		arg.AddressDigest,
+		arg.OldEventSecretEndsAtMs,
+		arg.OldEventSecretSetID,
+		arg.OldSealedEventSecret,
 		arg.UpdatedAtMs,
 		arg.Kind,
 		arg.IfVersion,

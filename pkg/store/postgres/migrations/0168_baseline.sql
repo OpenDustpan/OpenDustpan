@@ -340,6 +340,10 @@ CREATE TABLE git_host_app_registrations (
     version bigint NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
+    old_event_secret_ends_at_ms bigint,
+    old_event_secret_set_id text,
+    old_sealed_event_secret bytea,
+    CONSTRAINT git_host_app_registrations_old_event_secret_check CHECK ((((old_event_secret_ends_at_ms IS NULL) = (old_event_secret_set_id IS NULL)) AND ((old_event_secret_set_id IS NULL) = (old_sealed_event_secret IS NULL)))),
     CONSTRAINT git_host_app_registrations_version_check CHECK ((version >= 1))
 );
 
@@ -356,6 +360,17 @@ CREATE TABLE git_host_connections (
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
     CONSTRAINT git_host_connections_version_check CHECK ((version >= 1))
+);
+
+CREATE TABLE git_host_event_receipts (
+    kind text NOT NULL,
+    delivery_id text NOT NULL,
+    body_digest text NOT NULL,
+    installation_id text NOT NULL,
+    event_kind text NOT NULL,
+    repo text NOT NULL,
+    review_id text NOT NULL,
+    received_at_ms bigint NOT NULL
 );
 
 CREATE TABLE git_host_installations (
@@ -1764,6 +1779,12 @@ ALTER TABLE ONLY git_host_app_registrations
 ALTER TABLE ONLY git_host_connections
     ADD CONSTRAINT git_host_connections_pkey PRIMARY KEY (namespace_id, id);
 
+ALTER TABLE ONLY git_host_event_receipts
+    ADD CONSTRAINT git_host_event_receipts_kind_body_digest_key UNIQUE (kind, body_digest);
+
+ALTER TABLE ONLY git_host_event_receipts
+    ADD CONSTRAINT git_host_event_receipts_pkey PRIMARY KEY (kind, delivery_id);
+
 ALTER TABLE ONLY git_host_installations
     ADD CONSTRAINT git_host_installations_pkey PRIMARY KEY (installation_id);
 
@@ -2179,6 +2200,8 @@ CREATE INDEX gate_references_owner ON gate_references USING btree (namespace_id,
 CREATE UNIQUE INDEX git_host_connections_default ON git_host_connections USING btree (namespace_id) WHERE is_default;
 
 CREATE UNIQUE INDEX git_host_connections_installation ON git_host_connections USING btree (namespace_id, kind, installation_id);
+
+CREATE INDEX git_host_event_receipts_received ON git_host_event_receipts USING btree (received_at_ms);
 
 CREATE INDEX git_host_installations_namespace ON git_host_installations USING btree (namespace_id);
 
