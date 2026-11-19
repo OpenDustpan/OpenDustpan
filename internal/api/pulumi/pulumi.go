@@ -1175,6 +1175,10 @@ func (h *Handler) logRefusal(ctx context.Context, err error) {
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
 	case errors.Is(err, namespace.ErrFenced):
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	case errors.Is(err, collection.ErrNoCollection):
+		// A write with a lease token has no principal to record. The log
+		// names the refusal for the operator.
+		h.logger.WarnContext(ctx, "write refused: stack in no collection", slog.String("error", err.Error()))
 	default:
 	}
 }

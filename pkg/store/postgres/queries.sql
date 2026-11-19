@@ -213,6 +213,14 @@ SELECT id
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
+-- name: GetPlacedStack :one
+-- The stack ID with whether a collection holds the stack, read in one
+-- statement. The writes of a running update use it, so that a stack in no
+-- collection is refused in the same transaction as the write.
+SELECT id, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
+FROM stacks
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL;
+
 -- name: StackRefByID :one
 SELECT namespace, project, name
 FROM stacks
@@ -221,9 +229,9 @@ WHERE id = $1;
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
-SELECT id, version
+SELECT id, version, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE;
 
 -- name: CreateUpdate :exec

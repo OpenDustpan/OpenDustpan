@@ -1,123 +1,223 @@
 package pulumi_test
 
 import (
-	"context"
-	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
-var errCollectionStoreDown = errors.New("collection store down")
-
-// memberCollections is the collections port of a fakePlacer that answers
-// CollectionOf with a fixed result: a stack in no collection, or a failing
-// store.
-type memberCollections struct {
-	rules *fakePlacer
-	found bool
-	err   error
-}
-
-func (m memberCollections) CollectionID(ctx context.Context, obj identity.Object) (string, bool, error) {
-	return m.rules.CollectionID(ctx, obj)
-}
-
-func (m memberCollections) CollectionOf(context.Context, identity.Object) (string, bool, error) {
-	return "payments", m.found, m.err
-}
-
-func placerWith(c memberCollections) *pulumi.Placer {
-	return &pulumi.Placer{Rules: c.rules, Collections: c}
-}
-
-// writeCase is one state write of the Pulumi API. target names the path from
-// the paths of a running update, and lease says that the write presents the
-// lease token.
+// writeCase is one state write of the Pulumi API. target builds the path from
+// the paths of the running update and of an update that is not started. lease
+// says that the write presents the lease token. journaled says that the
+// running update uses the journal. recorded says that the route has a
+// principal, so the refusal also writes an entry to the audit log.
 type writeCase struct {
 	name   string
 	method string
-	target func(p updatePaths) string
-	lease  bool
+	target func(running, pending updatePaths) string
 	body   string
+	// seed is what the test does before the stack leaves its collection.
+	seed seedKind
+	// lease, journaled and recorded are the traits of the route.
+	lease     bool
+	journaled bool
+	recorded  bool
 }
 
-func fixedTarget(path string) func(updatePaths) string {
-	return func(updatePaths) string { return path }
+// seedKind names the state that a case needs before the stack leaves its
+// collection.
+type seedKind int
+
+const (
+	// seedNone needs nothing but the running update.
+	seedNone seedKind = iota
+	// seedCheckpoint saves a checkpoint, so that a delta has a base.
+	seedCheckpoint
+	// seedState imports a state and starts no update, so that a restore has a
+	// version to copy.
+	seedState
+)
+
+func fixedTarget(path string) func(running, pending updatePaths) string {
+	return func(updatePaths, updatePaths) string { return path }
 }
 
 func stateWrites() []writeCase {
 	const base = "/api/stacks/acme/web/prod"
 
 	return []writeCase{
-		{"create update", http.MethodPost, fixedTarget(base + "/update"), false, `{}`},
-		{"create preview", http.MethodPost, fixedTarget(base + "/preview"), false, `{}`},
-		{"start update", http.MethodPost, func(p updatePaths) string { return p.Start }, false, `{}`},
 		{
-			"checkpoint", http.MethodPatch, func(p updatePaths) string { return p.Checkpoint }, true,
-			`{"version":3,"deployment":{"resources":[]}}`,
+			name: "create update", method: http.MethodPost, target: fixedTarget(base + "/update"), body: `{}`,
+			lease: false, journaled: false, recorded: true, seed: seedNone,
 		},
 		{
-			"checkpoint verbatim", http.MethodPatch, func(p updatePaths) string { return p.Verbatim }, true,
-			`{"version":3,"sequenceNumber":1,"untypedDeployment":{"resources":[]}}`,
+			name: "create preview", method: http.MethodPost, target: fixedTarget(base + "/preview"), body: `{}`,
+			lease: false, journaled: false, recorded: true, seed: seedNone,
 		},
 		{
-			"checkpoint delta", http.MethodPatch, func(p updatePaths) string { return p.Delta }, true,
-			`{"version":3,"sequenceNumber":2,"checkpointHash":"x","deploymentDelta":[]}`,
+			name: "start update", method: http.MethodPost, body: `{}`,
+			target: func(_, pending updatePaths) string { return pending.Start },
+			lease:  false, journaled: false, recorded: true, seed: seedNone,
 		},
-		{"import", http.MethodPost, fixedTarget(base + "/import"), false, `{"version":3,"deployment":{}}`},
-		{"restore", http.MethodPost, fixedTarget(base + "/restore/1"), false, ``},
+		{
+			name: "checkpoint", method: http.MethodPatch,
+			target: func(running, _ updatePaths) string { return running.Checkpoint },
+			body:   `{"version":3,"deployment":{"resources":[]}}`,
+			lease:  true, journaled: false, recorded: false, seed: seedNone,
+		},
+		{
+			name: "checkpoint verbatim", method: http.MethodPatch,
+			target: func(running, _ updatePaths) string { return running.Verbatim },
+			body:   `{"version":3,"sequenceNumber":1,"untypedDeployment":{"deployment":{}}}`,
+			lease:  true, journaled: false, recorded: false, seed: seedNone,
+		},
+		{
+			name: "checkpoint delta", method: http.MethodPatch,
+			target: func(running, _ updatePaths) string { return running.Delta },
+			body: `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(`{"deployment":{"a":1,"b":3}}`)) +
+				`,"sequenceNumber":2,"deploymentDelta":[` + deltaEditJSON(25, 26, "3") + `]}`,
+			lease: true, journaled: false, recorded: false, seed: seedCheckpoint,
+		},
+		{
+			name:   "journal entries",
+			method: http.MethodPatch,
+			target: func(running, _ updatePaths) string {
+				return strings.Replace(running.Events, "/events/batch", "/journalentries", 1)
+			},
+			body:      `{"entries":[{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}]}`,
+			lease:     true,
+			journaled: true,
+			recorded:  false,
+			seed:      seedNone,
+		},
+		{
+			name: "import", method: http.MethodPost, target: fixedTarget(base + "/import"),
+			body:  `{"version":3,"deployment":{}}`,
+			lease: false, journaled: false, recorded: true, seed: seedNone,
+		},
+		{
+			name: "restore", method: http.MethodPost, target: fixedTarget(base + "/restore/1"), body: ``,
+			lease: false, journaled: false, recorded: true, seed: seedState,
+		},
 	}
 }
 
-// TestWritesToAStackInNoCollectionAreRefused sends every state write of the
-// Pulumi API to an existing stack that no collection holds. Each write must
-// answer 409 with the code unit.no-collection and the same message as the
-// OpenTofu API, and must change nothing.
-func TestWritesToAStackInNoCollectionAreRefused(t *testing.T) {
-	t.Parallel()
+// refusedWrite sends tc to a stack that no collection holds any more. The
+// stack was in a collection when the update started, as a stack is that lost
+// its collection while an update runs.
+func refusedWrite(t *testing.T, tc writeCase) refusedAnswer {
+	t.Helper()
 
-	unplaced := placerWith(memberCollections{rules: newFake(), found: false, err: nil})
+	placement := &placementSwitch{unplaced: atomic.Bool{}}
 
-	for _, tc := range stateWrites() {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	f := newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
+		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil, placer: nil,
+		placement: placement,
+	})
 
-			// The update service has no placement check, so a running update
-			// exists on the stack, as it does for a stack that lost its
-			// collection during an update.
-			f := newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
-				manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil, placer: unplaced,
-			})
-			id, lease := f.mintStartedMutating(t)
-			before := historyLen(t, f)
-
-			target := tc.target(mintedPaths(id))
-			req := accessRequest(tc.method, target, tc.body)
-
-			if tc.lease {
-				req = leaseRequest(tc.method, target, lease, tc.body)
-			}
-
-			status, body := f.doUpdate(t, req)
-			if status != http.StatusConflict {
-				t.Fatalf("answers %d, want %d (%s)", status, http.StatusConflict, body)
-			}
-
-			if !strings.Contains(body, "unit.no-collection") ||
-				!strings.Contains(body, "PUT /api/inventory/unit-collection") {
-				t.Fatalf("body %q lacks the code or the command that helps", body)
-			}
-
-			if after := historyLen(t, f); after != before {
-				t.Fatalf("refused write changed history: %d to %d", before, after)
-			}
-		})
+	pending, err := f.updates.Create(
+		t.Context(), f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
+	if err != nil {
+		t.Fatalf("create pending update: %v", err)
 	}
+
+	var runningID stack.UpdateID
+
+	lease := ""
+
+	if tc.seed == seedState {
+		if _, err = f.updates.Import(t.Context(), f.ref, "seed", seedInput()); err != nil {
+			t.Fatalf("seed state: %v", err)
+		}
+	} else {
+		runningID, lease = startedUpdate(t, f, tc.journalVersion())
+	}
+
+	if tc.seed == seedCheckpoint {
+		seeded := `{"version":3,"untypedDeployment":{"deployment":{"a":1,"b":2}},"sequenceNumber":1}`
+		status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, mintedPaths(runningID).Verbatim, lease, seeded))
+
+		if status != http.StatusOK {
+			t.Fatalf("seed checkpoint answers %d (%s)", status, body)
+		}
+	}
+
+	before := historyLen(t, f)
+
+	placement.Unplace()
+
+	target := tc.target(mintedPaths(runningID), mintedPaths(pending.ID))
+	req := accessRequest(tc.method, target, tc.body)
+
+	if tc.lease {
+		req = leaseRequest(tc.method, target, lease, tc.body)
+	}
+
+	status, body := f.doUpdate(t, req)
+
+	return refusedAnswer{
+		status: status, body: body, denied: noCollectionDenials(f), grown: historyLen(t, f) - before,
+	}
+}
+
+// refusedAnswer is what a write to a stack in no collection got.
+type refusedAnswer struct {
+	body   string
+	denied []audit.Entry
+	status int
+	// grown is the number of updates that the write added to history.
+	grown int
+}
+
+// journalVersion is the journal version of the running update of the case.
+func (tc writeCase) journalVersion() int64 {
+	if tc.journaled {
+		return 1
+	}
+
+	return 0
+}
+
+func startedUpdate(t *testing.T, f updateFixture, version int64) (stack.UpdateID, string) {
+	t.Helper()
+
+	u, err := f.updates.Create(
+		t.Context(), f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err := f.updates.StartWithJournalVersion(t.Context(), f.ref, u.ID, version)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	return u.ID, started.Token.Reveal()
+}
+
+func noCollectionDenials(f updateFixture) []audit.Entry {
+	f.audit.mu.Lock()
+	defer f.audit.mu.Unlock()
+
+	var out []audit.Entry
+
+	for i := range f.audit.entries {
+		if f.audit.entries[i].Outcome == audit.OutcomeDenied {
+			out = append(out, f.audit.entries[i])
+		}
+	}
+
+	return out
 }
 
 func historyLen(t *testing.T, f updateFixture) int {
@@ -131,16 +231,70 @@ func historyLen(t *testing.T, f updateFixture) int {
 	return len(history)
 }
 
+// TestWritesToAStackInNoCollectionAreRefused sends every state write of the
+// Pulumi API to a stack that no collection holds. Each write must answer 409
+// with the code unit.no-collection and the command that helps, change nothing,
+// and, on a route with a principal, write an audit entry that names the
+// reason.
+func TestWritesToAStackInNoCollectionAreRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range stateWrites() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := refusedWrite(t, tc)
+			if got.status != http.StatusConflict {
+				t.Fatalf("answers %d, want %d (%s)", got.status, http.StatusConflict, got.body)
+			}
+
+			if !strings.Contains(got.body, "unit.no-collection") ||
+				!strings.Contains(got.body, "PUT /api/inventory/unit-collection") {
+				t.Fatalf("body %q lacks the code or the command that helps", got.body)
+			}
+
+			if got.grown != 0 {
+				t.Fatalf("refused write added %d updates to history", got.grown)
+			}
+
+			if tc.recorded {
+				requireNoCollectionEntry(t, got.denied)
+			}
+		})
+	}
+}
+
+func requireNoCollectionEntry(t *testing.T, denied []audit.Entry) {
+	t.Helper()
+
+	for i := range denied {
+		if denied[i].Action == string(identity.ActionUnitWrite) &&
+			strings.Contains(denied[i].Reason, "stack in no collection") {
+			return
+		}
+	}
+
+	t.Fatalf(
+		"no denied audit entry for %s with the reason %q: %+v",
+		identity.ActionUnitWrite,
+		"stack in no collection",
+		denied,
+	)
+}
+
 // TestReadsOfAStackInNoCollectionStayAllowed proves that the check refuses
 // writes only.
 func TestReadsOfAStackInNoCollectionStayAllowed(t *testing.T) {
 	t.Parallel()
 
+	placement := &placementSwitch{unplaced: atomic.Bool{}}
 	f := newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
-		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil,
-		placer: placerWith(memberCollections{rules: newFake(), found: false, err: nil}),
+		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil, placer: nil,
+		placement: placement,
 	})
 	id, _ := f.mintStartedMutating(t)
+
+	placement.Unplace()
 
 	for _, target := range []string{
 		"/api/stacks/acme/web/prod/export",
@@ -154,36 +308,34 @@ func TestReadsOfAStackInNoCollectionStayAllowed(t *testing.T) {
 	}
 }
 
-// TestWriteFailsClosedWhenPlacementCannotBeChecked covers a nil Placer and a
-// failing collection store: neither may let the write through.
-func TestWriteFailsClosedWhenPlacementCannotBeChecked(t *testing.T) {
+// TestWriteRefusalWritesNoEntryForAGuest keeps the audit entry tied to a
+// principal: the refusal of a request with no sign-in is a 401 and writes no
+// no-collection entry.
+func TestWriteRefusalWritesNoEntryForAGuest(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name   string
-		placer *pulumi.Placer
-		want   int
-	}{
-		{"empty placer", &pulumi.Placer{Rules: nil, Collections: nil}, http.StatusNotImplemented},
-		{"no collections", &pulumi.Placer{Rules: newFake(), Collections: nil}, http.StatusNotImplemented},
-		{
-			"store error", placerWith(memberCollections{rules: newFake(), found: true, err: errCollectionStoreDown}),
-			http.StatusInternalServerError,
-		},
+	placement := &placementSwitch{unplaced: atomic.Bool{}}
+	f := newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
+		manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil, placer: nil,
+		placement: placement,
+	})
+
+	placement.Unplace()
+
+	status, _ := f.doUpdate(t, anonymousRequest(http.MethodPost, "/api/stacks/acme/web/prod/update", `{}`))
+	if status != http.StatusUnauthorized {
+		t.Fatalf("anonymous create answers %d, want %d", status, http.StatusUnauthorized)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, e := range noCollectionDenials(f) {
+		if strings.Contains(e.Reason, "stack in no collection") {
+			t.Fatalf("a guest wrote a no-collection entry: %+v", e)
+		}
+	}
+}
 
-			f := newUpdateFixtureWithAuthenticator(t, allowAll(), tokenAuthenticator{}, fixtureOptions{
-				manual: nil, checker: nil, limit: 0, cutoff: 0, replayer: nil, guard: nil, placer: tc.placer,
-			})
-
-			status, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/update", `{}`))
-			if status != tc.want {
-				t.Fatalf("answers %d, want %d (%s)", status, tc.want, body)
-			}
-		})
+func seedInput() stack.CheckpointInput {
+	return stack.CheckpointInput{
+		Deployment: []byte(`{"resources":[]}`), SchemaVersion: 3, Sequence: 0, Invalid: false, Features: nil,
 	}
 }

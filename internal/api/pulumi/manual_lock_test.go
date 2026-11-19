@@ -123,12 +123,13 @@ func TestUpdateStartMeetsAManualLock(t *testing.T) {
 				manual: manualLockHolder{
 					lock: lock,
 				},
-				checker:  nil,
-				limit:    0,
-				cutoff:   0,
-				replayer: nil,
-				guard:    nil,
-				placer:   nil,
+				checker:   nil,
+				limit:     0,
+				cutoff:    0,
+				replayer:  nil,
+				guard:     nil,
+				placer:    nil,
+				placement: nil,
 			})
 
 			status, body := startUpdate(t, f, tc.createPath)

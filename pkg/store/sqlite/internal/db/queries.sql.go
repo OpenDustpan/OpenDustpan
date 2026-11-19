@@ -8075,6 +8075,33 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	return i, err
 }
 
+const getPlacedStack = `-- name: GetPlacedStack :one
+SELECT id, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
+FROM stacks
+WHERE stacks.namespace = ? AND stacks.project = ? AND stacks.name = ? AND deleted_at_ms IS NULL
+`
+
+type GetPlacedStackParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+type GetPlacedStackRow struct {
+	ID     string
+	Placed bool
+}
+
+// The stack ID with whether a collection holds the stack, read in one
+// statement. The writes of a running update use it, so that a stack in no
+// collection is refused in the same transaction as the write.
+func (q *Queries) GetPlacedStack(ctx context.Context, arg GetPlacedStackParams) (GetPlacedStackRow, error) {
+	row := q.db.QueryRowContext(ctx, getPlacedStack, arg.Namespace, arg.Project, arg.Name)
+	var i GetPlacedStackRow
+	err := row.Scan(&i.ID, &i.Placed)
+	return i, err
+}
+
 const getPlacementCollection = `-- name: GetPlacementCollection :one
 SELECT id FROM collections WHERE namespace = ? AND id = ?
 `

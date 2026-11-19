@@ -199,8 +199,9 @@ func (r *blobDeleteRig) raceUpdates(
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Sealer:    secrettest.NewMemorySealer(),
-		BlobGuard: r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: checkpoints,
+		Membership: stacktest.PlacedAll(),
+		Sealer:     secrettest.NewMemorySealer(),
+		BlobGuard:  r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: checkpoints,
 		Events: r.store, Namespaces: nsSvc, Stacks: r.store, Blobs: r.live, Refusals: refusals, Now: now,
 		Logger: nil, MaxCheckpointBytes: 1 << 20, Journal: journal, Replayer: pulumijournal.NewReplayer(time.Now, ""),
 		OnDeleteWait: nil,

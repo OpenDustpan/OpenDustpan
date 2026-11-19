@@ -1888,6 +1888,29 @@ func newWorkspaceService(
 	return workspaces, nil
 }
 
+// updateMembership returns the port that tells the update service which
+// collection holds a stack. A store that holds no collections cannot place a
+// stack, so every stack is in no collection for it and every update write is
+// refused: the update service fails closed.
+//
+//nolint:ireturn // The port is the return type: the store or the refusing stand-in.
+func updateMembership(cfg *settings) stack.Membership {
+	if units, ok := cfg.namespaceStore.(stack.UnitCollections); ok {
+		return stack.CollectionMembership(units)
+	}
+
+	return noCollections{}
+}
+
+// noCollections is the membership of a store that holds no collections.
+type noCollections struct{}
+
+// CollectionOf implements stack.Membership. It answers that no collection
+// holds the stack.
+func (noCollections) CollectionOf(context.Context, stack.Ref) (string, bool, error) {
+	return "", false, nil
+}
+
 // clockOf returns the clock of the server settings, defaulting to time.Now
 // like the update service does. The journal replayer stamps the manifest of
 // each checkpoint it builds with it.
@@ -1925,6 +1948,7 @@ func newUpdateService(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
+		Membership:         updateMembership(cfg),
 		Checkpoints:        cfg.checkpointStore,
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,

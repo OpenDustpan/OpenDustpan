@@ -175,54 +175,23 @@ func stackPlacement(r *http.Request, p identity.Principal, ref stack.Ref, at pla
 	}, nil
 }
 
-// requirePlaced refuses a write to the existing stack obj when the stack is in
-// no collection. It returns an error that matches collection.ErrNoCollection
-// and names the command that moves the stack into a collection. It writes
-// nothing and reads only. It fails closed: a nil Placer cannot check the
-// stack, so it returns errPlacementOff, as choosePlacement does.
+// writeStateError writes the answer for an error of a state write. A write to
+// a stack in no collection also writes an entry of the refusal to the audit
+// log, with the principal that asked: the entry says that the stack is in no
+// collection, so a user can ask why the write failed.
 //
-// Defense in depth: the authorizer already finds no collection grant for a
-// unit in no collection, but a grant on the namespace still allows the write.
-// This check stays so that no grant can write to a stack that no collection
-// holds. It does not rely on the route check or on the update service.
-func (h *Handler) requirePlaced(ctx context.Context, obj identity.Object) error {
-	if h.placer == nil || h.placer.Collections == nil {
-		return fmt.Errorf("write to %s: %w", obj, errPlacementOff)
+// The update service and the stores make this refusal. The adapter does not
+// read the collection of the stack again, so the write path pays no extra
+// read. It only maps the refusal and records it.
+func (h *Handler) writeStateError(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, err error,
+) {
+	if errors.Is(err, collection.ErrNoCollection) {
+		h.guard.Record(r.Context(), r, p, refusal.Denial{
+			Action: identity.ActionUnitWrite, Object: obj,
+			Reason: "stack in no collection", ReasonWithin: nil, Window: 0,
+		})
 	}
 
-	_, found, err := h.placer.Collections.CollectionOf(ctx, obj)
-	if err != nil {
-		return fmt.Errorf("collection of %s: %w", obj, err)
-	}
-
-	if !found {
-		return fmt.Errorf("write to %s: %w", obj, collection.ErrNoCollection)
-	}
-
-	return nil
-}
-
-// placedOrWrite runs requirePlaced and writes the answer on a refusal. It
-// returns true when the write may go on.
-func (h *Handler) placedOrWrite(w http.ResponseWriter, r *http.Request, obj identity.Object) bool {
-	if err := h.requirePlaced(r.Context(), obj); err != nil {
-		h.writeError(r.Context(), w, err)
-
-		return false
-	}
-
-	return true
-}
-
-// placedRefOrWrite is placedOrWrite for a handler that has the stack
-// reference and no object.
-func (h *Handler) placedRefOrWrite(w http.ResponseWriter, r *http.Request, ref stack.Ref) bool {
-	obj, err := unitObject(ref)
-	if err != nil {
-		h.writeError(r.Context(), w, err)
-
-		return false
-	}
-
-	return h.placedOrWrite(w, r, obj)
+	h.writeError(r.Context(), w, err)
 }

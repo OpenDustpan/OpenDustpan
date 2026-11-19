@@ -8845,6 +8845,33 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	return i, err
 }
 
+const getPlacedStack = `-- name: GetPlacedStack :one
+SELECT id, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
+FROM stacks
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL
+`
+
+type GetPlacedStackParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+type GetPlacedStackRow struct {
+	ID     string
+	Placed bool
+}
+
+// The stack ID with whether a collection holds the stack, read in one
+// statement. The writes of a running update use it, so that a stack in no
+// collection is refused in the same transaction as the write.
+func (q *Queries) GetPlacedStack(ctx context.Context, arg GetPlacedStackParams) (GetPlacedStackRow, error) {
+	row := q.db.QueryRow(ctx, getPlacedStack, arg.Namespace, arg.Project, arg.Name)
+	var i GetPlacedStackRow
+	err := row.Scan(&i.ID, &i.Placed)
+	return i, err
+}
+
 const getPlacementCollection = `-- name: GetPlacementCollection :one
 SELECT id FROM collections WHERE namespace = $1 AND id = $2
 `
@@ -20484,9 +20511,9 @@ func (q *Queries) LockServerAuditScope(ctx context.Context) error {
 }
 
 const lockStackForUpdates = `-- name: LockStackForUpdates :one
-SELECT id, version
+SELECT id, version, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE
 `
 
@@ -20499,6 +20526,7 @@ type LockStackForUpdatesParams struct {
 type LockStackForUpdatesRow struct {
 	ID      string
 	Version int64
+	Placed  bool
 }
 
 // Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
@@ -20506,7 +20534,7 @@ type LockStackForUpdatesRow struct {
 func (q *Queries) LockStackForUpdates(ctx context.Context, arg LockStackForUpdatesParams) (LockStackForUpdatesRow, error) {
 	row := q.db.QueryRow(ctx, lockStackForUpdates, arg.Namespace, arg.Project, arg.Name)
 	var i LockStackForUpdatesRow
-	err := row.Scan(&i.ID, &i.Version)
+	err := row.Scan(&i.ID, &i.Version, &i.Placed)
 	return i, err
 }
 

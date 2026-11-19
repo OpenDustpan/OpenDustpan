@@ -461,6 +461,7 @@ func newBuildFixtureGuarded(
 	}
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          guard,
 		ManualLocks:        nil,

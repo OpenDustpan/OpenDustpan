@@ -13,6 +13,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -41,7 +42,7 @@ func (s *Store) CreateUpdate(
 	defer cancel()
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, u.Ref)
+		stackID, err := placedStackIDFor(ctx, q, u.Ref)
 		if err != nil {
 			return err
 		}
@@ -128,7 +129,7 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 	defer s.mu.RUnlock()
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, u.Ref)
+		stackID, err := placedStackIDFor(ctx, q, u.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
 			return stack.ErrUpdateNotFound
 		}
@@ -324,7 +325,7 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 	defer s.mu.RUnlock()
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, cp.Ref)
+		stackID, err := placedStackIDFor(ctx, q, cp.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
 			return stack.ErrWrongUpdateState
 		}
@@ -965,6 +966,36 @@ func stackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, erro
 	}
 
 	return id, nil
+}
+
+// placedStackIDFor is stackIDFor for the writes of the state of a stack: it
+// returns collection.ErrNoCollection when no collection holds the stack. The
+// same statement reads the stack and its membership, so the check costs no
+// round trip and has no gap between the check and the write.
+//
+// Defense in depth: the update service and the HTTP handler check the
+// membership too. This check stays so that a caller of the store port cannot
+// write to a stack in no collection, and it does not rely on those layers.
+func placedStackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, error) {
+	row, err := q.GetPlacedStack(ctx, db.GetPlacedStackParams{
+		Namespace: ref.Namespace.String(),
+		Project:   ref.Project.String(),
+		Name:      ref.Stack.String(),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", stack.ErrNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("resolve stack: %w", err)
+	}
+
+	if !row.Placed {
+		return "", fmt.Errorf("write to stack %s/%s/%s: %w",
+			ref.Namespace, ref.Project, ref.Stack, collection.ErrNoCollection)
+	}
+
+	return row.ID, nil
 }
 
 // allocateVersion returns the next version of a stack with no running
