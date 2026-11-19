@@ -244,13 +244,14 @@ func testInventoryLabelsPurge(t *testing.T, s Store) {
 
 // testInventoryLabelsOutsideGrammar checks that the store keeps and lists a
 // tag whose key or value the label grammar of the API does not allow, because
-// the Pulumi CLI sets the tags and the store must not lose them.
+// the Pulumi CLI sets the tags and the store must not lose them. The long
+// value has the largest size that a stack tag may have (256 bytes).
 func testInventoryLabelsOutsideGrammar(t *testing.T, s Store) {
 	t.Helper()
 
 	want := map[string]string{
 		"a key with spaces": "value",
-		"long":              strings.Repeat("x", 300),
+		"long":              strings.Repeat("x", 256),
 		"multi":             "line one\nline two",
 	}
 
