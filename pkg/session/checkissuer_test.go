@@ -64,5 +64,10 @@ func TestCheckIssuerAllowlist(t *testing.T) {
 		if err != nil && !errors.Is(err, session.ErrIssuer) {
 			t.Errorf("CheckIssuer(%.60q) = %v, want ErrIssuer", issuer, err)
 		}
+
+		// The error text holds no part of the issuer.
+		if err != nil && (strings.Contains(err.Error(), "s3cr3t") || strings.Contains(err.Error(), "pass")) {
+			t.Errorf("CheckIssuer(%.60q) error holds a part of the issuer: %v", issuer, err)
+		}
 	}
 }
