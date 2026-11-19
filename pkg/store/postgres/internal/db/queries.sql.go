@@ -7944,13 +7944,15 @@ SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_i
        s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
 FROM job_tokens AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
-JOIN (
-    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
-    FROM stacks WHERE deleted_at_ms IS NULL
+JOIN LATERAL (
+    SELECT s.id, s.namespace, s.project || '/' || s.name AS name
+    FROM stacks AS s
+    WHERE s.id = t.unit_id AND t.unit_tool = 'pulumi' AND s.deleted_at_ms IS NULL
     UNION ALL
-    SELECT id, 'opentofu' AS tool, namespace, name
-    FROM workspaces WHERE deleted_at_ms IS NULL
-) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+    SELECT w.id, w.namespace, w.name
+    FROM workspaces AS w
+    WHERE w.id = t.unit_id AND t.unit_tool = 'opentofu' AND w.deleted_at_ms IS NULL
+) AS u ON true
 JOIN durable_operations AS o ON o.id = t.claim_operation
 JOIN jobs AS j ON j.id = t.job_id
 JOIN namespaces AS jn ON jn.id = j.namespace_id
@@ -7990,6 +7992,8 @@ type GetJobTokenRow struct {
 
 // Defense in depth: the service checks the unit ID too. Resolve only a live
 // unit row so that a restored token cannot reach a removed unit by name.
+// The lateral join gives each branch the unit ID and the tool of the token, so
+// each branch reads one row by its unit ID index and no branch scans a table.
 func (q *Queries) GetJobToken(ctx context.Context, digest string) (GetJobTokenRow, error) {
 	row := q.db.QueryRow(ctx, getJobToken, digest)
 	var i GetJobTokenRow
@@ -20973,11 +20977,12 @@ SELECT name
 FROM namespaces
 WHERE ip_allowlist <> ''
 ORDER BY name
+LIMIT $1
 `
 
-// Lists the namespaces that have an IP allowlist.
-func (q *Queries) NamespacesWithList(ctx context.Context) ([]string, error) {
-	rows, err := q.db.Query(ctx, namespacesWithList)
+// Lists the namespaces that have an IP allowlist, at most lim of them.
+func (q *Queries) NamespacesWithList(ctx context.Context, lim int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, namespacesWithList, lim)
 	if err != nil {
 		return nil, err
 	}
@@ -22042,6 +22047,7 @@ SET state = $1, attempts = $2, next_at_ms = $3,
 WHERE notification_deliveries.id = $6 AND notification_deliveries.scope = $7
   AND notification_deliveries.owner = $8 AND notification_deliveries.version = $9
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > $10
+  AND (CAST($1 AS TEXT) = 'pending' OR CAST($5 AS BIGINT) > 0)
 `
 
 type RecordNotificationAttemptParams struct {
@@ -22058,7 +22064,8 @@ type RecordNotificationAttemptParams struct {
 }
 
 // Stores the result for the live claim only: the owner and the version of the
-// stored claim, and a lease that has not passed at now_ms.
+// stored claim, and a lease that has not passed at now_ms. A stopped state
+// needs a delivered time above zero: the wait of a redeliver starts there.
 func (q *Queries) RecordNotificationAttempt(ctx context.Context, arg RecordNotificationAttemptParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordNotificationAttempt,
 		arg.State,

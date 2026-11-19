@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -390,5 +392,85 @@ func TestPoolProxySettingsRoutesActions(t *testing.T) {
 
 	if found != len(want) {
 		t.Errorf("proxy settings routes = %d, want %d", found, len(want))
+	}
+}
+
+// TestPoolProxySettingsRoutesEndpointChange is the table of the handler layer
+// for a save that moves the upstream proxy and names no credential. An
+// accepted move clears the credential, and the answer and the next read say
+// so. A refused URL changes nothing, so the credential stays. This test fails
+// when the handler or a layer below it keeps the credential for another
+// endpoint.
+func TestPoolProxySettingsRoutesEndpointChange(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		url    string
+		status int
+		kept   bool
+	}{
+		{"other host", "https://other.example.com:3128", http.StatusOK, false},
+		{"other scheme", "http://upstream.example.com:3128", http.StatusOK, false},
+		{"other port", "https://upstream.example.com:3129", http.StatusOK, false},
+		{"default port instead of 3128", "https://upstream.example.com", http.StatusOK, false},
+		{"Unicode look-alike", "https://upstrеam.example.com:3128", http.StatusOK, false},
+		{"two trailing dots", "https://upstream.example.com..:3128", http.StatusOK, false},
+		{"old host in the path", "https://evil.example.com/https://upstream.example.com:3128", http.StatusOK, false},
+		{"same host, other case", "HTTPS://UPSTREAM.EXAMPLE.COM:3128", http.StatusOK, true},
+		{"same host, trailing dot", "https://upstream.example.com.:3128", http.StatusOK, true},
+		{"same host, redirect-like path", settingsURL + "/redirect?to=https://evil.example.com", http.StatusOK, true},
+		{
+			"user information trick",
+			fakecred.URL("https", "upstream.example.com", "3128", "evil.example.com", ""),
+			http.StatusBadRequest,
+			true,
+		},
+		{"fragment trick", "https://evil.example.com#@upstream.example.com", http.StatusBadRequest, true},
+		{"backslash trick", `https://evil.example.com\@upstream.example.com:3128`, http.StatusBadRequest, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkEndpointMove(t, tc.url, tc.status, tc.kept)
+		})
+	}
+}
+
+// checkEndpointMove saves the first settings, then a save to url with no
+// credential field, and checks the status, the answer and the next read.
+func checkEndpointMove(t *testing.T, url string, wantStatus int, kept bool) {
+	t.Helper()
+
+	e := newSettingsEnv(t, identity.AdminOnly{})
+
+	if status, _, body := e.do(put(saveBody())); status != http.StatusOK {
+		t.Fatalf("first PUT = %d %s, want 200", status, body)
+	}
+
+	quoted, err := json.Marshal(url)
+	if err != nil {
+		t.Fatalf("marshal URL: %v", err)
+	}
+
+	status, _, body := e.do(put(`{"allowedRanges":["10.20.0.0/16"],"upstreamProxy":` + string(quoted) + `}`))
+	if status != wantStatus {
+		t.Fatalf("PUT of %q = %d %s, want %d", url, status, body, wantStatus)
+	}
+
+	want := `"credentialSet":` + strconv.FormatBool(kept)
+	if status == http.StatusOK && !strings.Contains(string(body), want) {
+		t.Errorf("PUT of %q answer = %s, want %s", url, body, want)
+	}
+
+	status, _, body = e.do(get())
+	if status != http.StatusOK || !strings.Contains(string(body), want) {
+		t.Errorf("GET after a PUT of %q = %d %s, want %s", url, status, body, want)
+	}
+
+	if strings.Contains(string(body), hiddenValue) {
+		t.Errorf("GET answer holds the credential: %s", body)
 	}
 }

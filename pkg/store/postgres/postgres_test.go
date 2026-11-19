@@ -1963,6 +1963,8 @@ func emptySchemaURL(tb testing.TB, base string) string {
 		tb.Fatalf("create schema: %v", execErr)
 	}
 
+	pgtest.DropSchemaAtCleanup(tb, base, name)
+
 	u, parseErr := url.Parse(base)
 	if parseErr != nil {
 		tb.Fatalf("parse %s: %v", envURL, parseErr)
@@ -2377,6 +2379,17 @@ func BenchmarkProtectedGroups(b *testing.B) {
 	}
 
 	accesstest.BenchProtectedGroups(b, open(b, base))
+}
+
+// BenchmarkUnitLookup measures the read of one unit of a namespace of 20,000
+// units, by a list and a scan and by the unit ID. It needs the PostgreSQL URL.
+func BenchmarkUnitLookup(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	storetest.BenchUnitLookup(b, open(b, base))
 }
 
 // revocationStore adds to the store the two hooks of the revocation suite: the

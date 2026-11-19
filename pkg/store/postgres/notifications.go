@@ -1293,9 +1293,7 @@ func (k NotificationStore) Redeliver(
 			return sendErr
 		}
 
-		n, err := q.RedeliverNotificationDelivery(ctx, db.RedeliverNotificationDeliveryParams{
-			ID: id, Scope: scope.String(), MaxRedeliveries: notify.MaxAttempts,
-		})
+		n, err := redeliverRow(ctx, q, id, scope)
 		if err != nil {
 			return fmt.Errorf("redeliver: %w", err)
 		}
@@ -1312,6 +1310,21 @@ func (k NotificationStore) Redeliver(
 	})
 }
 
+// redeliverRow runs the update of a redeliver of the delivery id in scope and
+// returns the count of rows that it changed. The update alone refuses a
+// delivery that is pending or that has MaxAttempts redeliveries. The caller has
+// checked this in Go too; the limit here stays as a second layer.
+func redeliverRow(ctx context.Context, q *db.Queries, id string, scope namespace.Name) (int64, error) {
+	n, err := q.RedeliverNotificationDelivery(ctx, db.RedeliverNotificationDeliveryParams{
+		ID: id, Scope: scope.String(), MaxRedeliveries: notify.MaxAttempts,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update delivery: %w", err)
+	}
+
+	return n, nil
+}
+
 // checkRedeliver returns the refusal of a redeliver of d at now, or nil. The
 // limit check comes before the too-soon check.
 func checkRedeliver(d notify.Delivery, now time.Time) error {
@@ -1320,9 +1333,19 @@ func checkRedeliver(d notify.Delivery, now time.Time) error {
 		return fmt.Errorf("redeliver %s: %w: the delivery is pending", d.ID, notify.ErrConflict)
 	case d.Redeliveries >= notify.MaxAttempts:
 		return fmt.Errorf("redeliver %s: %w", d.ID, notify.ErrRedeliverLimit)
-	case now.Before(notify.RedeliverableAt(d)):
-		return fmt.Errorf("redeliver %s: %w", d.ID, &notify.TooSoonError{Wait: notify.RedeliverableAt(d).Sub(now)})
 	default:
+		// Defense in depth: Delivery.Validate refuses a stopped delivery with no
+		// time on the read; this check stays so that a delivery with no time
+		// never gets a redeliverable time of year 1.
+		at, ok := notify.RedeliverableAt(d)
+		if !ok {
+			return fmt.Errorf("redeliver %s: %w: the delivery stopped with no time", d.ID, notifystore.ErrCorrupt)
+		}
+
+		if now.Before(at) {
+			return fmt.Errorf("redeliver %s: %w", d.ID, &notify.TooSoonError{Wait: at.Sub(now)})
+		}
+
 		return nil
 	}
 }

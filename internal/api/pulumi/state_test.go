@@ -1264,3 +1264,54 @@ func checkStateAtRefusal(t *testing.T, tc stateAtRefusal, status int, body strin
 			status, body, tc.want, tc.message, tc.errorCode)
 	}
 }
+
+// TestStateReadsRefuseHostileDocuments is the hostile table of the handler
+// layer: a stored deployment that nests past the bound, or that holds tiny
+// leaves at the bound, answers 413 with its code and no value, on the
+// resource route and on the outputs route.
+func TestStateReadsRefuseHostileDocuments(t *testing.T) {
+	t.Parallel()
+
+	deep := strings.Repeat(`{"a":`, 150) + `1` + strings.Repeat(`}`, 150)
+	tiny := strings.Repeat(`[`, 90) + strings.TrimSuffix(strings.Repeat(`0,`, 400000), ",") + strings.Repeat(`]`, 90)
+
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "deeper than the bound", field: deep},
+		{name: "tiny leaves at the bound", field: tiny},
+	}
+
+	routes := []string{
+		"/api/stacks/acme/web/prod/state/latest/resources/" + stateURNStack,
+		"/api/stacks/acme/web/prod/state/latest/outputs",
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdateFixture(t, allowAll())
+			seedStateVersion(t, f, `{"resources":[{"urn":"`+stateURNStack+
+				`","type":"pulumi:pulumi:Stack","inputs":{},"outputs":`+tt.field+`}]}`)
+
+			for _, route := range routes {
+				status, body := f.doUpdate(t, accessRequest(http.MethodGet, route, ""))
+				if status != http.StatusRequestEntityTooLarge {
+					t.Fatalf(
+						"GET %s answers %d, want %d (%.200s)",
+						route,
+						status,
+						http.StatusRequestEntityTooLarge,
+						body,
+					)
+				}
+
+				if !strings.Contains(body, errcode.StackStateTooComplex) {
+					t.Fatalf("GET %s body %.200s, want the code %s", route, body, errcode.StackStateTooComplex)
+				}
+			}
+		})
+	}
+}

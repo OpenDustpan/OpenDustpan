@@ -48,11 +48,12 @@ FROM namespaces
 WHERE name = ?;
 
 -- name: NamespacesWithList :many
--- Lists the namespaces that have an IP allowlist.
+-- Lists the namespaces that have an IP allowlist, at most lim of them.
 SELECT name
 FROM namespaces
 WHERE ip_allowlist <> ''
-ORDER BY name;
+ORDER BY name
+LIMIT sqlc.arg('lim');
 
 -- name: SetNamespaceIPAllowlist :execrows
 -- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
@@ -4719,14 +4720,16 @@ RETURNING id, scope, notification_id, subscription_id, sink_id, contact, princip
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
--- stored claim, and a lease that has not passed at now_ms.
+-- stored claim, and a lease that has not passed at now_ms. A stopped state
+-- needs a delivered time above zero: the wait of a redeliver starts there.
 UPDATE notification_deliveries
 SET state = sqlc.arg(state), attempts = sqlc.arg(attempts), next_at_ms = sqlc.arg(next_at_ms),
     last_error = sqlc.arg(last_error), delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '',
     lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
-  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms)
+  AND (sqlc.arg(state) = 'pending' OR sqlc.arg(delivered_at_ms) > 0);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
 -- The number of deliveries of the subscription at or before the cursor
@@ -5023,8 +5026,8 @@ INSERT INTO job_tokens (
 );
 
 -- name: GetJobToken :one
-SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
-       CAST(u.name AS TEXT) AS unit_name,
+SELECT t.digest, n.name AS namespace, COALESCE(st.namespace, ws.namespace) AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(COALESCE(st.project || '/' || st.name, ws.name) AS TEXT) AS unit_name,
        t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
        o.state AS operation_state, o.claim_token AS operation_claim_token,
        o.claim_expires_at_ms AS operation_claim_expires_at_ms,
@@ -5036,19 +5039,19 @@ FROM job_tokens AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 -- Defense in depth: the service checks the unit ID too. Resolve only a live
 -- unit row so that a restored token cannot reach a removed unit by name.
-JOIN (
-    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
-    FROM stacks WHERE deleted_at_ms IS NULL
-    UNION ALL
-    SELECT id, 'opentofu' AS tool, namespace, name
-    FROM workspaces WHERE deleted_at_ms IS NULL
-) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+-- SQLite has no lateral join. Each left join reads one row by its unit ID index
+-- and only for the tool of the token, so no join scans a table. The WHERE
+-- clause drops a token whose unit row is missing or removed.
+LEFT JOIN stacks AS st
+    ON st.id = t.unit_id AND t.unit_tool = 'pulumi' AND st.deleted_at_ms IS NULL
+LEFT JOIN workspaces AS ws
+    ON ws.id = t.unit_id AND t.unit_tool = 'opentofu' AND ws.deleted_at_ms IS NULL
 JOIN durable_operations AS o ON o.id = t.claim_operation
 JOIN jobs AS j ON j.id = t.job_id
 JOIN namespaces AS jn ON jn.id = j.namespace_id
 JOIN principals AS js ON js.subject = json_extract(j.body, '$.startedBy') AND js.deleted_at_ms IS NULL
 JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
-WHERE t.digest = sqlc.arg(digest);
+WHERE t.digest = sqlc.arg(digest) AND (st.id IS NOT NULL OR ws.id IS NOT NULL);
 
 -- name: GetJobTokenUnitNamespace :one
 -- The stable namespace ID of the live unit row that a job token names, by

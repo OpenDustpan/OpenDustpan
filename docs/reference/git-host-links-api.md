@@ -130,7 +130,7 @@ does not know.
 `replacedPrincipal` is absent when the accept replaced no link.
 
 An accept needs a recent sign-in: a console session whose sign-in is older
-than the token freshness window answers 401 with the code
+than the token freshness window answers 403 with the code
 `mfa.fresh-step-required`, so sign in again and accept.
 
 A link never replaces another link silently. When the account has a link and

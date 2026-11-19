@@ -58,7 +58,16 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json
 
 The credential has three states in a save:
 
-- A body with no `upstreamCredential` field keeps the stored credential.
+- A body with no `upstreamCredential` field keeps the stored credential, if
+  the upstream proxy stays at the same endpoint. The endpoint is the scheme,
+  the host and the port. The server reads them from the parsed URL, so the
+  case of the host, one trailing dot, a port that is the default of the scheme,
+  and the path do not change the endpoint. A save with no `upstreamCredential`
+  field and another endpoint removes the credential, so that it never goes to
+  the new host. A host in Unicode and its punycode form count as two
+  endpoints. Send the credential again in the same save to keep one for the
+  new endpoint. The audit entry of the save has `credentialCleared` set to
+  `true` and `reason` set to `upstream-endpoint-changed`.
 - A body with `"upstreamCredential": null` removes it.
 - A body with a user name and a password replaces it.
 

@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
@@ -203,8 +204,9 @@ func lockRuleBody(r authgate.LockRule) localUserLockRuleBody {
 
 // localUserLockPruneBody is the effective schedule of the prune of the
 // counts of the lockout by name: the time between two runs, the age past the
-// last failure of a count that a run can delete, and the most counts that
-// one run deletes.
+// last failure of a count that a run can delete, the most counts that one
+// batch deletes, the longest time that one run starts new batches, and the
+// pause between two batches.
 //
 // Contract: never remove or rename these fields.
 type localUserLockPruneBody struct {
@@ -212,6 +214,8 @@ type localUserLockPruneBody struct {
 	AgeSeconds      int64 `json:"ageSeconds"`
 	MaxRows         int   `json:"maxRows"`
 	MaxEndedLocks   int   `json:"maxEndedLocks"`
+	MaxRunSeconds   int64 `json:"maxRunSeconds"`
+	BatchPauseMs    int64 `json:"batchPauseMillis"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -219,6 +223,15 @@ type localUserLockPruneBody struct {
 var errLocalUsersUnavailable = &codedError{
 	status: http.StatusNotImplemented, code: errcode.LocalUserUnavailable, args: nil,
 	message: "this server keeps no local users",
+}
+
+// errPublicURLRequired is the answer of a route that checks a password or a
+// code on a server that has no console sign-in. The sign-in needs the public
+// URL for the origin of its session cookie and for the check of the request
+// origin, so the answer names the flag.
+var errPublicURLRequired = &codedError{
+	status: http.StatusForbidden, code: errcode.LocalUserPublicURLRequired, args: nil,
+	message: "password sign-in is off because the server has no usable public URL: start the server with --public-url",
 }
 
 // errLocalUserBody is the answer of a body that is not the JSON object of the
@@ -231,7 +244,9 @@ var errLocalUserBody = &codedError{
 // localUserRoutes returns the rows of the local user routes. A handler with no
 // local user service mounts none. The routes that check a password or a
 // one-time code need the console sign-in, for its session, and its password
-// budget: with either one missing, they are not mounted.
+// budget. The public routes stay mounted without them and answer
+// errPublicURLRequired, so that a caller sees the cause and not a missing
+// route.
 func (h *Handler) localUserRoutes() []Route {
 	if h.localUsers == nil {
 		return nil
@@ -265,43 +280,77 @@ func (h *Handler) localUserRoutes() []Route {
 		},
 	}...)
 
-	if h.signIn == nil || h.signIn.passwords == nil {
-		return routes
-	}
-
-	return append(routes,
+	routes = append(routes,
 		Route{
 			Method: http.MethodPost, Path: localUserRedeemPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, OpaqueDenial: false, Serve: h.redeemLocalUserCode,
-		},
-		Route{
-			Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
-			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeOwnPassword,
 		},
 		Route{
 			Method: http.MethodPost, Path: localSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, OpaqueDenial: false, Serve: h.passwordSignIn,
 		},
 	)
+
+	// The change of the own password needs a session. A server with no
+	// console sign-in has none, so it does not mount this route.
+	if h.signIn == nil || h.signIn.passwords == nil {
+		return routes
+	}
+
+	return append(routes, Route{
+		Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
+		Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeOwnPassword,
+	})
 }
 
-// localUserRouteCount is the count of the local user routes: three to
-// manage the local users and three that check a password or a code.
-const localUserRouteCount = 6
+// localUserRouteCount is the count of the local user routes: five to manage
+// the local users, two that check a code or a password, and the change of
+// the own password.
+const localUserRouteCount = 8
 
 // admitPassword waits or refuses as the password budget of the address of
 // the request says. A handler with no password budget refuses: it fails
 // closed.
 //
-// Defense in depth: localUserRoutes mounts no password route without the
-// budget. This check stays so that a change to the route table never serves
-// a password check with no limit.
-func (h *Handler) admitPassword(ctx context.Context) error {
-	if h.signIn == nil || h.signIn.passwords == nil {
+// Defense in depth: the service refuses the same case with its own error.
+// This check stays so that a change to the service never serves a password
+// check with no limit. It does not rely on the check of the route table.
+//
+// A refusal for a missing console sign-in writes one denied entry through the
+// bounded recorder of the handler, so a caller cannot fill the audit log with
+// it.
+func (h *Handler) admitPassword(r *http.Request) error {
+	ctx := r.Context()
+
+	if h.signIn == nil {
+		h.recordPublicURLRequired(ctx, r)
+
+		return errPublicURLRequired
+	}
+
+	if h.signIn.passwords == nil {
 		return errLocalUsersUnavailable
 	}
 
 	return h.signIn.passwords.Admit(ctx)
+}
+
+// reasonPublicURLRequired is the reason of the audit entry of a password check
+// that the server refuses because it has no console sign-in.
+const reasonPublicURLRequired = "password sign-in without a usable public URL"
+
+// recordPublicURLRequired writes the denied entry of a password check that a
+// server with no console sign-in refuses. The recorder bounds the entries for
+// each subject, so a flood of requests writes one entry for each window.
+func (h *Handler) recordPublicURLRequired(ctx context.Context, r *http.Request) {
+	var p identity.Principal
+
+	p.Subject = passwordSignInAuditActor
+
+	h.guard.Record(ctx, r, p, denials.Denial{
+		Action: identity.Action(session.ActionSignIn), Object: identity.ServerObject(), Reason: reasonPublicURLRequired,
+		ReasonWithin: nil, Window: 0,
+	})
 }
 
 // failPassword spends one unit of the password budget of the address of the
@@ -338,10 +387,20 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 
 	noReferrer(w)
 
-	// Defense in depth: localUserRoutes mounts this route only with a console
-	// sign-in and a local user service. This check stays so that a change to
-	// the route table never serves a sign-in with no session service.
-	if h.signIn == nil || h.localUsers == nil {
+	// Without a console sign-in the server has no session to give: answer the
+	// cause before the check of the request origin, which needs the sign-in.
+	//
+	// Defense in depth: the service and the route table do not decide this
+	// case alone. This check stays so that a change to the route table never
+	// serves a sign-in with no session service.
+	if h.signIn == nil {
+		h.recordPublicURLRequired(ctx, r)
+		h.writeError(ctx, w, errPublicURLRequired)
+
+		return
+	}
+
+	if h.localUsers == nil {
 		h.writeError(ctx, w, errLocalUsersUnavailable)
 
 		return
@@ -365,7 +424,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -452,7 +511,7 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 
 	noReferrer(w)
 
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -551,6 +610,7 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		LockPrune: localUserLockPruneBody{
 			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
 			MaxRows: prune.MaxRows, MaxEndedLocks: prune.MaxEnded,
+			MaxRunSeconds: int64(prune.MaxRun / time.Second), BatchPauseMs: prune.BatchPause.Milliseconds(),
 		},
 		LockRules: localUserLockRulesBody{
 			Password: lockRuleBody(rules.Password), PasswordName: lockRuleBody(rules.PasswordName),
@@ -675,7 +735,7 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 	// The check of a current password spends the password budget of the
 	// address as a sign-in does, so a stolen session cannot guess the
 	// password of its person at the speed of the server.
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -794,6 +854,10 @@ func localUserErrors() []localUserMapping {
 				args:    nil,
 				message: "password sign-in is off on this installation",
 			},
+		},
+		{
+			err:    localuser.ErrPublicURLRequired,
+			answer: errPublicURLRequired,
 		},
 		{
 			err: localuser.ErrSecondFactorRequired,

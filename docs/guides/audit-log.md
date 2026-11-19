@@ -414,7 +414,7 @@ Send the access token as `Authorization: token <token>` or `Authorization: Beare
 (up to 200). Both default when missing.
 
 ```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+curl -g -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
 ```
 
@@ -461,23 +461,6 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 Each export writes one entry of the kind `audit-read` in the log that it
 reads. If the server cannot write that entry, it sends no line.
 
-`GET /api/audit/export?organization=<namespace>` sends the entries of the
-namespace oldest first, one JSON object for each line. It needs the same
-action. Use it to keep a copy of a range, or to check a range with no help
-from the server. The lines hold the previous hash and the hash, so a reader
-can compute each hash again. See
-[Audit export API](../reference/audit-export-api.md) for the query values, the
-fields and the steps of the offline check.
-
-```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/audit/export?organization=acme&fromSequence=100" \
-  > acme-audit.jsonl
-```
-
-Each export writes one entry of the kind `audit-read` in the log that it
-reads. If the server cannot write that entry, it sends no line.
-
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the installation log (`@server`). Read that log with
 `organization=@server`. It needs the action `server:read-audit` on the
@@ -489,7 +472,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
-A new namespace audit log starts with the grant of its creator.
+The audit log of a new namespace holds no entry until the first change in it. The creation of the namespace is an entry in the `@server` scope, with the action `server:create-namespace`.
 
 ## Turn the chain on or off
 
@@ -755,6 +738,15 @@ It answers 201 with the number of the new epoch, and it writes a change entry in
 It answers 409 when signed checkpoints are off.
 Each server process reads the new epoch at its next check.
 A mark from an older epoch stops nothing in the new epoch.
+
+A stored mark ends only when the current epoch is higher than the epoch of the mark.
+If you turn off signed checkpoints, or you replace the blob store, the epoch goes back to 0.
+The old marks then keep `dustpan_audit_chain_invalid` at 1 or more.
+To end them, turn signed checkpoints on, and then send the request above.
+Each request starts the epoch after the current one.
+Send it again until the epoch number is higher than the epoch of the highest mark, because a mark of the same epoch still stands.
+Each request writes a change entry.
+No other API clears a mark.
 
 ## What the chain protects against
 

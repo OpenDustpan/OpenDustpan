@@ -1305,6 +1305,8 @@ func classifyStack(err error) (failure, bool) {
 		return coded(http.StatusNotFound, err.Error(), errcode.StackNoState), true
 	case errors.Is(err, stack.ErrResourceNotFound):
 		return coded(http.StatusNotFound, err.Error(), errcode.StackResourceNotFound), true
+	case errors.Is(err, stack.ErrStateBound):
+		return coded(http.StatusRequestEntityTooLarge, err.Error(), errcode.StackStateTooComplex), true
 	case errors.Is(err, stack.ErrHasResources):
 		return coded(http.StatusBadRequest, hasResourcesMessage, errcode.StackHasResources), true
 	case errors.Is(err, stack.ErrAlreadyExists):

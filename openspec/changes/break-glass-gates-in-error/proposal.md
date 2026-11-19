@@ -51,7 +51,7 @@ Depends on:
 
 Removed from Depends on (14 Nov 2026, not a code dependency):
 
-- break-glass-pass-wiring: the pass wiring builds on this change; task 4.1 stays BLOCKED by it
+- break-glass-pass-wiring: the pass wiring builds on this change; task 3.1 stays BLOCKED by it
 
 ## Usability
 

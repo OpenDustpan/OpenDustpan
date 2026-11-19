@@ -506,6 +506,51 @@
         ],
         "type": "object"
       },
+      "BackupRegistryFilesTooLargeError": {
+        "description": "The error answer with the code backup.registry-files-too-large.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/BackupRegistryFilesTooLargeErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "backup.registry-files-too-large"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "BackupRegistryFilesTooLargeErrorArgs": {
+        "description": "The arguments of the text of the error with the code backup.registry-files-too-large.",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "size"
+        ],
+        "type": "object"
+      },
       "BackupSummary": {
         "properties": {
           "endedAt": {
@@ -2236,6 +2281,7 @@
           "mapping": {
             "access.collection-unit-cap": "#/components/schemas/AccessCollectionUnitCapError",
             "backup.corrupt": "#/components/schemas/BackupCorruptError",
+            "backup.registry-files-too-large": "#/components/schemas/BackupRegistryFilesTooLargeError",
             "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
@@ -2270,6 +2316,9 @@
           },
           {
             "$ref": "#/components/schemas/BackupCorruptError"
+          },
+          {
+            "$ref": "#/components/schemas/BackupRegistryFilesTooLargeError"
           },
           {
             "$ref": "#/components/schemas/BackupTooManyUnverifiedError"
@@ -2365,6 +2414,7 @@
           "auth.rate-limited",
           "auth.unauthenticated",
           "backup.corrupt",
+          "backup.registry-files-too-large",
           "backup.too-many-unverified",
           "collection.already-exists",
           "collection.changed",
@@ -2453,6 +2503,7 @@
           "local-user.outside-reach",
           "local-user.own-account",
           "local-user.password-sign-in-off",
+          "local-user.public-url-required",
           "local-user.reason-required",
           "local-user.second-factor-required",
           "local-user.session-ended",
@@ -2643,6 +2694,7 @@
           "stack.other-secrets-provider",
           "stack.resource-not-found",
           "stack.reveal-path-too-long",
+          "stack.state-too-complex",
           "state-version.budget-too-small",
           "state-version.busy",
           "state-version.checksum-mismatch",
@@ -2652,6 +2704,7 @@
           "state-version.resource-not-found",
           "state-version.reveal-path-too-long",
           "state-version.stale-serial",
+          "state-version.too-complex",
           "state-version.too-large",
           "state-version.upload-denied",
           "store.failover-setting-invalid",
@@ -2670,6 +2723,7 @@
           "token.not-found",
           "token.outside-reach",
           "token.requires-sign-in",
+          "token.unknown-kind",
           "token.unsupported",
           "token.wrong-kind",
           "trigger.cycle",
@@ -4578,6 +4632,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "batchPauseMillis": {
+            "format": "int64",
+            "type": "integer"
+          },
           "intervalSeconds": {
             "format": "int64",
             "type": "integer"
@@ -4589,13 +4647,19 @@
           "maxRows": {
             "format": "int64",
             "type": "integer"
+          },
+          "maxRunSeconds": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "ageSeconds",
+          "batchPauseMillis",
           "intervalSeconds",
           "maxEndedLocks",
-          "maxRows"
+          "maxRows",
+          "maxRunSeconds"
         ],
         "type": "object"
       },
@@ -20324,13 +20388,12 @@
             }
           },
           {
-            "description": "Lists the units as they were at this time, in Unix milliseconds. It takes no filter and no page token.",
+            "description": "Lists the units as they were at this time, an RFC 3339 time with Z or an offset, for example 2026-10-18T09:30:00Z. It takes no filter and no page token.",
             "in": "query",
             "name": "at",
             "required": false,
             "schema": {
-              "format": "int64",
-              "type": "integer"
+              "type": "string"
             }
           },
           {

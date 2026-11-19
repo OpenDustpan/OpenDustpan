@@ -47,7 +47,7 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
   --tls-cert data/cert.pem --tls-key data/key.pem
 ```
 
-The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it running. In a second shell, export the same `DUSTPAN_ADMIN_TOKEN` and make a namespace:
+The server keeps its data in `data/dustpan.db` and in `data/blobs`. Without `--public-url`, the server has no console sign-in. The password sign-in of a local user is then off. The policy shows `enabled: false` with the source `public-url`, and the redeem and sign-in routes answer 403 with `local-user.public-url-required`. To use local users, add `--public-url https://localhost:8080` to the command above. Leave it running. In a second shell, export the same `DUSTPAN_ADMIN_TOKEN` and make a namespace:
 
 ```sh
 ./bin/opendustpan namespace create --server https://localhost:8080 --ca-file data/cert.pem acme

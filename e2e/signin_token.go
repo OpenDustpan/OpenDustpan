@@ -312,6 +312,24 @@ func (e *Env) FreshAdminAPIStatus(ctx context.Context, tb testing.TB, req Sessio
 	return e.FreshSession(ctx, tb, e.freshAdmin(ctx, tb))(req)
 }
 
+// PrepareFreshAdmin makes the fresh administrator now, so that a later call of
+// a Fresh... method does not make it. With E2E_SERVER=binary the first call
+// stops the server, seeds the person and starts the server again. The new
+// start passes the bound port in --listen where the first start passed port
+// 0, and listen is a static setting, so the restart moves the revision of the
+// installation settings. A step that reads that revision and then changes a
+// setting with a fresh console session calls PrepareFreshAdmin before the
+// read. The env must come from NewEnvWithSignIn. A second call does nothing.
+func (e *Env) PrepareFreshAdmin(ctx context.Context, tb testing.TB) {
+	tb.Helper()
+
+	if e.signIn == nil {
+		tb.Fatal("PrepareFreshAdmin needs an env from NewEnvWithSignIn")
+	}
+
+	e.freshAdmin(ctx, tb)
+}
+
 // FreshAdminMergePatch sends one merge patch of body to path, with the
 // If-Match revision ifMatch, as a site administrator with a console session
 // that has a fresh sign-in. It returns the status and the body of the answer.

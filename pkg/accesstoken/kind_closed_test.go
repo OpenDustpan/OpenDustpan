@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -283,5 +284,61 @@ func TestNewTokenRefusesUnknownKind(t *testing.T) {
 		if _, err := accesstoken.IssueTokenForTest(f.svc, kind); err != nil {
 			t.Errorf("issue a token of kind %q: %v", kind, err)
 		}
+	}
+}
+
+// revokeCountStore returns every token with the kind that it holds, as a store
+// that skips the check of the kind, and counts the calls that revoke a token.
+type revokeCountStore struct {
+	accesstoken.Store
+
+	kind    accesstoken.Kind
+	revokes *atomic.Int32
+}
+
+func (s revokeCountStore) GetToken(ctx context.Context, id string) (accesstoken.Token, error) {
+	tok, err := s.Store.GetToken(ctx, id)
+	tok.Kind = s.kind
+
+	return tok, err
+}
+
+func (s revokeCountStore) RevokeToken(ctx context.Context, id string, e audit.Entry) error {
+	s.revokes.Add(1)
+
+	return s.Store.RevokeToken(ctx, id, e)
+}
+
+// TestRevokeRefusesTokenOfUnknownKind checks that a store that gives back a
+// token of a kind that this version does not know gets no revoke from the
+// service: the revoke answers ErrUnknownKind with the ID of the row, and the
+// service does not call the store to write.
+func TestRevokeRefusesTokenOfUnknownKind(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []accesstoken.Kind{oldKind, "", "Service", "service ", "service\x00", "../service"} {
+		t.Run(strconv.Quote(string(kind)), func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t, nil)
+			tok, _ := f.create(t, f.service, "deploy")
+
+			var revokes atomic.Int32
+
+			svc := serviceOver(t, &f, revokeCountStore{Store: f.store, kind: kind, revokes: &revokes})
+
+			err := svc.Revoke(t.Context(), admin(), caller(), accesstoken.ScopeService, tok.ID)
+			if !errors.Is(err, accesstoken.ErrUnknownKind) {
+				t.Fatalf("Revoke of a token of kind %q: err = %v, want ErrUnknownKind", kind, err)
+			}
+
+			if !strings.Contains(err.Error(), tok.ID) {
+				t.Errorf("Revoke of a token of kind %q: error %q does not name the row", kind, err)
+			}
+
+			if n := revokes.Load(); n != 0 {
+				t.Errorf("store.RevokeToken called %d times, want 0", n)
+			}
+		})
 	}
 }

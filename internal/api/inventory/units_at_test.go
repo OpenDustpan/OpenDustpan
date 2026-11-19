@@ -3,11 +3,14 @@ package inventory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +88,7 @@ type unitAtBody struct {
 // unitsAtBody is the decoded view at a time.
 type unitsAtBody struct {
 	Units   []unitAtBody `json:"units"`
-	At      int64        `json:"at"`
+	At      string       `json:"at"`
 	Purged  int          `json:"purged"`
 	Omitted int          `json:"omitted"`
 }
@@ -161,14 +164,14 @@ func TestListUnitsAt(t *testing.T) {
 	t.Parallel()
 
 	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
-	at := strconv.FormatInt(atTime(5).UnixMilli(), 10)
+	at := atTime(5).Format(time.RFC3339Nano)
 
 	rec, got := getUnitsAt(t, handler, at)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
 
-	if got.At != atTime(5).UnixMilli() || got.Purged != 1 || got.Omitted != 0 || len(got.Units) != 2 {
+	if got.At != atTime(5).Format(time.RFC3339Nano) || got.Purged != 1 || got.Omitted != 0 || len(got.Units) != 2 {
 		t.Fatalf("view = %+v, want 2 units, 1 purged, none omitted", got)
 	}
 
@@ -249,7 +252,7 @@ func TestListUnitsAtPoints(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			rec, got := getUnitsAt(t, handler, strconv.FormatInt(tc.at.UnixMilli(), 10))
+			rec, got := getUnitsAt(t, handler, tc.at.Format(time.RFC3339Nano))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 			}
@@ -272,13 +275,154 @@ func TestListUnitsAtOmitsUnitsTheCallerCannotRead(t *testing.T) {
 	authz := denyUnits{deny: map[string]bool{"opentofu:acme/network": true}}
 	handler := newHistoryHandler(t, seededHistory(), authz)
 
-	rec, got := getUnitsAt(t, handler, strconv.FormatInt(atTime(5).UnixMilli(), 10))
+	rec, got := getUnitsAt(t, handler, atTime(5).Format(time.RFC3339Nano))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
 
 	if len(got.Units) != 1 || got.Units[0].Name != "web/prod" || got.Omitted != 1 {
 		t.Fatalf("view = %+v, want only web/prod and 1 omitted", got)
+	}
+}
+
+const (
+	// The whole message of each refusal. The tests spell the text out, so a
+	// change of the answer fails them.
+	errAtFormatText      = "invalid query parameter: at must be an RFC 3339 time, for example 2026-10-18T09:30:00Z"
+	errAtBeforeEpochText = "invalid query parameter: at must not be before 1970-01-01T00:00:00Z"
+	errAtRepeatedText    = "invalid query parameter: send at most one at query value"
+)
+
+// assertAtRefusal checks a 400 answer: the whole message equals the constant
+// text, the body holds no byte below 0x20 except the final line feed of the
+// JSON encoder, and the body holds no part of the raw input.
+func assertAtRefusal(t *testing.T, rec *httptest.ResponseRecorder, rawQuery, wantText string) {
+	t.Helper()
+
+	var doc struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, rec.Body.String())
+	}
+
+	if doc.Message != wantText {
+		t.Fatalf("message = %q, want %q", doc.Message, wantText)
+	}
+
+	body := strings.TrimSuffix(rec.Body.String(), "\n")
+	for i := range len(body) {
+		if body[i] < 0x20 {
+			t.Fatalf("body holds byte 0x%02x at %d: %q", body[i], i, body)
+		}
+	}
+
+	raw, err := url.QueryUnescape(rawQuery)
+	if err != nil {
+		t.Fatalf("unescape %q: %v", rawQuery, err)
+	}
+
+	// A value of 4096 digits or a piece of a header: none of it may come back.
+	for _, piece := range []string{strings.TrimSpace(raw), "X-Evil"} {
+		if piece != "" && strings.Contains(raw, piece) && strings.Contains(body, piece) {
+			t.Fatalf("body repeats the input %q: %q", piece, body)
+		}
+	}
+}
+
+// TestListUnitsAtRepeatedValue checks that a request with more than one at
+// value gets 400, whatever the values are.
+func TestListUnitsAtRepeatedValue(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	cases := []struct{ name, query string }{
+		{"a valid value and a junk value", "at=2026-10-10T09:00:00Z&at=junk"},
+		{"an empty value and a valid value", "at=&at=2026-10-10T09:00:00Z"},
+		{"two valid values", "at=2026-10-10T09:00:00Z&at=2026-10-10T10:00:00Z"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+tc.query, "test-token")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+
+			assertAtRefusal(t, rec, tc.query, errAtRepeatedText)
+		})
+	}
+}
+
+// TestListUnitsAtBadQueryString checks that a query string that does not
+// parse gets 400 with the whole message, whatever the at values are.
+func TestListUnitsAtBadQueryString(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	const wantText = "invalid query parameter: the query string is not valid"
+
+	cases := []struct{ name, query string }{
+		{"a semicolon after a junk value", "at=junk;at=2026-10-10T09:00:00Z"},
+		{"a semicolon between two valid values", "at=2026-10-10T09:00:00Z;at=2026-10-10T10:00:00Z"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+tc.query, "test-token")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+
+			assertAtRefusal(t, rec, tc.query, wantText)
+		})
+	}
+}
+
+// TestListUnitsAtEncodedName checks that an at name with a percent escape is
+// the same name: two values are refused.
+func TestListUnitsAtEncodedName(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	const query = "%61t=2026-10-10T09:00:00Z&at=2026-10-10T10:00:00Z"
+
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?"+query, "test-token")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+
+	assertAtRefusal(t, rec, query, errAtRepeatedText)
+}
+
+// TestAtQueryBadQueryString checks the refusal of atQuery alone: no
+// parseUnitFilter runs before it, so removing its own check fails this test.
+func TestAtQueryBadQueryString(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"at=junk;at=2026-10-10T09:00:00Z", "at=2026-10-10T09:00:00Z;at=2026-10-10T10:00:00Z"} {
+		r := httptest.NewRequestWithContext(
+			t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/acme/units?"+raw, nil,
+		)
+		r.Pattern = apiinventory.UnitListPattern
+
+		_, ok, err := apiinventory.ReadAtQuery(r)
+		if ok || err == nil {
+			t.Fatalf("%q: ok = %v, err = %v, want a refusal", raw, ok, err)
+		}
+
+		if !errors.Is(err, apiinventory.ErrInvalidQuery) ||
+			!strings.Contains(err.Error(), "the query string is not valid") {
+			t.Fatalf("%q: err = %v, want the bad query string refusal", raw, err)
+		}
 	}
 }
 
@@ -293,10 +437,215 @@ func TestListUnitsAtErrors(t *testing.T) {
 		name    string
 		at      string
 		want    int
+		// wantText is the whole message of a 400 answer.
+		wantText string
 	}{
-		{name: "a time that is not a number", handler: withHistory, at: "yesterday", want: http.StatusBadRequest},
-		{name: "a negative time", handler: withHistory, at: "-5", want: http.StatusBadRequest},
-		{name: "a store with no change log", handler: withoutHistory, at: "100", want: http.StatusNotImplemented},
+		{
+			name:     "a store with no change log",
+			handler:  withoutHistory,
+			at:       "2026-10-10T09:00:00Z",
+			want:     http.StatusNotImplemented,
+			wantText: "",
+		},
+		{
+			name:     "a time that is not a time",
+			handler:  withHistory,
+			at:       "yesterday",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "Unix milliseconds",
+			handler:  withHistory,
+			at:       "1700000000000",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a negative number",
+			handler:  withHistory,
+			at:       "-5",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a date with no time",
+			handler:  withHistory,
+			at:       "2026-10-10",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "no zone",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a lower case t",
+			handler:  withHistory,
+			at:       "2026-10-10t09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a lower case z",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a space for the T",
+			handler:  withHistory,
+			at:       "2026-10-10%2009:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a comma fraction",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00,5Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a fraction of 10 digits",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00.1234567890Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "an empty fraction",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00.Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "an offset with no colon",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00%2B0200",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "an offset of 24 hours",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00%2B24:00",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a leap second",
+			handler:  withHistory,
+			at:       "2026-12-31T23:59:60Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a month 13",
+			handler:  withHistory,
+			at:       "2026-13-10T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a day that does not exist",
+			handler:  withHistory,
+			at:       "2026-02-30T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a year with 5 digits",
+			handler:  withHistory,
+			at:       "12026-10-10T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "before 1970",
+			handler:  withHistory,
+			at:       "1969-12-31T23:59:59Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtBeforeEpochText,
+		},
+		{
+			name:     "before 1970 by an offset",
+			handler:  withHistory,
+			at:       "1970-01-01T00:00:00%2B01:00",
+			want:     http.StatusBadRequest,
+			wantText: errAtBeforeEpochText,
+		},
+		{
+			name:     "year 0",
+			handler:  withHistory,
+			at:       "0000-01-01T00:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtBeforeEpochText,
+		},
+		{
+			name:     "a leading space",
+			handler:  withHistory,
+			at:       "%202026-10-10T09:00:00Z",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a trailing new line",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00Z%0A",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a CR LF inside",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00Z%0D%0AX-Evil:1",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a NUL byte",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00Z%00",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a long value",
+			handler:  withHistory,
+			at:       strings.Repeat("9", 4096),
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{
+			name:     "a digit overflow",
+			handler:  withHistory,
+			at:       "99999999999999999999999999",
+			want:     http.StatusBadRequest,
+			wantText: errAtFormatText,
+		},
+		{name: "the far future", handler: withHistory, at: "9999-12-31T23:59:59Z", want: http.StatusOK, wantText: ""},
+		{name: "the epoch", handler: withHistory, at: "1970-01-01T00:00:00Z", want: http.StatusOK, wantText: ""},
+		{
+			name:     "a fraction",
+			handler:  withHistory,
+			at:       "2026-10-10T09:00:00.123456789Z",
+			want:     http.StatusOK,
+			wantText: "",
+		},
+		{name: "an offset", handler: withHistory, at: "2026-10-10T11:00:00%2B02:00", want: http.StatusOK, wantText: ""},
+		{
+			name:     "a negative offset",
+			handler:  withHistory,
+			at:       "2026-10-10T04:00:00-05:00",
+			want:     http.StatusOK,
+			wantText: "",
+		},
 	}
 
 	for _, tc := range cases {
@@ -307,7 +656,33 @@ func TestListUnitsAtErrors(t *testing.T) {
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", rec.Code, tc.want, rec.Body.String())
 			}
+
+			if tc.want == http.StatusBadRequest {
+				assertAtRefusal(t, rec, tc.at, tc.wantText)
+			}
 		})
+	}
+}
+
+// TestListUnitsAtOffsetsAgree checks that the same instant, in UTC and with an
+// offset, gives the same view, and that the answer at is a UTC RFC 3339 time
+// that is cut to whole milliseconds.
+func TestListUnitsAtOffsetsAgree(t *testing.T) {
+	t.Parallel()
+
+	handler := newHistoryHandler(t, seededHistory(), selectiveAuthorizer{deny: nil})
+
+	_, utc := getUnitsAt(t, handler, "2026-10-10T09:05:00Z")
+	_, offset := getUnitsAt(t, handler, "2026-10-10T11:05:00%2B02:00")
+	_, frac := getUnitsAt(t, handler, "2026-10-10T09:05:00.0009Z")
+
+	if len(utc.Units) == 0 || !reflect.DeepEqual(utc, offset) || !reflect.DeepEqual(utc, frac) {
+		t.Fatalf("views differ: utc %+v, offset %+v, fraction %+v", utc, offset, frac)
+	}
+
+	got, err := time.Parse(time.RFC3339Nano, utc.At)
+	if err != nil || !got.Equal(atTime(5)) || !strings.HasSuffix(utc.At, "Z") {
+		t.Fatalf("at = %q (%v), want %s in UTC", utc.At, err, atTime(5).Format(time.RFC3339Nano))
 	}
 }
 
@@ -316,7 +691,7 @@ func TestListUnitsAtNeedsNamespaceRead(t *testing.T) {
 
 	handler := newHistoryHandler(t, seededHistory(), stubAuthorizer{})
 
-	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at=100", "test-token")
+	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at=2026-10-10T09:00:00Z", "test-token")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
 	}
@@ -334,7 +709,7 @@ func TestListUnitsAtConsoleURL(t *testing.T) {
 		selectiveAuthorizer{deny: nil},
 		"https://dustpan.example.com",
 	)
-	at := strconv.FormatInt(atTime(5).UnixMilli(), 10)
+	at := atTime(5).Format(time.RFC3339Nano)
 
 	rec := authorizedGet(t, handler, "/api/dustpan/v1/namespaces/acme/units?at="+at, "test-token")
 	if rec.Code != http.StatusOK {
