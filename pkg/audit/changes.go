@@ -131,7 +131,7 @@ func validateChangeTexts(c Change) error {
 	// A key, a layer and a takes-effect text are one line. Old and New may hold
 	// line breaks and tabs, because a value can be a list with one item on
 	// each line; any other hidden character is refused there too.
-	oneLine := func(r rune) bool { return ident.IsHiddenRune(r) }
+	oneLine := ident.IsHiddenRune
 	multiLine := func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }
 
 	texts := []struct {

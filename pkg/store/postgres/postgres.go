@@ -578,23 +578,15 @@ func (s *Store) UpdateStackTags(
 			return err
 		}
 
-		if err := q.DeleteStackTags(ctx, id); err != nil {
-			return fmt.Errorf("delete stack tags: %w", err)
-		}
-
-		touchErr := q.TouchStack(ctx, db.TouchStackParams{
-			UpdatedAtMs: codec.Millis(u.UpdatedAt),
-			ID:          id,
-		})
-		if touchErr != nil {
-			return fmt.Errorf("stamp stack: %w", touchErr)
-		}
-
-		if err := insertStackTags(ctx, q, id, u.Tags); err != nil {
+		// Check the entry, with the changes that it will hold, before the first
+		// write: a hostile tag key returns audit.ErrInvalidEntry, and no driver
+		// error for the key hides it.
+		entry, due, err := tagChangeEntry(u.Entry, id, stack.TagChanges(before, u.Tags))
+		if err != nil {
 			return err
 		}
 
-		if err := appendTagChangeEntry(ctx, q, u.Entry, id, stack.TagChanges(before, u.Tags)); err != nil {
+		if err := replaceStackTags(ctx, q, id, u, tagEntry{entry: entry, due: due}); err != nil {
 			return err
 		}
 
@@ -622,34 +614,63 @@ func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string
 	return tags, nil
 }
 
-// appendTagChangeEntry appends e with the stable stack ID and changes, in the
-// transaction of q. It appends nothing when changes is empty.
-func appendTagChangeEntry(
-	ctx context.Context, q *db.Queries, e audit.Entry, id string, changes []audit.Change,
-) error {
+// tagEntry is the audit entry of a tag update, and whether the update owes it.
+type tagEntry struct {
+	entry audit.Entry
+	due   bool
+}
+
+// replaceStackTags replaces the tag rows of the stack ID with u.Tags, stamps
+// the stack and appends the entry of the update when it is due, in the
+// transaction of q.
+func replaceStackTags(ctx context.Context, q *db.Queries, id string, u stack.TagUpdate, te tagEntry) error {
+	if err := q.DeleteStackTags(ctx, id); err != nil {
+		return fmt.Errorf("delete stack tags: %w", err)
+	}
+
+	touchErr := q.TouchStack(ctx, db.TouchStackParams{
+		UpdatedAtMs: codec.Millis(u.UpdatedAt),
+		ID:          id,
+	})
+	if touchErr != nil {
+		return fmt.Errorf("stamp stack: %w", touchErr)
+	}
+
+	if err := insertStackTags(ctx, q, id, u.Tags); err != nil {
+		return err
+	}
+
+	if te.due {
+		if _, err := appendAuditEntry(ctx, q, te.entry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// tagChangeEntry returns e with the stable stack ID and changes, ready to
+// append, and false when changes is empty and no entry is due. It returns audit.ErrInvalidEntry
+// when the entry with its changes fails validation, for example for a tag key
+// that holds a line break, a hidden character, invalid UTF-8 or too many
+// bytes.
+//
+// Defense in depth: the service checks the tag names, and the audit package
+// checks each change text. This check stays so that a caller of the store
+// cannot write a change that no other layer saw.
+func tagChangeEntry(e audit.Entry, id string, changes []audit.Change) (audit.Entry, bool, error) {
 	if len(changes) == 0 {
-		return nil
+		return e, false, nil
 	}
 
 	e.ObjectID = id
 	e.Changes = changes
 
-	// The entry that the caller passed was checked before the changes were set,
-	// so the changes get their own check here. A hostile tag key returns
-	// audit.ErrInvalidEntry, and the transaction rolls back.
-	//
-	// Defense in depth: the service checks the tag names, and the audit package
-	// checks each change text when it validates an entry. This check stays so
-	// that a caller of the store cannot write a change that no other layer saw.
 	if err := e.Validate(); err != nil {
-		return fmt.Errorf("audit entry: %w", err)
+		return e, false, fmt.Errorf("audit entry: %w", err)
 	}
 
-	if _, err := appendAuditEntry(ctx, q, e); err != nil {
-		return fmt.Errorf("append audit entry: %w", err)
-	}
-
-	return nil
+	return e, true, nil
 }
 
 // insertStackTags writes one row per tag, keyed by the stack ID. A nil or
