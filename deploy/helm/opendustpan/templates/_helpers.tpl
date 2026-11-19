@@ -165,7 +165,7 @@ and key, and values that the release needs.
 {{- fail "database.existingSecret.name and keyEncryptionKey.existingSecret.name are required: make the two Secrets and set both names" -}}
 {{- end -}}
 {{- if not .Values.adminToken.existingSecret.name -}}
-{{- fail "adminToken.existingSecret.name is empty. The server does not start without an admin token. Create the Secret: kubectl create secret generic opendustpan-admin-token --from-literal=admin-token=$(openssl rand -hex 32). Then set adminToken.existingSecret.name to opendustpan-admin-token." -}}
+{{- fail "adminToken.existingSecret.name is empty. The server does not start without an admin token. Set adminToken.existingSecret.name to opendustpan-admin-token, then make the Secret with this command: kubectl create secret generic opendustpan-admin-token --from-literal=admin-token=$(openssl rand -hex 32)" -}}
 {{- end -}}
 {{- if and (eq $db.name $kek.name) (eq $db.key $kek.key) -}}
 {{- fail "database.existingSecret and keyEncryptionKey.existingSecret name the same Secret and key: use two different Secrets or keys" -}}

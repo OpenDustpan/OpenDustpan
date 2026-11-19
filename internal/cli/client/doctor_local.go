@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 const (
@@ -159,6 +160,13 @@ func adminTokenCheck(d doctorSettings) checkResult {
 				),
 			}
 		}
+	}
+
+	// Serve builds its tokens with the same constructor, so a duplicate fails
+	// here and in serve with the same text. The error names the index of the
+	// token and never holds a token value.
+	if _, err := identity.NewStaticTokens(tokens...); err != nil {
+		return checkResult{statusFail, nameAdminToken, err.Error()}
 	}
 
 	return checkResult{

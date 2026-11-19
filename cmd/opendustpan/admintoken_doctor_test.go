@@ -110,6 +110,8 @@ func TestServeAndDoctorAgreeOnAdminToken(t *testing.T) {
 		{name: "a token in the variable", variable: tokenA, file: "", fileMode: 0, fails: false},
 		{name: "a token in a private file", variable: "", file: tokenA + "\n", fileMode: 0o600, fails: false},
 		{name: "a token in a group-readable file", variable: "", file: tokenA + "\n", fileMode: 0o640, fails: true},
+		{name: "a duplicate token in the variable", variable: tokenA + "," + tokenA, file: "", fileMode: 0, fails: true},
+		{name: "a duplicate token in a private file", variable: "", file: tokenA + "\n" + tokenA + "\n", fileMode: 0o600, fails: true},
 	}
 
 	for _, tc := range cases {

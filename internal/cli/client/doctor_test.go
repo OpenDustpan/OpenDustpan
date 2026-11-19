@@ -165,6 +165,12 @@ func TestDoctorLocalChecks(t *testing.T) {
 			wantErr: client.ErrDoctorFailed,
 		},
 		{
+			name: "a duplicate admin token",
+			env:  map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken + "," + doctorToken}, args: goodArgs,
+			want:    []string{"fail  admin token: ", "token 2 is a duplicate"},
+			wantErr: client.ErrDoctorFailed,
+		},
+		{
 			name: "no backup target",
 			env:  map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
 			args: func(dir, key string) []string {
