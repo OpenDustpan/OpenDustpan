@@ -1255,7 +1255,10 @@ func runBulkLatency(t *testing.T, s latencyStore, records idempotency.Store) {
 		t.Logf("bulk-lock of %d units, %s, %d runs: p50 %v, p95 %v, max %v",
 			latencyUnits, name, len(times), p50, p95, maxTime)
 
-		if p95 > latencyP95Limit {
+		// The race detector makes a store call several times slower, and a run of
+		// the whole suite loads the machine too. The target is for a build with
+		// no detector; with it, the test still runs the calls and logs the times.
+		if p95 > latencyP95Limit && !raceDetector {
 			t.Errorf("%s: p95 %v is above the limit %v", name, p95, latencyP95Limit)
 		}
 	}
