@@ -691,10 +691,12 @@ func TestRestoreAuditsExpiredUpdateLeases(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		expired int64
-		want    bool
+		// want is the text of the audit entry, or empty for no entry.
+		want string
 	}{
-		{name: "two leases", expired: 2, want: true},
-		{name: "no lease", expired: 0, want: false},
+		{name: "two leases", expired: 2, want: "expired the lease of 2 running updates of backup"},
+		{name: "one lease", expired: 1, want: "expired the lease of 1 running update of backup"},
+		{name: "no lease", expired: 0, want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -715,13 +717,26 @@ func TestRestoreAuditsExpiredUpdateLeases(t *testing.T) {
 			appends := slices.Clone(setup.live.dev.appends)
 			setup.live.mu.Unlock()
 
-			found := slices.ContainsFunc(appends, func(e audit.Entry) bool {
-				return strings.Contains(e.Object, "expired the lease of 2 running updates") &&
-					strings.Contains(e.Object, "restore "+id.String())
-			})
+			// Any entry of the expired leases counts, so the case with no lease
+			// fails for an entry with a count of zero too.
+			var got []string
 
-			if found != tc.want {
-				t.Errorf("audit entry of the expired leases found = %v, want %v", found, tc.want)
+			for _, e := range appends {
+				if strings.Contains(e.Object, "expired the lease of") {
+					got = append(got, e.Object)
+				}
+			}
+
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("audit entries of the expired leases = %q, want none", got)
+				}
+
+				return
+			}
+
+			if len(got) != 1 || !strings.Contains(got[0], tc.want) || !strings.Contains(got[0], "restore "+id.String()) {
+				t.Errorf("audit entries of the expired leases = %q, want one with %q for restore %s", got, tc.want, id)
 			}
 		})
 	}

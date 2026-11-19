@@ -1241,8 +1241,13 @@ func expiredUpdateLeasesOf(op durable.Operation) (int64, error) {
 // expired, for its audit entry: the backup holds the leases of updates that ran
 // when it was made, and no CLI can use them after the restore.
 func expiredUpdateLeasesAuditObject(in restoreInput, expired int64) string {
+	noun := " running updates"
+	if expired == 1 {
+		noun = " running update"
+	}
+
 	return "restore " + in.ID.String() + " expired the lease of " + strconv.FormatInt(expired, 10) +
-		" running updates of backup " + in.BackupID.String() +
+		noun + " of backup " + in.BackupID.String() +
 		": the updates stay running and keep their stacks locked until an operator cancels them"
 }
 

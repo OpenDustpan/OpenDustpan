@@ -697,6 +697,11 @@ func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
 	decoder := json.NewDecoder(bytes.NewReader(result))
 	decoder.DisallowUnknownFields()
 
+	// Defense in depth: EncodeRestoreSwap never writes a negative count, and the
+	// store writes the record in its own transaction. This check stays because
+	// a step record is read from the database, which a restore of another
+	// version or a person can change, and the audit entry of the restore uses
+	// the count. It does not rely on the encoder or on the store.
 	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 || out.ExpiredUpdateLeases < 0 {
 		return KeepAccessResult{
 			DroppedTempAdmins:   0,

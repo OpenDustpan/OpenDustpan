@@ -101,6 +101,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			test: testRestoreApplyExpiresUpdateLeases,
 		},
 		{name: "keeping apply counts the expired update leases", test: testRestoreKeepingApplyCountsExpiredLeases},
+		{name: "the swap step record holds the expired update leases", test: testRestoreSwapRecordsExpiredLeases},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
 		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
@@ -1932,6 +1933,71 @@ func testRestoreKeepingApplyCountsExpiredLeases(t *testing.T, newStore RestoreFa
 
 	if result.ExpiredUpdateLeases != 1 {
 		t.Errorf("expired update leases = %d, want 1 (the running update)", result.ExpiredUpdateLeases)
+	}
+}
+
+// testRestoreSwapRecordsExpiredLeases proves that ApplyRestoreArea records the
+// count of the update leases that the swap expired in the result of its swap
+// step. The restore reads the count from that record to write its audit
+// entry, so a swap that records a wrong count hides the expired leases.
+func testRestoreSwapRecordsExpiredLeases(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	for _, keepAccess := range []bool{false, true} {
+		r := newStagedRestoreWith(t, newStore, func(t *testing.T, src BackupStore) {
+			t.Helper()
+
+			updates, ok := src.(UpdatesStore)
+			if !ok {
+				t.Skip("the store has no update port")
+			}
+
+			// The seeded backup holds the namespace acme, so the stacks go in
+			// another namespace.
+			ns := newNamespace(t, updates, "initech")
+			st := newStack(ns.Name, "web", "prod")
+
+			if err := updates.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+				t.Fatalf("create stack: %v", err)
+			}
+
+			f := fixture{s: updates, ref: st.Ref, fence: ns.Fence()}
+			f.run(t, f.ref, "u1", mutating())
+			f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
+		})
+
+		area := r.stage(t, r.held.Claim.Token)
+
+		if err := r.dst.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+			t.Fatalf("enter maintenance mode: %v", err)
+		}
+
+		swap := r.held.Claim.Step(backup.RestoreStepSwap)
+
+		if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, keepAccess); err != nil {
+			t.Fatalf("keepAccess=%v: swap: %v", keepAccess, err)
+		}
+
+		op, err := r.dst.DurableOperationsPort().Get(t.Context(), r.held.ID)
+		if err != nil {
+			t.Fatalf("keepAccess=%v: get operation: %v", keepAccess, err)
+		}
+
+		rec, ok := op.Step(backup.RestoreStepSwap)
+		if !ok {
+			t.Fatalf("keepAccess=%v: operation has the steps %+v, want the swap step", keepAccess, op.Steps)
+		}
+
+		kept, err := backup.DecodeRestoreSwap(rec.Result)
+		if err != nil {
+			t.Fatalf("keepAccess=%v: decode the swap step %q: %v", keepAccess, rec.Result, err)
+		}
+
+		// One update runs in the backup. The update that ended adds nothing.
+		if kept.ExpiredUpdateLeases != 1 {
+			t.Errorf("keepAccess=%v: expired update leases in the swap record = %d, want 1 (the running update)",
+				keepAccess, kept.ExpiredUpdateLeases)
+		}
 	}
 }
 

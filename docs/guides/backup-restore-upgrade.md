@@ -238,8 +238,9 @@ client that holds the old lease token cannot renew the lease, save a
 checkpoint or complete the update: each call answers 401 with the error code
 `update.lease-expired`. To unlock the stack, run `pulumi cancel` on it. The
 cancel ends the update as canceled and builds its checkpoint from the journal,
-as for any update whose lease ran out. The audit log holds one entry of the
-restore that gives the count of the expired leases.
+as for any update whose lease ran out. When the restore expired at least one
+lease, the audit log holds one entry of the restore that gives the count of the
+expired leases.
 
 The server checks the key that it started with before it writes anything. The
 `opendustpan restore` command does not read `DUSTPAN_KEY_ENCRYPTION_KEY`. When

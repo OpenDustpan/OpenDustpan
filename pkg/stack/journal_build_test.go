@@ -720,6 +720,29 @@ func TestRestoredUpdateLeaseStops(t *testing.T) {
 		t.Errorf("complete with the old token: %v, want ErrLeaseExpired", err)
 	}
 
+	// The writes of an update that runs also stop: the journal, the events and
+	// the checkpoint delta each check the lease again.
+	for _, call := range []struct {
+		name string
+		do   func() error
+	}{
+		{"append journal", func() error {
+			return f.svc.AppendJournal(ctx, f.ref, s.Update.ID, s.Token, []byte(`{"entries":[]}`))
+		}},
+		{"append events", func() error {
+			events := []stack.Event{{Timestamp: clk.Now(), Payload: []byte(`{}`), Sequence: 0}}
+
+			return f.svc.AppendEvents(ctx, f.ref, s.Update.ID, s.Token, events)
+		}},
+		{"save checkpoint delta", func() error {
+			return f.svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, deltaOf(2, "{}", "[]"))
+		}},
+	} {
+		if err = call.do(); !errors.Is(err, stack.ErrLeaseExpired) {
+			t.Errorf("%s with the old token: %v, want ErrLeaseExpired", call.name, err)
+		}
+	}
+
 	got, err := f.svc.Active(ctx, f.ref)
 	if err != nil {
 		t.Fatalf("active update after the lease stopped: %v, want the running update", err)
