@@ -240,7 +240,11 @@ func (c *guideCurl) setOption(option, value string) bool {
 	case "-X":
 		c.method = value
 	case "-H":
-		k, v, _ := strings.Cut(value, ": ")
+		k, v, ok := strings.Cut(value, ": ")
+		if !ok || k == "" {
+			return false
+		}
+
 		c.header[k] = v
 	case "-d":
 		c.data = value
@@ -251,4 +255,32 @@ func (c *guideCurl) setOption(option, value string) bool {
 	}
 
 	return true
+}
+
+// TestGuideCurlSetOption checks that the parser refuses a -H value without
+// the ": " separator, so that no request goes out without its header.
+func TestGuideCurlSetOption(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, option, value string
+		want                bool
+	}{
+		{"header with separator", "-H", "Content-Type: application/json", true},
+		{"header without separator", "-H", "Content-Type application/json", false},
+		{"header with colon and no space", "-H", "Content-Type:application/json", false},
+		{"header with empty name", "-H", ": application/json", false},
+		{"unknown option", "--data-raw", "x", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := guideCurl{method: http.MethodGet, url: "", data: "", archive: "", header: map[string]string{}}
+			if got := c.setOption(tt.option, tt.value); got != tt.want {
+				t.Fatalf("setOption(%q, %q) = %v, want %v", tt.option, tt.value, got, tt.want)
+			}
+		})
+	}
 }
