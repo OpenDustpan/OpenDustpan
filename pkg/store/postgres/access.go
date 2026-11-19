@@ -101,6 +101,15 @@ func (r grantReads) GetPrincipal(ctx context.Context, id string) (principal.Prin
 
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
+	// Defense in depth: the service mints the ID and the CHECK constraint of
+	// the grants table refuses a bad one too. This check stays so that an ID
+	// from a bad generator answers a domain error and never a driver error.
+	// It does not rely on the service or on the constraint. The text holds no
+	// part of the ID.
+	if !access.ValidGrantID(g.ID) {
+		return fmt.Errorf("%w: the grant ID is not a grant ID", access.ErrInvalid)
+	}
+
 	kind, ok := access.KindOf(g.Object)
 	if !ok {
 		return fmt.Errorf("%w: object %q takes no grant", access.ErrInvalid, g.Object.String())

@@ -437,7 +437,7 @@ func (s *Service) Revoke(
 
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	if obj, err = s.existingObject(ctx, obj); err != nil {
@@ -445,7 +445,7 @@ func (s *Service) Revoke(
 	}
 
 	if !sameTarget(g.Object, obj) {
-		return Grant{}, fmt.Errorf("revoke grant %q on %q: %w", id, obj.String(), ErrNotFound)
+		return Grant{}, revokeReadError(ErrNotFound)
 	}
 
 	return s.revokeStored(ctx, e, caller, g, id)
@@ -468,7 +468,7 @@ func (s *Service) RevokeByID(ctx context.Context, e audit.Entry, caller identity
 
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	return s.revokeStored(ctx, e, caller, g, id)
@@ -679,6 +679,14 @@ func ValidGrantID(id string) bool {
 // audit entry. It wraps ErrInvalid.
 func errBadGrantID() error {
 	return fmt.Errorf("%w: the grant ID is not a grant ID", ErrInvalid)
+}
+
+// revokeReadError wraps the error of the read of the grant to revoke. The
+// text holds no part of the ID and no object, so every unknown grant, and a
+// grant on another object, answers with the same text, and a caller cannot
+// tell them apart. It keeps the sentinel of err.
+func revokeReadError(err error) error {
+	return fmt.Errorf("revoke grant: %w", err)
 }
 
 // change completes the entry of the caller for one change of the record

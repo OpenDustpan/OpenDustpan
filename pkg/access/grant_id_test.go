@@ -74,7 +74,14 @@ func TestServiceRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 
 	for name, call := range calls {
 		for _, id := range accesstest.HostileGrantIDs() {
+			before := counting.reads.Load()
+
 			err := call(id)
+
+			if n := counting.reads.Load() - before; n != 0 {
+				t.Fatalf("%s(%.20q) read the store %d times, want 0", name, id, n)
+			}
+
 			if !errors.Is(err, access.ErrInvalid) {
 				t.Fatalf("%s(%.20q) = %v, want ErrInvalid", name, id, err)
 			}

@@ -766,7 +766,7 @@ func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (id
 	if errors.Is(err, access.ErrNotFound) {
 		h.auditGrantRefusal(r, p, id)
 
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+		return identity.Object{}, errUnknownGrant()
 	}
 
 	if err != nil {
@@ -777,12 +777,12 @@ func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (id
 	if !known {
 		h.auditGrantRefusal(r, p, id)
 
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+		return identity.Object{}, errUnknownGrant()
 	}
 
 	if authErr := h.guard.Authorize(r.Context(), r, p, actions.read, g.Object); authErr != nil {
 		if errors.Is(authErr, identity.ErrDenied) {
-			return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+			return identity.Object{}, errUnknownGrant()
 		}
 
 		return identity.Object{}, fmt.Errorf("authorize %s: %w", actions.read, authErr)
@@ -829,7 +829,10 @@ func (h *Handler) serveRevokeGrantByID(
 
 	actions, known := grantAccessActions(obj)
 	if !known {
+		// The same refusal and the same failure entry as an ID that is not
+		// a grant ID. The object of the entry is the ID of the request.
 		h.writeError(ctx, w, errUnknownGrant())
+		h.auditGrantRefusal(r, p, id)
 
 		return
 	}
