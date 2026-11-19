@@ -301,7 +301,11 @@ CREATE TABLE roles (
 ) STRICT;
 
 CREATE TABLE grants (
-    id            TEXT    NOT NULL PRIMARY KEY,
+    id            TEXT    NOT NULL PRIMARY KEY CHECK (
+        length(CAST(id AS BLOB)) BETWEEN 5 AND 64 AND length(CAST(id AS BLOB)) = length(id)
+        AND id GLOB 'grt-?*'
+        AND id NOT GLOB '*[^A-Za-z0-9_.-]*'
+    ),
     subject       TEXT    NOT NULL,
     subject_kind  TEXT    NOT NULL,
     subject_id    TEXT    NOT NULL,
