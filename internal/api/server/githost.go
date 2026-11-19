@@ -34,6 +34,7 @@ import (
 // Paths of the Git host routes.
 const (
 	gitHostAppPath           = "/api/dustpan/v1/git-host-apps/{kind}"
+	gitHostConfirmPath       = gitHostAppPath + "/confirm-rotation"
 	gitHostInstallationsPath = "/api/dustpan/v1/git-host-installations"
 	gitHostInstallationPath  = "/api/dustpan/v1/git-host-installations/{installation_id}"
 	gitHostConnectionsPath   = "/api/dustpan/v1/namespaces/{namespace}/git-host-connections"
@@ -106,6 +107,7 @@ func (h *Handler) gitHostInstallationRoutes() []Route {
 		row(http.MethodGet, gitHostAppPath, read, h.readGitHostApp),
 		row(http.MethodPut, gitHostAppPath, manage, h.putGitHostApp),
 		row(http.MethodDelete, gitHostAppPath, manage, h.deleteGitHostApp),
+		row(http.MethodPost, gitHostConfirmPath, manage, h.confirmGitHostRotation),
 		row(http.MethodGet, gitHostInstallationsPath, read, h.listGitHostInstallations),
 		row(http.MethodGet, gitHostInstallationPath, read, h.readGitHostInstallation),
 		row(http.MethodPut, gitHostInstallationPath, manage, h.putGitHostInstallation),
@@ -202,6 +204,8 @@ func classifyGitHostConflict(err error) (failure, bool) {
 	case errors.Is(err, forge.ErrConnectionExists), errors.Is(err, forge.ErrConnectionLimit),
 		errors.Is(err, forge.ErrDefaultConnection), errors.Is(err, forge.ErrRegistrationInUse):
 		return fail(http.StatusConflict, rootText(err)), true
+	case errors.Is(err, forge.ErrNoRotation):
+		return failCoded(http.StatusConflict, forge.ErrNoRotation.Error(), errcode.GitHostAppNoRotation), true
 	case errors.Is(err, forge.ErrVersionConflict):
 		return fail(http.StatusPreconditionFailed, forge.ErrVersionConflict.Error()), true
 	default:

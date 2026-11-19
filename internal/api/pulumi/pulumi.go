@@ -1182,6 +1182,10 @@ func (h *Handler) logRefusal(ctx context.Context, err error) {
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
 	case errors.Is(err, namespace.ErrFenced):
 		h.logger.WarnContext(ctx, "write fenced", slog.String("error", err.Error()))
+	case errors.Is(err, collection.ErrNoCollection):
+		// A write with a lease token has no principal to record. The log
+		// names the refusal for the operator.
+		h.logger.WarnContext(ctx, "write refused: stack in no collection", slog.String("error", err.Error()))
 	default:
 	}
 }
@@ -1329,6 +1333,8 @@ func classifyPlacement(err error) (failure, bool) {
 		return coded(http.StatusUnprocessableEntity, err.Error(), errcode.PlacementNoMatch), true
 	case errors.Is(err, errPlacementOff), errors.Is(err, stack.ErrPlacementUnsupported):
 		return coded(http.StatusNotImplemented, err.Error(), errcode.PlacementUnavailable), true
+	case errors.Is(err, collection.ErrNoCollection):
+		return coded(http.StatusConflict, collection.ErrNoCollection.Error(), errcode.UnitNoCollection), true
 	case errors.Is(err, collection.ErrPlacementCollectionMissing):
 		// The rule names a collection that does not exist (any more).
 		return coded(http.StatusConflict, err.Error(), errcode.CollectionNotFound), true

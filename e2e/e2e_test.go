@@ -1297,6 +1297,10 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
 		pulumiUnitWithoutCollectionRefused(t, env)
 	})
+
+	t.Run("stack_in_no_collection_is_refused", func(t *testing.T) {
+		pulumiStackInNoCollectionRefused(t, env, org)
+	})
 }
 
 // pulumiRenameWithCheckpointScenario proves that a stack with a checkpoint and

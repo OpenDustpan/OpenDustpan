@@ -55,6 +55,11 @@ type serverProc struct {
 
 	healthy atomic.Bool
 
+	// probe sends the readiness probes of this process. It has its own
+	// transport, so that the close of its idle connections cannot break a
+	// connection of another sender in this process.
+	probe *http.Client
+
 	mu   sync.Mutex
 	port int
 	// gen counts the changes of state by start and stop. A probe may set the
@@ -88,7 +93,8 @@ func newServerProc(spec procSpec) *serverProc {
 	return &serverProc{
 		index: spec.index, bin: spec.bin, args: spec.args, env: spec.env, dir: spec.dir,
 		startTimeout: spec.startTimeout, stopTimeout: spec.stopTimeout,
-		healthy: atomic.Bool{}, mu: sync.Mutex{}, port: spec.port, gen: 0, stopping: false, runs: 0, logPath: "",
+		healthy: atomic.Bool{}, probe: &http.Client{Transport: &http.Transport{DisableKeepAlives: true}},
+		mu: sync.Mutex{}, port: spec.port, gen: 0, stopping: false, runs: 0, logPath: "",
 		cmd: nil, done: nil, exitErr: nil,
 	}
 }
@@ -196,7 +202,7 @@ func (p *serverProc) waitReady(ctx context.Context, done <-chan struct{}) error 
 	deadline := time.Now().Add(p.startTimeout)
 
 	for time.Now().Before(deadline) {
-		if port, bound := portFromLog(p.logTail(logWindow)); bound && p.accept(port) && probeReady(ctx, p.url()) {
+		if port, bound := portFromLog(p.logTail(logWindow)); bound && p.accept(port) && p.probeReady(ctx) {
 			p.markReady()
 
 			return nil
@@ -391,12 +397,12 @@ func portFromLog(logs string) (int, bool) {
 	return 0, false
 }
 
-// probeReady reports whether base answers 200 on /health/ready.
-func probeReady(ctx context.Context, base string) bool {
+// probeReady reports whether the process answers 200 on /health/ready.
+func (p *serverProc) probeReady(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health/ready", http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url()+"/health/ready", http.NoBody)
 	if err != nil {
 		return false
 	}
@@ -404,7 +410,7 @@ func probeReady(ctx context.Context, base string) bool {
 	// One connection for each probe: no idle connection stays after the run.
 	req.Close = true
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := p.probe.Do(req)
 	if err != nil {
 		return false
 	}
@@ -525,7 +531,7 @@ func (b *balancer) watch(ctx context.Context) {
 					// that start and stop set; only a running process is checked.
 					if proc.pid() != 0 {
 						gen := proc.generation()
-						proc.setHealthyIf(gen, probeReady(ctx, proc.url()))
+						proc.setHealthyIf(gen, proc.probeReady(ctx))
 					}
 				})
 			}

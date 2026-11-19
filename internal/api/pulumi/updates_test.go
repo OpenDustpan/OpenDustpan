@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -75,7 +77,24 @@ type memUpdateStore struct {
 	// stacks resolves the stack ID of the item key of a new update, as the
 	// Stacks of the update service does.
 	stacks stack.CheckpointStacks
-	mu     sync.Mutex
+	// placement, when set, makes the store refuse the writes of a stack in no
+	// collection, as the real stores do in their transaction.
+	placement *placementSwitch
+	mu        sync.Mutex
+}
+
+// placementSwitch is the collection membership of a test: every stack is in a
+// collection until Unplace runs.
+type placementSwitch struct {
+	unplaced atomic.Bool
+}
+
+// Unplace moves every stack of the test out of its collection.
+func (p *placementSwitch) Unplace() { p.unplaced.Store(true) }
+
+// CollectionOf implements stack.Membership.
+func (p *placementSwitch) CollectionOf(context.Context, stack.Ref) (string, bool, error) {
+	return "c-test", !p.unplaced.Load(), nil
 }
 
 func newMemUpdateStore() *memUpdateStore {
@@ -88,6 +107,7 @@ func newMemUpdateStore() *memUpdateStore {
 		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
 		seqs:         map[stack.UpdateID][]int64{},
 		stacks:       nil,
+		placement:    nil,
 		mu:           sync.Mutex{},
 	}
 }
@@ -95,6 +115,10 @@ func newMemUpdateStore() *memUpdateStore {
 func (m *memUpdateStore) CreateUpdate(
 	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
 ) error {
+	if err := m.refusePlacement(u.Ref); err != nil {
+		return err
+	}
+
 	st, err := m.stacks.GetStack(ctx, u.Ref)
 	if err != nil {
 		return err
@@ -131,6 +155,10 @@ func (m *memUpdateStore) GetUpdate(_ context.Context, ref stack.Ref, id stack.Up
 }
 
 func (m *memUpdateStore) StartUpdate(_ context.Context, u stack.Update, _ namespace.Fence) (stack.Update, error) {
+	if err := m.refusePlacement(u.Ref); err != nil {
+		return stack.Update{}, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -218,6 +246,10 @@ func (m *memUpdateStore) ListUpdates(_ context.Context, ref stack.Ref, _ stack.P
 }
 
 func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) (bool, error) {
+	if err := m.refusePlacement(cp.Ref); err != nil {
+		return false, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -461,6 +493,16 @@ func (m *memUpdateStore) ListEvents(
 	return out, nil
 }
 
+// refusePlacement is the check of the real stores: a write to a stack in no
+// collection fails with collection.ErrNoCollection.
+func (m *memUpdateStore) refusePlacement(ref stack.Ref) error {
+	if m.placement != nil && m.placement.unplaced.Load() {
+		return fmt.Errorf("write to stack %s: %w", ref, collection.ErrNoCollection)
+	}
+
+	return nil
+}
+
 // resolving sets the stack resolver of m and returns m.
 func (m *memUpdateStore) resolving(stacks stack.CheckpointStacks) *memUpdateStore {
 	m.stacks = stacks
@@ -601,7 +643,16 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{manual: nil, checker: nil, limit: limit, cutoff: cutoff, replayer: nil, guard: nil},
+		fixtureOptions{
+			manual:    nil,
+			checker:   nil,
+			limit:     limit,
+			cutoff:    cutoff,
+			replayer:  nil,
+			guard:     nil,
+			placer:    nil,
+			placement: nil,
+		},
 	)
 }
 
@@ -618,6 +669,12 @@ type fixtureOptions struct {
 	// guard is the state guard of the handler. Nil gives the guard of
 	// stategate.Off.
 	guard stategate.Guard
+	// placer is the Placer of the handler. Nil gives a Placer whose
+	// collections hold every unit.
+	placer *pulumi.Placer
+	// placement is the collection membership of the update service and of the
+	// update store. Nil puts every stack in a collection.
+	placement *placementSwitch
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -663,7 +720,14 @@ func newUpdateFixtureWithAuthenticator(
 	sealer := secrettest.NewMemorySealer()
 	auditLog := newTestAudit()
 
+	var membership stack.Membership = stacktest.PlacedAll()
+	if opts.placement != nil {
+		membership = opts.placement
+		mem.placement = opts.placement
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         membership,
 		Sealer:             sealer,
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        opts.manual,
@@ -691,8 +755,13 @@ func newUpdateFixtureWithAuthenticator(
 		guard = opts.guard
 	}
 
+	placer := opts.placer
+	if placer == nil {
+		placer = newFake().placer()
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  placer,
 		StateGuard:              guard,
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -2933,6 +3002,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -2956,7 +3026,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,

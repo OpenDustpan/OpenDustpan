@@ -28,6 +28,11 @@ func portableGitHostTables() []PortableTable {
 				{Name: portColVersion, Kind: KindInteger},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
+				// The three columns of the old event secret hold null while no
+				// rotation window is open.
+				{Name: "old_event_secret_ends_at_ms", Kind: KindTime},
+				{Name: "old_event_secret_set_id", Kind: KindText},
+				{Name: "old_sealed_event_secret", Kind: KindBytes},
 			},
 		},
 		{

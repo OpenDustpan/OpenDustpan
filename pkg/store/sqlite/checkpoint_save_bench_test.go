@@ -157,6 +157,12 @@ func openBenchSaveStore(b *testing.B) *benchSaveFixture {
 		b.Fatalf("create stack: %v", err)
 	}
 
+	// A state write to a stack in no collection is refused, so the bench puts
+	// the stack in a collection first.
+	if err = storetest.PlaceStackCtx(ctx, s, ref); err != nil {
+		b.Fatalf("place stack: %v", err)
+	}
+
 	return &benchSaveFixture{store: s, ref: ref, fence: ns.Fence(), nsID: ns.ID, stackID: stackID}
 }
 

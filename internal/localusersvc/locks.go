@@ -281,14 +281,15 @@ func (s *Service) Locks(ctx context.Context, a Actor, principalID string) ([]Loc
 // Unlock ends every count and lock of the name of the local user of the
 // person principalID, in both scopes, and writes the audit entry with the
 // reason. It returns how many counts it cleared, localuser.ErrReasonRequired
-// for no reason, localuser.ErrNotFound for a person with no local user, and
+// for no reason, audit.ErrInvalidReason for a reason that the audit log
+// refuses, localuser.ErrNotFound for a person with no local user, and
 // localuser.ErrOutsideReach when the reach of a does not cover the reach of
 // the person: an unlock lets more guesses reach the password of the person.
 func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason string) (int64, error) {
 	object := principal.Ref(principalID)
 
 	if err := validReason(reason); err != nil {
-		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "no reason", err)
+		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), reasonCause(err), err)
 	}
 
 	u, err := s.store.UserByPrincipal(ctx, principalID)

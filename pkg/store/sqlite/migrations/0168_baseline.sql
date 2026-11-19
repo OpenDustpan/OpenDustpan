@@ -1035,7 +1035,12 @@ CREATE TABLE git_host_app_registrations (
     address_digest             TEXT    NOT NULL,
     version                    INTEGER NOT NULL CHECK (version >= 1),
     created_at_ms              INTEGER NOT NULL,
-    updated_at_ms              INTEGER NOT NULL
+    updated_at_ms              INTEGER NOT NULL,
+    old_event_secret_ends_at_ms INTEGER,
+    old_event_secret_set_id     TEXT,
+    old_sealed_event_secret     BLOB,
+    CHECK ((old_event_secret_ends_at_ms IS NULL) = (old_event_secret_set_id IS NULL)
+       AND (old_event_secret_set_id IS NULL) = (old_sealed_event_secret IS NULL))
 ) STRICT;
 
 CREATE TABLE git_host_installations (
@@ -1059,6 +1064,19 @@ CREATE TABLE git_host_connections (
     created_at_ms   INTEGER NOT NULL,
     updated_at_ms   INTEGER NOT NULL,
     PRIMARY KEY (namespace_id, id)
+) STRICT;
+
+CREATE TABLE git_host_event_receipts (
+    kind            TEXT    NOT NULL,
+    delivery_id     TEXT    NOT NULL,
+    body_digest     TEXT    NOT NULL,
+    installation_id TEXT    NOT NULL,
+    event_kind      TEXT    NOT NULL,
+    repo            TEXT    NOT NULL,
+    review_id       TEXT    NOT NULL,
+    received_at_ms  INTEGER NOT NULL,
+    PRIMARY KEY (kind, delivery_id),
+    UNIQUE (kind, body_digest)
 ) STRICT;
 
 CREATE TABLE item_keys (
@@ -1808,6 +1826,8 @@ CREATE INDEX git_host_installations_namespace ON git_host_installations (namespa
 CREATE UNIQUE INDEX git_host_connections_installation ON git_host_connections (namespace_id, kind, installation_id);
 
 CREATE UNIQUE INDEX git_host_connections_default ON git_host_connections (namespace_id) WHERE is_default = 1;
+
+CREATE INDEX git_host_event_receipts_received ON git_host_event_receipts (received_at_ms);
 
 CREATE UNIQUE INDEX item_keys_item ON item_keys (namespace_id, scope_id, kind, item);
 

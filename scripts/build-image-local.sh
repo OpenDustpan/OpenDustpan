@@ -8,6 +8,9 @@
 #
 # Environment:
 #   IMAGE           image tag to build (default opendustpan:local)
+#   IMAGE_VERSION   version that the binary prints for --version, passed as the
+#                   build argument VERSION (default dev); letters, digits, dot,
+#                   plus and dash, 1 to 64 characters, for example v0.1.0
 #   CONSOLE_URL     https: URL of a console release tarball (default: placeholder)
 #   CONSOLE_SHA256  tarball checksum (required with CONSOLE_URL)
 #   EXTRA_CA_FILE   optional PEM bundle file with one more CA to trust during
@@ -21,6 +24,17 @@ IMAGE="${IMAGE:-opendustpan:local}"
 CONSOLE_URL="${CONSOLE_URL:-}"
 CONSOLE_SHA256="${CONSOLE_SHA256:-}"
 TARBALL="$ROOT/console-local.tgz"
+
+# The version of the image. It goes into a shell line of the Dockerfile, so the
+# script refuses a value outside the allowlist before any docker call. The
+# check refuses and never edits the value. Defense in depth: the Dockerfile
+# checks VERSION too; this check stays so that no docker call runs for a bad
+# value, and it does not rely on the Dockerfile check.
+IMAGE_VERSION="${IMAGE_VERSION-dev}"
+if ! (LC_ALL=C; [[ "$IMAGE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$ ]]); then
+  echo "build-image-local: IMAGE_VERSION must be 1 to 64 characters: letters, digits, dot, plus and dash, and it must start with a letter or a digit; for example IMAGE_VERSION=v0.1.0" >&2
+  exit 1
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"; rm -f "$TARBALL"' EXIT
@@ -49,7 +63,7 @@ if [ -n "${DOCKER_BUILD_NETWORK:-}" ]; then
 fi
 
 docker build -t "$IMAGE" \
-  --build-arg VERSION=dev \
+  --build-arg VERSION="$IMAGE_VERSION" \
   --build-arg CONSOLE_URL="$CONSOLE_URL" \
   --build-arg CONSOLE_SHA256="$CONSOLE_SHA256" \
   ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \

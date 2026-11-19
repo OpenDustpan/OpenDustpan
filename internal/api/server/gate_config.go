@@ -33,7 +33,8 @@ type GateConfig interface {
 // ApprovalConfig is the part of GateConfig for the approval defaults and the
 // approval rules of a namespace.
 type ApprovalConfig interface {
-	// ApprovalDefault returns the approval default of scope, or gate.ErrNotFound.
+	// ApprovalDefault returns the approval default of scope, gate.ErrNotFound when scope sets none, or
+	// namespace.ErrNotFound for a namespace that does not exist.
 	ApprovalDefault(ctx context.Context, scope gate.Scope) (gate.ApprovalDefault, error)
 	// PutApprovalDefault stores d, and returns it with its new version.
 	PutApprovalDefault(
@@ -44,9 +45,11 @@ type ApprovalConfig interface {
 	) (gate.ApprovalDefault, error)
 	// DeleteApprovalDefault removes the approval default of scope at version prev.
 	DeleteApprovalDefault(ctx context.Context, scope gate.Scope, prev int64, e audit.Entry) error
-	// ApprovalRules returns the approval rules stored at scope, ordered by ID.
+	// ApprovalRules returns the approval rules stored at scope, ordered by ID, or namespace.ErrNotFound for a
+	// namespace that does not exist.
 	ApprovalRules(ctx context.Context, scope gate.Scope) ([]gate.ApprovalRule, error)
-	// ApprovalRule returns one approval rule of scope, or gate.ErrNotFound.
+	// ApprovalRule returns one approval rule of scope, gate.ErrNotFound when scope holds no such rule, or
+	// namespace.ErrNotFound for a namespace that does not exist.
 	ApprovalRule(ctx context.Context, scope gate.Scope, id gate.ID) (gate.ApprovalRule, error)
 	// PutApprovalRule stores r, and returns it with its new version.
 	PutApprovalRule(ctx context.Context, r gate.ApprovalRule, prev int64, e audit.Entry) (gate.ApprovalRule, error)
@@ -400,7 +403,7 @@ func (h *Handler) writeApprovalDefault(
 
 // removeApprovalDefault serves DELETE /api/dustpan/v1/namespaces/{namespace}/approval-default.
 // It answers 204, also when the namespace sets no default. With If-Match, it
-// removes that version only.
+// removes that version only. A namespace that does not exist answers 404.
 func (h *Handler) removeApprovalDefault(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {

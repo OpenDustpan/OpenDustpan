@@ -69,6 +69,7 @@ func newUpdateFixtureWithAddressGate(
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -92,7 +93,7 @@ func newUpdateFixtureWithAddressGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -259,6 +260,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 	mem := newMemUpdateStore()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -295,7 +297,7 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 	t.Helper()
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
