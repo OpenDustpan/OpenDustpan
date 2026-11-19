@@ -99,3 +99,16 @@ const MaskedMaxMarkers = maskedMaxMarkers
 func MaskedStateAndOutputPaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
 	return maskedStatePaths(ctx, state, marks)
 }
+
+// MaskedPageAt answers the page of paths that starts at offset, as the masked
+// read does after the cursor check. The tests call it with an offset that a
+// signed cursor never holds, to reach the guard against a negative offset.
+func MaskedPageAt(key []byte, paths []string, offset int) (MaskedPage, error) {
+	return maskedPageOf(paths, offset, key, maskedBinding{Unit: "", Version: "sv-1", Subject: ""}, time.Unix(0, 0))
+}
+
+// MaskedStatePaths returns the masked set of state with the sensitive outputs
+// added, as the masked read builds it, for the tests.
+func MaskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	return maskedStatePaths(ctx, state, marks)
+}

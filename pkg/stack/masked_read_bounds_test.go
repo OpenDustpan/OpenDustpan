@@ -288,7 +288,7 @@ func chainSecretsDoc(depth, n int) []byte {
 func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
 	// The counter holds the allocations of the whole process, so no other test
 	// may run at the same time. t.Setenv forbids t.Parallel, so the test runs alone.
-	t.Setenv("DUSTPAN_ALLOC_TEST", "1")
+	t.Setenv("DUSTPAN_TEST_ALLOC", "1")
 
 	// The decode of the document alone allocates about 11 MB. A build of the
 	// paths adds more than 30 MB, so the bound sits between the two.
@@ -671,5 +671,32 @@ func TestMaskedReadSkipsRunningJournal(t *testing.T) {
 	page, err := read(stack.StateSelector{Latest: true, Version: 0})
 	if err != nil || page.Version != "1" {
 		t.Fatalf("latest read: page %+v, err %v, want the stored version 1", page, err)
+	}
+}
+
+// TestVerifyCursorRefusesNegativeOffset proves the check of the cursor refuses
+// a signed cursor that is bound to the caller and holds a negative offset, with
+// no help from the page guard: the check is called alone.
+func TestVerifyCursorRefusesNegativeOffset(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, offset := range []int{-1, -1000} {
+		raw := mintCursor(t, testCursorKey(), testCursor{
+			unit: "u", version: "1", subject: "s", offset: offset, expiry: now.Add(time.Minute),
+		})
+
+		if _, err := stack.VerifyCursorOffset(testCursorKey(), raw, "u", "1", "s", now); !errors.Is(err, stack.ErrBadPath) {
+			t.Fatalf("offset %d: err = %v, want the bad path of the read", offset, err)
+		}
+	}
+
+	valid := mintCursor(t, testCursorKey(), testCursor{
+		unit: "u", version: "1", subject: "s", offset: 2, expiry: now.Add(time.Minute),
+	})
+
+	if got, err := stack.VerifyCursorOffset(testCursorKey(), valid, "u", "1", "s", now); err != nil || got != 2 {
+		t.Fatalf("valid cursor: offset %d, err %v, want 2 and nil", got, err)
 	}
 }

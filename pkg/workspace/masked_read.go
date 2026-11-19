@@ -486,7 +486,7 @@ func maskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) (
 	// resources; this check bounds the markers with the sensitive outputs added,
 	// so it does not rely on those checks.
 	if len(paths) > maskedMaxMarkers {
-		return nil, fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+		return nil, fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, len(paths), maskedMaxMarkers)
 	}
 
 	if ctx.Err() != nil {
@@ -525,6 +525,12 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 		return nil, fmt.Errorf("%w: resources has an entry that the server cannot read", ErrUnreadableState)
 	}
 
+	for _, entry := range entries {
+		if err := checkTofuInstanceShapes(entry.obj, marks); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := maskedCheckWork(entries, marks); err != nil {
 		return nil, err
 	}
@@ -552,7 +558,7 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 	// The copies of a masked secret add markers that the pointers did not
 	// count, so the count is checked after the masking too.
 	if len(masked) > maskedMaxMarkers {
-		return nil, fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+		return nil, fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, len(masked), maskedMaxMarkers)
 	}
 
 	return masked, nil
@@ -647,6 +653,10 @@ func (w *maskedWork) addInstance(
 		pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
 		w.markers += len(pointers)
 
+		if w.markers > maskedMaxMarkers {
+			return fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, w.markers, maskedMaxMarkers)
+		}
+
 		for _, relative := range pointers {
 			if value, found := lookupPointer(attributes, relative); found && propagableSecret(value) {
 				secrets++
@@ -697,7 +707,7 @@ func (w *maskedWork) walk(v any, pathLen int) error {
 	}
 
 	if w.markers > maskedMaxMarkers {
-		return fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+		return fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, w.markers, maskedMaxMarkers)
 	}
 
 	return nil
@@ -735,8 +745,10 @@ func maskedOutputPaths(state []byte) ([]string, error) {
 		} `json:"outputs"`
 	}
 
+	// The text of a decode error names the key of the output, so the error
+	// carries a fixed text and no wrapped decode error.
 	if err := json.Unmarshal(state, &doc); err != nil {
-		return nil, fmt.Errorf("decode outputs: %w", err)
+		return nil, fmt.Errorf("%w: outputs has a shape that the server cannot read", ErrUnreadableState)
 	}
 
 	var paths []string

@@ -103,7 +103,7 @@ accepts.
 | 404 | `unit.not-found` | The unit does not exist. |
 | 404 | `unit.no-state` | The unit has no state yet. |
 | 404 | `state-version.not-found` | The version does not exist. |
-| 413 | `state-version.too-large` | The version is larger than 5 MB, nests deeper than 100 levels, or holds more than 10000 markers. The server refuses it. |
+| 413 | `state-version.too-large` | The version is larger than 5 MB, nests deeper than 100 levels, holds more than 10000 markers, or needs more than 50,000,000 comparisons to find the copies of a secret. The server refuses it. |
 | 500 | `server.internal` | The server cannot read the shape of the version, for example an OpenTofu state that the client encrypted. The answer has no content. |
 | 504 | `state.read-timeout` | The read took more than 30 seconds. |
 
@@ -115,9 +115,7 @@ entry for each window. The answer of a refusal keeps its own status.
 - The server refuses a version larger than 5 MB before it loads the version.
 - For OpenTofu, the server loads the version in chunks of 256 KB and stops
   at 5 MB. For Pulumi, the server checks the size of the stored version
-  before it loads the version, and checks the size again after the load. A
-  Pulumi version that an update still writes through its journal is checked
-  by the size of its journal batches before the server builds it.
+  before it loads the version, and checks the size again after the load.
 - The server limits the work of one read by the shape of the state, not only
   by its size. It refuses a version with a nesting depth above 100, with more
   than 10000 markers, or whose value paths need more bytes than the limit of

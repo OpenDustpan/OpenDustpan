@@ -126,6 +126,10 @@ func verifyCursor(key []byte, raw string, want cursorPayload, now time.Time) (in
 		return 0, ErrBadPath
 	}
 
+	// Defense in depth: the signature covers the offset and the page guard
+	// refuses a negative offset too; this check stays so that a signed cursor
+	// with a negative offset never reaches the page, and it does not rely on
+	// either layer.
 	if parsed.Offset < 0 || parsed.Expiry < now.Unix() {
 		return 0, ErrBadPath
 	}

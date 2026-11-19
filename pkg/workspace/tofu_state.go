@@ -381,6 +381,42 @@ func tofuInstances(obj map[string]any) []map[string]any {
 	return out
 }
 
+// checkTofuInstanceShapes refuses a resource whose instances the masking
+// cannot read as it is: an instances value that is no array, an instance that
+// is no object, or attributes that are no object while kept marks or
+// sensitive_attributes name paths in them. It fails closed with
+// ErrUnreadableState. The text names no resource, key or value.
+func checkTofuInstanceShapes(obj map[string]any, marks SensitiveMarks) error {
+	raw, present := obj["instances"]
+	if !present {
+		return nil
+	}
+
+	list, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("%w: instances is not an array", ErrUnreadableState)
+	}
+
+	for _, elem := range list {
+		instance, ok := elem.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: an instance is not an object", ErrUnreadableState)
+		}
+
+		attributes := instance["attributes"]
+		if _, isObject := attributes.(map[string]any); isObject || attributes == nil {
+			continue
+		}
+
+		_, hasSensitive := instance["sensitive_attributes"]
+		if len(marks) > 0 || hasSensitive {
+			return fmt.Errorf("%w: attributes is not an object", ErrUnreadableState)
+		}
+	}
+
+	return nil
+}
+
 // tofuFingerprint returns the comparison shape of one resource instance: the
 // raw attributes as encoded. A changed secret still reads changed: the
 // comparison never leaks a value, only the changed flag of the list.
@@ -625,7 +661,11 @@ func ctyObjectToken(step map[string]any) (string, bool) {
 
 // tofuSensitivePointers returns the attribute-relative JSON Pointers that
 // the instance marks sensitive: each path of sensitive_attributes, and each
-// kept mark of the instance address or its resource base.
+// kept mark of the instance address or its resource base. Each pointer
+// appears once, in the order of its first appearance: a resource with no index
+// key has the same address and base, and a path can appear in
+// sensitive_attributes and in a kept mark, so the counts of the markers and of
+// the secrets of the callers use the distinct pointers.
 func tofuSensitivePointers(instance map[string]any, address, base string, marks SensitiveMarks) []string {
 	var out []string
 
@@ -644,6 +684,24 @@ func tofuSensitivePointers(instance map[string]any, address, base string, marks 
 
 	for _, key := range []string{address, base} {
 		out = append(out, marks[key]...)
+	}
+
+	return dedupePointers(out)
+}
+
+// dedupePointers returns pointers without a repeated pointer, in the order of
+// the first appearance.
+func dedupePointers(pointers []string) []string {
+	seen := make(map[string]bool, len(pointers))
+	out := pointers[:0]
+
+	for _, pointer := range pointers {
+		if seen[pointer] {
+			continue
+		}
+
+		seen[pointer] = true
+		out = append(out, pointer)
 	}
 
 	return out
@@ -924,6 +982,7 @@ const maskTickEvery = 4096
 type maskTicker struct {
 	nodes   int
 	expired func() bool
+	failed  bool
 }
 
 // newCtxTicker returns a ticker that expires when ctx is done.
@@ -942,6 +1001,19 @@ func (t *maskTicker) tick() error {
 	t.nodes++
 
 	if t.nodes%maskTickEvery == 0 && t.expired() {
+		t.failed = true
+
+		return ErrReadDeadline
+	}
+
+	return nil
+}
+
+// check answers ErrReadDeadline when the ticker expired at an earlier tick or
+// is expired now. A walk that counts few nodes never reaches a tick check, so
+// a caller that must fail closed calls check after its work.
+func (t *maskTicker) check() error {
+	if t.failed || t.expired() {
 		return ErrReadDeadline
 	}
 
@@ -1050,9 +1122,15 @@ func (p *dupPass) maskDuplicateList(list []any, path string) error {
 // maskAllLeaves replaces each leaf value under v with a marker for its path,
 // and appends each marker path to masked. Containers keep their shape. It
 // checks the context every maskTickEvery nodes and answers ErrReadDeadline.
-func maskAllLeaves(v any, base string, masked *[]string, ticker *maskTicker) (any, error) {
+func maskAllLeaves(v any, base string, masked *[]string, ticker *maskTicker, skip map[string]bool) (any, error) {
 	if err := ticker.tick(); err != nil {
 		return nil, err
+	}
+
+	// A value that sensitive_attributes masked already holds its marker: the
+	// walk leaves it as it is, so no key below it reaches a marker path.
+	if skip[base] {
+		return v, nil
 	}
 
 	switch typed := v.(type) {
@@ -1060,7 +1138,7 @@ func maskAllLeaves(v any, base string, masked *[]string, ticker *maskTicker) (an
 		out := make(map[string]any, len(typed))
 
 		for key, elem := range typed {
-			child, err := maskAllLeaves(elem, base+"/"+escapeTofuPointerToken(key), masked, ticker)
+			child, err := maskAllLeaves(elem, base+"/"+escapeTofuPointerToken(key), masked, ticker, skip)
 			if err != nil {
 				return nil, err
 			}
@@ -1073,7 +1151,7 @@ func maskAllLeaves(v any, base string, masked *[]string, ticker *maskTicker) (an
 		out := make([]any, len(typed))
 
 		for i, elem := range typed {
-			child, err := maskAllLeaves(elem, base+"/"+strconv.Itoa(i), masked, ticker)
+			child, err := maskAllLeaves(elem, base+"/"+strconv.Itoa(i), masked, ticker, skip)
 			if err != nil {
 				return nil, err
 			}
@@ -1087,6 +1165,56 @@ func maskAllLeaves(v any, base string, masked *[]string, ticker *maskTicker) (an
 
 		return newTofuMarker(base), nil
 	}
+}
+
+// maskUnmarkedInstance masks one instance with no kept marks for its version:
+// each path of sensitive_attributes answers as one marker, and every other
+// attribute value answers as a marker of its own. No key below a path of
+// sensitive_attributes reaches a marker path, as the whole value is secret.
+func maskUnmarkedInstance(
+	ticker *maskTicker, instance map[string]any, attributes any, base string,
+) (any, []string, error) {
+	var masked []string
+
+	var secrets []any
+
+	var applied [][]string
+
+	seen := map[string]bool{}
+	collectors := maskCollectors{seen: seen, masked: &masked, secrets: &secrets, applied: &applied}
+
+	// Only sensitive_attributes names a pointer here: there are no kept marks.
+	for _, relative := range tofuSensitivePointers(instance, "", "", nil) {
+		full := base + relative
+		if seen[full] {
+			continue
+		}
+
+		maskOnePointer(attributes, relative, full, &collectors)
+	}
+
+	skip := make(map[string]bool, len(applied))
+
+	for _, route := range applied {
+		path := base
+
+		for _, token := range route {
+			path += "/" + escapeTofuPointerToken(token)
+		}
+
+		skip[path] = true
+	}
+
+	out, err := maskAllLeaves(attributes, base, &masked, ticker, skip)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if masked == nil {
+		masked = []string{}
+	}
+
+	return out, masked, nil
 }
 
 // maskCollectors carries the collectors of maskTofuInstance across one
@@ -1148,18 +1276,7 @@ func maskTofuInstance(
 	}
 
 	if len(marks) == 0 {
-		var masked []string
-
-		out, err := maskAllLeaves(attributes, base, &masked, ticker)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if masked == nil {
-			masked = []string{}
-		}
-
-		return out, masked, nil
+		return maskUnmarkedInstance(ticker, instance, attributes, base)
 	}
 
 	seen := map[string]bool{}
@@ -1239,6 +1356,10 @@ func ReadStateResource(ctx context.Context, state []byte, marks SensitiveMarks, 
 
 	position, obj, err := findTofuResource(doc, address)
 	if err != nil {
+		return StateDetail{}, err
+	}
+
+	if err := checkTofuInstanceShapes(obj, marks); err != nil {
 		return StateDetail{}, err
 	}
 
@@ -1870,8 +1991,12 @@ type tofuVersionSide struct {
 // addresses only in to, removed those only in from, and changed those in
 // both with a change. Differing holds the sorted addresses that differ in
 // any way.
-func collectTofuDiff(ticker *maskTicker, from, to tofuVersionSide) tofuDiffMismatch {
+func collectTofuDiff(ticker *maskTicker, from, to tofuVersionSide) (tofuDiffMismatch, error) {
 	var out tofuDiffMismatch
+
+	if err := ticker.check(); err != nil {
+		return tofuDiffMismatch{}, err
+	}
 
 	for address := range to.byBase {
 		if _, ok := from.byBase[address]; !ok {
@@ -1899,6 +2024,14 @@ func collectTofuDiff(ticker *maskTicker, from, to tofuVersionSide) tofuDiffMisma
 		}
 
 		entry := diffTofuResource(ticker, pair)
+
+		// Defense in depth: DiffStates checks the context too. An expired ticker
+		// makes the masked copies empty, so no entry of this resource is valid;
+		// this check does not rely on the check in DiffStates.
+		if err := ticker.check(); err != nil {
+			return tofuDiffMismatch{}, err
+		}
+
 		if len(entry.paths) == 0 && len(entry.secrets) == 0 {
 			continue
 		}
@@ -1917,7 +2050,7 @@ func collectTofuDiff(ticker *maskTicker, from, to tofuVersionSide) tofuDiffMisma
 	})
 	slices.Sort(out.differing)
 
-	return out
+	return out, nil
 }
 
 // pageTofuDiff returns the page of mismatch at offset with at most limit
@@ -2033,11 +2166,20 @@ func DiffStates(ctx context.Context, from, to StateWithMarks, cursor string, siz
 		return emptyTofuDiff(), nil
 	}
 
-	mismatch := collectTofuDiff(
+	// Fail closed: an expired context gives no diff, as a masked copy that the
+	// deadline cut short holds no marker.
+	if ctx.Err() != nil {
+		return StateDiff{}, ErrReadDeadline
+	}
+
+	mismatch, err := collectTofuDiff(
 		newCtxTicker(ctx),
 		tofuVersionSideOf(fromEntries, from.Marks),
 		tofuVersionSideOf(toEntries, to.Marks),
 	)
+	if err != nil {
+		return StateDiff{}, err
+	}
 
 	if fromSkipped || toSkipped {
 		mismatch.skipped = 1

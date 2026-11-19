@@ -610,8 +610,8 @@ func checkForgedCursor(t *testing.T) {
 	}
 }
 
-// checkCursorBinding proves a cursor that has expired, or that names another
-// caller, another unit or another version, is refused with the bad path of
+// checkCursorBinding proves a cursor that has expired, that names another
+// caller, another unit or another version, or that holds a negative offset, is refused with the bad path of
 // the read and one refusal.
 func checkCursorBinding(t *testing.T) {
 	t.Helper()
@@ -643,6 +643,11 @@ func checkCursorBinding(t *testing.T) {
 		{
 			name:   "another version",
 			cursor: testCursor{unit: r.obj.String(), version: "2", subject: r.p.Subject, offset: 0, expiry: later},
+		},
+		{
+			// Signed and bound to the caller, so only the check of the offset refuses it.
+			name:   "negative offset",
+			cursor: testCursor{unit: r.obj.String(), version: "1", subject: r.p.Subject, offset: -1, expiry: later},
 		},
 	}
 

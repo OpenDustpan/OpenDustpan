@@ -216,7 +216,7 @@ func refusedAllocation(t *testing.T, state string) uint64 {
 func TestMaskedPathsRefusalBuildsNoPath(t *testing.T) {
 	// The test counts the allocation of the process, so no other test may run
 	// at the same time. t.Setenv forbids t.Parallel, so the test runs alone.
-	t.Setenv("DUSTPAN_ALLOC_TEST", "1")
+	t.Setenv("DUSTPAN_TEST_ALLOC", "1")
 
 	const limit = 8 << 20
 
