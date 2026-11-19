@@ -63,7 +63,7 @@ type answer struct {
 	status int
 }
 
-func answerOf(rec *httptest.ResponseRecorder) answer {
+func damagedAnswerOf(rec *httptest.ResponseRecorder) answer {
 	return answer{header: rec.Header().Clone(), body: rec.Body.String(), status: rec.Code}
 }
 
@@ -82,7 +82,7 @@ func TestUnitByIDHostile(t *testing.T) {
 
 			handler := newUnitHandlerWithEntries(t, caller.authz, damagedEntries())
 
-			want := answerOf(getUnitByID(t, handler, "stk-unknown", "test-token"))
+			want := damagedAnswerOf(getUnitByID(t, handler, "stk-unknown", "test-token"))
 			if want.status != http.StatusNotFound || want.body != notFoundBody {
 				t.Fatalf("unknown ID: status %d body %q, want 404 %q", want.status, want.body, notFoundBody)
 			}
@@ -238,7 +238,7 @@ func TestUnitNotFoundFixedText(t *testing.T) {
 func checkSameAnswer(t *testing.T, rec *httptest.ResponseRecorder, want answer, stored []string) {
 	t.Helper()
 
-	got := answerOf(rec)
+	got := damagedAnswerOf(rec)
 
 	if got.status != want.status || got.body != want.body {
 		t.Errorf("status %d body %q, want status %d body %q", got.status, got.body, want.status, want.body)

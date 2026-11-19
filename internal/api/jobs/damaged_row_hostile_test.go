@@ -47,14 +47,14 @@ func jobRoutes() []jobRoute {
 	}
 }
 
-// answerOf is the status, the body and the headers of one answer.
-type answerOf struct {
+// damagedAnswerOf is the status, the body and the headers of one answer.
+type damagedAnswerOf struct {
 	code   int
 	body   string
 	header http.Header
 }
 
-func send(t *testing.T, h http.Handler, rt jobRoute, ns, id string) answerOf {
+func send(t *testing.T, h http.Handler, rt jobRoute, ns, id string) damagedAnswerOf {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), rt.method, jobPath(ns, id)+rt.suffix, strings.NewReader("{}"))
@@ -63,10 +63,10 @@ func send(t *testing.T, h http.Handler, rt jobRoute, ns, id string) answerOf {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	return answerOf{code: rec.Code, body: rec.Body.String(), header: rec.Header().Clone()}
+	return damagedAnswerOf{code: rec.Code, body: rec.Body.String(), header: rec.Header().Clone()}
 }
 
-func (a answerOf) sameAs(b answerOf) bool {
+func (a damagedAnswerOf) sameAs(b damagedAnswerOf) bool {
 	return a.code == b.code && a.body == b.body && reflect.DeepEqual(a.header, b.header)
 }
 

@@ -256,8 +256,8 @@ func (a triggerAnswer) same(b triggerAnswer) bool {
 	return a.code == b.code && a.body == b.body && reflect.DeepEqual(a.header, b.header)
 }
 
-// hostileRow is one row of the hostile table of the trigger routes.
-type hostileRow struct {
+// damagedRow is one row of the hostile table of the trigger routes.
+type damagedRow struct {
 	name string
 	path string
 	// readsStore is true when the ID is well formed, so that the store read is expected.
@@ -267,20 +267,20 @@ type hostileRow struct {
 	getOnly bool
 }
 
-func malformed(name, path string) hostileRow {
-	return hostileRow{name: name, path: path, readsStore: false, getOnly: false}
+func malformed(name, path string) damagedRow {
+	return damagedRow{name: name, path: path, readsStore: false, getOnly: false}
 }
 
-func stored(name, path string) hostileRow {
-	return hostileRow{name: name, path: path, readsStore: true, getOnly: false}
+func stored(name, path string) damagedRow {
+	return damagedRow{name: name, path: path, readsStore: true, getOnly: false}
 }
 
-func damaged(name, path string) hostileRow {
-	return hostileRow{name: name, path: path, readsStore: true, getOnly: true}
+func damaged(name, path string) damagedRow {
+	return damagedRow{name: name, path: path, readsStore: true, getOnly: true}
 }
 
-func hostileRows() []hostileRow {
-	return []hostileRow{
+func damagedRows() []damagedRow {
+	return []damagedRow{
 		malformed("another namespace in the path", triggerURL("other", netID, "trg-1")),
 		malformed("unit of another namespace", triggerURL("acme", otherID, "trg-other")),
 		stored("trigger of another unit", triggerURL("acme", netID, "trg-app")),
@@ -318,7 +318,7 @@ func TestTriggerRoutesAnswerHostileRowsLikeAnUnknownTrigger(t *testing.T) {
 
 	for _, caller := range callers {
 		for _, method := range []string{http.MethodGet, http.MethodDelete} {
-			for _, tc := range hostileRows() {
+			for _, tc := range damagedRows() {
 				if method == http.MethodDelete && tc.getOnly {
 					continue
 				}
@@ -333,7 +333,7 @@ func TestTriggerRoutesAnswerHostileRowsLikeAnUnknownTrigger(t *testing.T) {
 	}
 }
 
-func checkHostileRow(t *testing.T, holds []string, method string, tc hostileRow) {
+func checkHostileRow(t *testing.T, holds []string, method string, tc damagedRow) {
 	t.Helper()
 
 	unknownRig := newSpyRig(t, newAuthorizer(holds...), nil)
