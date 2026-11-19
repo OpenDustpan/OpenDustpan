@@ -842,7 +842,11 @@ func (s *Store) ApplyRestoreArea(
 	plan := swapPlan{
 		staging: schema, previous: previous, keepAccess: d.KeepAccessTables, keepSettings: d.KeepSettingKeys,
 		before: func(tx pgx.Tx) error {
-			return s.checkSwapStart(ctx, s.queries.WithTx(tx), f, a, staged)
+			if startErr := s.checkSwapStart(ctx, s.queries.WithTx(tx), f, a, staged); startErr != nil {
+				return startErr
+			}
+
+			return checkWidenedSetting(ctx, tx, d)
 		},
 		after: func(tx pgx.Tx, kept backup.KeepAccessResult) error {
 			// The fence comes after the copy of the durable control tables,
@@ -876,6 +880,37 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	return kept, nil
+}
+
+// checkWidenedSetting refuses a swap that widens when the live row of the
+// restore access setting does not say true. The read locks the row with FOR
+// SHARE, in the swap transaction and before the schema swap, so no write
+// changes the row before the commit. The failure is permanent.
+//
+// Defense in depth: the service checks the setting too. This check stays so
+// that a bug in swapDecision or widenedAccess, or a new caller of the store,
+// cannot replace the access tables while the setting is off. It does not rely
+// on the service, on the route or on the decoder of the swap record.
+func checkWidenedSetting(ctx context.Context, tx pgx.Tx, d backup.SwapDecision) error {
+	if !d.Widened {
+		return nil
+	}
+
+	var value string
+
+	err := tx.QueryRow(
+		ctx, `SELECT value FROM settings WHERE scope_id = $1 AND key = $2 FOR SHARE`,
+		serverScopeID, backup.SettingRestoreAccessTables,
+	).Scan(&value)
+
+	switch {
+	case err == nil && backup.EffectiveRestoreAccessSettingText(value) == "true":
+		return nil
+	case err == nil || errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("widen the swap while %s is not true: %w", backup.SettingRestoreAccessTables, backup.ErrCorrupt)
+	default:
+		return fmt.Errorf("read live setting row: %w", backup.ErrExportRead)
+	}
 }
 
 // checkSwapStart runs the checks at the start of the swap of area a with the

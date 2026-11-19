@@ -23,6 +23,7 @@ func restoreStagingCases() []restoreCase {
 		{name: "a cancel before the swap and the swap have one winner", test: testRestoreAreaSwapCanceled},
 		{name: "cleanup drops the areas of its restore and of ended restores", test: testRestoreAreaCleanup},
 		{name: "a swap keeps the live row of a kept setting key", test: testRestoreSwapKeepsSettingRow},
+		{name: "a widened swap needs the live setting to be true", test: testRestoreWidenedSwapNeedsSetting},
 		{
 			name: "a restore drops the issuer keys of each namespace of another installation",
 			test: testRestoreAreaDropsIssuerKeys,

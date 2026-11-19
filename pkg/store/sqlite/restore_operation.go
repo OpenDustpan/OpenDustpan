@@ -833,7 +833,7 @@ func (s *Store) ApplyRestoreArea(
 		before: func(ctx context.Context) error {
 			// The fence comes first, before the first change, so a cancel
 			// before the swap and the swap have one winner.
-			return s.runTx(ctx, func(q *db.Queries) error {
+			err := s.runTx(ctx, func(q *db.Queries) error {
 				var fenceErr error
 
 				row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore)
@@ -843,6 +843,11 @@ func (s *Store) ApplyRestoreArea(
 
 				return checkSwapState(ctx, q, a, path)
 			}, nil)
+			if err != nil {
+				return err
+			}
+
+			return s.checkWidenedSetting(ctx, d)
 		},
 		after: func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error {
 			recorded, recordErr := withStagedSetting(ctx, tx, d)
@@ -860,6 +865,36 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	return kept, nil
+}
+
+// checkWidenedSetting refuses a swap that widens when the live row of the
+// restore access setting does not say true. A swap that does not widen needs
+// no check. The failure is permanent: a retry decides the same way.
+//
+// Defense in depth: the service checks the setting too. This check stays so
+// that a bug in swapDecision or widenedAccess, or a new caller of the store,
+// cannot replace the access tables while the setting is off. It does not rely
+// on the service, on the route or on the decoder of the swap record.
+func (s *Store) checkWidenedSetting(ctx context.Context, d backup.SwapDecision) error {
+	if !d.Widened {
+		return nil
+	}
+
+	var value string
+
+	err := s.conn.QueryRowContext(
+		ctx, `SELECT value FROM main.settings WHERE scope_id = ? AND key = ?`,
+		serverScopeID, backup.SettingRestoreAccessTables,
+	).Scan(&value)
+
+	switch {
+	case err == nil && backup.EffectiveRestoreAccessSettingText(value) == "true":
+		return nil
+	case err == nil || errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("widen the swap while %s is not true: %w", backup.SettingRestoreAccessTables, backup.ErrCorrupt)
+	default:
+		return fmt.Errorf("read live setting row: %w", backup.ErrExportRead)
+	}
 }
 
 // checkSwapState checks that the installation is in maintenance mode and that
