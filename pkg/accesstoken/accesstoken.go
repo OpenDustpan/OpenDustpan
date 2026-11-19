@@ -468,3 +468,28 @@ func (t Token) ExpiryWarningAt(now time.Time) ExpiryWarning {
 
 	return WarningFor(t.ExpiresAt, now)
 }
+
+// UnknownKindError is the error of a stored token of a kind that this
+// version does not know. It wraps ErrUnknownKind, and it carries the owner of
+// the row, read without decoding the kind, so that a route for the own
+// tokens of a person checks the owner before it answers anything about the
+// kind. Its text names the row and the stored kind: a handler must not show
+// it.
+type UnknownKindError struct {
+	// ID is the ID of the stored token.
+	ID string
+	// PrincipalID is the principal that owns the stored token.
+	PrincipalID string
+	// Kind is the stored kind.
+	Kind string
+}
+
+// Error implements error.
+func (e *UnknownKindError) Error() string {
+	return fmt.Sprintf("access token %q: %v: %q", e.ID, ErrUnknownKind, e.Kind)
+}
+
+// Is makes errors.Is(err, ErrUnknownKind) true.
+func (e *UnknownKindError) Is(target error) bool {
+	return target == ErrUnknownKind
+}

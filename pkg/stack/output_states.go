@@ -106,7 +106,7 @@ func (s *OutputStates) Outputs(
 		return nil, recheckErr
 	}
 
-	return rootOutputs(cp.Deployment)
+	return rootOutputs(ctx, cp.Deployment)
 }
 
 // recheck looks the stack of u up again, after a read of its checkpoint by
@@ -183,8 +183,8 @@ func (s *OutputStates) gone(ctx context.Context, u identity.Object, err error) e
 // ordered by name. A secret output has no value. The masked read marks a
 // secret as an object with a secret member and a path member, and the read
 // keeps the marker of a secret inside an object or a list as it is.
-func rootOutputs(deployment []byte) ([]outputshare.Output, error) {
-	masked, err := ReadStateOutputs(deployment)
+func rootOutputs(ctx context.Context, deployment []byte) ([]outputshare.Output, error) {
+	masked, err := ReadStateOutputs(ctx, deployment)
 	if err != nil {
 		return nil, fmt.Errorf("read the outputs of the checkpoint: %w", err)
 	}

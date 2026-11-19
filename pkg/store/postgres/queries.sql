@@ -5208,14 +5208,16 @@ RETURNING id, scope, notification_id, subscription_id, sink_id, contact, princip
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
--- stored claim, and a lease that has not passed at now_ms.
+-- stored claim, and a lease that has not passed at now_ms. A stopped state
+-- needs a delivered time above zero: the wait of a redeliver starts there.
 UPDATE notification_deliveries
 SET state = sqlc.arg(state), attempts = sqlc.arg(attempts), next_at_ms = sqlc.arg(next_at_ms),
     last_error = sqlc.arg(last_error), delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '',
     lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
-  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms)
+  AND (CAST(sqlc.arg(state) AS TEXT) = 'pending' OR CAST(sqlc.arg(delivered_at_ms) AS BIGINT) > 0);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
 -- The number of deliveries of the subscription at or before the cursor
@@ -5532,13 +5534,17 @@ FROM job_tokens AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 -- Defense in depth: the service checks the unit ID too. Resolve only a live
 -- unit row so that a restored token cannot reach a removed unit by name.
-JOIN (
-    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
-    FROM stacks WHERE deleted_at_ms IS NULL
+-- The lateral join gives each branch the unit ID and the tool of the token, so
+-- each branch reads one row by its unit ID index and no branch scans a table.
+JOIN LATERAL (
+    SELECT s.id, s.namespace, s.project || '/' || s.name AS name
+    FROM stacks AS s
+    WHERE s.id = t.unit_id AND t.unit_tool = 'pulumi' AND s.deleted_at_ms IS NULL
     UNION ALL
-    SELECT id, 'opentofu' AS tool, namespace, name
-    FROM workspaces WHERE deleted_at_ms IS NULL
-) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+    SELECT w.id, w.namespace, w.name
+    FROM workspaces AS w
+    WHERE w.id = t.unit_id AND t.unit_tool = 'opentofu' AND w.deleted_at_ms IS NULL
+) AS u ON true
 JOIN durable_operations AS o ON o.id = t.claim_operation
 JOIN jobs AS j ON j.id = t.job_id
 JOIN namespaces AS jn ON jn.id = j.namespace_id

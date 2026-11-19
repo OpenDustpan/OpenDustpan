@@ -489,7 +489,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
-A new namespace audit log starts with the grant of its creator.
+The audit log of a new namespace holds no entry until the first change in it. The creation of the namespace is an entry in the `@server` scope, with the action `server:create-namespace`.
 
 ## Turn the chain on or off
 

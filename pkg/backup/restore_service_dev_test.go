@@ -682,6 +682,77 @@ func TestRestoreCountsDroppedTempAdmins(t *testing.T) {
 	}
 }
 
+// TestRestoreAuditsExpiredUpdateLeases checks that the swap result with expired
+// update leases makes one audit entry of the restore that names the count, and
+// that a swap with none makes no such entry.
+func TestRestoreAuditsExpiredUpdateLeases(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		expired int64
+		// want is the text of the audit entry, or empty for no entry.
+		want string
+	}{
+		{name: "two leases", expired: 2, want: "expired the lease of 2 running updates of backup"},
+		{name: "one lease", expired: 1, want: "expired the lease of 1 running update of backup"},
+		{name: "no lease", expired: 0, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := newRestoreServiceSetupWith(t, func(*backup.RestoreConfig) {})
+			setup.live.dev.expiredLeases = tc.expired
+
+			id, err := startRestoreOf(t, setup, plainRestore())
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+
+			if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreSucceeded {
+				t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
+			}
+
+			setup.live.mu.Lock()
+			appends := slices.Clone(setup.live.dev.appends)
+			setup.live.mu.Unlock()
+
+			checkExpiredLeaseEntries(t, appends, tc.want, id)
+		})
+	}
+}
+
+// checkExpiredLeaseEntries checks the audit entries of the expired leases in
+// appends. An empty want means no entry. Any entry of the expired leases
+// counts, so a case with no lease also fails for an entry with a count of zero.
+func checkExpiredLeaseEntries(t *testing.T, appends []audit.Entry, want string, id backup.RestoreID) {
+	t.Helper()
+
+	var got []string
+
+	for i := range appends {
+		if strings.Contains(appends[i].Object, "expired the lease of") {
+			got = append(got, appends[i].Object)
+		}
+	}
+
+	if want == "" {
+		if len(got) != 0 {
+			t.Errorf("audit entries of the expired leases = %q, want none", got)
+		}
+
+		return
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("audit entries of the expired leases = %q, want one", got)
+	}
+
+	if !strings.Contains(got[0], want) || !strings.Contains(got[0], "restore "+id.String()) {
+		t.Errorf("audit entry of the expired leases = %q, want %q for restore %s", got[0], want, id)
+	}
+}
+
 // TestRestoreLogsOneWarningForEachClass checks that the strip logs one
 // warning for each class that removed rows, with the count, and that no line
 // holds a subject, a token or a session ID.

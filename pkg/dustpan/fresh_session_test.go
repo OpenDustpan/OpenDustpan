@@ -46,7 +46,7 @@ func signInOptions(t *testing.T, st consoleBackend) []dustpan.Option {
 	// servers of a store, because a provider ID keeps its first issuer.
 	idp := providerOf(t, st, publicURL)
 
-	bound := []session.Provider{{ID: "corp", Issuer: idp.Issuer(), UserinfoURL: "", SubjectClaim: ""}}
+	bound := []session.Provider{{ID: "corp", Issuer: idp.Issuer(), UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""}}
 
 	err := session.BindProviders(t.Context(), st, bound, time.Now())
 	if err != nil {

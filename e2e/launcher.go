@@ -165,6 +165,9 @@ func (e *Env) apiCreated(ctx context.Context, tb testing.TB, method, path string
 	}
 }
 
+// ID returns the ID of the runner, the subject of its claims.
+func (r *FakeRunner) ID() string { return r.id }
+
 // Poll long-polls for one phase and returns it, or nil when the poll answers 204.
 func (r *FakeRunner) Poll(ctx context.Context, tb testing.TB, wait time.Duration) *protocol.Work {
 	tb.Helper()

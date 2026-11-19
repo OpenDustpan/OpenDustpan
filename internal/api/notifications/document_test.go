@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -121,5 +122,26 @@ func TestDocumentFlagsAStoredHostThatNeedsAnUpdate(t *testing.T) {
 
 			checkTargetLog(t, tc.name, logs, &tc.sink, tc.wantTarget)
 		})
+	}
+}
+
+// TestDeliveryWithNoStopTimeShowsNoRedeliverableAt gives the document a stopped
+// delivery with no stop time, as if the checks of the store had failed. The API
+// shows no time, and not year 1 plus the wait.
+func TestDeliveryWithNoStopTimeShowsNoRedeliverableAt(t *testing.T) {
+	t.Parallel()
+
+	d := notify.Delivery{
+		ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1", Contact: "",
+		Principal: "alice", State: notify.DeliveryAbandoned, Attempts: 1, CreatedAt: time.UnixMilli(1), Redeliveries: 0,
+		NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 1,
+	}
+	if apinotifications.RedeliverableAtOf(&d) {
+		t.Fatal("a stopped delivery with no stop time shows a redeliverableAt")
+	}
+
+	d.DeliveredAt = time.UnixMilli(1_700_000_000_000)
+	if !apinotifications.RedeliverableAtOf(&d) {
+		t.Fatal("a stopped delivery with a stop time shows no redeliverableAt")
 	}
 }

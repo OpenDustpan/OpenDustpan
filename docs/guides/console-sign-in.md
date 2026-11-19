@@ -59,8 +59,11 @@ sign-in answers 502.
 
 ## Set providers through the API
 
-An administrator can also add sign-in providers through the API, with no
-restart. The server keeps them in its database. Each provider has its own
+An administrator with a console session that has a recent sign-in can also
+add sign-in providers through the API, with no restart. The bootstrap admin
+token and other access tokens cannot do this: `POST`, `PATCH` and `DELETE`
+answer 403 with `mfa.fresh-step-required` (see "Tokens from a console
+session"). The server keeps them in its database. Each provider has its own
 ID, issuer and client, so several providers can work side by side.
 
 ```sh
@@ -209,8 +212,14 @@ By default, the first sign-in of a person through an OpenID provider
 makes a principal with the source `oidc`, no grant and no group. A plain
 OAuth 2.0 provider does so only with `"autoCreate": true`, and the
 principal has the source `oauth`. The person can sign in, but can do
-nothing until an administrator gives a role. Give the first roles with the
-bootstrap admin token, through the grants API.
+nothing until an administrator gives a role. A grant needs a console session
+with a recent sign-in (see "Tokens from a console session"). The bootstrap
+admin token has no console session, so `POST` on a grant answers 403 with
+`mfa.fresh-step-required`. On `opendustpan serve`, a person who holds no role
+cannot give a first role: the token cannot do it, and no other route does it.
+The token can make principals and local users, but it cannot give them a
+role. `opendustpan host create-temp-admin` also does not help: its token is
+an access token, and it gets the same 403 on a grant.
 
 With `--oidc-no-auto-create`, the server refuses the sign-in of a person
 who has no principal yet. It answers 403 and writes an audit entry with
@@ -301,7 +310,8 @@ one.
 A signed-in person can create and rotate access tokens from the console,
 on the same routes as with a token. An access token never creates or
 rotates a token: the request answers 403 with the error code
-`mfa.fresh-step-required`, and changes nothing. The sign-in of the session
+`mfa.fresh-step-required`, and changes nothing. The bootstrap admin token is
+an access token for this rule, also on every change in the list below. The sign-in of the session
 must be fresh: the token freshness window of the session policy sets how old it
 can be. The default is 15 minutes. A window of 0 asks for a fresh
 authentication at each step, so no sign-in passes. The other values are 60
@@ -335,6 +345,9 @@ The same rule holds for these changes:
 - the IP allowlist of a namespace (`PUT` and `DELETE`)
 - the accept of a link from a Git host account to the own principal, because
   the comment commands of that account then run as the principal
+- the trust rules and the trust bundles of a namespace (`POST`)
+- a setting that can reduce security, for example turning the local password
+  sign-in on (see [Settings](settings.md#changes-that-need-a-fresh-sign-in))
 - the reveal of a secret value in the console, for a Pulumi stack, for an
   OpenTofu state version and for a profile (`showSecrets=true`)
 

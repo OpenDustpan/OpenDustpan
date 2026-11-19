@@ -45,6 +45,12 @@ func TestNameLockConformance(t *testing.T) {
 
 				placeNameLocks(t, openURL(t, schemaURL), nameCount{scope: scope, name: name, sub: sub}, offset)
 			},
+			SetTimes: func(t *testing.T, scope, name, sub string, lastFailure, lockedUntil, lastLockEnd time.Duration) {
+				t.Helper()
+
+				setNameLockTimes(t, openURL(t, schemaURL), nameCount{scope: scope, name: name, sub: sub},
+					[3]time.Duration{lastFailure, lockedUntil, lastLockEnd})
+			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
 
@@ -161,6 +167,39 @@ func placeNameLocks(t *testing.T, s *postgres.Store, k nameCount, offset time.Du
 		at, k.scope, k.name, k.sub)
 	if err != nil {
 		t.Fatalf("place the name count: %v", err)
+	}
+
+	if rows := tag.RowsAffected(); rows != 1 {
+		t.Fatalf("the update of the name count %s, %s, %s changed %d rows; want 1", k.scope, k.name, k.sub, rows)
+	}
+}
+
+// setNameLockTimes sets the three time columns of one name count of s, the
+// count that k names, each to the time of the clock of the database plus its
+// offset: the last failure, the end of the lock and the end of the last
+// lock. An offset of authgatetest.NoTime stores 0.
+func setNameLockTimes(t *testing.T, s *postgres.Store, k nameCount, offsets [3]time.Duration) {
+	t.Helper()
+
+	now, err := s.DatabaseNow(t.Context())
+	if err != nil {
+		t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	var at [3]int64
+
+	for i, o := range offsets {
+		if o != authgatetest.NoTime {
+			at[i] = now.UnixMilli() + o.Milliseconds()
+		}
+	}
+
+	tag, err := postgres.Pool(s).Exec(t.Context(), `UPDATE name_locks SET
+		last_failure_ms = $1::bigint, locked_until_ms = $2::bigint, last_lock_end_ms = $3::bigint
+		WHERE scope = $4 AND name = $5 AND sub = $6`,
+		at[0], at[1], at[2], k.scope, k.name, k.sub)
+	if err != nil {
+		t.Fatalf("set the times of the name count: %v", err)
 	}
 
 	if rows := tag.RowsAffected(); rows != 1 {
