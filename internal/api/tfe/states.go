@@ -784,12 +784,14 @@ func (h *Handler) resolveStateOutputID(_ http.ResponseWriter, r *http.Request) (
 func (h *Handler) resolveStateVersion(
 	r *http.Request, id workspace.StateVersionID,
 ) (identity.Object, error) {
-	sv, err := h.workspaces.ReadState(r.Context(), id)
+	// The lookup opens no output: decryption runs only after the guard
+	// authorizes the unit that this function returns.
+	wsID, err := h.workspaces.StateVersionWorkspace(r.Context(), id)
 	if err != nil {
 		return identity.Object{}, err
 	}
 
-	ws, err := h.workspaces.GetByID(r.Context(), sv.Workspace)
+	ws, err := h.workspaces.GetByID(r.Context(), wsID)
 	if err != nil {
 		return identity.Object{}, err
 	}
