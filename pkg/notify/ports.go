@@ -273,8 +273,10 @@ type Delivery struct {
 // Validate returns ErrInvalid for a delivery with no ID of the prefix
 // DeliveryIDPrefix, no notification ID of the prefix IDPrefix, no scope, no
 // principal, no creation time, an unknown state, neither a subscription nor a
-// contact, a negative count of redeliveries, or a LastError that is not empty
-// or a Class.
+// contact, a negative count of redeliveries, a stopped state (done, abandoned
+// or skipped) with no DeliveredAt, or a LastError that is not empty or a
+// Class. A stopped delivery needs DeliveredAt because the wait before a
+// manual redelivery starts at that time (RedeliverableAt).
 func (d Delivery) Validate() error {
 	switch {
 	case !ValidDeliveryID(d.ID) || !strings.HasPrefix(d.Notification, IDPrefix):
@@ -288,8 +290,23 @@ func (d Delivery) Validate() error {
 		return fmt.Errorf("%w: a delivery needs a subscription or a contact", ErrInvalid)
 	case d.Redeliveries < 0:
 		return fmt.Errorf("%w: the redeliveries of a delivery are not negative", ErrInvalid)
+	default:
+		return d.validateState()
+	}
+}
+
+// validateState returns ErrInvalid for an unknown state, a stopped state with
+// no DeliveredAt, or a LastError that is not empty or a Class.
+func (d Delivery) validateState() error {
+	switch {
 	case !validState(d.State):
 		return fmt.Errorf("%w: unknown delivery state %q", ErrInvalid, d.State)
+	// Defense in depth: Attempt.Validate and the SQL of Record check this too,
+	// and the store checks it again on a read and on a staged restore; this
+	// check stays so that a stored or staged row that stopped with no time is
+	// refused and a person cannot send it again at once.
+	case d.State != DeliveryPending && d.DeliveredAt.IsZero():
+		return fmt.Errorf("%w: a stopped delivery needs the time it stopped", ErrInvalid)
 	case !validClass(d.LastError):
 		return fmt.Errorf("%w: the last error of a delivery is a class", ErrInvalid)
 	default:
@@ -337,17 +354,19 @@ type Attempt struct {
 // unknown state, a negative count of attempts, a stopped state (delivered,
 // abandoned or skipped) with no DeliveredAt, or a LastError that is not
 // empty or a Class. A stopped delivery needs DeliveredAt because the wait
-// before a manual redelivery starts at that time (RedeliverableAt). LastError never holds the text of an error, so an
-// address or a credential in that text never reaches the store.
+// before a manual redelivery starts at that time (RedeliverableAt). LastError
+// never holds the text of an error, so an address or a credential in that text
+// never reaches the store.
 func (a Attempt) Validate() error {
 	switch {
 	case a.ID == "" || a.Owner == "" || a.Now.IsZero():
 		return fmt.Errorf("%w: an attempt needs a delivery ID, an owner and a time", ErrInvalid)
 	case !validState(a.State) || a.Attempts < 0:
 		return fmt.Errorf("%w: an attempt needs a known state and a count of attempts", ErrInvalid)
-	// Defense in depth: a store and a dispatcher may check this too; this
-	// check stays so that no caller records a stopped delivery that a person
-	// can send again at once.
+	// Defense in depth: Delivery.Validate checks the stored row on a read and
+	// on a staged restore, and the Redeliver check refuses a stopped delivery
+	// with no time; this check stays so that no caller records a stopped
+	// delivery that a person can send again at once.
 	case a.State != DeliveryPending && a.DeliveredAt.IsZero():
 		return fmt.Errorf("%w: an attempt that stops a delivery needs the time it stopped", ErrInvalid)
 	case !validClass(a.LastError):

@@ -557,8 +557,43 @@ func TestRedeliverableAt(t *testing.T) {
 			d.State, d.Redeliveries = tc.state, tc.redeliveries
 
 			want := stop.Add(notify.RetryWait(tc.redeliveries + 1))
-			if got := notify.RedeliverableAt(d); !got.Equal(want) {
-				t.Fatalf("RedeliverableAt = %s, want %s", got, want)
+			if got, ok := notify.RedeliverableAt(d); !ok || !got.Equal(want) {
+				t.Fatalf("RedeliverableAt = %s, %t; want %s", got, ok, want)
+			}
+		})
+	}
+}
+
+// TestRedeliverableAtFailsClosed checks that a delivery with no stop time has
+// no redeliverable time, so that no caller reads year 1 plus the wait.
+func TestRedeliverableAtFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []notify.DeliveryState{notify.DeliveryDone, notify.DeliveryAbandoned, notify.DeliverySkipped} {
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+
+			d := notify.Delivery{
+				ID:           "dlv-1",
+				Notification: "ntf-1",
+				Scope:        "acme",
+				Subscription: "sub-1",
+				Sink:         "snk-1",
+				Contact:      "",
+				Principal:    "alice",
+				State:        state,
+				Attempts:     1,
+				CreatedAt:    time.UnixMilli(1),
+				Redeliveries: 0,
+				NextAt:       time.Time{},
+				LastError:    "",
+				DeliveredAt:  time.Time{},
+				Owner:        "",
+				LeaseUntil:   time.Time{},
+				Version:      1,
+			}
+			if at, ok := notify.RedeliverableAt(d); ok || !at.IsZero() {
+				t.Fatalf("RedeliverableAt = %s, %t; want the zero time and false", at, ok)
 			}
 		})
 	}
@@ -612,6 +647,12 @@ func TestDeliveryValidate(t *testing.T) {
 		{"a delivery with no redeliveries", func(*notify.Delivery) {}, true},
 		{"a delivery at the limit", func(d *notify.Delivery) { d.Redeliveries = notify.MaxAttempts }, true},
 		{"a negative count of redeliveries", func(d *notify.Delivery) { d.Redeliveries = -1 }, false},
+		{"a delivered delivery with a time", func(d *notify.Delivery) {
+			d.State, d.DeliveredAt = notify.DeliveryDone, time.UnixMilli(2)
+		}, true},
+		{"a delivered delivery with no time", func(d *notify.Delivery) { d.State = notify.DeliveryDone }, false},
+		{"an abandoned delivery with no time", func(d *notify.Delivery) { d.State = notify.DeliveryAbandoned }, false},
+		{"a skipped delivery with no time", func(d *notify.Delivery) { d.State = notify.DeliverySkipped }, false},
 	}
 
 	for _, tc := range cases {

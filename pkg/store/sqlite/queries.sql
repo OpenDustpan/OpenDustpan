@@ -4711,14 +4711,16 @@ RETURNING id, scope, notification_id, subscription_id, sink_id, contact, princip
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
--- stored claim, and a lease that has not passed at now_ms.
+-- stored claim, and a lease that has not passed at now_ms. A stopped state
+-- needs a delivered time above zero: the wait of a redeliver starts there.
 UPDATE notification_deliveries
 SET state = sqlc.arg(state), attempts = sqlc.arg(attempts), next_at_ms = sqlc.arg(next_at_ms),
     last_error = sqlc.arg(last_error), delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '',
     lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
-  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms)
+  AND (sqlc.arg(state) = 'pending' OR sqlc.arg(delivered_at_ms) > 0);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
 -- The number of deliveries of the subscription at or before the cursor

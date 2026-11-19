@@ -1320,9 +1320,19 @@ func checkRedeliver(d notify.Delivery, now time.Time) error {
 		return fmt.Errorf("redeliver %s: %w: the delivery is pending", d.ID, notify.ErrConflict)
 	case d.Redeliveries >= notify.MaxAttempts:
 		return fmt.Errorf("redeliver %s: %w", d.ID, notify.ErrRedeliverLimit)
-	case now.Before(notify.RedeliverableAt(d)):
-		return fmt.Errorf("redeliver %s: %w", d.ID, &notify.TooSoonError{Wait: notify.RedeliverableAt(d).Sub(now)})
 	default:
+		// Defense in depth: Delivery.Validate refuses a stopped delivery with no
+		// time on the read; this check stays so that a delivery with no time
+		// never gets a redeliverable time of year 1.
+		at, ok := notify.RedeliverableAt(d)
+		if !ok {
+			return fmt.Errorf("redeliver %s: %w: the delivery stopped with no time", d.ID, notifystore.ErrCorrupt)
+		}
+
+		if now.Before(at) {
+			return fmt.Errorf("redeliver %s: %w", d.ID, &notify.TooSoonError{Wait: at.Sub(now)})
+		}
+
 		return nil
 	}
 }
