@@ -1142,14 +1142,14 @@ func TestBulkLockItemReused(t *testing.T) {
 	}
 }
 
-// wrongIDReader answers every lookup of from with the entry of to.
-type wrongIDReader struct {
+// bulkWrongIDReader answers every lookup of from with the entry of to.
+type bulkWrongIDReader struct {
 	coreinventory.Reader
 
 	from, to string
 }
 
-func (w wrongIDReader) GetUnit(ctx context.Context, id string) (coreinventory.Entry, error) {
+func (w bulkWrongIDReader) GetUnit(ctx context.Context, id string) (coreinventory.Entry, error) {
 	if id == w.from {
 		return w.Reader.GetUnit(ctx, w.to)
 	}
@@ -1168,7 +1168,7 @@ func TestBulkLockUnitIDMustMatch(t *testing.T) {
 		plainAuthz(),
 		2,
 		bulkOptions{noRecords: false, limiter: nil, wrap: func(r coreinventory.Reader) coreinventory.Reader {
-			return wrongIDReader{Reader: r, from: bulkUnitID(0), to: bulkUnitID(1)}
+			return bulkWrongIDReader{Reader: r, from: bulkUnitID(0), to: bulkUnitID(1)}
 		}},
 	)
 
