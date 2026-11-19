@@ -284,10 +284,25 @@ type PlacementError struct {
 }
 
 func (e *PlacementError) Error() string {
-	return fmt.Sprintf(
-		"no placement rule matches %s stack %s/%s in namespace %s: run opendustpan placement add",
-		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace,
-	)
+	// A workspace of OpenTofu has no project, so its text names the workspace
+	// only. A stack of the Pulumi CLI has a project and a name.
+	switch e.Tool {
+	case ToolOpenTofu:
+		return fmt.Sprintf(
+			"no placement rule matches %s workspace %s in namespace %s: run opendustpan placement add --tool %s",
+			e.Tool, quoteName(e.Stack), e.Namespace, e.Tool,
+		)
+	case ToolPulumi:
+		return fmt.Sprintf(
+			"no placement rule matches %s stack %s/%s in namespace %s: run opendustpan placement add --tool %s",
+			e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Tool,
+		)
+	default:
+		return fmt.Sprintf(
+			"no placement rule matches %s stack or workspace %s/%s in namespace %s: run opendustpan placement add",
+			quoteName(e.Tool), quoteName(e.Project), quoteName(e.Stack), e.Namespace,
+		)
+	}
 }
 
 // Is reports whether target is ErrNoPlacement.
