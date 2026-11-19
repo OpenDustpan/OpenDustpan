@@ -107,10 +107,8 @@ func DecodeForTest(text string) (any, error) {
 	return doc, nil
 }
 
-// ForceOneDigest makes every value of the secret index share one digest, and
-// returns the function that restores the digest.
-func ForceOneDigest() func() {
-	forceOneDigest.Store(true)
-
-	return func() { forceOneDigest.Store(false) }
+// WithOneDigest returns ctx with the hook that gives every value of the
+// secret index one digest.
+func WithOneDigest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, oneDigestKey{}, true)
 }

@@ -219,16 +219,16 @@ func TestMaskTofuInstanceDuplicatePassIsLinear(t *testing.T) {
 // digest here. The copy of a secret is masked, and a value that is not a copy
 // stays, so only the equality check stops a collision from masking it.
 func TestDuplicatePassComparesValuesOnADigestCollision(t *testing.T) {
-	// The digest switch is global to the package, so this test must not run in
-	// parallel. t.Setenv makes testing panic if t.Parallel is added.
-	t.Setenv("OPENDUSTPAN_TEST_SERIAL_HEAP", "1")
-
-	restore := workspace.ForceOneDigest()
-	defer restore()
+	t.Parallel()
 
 	instance, marks := duplicateInstance(t, 1, 3)
 
-	attributes, masked, err := workspace.MaskInstanceForTest(t.Context(), instance, resourceAddress, marks)
+	attributes, masked, err := workspace.MaskInstanceForTest(
+		workspace.WithOneDigest(t.Context()),
+		instance,
+		resourceAddress,
+		marks,
+	)
 	if err != nil {
 		t.Fatalf("mask: %v", err)
 	}

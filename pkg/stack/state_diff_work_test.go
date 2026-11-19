@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -123,11 +124,15 @@ func TestDiffStatesChecksContext(t *testing.T) {
 // reports cancellation only on call number cancelOn. It lets a test cancel at
 // one check of the diff, so that each ctx check has its own test.
 type callContext struct {
-	context.Context //nolint:containedctx // The test context wraps the test context to change only Err.
-
 	cancelOn int
 	calls    int
 }
+
+func (c *callContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (c *callContext) Done() <-chan struct{} { return nil }
+
+func (c *callContext) Value(any) any { return nil }
 
 func (c *callContext) Err() error {
 	c.calls++
@@ -161,7 +166,7 @@ func TestDiffStatesChecksContextAtEachStep(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx := &callContext{Context: t.Context(), cancelOn: tt.cancelOn, calls: 0}
+			ctx := &callContext{cancelOn: tt.cancelOn, calls: 0}
 
 			_, err := stack.DiffStates(ctx, tt.pair[0], tt.pair[1], "", 100)
 			if !errors.Is(err, context.Canceled) || errors.Is(err, stack.ErrStateBound) {

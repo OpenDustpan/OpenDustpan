@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 )
 
 // Masked state read for the console: a paged resource list and one resource
@@ -1076,12 +1075,18 @@ func propagableSecret(value any) bool {
 type secretIndex struct {
 	seed     maphash.Seed
 	byDigest map[uint64][]any
+	// oneDigest gives every value the digest 0. Only a test sets it.
+	oneDigest bool
 }
 
 // newSecretIndex returns the index of secrets. A secret that equals an
 // earlier one adds nothing.
-func newSecretIndex(secrets []any) *secretIndex {
-	index := &secretIndex{seed: maphash.MakeSeed(), byDigest: map[uint64][]any{}}
+func newSecretIndex(ctx context.Context, secrets []any) *secretIndex {
+	index := &secretIndex{
+		seed:      maphash.MakeSeed(),
+		byDigest:  map[uint64][]any{},
+		oneDigest: ctx.Value(oneDigestKey{}) != nil,
+	}
 
 	for _, secret := range secrets {
 		digest := index.digest(secret)
@@ -1097,11 +1102,10 @@ func newSecretIndex(secrets []any) *secretIndex {
 	return index
 }
 
-// forceOneDigest is a hook for the tests of this package. It is false in the
-// server, and no code outside the tests sets it.
-//
-//nolint:gochecknoglobals // Test hook: an atomic switch that the server never sets; a field would need a parameter through every mask call.
-var forceOneDigest atomic.Bool
+// oneDigestKey is the context key of a hook for the tests of this package.
+// A context that holds it gives every value one digest, so the equality check
+// of duplicates is the only guard against a collision. No server code sets it.
+type oneDigestKey struct{}
 
 // Digest tags: each type of value starts from another number, so a string and
 // a number with the same text do not share a digest.
@@ -1122,9 +1126,7 @@ func mixDigest(a, b uint64) uint64 {
 // digest returns the digest of v. Equal values have equal digests: the digest
 // of a map does not depend on the order of its keys. One call walks v once.
 func (x *secretIndex) digest(v any) uint64 {
-	// A test sets this switch to give every value one digest, so that the
-	// equality check of duplicates is the only guard against a collision.
-	if forceOneDigest.Load() {
+	if x.oneDigest {
 		return 0
 	}
 
@@ -1376,7 +1378,7 @@ func maskTofuInstance(
 	}
 
 	if len(secrets) > 0 {
-		pass := duplicatePass{index: newSecretIndex(secrets), seen: seen, masked: &masked}
+		pass := duplicatePass{index: newSecretIndex(ctx, secrets), seen: seen, masked: &masked}
 
 		if err := pass.maskDuplicates(ctx, attributes, base); err != nil {
 			return nil, nil, err
