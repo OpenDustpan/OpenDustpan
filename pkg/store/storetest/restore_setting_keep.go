@@ -15,7 +15,12 @@ import (
 // installation settings returns their port. The swap cases of the setting rows
 // skip a store without it.
 type SettingSeeder interface {
-	SettingPort() setting.Store
+	SettingPorts() SettingPorts
+}
+
+// SettingPorts holds the ports of the installation settings of a store.
+type SettingPorts struct {
+	Store setting.Store
 }
 
 // settingKeepStore is a store that also keeps the installation settings.
@@ -117,7 +122,7 @@ func runSettingKeepCase(t *testing.T, newStore RestoreFactory, tc *settingKeepCa
 
 		src = store
 
-		setRestoreAccessSetting(t, src.SettingPort(), tc.backupValue)
+		setRestoreAccessSetting(t, src.SettingPorts().Store, tc.backupValue)
 	})
 
 	dst, ok := r.dst.(settingKeepStore)
@@ -126,7 +131,7 @@ func runSettingKeepCase(t *testing.T, newStore RestoreFactory, tc *settingKeepCa
 	}
 
 	if tc.liveValue != "" {
-		setRestoreAccessSetting(t, dst.SettingPort(), tc.liveValue)
+		setRestoreAccessSetting(t, dst.SettingPorts().Store, tc.liveValue)
 	}
 
 	area := r.stage(t, r.held.Claim.Token)
@@ -142,7 +147,7 @@ func runSettingKeepCase(t *testing.T, newStore RestoreFactory, tc *settingKeepCa
 		t.Fatalf("swap error = %v, want %v", err, tc.wantErr)
 	}
 
-	if got := restoreAccessSettingValue(t, dst.SettingPort()); got != tc.want {
+	if got := restoreAccessSettingValue(t, dst.SettingPorts().Store); got != tc.want {
 		t.Fatalf("restore access setting after the swap = %q, want %q", got, tc.want)
 	}
 }

@@ -46,7 +46,9 @@ func (s *Store) keepLiveSettings(ctx context.Context, path string, keys []string
 	}
 
 	defer func() {
-		_ = conn.Close() //nolint:errcheck // Best-effort close of the staging handle.
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr // Best-effort close of the staging handle.
+		}
 	}()
 
 	tx, err := conn.BeginTx(ctx, nil)

@@ -13,7 +13,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
-	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -107,11 +106,9 @@ func (s *backupStore) IssuerPorts() storetest.IssuerPorts {
 	return storetest.IssuerPorts{Store: s.Issuer()}
 }
 
-// SettingPort implements storetest.SettingSeeder.
-//
-//nolint:ireturn // The method implements storetest.SettingSeeder, which returns the port.
-func (s *backupStore) SettingPort() setting.Store {
-	return s.SettingStore()
+// SettingPorts implements storetest.SettingSeeder.
+func (s *backupStore) SettingPorts() storetest.SettingPorts {
+	return storetest.SettingPorts{Store: s.SettingStore()}
 }
 
 // ProfileStore implements storetest.ProfileSeeder.
