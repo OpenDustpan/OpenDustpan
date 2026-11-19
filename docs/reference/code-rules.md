@@ -49,8 +49,8 @@ suffix" for each reason that gets this text.
   configuration, no dev sign-in, and no store that keeps sessions with a
   valid public URL (https, or http on a loopback host). The sign-in runs
   with zero stored providers. The dev sign-in counts when it is set. The
-  check does not read the installation kind, but the server accepts a dev
-  sign-in only on an installation of kind dev. The code checks only this
+  rule does not read the installation kind, but the server accepts a dev
+  sign-in only on an installation of kind dev. The code evaluates only this
   condition. It does not read the setting of built-in MFA or the list of SSO
   providers. This rule stays because such a server has no sign-in step to
   ask for.
@@ -91,7 +91,7 @@ suffix" for each reason that gets this text.
   ([Revocations in maintenance mode](../guides/backup-restore-upgrade.md#revocations-in-maintenance-mode)).
 - A restore stops with the code `principal.no-working-break-glass` when it
   lowers the count of working break-glass accounts and leaves fewer than two
-  ([Other paths](../guides/break-glass-accounts.md#other-paths)).<<<<<<< ours
+  ([Other paths](../guides/break-glass-accounts.md#other-paths)).
 
 ## Site administrators
 
@@ -304,14 +304,11 @@ suffix" for each reason that gets this text.
   the code `access.denied` and writes an audit entry with the outcome
   `denied` and the reason `only the person who started the job can confirm
   it`, with the route suffix.
-||||||| original
-
-=======
 
 ## IP allowlists
 
-- Once a list check calls the read, the server reads the namespaces that have
-  an IP allowlist for a list check of a principal whose scope covers every
+- Once a list request calls the read, the server reads the namespaces that have
+  an IP allowlist for a list request of a principal whose scope covers every
   object. The read returns at most 1000 namespaces. When more than 1000
   namespaces have a list, the read fails with the error
   `ipallow: too many namespaces have an IP allowlist`, and the server does not
@@ -319,4 +316,3 @@ suffix" for each reason that gets this text.
   principal whose scope covers every object on every list until the number of
   namespaces with a list is 1000 or fewer
   ([Limits](../guides/ip-allowlists.md#limits)).
->>>>>>> theirs
