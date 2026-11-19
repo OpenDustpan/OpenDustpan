@@ -48,15 +48,30 @@ func (g foreignGrants) GrantsOf(ctx context.Context, subject access.Subject) ([]
 	return g.GrantLookups.GrantsOf(ctx, subject)
 }
 
+// errRunaway is the error of a stuck port that a loop did not stop: a guard
+// that is missing ends the test with this error and not with an endless loop.
+var errRunaway = errors.New("the loop read too many pages of a stuck port")
+
+// maxStuckPages is the number of pages that stuckPrincipals answers before it
+// fails with errRunaway.
+const maxStuckPages = 20
+
 // stuckPrincipals answers every page of the principals of a namespace with
-// the same full page, so that the cursor never advances.
+// the same full page, so that the cursor never advances. After maxStuckPages
+// pages it fails with errRunaway, so a missing guard fails the test fast.
 type stuckPrincipals struct {
 	access.PrincipalNamespaces
+
+	pages *atomic.Int64
 }
 
-func (stuckPrincipals) ListNamespacePrincipals(
+func (s stuckPrincipals) ListNamespacePrincipals(
 	_ context.Context, _ namespace.Name, _ principal.Query,
 ) ([]principal.Principal, int64, error) {
+	if s.pages.Add(1) > maxStuckPages {
+		return nil, 0, errRunaway
+	}
+
 	rows := make([]principal.Principal, principal.MaxLimit)
 	for i := range rows {
 		rows[i] = principal.Principal{
@@ -163,15 +178,20 @@ func TestReachMatchesAuthorizerOnHostileFixture(t *testing.T) {
 	for _, tc := range []struct {
 		action identity.Action
 		obj    identity.Object
+		want   bool
 	}{
-		{identity.ActionServerBackup, identity.ServerObject()},
-		{identity.ActionServerManagePrincipals, identity.ServerObject()},
-		{identity.ActionNamespaceRead, identity.NamespaceObject("beta")},
-		{identity.ActionNamespaceRead, identity.NamespaceObject("acme")},
+		{identity.ActionServerBackup, identity.ServerObject(), false},
+		{identity.ActionServerManagePrincipals, identity.ServerObject(), false},
+		{identity.ActionNamespaceRead, identity.NamespaceObject("beta"), false},
+		{identity.ActionNamespaceRead, identity.NamespaceObject("acme"), true},
 	} {
 		has, hasErr := reach.Has(t.Context(), tc.action, tc.obj)
 		if hasErr != nil {
 			t.Fatalf("has %s on %s: %v", tc.action, tc.obj, hasErr)
+		}
+
+		if has != tc.want {
+			t.Fatalf("%s on %s: reach %v, want %v", tc.action, tc.obj, has, tc.want)
 		}
 
 		authErr := authz.Authorize(t.Context(), bot, tc.action, tc.obj)
@@ -279,10 +299,85 @@ func TestReachFailsClosedOnAStuckNamespacePage(t *testing.T) {
 	f.grant(t, prn("carol"), nsTokens.ID, identity.NamespaceObject("acme"))
 
 	cfg := f.reach()
-	cfg.Principals = stuckPrincipals{PrincipalNamespaces: f.store}
+	cfg.Principals = stuckPrincipals{PrincipalNamespaces: f.store, pages: new(atomic.Int64)}
 
 	if _, err := access.ReachOf(t.Context(), cfg, "prn-carol"); !errors.Is(err, access.ErrInvalid) {
 		t.Fatalf("reach = %v, want ErrInvalid for a page that does not advance", err)
+	}
+}
+
+// TestAuthorizerFailsClosedOnAStuckNamespacePage proves that ListObjects ends
+// with an error, and not with an endless loop or an output that grows, when
+// the port answers each page of the principals of a namespace with the same
+// full page. The caller holds namespace:manage-principal-tokens on acme.
+func TestAuthorizerFailsClosedOnAStuckNamespacePage(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	nsTokens := f.customRole(t, identity.ActionNamespaceManagePrincipalTokens)
+
+	carol := f.person(t, "carol")
+	f.grant(t, prn("carol"), nsTokens.ID, identity.NamespaceObject("acme"))
+
+	stuck := stuckPrincipals{PrincipalNamespaces: f.store, pages: new(atomic.Int64)}
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: f.store, Callers: f.store, Collections: f.units, Units: f.store, Principals: stuck,
+	})
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+
+	_, listErr := authz.ListObjects(t.Context(), carol, identity.ActionPrincipalManageTokens)
+	if !errors.Is(listErr, access.ErrInvalid) {
+		t.Fatalf("list objects = %v, want ErrInvalid for a page that does not advance", listErr)
+	}
+
+	if pages := stuck.pages.Load(); pages > 2 {
+		t.Fatalf("the loop read %d pages of a stuck port, want at most 2", pages)
+	}
+}
+
+// TestEmptyPrincipalSubjectIsRefusedOnItsOwn proves that a principal subject
+// with an empty ID, listed before the right principal subject and a group,
+// gives ErrInvalid at the walker and at the authorizer, and that a grant
+// planted for the empty principal gives no power. Only the empty-ID check
+// stops this list: it has one valid principal subject and a group.
+func TestEmptyPrincipalSubjectIsRefusedOnItsOwn(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	empty := access.Subject{Kind: access.SubjectPrincipal, ID: ""}
+
+	plantGrant(t, f, plantedGrant("grt-empty", empty, access.RoleSiteAdministrator, identity.ServerObject()))
+	f.namespaceBot(t, "prn-ci-acme", "ci-acme", "acme")
+
+	team := f.group(t, "team")
+	subjects := []access.Subject{empty, prn("ci-acme"), {Kind: access.SubjectGroup, ID: team.ID}}
+	callers := fixedCallers{Callers: f.store, subject: "ci-acme", subjects: subjects}
+
+	cfg := f.reach()
+	cfg.Callers = callers
+
+	reach, reachErr := access.ReachOf(t.Context(), cfg, "prn-ci-acme")
+	if !errors.Is(reachErr, access.ErrInvalid) {
+		t.Errorf("reach = %v, want ErrInvalid", reachErr)
+	}
+
+	if heldBackup(t, reach) {
+		t.Error("reach of the failed walk holds server:backup")
+	}
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: f.store, Callers: callers, Collections: f.units, Units: f.store, Principals: f.store,
+	})
+	if err != nil {
+		t.Fatalf("new authorizer: %v", err)
+	}
+
+	if authErr := authorizeBackup(t, authz); !errors.Is(authErr, access.ErrInvalid) {
+		t.Errorf("authorize = %v, want ErrInvalid", authErr)
 	}
 }
 

@@ -448,8 +448,30 @@ func (a *Authorizer) addNamespacePrincipals(ctx context.Context, ns namespace.Na
 			return out, nil
 		}
 
-		after = rows[len(rows)-1].Subject
+		after, err = nextPrincipalCursor(ns, after, rows)
+		if err != nil {
+			return out, err
+		}
 	}
+}
+
+// nextPrincipalCursor returns the cursor for the page after the full page
+// rows of the principals of the namespace ns, read after the cursor after.
+// It returns ErrInvalid when the last subject does not move past after.
+//
+// Defense in depth: a full page whose last subject does not advance would
+// loop for ever and, in a loop that collects rows, grow without bound; fail
+// closed instead. The adapters order the rows, and this check does not rely
+// on them. Each paging loop of a namespace calls this one function, so the
+// loops cannot differ.
+func nextPrincipalCursor(ns namespace.Name, after string, rows []principal.Principal) (string, error) {
+	next := rows[len(rows)-1].Subject
+	if next <= after {
+		return "", fmt.Errorf("%w: list of principals of namespace %q does not advance past %q",
+			ErrInvalid, ns.String(), after)
+	}
+
+	return next, nil
 }
 
 // grantLive reports whether a grant on obj still gives something. The name
@@ -858,6 +880,9 @@ func principalSubjectOf(subjects []Subject) (string, bool, error) {
 	for i := range subjects {
 		switch subjects[i].Kind {
 		case SubjectPrincipal:
+			// Defense in depth: refuse an empty principal ID here on its own.
+			// The check of a group with no principal subject does not stand
+			// in for it, and this check does not rely on it.
 			if id != "" || subjects[i].ID == "" {
 				return "", false, fmt.Errorf("%w: more than one principal subject, or an empty one", ErrInvalid)
 			}
