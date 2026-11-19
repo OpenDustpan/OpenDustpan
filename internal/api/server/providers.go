@@ -502,14 +502,22 @@ func staticProviderOf(p SignInProvider) providerResponse {
 // with no user information, query or fragment. Defense in depth: the server
 // refuses an issuer with user information, and this function
 // stays so that a new way to set an issuer cannot put a credential in an
-// answer. An issuer that does not parse shows as empty.
+// answer. An issuer that does not parse, has no host, or has a scheme other
+// than https or http shows as empty. The scheme check does not rely on the
+// check of the CLI (CheckURL) or on the check of the OAuth issuer
+// (validate). The path keeps its escaped form, so that an encoded CR or LF
+// stays encoded in the answer.
 func publicIssuer(issuer string) string {
 	u, err := url.Parse(issuer)
 	if err != nil || u.Host == "" {
 		return ""
 	}
 
-	return u.Scheme + "://" + u.Host + u.Path
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return ""
+	}
+
+	return u.Scheme + "://" + u.Host + u.EscapedPath()
 }
 
 // classifyProviders maps the sign-in provider errors to their status and

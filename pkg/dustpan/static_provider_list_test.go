@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
@@ -101,5 +103,50 @@ func checkStaticLDAP(t *testing.T, doc staticProviderDoc) {
 	if doc.LDAP == nil || doc.LDAP.CAFile != "/etc/dustpan/ldap-ca.pem" || doc.LDAP.DisabledMask != "2" ||
 		!slices.Equal(doc.LDAP.DisabledValues, []string{"000001010000Z"}) {
 		t.Fatalf("corp-ldap = %+v, want the CA file, the disabled mask and the disabled values of the flags", doc)
+	}
+}
+
+// TestStaticProviderListHidesIssuerSecrets proves that the list of the
+// sign-in providers shows the issuer of a static provider with no user
+// information, query or fragment, even when the setting holds them.
+func TestStaticProviderListHidesIssuerSecrets(t *testing.T) {
+	t.Parallel()
+
+	oidc := oidcProvider("corp")
+	oidc.Issuer = fakecred.URL("https", "user", "pw-secret", "idp.example", "") + "/r?token=tok-secret#frag-secret"
+
+	st := openAuditStore(t)
+	opts := append(auditSinkServerOptions(t, st),
+		dustpan.WithPublicURL("https://dustpan.example"), dustpan.WithOIDCProvider(oidc))
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	if err := srv.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/sign-in-providers", http.NoBody)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	var list struct {
+		Providers []staticProviderDoc `json:"providers"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("list = %d %s, %v", rec.Code, rec.Body.String(), err)
+	}
+
+	if len(list.Providers) != 1 || list.Providers[0].Issuer != "https://idp.example/r" {
+		t.Fatalf("list = %+v, want the issuer https://idp.example/r", list.Providers)
+	}
+
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("the list holds a secret: %s", rec.Body.String())
 	}
 }

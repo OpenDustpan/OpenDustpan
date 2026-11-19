@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -308,7 +308,8 @@ func checkProviderList(t *testing.T, e providerEnv) {
 		t.Fatalf("list = %+v, want corp (static) and beta (api)", list.Providers)
 	}
 
-	if corp := list.Providers[0]; corp.Issuer != "https://idp.example" || !slices.Equal(corp.Scopes, []string{"profile"}) {
+	if corp := list.Providers[0]; corp.Issuer != "https://idp.example" ||
+		!slices.Equal(corp.Scopes, []string{"profile"}) {
 		t.Fatalf("corp = %+v, want the issuer and the scopes of the configuration", corp)
 	}
 
