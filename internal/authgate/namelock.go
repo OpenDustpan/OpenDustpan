@@ -91,7 +91,8 @@ const (
 	// writer that waits for the lock gets a turn inside each pause.
 	NamePruneBatchPause = 150 * time.Millisecond
 	// MaxNamePruneRows is the most counts that one batch of the prune
-	// deletes. A run starts another batch while a batch deletes this many.
+	// deletes. When a batch deletes 10000 counts, the run waits 150
+	// milliseconds and starts another batch.
 	MaxNamePruneRows = 10000
 	// MaxNamePruneEnded is the most counts with a lock that ended, and that no
 	// attempt saw, that one batch of the prune deletes. Each such count gets

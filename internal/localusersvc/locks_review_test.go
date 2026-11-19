@@ -734,6 +734,35 @@ func TestPruneLocksChecksItsContextAfterThePause(t *testing.T) {
 	}
 }
 
+// TestPruneLocksStopsWhenThePauseEndsEarly proves that a pause that ends
+// before its time, with a live context, stops the run with its own error and
+// stop reason, and not with the error of a context. A run that reports
+// context.Canceled here fails this test.
+func TestPruneLocksStopsWhenThePauseEndsEarly(t *testing.T) {
+	t.Parallel()
+
+	full := int64(authgate.MaxNamePruneRows)
+	b := &batchPrune{NameLockCounter: nil, after: nil, calls: 0, batches: []int64{full, full, full}}
+	clock := localusersvc.PruneClock{
+		Now:   func() time.Time { return time.Unix(1_700_000_000, 0) },
+		Pause: func(context.Context, time.Duration) bool { return false },
+	}
+
+	res, err := localusersvc.PruneLocks(t.Context(), b, clock)
+	if !errors.Is(err, localusersvc.ErrPrunePauseEnded) {
+		t.Fatalf("error = %v, want ErrPrunePauseEnded", err)
+	}
+
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, must not be context.Canceled: the context is live", err)
+	}
+
+	if res.StopReason != localusersvc.PruneStopPauseEnded || res.Batches != 1 || res.Deleted != full {
+		t.Fatalf("result = %+v, want stop reason %q, 1 batch and %d deleted",
+			res, localusersvc.PruneStopPauseEnded, full)
+	}
+}
+
 // TestPruneLocksNeedsAClock proves that a run with no clock fails closed.
 func TestPruneLocksNeedsAClock(t *testing.T) {
 	t.Parallel()

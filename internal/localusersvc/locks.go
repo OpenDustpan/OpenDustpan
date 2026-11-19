@@ -394,7 +394,8 @@ func Prune() PruneSettings {
 
 // The reasons that a run of the prune stopped. A run that stops for
 // PruneStopShortBatch or PruneStopTimeBound returns no error. A run that stops
-// for PruneStopContext or PruneStopError returns an error.
+// for PruneStopContext, PruneStopPauseEnded or PruneStopError returns an
+// error.
 const (
 	// PruneStopShortBatch: a batch deleted less than its limit, so no old
 	// count is left.
@@ -405,9 +406,18 @@ const (
 	// PruneStopContext: the context of the run ended between two batches. The
 	// run returns the error of the context.
 	PruneStopContext = "context ended"
+	// PruneStopPauseEnded: the pause between two batches ended before its
+	// time while the context was still live. The run returns
+	// ErrPrunePauseEnded.
+	PruneStopPauseEnded = "pause ended early"
 	// PruneStopError: a batch returned an error.
 	PruneStopError = "batch error"
 )
+
+// ErrPrunePauseEnded is the error of a run that stopped because the pause
+// between two batches ended before its time and the context of the run was
+// still live. It is not the error of a context.
+var ErrPrunePauseEnded = errors.New("localusersvc: the pause between two prune batches ended before its time")
 
 // PruneClock is the time source of a run of the prune: the clock that sets
 // the time bound, and the pause between two batches. A test injects a fake.
@@ -465,8 +475,11 @@ type PruneResult struct {
 // continues. Each batch gets ctx itself, so a batch never ends in the middle
 // because of the time bound. When ctx ends between two batches, the run
 // stops with PruneStopContext and returns the error of ctx, wrapped. So the
-// runner sees the same interruption as when ctx ends inside a batch. A batch
-// that fails stops the run with the error and PruneStopError. The store appends the audit entry of each batch, with
+// runner sees the same interruption as when ctx ends inside a batch. When the
+// pause ends before its time and ctx is live, the run stops with
+// PruneStopPauseEnded and returns ErrPrunePauseEnded, wrapped: it does not
+// report a context that did not end. A batch that fails stops the run with
+// the error and PruneStopError. The store appends the audit entry of each batch, with
 // the server as the subject, the reason and the count that it deleted, in
 // the transaction of the delete. So each batch has its entry, also a batch
 // that deletes nothing. Deleted in the result is the sum of all batches,
@@ -524,6 +537,9 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, clock Prune
 
 		if err := pauseBetweenBatches(ctx, clock, p.BatchPause); err != nil {
 			res.StopReason = PruneStopContext
+			if errors.Is(err, ErrPrunePauseEnded) {
+				res.StopReason = PruneStopPauseEnded
+			}
 
 			return res, err
 		}
@@ -537,9 +553,10 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, clock Prune
 }
 
 // pauseBetweenBatches waits the pause of the clock between two batches. It
-// returns an error that wraps the error of ctx when ctx ended.
+// returns an error that wraps the error of ctx when ctx ended. It returns an
+// error that wraps ErrPrunePauseEnded when the pause ended early and ctx is
+// live.
 func pauseBetweenBatches(ctx context.Context, clock PruneClock, d time.Duration) error {
-	// A pause that ends early means that ctx ended.
 	paused := clock.Pause(ctx, d)
 
 	// Defense in depth: a pause that ends early reports the end of ctx too.
@@ -551,7 +568,7 @@ func pauseBetweenBatches(ctx context.Context, clock PruneClock, d time.Duration)
 	}
 
 	if ctxErr == nil {
-		ctxErr = context.Canceled
+		return fmt.Errorf("prune the name counts: stopped between batches: %w", ErrPrunePauseEnded)
 	}
 
 	return fmt.Errorf("prune the name counts: stopped between batches: %w", ctxErr)
