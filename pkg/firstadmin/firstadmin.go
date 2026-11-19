@@ -235,10 +235,15 @@ type Result struct {
 // the code is the principal of the session, the live row passes
 // CheckPrincipal, the sign-in is fresh. It then inserts the grant (the role
 // Role on the installation, with the creator of the code row as granter),
-// deletes the code row, stores the marker and appends the entry. It returns
-// ErrAlreadyMade, ErrCodeInvalid, ErrPrincipalInvalid, ErrStaleSignIn or
-// ErrGrantExists, and then changes nothing: a code that fails ErrGrantExists
-// is not spent.
+// deletes the code row, stores the marker and appends the entry. Before the
+// append, the transaction sets the reason of the entry to the reason of the
+// code row it read, and the change ChangeCreatedBy to the creator of that
+// row (StampRedeemEntry). The entry of the caller never decides these two
+// facts: an offer that replaced the code after the caller read State cannot
+// leave the reason or the creator of the old offer in the entry. Redeem
+// returns ErrAlreadyMade, ErrCodeInvalid, ErrPrincipalInvalid, ErrStaleSignIn
+// or ErrGrantExists, and then changes nothing: a code that fails
+// ErrGrantExists is not spent.
 //
 // State returns the marker and the open offer. It never returns a code or a
 // digest.
@@ -246,6 +251,43 @@ type Store interface {
 	State(ctx context.Context, now time.Time) (State, error)
 	Offer(ctx context.Context, in OfferInput, e audit.Entry) (OfferResult, error)
 	Redeem(ctx context.Context, in RedeemInput, e audit.Entry) (Result, error)
+}
+
+// ChangeCreatedBy is the key of the change of the redeem entry that holds the
+// creator of the code row.
+const ChangeCreatedBy = "createdBy"
+
+// StampRedeemEntry returns e with the reason and the creator that the stored
+// code row holds. Both store adapters call it inside the redeem transaction,
+// on the row they read there, so that the entry never holds the reason or the
+// creator of an offer that another offer replaced. It replaces the change
+// with the key ChangeCreatedBy, or adds it when e has none, and it leaves the
+// slice of e unchanged.
+func StampRedeemEntry(e audit.Entry, createdBy, reason string) audit.Entry {
+	changes := make([]audit.Change, 0, len(e.Changes)+1)
+	found := false
+
+	for _, c := range e.Changes {
+		if c.Key == ChangeCreatedBy {
+			c.New = createdBy
+			c.Old = nil
+			found = true
+		}
+
+		changes = append(changes, c)
+	}
+
+	if !found {
+		changes = append(
+			changes,
+			audit.Change{Key: ChangeCreatedBy, Old: nil, New: createdBy, Layer: "", TakesEffect: ""},
+		)
+	}
+
+	e.Changes = changes
+	e.Reason = reason
+
+	return e
 }
 
 // Facts are the rows a redeem reads in its transaction, for CheckRedeem.

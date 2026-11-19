@@ -128,8 +128,9 @@ helps.
 | --- | --- | --- | --- |
 | `400` | `first-administrator.code-invalid` | The code is wrong, used, older than 10 minutes, or made for another person. One text covers the four cases. | Ask for a new code with `POST /api/server/first-administrator` (step 3). |
 | `403` | `mfa.fresh-step-required` | The sign-in is too old, or the request has an access token. An access token never gives a fresh sign-in. | Sign in again in the console. Use the path in the answer (`reauthenticate`), and send the code in the new session. |
+| `403` | `access.denied` | The request to make the code does not use the bootstrap admin token. A personal token, a temporary administrator and a console session are refused. | Send the request with the bootstrap admin token (step 3). |
 | `409` | `first-administrator.already-made` | The installation has the marker. | Recover with `opendustpan host create-temp-admin` (see below). |
-| `400` | `first-administrator.principal-invalid` | The principal is not a live, enabled person, or it is a break-glass account, a temporary administrator, a service principal or a `dev:` subject. The text names the rule. | Send the principal ID of a live person who is not one of these. |
+| `400` | `first-administrator.principal-invalid` | The principal is not a live, enabled person, or it is a break-glass account, a temporary administrator, a service principal or a `dev:` subject. The audit entry of the refusal names the rule. | Send the principal ID of a live person who is not one of these. |
 | `400` | `first-administrator.reason-invalid` | The reason is blank, longer than 500 characters, not UTF-8, or has a control or format character. | Send a plain reason of 1 to 500 characters. |
 | `409` | `first-administrator.grant-exists` | The person holds the `site-administrator` role already. The server spends no code and stores no marker. | Ask for a code for another person, or let the person make the next grants. |
 

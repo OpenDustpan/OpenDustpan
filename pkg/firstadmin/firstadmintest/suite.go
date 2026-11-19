@@ -129,6 +129,7 @@ func RunFirstAdministrator(t *testing.T, newHarness Factory) {
 		{name: "TestRedeemSpent", test: testRedeemSpent},
 		{name: "TestRedeemGrantExists", test: testRedeemGrantExists},
 		{name: "TestOneRowOnly", test: testOneRowOnly},
+		{name: "TestRedeemEntryReasonFromCodeRow", test: testRedeemEntryReasonFromCodeRow},
 	}
 
 	for _, tc := range cases {
@@ -1077,4 +1078,115 @@ func testRawCodeAfterMarker(t *testing.T, h Harness) {
 
 	_, err := redeem(h, redeemInput(alice, digestA(), "grt-again"))
 	wantErr(t, "redeem with a code row after the marker", err, firstadmin.ErrAlreadyMade)
+}
+
+// testRedeemEntryReasonFromCodeRow replaces the offer after the caller built
+// its entry from the first one, as a service does between its read of the
+// state and the redeem. The entry that the transaction appends holds the
+// reason and the creator of the stored code row, not those of the entry of the
+// caller.
+func testRedeemEntryReasonFromCodeRow(t *testing.T, h Harness) {
+	t.Helper()
+
+	const (
+		staleReason  = "the reason of the offer that was replaced"
+		staleCreator = "stale-creator"
+		newReason    = "the reason of the offer in the store"
+		newCreator   = "host-two"
+	)
+
+	mustPrincipal(t, h, person(alice, aliceSubject))
+
+	stale := offerInput(alice, digestA())
+	stale.Reason = staleReason
+	stale.CreatedBy = staleCreator
+
+	if _, err := h.Store.Offer(t.Context(), stale, entry(offerAction, principal.Ref(alice))); err != nil {
+		t.Fatalf("first offer: %v", err)
+	}
+
+	// The caller read the state here and built its entry from the first offer.
+	callerEntry := entry(redeemAction, "@server")
+	callerEntry.Reason = staleReason
+	callerEntry.Changes = []audit.Change{
+		{Key: firstadmin.ChangeCreatedBy, Old: nil, New: staleCreator, Layer: "", TakesEffect: ""},
+		{Key: "role", Old: nil, New: firstadmin.Role, Layer: "", TakesEffect: ""},
+	}
+
+	// Another offer replaces the code before the redeem.
+	fresh := offerInput(alice, digestB())
+	fresh.Reason = newReason
+	fresh.CreatedBy = newCreator
+
+	if _, err := h.Store.Offer(t.Context(), fresh, entry(offerAction, principal.Ref(alice))); err != nil {
+		t.Fatalf("second offer: %v", err)
+	}
+
+	if _, err := h.Store.Redeem(t.Context(), redeemInput(alice, digestB(), aliceGrantID), callerEntry); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+
+	got := redeemEntry(t, h)
+
+	if got.Reason != newReason {
+		t.Fatalf("redeem entry reason = %q, want the reason of the stored code row %q", got.Reason, newReason)
+	}
+
+	wantStampedChanges(t, got, newCreator)
+
+	// The slice of the entry of the caller is unchanged.
+	if callerEntry.Changes[0].New != staleCreator {
+		t.Fatalf("the store changed the entry of the caller: %+v", callerEntry.Changes)
+	}
+}
+
+// redeemEntry returns the one audit entry of the redeem in the scope @server.
+func redeemEntry(t *testing.T, h Harness) audit.Entry {
+	t.Helper()
+
+	listing, err := h.Store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	var found []audit.Entry
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == redeemAction {
+			found = append(found, listing.Entries[i])
+		}
+	}
+
+	if len(found) != 1 {
+		t.Fatalf("redeem entries = %d, want 1", len(found))
+	}
+
+	return found[0]
+}
+
+// wantStampedChanges fails unless the entry has one creator change with the
+// creator of the stored code row, and the role change of the caller.
+func wantStampedChanges(t *testing.T, got audit.Entry, creator string) {
+	t.Helper()
+
+	creators, roles := 0, 0
+
+	for _, c := range got.Changes {
+		switch c.Key {
+		case firstadmin.ChangeCreatedBy:
+			creators++
+
+			if c.New != creator {
+				t.Fatalf("redeem entry creator = %v, want the creator of the stored code row %q", c.New, creator)
+			}
+		case "role":
+			roles++
+		default:
+			// Another change of the entry is not under test.
+		}
+	}
+
+	if creators != 1 || roles != 1 {
+		t.Fatalf("redeem entry changes = %+v, want one creator change and the role change kept", got.Changes)
+	}
 }

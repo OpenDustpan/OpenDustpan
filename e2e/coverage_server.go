@@ -11,9 +11,15 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/firstadminsvc"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/firstadmin"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
+
+// firstAdministratorCoveringTest names the test that covers the three routes
+// of the first administrator.
+const firstAdministratorCoveringTest = "TestFirstAdministratorPath"
 
 // coverageMetrics writes nothing: the route table needs a metrics writer,
 // and the coverage gate never serves a request.
@@ -39,47 +45,48 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{
-		ProxyRules:       coverageProxyRules(tb),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          coverageGitHost(tb),
-		Idempotency:      nil,
-		Instances:        nil,
-		Workers:          nil,
-		Namespaces:       coverageNamespaces(tb),
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      coverageMaintenance{},
-		Metrics:          coverageMetrics{},
-		TempAdmins:       nil,
-		Version:          "test",
-		Schema:           coverageSchema{},
-		Principals:       nil,
-		Access:           nil,
-		Reach:            coverageReach(),
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		IPAllowlists:     coverageIPAllowlists(tb),
-		Gates:            coverageGateConfig{},
-		SessionPolicy:    coverageSessionPolicies(tb),
-		SignIn:           nil,
-		CheckpointEpochs: nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		StoreChecks:      coverageStoreChecks(tb),
-		Cursors:          nil,
-		Now:              nil,
-		Authenticator:    coverageAuthenticator{},
-		Authorizer:       coverageAuthorizer{},
-		Logger:           slog.New(slog.DiscardHandler),
-		Journal:          nil,
-		Tokens:           nil,
-		Audit:            coverageAuditStore{},
-		OnAuditFailure:   nil,
-		DenialLimiter:    nil,
+		FirstAdministrator: coverageFirstAdministrator{},
+		ProxyRules:         coverageProxyRules(tb),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            coverageGitHost(tb),
+		Idempotency:        nil,
+		Instances:          nil,
+		Workers:            nil,
+		Namespaces:         coverageNamespaces(tb),
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        coverageMaintenance{},
+		Metrics:            coverageMetrics{},
+		TempAdmins:         nil,
+		Version:            "test",
+		Schema:             coverageSchema{},
+		Principals:         nil,
+		Access:             nil,
+		Reach:              coverageReach(),
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		IPAllowlists:       coverageIPAllowlists(tb),
+		Gates:              coverageGateConfig{},
+		SessionPolicy:      coverageSessionPolicies(tb),
+		SignIn:             nil,
+		CheckpointEpochs:   nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		StoreChecks:        coverageStoreChecks(tb),
+		Cursors:            nil,
+		Now:                nil,
+		Authenticator:      coverageAuthenticator{},
+		Authorizer:         coverageAuthorizer{},
+		Logger:             slog.New(slog.DiscardHandler),
+		Journal:            nil,
+		Tokens:             nil,
+		Audit:              coverageAuditStore{},
+		OnAuditFailure:     nil,
+		DenialLimiter:      nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -208,18 +215,18 @@ func operatorAllowEntries() []AllowEntry {
 		},
 		{
 			Method: http.MethodGet, Path: "/api/server/first-administrator",
-			CoveringTest: "TestFirstAdministratorPath",
+			CoveringTest: firstAdministratorCoveringTest,
 			Reason:       "Operator route: no CLI calls it. The harness reads the state before and after the redeem.",
 		},
 		{
 			Method: http.MethodPost, Path: "/api/server/first-administrator",
-			CoveringTest: "TestFirstAdministratorPath",
+			CoveringTest: firstAdministratorCoveringTest,
 			Reason: "Operator route: no CLI calls it. The harness asks for the code with the bootstrap " +
 				"admin token, and a second request after the marker answers 409.",
 		},
 		{
 			Method: http.MethodPost, Path: "/api/server/first-administrator/redeem",
-			CoveringTest: "TestFirstAdministratorPath",
+			CoveringTest: firstAdministratorCoveringTest,
 			Reason: "Console route: no CLI calls it. The harness redeems the code in a console session, " +
 				"and refuses an access token and a stale sign-in.",
 		},
@@ -234,4 +241,25 @@ func operatorAllowEntries() []AllowEntry {
 			Reason:       "Operator probe: no CLI calls it.",
 		},
 	}
+}
+
+// coverageFirstAdministrator is the service of the first administrator that
+// the route table needs to mount the three routes. No test of the table calls
+// it.
+type coverageFirstAdministrator struct{}
+
+func (coverageFirstAdministrator) State(context.Context) (firstadmin.State, error) {
+	return firstadmin.State{Marker: nil, Offer: nil}, nil
+}
+
+func (coverageFirstAdministrator) Offer(
+	context.Context, firstadminsvc.OfferInput,
+) (firstadminsvc.OfferResult, error) {
+	return firstadminsvc.OfferResult{}, firstadmin.ErrAlreadyMade
+}
+
+func (coverageFirstAdministrator) Redeem(
+	context.Context, firstadminsvc.RedeemInput,
+) (firstadmin.Result, error) {
+	return firstadmin.Result{}, firstadmin.ErrAlreadyMade
 }

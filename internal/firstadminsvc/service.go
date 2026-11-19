@@ -67,7 +67,7 @@ const (
 	changeRule     = "rule"
 	changeReplaced = "replaced"
 	changeGrant    = "grant"
-	changeCreator  = "createdBy"
+	changeCreator  = firstadmin.ChangeCreatedBy
 	changeSession  = "session"
 	changeRole     = "role"
 )
@@ -96,7 +96,7 @@ type Config struct {
 	// ident.NewID with access.GrantIDPrefix.
 	GrantID func() string
 	// Window returns the freshness window of the session policy.
-	Window func() time.Duration
+	Window func(ctx context.Context) time.Duration
 	// Logger receives the log records of the service.
 	Logger *slog.Logger
 }
@@ -282,7 +282,7 @@ func (s *Service) Redeem(ctx context.Context, in RedeemInput) (firstadmin.Result
 		now: s.cfg.Now(), request: in.Request, subject: in.Caller.Subject,
 		action: string(identity.ActionCallerRedeemFirstAdministrator), object: identity.ServerObject().String(),
 	}
-	window := s.cfg.Window()
+	window := s.cfg.Window(ctx)
 
 	if rule, err := screenRedeem(in, a.now, window); err != nil {
 		s.refuse(ctx, a, rule)
@@ -364,9 +364,15 @@ func screenRedeem(in RedeemInput, now time.Time, window time.Duration) (string, 
 	}
 }
 
-// openOffer reads the state and returns the open offer for the person. The
-// reason of the redeem entry is the reason of the offer, and only the state
-// gives it. An offer for another person gets the one answer of a wrong code.
+// openOffer reads the state and returns the open offer for the person. An
+// offer for another person gets the one answer of a wrong code.
+//
+// Defense in depth: the store transaction reads the code row again, and it
+// sets the reason and the creator of the entry from that row. The reason and
+// the creator that this read gives are a first value only: an offer can
+// replace the code between this read and the transaction, so the service never
+// relies on them. The read stays so that a request with no open offer for the
+// person never reaches the store.
 func (s *Service) openOffer(ctx context.Context, a attempt, principalID string) (firstadmin.Offer, error) {
 	state, err := s.cfg.Store.State(ctx, a.now)
 	if err != nil {

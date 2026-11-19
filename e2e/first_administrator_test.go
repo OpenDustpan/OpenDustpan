@@ -82,10 +82,14 @@ func TestFirstAdministratorPath(t *testing.T) {
 			}
 
 			t.Run("local user", func(t *testing.T) {
+				t.Parallel()
+
 				runFirstAdministratorLocalUser(t, e2e.NewEnv(t.Context(), t, tofu, db))
 			})
 
 			t.Run("stale sign-in", func(t *testing.T) {
+				t.Parallel()
+
 				runFirstAdministratorStaleSignIn(t, e2e.NewEnvWithSignIn(t.Context(), t, pulumi, db))
 			})
 		})
@@ -97,7 +101,6 @@ func TestFirstAdministratorPath(t *testing.T) {
 func runFirstAdministratorLocalUser(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	ctx := t.Context()
 	c := localClient{env: env, browser: env.BrowserClient(t)}
 	alice := signInAlice(t, c)
 
@@ -107,7 +110,8 @@ func runFirstAdministratorLocalUser(t *testing.T, env *e2e.Env) {
 	wantFirstAdminBody(t, "state before", before.body, `"made":false`, `"offer":null`)
 
 	// A console session is not the bootstrap administrator: it cannot ask for a code.
-	if refused := c.send(t, http.MethodPost, firstAdminPath, firstAdminOfferBody(alice.principal), asBrowser(alice.csrf)); refused.status != http.StatusForbidden {
+	refused := c.send(t, http.MethodPost, firstAdminPath, firstAdminOfferBody(alice.principal), asBrowser(alice.csrf))
+	if refused.status != http.StatusForbidden {
 		t.Fatalf("offer with a console session = %d, want 403: %s", refused.status, refused.body)
 	}
 
@@ -125,7 +129,35 @@ func runFirstAdministratorLocalUser(t *testing.T, env *e2e.Env) {
 	c.send(t, http.MethodPost, firstAdminRedeem, `{"code":"`+strings.Repeat("A", 43)+`"}`, asBrowser(alice.csrf)).
 		want(t, "redeem a wrong code", http.StatusBadRequest, "first-administrator.code-invalid")
 
-	// An access token never gives a fresh authentication.
+	checkAccessTokenRedeem(t, env, c, alice, offer.Code)
+
+	// Step 4 and 5: the person redeems the code in the console session.
+	redeemed := c.send(t, http.MethodPost, firstAdminRedeem, `{"code":"`+offer.Code+`"}`, asBrowser(alice.csrf))
+	redeemed.want(t, "redeem", http.StatusOK, "")
+
+	var done firstAdminRedeemed
+	if err := json.Unmarshal([]byte(redeemed.body), &done); err != nil ||
+		done.Principal != alice.principal || done.Role != siteAdminRole || done.Grant == "" || done.MadeAt == "" {
+		t.Fatalf(
+			"redeem = %s (%v), want the principal, the role %s, a grant ID and a time",
+			redeemed.body,
+			err,
+			siteAdminRole,
+		)
+	}
+
+	// The code is spent.
+	c.send(t, http.MethodPost, firstAdminRedeem, `{"code":"`+offer.Code+`"}`, asBrowser(alice.csrf)).
+		want(t, "redeem again", http.StatusConflict, "first-administrator.already-made")
+
+	checkFirstAdministratorAfter(t, c, alice, done)
+}
+
+// checkAccessTokenRedeem checks that an access token of the person never gives
+// the fresh authentication that the redeem needs.
+func checkAccessTokenRedeem(t *testing.T, env *e2e.Env, c localClient, alice signedInPerson, code string) {
+	t.Helper()
+
 	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	made := c.send(t, http.MethodPost, "/api/dustpan/v1/me/tokens",
 		`{"name":"first-administrator","expiresAt":"`+expires+`"}`, asBrowser(alice.csrf))
@@ -136,27 +168,12 @@ func runFirstAdministratorLocalUser(t *testing.T, env *e2e.Env) {
 		t.Fatalf("token = %s (%v)", made.body, err)
 	}
 
-	status, body, err := env.ServerAPIStatusAs(ctx, tok.Secret, http.MethodPost, firstAdminRedeem,
-		`{"code":"`+offer.Code+`"}`)
-	if err != nil || status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"mfa.fresh-step-required"`) {
+	status, body, err := env.ServerAPIStatusAs(t.Context(), tok.Secret, http.MethodPost, firstAdminRedeem,
+		`{"code":"`+code+`"}`)
+	if err != nil || status != http.StatusForbidden ||
+		!strings.Contains(body, `"errorCode":"mfa.fresh-step-required"`) {
 		t.Fatalf("redeem with an access token = %d, %v (%s); want 403 with mfa.fresh-step-required", status, err, body)
 	}
-
-	// Step 4 and 5: the person redeems the code in the console session.
-	redeemed := c.send(t, http.MethodPost, firstAdminRedeem, `{"code":"`+offer.Code+`"}`, asBrowser(alice.csrf))
-	redeemed.want(t, "redeem", http.StatusOK, "")
-
-	var done firstAdminRedeemed
-	if err := json.Unmarshal([]byte(redeemed.body), &done); err != nil ||
-		done.Principal != alice.principal || done.Role != siteAdminRole || done.Grant == "" || done.MadeAt == "" {
-		t.Fatalf("redeem = %s (%v), want the principal, the role %s, a grant ID and a time", redeemed.body, err, siteAdminRole)
-	}
-
-	// The code is spent.
-	c.send(t, http.MethodPost, firstAdminRedeem, `{"code":"`+offer.Code+`"}`, asBrowser(alice.csrf)).
-		want(t, "redeem again", http.StatusConflict, "first-administrator.already-made")
-
-	checkFirstAdministratorAfter(t, c, alice, done)
 }
 
 // checkFirstAdministratorAfter checks step 6 of the guide: the state, the
@@ -250,15 +267,25 @@ func runFirstAdministratorStaleSignIn(t *testing.T, env *e2e.Env) {
 
 	stale := b.tokenChange(t, firstAdminRedeem, `{"code":"`+offer.Code+`"}`)
 	if stale.status != http.StatusForbidden || !strings.Contains(stale.body, `"errorCode":"mfa.fresh-step-required"`) {
-		t.Fatalf("redeem with a stale sign-in = %d, want 403 with mfa.fresh-step-required: %s", stale.status, stale.body)
+		t.Fatalf(
+			"redeem with a stale sign-in = %d, want 403 with mfa.fresh-step-required: %s",
+			stale.status,
+			stale.body,
+		)
 	}
 
-	// The refusal changes nothing: a new sign-in redeems the same code.
-	b.signIn(t)
+	// The refusal changes nothing: a new authentication at the provider, with
+	// the path of the answer, redeems the same code.
+	reauthenticate(t, b, env, stale.body)
 
 	fresh := b.tokenChange(t, firstAdminRedeem, `{"code":"`+offer.Code+`"}`)
 	if fresh.status != http.StatusOK || !strings.Contains(fresh.body, siteAdminRole) {
-		t.Fatalf("redeem with a new sign-in = %d, want 200 with the role %s: %s", fresh.status, siteAdminRole, fresh.body)
+		t.Fatalf(
+			"redeem with a new sign-in = %d, want 200 with the role %s: %s",
+			fresh.status,
+			siteAdminRole,
+			fresh.body,
+		)
 	}
 }
 
@@ -275,5 +302,30 @@ func wantFirstAdminBody(t *testing.T, step, body string, parts ...string) {
 		if !strings.Contains(body, part) {
 			t.Fatalf("%s = %s, want it to hold %s", step, body, part)
 		}
+	}
+}
+
+// reauthenticate runs the new authentication that the refusal body names: the
+// start of a sign-in with max_age=0, the provider and the callback.
+func reauthenticate(t *testing.T, b browser, env *e2e.Env, refusalBody string) {
+	t.Helper()
+
+	var refusal struct {
+		Reauthenticate string `json:"reauthenticate"`
+	}
+
+	if err := json.Unmarshal([]byte(refusalBody), &refusal); err != nil || refusal.Reauthenticate == "" {
+		t.Fatalf("the refusal has no path of a new sign-in: %s", refusalBody)
+	}
+
+	start := b.do(t, b.server, http.MethodGet, env.URL+refusal.Reauthenticate+"&return=/console", nil)
+	if start.status != http.StatusFound || !strings.Contains(start.location, "max_age=0") {
+		t.Fatalf("fresh sign-in start = %d to %q, want 302 with max_age=0", start.status, start.location)
+	}
+
+	auth := b.do(t, b.idp, http.MethodGet, start.location, nil)
+
+	if back := b.do(t, b.server, http.MethodGet, auth.location, nil); back.status != http.StatusSeeOther {
+		t.Fatalf("fresh callback = %d, want 303 after a new authentication: %s", back.status, back.body)
 	}
 }

@@ -145,7 +145,7 @@ func (s *Store) Redeem(ctx context.Context, in firstadmin.RedeemInput, e audit.E
 
 	var result firstadmin.Result
 
-	err := s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	err := s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
 		facts, code, err := readRedeemFacts(ctx, q, in)
 		if err != nil {
 			return err
@@ -193,6 +193,12 @@ func (s *Store) Redeem(ctx context.Context, in firstadmin.RedeemInput, e audit.E
 		if err := q.InsertFirstAdministratorMarker(ctx, marker); err != nil {
 			return fmt.Errorf("insert first administrator marker: %w", err)
 		}
+
+		// The reason and the creator come from the code row of this
+		// transaction, never from the entry of the caller: an offer that
+		// replaced the code after the caller read the state cannot leave its
+		// own reason in the entry.
+		e = firstadmin.StampRedeemEntry(e, code.CreatedBy, code.Reason)
 
 		result = firstadmin.Result{
 			MadeAt:      codec.FromMillis(marker.MadeAtMs),

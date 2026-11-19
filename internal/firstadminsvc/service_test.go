@@ -262,7 +262,7 @@ func newRig(t *testing.T, mutate func(*rig)) *rig {
 		Now:     clock,
 		Random:  r.random,
 		GrantID: func() string { return r.grantID },
-		Window:  func() time.Duration { return r.window },
+		Window:  func(context.Context) time.Duration { return r.window },
 		Logger:  slog.New(slog.NewTextHandler(r.logs, nil)),
 	})
 	if err != nil {
@@ -382,7 +382,7 @@ func TestNewRefusesMissingDependency(t *testing.T) {
 		return firstadminsvc.Config{
 			Store: r.store, Principals: r.principals, TempAdmins: r.temps, Audit: r.audit,
 			Now: clock, Random: r.random,
-			GrantID: func() string { return "grt-x" }, Window: func() time.Duration { return window },
+			GrantID: func() string { return "grt-x" }, Window: func(context.Context) time.Duration { return window },
 			Logger: slog.New(slog.DiscardHandler),
 		}
 	}
