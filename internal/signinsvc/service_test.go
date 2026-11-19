@@ -1092,3 +1092,33 @@ func TestCompleteDisableLastAdministrator(t *testing.T) {
 		checkRefusedEntry(t, w, signinsvc.ReasonDisableLastAdmin, "corp", session.MethodOIDC)
 	}
 }
+
+// TestCompleteRefusesAFailedTemporaryAdministratorRead sends the error of a
+// failed read of the temporary administrators from the principal step. The
+// service must refuse with the coded reason, write a failure entry, keep the
+// cause, log it and start no session.
+func TestCompleteRefusesAFailedTemporaryAdministratorRead(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.principalErr = fmt.Errorf("%w: principal:p1: %w", principal.ErrTempAdminRead, errStoreStopped)
+
+	_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
+	r := refusalOf(t, err)
+
+	if r.Reason != signinsvc.ReasonTargetLookup || r.Answer != signinsvc.AnswerFailed {
+		t.Fatalf("refusal = %q %v, want %q failed", r.Reason, r.Answer, signinsvc.ReasonTargetLookup)
+	}
+
+	checkRefusalCause(t, err, errStoreStopped)
+	checkCauseLogged(t, w, errStoreStopped)
+	checkRefusedEntry(t, w, signinsvc.ReasonTargetLookup, "corp", session.MethodOIDC)
+
+	if w.entries[0].Outcome != audit.OutcomeFailure {
+		t.Fatalf("outcome = %q, want %q", w.entries[0].Outcome, audit.OutcomeFailure)
+	}
+
+	if len(w.starts) != 0 {
+		t.Fatalf("sessions started = %d, want none", len(w.starts))
+	}
+}

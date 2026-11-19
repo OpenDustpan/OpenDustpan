@@ -478,7 +478,9 @@ func (h *Handler) runPrincipalOp(
 
 // writePrincipalResult writes the status and the body of a success. A body
 // that holds principals carries the banner flag of each working temporary
-// administrator. A failed flag read answers 500 with the usual error body.
+// administrator. A failed flag read answers 500 with the usual error body
+// for a read. After a committed write it answers the stored principal, each
+// person marked (fail closed), and logs a warning.
 func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult) {
 	if res.body == nil {
 		w.WriteHeader(res.status)
@@ -488,12 +490,53 @@ func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, r
 
 	marked, err := h.markTempAdmin(r.Context(), res.body)
 	if err != nil {
-		h.writeError(r.Context(), w, err)
+		// A read cannot have stored anything: it answers the error. Any
+		// other method reaches here after a committed write.
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			h.writeError(r.Context(), w, err)
 
-		return
+			return
+		}
+
+		// The write is stored, so the answer must match the stored state.
+		// Fail closed: each person of the body is marked as a temporary
+		// administrator, the safe direction for a banner. The log holds the
+		// error type only: the text of a store error can hold driver text.
+		h.logger.WarnContext(r.Context(), "the temporary administrator read failed after a principal write",
+			slog.String("principal", res.object), slog.String("cause", causeType(err)))
+
+		marked = markAllTempAdmin(res.body)
 	}
 
 	h.writeJSON(r.Context(), w, res.status, marked)
+}
+
+// markAllTempAdmin sets the banner flag on each person of a body that holds
+// principals, with no expiry time. It is the fail-closed answer when the read
+// of the records failed: it never hides a temporary administrator.
+func markAllTempAdmin(body any) any {
+	mark := func(res principalResponse) principalResponse {
+		if res.Kind == string(principal.KindPerson) {
+			res.TemporaryAdministrator = true
+		}
+
+		return res
+	}
+
+	switch v := body.(type) {
+	case principalResponse:
+		return mark(v)
+	case principalListResponse:
+		return markTempAdminPage(v, mark)
+	case memberResponse:
+		v.Principal = mark(v.Principal)
+
+		return v
+	case memberListResponse:
+		return markTempAdminMembers(v, mark)
+	default:
+		return body
+	}
 }
 
 // ok returns the result of a success.

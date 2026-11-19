@@ -355,11 +355,12 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 		Subject: subject, Source: source, Names: a.Names, Create: req.Provider.AutoCreate,
 	})
 	if reason := principalRefusal(err); reason != "" {
-		return none, s.refuse(
-			ctx,
-			req,
-			&refusal{reason: reason, answer: AnswerRefused, idpSubject: a.Subject, cause: nil},
-		)
+		if reason == ReasonTargetLookup {
+			s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
+				slog.String("provider", req.Provider.ID), slog.String("error", err.Error()))
+		}
+
+		return none, s.refuse(ctx, req, principalRefusalOf(reason, a.Subject, err))
 	}
 
 	if err != nil {
@@ -761,11 +762,25 @@ func principalRefusal(err error) string {
 		return ReasonDisabled
 	case errors.Is(err, principal.ErrNotSignInTarget):
 		return ReasonNotTarget
+	case errors.Is(err, principal.ErrTempAdminRead):
+		return ReasonTargetLookup
 	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject):
 		return ReasonSubject
 	default:
 		return ""
 	}
+}
+
+// principalRefusalOf returns the refusal for the reason of principalRefusal.
+// A failed read of the temporary administrators is a failure, not a denial:
+// the server could not decide. It keeps the cause, and the sign-in stays
+// refused (fail closed).
+func principalRefusalOf(reason, idpSubject string, err error) *refusal {
+	if reason == ReasonTargetLookup {
+		return &refusal{reason: reason, answer: AnswerFailed, idpSubject: idpSubject, cause: err}
+	}
+
+	return &refusal{reason: reason, answer: AnswerRefused, idpSubject: idpSubject, cause: nil}
 }
 
 // startChanges returns the changes of the audit entry of a session: the kind

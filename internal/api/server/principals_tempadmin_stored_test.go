@@ -1,0 +1,212 @@
+package server_test
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"sync"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+)
+
+const storedPrincipalWarning = "the temporary administrator read failed after a principal write"
+
+// tempAdminReadError is the error of a failed read of the temporary
+// administrator records. Its type is the cause that the log must hold.
+type tempAdminReadError struct{}
+
+func (tempAdminReadError) Error() string { return "temp admin store: disk I/O error" }
+
+// markedPrincipalDoc is a principal on the wire with the banner flag.
+type markedPrincipalDoc struct {
+	ID                     string  `json:"id"`
+	Subject                string  `json:"subject"`
+	Kind                   string  `json:"kind"`
+	TemporaryAdministrator bool    `json:"temporaryAdministrator"`
+	TemporaryExpiresAt     *string `json:"temporaryExpiresAt"`
+}
+
+// storedPrincipalCase is one row of TestStoredPrincipalOnFailedTempAdminRead.
+type storedPrincipalCase struct {
+	name    string
+	kind    string
+	failing bool
+	change  bool
+	marked  bool
+}
+
+// TestStoredPrincipalOnFailedTempAdminRead proves that a principal create and
+// a principal change answer the stored principal when the read of the
+// temporary administrator records fails: the status is the success status,
+// the person is marked (fail closed), the audit log holds one success entry,
+// and the log holds one warning with the principal ID and the error type
+// only. A working read answers the real flag and writes no warning.
+func TestStoredPrincipalOnFailedTempAdminRead(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []storedPrincipalCase{
+		{name: "create person fails closed", kind: "person", failing: true, change: false, marked: true},
+		{name: "change person fails closed", kind: "person", failing: true, change: true, marked: true},
+		{name: "create service is not marked", kind: "service", failing: true, change: false, marked: false},
+		{name: "create reads the flag", kind: "person", failing: false, change: false, marked: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runStoredPrincipalCase(t, tc)
+		})
+	}
+}
+
+// runStoredPrincipalCase runs one row of TestStoredPrincipalOnFailedTempAdminRead.
+func runStoredPrincipalCase(t *testing.T, tc storedPrincipalCase) {
+	t.Helper()
+
+	svc, st := newTestPrincipalStore(t)
+	log := &capturedLog{mu: sync.Mutex{}, records: nil}
+	opts := principalHandlerOptions{
+		now: nil, authenticator: nil, logger: slog.New(log), onAuditFailure: nil, tempAdmins: nil,
+	}
+
+	if tc.failing {
+		opts.tempAdmins = failingTempAdmins{err: tempAdminReadError{}}
+	}
+
+	h := newReachPrincipalHandlerWith(t, svc, st, routeReach(st), opts)
+
+	var doc markedPrincipalDoc
+
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"` + tc.kind + `"}`,
+		http.StatusCreated,
+	}, &doc)
+
+	writes := 1
+
+	if tc.change {
+		created := doc
+
+		mustCall(t, h, apiCall{
+			http.MethodPatch, "/api/server/principals/" + created.ID,
+			`{"displayName":"Alice B"}`, http.StatusOK,
+		}, &doc)
+
+		if doc.ID != created.ID {
+			t.Fatalf("changed ID = %q, want %q", doc.ID, created.ID)
+		}
+
+		writes = 2
+	}
+
+	if doc.TemporaryAdministrator != tc.marked {
+		t.Errorf("temporaryAdministrator = %t, want %t", doc.TemporaryAdministrator, tc.marked)
+	}
+
+	if doc.TemporaryExpiresAt != nil {
+		t.Errorf("temporaryExpiresAt = %q, want none", *doc.TemporaryExpiresAt)
+	}
+
+	want := 0
+	if tc.failing {
+		want = writes
+	}
+
+	checkStoredPrincipalWarnings(t, log, doc.ID, want)
+	checkStoredPrincipalEntries(t, st, doc.ID, writes)
+}
+
+// TestReadStaysAnErrorOnFailedTempAdminRead proves that a read, which stored
+// nothing, still answers 500 when the read of the records fails: the fail-closed
+// mark applies only after a committed write.
+func TestReadStaysAnErrorOnFailedTempAdminRead(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	opts := principalHandlerOptions{
+		now: nil, authenticator: nil, logger: slog.New(slog.DiscardHandler), onAuditFailure: nil,
+		tempAdmins: failingTempAdmins{err: tempAdminReadError{}},
+	}
+	h := newReachPrincipalHandlerWith(t, svc, st, routeReach(st), opts)
+
+	for _, path := range []string{"/api/server/principals"} {
+		status, body := call(t, h, apiCall{http.MethodGet, path, "", http.StatusInternalServerError})
+		if status != http.StatusInternalServerError || !json.Valid([]byte(body)) {
+			t.Errorf("GET %s = %d %s, want 500 with a JSON error", path, status, body)
+		}
+	}
+}
+
+// checkStoredPrincipalWarnings proves the warnings of the log: want of them,
+// each with the principal ID and the error type only, and no record with the
+// text of the failed read.
+func checkStoredPrincipalWarnings(t *testing.T, log *capturedLog, id string, want int) {
+	t.Helper()
+
+	var warnings []slog.Record
+
+	records := log.snapshot()
+	for i := range records {
+		if records[i].Message == storedPrincipalWarning && records[i].Level == slog.LevelWarn {
+			warnings = append(warnings, records[i])
+		}
+
+		records[i].Attrs(func(a slog.Attr) bool {
+			if a.Value.String() == (tempAdminReadError{}).Error() {
+				t.Errorf("attribute %q holds the text of the failed read", a.Key)
+			}
+
+			return true
+		})
+	}
+
+	if len(warnings) != want {
+		t.Fatalf("warnings = %d, want %d", len(warnings), want)
+	}
+
+	if want == 0 {
+		return
+	}
+
+	last := warnings[len(warnings)-1]
+	if got := attrOf(last, "principal"); got != "principal:"+id {
+		t.Errorf("principal of the warning = %q, want %q", got, "principal:"+id)
+	}
+
+	if got := attrOf(last, "cause"); got != "server_test.tempAdminReadError" {
+		t.Errorf("cause of the warning = %q, want the error type", got)
+	}
+}
+
+// checkStoredPrincipalEntries proves that the audit log holds one success
+// entry for each write of the principal, and no failure entry.
+func checkStoredPrincipalEntries(t *testing.T, st *sqlite.Store, id string, writes int) {
+	t.Helper()
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	count := 0
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Object != "principal:"+id || e.Action != string(identity.ActionServerManagePrincipals) {
+			continue
+		}
+
+		count++
+
+		if e.Outcome != audit.OutcomeSuccess {
+			t.Errorf("entry outcome = %q, want success", e.Outcome)
+		}
+	}
+
+	if count != writes {
+		t.Fatalf("entries for the principal = %d, want %d", count, writes)
+	}
+}
