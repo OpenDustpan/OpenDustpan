@@ -505,6 +505,7 @@ The CLI cannot give a fresh authentication.
 It prints where to approve and ends with an error.
 
 `opendustpan audit-chain status --server https://dustpan.example` shows the state of the chain and whether a change waits.
+The command reads the admin token from `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).

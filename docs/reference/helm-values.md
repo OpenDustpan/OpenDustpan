@@ -74,11 +74,11 @@ The key-encryption key. The server stops at start without one. Make it once with
 
 ## `adminToken`
 
-Optional bootstrap admin tokens, comma-separated, from a Secret. The pod gets them in `DUSTPAN_ADMIN_TOKEN`. Empty name means no bootstrap admin token.
+Required. The bootstrap admin tokens, comma-separated, from a Secret. The pod gets them in `DUSTPAN_ADMIN_TOKEN`. `serve` exits with `no admin token is set` without a token, so the chart refuses an empty name. The chart never makes a token.
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `adminToken.existingSecret.name` | `""` | The name of a Secret with the bootstrap admin tokens. Empty means no bootstrap admin token. |
+| `adminToken.existingSecret.name` | `""` | Required. The name of a Secret with the bootstrap admin tokens. |
 | `adminToken.existingSecret.key` | `admin-token` | The key in the Secret that holds the tokens. |
 
 ## `s3`

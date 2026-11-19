@@ -36,6 +36,9 @@ func sqliteGitHostBackupTables() []sqliteBackupTable {
 				backupColVersion,
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
+				"old_event_secret_ends_at_ms",
+				"old_event_secret_set_id",
+				"old_sealed_event_secret",
 			},
 		},
 		{
@@ -89,7 +92,8 @@ func checkStagedGitHost(ctx context.Context, conn *sql.DB) error {
 func checkStagedRegistrations(ctx context.Context, conn *sql.DB) error {
 	const query = `SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms,
 sealed_event_secret, event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms,
-updated_at_ms FROM git_host_app_registrations`
+updated_at_ms, old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
+FROM git_host_app_registrations`
 
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
@@ -106,7 +110,8 @@ updated_at_ms FROM git_host_app_registrations`
 		scanErr := rows.Scan(
 			&row.Kind, &row.AppID, &row.BaseURL, &row.HookID, &row.SealedKey, &row.KeySetID, &row.KeyCreatedAtMs,
 			&row.SealedEventSecret, &row.EventSecretSetID, &row.EventSecretCreatedAtMs, &row.AddressDigest,
-			&row.Version, &row.CreatedAtMs, &row.UpdatedAtMs,
+			&row.Version, &row.CreatedAtMs, &row.UpdatedAtMs, &row.OldEventSecretEndsAtMs, &row.OldEventSecretSetID,
+			&row.OldSealedEventSecret,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged Git host registrations: %w", backup.ErrExportRead)

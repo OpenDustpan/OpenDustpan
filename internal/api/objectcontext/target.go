@@ -3,14 +3,25 @@ package objectcontext
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/logtext"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
+
+// maxUnitIDLength bounds the unit ID of a path. A longer value is no unit ID.
+const maxUnitIDLength = 100
+
+// deletedLookupLimit is the page size of the lookup of one deleted unit. Two
+// rows let a store that breaks the unit ID filter show itself.
+const deletedLookupLimit = 2
 
 // target is the object of a request, found before any authorization check.
 // unit is set for a live unit and deleted for a soft-deleted unit; both are
@@ -71,15 +82,28 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (targe
 
 	unitID := r.PathValue("unit_id")
 
-	live, err := h.units.GetUnit(r.Context(), unitID)
+	// Defense in depth: the route and the store may check the ID too; this
+	// boundary check stays so that a raw path value never reaches the store.
+	if !ident.Valid(unitID, maxUnitIDLength) {
+		return target{}, errNotFound
+	}
 
-	switch {
-	case err == nil && live.Namespace == ns.Name:
-		return h.liveTarget(ns, live)
-	case err == nil, errors.Is(err, coreinventory.ErrUnitNotFound):
-		// A live unit of another namespace takes the path of an unknown ID,
-		// so the answer does not tell a caller that the unit exists.
-	default:
+	// The unit ID is unique in the installation, so one indexed read finds the
+	// unit. The read never loads the units of the namespace before any
+	// authorization check.
+	live, err := h.units.GetUnit(r.Context(), unitID)
+	if err == nil {
+		// Defense in depth: GetUnit names no namespace. A unit of another
+		// namespace must not answer under this one, whatever the caller may
+		// read there.
+		if live.Namespace != ns.Name || live.UnitID != unitID {
+			return target{}, errNotFound
+		}
+
+		return h.liveTarget(r, ns, live)
+	}
+
+	if !errors.Is(err, coreinventory.ErrUnitNotFound) {
 		return target{}, fmt.Errorf("get unit: %w", err)
 	}
 
@@ -87,15 +111,15 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (targe
 }
 
 // liveTarget returns the target of the live unit e.
-func (h *Handler) liveTarget(ns namespace.Namespace, e coreinventory.Entry) (target, error) {
+func (h *Handler) liveTarget(r *http.Request, ns namespace.Namespace, e coreinventory.Entry) (target, error) {
 	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: e.Tool, ID: e.UnitID})
 	if ref.Validate() != nil {
-		return target{}, errNotFound
+		return target{}, h.damagedRow(r, e.UnitID, ref.Validate())
 	}
 
 	obj, err := unitObject(e.Tool, ns.Name, e.Name, e.UnitID)
 	if err != nil {
-		return target{}, err
+		return target{}, h.damagedRow(r, e.UnitID, err)
 	}
 
 	return target{ns: ns, obj: obj, ref: ref, unit: &e, deleted: nil, lookupErr: nil}, nil
@@ -104,14 +128,23 @@ func (h *Handler) liveTarget(ns namespace.Namespace, e coreinventory.Entry) (tar
 // deletedTargetByID returns the target of the soft-deleted unit unitID, or
 // errNotFound.
 func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, unitID string) (target, error) {
-	all, err := h.deleted.ListDeletedUnits(r.Context(), ns.Name)
+	// One restricted query finds the unit. It never loads the soft-deleted
+	// units of the namespace before any authorization check. The page holds
+	// two rows at most.
+	page, err := h.deleted.QueryDeletedUnits(r.Context(), coreinventory.DeletedQuery{
+		PurgeBefore: time.Time{}, After: nil, Namespace: ns.Name, Tool: "", NamePrefix: "",
+		UnitIDs: []string{unitID}, Limit: deletedLookupLimit, Restricted: true,
+	})
 	if err != nil {
-		return target{}, fmt.Errorf("list deleted units: %w", err)
+		return target{}, fmt.Errorf("query deleted units: %w", err)
 	}
 
-	for i := range all {
-		if all[i].UnitID == unitID {
-			return h.goneTarget(ns, all[i])
+	for i := range page.Entries {
+		// Defense in depth: the store filters by namespace and unit ID. A row
+		// of another namespace or unit must not answer here, whatever the
+		// store returned.
+		if page.Entries[i].UnitID == unitID && page.Entries[i].Namespace == ns.Name {
+			return h.goneTarget(r, ns, page.Entries[i])
 		}
 	}
 
@@ -119,15 +152,15 @@ func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, uni
 }
 
 // goneTarget returns the target of the soft-deleted unit gone.
-func (h *Handler) goneTarget(ns namespace.Namespace, gone coreinventory.DeletedEntry) (target, error) {
+func (h *Handler) goneTarget(r *http.Request, ns namespace.Namespace, gone coreinventory.DeletedEntry) (target, error) {
 	ref := objectcontext.UnitRef(graph.Unit{Namespace: ns.Name, Tool: gone.Tool, ID: gone.UnitID})
 	if ref.Validate() != nil {
-		return target{}, errNotFound
+		return target{}, h.damagedRow(r, gone.UnitID, ref.Validate())
 	}
 
 	obj, err := unitObject(gone.Tool, ns.Name, gone.Name, gone.UnitID)
 	if err != nil {
-		return target{}, err
+		return target{}, h.damagedRow(r, gone.UnitID, err)
 	}
 
 	return target{ns: ns, obj: obj, ref: ref, unit: nil, deleted: &gone, lookupErr: nil}, nil
@@ -141,4 +174,15 @@ func unitObject(tool string, ns namespace.Name, name, unitID string) (identity.O
 	}
 
 	return obj.WithUnitID(unitID), nil
+}
+
+// damagedRow logs the cause of a stored unit row that fails its checks and
+// returns errNotFound. The row answers as an unknown unit, before any
+// authorization check, so that a caller with no right on the unit cannot tell
+// that the row exists.
+func (h *Handler) damagedRow(r *http.Request, unitID string, cause error) error {
+	h.logger.WarnContext(r.Context(), "stored unit row is not served",
+		slog.String("unit_id", logtext.Clean(unitID)), slog.String("error", logtext.Clean(cause.Error())))
+
+	return errNotFound
 }

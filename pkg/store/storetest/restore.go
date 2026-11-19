@@ -131,6 +131,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore leaves no job token", test: testRestoreEmptiesJobTokens},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},
+		{name: "a restore brings back the old event secret of a registration", test: testRestoreKeepsOldEventSecret},
 		{
 			name: "a restore keeps a principal created after the backup with its child rows",
 			test: testRestoreKeepsLiveOnlyPrincipal,
@@ -1974,6 +1975,8 @@ func seedRunningUpdate(t *testing.T, src BackupStore) {
 	if err := updates.CreateStack(t.Context(), st, ns.Fence()); err != nil {
 		t.Fatalf("create stack: %v", err)
 	}
+
+	PlaceStack(t, updates, st.Ref)
 
 	f := fixture{s: updates, ref: st.Ref, fence: ns.Fence()}
 	f.run(t, f.ref, "u1", mutating())

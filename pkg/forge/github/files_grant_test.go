@@ -117,6 +117,14 @@ func TestTokenConnectionAlwaysListsFiles(t *testing.T) {
 func rawApp(t *testing.T, tokenBody string) rawHost {
 	t.Helper()
 
+	return rawAppAt(t, tokenBody, nil)
+}
+
+// rawAppAt is rawApp with a clock for the adapter. Nil means the time of the
+// system.
+func rawAppAt(t *testing.T, tokenBody string, now func() time.Time) rawHost {
+	t.Helper()
+
 	var reads atomic.Int64
 
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +158,7 @@ func rawApp(t *testing.T, tokenBody string) rawHost {
 	pool.AddCert(srv.Certificate())
 
 	o, err := github.NewOpener(
-		github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: testProver{}, AppBudget: nil},
+		github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: now, Prover: testProver{}, AppBudget: nil},
 	)
 	if err != nil {
 		t.Fatal(err)

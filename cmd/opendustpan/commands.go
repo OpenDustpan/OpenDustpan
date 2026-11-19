@@ -80,7 +80,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 
 	cmd, rest, ok := commandTable().Match(args)
 	if !ok {
-		return errUsage
+		return unknownCommand(commandTable(), args)
 	}
 
 	err := cmd.Run(ctx, rest, stdout, stderr)
@@ -89,4 +89,36 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 
 	return err
+}
+
+// commandError is the error of a command line that names no command. It
+// matches errUsage, so a caller that tests for the usage error keeps working.
+type commandError struct {
+	text string
+}
+
+// Error returns the short text with the one command that helps, then the
+// usage groups.
+func (e *commandError) Error() string {
+	return e.text + "\n" + errUsage.Error()
+}
+
+// Is reports that the error is the usage error.
+func (e *commandError) Is(target error) bool {
+	return target == errUsage
+}
+
+// unknownCommand returns the error for args that match no command. It says
+// if the first word is not a command, or if it is the start of a command that
+// needs more words.
+func unknownCommand(table cli.Table, args []string) error {
+	const help = ": run opendustpan --help for the list of commands"
+
+	for _, cand := range table {
+		if len(cand.Path) > 0 && cand.Path[0] == args[0] {
+			return &commandError{text: fmt.Sprintf("the command %q is not complete or is not known", args[0]) + help}
+		}
+	}
+
+	return &commandError{text: fmt.Sprintf("unknown command %q", args[0]) + help}
 }

@@ -92,7 +92,7 @@ func UpgradeCheck(
 		return err
 	}
 
-	token, err := BackupToken()
+	token, err := backupTokenFor("run opendustpan upgrade check again")
 	if err != nil {
 		return err
 	}

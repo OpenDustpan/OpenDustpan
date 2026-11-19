@@ -87,7 +87,14 @@ type SignInProvider struct {
 	Method      session.RedirectMethod
 	ID          string
 	DisplayName string
-	AutoCreate  bool
+	// Issuer, ClientID and Scopes are the effective settings of a provider
+	// of the configuration of the server. The list of the sign-in providers
+	// shows them. A stored provider reads them from its own record, so these
+	// fields stay empty for it. They never hold the client secret.
+	Issuer     string
+	ClientID   string
+	Scopes     []string
+	AutoCreate bool
 	// Stored reports a provider that the API keeps. Its session is created
 	// in the same write as a check that the provider is still enabled.
 	Stored bool
@@ -194,6 +201,9 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 			Method:      nil,
 			ID:          "",
 			DisplayName: "",
+			Issuer:      "",
+			ClientID:    "",
+			Scopes:      nil,
 			AutoCreate:  false,
 			Stored:      false,
 		}, false, nil

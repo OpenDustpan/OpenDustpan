@@ -31,8 +31,11 @@ func TestGitHostHeaderFlagsMatchTheHandler(t *testing.T) {
 		t.Run(op.ID, func(t *testing.T) {
 			t.Parallel()
 
-			// The check route changes no value, so it refuses the key.
-			headertest.Check(t, op, scenario, headertest.Options{RefusesKey: op.ID == "checkGitHostConnection"})
+			// The check route changes no value, and the confirm of a rotation ends
+			// a window that a second call finds closed, so both refuse the key.
+			headertest.Check(t, op, scenario, headertest.Options{
+				RefusesKey: op.ID == "checkGitHostConnection" || op.ID == "confirmGitHostAppRotation",
+			})
 		})
 	}
 }
@@ -84,6 +87,7 @@ func gitHostScenarios() map[string]headertest.Scenario {
 		"getGitHostApp":                probe(http.MethodGet, app, "", ""),
 		"putGitHostApp":                probe(http.MethodPut, app, hostAppBody(), app),
 		"deleteGitHostApp":             probe(http.MethodDelete, app, "", app, unassign),
+		"confirmGitHostAppRotation":    probe(http.MethodPost, app+"/confirm-rotation", "", app, rotate),
 		"listGitHostInstallations":     probe(http.MethodGet, installs, "", ""),
 		"getGitHostInstallation":       probe(http.MethodGet, install, "", ""),
 		"putGitHostInstallation":       probe(http.MethodPut, install, `{"namespace":"beta"}`, install),
@@ -95,6 +99,13 @@ func gitHostScenarios() map[string]headertest.Scenario {
 		"makeGitHostConnectionDefault": probe(http.MethodPost, conn+"/make-default", "", conn),
 		"checkGitHostConnection":       probe(http.MethodPost, conn+"/check", "", ""),
 	}
+}
+
+// rotate puts a new event secret, which opens the window of the old one.
+func rotate(t *testing.T, e *hostEnv) {
+	t.Helper()
+
+	wantHost(t, e.send(t, http.MethodPut, hostAppPath, rotationBody()), http.StatusOK)
 }
 
 // unassign ends the assignment, so that the registration can go.

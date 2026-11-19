@@ -46,7 +46,7 @@ func (s *skippingOperations) Claim(context.Context, durable.ClaimRequest) (durab
 	return durable.Operation{
 		ID: id, Key: job.PhaseKey(job.ID(job.IDPrefix+strconv.FormatInt(n, 10)), 0), Kind: "", Version: 0, Input: nil,
 		State: durable.StateRunning,
-		Steps: nil, Attempt: 0, Failures: 0, Expiries: 0, LastError: "",
+		Steps: nil, Attempt: 0, Failures: 0, Expiries: 0, DeadlineReleases: 0, LastError: "",
 		Claim:           durable.Claim{Operation: id, Owner: "runner-1", Token: n, ExpiresAt: time.Time{}},
 		CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}, nil

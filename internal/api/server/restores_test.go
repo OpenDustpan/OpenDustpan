@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -56,6 +57,10 @@ func workRestores(t *testing.T, restores *backup.RestoreService) {
 	})
 }
 
+// unreadableBackupID is a backup that the target names with a live pointer and
+// no manifest. A restore of it starts and ends failed.
+const unreadableBackupID = "bkp-missing000000000001"
+
 // newRestoreFixture builds a Handler with a backup service and a restore
 // service over fresh stores. The registry store doubles as the restore live
 // store, so the restore swaps the database it tracks.
@@ -102,6 +107,16 @@ func newRestoreFixtureWorkers(
 	opts restoreFixtureOptions,
 ) restoreFixture {
 	t.Helper()
+
+	// A restore of a backup with no row starts when the target holds the live
+	// pointer of the backup, as on a new installation. The pointer names an
+	// attempt with no manifest, so the restore starts and then fails fast.
+	key := blob.Key("backups/" + unreadableBackupID + "/live.json")
+
+	putErr := stores.target.Put(t.Context(), key, strings.NewReader(`{"attempt":"1"}`))
+	if putErr != nil && !errors.Is(putErr, blob.ErrExists) {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, putErr)
+	}
 
 	workers, authz := opts.workers, opts.authz
 	if authz == nil {
@@ -1073,6 +1088,12 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, sett
 
 	stores := openBackupDeps(t)
 
+	// The backup has no row, so the target must name it with a live pointer.
+	pointer := blob.Key("backups/" + unreadableBackupID + "/live.json")
+	if putErr := stores.target.Put(t.Context(), pointer, strings.NewReader(`{"attempt":"1"}`)); putErr != nil {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, putErr)
+	}
+
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
 		Kinds:       stores.registry,
@@ -1510,13 +1531,23 @@ func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
 
 	const want = "invalid backup ID: use an ID that opendustpan backup printed"
 
-	for _, id := range []string{"../x", "bkp-a/b", "x"} {
+	for _, id := range []string{"../x", "bkp-a/b", "x", `bkp-a\u0000`} {
 		status, resp := serveRestore(
 			t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
 		)
 		if status != http.StatusBadRequest || !strings.Contains(resp, want) {
-			t.Errorf("POST restores of %q answers %d %s, want 400 that names the ID rule", id, status, resp)
+			t.Errorf("POST restores of %.20q answers %d %.200s, want 400 that names the ID rule", id, status, resp)
 		}
+	}
+
+	// An ID of 10 kB is over the body limit of the route: the body check
+	// refuses it before the ID check.
+	status, resp := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores",
+		`{"backupID":"bkp-`+strings.Repeat("a", 10_000)+`"}`,
+	)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Errorf("POST restores of an ID of 10 kB answers %d %.200s, want 413", status, resp)
 	}
 
 	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
@@ -1559,5 +1590,169 @@ func TestStartRestoreBodyTooLarge(t *testing.T) {
 
 	if got.ErrorCode != "request.body-too-large" || got.ErrorArgs["maxBytes"] != float64(limit) {
 		t.Fatalf("answer = %+v, want request.body-too-large with maxBytes %d", got, limit)
+	}
+}
+
+// TestStartRestoreUnknownBackupAnswers404 proves a start for an ID that has no
+// row and no data in the target answers 404 and makes no restore row.
+func TestStartRestoreUnknownBackupAnswers404(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	status, body := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-nonexistent0000001"}`,
+	)
+	if status != http.StatusNotFound {
+		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	if doc := decodeError(t, body); doc.Message != "backup not found" {
+		t.Fatalf("POST restores error = %+v, want the message backup not found", doc)
+	}
+
+	status, body = serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if status != http.StatusOK || strings.Contains(body, "bkp-nonexistent0000001") {
+		t.Fatalf("GET restores = %d %s, want a list with no restore of the unknown backup", status, body)
+	}
+}
+
+// TestStartRestoreRunningBackupAnswers409 proves a start for a backup that has
+// not ended answers 409 with a text that says it runs, and makes no row.
+func TestStartRestoreRunningBackupAnswers409(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	gate := newGateExporter(stores.registry)
+	fix := newBackupFixture(t, stores, gate, nil)
+	restores := newRestoreFixtureOver(t, stores, stores.target)
+
+	id := startBackup(t, fix.handler)
+
+	waitGateEntered(t, gate)
+
+	status, body := serveRestore(
+		t, restores.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+	)
+	if status != http.StatusConflict {
+		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	if doc := decodeError(t, body); !strings.Contains(doc.Message, "still running") {
+		t.Fatalf("POST restores error = %+v, want a message that says the backup is still running", doc)
+	}
+
+	close(gate.release)
+}
+
+// getFailTarget fails the Get of every live pointer with errTargetDown and
+// passes all other calls to the embedded store.
+type getFailTarget struct {
+	blob.Store
+}
+
+var errTargetDown = errors.New("target down")
+
+func (s getFailTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if strings.HasSuffix(key.String(), "/live.json") {
+		return nil, errTargetDown
+	}
+
+	return s.Store.Get(ctx, key)
+}
+
+// TestStartRestoreUnreadablePointerIsRefused proves that a start for a backup
+// with no row, whose live pointer in the target cannot be read, is refused
+// with a status that is not 202, and makes no restore row.
+func TestStartRestoreUnreadablePointerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const id = "bkp-badpointer0000001"
+
+	tests := []struct {
+		name    string
+		pointer string
+		failGet bool
+		status  int
+	}{
+		{"not JSON", "not json", false, http.StatusInternalServerError},
+		{"oversize", `{"attempt":"` + strings.Repeat("a", 2048) + `"}`, false, http.StatusInternalServerError},
+		{"bad attempt", `{"attempt":"5/../6"}`, false, http.StatusInternalServerError},
+		{"target error", "", true, http.StatusInternalServerError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stores := openBackupDeps(t)
+			putLivePointer(t, stores, id, tc.pointer)
+
+			var target blob.Store = stores.target
+			if tc.failGet {
+				target = getFailTarget{Store: stores.target}
+			}
+
+			fix := newRestoreFixtureOver(t, stores, target)
+
+			status, body := serveRestore(
+				t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+			)
+			if status == http.StatusAccepted || status != tc.status {
+				t.Fatalf("POST restores answers %d %s, want %d", status, body, tc.status)
+			}
+
+			listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+			if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
+				t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
+			}
+		})
+	}
+}
+
+// putLivePointer stores data as the live pointer of backup id in the target
+// of stores. Empty data stores nothing.
+func putLivePointer(t *testing.T, stores backupStores, id, data string) {
+	t.Helper()
+
+	if data == "" {
+		return
+	}
+
+	key := blob.Key("backups/" + id + "/live.json")
+	if err := stores.target.Put(t.Context(), key, strings.NewReader(data)); err != nil {
+		t.Fatalf("put pointer: %v", err)
+	}
+}
+
+// TestFailedBackupAnswersWithItsState proves that the check of a backup that
+// ended with an error answers 200 with complete false and a text that says
+// so, and that a start for it answers 409 with the same text and makes no
+// restore row.
+func TestFailedBackupAnswersWithItsState(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	status, body := serveRestore(
+		t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+testBackupID.String()+"/check", "",
+	)
+	if status != http.StatusOK || !strings.Contains(body, `"complete":false`) ||
+		!strings.Contains(body, "ended with an error") || strings.Contains(body, "corrupt") {
+		t.Fatalf("GET check answers %d %s, want 200 complete false and the text ended with an error", status, body)
+	}
+
+	_, before := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+
+	status, body = serveRestore(
+		t, handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+testBackupID.String()+`"}`,
+	)
+	if status != http.StatusConflict || !strings.Contains(body, "ended with an error") {
+		t.Fatalf("POST restores answers %d %s, want 409 that says the backup ended with an error", status, body)
+	}
+
+	status, body = serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if status != http.StatusOK || body != before {
+		t.Fatalf("GET restores answers %d %s, want the list %s that it had before the start", status, body, before)
 	}
 }

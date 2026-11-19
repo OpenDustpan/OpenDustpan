@@ -126,3 +126,80 @@ func TestBackupReportRegistryFiles(t *testing.T) {
 		})
 	}
 }
+
+// TestBackupReadFailureSaysTheBackupContinues proves that a backup command
+// that started a backup and then cannot read it does not tell the operator to
+// run the backup again: the server continues the backup, and a second start
+// answers 409 while it runs. The text names the read of its state. The test
+// sets the admin token, so it cannot run in parallel.
+func TestBackupReadFailureSaysTheBackupContinues(t *testing.T) {
+	tests := map[string]http.HandlerFunc{
+		"connection closed": closeConnection,
+		"server error": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		},
+		"not JSON": func(w http.ResponseWriter, _ *http.Request) {
+			if _, err := w.Write([]byte("not json")); err != nil {
+				return
+			}
+		},
+	}
+
+	for name, read := range tests {
+		t.Run(name, func(t *testing.T) {
+			srv := serveStartThenRead(t, read)
+
+			t.Setenv("DUSTPAN_ADMIN_TOKEN", "test-token")
+
+			var stdout, stderr bytes.Buffer
+
+			err := client.BackupCommand(t.Context(), []string{"--server", srv.URL}, &stdout, &stderr)
+			if err == nil || !errors.Is(err, client.ErrBackupRead) {
+				t.Fatalf("backup = %v, want ErrBackupRead", err)
+			}
+
+			text := err.Error()
+			if !strings.Contains(text, "continues backup bkp-run1 on its own") ||
+				!strings.Contains(text, "/api/dustpan/v1/backups/bkp-run1") || strings.Contains(text, "again") {
+				t.Errorf("error = %q, want the text that the server continues the backup, with no rerun", text)
+			}
+		})
+	}
+}
+
+// closeConnection closes the connection of a request with no answer.
+func closeConnection(w http.ResponseWriter, _ *http.Request) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return
+	}
+
+	if conn, _, err := hj.Hijack(); err == nil {
+		if err := conn.Close(); err != nil {
+			return
+		}
+	}
+}
+
+// serveStartThenRead answers a backup start with the ID bkp-run1 and every
+// read of the backup with read.
+func serveStartThenRead(t *testing.T, read http.HandlerFunc) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			read(w, r)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusAccepted)
+
+		if _, err := w.Write([]byte(`{"id":"bkp-run1"}`)); err != nil {
+			return
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}

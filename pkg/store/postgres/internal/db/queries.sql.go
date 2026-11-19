@@ -766,7 +766,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
   updated_at_ms = c.now_ms
 FROM c, pick
 WHERE o.id = pick.id
-RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.deadline_releases, o.failures, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
 `
 
@@ -803,6 +803,7 @@ func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOpe
 		&i.State,
 		&i.Attempt,
 		&i.Expiries,
+		&i.DeadlineReleases,
 		&i.Failures,
 		&i.LastError,
 		&i.ClaimOwner,
@@ -999,7 +1000,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
   updated_at_ms = c.now_ms
 FROM c
 WHERE o.id = $3::text AND o.state = 'pending'
-RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.deadline_releases, o.failures, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
 `
 
@@ -1024,6 +1025,7 @@ func (q *Queries) ClaimStartedDurableOperation(ctx context.Context, arg ClaimSta
 		&i.State,
 		&i.Attempt,
 		&i.Expiries,
+		&i.DeadlineReleases,
 		&i.Failures,
 		&i.LastError,
 		&i.ClaimOwner,
@@ -1168,6 +1170,28 @@ func (q *Queries) CompleteIdempotencyRecord(ctx context.Context, arg CompleteIde
 		arg.IdemKey,
 		arg.Token,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const confirmGitHostRotation = `-- name: ConfirmGitHostRotation :execrows
+UPDATE git_host_app_registrations
+SET old_event_secret_ends_at_ms = NULL, old_event_secret_set_id = NULL, old_sealed_event_secret = NULL,
+    version = version + 1, updated_at_ms = GREATEST($1, git_host_app_registrations.created_at_ms)
+WHERE kind = $2 AND old_event_secret_ends_at_ms IS NOT NULL AND ($3::bigint = 0 OR version = $3::bigint)
+`
+
+type ConfirmGitHostRotationParams struct {
+	UpdatedAtMs int64
+	Kind        string
+	IfVersion   int64
+}
+
+// Ends the window of the old event secret. It writes only while a window is open.
+func (q *Queries) ConfirmGitHostRotation(ctx context.Context, arg ConfirmGitHostRotationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmGitHostRotation, arg.UpdatedAtMs, arg.Kind, arg.IfVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -1431,6 +1455,17 @@ WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
 
 func (q *Queries) CountGitHostConnections(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRow(ctx, countGitHostConnections, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGitHostEventReceipts = `-- name: CountGitHostEventReceipts :one
+SELECT COUNT(*) FROM git_host_event_receipts
+`
+
+func (q *Queries) CountGitHostEventReceipts(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countGitHostEventReceipts)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -5198,28 +5233,31 @@ const endDurableClaim = `-- name: EndDurableClaim :exec
 UPDATE durable_operations
 SET state = $1::text, last_error = $2::text,
   failures = failures + $3::bigint,
-  not_before_ms = $4::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
-  updated_at_ms = $5::bigint
-WHERE id = $6::text
+  deadline_releases = $4::bigint,
+  not_before_ms = $5::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
+  updated_at_ms = $6::bigint
+WHERE id = $7::text
 `
 
 type EndDurableClaimParams struct {
-	State       string
-	LastError   string
-	AddFailures int64
-	NotBeforeMs int64
-	NowMs       int64
-	ID          string
+	State            string
+	LastError        string
+	AddFailures      int64
+	DeadlineReleases int64
+	NotBeforeMs      int64
+	NowMs            int64
+	ID               string
 }
 
-// Ends the claim of an operation with its next state, and adds add_failures
-// to its failures. The claim token stays, so the next claim gets a larger
-// one.
+// Ends the claim of an operation with its next state, adds add_failures to
+// its failures, and sets its deadline releases in a row to deadline_releases.
+// The claim token stays, so the next claim gets a larger one.
 func (q *Queries) EndDurableClaim(ctx context.Context, arg EndDurableClaimParams) error {
 	_, err := q.db.Exec(ctx, endDurableClaim,
 		arg.State,
 		arg.LastError,
 		arg.AddFailures,
+		arg.DeadlineReleases,
 		arg.NotBeforeMs,
 		arg.NowMs,
 		arg.ID,
@@ -5539,6 +5577,8 @@ type ExtendDurableClaimParams struct {
 	ID          string
 }
 
+// Moves the expiry. It leaves the count of deadline releases in a row as it
+// is: a renewal whose reply came too late shows nothing about the holder.
 func (q *Queries) ExtendDurableClaim(ctx context.Context, arg ExtendDurableClaimParams) error {
 	_, err := q.db.Exec(ctx, extendDurableClaim, arg.ExpiresAtMs, arg.NowMs, arg.ID)
 	return err
@@ -6786,7 +6826,7 @@ func (q *Queries) GetDriftResult(ctx context.Context, arg GetDriftResultParams) 
 }
 
 const getDurableOperation = `-- name: GetDurableOperation :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 `
@@ -6803,6 +6843,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 		&i.State,
 		&i.Attempt,
 		&i.Expiries,
+		&i.DeadlineReleases,
 		&i.Failures,
 		&i.LastError,
 		&i.ClaimOwner,
@@ -6817,7 +6858,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 }
 
 const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1
 `
@@ -6834,6 +6875,7 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 		&i.State,
 		&i.Attempt,
 		&i.Expiries,
+		&i.DeadlineReleases,
 		&i.Failures,
 		&i.LastError,
 		&i.ClaimOwner,
@@ -7174,7 +7216,8 @@ func (q *Queries) GetGitHostInstallation(ctx context.Context, installationID str
 
 const getGitHostRegistration = `-- name: GetGitHostRegistration :one
 SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 FROM git_host_app_registrations
 WHERE kind = $1
 `
@@ -7197,6 +7240,9 @@ func (q *Queries) GetGitHostRegistration(ctx context.Context, kind string) (GitH
 		&i.Version,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.OldEventSecretEndsAtMs,
+		&i.OldEventSecretSetID,
+		&i.OldSealedEventSecret,
 	)
 	return i, err
 }
@@ -8846,6 +8892,33 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	row := q.db.QueryRow(ctx, getPersonPreferences, id)
 	var i GetPersonPreferencesRow
 	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
+	return i, err
+}
+
+const getPlacedStack = `-- name: GetPlacedStack :one
+SELECT id, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
+FROM stacks
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL
+`
+
+type GetPlacedStackParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+type GetPlacedStackRow struct {
+	ID     string
+	Placed bool
+}
+
+// The stack ID with whether a collection holds the stack, read in one
+// statement. The writes of a running update use it, so that a stack in no
+// collection is refused in the same transaction as the write.
+func (q *Queries) GetPlacedStack(ctx context.Context, arg GetPlacedStackParams) (GetPlacedStackRow, error) {
+	row := q.db.QueryRow(ctx, getPlacedStack, arg.Namespace, arg.Project, arg.Name)
+	var i GetPlacedStackRow
+	err := row.Scan(&i.ID, &i.Placed)
 	return i, err
 }
 
@@ -11551,14 +11624,14 @@ func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedI
 const insertDurableOperation = `-- name: InsertDurableOperation :one
 
 INSERT INTO durable_operations (
-  id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 )
 SELECT $1::text, $2::text, $3::text, $4::bytea,
-  $5::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+  $5::bigint, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
 FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
 ON CONFLICT (start_key) DO NOTHING
-RETURNING id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 `
 
@@ -11593,6 +11666,7 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 		&i.State,
 		&i.Attempt,
 		&i.Expiries,
+		&i.DeadlineReleases,
 		&i.Failures,
 		&i.LastError,
 		&i.ClaimOwner,
@@ -11907,6 +11981,46 @@ func (q *Queries) InsertGitHostConnection(ctx context.Context, arg InsertGitHost
 	return result.RowsAffected(), nil
 }
 
+const insertGitHostEventReceipt = `-- name: InsertGitHostEventReceipt :execrows
+INSERT INTO git_host_event_receipts (
+    kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8
+)
+ON CONFLICT DO NOTHING
+`
+
+type InsertGitHostEventReceiptParams struct {
+	Kind           string
+	DeliveryID     string
+	BodyDigest     string
+	InstallationID string
+	EventKind      string
+	Repo           string
+	ReviewID       string
+	ReceivedAtMs   int64
+}
+
+// A receipt that hits the key of the delivery ID or the key of the body digest writes nothing.
+func (q *Queries) InsertGitHostEventReceipt(ctx context.Context, arg InsertGitHostEventReceiptParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertGitHostEventReceipt,
+		arg.Kind,
+		arg.DeliveryID,
+		arg.BodyDigest,
+		arg.InstallationID,
+		arg.EventKind,
+		arg.Repo,
+		arg.ReviewID,
+		arg.ReceivedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertGitHostInstallation = `-- name: InsertGitHostInstallation :execrows
 INSERT INTO git_host_installations (installation_id, namespace_id, version, created_at_ms, updated_at_ms)
 SELECT $1, n.id, 1, $2, $3
@@ -11938,13 +12052,15 @@ func (q *Queries) InsertGitHostInstallation(ctx context.Context, arg InsertGitHo
 const insertGitHostRegistration = `-- name: InsertGitHostRegistration :execrows
 INSERT INTO git_host_app_registrations (
     kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 )
 VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8,
     $9, $10, $11, 1,
-    $12, $13
+    $12, $13,
+    $14, $15, $16
 )
 ON CONFLICT (kind) DO NOTHING
 `
@@ -11963,6 +12079,9 @@ type InsertGitHostRegistrationParams struct {
 	AddressDigest          string
 	CreatedAtMs            int64
 	UpdatedAtMs            int64
+	OldEventSecretEndsAtMs pgtype.Int8
+	OldEventSecretSetID    pgtype.Text
+	OldSealedEventSecret   []byte
 }
 
 func (q *Queries) InsertGitHostRegistration(ctx context.Context, arg InsertGitHostRegistrationParams) (int64, error) {
@@ -11980,6 +12099,9 @@ func (q *Queries) InsertGitHostRegistration(ctx context.Context, arg InsertGitHo
 		arg.AddressDigest,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.OldEventSecretEndsAtMs,
+		arg.OldEventSecretSetID,
+		arg.OldSealedEventSecret,
 	)
 	if err != nil {
 		return 0, err
@@ -14837,7 +14959,7 @@ func (q *Queries) ListDueNotificationDeliveryScopes(ctx context.Context, nowMs i
 }
 
 const listDurableOperations = `-- name: ListDurableOperations :many
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations
 WHERE ($1::text = '' OR kind = $1::text)
@@ -14872,6 +14994,7 @@ func (q *Queries) ListDurableOperations(ctx context.Context, arg ListDurableOper
 			&i.State,
 			&i.Attempt,
 			&i.Expiries,
+			&i.DeadlineReleases,
 			&i.Failures,
 			&i.LastError,
 			&i.ClaimOwner,
@@ -20297,7 +20420,7 @@ func (q *Queries) LockBlobDeleteLeaseShared(ctx context.Context, class int32) er
 }
 
 const lockDurableOperation = `-- name: LockDurableOperation :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 FOR UPDATE
@@ -20317,6 +20440,7 @@ func (q *Queries) LockDurableOperation(ctx context.Context, id string) (DurableO
 		&i.State,
 		&i.Attempt,
 		&i.Expiries,
+		&i.DeadlineReleases,
 		&i.Failures,
 		&i.LastError,
 		&i.ClaimOwner,
@@ -20338,6 +20462,16 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 // namespace, so two refusals of one key at the same time share one record.
 func (q *Queries) LockGateRefusal(ctx context.Context, lockKey string) error {
 	_, err := q.db.Exec(ctx, lockGateRefusal, lockKey)
+	return err
+}
+
+const lockGitHostEventReceipts = `-- name: LockGitHostEventReceipts :exec
+LOCK TABLE git_host_event_receipts IN SHARE ROW EXCLUSIVE MODE
+`
+
+// Makes the writers of receipts take turns, so the bound is exact. Readers do not wait.
+func (q *Queries) LockGitHostEventReceipts(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockGitHostEventReceipts)
 	return err
 }
 
@@ -20488,9 +20622,9 @@ func (q *Queries) LockServerAuditScope(ctx context.Context) error {
 }
 
 const lockStackForUpdates = `-- name: LockStackForUpdates :one
-SELECT id, version
+SELECT id, version, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE
 `
 
@@ -20503,6 +20637,7 @@ type LockStackForUpdatesParams struct {
 type LockStackForUpdatesRow struct {
 	ID      string
 	Version int64
+	Placed  bool
 }
 
 // Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
@@ -20510,7 +20645,7 @@ type LockStackForUpdatesRow struct {
 func (q *Queries) LockStackForUpdates(ctx context.Context, arg LockStackForUpdatesParams) (LockStackForUpdatesRow, error) {
 	row := q.db.QueryRow(ctx, lockStackForUpdates, arg.Namespace, arg.Project, arg.Name)
 	var i LockStackForUpdatesRow
-	err := row.Scan(&i.ID, &i.Version)
+	err := row.Scan(&i.ID, &i.Version, &i.Placed)
 	return i, err
 }
 
@@ -21543,6 +21678,18 @@ func (q *Queries) PublishUnitState(ctx context.Context, arg PublishUnitStatePara
 		arg.Final,
 	)
 	return err
+}
+
+const purgeGitHostEventReceipts = `-- name: PurgeGitHostEventReceipts :execrows
+DELETE FROM git_host_event_receipts WHERE received_at_ms < $1::bigint
+`
+
+func (q *Queries) PurgeGitHostEventReceipts(ctx context.Context, beforeMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeGitHostEventReceipts, beforeMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const purgeStack = `-- name: PurgeStack :execrows
@@ -24733,8 +24880,11 @@ SET app_id = $1, base_url = $2, sealed_key = $3,
     key_set_id = $4, key_created_at_ms = $5,
     sealed_event_secret = $6, event_secret_set_id = $7,
     event_secret_created_at_ms = $8, address_digest = $9,
-    version = version + 1, updated_at_ms = GREATEST($10, git_host_app_registrations.created_at_ms)
-WHERE kind = $11 AND ($12::bigint = 0 OR version = $12::bigint)
+    old_event_secret_ends_at_ms = $10,
+    old_event_secret_set_id = $11,
+    old_sealed_event_secret = $12,
+    version = version + 1, updated_at_ms = GREATEST($13, git_host_app_registrations.created_at_ms)
+WHERE kind = $14 AND ($15::bigint = 0 OR version = $15::bigint)
 `
 
 type UpdateGitHostRegistrationParams struct {
@@ -24747,6 +24897,9 @@ type UpdateGitHostRegistrationParams struct {
 	EventSecretSetID       string
 	EventSecretCreatedAtMs int64
 	AddressDigest          string
+	OldEventSecretEndsAtMs pgtype.Int8
+	OldEventSecretSetID    pgtype.Text
+	OldSealedEventSecret   []byte
 	UpdatedAtMs            int64
 	Kind                   string
 	IfVersion              int64
@@ -24764,6 +24917,9 @@ func (q *Queries) UpdateGitHostRegistration(ctx context.Context, arg UpdateGitHo
 		arg.EventSecretSetID,
 		arg.EventSecretCreatedAtMs,
 		arg.AddressDigest,
+		arg.OldEventSecretEndsAtMs,
+		arg.OldEventSecretSetID,
+		arg.OldSealedEventSecret,
 		arg.UpdatedAtMs,
 		arg.Kind,
 		arg.IfVersion,

@@ -597,10 +597,22 @@ func RunControlMinimumRunner(t *testing.T, h ControlMinimumHarness) {
 		t.Helper()
 
 		r, err := durable.NewRunner(durable.RunnerConfig{
-			Store: s.Durable, Owner: owner, Kinds: []durable.KindSpec{spec}, Lease: time.Minute,
-			RenewEvery: 0, PollEvery: 0, MaxAttempts: 0, ExpiryLimit: 0, Backoff: durable.Backoff{Base: 0, Max: 0},
-			ClaimBackoff: durable.Backoff{Base: 0, Max: 0}, WriteTimeout: 0, Deferred: nil, StopOnRenewalError: false,
-			Logger: nil, Rand: nil,
+			Store:                s.Durable,
+			Owner:                owner,
+			Kinds:                []durable.KindSpec{spec},
+			Lease:                time.Minute,
+			RenewEvery:           0,
+			PollEvery:            0,
+			MaxAttempts:          0,
+			ExpiryLimit:          0,
+			DeadlineReleaseLimit: 0,
+			Backoff:              durable.Backoff{Base: 0, Max: 0},
+			ClaimBackoff:         durable.Backoff{Base: 0, Max: 0},
+			WriteTimeout:         0,
+			Deferred:             nil,
+			StopOnRenewalError:   false,
+			Logger:               nil,
+			Rand:                 nil,
 		})
 		if err != nil {
 			t.Fatalf("new runner: %v", err)

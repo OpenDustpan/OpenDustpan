@@ -3,6 +3,9 @@ package postgres_test
 import (
 	"os"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge/connectiontest"
@@ -16,11 +19,13 @@ func gitHostHarness(base string) connectiontest.Factory {
 	return func(t *testing.T) connectiontest.Harness {
 		t.Helper()
 
-		return newGitHostHarness(t, open(t, base))
+		schemaURL := isolatedURL(t, base)
+
+		return newGitHostHarness(t, openURL(t, schemaURL), schemaURL)
 	}
 }
 
-func newGitHostHarness(t *testing.T, s *postgres.Store) connectiontest.Harness {
+func newGitHostHarness(t *testing.T, s *postgres.Store, schemaURL string) connectiontest.Harness {
 	t.Helper()
 
 	return connectiontest.Harness{
@@ -35,6 +40,18 @@ func newGitHostHarness(t *testing.T, s *postgres.Store) connectiontest.Harness {
 
 			return allAuditEntries(t, s, scope)
 		},
+		SeedReceipts: func(t *testing.T, n int, receivedAt time.Time) {
+			t.Helper()
+
+			seedReceipts(t, schemaURL, n, receivedAt)
+		},
+		BreakAuditAppends: func(t *testing.T) {
+			t.Helper()
+
+			if err := breakAuditAppends(t.Context(), schemaURL); err != nil {
+				t.Fatalf("break audit appends: %v", err)
+			}
+		},
 	}
 }
 
@@ -47,4 +64,30 @@ func TestGitHostConformance(t *testing.T) {
 	}
 
 	connectiontest.Run(t, gitHostHarness(base))
+}
+
+// seedReceipts writes n receipts of the GitHub kind in one statement on a
+// second connection, with no check of the port.
+func seedReceipts(t *testing.T, schemaURL string, n int, receivedAt time.Time) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	const seed = `INSERT INTO git_host_event_receipts
+    (kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms)
+SELECT 'github', 'seed-' || i, lpad(to_hex(i), 64, '0'), '101', 'review', 'acme/widgets', '7', $2
+FROM generate_series(1, $1::int) AS i`
+
+	if _, execErr := conn.Exec(t.Context(), seed, n, receivedAt.UnixMilli()); execErr != nil {
+		t.Fatalf("seed receipts: %v", execErr)
+	}
 }

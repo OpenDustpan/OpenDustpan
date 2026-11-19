@@ -80,6 +80,19 @@ changes, so a later change of the user name changes no subject, grant or audit
 reference. No identity provider can use the provider ID `local`, and no other
 principal can have a subject that starts with `local:`.
 
+Each change by an administrator needs a reason: the make of a user, an
+unlock, a reset and the removal of a password. The audit entry records the
+reason. A reason has 1 to 500 characters (Unicode code points, not bytes),
+with no control character, line break or other hidden character. A reason
+that is empty or only spaces, or that holds a control character, answers
+`400` with the error code `local-user.reason-required`. A reason that is
+longer than 500 characters or that holds another hidden character answers
+`400` with the error code `audit.reason-invalid`.
+
+A request body of a local user route has at most 8192 bytes. A longer body
+answers `413` with the error code `request.body-too-large` and the limit in
+`maxBytes`.
+
 Give the set-up code to the person on another channel. The code works once.
 It ends after the reset lifetime, 1 hour by default. The server keeps only a
 SHA-256 digest of the code.
