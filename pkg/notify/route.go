@@ -887,9 +887,15 @@ func RetryWait(n int) time.Duration {
 
 // RedeliverableAt returns the time from which a person can send the stopped
 // delivery d again: the time it stopped plus the wait after its next manual
-// redelivery.
-func RedeliverableAt(d Delivery) time.Time {
-	return d.DeliveredAt.Add(RetryWait(d.Redeliveries + 1))
+// redelivery. It returns false, and the zero time, for a delivery with no
+// DeliveredAt: a time that starts at year 1 would let a person send the
+// delivery again at once, so the caller refuses the delivery.
+func RedeliverableAt(d Delivery) (time.Time, bool) {
+	if d.DeliveredAt.IsZero() {
+		return time.Time{}, false
+	}
+
+	return d.DeliveredAt.Add(RetryWait(d.Redeliveries + 1)), true
 }
 
 // RedeliveriesRemaining returns the number of manual redeliveries that the

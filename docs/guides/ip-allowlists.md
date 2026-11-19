@@ -42,6 +42,29 @@ curl -si -X PATCH -H "Authorization: Bearer $TOKEN" \
 The caller needs `server:manage-settings`. The answer is `200` with the new
 resource and the new `ETag`. The change takes effect at once.
 
+Only a change that reduces security needs a fresh sign-in, and only when the
+installation has console sign-in (the server has a public URL). These changes
+reduce security:
+
+- `ipAllowlist.enabled` goes from `true` to `false`.
+- `ipAllowlist.installation` is cleared.
+- `ipAllowlist.installation` gets an entry that the old list does not cover.
+  The first list of an installation that has none is such a change.
+
+These changes need no fresh sign-in: `ipAllowlist.enabled` goes to `true`, and
+the list becomes narrower or stays as wide. An access token gets `200` for them.
+
+An access token never gives a fresh sign-in. With an access token, a change that
+reduces security gets `403` with the code `mfa.fresh-step-required`, and nothing
+changes. The example above sets the first list, so it gets this answer when the
+installation has console sign-in. To satisfy the rule, sign in to the console
+again, and make the change in the console, or with the session of that new
+sign-in. The console sends the session cookie `__Host-dustpan_session` and the
+`X-Dustpan-CSRF` header. When the installation has no console sign-in, no change
+needs a fresh sign-in, and the access token in the example is enough. The
+[settings guide](settings.md#changes-that-need-a-fresh-sign-in) explains the
+rule.
+
 The list value is one string of CIDRs or addresses, separated by commas:
 
 - Each item is a CIDR, such as `10.0.0.0/8`, or a single address, such as
@@ -207,6 +230,20 @@ deleted in two ways.
 
 The [security model](../explanation/security-model.md) describes the recovery
 in more detail.
+
+## Limits
+
+A namespace list holds at most 64 entries. The server also reads the
+namespaces that have a list, in one read of at most 1000 namespaces. This
+limit is a [code rule](../reference/code-rules.md#ip-allowlists): no grant or
+setting changes it, and the API does not show it yet.
+
+When more than 1000 namespaces have a list, the read fails with the error
+`ipallow: too many namespaces have an IP allowlist`. The server fails closed:
+it does not cover every object. Once a list check calls the read, the server
+refuses a principal whose scope covers every object on every list while more
+than 1000 namespaces have a list. To end the refusal, delete the lists that you do not
+need until 1000 namespaces or fewer have a list.
 
 ## Errors
 

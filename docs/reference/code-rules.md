@@ -27,6 +27,28 @@ that a grant seems to allow.
   the server logs the failed check
   ([Groups](../guides/principals-and-groups.md#groups)).
 
+## Settings changes that need a fresh sign-in
+
+- A change of a setting that reduces security (`mayReduceSecurity` is `true`
+  on the setting) needs a fresh authentication. A server that has no console
+  sign-in asks for none, and the change runs with no fresh authentication.
+  The server has no console sign-in when it has no provider in its
+  configuration, no dev sign-in, and no store that keeps sessions with a
+  valid public URL (https, or http on a loopback host). The sign-in runs
+  with zero stored providers. The dev sign-in counts when it is set. The
+  check does not read the installation kind, but the server accepts a dev
+  sign-in only on an installation of kind dev. The code checks only this
+  condition. It does not read the setting of built-in MFA or the list of SSO
+  providers. This rule stays because such a server has no sign-in step to
+  ask for.
+- The rule has no effective value in the API. The unmounted sign-in routes
+  of the server show its condition. Each change that the rule lets through
+  writes the normal audit entry of a settings change with the changed keys.
+  The server writes no separate record that it skipped the step.
+- A server that has a console sign-in answers 403 with the code
+  `mfa.fresh-step-required` to a change with no fresh authentication
+  ([Changes that need a fresh sign-in](../guides/settings.md#changes-that-need-a-fresh-sign-in)).
+
 ## Git host links
 
 - Only a person in a console session makes or accepts a link. An accept needs
@@ -52,3 +74,15 @@ that a grant seems to allow.
 - A restore stops with the code `principal.no-working-break-glass` when it
   lowers the count of working break-glass accounts and leaves fewer than two
   ([Other paths](../guides/break-glass-accounts.md#other-paths)).
+
+## IP allowlists
+
+- Once a list check calls the read, the server reads the namespaces that have
+  an IP allowlist for a list check of a principal whose scope covers every
+  object. The read returns at most 1000 namespaces. When more than 1000
+  namespaces have a list, the read fails with the error
+  `ipallow: too many namespaces have an IP allowlist`, and the server does not
+  cover every object. No setting changes the limit. Then the server refuses a
+  principal whose scope covers every object on every list until the number of
+  namespaces with a list is 1000 or fewer
+  ([Limits](../guides/ip-allowlists.md#limits)).

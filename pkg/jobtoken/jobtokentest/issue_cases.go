@@ -71,6 +71,10 @@ func issueCases() []suiteCase {
 		},
 		{name: "issue then rename of a unit keeps the token of the unit ID", test: testRenamedUnit},
 		{name: "issue with a stale fence returns fenced and writes nothing", test: testStaleFence},
+		{
+			name: "issue into a namespace with no row returns not found and writes nothing",
+			test: testIssueIntoMissingNamespace,
+		},
 		{name: "issue with a refused audit entry writes nothing", test: testRefusedEntry},
 		{name: "issue with an audit entry of another namespace writes nothing", test: testEntryOtherNamespace},
 	}
@@ -719,6 +723,25 @@ func testStaleFence(t *testing.T, h Harness) {
 
 	if err := tryIssue(t, h, tok, staleFence(fence)); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("Issue with a stale fence = %v, want ErrFenced", err)
+	}
+
+	wantNothing(t, h, tok.Digest, fence.Namespace)
+}
+
+func testIssueIntoMissingNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-missing-namespace")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	h.DeleteNamespace(t, fence.Namespace)
+
+	if err := tryIssue(t, h, tok, fence); !errors.Is(err, namespace.ErrNotFound) {
+		t.Fatalf("Issue into a namespace with no row = %v, want ErrNotFound", err)
 	}
 
 	wantNothing(t, h, tok.Digest, fence.Namespace)

@@ -300,27 +300,61 @@ func ValidName(s string) bool {
 	return len(s) <= MaxNameLength && namePattern.MatchString(s)
 }
 
-// Validate checks the fields of p that a caller sets. It returns an error
-// that wraps ErrInvalid for a name that is not valid, an unknown purpose, a
-// lease outside MinLease to MaxLease, a concurrency outside 1 to
-// MaxConcurrency, an unknown isolation kind, or an unknown git credential
-// mode, or a custom git credential helper that is not a bare
-// git-credential- name or a clean absolute path.
+// FieldError is the error of a field of a pool that is not valid. It wraps
+// ErrInvalid. Its field and its rule are fixed text of this package: the
+// error never holds the value that the caller sent, so a log line or an
+// answer that shows it cannot carry hostile input.
+type FieldError struct {
+	field string
+	rule  string
+}
+
+// newFieldError makes a FieldError. The callers in this package pass
+// constant text only.
+func newFieldError(field, rule string) *FieldError {
+	return &FieldError{field: field, rule: rule}
+}
+
+// Field returns the name of the field in the request, for example "lease".
+func (e *FieldError) Field() string { return e.field }
+
+// Sentence returns the field and the rule as one sentence, for an answer to
+// the caller. It holds no input of the caller.
+func (e *FieldError) Sentence() string { return e.field + ": " + e.rule }
+
+// Error returns the text of ErrInvalid with the sentence of the field.
+func (e *FieldError) Error() string { return ErrInvalid.Error() + ": " + e.Sentence() }
+
+// Unwrap returns ErrInvalid.
+func (e *FieldError) Unwrap() error { return ErrInvalid }
+
+// Validate checks the fields of p that a caller sets. It returns a
+// *FieldError, which wraps ErrInvalid, for a name that is not valid, a
+// purpose that is missing or unknown, a lease outside MinLease to MaxLease, a
+// concurrency outside 1 to MaxConcurrency, an unknown isolation kind, or an
+// unknown git credential mode. It returns an error that wraps
+// ErrInvalidHelper for a custom git credential helper that is not a bare
+// git-credential- name or a clean absolute path. No error holds the value
+// that the caller sent.
 func (p *Pool) Validate() error {
 	switch {
 	case !ValidName(p.Name):
-		return fmt.Errorf("%w: pool name must be 1 to %d lowercase letters, digits and '-'", ErrInvalid, MaxNameLength)
+		return newFieldError("name", fmt.Sprintf(
+			"use 1 to %d lowercase letters, digits and '-'. Start and end with a letter or digit.", MaxNameLength,
+		))
 	case !p.Purpose.Valid():
-		return fmt.Errorf("%w: unknown purpose %q", ErrInvalid, p.Purpose)
+		return newFieldError("purpose", fmt.Sprintf("use %s or %s.", PurposeJobs, PurposeSweeps))
 	case p.Lease != 0 && (p.Lease < MinLease || p.Lease > MaxLease):
-		return fmt.Errorf("%w: lease must be %v to %v", ErrInvalid, MinLease, MaxLease)
+		return newFieldError("lease", fmt.Sprintf("use 0, or %d to %d milliseconds.",
+			MinLease.Milliseconds(), MaxLease.Milliseconds()))
 	case p.Concurrency < 0 || p.Concurrency > MaxConcurrency:
-		return fmt.Errorf("%w: concurrency must be 1 to %d", ErrInvalid, MaxConcurrency)
+		return newFieldError("concurrency", fmt.Sprintf("use 0, or 1 to %d.", MaxConcurrency))
 	}
 
 	for _, k := range p.Isolation {
 		if !k.Valid() {
-			return fmt.Errorf("%w: unknown isolation %q", ErrInvalid, k)
+			return newFieldError("isolation", fmt.Sprintf("use %s, %s, %s or %s.",
+				IsolationKubernetes, IsolationFirecracker, IsolationGVisor, IsolationProcess))
 		}
 	}
 
@@ -386,7 +420,8 @@ func (g GitCredentials) Validate() error {
 	case GitCredentialsCustom:
 		return validateHelper(g.Helper)
 	default:
-		return fmt.Errorf("%w: unknown git credential mode %q", ErrInvalid, g.Mode)
+		return newFieldError("gitCredentials.mode", fmt.Sprintf("use %s, %s or %s.",
+			GitCredentialsNone, GitCredentialsForge, GitCredentialsCustom))
 	}
 }
 

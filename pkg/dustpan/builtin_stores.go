@@ -181,9 +181,15 @@ func WithPostgreSQL(dsn string, opts ...StoreOption) Option {
 }
 
 // WithBuiltinStore sets every store option of the server from b, which the
-// caller opened with OpenStore. The caller closes b. The store options apply
+// caller opened with OpenStore. The caller closes b: Close of the server
+// leaves b open, in any order of the two Close calls. The store options apply
 // after all other options, so they replace a With...Store option for the same
 // port. A nil b fails NewServer.
+//
+// Open b with the version of the binary and the installation kind of the
+// command (WithStoreBinaryVersion and WithStoreInstallationKind), because
+// NewServer does not check them again: WithBuiltinStore does not run the
+// schema check or set the kind marker, and the Open of the adapter does both.
 func WithBuiltinStore(b *BuiltinStore) Option {
 	return func(o *settings) {
 		builtin := newBuiltinStoreSettings(builtinStoreHandle, nil)
@@ -391,6 +397,7 @@ func sqliteStoreOptions(cfg *settings, st *sqlite.Store) []Option {
 	return append(sharedStoreOptions(cfg, st, st.Jobs()),
 		WithDurableStore(st.DurableOperations()),
 		WithRunners(st.Runners()),
+		WithJobTokenStore(st.JobTokens()),
 		WithSourceFilters(st.SourceFilters()),
 		WithTrustRules(st.TrustRules()),
 		WithUnitSettingsStore(st.UnitSettings()),
@@ -407,6 +414,7 @@ func postgresStoreOptions(cfg *settings, st *postgres.Store) []Option {
 	return append(sharedStoreOptions(cfg, st, st.Jobs()),
 		WithDurableStore(st.DurableOperations()),
 		WithRunners(st.Runners()),
+		WithJobTokenStore(st.JobTokens()),
 		WithSourceFilters(st.SourceFilters()),
 		WithTrustRules(st.TrustRules()),
 		WithUnitSettingsStore(st.UnitSettings()),

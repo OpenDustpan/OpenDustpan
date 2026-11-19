@@ -59,6 +59,9 @@ const (
 	// ReasonNoProxyOperation: the claim is a sweep, or its job has no proxy
 	// operation.
 	ReasonNoProxyOperation = "no-proxy-operation"
+	// ReasonUpstreamEndpointChanged: a save moved the upstream proxy to another
+	// endpoint and named no credential, so the save cleared the stored one.
+	ReasonUpstreamEndpointChanged = "upstream-endpoint-changed"
 )
 
 // Sources of the proxy settings of a pool.
@@ -467,6 +470,15 @@ func (s *Service) saveOnce(
 		next.Credential = sealed
 	}
 
+	// A write-only credential is for one endpoint. A save that moves the
+	// upstream proxy and names no credential must not send the stored one to
+	// the new endpoint, so it clears it. The audit entry says why. Defense in
+	// depth: the store refuses the same write; this clearing does not rely on it.
+	if !req.Credential.Present && len(current.Credential) != 0 &&
+		runner.UpstreamEndpointChanged(current.Settings.UpstreamURL(), settings.UpstreamURL()) {
+		next.Credential = nil
+	}
+
 	// Fail closed: a credential with no upstream proxy has no use, so the save
 	// refuses it and keeps the credential out of the row.
 	if len(next.Credential) != 0 && settings.UpstreamURL() == "" {
@@ -838,6 +850,10 @@ func (s *Service) settingsEntry(req *PutRequest, old, next *runner.ProxySettings
 	oldRanges := strings.Join(old.Settings.AllowedRanges(), ",")
 	oldVersion := strconv.FormatInt(old.Version, 10)
 
+	// The save cleared the credential when it named none, the pool had one and
+	// the row has none now.
+	cleared := !req.Credential.Present && len(old.Credential) != 0 && len(next.Credential) == 0
+
 	e := req.Entry
 	e.At = next.UpdatedAt
 	e.Namespace = req.Pool.Namespace
@@ -852,11 +868,18 @@ func (s *Service) settingsEntry(req *PutRequest, old, next *runner.ProxySettings
 			Layer: "", TakesEffect: "",
 		},
 		change("upstreamURLChanged", strconv.FormatBool(old.Settings.UpstreamURL() != next.Settings.UpstreamURL())),
-		change("credentialChanged", strconv.FormatBool(req.Credential.Present)),
+		change("credentialChanged", strconv.FormatBool(req.Credential.Present || cleared)),
 		audit.Change{
 			Key: "version", Old: &oldVersion, New: strconv.FormatInt(old.Version+1, 10), Layer: "", TakesEffect: "",
 		},
 	)
+
+	if cleared {
+		e.Changes = append(e.Changes,
+			change("credentialCleared", "true"),
+			change("reason", ReasonUpstreamEndpointChanged),
+		)
+	}
 
 	return e
 }

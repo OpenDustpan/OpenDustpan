@@ -18,7 +18,7 @@ func TestOwnTokenRevokeInMaintenanceMode(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true, failTempAdminRead: false,
 	})
 	sess := e.freshSignIn(t)
 	body := ownTokenBody()
@@ -92,7 +92,7 @@ func TestOwnTokenCreateRefusedInMaintenanceMode(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true, failTempAdminRead: false,
 	})
 	sess := e.freshSignIn(t)
 

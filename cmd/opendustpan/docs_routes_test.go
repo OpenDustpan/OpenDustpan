@@ -23,7 +23,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // docRouteMark is the text that marks a documented route as not served yet.
@@ -505,7 +504,7 @@ func docTestServer(t *testing.T, issuer string) *dustpan.Server {
 
 	ctx := t.Context()
 
-	st, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
+	st, err := dustpan.OpenStore(ctx, "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -552,39 +551,13 @@ func docTestServer(t *testing.T, issuer string) *dustpan.Server {
 
 	opts := []dustpan.Option{
 		dustpan.WithInstallation(namespace.InstallationName("local")),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
 		dustpan.WithAuthenticator(authn),
-		dustpan.WithWorkspaceStore(st),
-		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
-		dustpan.WithInventoryReader(st),
 		dustpan.WithSecretWrapper(wrapper),
-		dustpan.WithSelfServiceBlueprints(st.SelfServiceBlueprints()),
 		dustpan.WithPublicURL("https://dustpan.example.invalid"),
-		dustpan.WithDurableStore(st.DurableOperations()),
-		dustpan.WithJobStore(st.Jobs()),
-		dustpan.WithDriftStore(st.DriftResults()),
-		dustpan.WithTriggerStore(st.Triggers()),
-		dustpan.WithUnitSettingsStore(st.UnitSettings()),
-		dustpan.WithRunners(st.Runners()),
-		dustpan.WithSourceFilters(st.SourceFilters()),
-		dustpan.WithTrustRules(st.TrustRules()),
-		dustpan.WithSavedViewStore(st.SavedViews()),
 		dustpan.WithSettings(st.SettingStore(), settingtest.Declarations(), nil),
-		dustpan.WithProfileStore(st.Profiles()),
-		dustpan.WithIssuerStore(st.Issuer()),
-		dustpan.WithGitHostStore(st.GitHost()),
-		dustpan.WithRegistry(st.Registry(), st.RegistryKeys()),
-		dustpan.WithSinkStore(st.NotificationSinks()),
-		dustpan.WithIdempotencyStore(st.Idempotency(wrapper)),
-		dustpan.WithInstanceStore(st),
+		dustpan.WithBuiltinStore(st),
 		dustpan.WithIPAllowlists(true),
-		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithBackupTarget(backupTarget, "dir:backup-target"),
 		dustpan.WithLDAPProvider(dustpan.LDAPProvider{
 			RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp",

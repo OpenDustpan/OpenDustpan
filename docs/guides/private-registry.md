@@ -443,6 +443,7 @@ A request has at most one manifest file. To find the cause, run
 | One module archive when unpacked | 1 GiB |
 | Entries in one module archive | 20,000 |
 | All files of one release | 2 GiB |
+| All files of one namespace, for a backup and a restore | 2 GiB |
 | Archives for one version | 64 |
 | Trusted keys for one namespace | 16 |
 | Validity of a signed file address | 15 minutes |
@@ -452,7 +453,10 @@ A request has at most one manifest file. To find the cause, run
 - The registry serves modules that you upload. It does not read modules from
   git tags yet.
 - A backup holds the records of the releases, the keys and the files of the
-  releases.
+  releases. The server refuses a backup when one file is larger than 512 MiB
+  or when the files of one namespace are together larger than 2 GiB, because a
+  restore refuses the same sizes. The refusal has the code
+  `backup.registry-files-too-large`.
 - A signed file address is valid only on the server process that made it, because
   each server process makes its own signing key at start. Behind one address with
   several server processes, use one server process for the registry, or set one shared key

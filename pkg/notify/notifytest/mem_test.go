@@ -611,7 +611,12 @@ func (m *memStore) Redeliver(_ context.Context, id string, now time.Time, fence 
 			return fmt.Errorf("redeliver %s: %w", id, notify.ErrRedeliverLimit)
 		}
 
-		if at := notify.RedeliverableAt(d); now.Before(at) {
+		at, ok := notify.RedeliverableAt(d)
+		if !ok {
+			return fmt.Errorf("redeliver %s: %w: the delivery stopped with no time", id, notify.ErrInvalid)
+		}
+
+		if now.Before(at) {
 			return fmt.Errorf("redeliver %s: %w", id, &notify.TooSoonError{Wait: at.Sub(now)})
 		}
 

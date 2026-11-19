@@ -93,6 +93,7 @@ func Run(t *testing.T, newHarness Factory) {
 		run  func(t *testing.T, h Harness)
 	}{
 		{"create stores a pool and get returns it", testCreatePool},
+		{"a pool of one namespace with the fence of another is refused", testCreatePoolNamespaceMismatch},
 		{"a pool name is unique in its namespace", testPoolNameUnique},
 		{"the purpose of a pool never changes", testPurposeImmutable},
 		{"a namespace has at most 50 pools", testPoolLimit},

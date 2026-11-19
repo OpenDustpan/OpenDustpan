@@ -74,6 +74,8 @@ A restore accepts a backup only when the `unverified` list names every blob that
 
 The server refuses a backup when its data names more than 10000 such blobs. It writes no manifest, so no restore applies the backup. The failed row and the server log name the count and the limit. The count points to rows without the size and the MD5 of a blob. Such rows can come from an earlier version of the server. Run the backup again after those rows hold their values, or after the server no longer holds them. No setting changes the bound. The answer of `GET /api/dustpan/v1/backups/{id}` shows it as `unverifiedKeyLimit`. The same answer shows the count of the unverified keys of the manifest as `unverifiedKeyCount`. The code `backup.too-many-unverified` carries the count and the limit as its arguments.
 
+The server refuses a backup in two cases. One registry file is larger than 512 MiB, or the registry files of one namespace together are larger than 2 GiB. A restore refuses the same sizes, so such a backup would never restore. The server checks the sizes before it copies a blob and before it writes the manifest, so no manifest exists for the refused backup. The failed row names the release, the version, the size and the limit. The server log names only the backup ID. Delete the release or the files that are too large, then run the backup again. No setting changes the limits. The code `backup.registry-files-too-large` carries the size in bytes and the limit in bytes as its arguments. For the limit of the namespace, the size is the total of the namespace.
+
 A restore does not apply the bound. A manifest with more unverified keys than the bound restores as before. Such a manifest can come from an earlier version of the server. The restore checks the same rule: the list must name every blob that the data names. The audit log then holds one entry with the count and the limit.
 
 The table files use one encoding for both databases. A backup of SQLite restores into PostgreSQL, and a backup of PostgreSQL restores into SQLite.
@@ -229,6 +231,16 @@ working, so no client can write data from before the restore into the
 restored data. The restore also releases every OpenTofu workspace lock that
 the backup holds. A client that holds a lock from before the restore must take
 a new lock and read the restored state before it writes.
+
+The restore also expires the lease of every Pulumi update that was running when
+the backup was made. The update stays `running` and its stack stays locked. The
+client that holds the old lease token cannot renew the lease, save a
+checkpoint or complete the update: each call answers 401 with the error code
+`update.lease-expired`. To unlock the stack, run `pulumi cancel` on it. The
+cancel ends the update as canceled and builds its checkpoint from the journal,
+as for any update whose lease ran out. When the restore expired at least one
+lease, the audit log holds one entry of the restore that gives the count of the
+expired leases.
 
 The server checks the key that it started with before it writes anything. The
 `opendustpan restore` command does not read `DUSTPAN_KEY_ENCRYPTION_KEY`. When
