@@ -149,6 +149,11 @@ type unitEffect struct {
 	errs      []string
 	approvals []string
 	warns     []string
+	// blocked is true when a gate in error matched with an outcome that is
+	// not a warning, or an approval gate has no rule. No break-glass pass
+	// passes such a gate: the pass is for a gate in error, never for a deny
+	// or an approval.
+	blocked bool
 }
 
 // result returns the result of the unit: the strictest effect.
@@ -279,7 +284,7 @@ func (r *stateWriteRun) record() Record {
 		AutoApply: false, Controls: nil, BreakGlass: "", Result: ResultAllow, Action: "", Count: 1, LastAt: at,
 	}
 
-	total := unitEffect{denies: nil, errs: nil, approvals: nil, warns: nil}
+	total := unitEffect{denies: nil, errs: nil, approvals: nil, warns: nil, blocked: false}
 
 	for i := range r.units {
 		res, eff := r.unitResult(i)
@@ -289,6 +294,7 @@ func (r *stateWriteRun) record() Record {
 		total.errs = append(total.errs, eff.errs...)
 		total.approvals = append(total.approvals, eff.approvals...)
 		total.warns = append(total.warns, eff.warns...)
+		total.blocked = total.blocked || eff.blocked
 	}
 
 	// A state change with a reason says why state.available is false. The
@@ -309,7 +315,8 @@ func (r *stateWriteRun) record() Record {
 // decide sets the result of the record and the refusal of the run.
 func (r *stateWriteRun) decide(rec *Record, total *unitEffect, engineDown bool) {
 	rec.Result = total.result()
-	r.onlyErrors = len(total.denies) == 0 && !engineDown && len(total.approvals) == 0 && len(total.errs) > 0
+	r.onlyErrors = len(total.denies) == 0 && !engineDown && len(total.approvals) == 0 && !total.blocked &&
+		len(total.errs) > 0
 
 	switch {
 	case len(total.denies) > 0:
@@ -548,7 +555,7 @@ func (r *stateWriteRun) unitResult(i int) (UnitResult, *unitEffect) {
 	res := UnitResult{
 		Unit: UnitRef{Object: u.unit}, Facts: u.facts, Digest: digest, Gates: []PolicyResult{}, Result: ResultAllow,
 	}
-	eff := &unitEffect{denies: nil, errs: nil, approvals: nil, warns: nil}
+	eff := &unitEffect{denies: nil, errs: nil, approvals: nil, warns: nil, blocked: false}
 
 	var answer *Answer
 	if r.engineErr == nil {
@@ -561,9 +568,11 @@ func (r *stateWriteRun) unitResult(i int) (UnitResult, *unitEffect) {
 			continue
 		}
 
-		pr := r.gateResult(g, u, answer)
+		pr := newPolicyResult(g)
+		matched := r.gateResult(&pr, g, u, answer)
+
 		if g.Mode == ModeEnforce {
-			r.enforce(&pr, g, u, eff)
+			r.enforce(&pr, g, u, eff, matched)
 		}
 
 		res.Gates = append(res.Gates, pr)
@@ -578,13 +587,10 @@ func (r *stateWriteRun) unitResult(i int) (UnitResult, *unitEffect) {
 }
 
 // gateResult sets the match, the error and the message of one gate for one
-// unit.
-func (r *stateWriteRun) gateResult(g *Gate, u *unitEval, answer *Answer) PolicyResult {
-	pr := PolicyResult{
-		Policy: g.PolicyID(), Version: g.Version, Mode: g.Mode, Outcome: g.Outcome, Matched: false,
-		Error: false, Diagnostic: "", Skipped: false, BrokenBy: "", Message: "",
-	}
-
+// unit into pr. It returns true when the engine matched the gate and the
+// message then failed to render: the result shows an error, but the gate
+// still matched, so its outcome must not pass with a break-glass pass.
+func (r *stateWriteRun) gateResult(pr *PolicyResult, g *Gate, u *unitEval, answer *Answer) bool {
 	switch {
 	case g.State != StateValid:
 		pr.Error = true
@@ -592,24 +598,32 @@ func (r *stateWriteRun) gateResult(g *Gate, u *unitEval, answer *Answer) PolicyR
 	case r.engineErr != nil:
 		pr.Error, pr.Diagnostic = true, cleanText(r.engineErr.Error())
 	case answer != nil:
-		r.readAnswer(&pr, answer)
+		r.readAnswer(pr, answer)
 	default:
 	}
 
 	if !pr.Matched {
-		return pr
+		return false
 	}
 
 	msg, err := renderMessage(g.Message, u.doc)
 	if err != nil {
 		pr.Matched, pr.Error, pr.Diagnostic = false, true, cleanText(err.Error())
 
-		return pr
+		return true
 	}
 
 	pr.Message = cleanText(msg)
 
-	return pr
+	return false
+}
+
+// newPolicyResult returns the empty result of gate g.
+func newPolicyResult(g *Gate) PolicyResult {
+	return PolicyResult{
+		Policy: g.PolicyID(), Version: g.Version, Mode: g.Mode, Outcome: g.Outcome, Matched: false,
+		Error: false, Diagnostic: "", Skipped: false, BrokenBy: "", Message: "",
+	}
 }
 
 // readAnswer sets the match and the error of pr from the answer.
@@ -626,11 +640,15 @@ func (r *stateWriteRun) readAnswer(pr *PolicyResult, answer *Answer) {
 }
 
 // enforce adds the effect of the enforced gate g to eff.
-func (r *stateWriteRun) enforce(pr *PolicyResult, g *Gate, u *unitEval, eff *unitEffect) {
+// matched is true when the engine matched the gate before its message failed
+// to render.
+func (r *stateWriteRun) enforce(pr *PolicyResult, g *Gate, u *unitEval, eff *unitEffect, matched bool) {
 	switch {
 	case pr.Error && g.OnError == OnErrorSkip:
 		pr.Skipped = true
 	case pr.Error:
+		// A matched deny or approval gate is not a gate in error for a pass.
+		eff.blocked = eff.blocked || (matched && g.Outcome != OutcomeWarn)
 		eff.errs = append(eff.errs, "the gate "+pr.Policy.String()+" failed: "+pr.Diagnostic)
 	case pr.Matched:
 		r.applyOutcome(pr, u, eff)
@@ -665,6 +683,7 @@ func (r *stateWriteRun) requireApproval(pr *PolicyResult, u *unitEval, eff *unit
 	if !ok || !found {
 		pr.Error, pr.Matched = true, false
 		pr.Diagnostic = "the approval rule " + string(pr.Outcome) + " does not exist for the unit"
+		eff.blocked = true
 		eff.errs = append(eff.errs, "the gate "+pr.Policy.String()+" failed: "+pr.Diagnostic)
 
 		return
@@ -824,15 +843,25 @@ func (s *Service) breakGlassKey(c Change) (BreakGlassKey, bool, error) {
 // refusal. A deny, an approval and an engine failure never pass. The record
 // names the break-glass.
 //
-// Defense in depth: the decision above this call and the store each check the
-// whole key. This check stays so that a store that skips a check cannot pass
-// a deny.
+// Defense in depth: this function checks the refusal, onlyErrors, the key
+// and the window of the pass itself. It does not rely on the decision above
+// it or on the store, because a store that skips a check must not pass a deny
+// or a pass of another holder, unit or operation. The error kind check stays
+// so that a new caller cannot pass an engine failure or a deny.
 func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key BreakGlassKey) {
 	if r.refusal == nil || !r.onlyErrors || !errors.Is(r.refusal.Err, ErrRuleFailed) {
 		return
 	}
 
-	err := r.svc.breakGlass.Consume(ctx, key, r.svc.now())
+	now := r.svc.now()
+	pass, err := r.svc.breakGlass.Consume(ctx, key, now)
+
+	if err == nil && (pass.Key() != key || !pass.ValidAt(now)) {
+		// Defense in depth: the store matches the key and the window too.
+		// This check stays so that a store that skips one cannot pass the
+		// write with a pass of another key or an expired pass.
+		err = fmt.Errorf("%w: the store returned a pass that is not for this change or is not valid", ErrUnavailable)
+	}
 
 	switch {
 	case err == nil:

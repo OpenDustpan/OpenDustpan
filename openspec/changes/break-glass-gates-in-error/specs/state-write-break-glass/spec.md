@@ -36,6 +36,14 @@ If a write evaluation holds a deny, then the server SHALL refuse the write when 
 - **WHEN** the evaluation has a deny and a valid pass exists
 - **THEN** the decision refuses the write and consumes no pass
 
+#### Scenario: Matched gate whose message does not render
+- **WHEN** a deny gate or an approval gate matches, its message fails to render or its approval rule is missing, and a valid pass exists
+- **THEN** the decision refuses the write and consumes no pass
+
+#### Scenario: Store returns a wrong pass
+- **WHEN** the store returns a pass of another key or an expired pass
+- **THEN** the decision refuses the write with gate.unavailable
+
 ### Requirement: Fail closed without a store
 
 If no pass store is wired, then the server SHALL refuse a write that sets break-glass with gate.unavailable.

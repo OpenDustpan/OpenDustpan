@@ -144,11 +144,13 @@ type BreakGlassStore interface {
 	// NewBreakGlassPass did not make.
 	Issue(ctx context.Context, pass BreakGlassPass) error
 	// Consume uses one pass of key that is unused and valid at now, in one
-	// atomic step: of any number of concurrent calls for one pass, exactly
-	// one returns nil. It returns ErrNotFound when no such pass exists. The
-	// error is the same for a missing, a used, an expired and a foreign
-	// pass, so that a caller learns nothing about the passes of others.
-	Consume(ctx context.Context, key BreakGlassKey, now time.Time) error
+	// atomic step, and returns the pass that it used: of any number of
+	// concurrent calls for one pass, exactly one returns a pass. The
+	// returned pass has the key and is valid at now; the caller checks both
+	// again. Consume returns ErrNotFound when no such pass exists. The error
+	// is the same for a missing, a used, an expired and a foreign pass, so
+	// that a caller learns nothing about the passes of others.
+	Consume(ctx context.Context, key BreakGlassKey, now time.Time) (BreakGlassPass, error)
 }
 
 // unwiredBreakGlassStore is the BreakGlassStore of a Service that has none.
@@ -161,8 +163,8 @@ func (unwiredBreakGlassStore) Issue(context.Context, BreakGlassPass) error {
 	return errBreakGlassUnwired
 }
 
-func (unwiredBreakGlassStore) Consume(context.Context, BreakGlassKey, time.Time) error {
-	return errBreakGlassUnwired
+func (unwiredBreakGlassStore) Consume(context.Context, BreakGlassKey, time.Time) (BreakGlassPass, error) {
+	return BreakGlassPass{}, errBreakGlassUnwired
 }
 
 // noBreakGlassKey is the key that a function returns with an error, or when a

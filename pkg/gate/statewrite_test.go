@@ -731,11 +731,17 @@ func TestBreakGlassChangeFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
+
 	c := swChange(t, e.fence)
 	c.BreakGlass = "audit-1"
 
 	if _, err := e.svc.Evaluate(t.Context(), c); !errors.Is(err, gate.ErrUnavailable) {
-		t.Fatalf("Evaluate(break-glass) = %v, want ErrUnavailable: no break-glass is implemented", err)
+		t.Fatalf("Evaluate(break-glass, gate in error, no pass store) = %v, want ErrUnavailable", err)
+	}
+
+	if recs := e.records(t); len(recs) != 0 {
+		t.Fatalf("records = %d, want none: a refusal with no pass store writes no decision record", len(recs))
 	}
 }
 

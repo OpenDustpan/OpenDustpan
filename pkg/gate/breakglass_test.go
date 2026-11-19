@@ -1,6 +1,7 @@
 package gate_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const bgBroken = `context.unit.nothing == "x"`
@@ -250,6 +252,16 @@ func TestBreakGlassDenyStillRefuses(t *testing.T) {
 			},
 			want: gate.ErrRuleFailed,
 		},
+		// A matched gate whose message names an absent fact is a gate in
+		// error, but it still matched with a deny: a pass must not pass it.
+		"a deny whose message does not render": {
+			extra: func(t *testing.T, e bgEnv) {
+				t.Helper()
+
+				e.putGate(t, newSWGate(atUnit, "no-writes", "", gate.OutcomeDeny, "no writes to {{unit.nothing}}"))
+			},
+			want: gate.ErrRuleFailed,
+		},
 	} {
 		e := newBGEnv(t)
 		e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
@@ -406,5 +418,118 @@ func TestBreakGlassSkipPathUsesNoPass(t *testing.T) {
 
 	if e.store.consumes.Load() != 0 || e.store.unused() != 1 {
 		t.Error("the skip path used a pass")
+	}
+}
+
+// noRuleStore is a gate store whose configuration snapshot holds no approval
+// rule, like a store that holds a gate from another version whose rule is
+// gone.
+type noRuleStore struct{ gate.Store }
+
+func (n noRuleStore) Snapshot(ctx context.Context, scopes []gate.Scope) (gate.Config, error) {
+	cfg, err := n.Store.Snapshot(ctx, scopes)
+	cfg.ApprovalRules = nil
+
+	return cfg, err
+}
+
+// TestBreakGlassMissingRuleStillRefuses checks that an approval gate whose
+// rule is missing fails closed and that a valid pass does not pass it.
+func TestBreakGlassMissingRuleStillRefuses(t *testing.T) {
+	t.Parallel()
+
+	st := newMemBreakGlassStore()
+	now := bgNow()
+
+	e := bgEnv{
+		swEnv: newBreakGlassSWEnv(t, swSetup{
+			units: swUnits{collections: nil, labels: nil}, engineErr: nil, kinds: fixedKind("production"),
+			wrap:       func(s *sqlite.Store) gate.Store { return noRuleStore{Store: s} },
+			breakGlass: st, now: func() time.Time { return now },
+		}),
+		store: st, clock: &now,
+	}
+
+	e.putRule(t)
+	e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
+	e.putGate(t, newSWGate(atUnit, "needs-gone", "", gate.ApprovalOutcome("two-eyes"), "review"))
+	e.issue(t, "alice", gate.OperationApply, bgUnit(t, "web", "ws-test-web"))
+
+	if _, err := e.svc.Evaluate(t.Context(), e.change(t)); !errors.Is(err, gate.ErrRuleFailed) {
+		t.Fatalf("Evaluate = %v, want ErrRuleFailed", err)
+	}
+
+	if st.unused() != 1 || st.consumes.Load() != 0 {
+		t.Errorf("unused = %d, consumes = %d, want 1 and 0: no pass is used", st.unused(), st.consumes.Load())
+	}
+}
+
+// wrongPassStore is a hostile store: its Consume uses a pass and returns the
+// pass that make gives, whatever the key and the time are.
+type wrongPassStore struct {
+	*memBreakGlassStore
+
+	make func(t *testing.T) gate.BreakGlassPass
+	t    *testing.T
+}
+
+func (w wrongPassStore) Consume(
+	ctx context.Context, key gate.BreakGlassKey, now time.Time,
+) (gate.BreakGlassPass, error) {
+	if _, err := w.memBreakGlassStore.Consume(ctx, key, now); err != nil {
+		return gate.BreakGlassPass{}, err
+	}
+
+	return w.make(w.t), nil
+}
+
+// TestBreakGlassHostileStoreRefuses checks that the service checks the key and
+// the window of the pass that a store returns: a store that returns a pass of
+// another key or an expired pass does not let the write through.
+func TestBreakGlassHostileStoreRefuses(t *testing.T) {
+	t.Parallel()
+
+	web := bgUnit(t, "web", "ws-test-web")
+
+	for name, mk := range map[string]func(t *testing.T) gate.BreakGlassPass{
+		"a pass of another holder": func(t *testing.T) gate.BreakGlassPass {
+			t.Helper()
+
+			return bgPass(t, "bob", gate.OperationApply, web, bgNow())
+		},
+		"a pass of another operation": func(t *testing.T) gate.BreakGlassPass {
+			t.Helper()
+
+			return bgPass(t, "alice", gate.OperationDestroy, web, bgNow())
+		},
+		"an expired pass": func(t *testing.T) gate.BreakGlassPass {
+			t.Helper()
+
+			return bgPass(t, "alice", gate.OperationApply, web, bgNow().Add(-2*gate.BreakGlassPassWindow))
+		},
+	} {
+		st := newMemBreakGlassStore()
+		now := bgNow()
+
+		e := bgEnv{
+			swEnv: newBreakGlassSWEnv(t, swSetup{
+				units: swUnits{collections: nil, labels: nil}, engineErr: nil, wrap: nil,
+				kinds:      fixedKind("production"),
+				breakGlass: wrongPassStore{memBreakGlassStore: st, make: mk, t: t},
+				now:        func() time.Time { return now },
+			}),
+			store: st, clock: &now,
+		}
+
+		e.putGate(t, newSWGate(atUnit, "broken", bgBroken, gate.OutcomeDeny, "x"))
+		e.issue(t, "alice", gate.OperationApply, web)
+
+		if _, err := e.svc.Evaluate(t.Context(), e.change(t)); !errors.Is(err, gate.ErrUnavailable) {
+			t.Errorf("%s: Evaluate = %v, want ErrUnavailable", name, err)
+		}
+
+		if rec := e.newestRecord(t); rec.BreakGlass != "" {
+			t.Errorf("%s: Record.BreakGlass = %q, want none", name, rec.BreakGlass)
+		}
 	}
 }

@@ -42,11 +42,13 @@ func (m *memBreakGlassStore) Issue(_ context.Context, pass gate.BreakGlassPass) 
 	return nil
 }
 
-func (m *memBreakGlassStore) Consume(_ context.Context, key gate.BreakGlassKey, now time.Time) error {
+func (m *memBreakGlassStore) Consume(
+	_ context.Context, key gate.BreakGlassKey, now time.Time,
+) (gate.BreakGlassPass, error) {
 	m.consumes.Add(1)
 
 	if m.failWith != nil {
-		return m.failWith
+		return gate.BreakGlassPass{}, m.failWith
 	}
 
 	m.mu.Lock()
@@ -57,11 +59,11 @@ func (m *memBreakGlassStore) Consume(_ context.Context, key gate.BreakGlassKey, 
 		if !p.used && p.pass.Key() == key && p.pass.ValidAt(now) {
 			p.used = true
 
-			return nil
+			return p.pass, nil
 		}
 	}
 
-	return gate.ErrNotFound
+	return gate.BreakGlassPass{}, gate.ErrNotFound
 }
 
 // unused counts the passes that no Consume used.
@@ -151,11 +153,16 @@ func suiteUsedOnce(t *testing.T, newStore func(*testing.T) gate.BreakGlassStore)
 
 	bgSuiteIssue(t, s)
 
-	if err := s.Consume(t.Context(), bgSuiteKey(), at); err != nil {
+	pass, err := s.Consume(t.Context(), bgSuiteKey(), at)
+	if err != nil {
 		t.Fatalf("first Consume = %v, want nil", err)
 	}
 
-	if err := s.Consume(t.Context(), bgSuiteKey(), at); !errors.Is(err, gate.ErrNotFound) {
+	if pass.Key() != bgSuiteKey() || !pass.ValidAt(at) {
+		t.Fatalf("first Consume returned pass %+v, want a valid pass of the key", pass.Key())
+	}
+
+	if _, err = s.Consume(t.Context(), bgSuiteKey(), at); !errors.Is(err, gate.ErrNotFound) {
 		t.Fatalf("second Consume = %v, want ErrNotFound", err)
 	}
 }
@@ -179,7 +186,7 @@ func suiteWindow(t *testing.T, newStore func(*testing.T) gate.BreakGlassStore) {
 
 		bgSuiteIssue(t, s)
 
-		err := s.Consume(t.Context(), bgSuiteKey(), tc.at)
+		_, err := s.Consume(t.Context(), bgSuiteKey(), tc.at)
 		if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
 			t.Errorf("%s: Consume = %v, want %v", name, err, tc.want)
 		}
@@ -202,12 +209,12 @@ func suiteWholeKey(t *testing.T, newStore func(*testing.T) gate.BreakGlassStore)
 		"a prefix of the owner": {Holder: "alic", UnitID: "ws-test-web", Kind: gate.OperationApply},
 		"the empty key":         {Holder: "", UnitID: "", Kind: ""},
 	} {
-		if err := s.Consume(t.Context(), k, at); !errors.Is(err, gate.ErrNotFound) {
+		if _, err := s.Consume(t.Context(), k, at); !errors.Is(err, gate.ErrNotFound) {
 			t.Errorf("%s: Consume = %v, want ErrNotFound", name, err)
 		}
 	}
 
-	if err := s.Consume(t.Context(), bgSuiteKey(), at); err != nil {
+	if _, err := s.Consume(t.Context(), bgSuiteKey(), at); err != nil {
 		t.Fatalf("the pass is still valid after each foreign key: Consume = %v", err)
 	}
 }
@@ -226,7 +233,7 @@ func suiteConcurrent(t *testing.T, newStore func(*testing.T) gate.BreakGlassStor
 
 	for range 16 {
 		wg.Go(func() {
-			if s.Consume(t.Context(), bgSuiteKey(), at) == nil {
+			if _, err := s.Consume(t.Context(), bgSuiteKey(), at); err == nil {
 				wins.Add(1)
 			}
 		})
