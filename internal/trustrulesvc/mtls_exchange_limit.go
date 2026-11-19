@@ -56,14 +56,24 @@ type MtlsGuard struct {
 // slot, so the memory of a window has a fixed upper bound.
 const maxRefusalNames = 8
 
+// maxRearms is the number of times that a slot of one window gives the first
+// refusal back after a failed write. After that, the slot stays marked and
+// counts the refusals, so the count carries to the next window.
+const maxRearms = 2
+
 // refusalSlot is the state of the refusals of one namespace name in one
 // window. marked is true after the guard reported the first refusal and the
 // caller did not give it back. held is the number of refusals since then,
 // which the guard counted and which wrote no entry.
+//
+// rearms is the number of times that the caller gave the first refusal back
+// after a failed write. It is bounded by maxRearms for each window, so a store
+// that always fails costs a bounded number of reads for each window.
 type refusalSlot struct {
 	name   string
 	marked bool
 	held   int
+	rearms int
 }
 
 // guardWindow counts the calls since start. named and shared hold the first
@@ -133,7 +143,11 @@ func NewMtlsGuard(cfg MtlsGuardConfig) (*MtlsGuard, error) {
 // newGuardWindow returns an empty window.
 func newGuardWindow() guardWindow {
 	return guardWindow{
-		start: time.Time{}, count: 0, named: nil, shared: refusalSlot{name: "", marked: false, held: 0}, freed: 0,
+		start:  time.Time{},
+		count:  0,
+		named:  nil,
+		shared: refusalSlot{name: "", marked: false, held: 0, rearms: 0},
+		freed:  0,
 	}
 }
 
@@ -203,15 +217,43 @@ func (g *MtlsGuard) Admit(key, namespace string, bodyLen int64) (Refusal, error)
 
 // Rearm gives a first refusal back, because the caller could not write its
 // denial entry: the next refusal of the window and name is a first refusal
-// again, and the counts of r return to the guard.
+// again, and the counts of r return to the guard. It does this at most
+// maxRearms times for each slot and window. After that, the slot stays marked
+// and counts the refusal, so a store that always fails costs a bounded number
+// of reads for each window, and the count carries to the next window.
 func (g *MtlsGuard) Rearm(r Refusal) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	g.returnCarry(r.Held)
 
+	slot := g.slotOf(r)
+	if slot == nil {
+		return
+	}
+
+	if slot.rearms >= maxRearms {
+		slot.held++
+
+		return
+	}
+
+	slot.rearms++
+	slot.marked = false
+}
+
+// Keep gives a first refusal back to the guard for a namespace that exists but
+// writes no entry on this installation. The slot stays marked and counts the
+// refusal, so the refusals that follow cause no read, and the counts of r
+// return to the guard.
+func (g *MtlsGuard) Keep(r Refusal) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.returnCarry(r.Held)
+
 	if slot := g.slotOf(r); slot != nil {
-		slot.marked = false
+		slot.held++
 	}
 }
 
@@ -255,7 +297,7 @@ func (w *guardWindow) slotFor(name string) (*refusalSlot, string) {
 		return &w.shared, ""
 	}
 
-	w.named = append(w.named, refusalSlot{name: name, marked: false, held: 0})
+	w.named = append(w.named, refusalSlot{name: name, marked: false, held: 0, rearms: 0})
 
 	return &w.named[len(w.named)-1], name
 }
@@ -305,7 +347,12 @@ func (g *MtlsGuard) Tracked() int {
 func (g *MtlsGuard) count(w *guardWindow, now time.Time) int {
 	if w.start.IsZero() || !now.Before(w.start.Add(g.cfg.Window)) {
 		g.fold(w)
-		w.start, w.count, w.named, w.shared, w.freed = now, 0, nil, refusalSlot{name: "", marked: false, held: 0}, 0
+		w.start, w.count, w.named, w.shared, w.freed = now, 0, nil, refusalSlot{
+			name:   "",
+			marked: false,
+			held:   0,
+			rearms: 0,
+		}, 0
 	}
 
 	w.count++
@@ -358,7 +405,7 @@ func (g *MtlsGuard) addCarry(name string, n int) {
 		return
 	}
 
-	if _, ok := g.carry[name]; !ok && len(g.carry) > maxRefusalNames {
+	if _, ok := g.carry[name]; !ok && len(g.carry) >= maxRefusalNames {
 		name = ""
 	}
 

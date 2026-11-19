@@ -229,14 +229,20 @@ The answer is 201 with `Cache-Control: no-store`, in the form of the token
 exchange above. The token never lives longer than the leaf certificate. Each
 exchange writes the audit entry `trust-rule:exchange`, and each refusal writes
 an audit entry with the outcome `denied`. This includes a refusal for the rate
-limit or the body size. For each window and namespace, the server writes the
-first refusal and counts the others in memory, so a flood of refused calls
-causes one namespace read for each window. The server writes the count of the
+limit or the body size. For each window, the server tracks 8 namespace names for
+each address. It writes the first refusal of each tracked name and counts the
+others in memory, so a flood of refused calls to these names causes a bounded
+number of namespace reads for each window. The server writes the count of the
 others as an entry with the reason "N refused exchanges wrote no entry of
-their own". If the server cannot write an entry, the next refusal tries again.
-A call to a namespace that does not exist writes no entry, because that
-namespace has no audit log. Such a call does not hide the refusals of another
-namespace.
+their own". The count for the names beyond the 8 goes to the audit log of the
+installation, not to the log of a namespace, with the reason "N refused mTLS
+exchanges to namespaces beyond the 8 names the guard tracks in a window wrote
+no entry of their own". A caller can use these names to keep the refusals to a
+real namespace out of the log of that namespace for the rest of the window.
+The count of the installation shows it. If the server cannot write an entry, the
+next refusal tries again, at most 2 times in a window. A call to a namespace that
+does not exist, or that another installation owns, writes no entry, because
+this installation has no audit log for that namespace.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |

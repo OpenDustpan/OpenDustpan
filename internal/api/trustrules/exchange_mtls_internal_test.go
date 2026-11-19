@@ -56,3 +56,35 @@ func TestClassifyMtlsRows(t *testing.T) {
 		t.Error("classifyMtls(unrelated) classified: want pass-through, so the writer fails closed with 500")
 	}
 }
+
+// TestCountMtlsRefusedReason checks the reason that the handler gives to the
+// counter: body-size for a body over the cap, rate-limit for the rest.
+func TestCountMtlsRefusedReason(t *testing.T) {
+	t.Parallel()
+
+	rows := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "body too large", err: trustrulesvc.ErrBodyTooLarge, want: "body-size"},
+		{name: "wrapped body too large", err: fmt.Errorf("x: %w", trustrulesvc.ErrBodyTooLarge), want: "body-size"},
+		{name: "rate limited", err: trustrulesvc.ErrRateLimited, want: "rate-limit"},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []string
+
+			h := new(Handler)
+			h.onMtlsRefused = func(r string) { got = append(got, r) }
+			h.countMtlsRefused(row.err)
+
+			if len(got) != 1 || got[0] != row.want {
+				t.Fatalf("reasons = %v, want [%s]", got, row.want)
+			}
+		})
+	}
+}

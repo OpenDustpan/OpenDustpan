@@ -144,6 +144,29 @@ type mtlsOpts struct {
 	// canceled gives each request a context that is already canceled, like a
 	// client that disconnects during the call.
 	canceled bool
+	// guardNow is the clock of the guard. Nil means the fixed test time.
+	guardNow func() time.Time
+	// onRefused is the OnMtlsRefused callback of the handler.
+	onRefused func(reason string)
+	// failServer, when not nil, makes the write in the audit log of the
+	// installation fail while it holds true.
+	failServer *atomic.Bool
+}
+
+// failingServerAudit is a server audit store that fails while fail holds
+// true.
+type failingServerAudit struct {
+	audit.ServerStore
+
+	fail *atomic.Bool
+}
+
+func (f failingServerAudit) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	if f.fail.Load() {
+		return audit.Entry{}, errDisk
+	}
+
+	return f.ServerStore.AppendServer(ctx, e)
 }
 
 // mtlsServer is the handler behind a TLS server that asks for a client
@@ -203,27 +226,18 @@ func (e *env) newMtlsServerWith(
 		mtlsNamespaces = wrap(namespaces)
 	}
 
+	serverAudit := o.serverAudit(e)
+
 	mtls, err := trustrulesvc.NewMtlsExchanger(trustrulesvc.MtlsConfig{
 		Rules: e.store.TrustRules(), Exchanges: exchanges, Bundles: e.store.TrustRules(), Namespaces: mtlsNamespaces,
-		Principals: e.store, Tokens: e.tokens, Audit: e.store, ServerAudit: e.store, Refusals: nil,
+		Principals: e.store, Tokens: e.tokens, Audit: e.store, ServerAudit: serverAudit, Refusals: nil,
 		Revocation: o.revocation, Now: testNow, Log: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("mtls exchanger: %v", err)
 	}
 
-	limit := o.limit
-	if limit == 0 {
-		limit = 1000
-	}
-
-	guard, err := trustrulesvc.NewMtlsGuard(trustrulesvc.MtlsGuardConfig{
-		MaxBodyBytes: 1024, Limit: limit, GlobalLimit: 1000, Window: time.Minute, MaxKeys: 100,
-		Now: testNow,
-	})
-	if err != nil {
-		e.t.Fatalf("mtls guard: %v", err)
-	}
+	guard := e.newGuard(o)
 
 	cfgMtls, cfgGuard := mtls, guard
 	if o.noMtls {
@@ -233,7 +247,7 @@ func (e *env) newMtlsServerWith(
 	h, err := trustrules.NewHandler(trustrules.Config{
 		Exchanger: exchanger, MtlsExchanger: cfgMtls, MtlsGuard: cfgGuard,
 		Namespaces: namespaces, Rules: rules, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: e.audit, OnAuditFailure: nil, OnMtlsRefused: nil, DenialLimiter: nil, Sessions: nil,
+		Audit: e.audit, OnAuditFailure: nil, OnMtlsRefused: o.onRefused, DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
 	})
 	if err != nil {
@@ -256,6 +270,42 @@ func (e *env) newMtlsServerWith(
 	e.t.Cleanup(srv.Close)
 
 	return &mtlsServer{srv: srv}
+}
+
+// serverAudit returns the server audit store of the exchanger. It fails
+// while o.failServer holds true, and never when o.failServer is nil.
+func (o mtlsOpts) serverAudit(e *env) failingServerAudit {
+	fail := o.failServer
+	if fail == nil {
+		fail = &atomic.Bool{}
+	}
+
+	return failingServerAudit{ServerStore: e.store, fail: fail}
+}
+
+// newGuard makes the guard of a test server.
+func (e *env) newGuard(o mtlsOpts) *trustrulesvc.MtlsGuard {
+	e.t.Helper()
+
+	limit := o.limit
+	if limit == 0 {
+		limit = 1000
+	}
+
+	guardNow := testNow
+	if o.guardNow != nil {
+		guardNow = o.guardNow
+	}
+
+	guard, err := trustrulesvc.NewMtlsGuard(trustrulesvc.MtlsGuardConfig{
+		MaxBodyBytes: 1024, Limit: limit, GlobalLimit: 1000, Window: time.Minute, MaxKeys: 100,
+		Now: guardNow,
+	})
+	if err != nil {
+		e.t.Fatalf("mtls guard: %v", err)
+	}
+
+	return guard
 }
 
 // call posts an empty body to the exchange route of path, with the client
@@ -373,7 +423,18 @@ func TestExchangeMtlsIssuesAToken(t *testing.T) {
 	t.Parallel()
 
 	e, ca, ruleID := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: false, canceled: false})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      0,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 	cert := ca.goodLeaf(t)
 
 	status, header, body := m.call(t, mtlsExchangeURL, &cert, nil)
@@ -559,7 +620,16 @@ func runHostile(t *testing.T, row *hostileRow) {
 	}
 
 	m := e.newMtlsServer(
-		mtlsOpts{revocation: row.revocation, failWrite: row.failWrite, limit: 0, noMtls: false, canceled: false},
+		mtlsOpts{
+			revocation: row.revocation,
+			failWrite:  row.failWrite,
+			limit:      0,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
 	)
 
 	var cert *tls.Certificate
@@ -627,7 +697,18 @@ func TestExchangeMtlsBodyTooLarge(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: false, canceled: false})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      0,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 	cert := ca.goodLeaf(t)
 	body := `{"token":"` + strings.Repeat("a", trustrule.MaxTokenBytes+4096) + `"}`
 
@@ -664,7 +745,18 @@ func TestExchangeMtlsRateLimit(t *testing.T) {
 	t.Parallel()
 
 	e, _, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 3, noMtls: false, canceled: false})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      3,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 
 	for i := 1; i <= 3; i++ {
 		status, _, body := m.call(t, mtlsExchangeURL, nil, nil)
@@ -689,7 +781,18 @@ func TestExchangeMtlsNotConfigured(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 0, noMtls: true, canceled: false})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      0,
+			noMtls:     true,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 	cert := ca.goodLeaf(t)
 
 	status, _, body := m.call(t, mtlsExchangeURL, &cert, nil)
@@ -711,7 +814,18 @@ func TestExchangeMtlsRateLimitAudit(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 2, noMtls: false, canceled: false})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      2,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 	cert := ca.goodLeaf(t)
 
 	for i := 1; i <= 2; i++ {
@@ -778,7 +892,16 @@ func TestExchangeMtlsRefusedFloodReads(t *testing.T) {
 	counter := &countingNamespaces{Namespaces: nil, writable: atomic.Int64{}, fail: nil, failing: nil}
 
 	m := e.newMtlsServerWith(
-		mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      1,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
 		func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
 			counter.Namespaces = n
 
@@ -816,7 +939,16 @@ func TestExchangeMtlsRefusedAnswer(t *testing.T) {
 
 		e, ca, _ := mtlsFixture(t)
 		m := e.newMtlsServerWith(
-			mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
+			mtlsOpts{
+				revocation: noRevocation,
+				failWrite:  false,
+				limit:      1,
+				noMtls:     false,
+				canceled:   false,
+				guardNow:   nil,
+				onRefused:  nil,
+				failServer: nil,
+			},
 			func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
 				return &countingNamespaces{Namespaces: n, writable: atomic.Int64{}, fail: errDisk, failing: nil}
 			},
@@ -838,7 +970,16 @@ func TestExchangeMtlsRefusedAnswer(t *testing.T) {
 
 		e, ca, _ := mtlsFixture(t)
 		m := e.newMtlsServer(
-			mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
+			mtlsOpts{
+				revocation: noRevocation,
+				failWrite:  false,
+				limit:      1,
+				noMtls:     false,
+				canceled:   false,
+				guardNow:   nil,
+				onRefused:  nil,
+				failServer: nil,
+			},
 		)
 		cert := ca.goodLeaf(t)
 		path := "/api/dustpan/v1/namespaces/nowhere/trust-rules/exchange"
@@ -884,7 +1025,18 @@ func testRefusalUnknownFirst(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      1,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 	cert := ca.goodLeaf(t)
 	ghost := "/api/dustpan/v1/namespaces/nowhere/trust-rules/exchange"
 
@@ -909,7 +1061,16 @@ func testRefusalStoreError(t *testing.T) {
 	failing := &atomic.Bool{}
 	counter := &countingNamespaces{Namespaces: nil, writable: atomic.Int64{}, fail: errDisk, failing: failing}
 	m := e.newMtlsServerWith(
-		mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: false},
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      1,
+			noMtls:     false,
+			canceled:   false,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
 		func(n trustrulesvc.Namespaces) trustrulesvc.Namespaces {
 			counter.Namespaces = n
 
@@ -939,7 +1100,18 @@ func testRefusalCanceled(t *testing.T) {
 	t.Parallel()
 
 	e, ca, _ := mtlsFixture(t)
-	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 1, noMtls: false, canceled: true})
+	m := e.newMtlsServer(
+		mtlsOpts{
+			revocation: noRevocation,
+			failWrite:  false,
+			limit:      1,
+			noMtls:     false,
+			canceled:   true,
+			guardNow:   nil,
+			onRefused:  nil,
+			failServer: nil,
+		},
+	)
 	cert := ca.goodLeaf(t)
 
 	for range 7 {

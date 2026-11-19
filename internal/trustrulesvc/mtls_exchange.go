@@ -60,6 +60,12 @@ var (
 	// ErrBundleUnknown reports that the namespace has no trust bundle, or
 	// that its bundle has no active version.
 	ErrBundleUnknown = errors.New("the namespace has no active trust bundle")
+
+	// ErrNamespaceNotHome reports that the namespace exists, but another
+	// installation is its primary installation, so this installation writes
+	// no audit entry in it. Only RefuseCall returns it; it is never an answer
+	// to a client.
+	ErrNamespaceNotHome = errors.New("this installation writes no audit entry in the namespace")
 	// ErrInvalid reports a chain that is too large, too deep, not parsable,
 	// or that has no usable SPIFFE ID.
 	ErrInvalid = errors.New("the client certificate chain is not valid")
@@ -505,6 +511,10 @@ func (e *MtlsExchanger) RefuseCall(
 
 	ns, err := e.cfg.Namespaces.WritableHere(ctx, name)
 	if err != nil {
+		if errors.Is(err, namespace.ErrNotHome) {
+			return held, fmt.Errorf("%w: %w", ErrNamespaceNotHome, err)
+		}
+
 		return held, namespaceError(err)
 	}
 
@@ -625,27 +635,34 @@ func (e *MtlsExchanger) Exchange(ctx context.Context, in *MtlsExchangeInput) (Mt
 
 // writeHeld writes the counts of refused calls that the guard held back, and
 // returns the counts that it could not write. A count for a namespace that
-// does not exist is dropped: that namespace has no audit log.
+// does not exist, or that this installation does not own, is dropped: it has
+// no audit log here. The count for the names beyond the bound of the guard
+// goes to the log of the installation.
 func (e *MtlsExchanger) writeHeld(ctx context.Context, request audit.Entry, held []HeldCount) []HeldCount {
 	var unwritten []HeldCount
 
-	for _, h := range held {
-		p := denylimit.Pending{
-			Key:        denylimit.Key{Principal: "", Action: "", Kind: "", Scope: ""},
-			Suppressed: h.Count, Overflow: h.Namespace == "",
-		}
+	// A count holds refusals of earlier windows, so the address and the agent
+	// of the current caller do not belong on it.
+	request.SourceIP, request.UserAgent = "", ""
 
-		if h.Namespace != "" {
-			ns, err := namespace.ParseName(h.Namespace)
-			if err != nil {
+	for _, h := range held {
+		var err error
+
+		if h.Namespace == "" {
+			err = e.refuser.serverEntry(ctx, request, fmt.Sprintf("%d refused mTLS exchanges to namespaces beyond "+
+				"the %d names the guard tracks in a window wrote no entry of their own", h.Count, maxRefusalNames))
+		} else {
+			ns, parseErr := namespace.ParseName(h.Namespace)
+			if parseErr != nil {
 				continue
 			}
 
-			p.Key = unsignedKey(ns)
+			err = e.refuser.flush(ctx, request, []denylimit.Pending{{
+				Key: unsignedKey(ns), Suppressed: h.Count, Overflow: false,
+			}})
 		}
 
-		err := e.refuser.flush(ctx, request, []denylimit.Pending{p})
-		if err != nil && !errors.Is(err, namespace.ErrNotFound) {
+		if err != nil && !errors.Is(err, namespace.ErrNotFound) && !errors.Is(err, namespace.ErrNotHome) {
 			unwritten = append(unwritten, h)
 		}
 	}

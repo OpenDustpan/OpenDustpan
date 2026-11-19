@@ -454,3 +454,234 @@ func TestMtlsGuardOversizeCounts(t *testing.T) {
 		t.Fatalf("normal call after the oversize calls: %v, want ErrRateLimited", err)
 	}
 }
+
+// TestMtlsGuardBounds checks the bounds of the guard: what each give-back
+// method does, and the limits that keep the memory and the reads of a window
+// fixed.
+func TestMtlsGuardBounds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Rearm gives the first refusal back at most twice", testRearmBound)
+	t.Run("Keep marks the slot and counts the refusal", testKeepCounts)
+	t.Run("Forget frees at most 8 slots in a window", testForgetBound)
+	t.Run("Rearm returns the held counts", testRearmReturnsCarry)
+	t.Run("Forget returns the held counts", testForgetReturnsCarry)
+	t.Run("Keep returns the held counts", testKeepReturnsCarry)
+	t.Run("a Rearm of an old window keeps the slot of the new one", testRearmOldWindow)
+	t.Run("the carry holds at most 8 names and one sum", testCarryBound)
+	t.Run("GiveBack returns counts to the next first refusal", testGiveBack)
+}
+
+func testRearmBound(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	admitOK(t, g, "acme")
+
+	var first int
+
+	for range 10 {
+		r := admitRefused(t, g, "acme")
+		if !r.First {
+			break
+		}
+
+		first++
+
+		g.Rearm(r)
+	}
+
+	if first != 3 {
+		t.Fatalf("first refusals = %d, want 3 (one, and two after Rearm)", first)
+	}
+
+	if admitRefused(t, g, "acme").First {
+		t.Fatal("a refusal after the bound is first")
+	}
+}
+
+func testKeepCounts(t *testing.T) {
+	t.Parallel()
+
+	g, clock := rearmGuard(t)
+
+	admitOK(t, g, "acme")
+
+	r := admitRefused(t, g, "acme")
+	g.Keep(r)
+
+	if admitRefused(t, g, "acme").First {
+		t.Fatal("a refusal after Keep is first")
+	}
+
+	clock.advance(time.Hour)
+
+	admitOK(t, g, "acme")
+
+	next := admitRefused(t, g, "acme")
+	if len(next.Held) != 1 || next.Held[0].Namespace != "acme" || next.Held[0].Count != 2 {
+		t.Fatalf("held = %+v, want acme 2 (the kept refusal and the one after it)", next.Held)
+	}
+}
+
+func testForgetBound(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	admitOK(t, g, "n0")
+
+	var first int
+
+	for i := range 20 {
+		r := admitRefused(t, g, fmt.Sprintf("n%d", i))
+		if r.First {
+			first++
+
+			g.Forget(r)
+		}
+	}
+
+	// 8 names are freed, then 8 names and the shared slot stay marked.
+	if first != 17 {
+		t.Fatalf("first refusals = %d, want 17 (8 freed, 8 named slots, 1 shared slot)", first)
+	}
+}
+
+// heldAcme returns the held count of acme in r, or 0.
+func heldAcme(r trustrulesvc.Refusal) int {
+	for _, h := range r.Held {
+		if h.Namespace == "acme" {
+			return h.Count
+		}
+	}
+
+	return 0
+}
+
+// carryFixture makes a window with 3 held refusals of acme, then a new
+// window, and returns the first refusal of the new window. Its Held holds
+// the carry of acme.
+func carryFixture(t *testing.T) (*trustrulesvc.MtlsGuard, trustrulesvc.Refusal) {
+	t.Helper()
+
+	g, clock := rearmGuard(t)
+
+	admitOK(t, g, "acme")
+
+	for range 4 {
+		admitRefused(t, g, "acme")
+	}
+
+	clock.advance(time.Hour)
+
+	admitOK(t, g, "acme")
+
+	r := admitRefused(t, g, "acme")
+	if !r.First || heldAcme(r) != 3 {
+		t.Fatalf("fixture: first = %t, held = %+v, want first with acme 3", r.First, r.Held)
+	}
+
+	return g, r
+}
+
+func testRearmReturnsCarry(t *testing.T) {
+	t.Parallel()
+
+	g, r := carryFixture(t)
+
+	g.Rearm(r)
+
+	if got := heldAcme(admitRefused(t, g, "acme")); got != 3 {
+		t.Fatalf("held acme after Rearm = %d, want 3", got)
+	}
+}
+
+func testForgetReturnsCarry(t *testing.T) {
+	t.Parallel()
+
+	g, r := carryFixture(t)
+
+	g.Forget(r)
+
+	if got := heldAcme(admitRefused(t, g, "other")); got != 3 {
+		t.Fatalf("held acme after Forget = %d, want 3", got)
+	}
+}
+
+func testKeepReturnsCarry(t *testing.T) {
+	t.Parallel()
+
+	g, r := carryFixture(t)
+
+	g.Keep(r)
+
+	if got := heldAcme(admitRefused(t, g, "other")); got != 3 {
+		t.Fatalf("held acme after Keep = %d, want 3", got)
+	}
+}
+
+func testRearmOldWindow(t *testing.T) {
+	t.Parallel()
+
+	g, clock := rearmGuard(t)
+
+	admitOK(t, g, "acme")
+
+	old := admitRefused(t, g, "acme")
+
+	clock.advance(time.Hour)
+
+	admitOK(t, g, "acme")
+
+	if !admitRefused(t, g, "acme").First {
+		t.Fatal("the first refusal of the new window is not first")
+	}
+
+	g.Rearm(old)
+
+	if admitRefused(t, g, "acme").First {
+		t.Fatal("a Rearm of a refusal of an old window freed the slot of the new window")
+	}
+}
+
+func testCarryBound(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	given := make([]trustrulesvc.HeldCount, 0, 20)
+	for i := range 20 {
+		given = append(given, trustrulesvc.HeldCount{Namespace: fmt.Sprintf("n%d", i), Count: 1})
+	}
+
+	g.GiveBack(given)
+
+	admitOK(t, g, "acme")
+
+	r := admitRefused(t, g, "acme")
+
+	var sum int
+	for _, h := range r.Held {
+		sum += h.Count
+	}
+
+	if len(r.Held) != 9 || sum != 20 {
+		t.Fatalf("held has %d entries with %d refusals, want 9 entries (8 names and one sum) with 20", len(r.Held), sum)
+	}
+}
+
+func testGiveBack(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	g.GiveBack([]trustrulesvc.HeldCount{{Namespace: "acme", Count: 2}})
+
+	admitOK(t, g, "acme")
+
+	if got := heldAcme(admitRefused(t, g, "acme")); got != 2 {
+		t.Fatalf("held acme = %d, want 2", got)
+	}
+}

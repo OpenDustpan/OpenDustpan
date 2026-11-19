@@ -149,6 +149,14 @@ func (h *Handler) writeMtlsRefusal(
 		return
 	}
 
+	if errors.Is(err, trustrulesvc.ErrNamespaceNotHome) {
+		// Another installation owns the namespace. A retry cannot write the
+		// entry here, so the slot stays marked and counts the later refusals.
+		h.mtlsGuard.Keep(refusal)
+
+		return
+	}
+
 	h.mtlsGuard.Rearm(refusal)
 
 	if h.onAuditFailure != nil {
