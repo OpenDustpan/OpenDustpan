@@ -49,7 +49,7 @@ func (a *testAudit) List(context.Context, namespace.Name, audit.Page) (audit.Lis
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return audit.Listing{Entries: append([]audit.Entry(nil), a.entries...), Total: int64(len(a.entries))}, nil
+	return audit.Listing{Entries: append([]audit.Entry(nil), a.entries...), More: false}, nil
 }
 
 func (a *testAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {

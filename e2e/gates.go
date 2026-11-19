@@ -248,7 +248,7 @@ func (e *Env) AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entr
 		return nil, fmt.Errorf("%w: the store %T keeps no audit log", errBinaryGates, e.inprocess)
 	}
 
-	listing, err := st.List(ctx, ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := st.List(ctx, ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		return nil, fmt.Errorf("audit entries of %s: %w", ns, err)
 	}

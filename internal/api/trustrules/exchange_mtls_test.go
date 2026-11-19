@@ -400,7 +400,7 @@ func mtlsFixture(t *testing.T) (*env, *pkiCA, string) {
 func (e *env) exchangeEntries() []audit.Entry {
 	e.t.Helper()
 
-	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		e.t.Fatalf("list audit: %v", err)
 	}

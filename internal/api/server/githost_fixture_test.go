@@ -594,7 +594,7 @@ type checkDoc struct {
 func (e *hostEnv) auditEntries(t *testing.T, scope namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of %s: %v", scope, err)
 	}

@@ -49,8 +49,8 @@ func importAudited(t *testing.T, s *postgres.Store, ns namespace.Name) []audit.E
 
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := s.List(t.Context(), ns, audit.Page{Number: page, Size: audit.MaxPageSize})
+	for before := int64(0); ; {
+		listing, err := s.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize, Before: before})
 		if err != nil {
 			t.Fatalf("list audit: %v", err)
 		}
@@ -61,7 +61,11 @@ func importAudited(t *testing.T, s *postgres.Store, ns namespace.Name) []audit.E
 			}
 		}
 
-		if len(listing.Entries) < audit.MaxPageSize {
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
 			break
 		}
 	}

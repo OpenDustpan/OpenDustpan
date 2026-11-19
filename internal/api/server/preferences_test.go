@@ -250,7 +250,7 @@ func (e prefsEnv) prefsRefusals(t *testing.T) []audit.Entry {
 func (e prefsEnv) entriesWith(t *testing.T, keep func(audit.Outcome) bool) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.st.List(testContext(t), audit.ServerScope, audit.Page{Number: 1, Size: 500})
+	listing, err := e.st.List(testContext(t), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

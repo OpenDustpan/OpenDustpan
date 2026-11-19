@@ -952,19 +952,6 @@ func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountA
 	return count, err
 }
 
-const countAuditEntries = `-- name: CountAuditEntries :one
-SELECT COUNT(*)
-FROM audit_entries
-WHERE namespace = ?
-`
-
-func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAuditEntries, namespace)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countBlobPurges = `-- name: CountBlobPurges :one
 SELECT COUNT(*) AS pending, CAST(COALESCE(MIN(purged_at_ms), 0) AS INTEGER) AS oldest_ms
 FROM blob_purges
@@ -13801,26 +13788,27 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 	return items, nil
 }
 
-const listAuditEntries = `-- name: ListAuditEntries :many
+const listAuditEntriesBefore = `-- name: ListAuditEntriesBefore :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
-WHERE namespace = ?
+WHERE namespace = ? AND sequence < ?
 ORDER BY sequence DESC
-LIMIT ? OFFSET ?
+LIMIT ?
 `
 
-type ListAuditEntriesParams struct {
+type ListAuditEntriesBeforeParams struct {
 	Namespace string
+	Sequence  int64
 	Limit     int64
-	Offset    int64
 }
 
-// One page of the entries of a namespace, newest first. Ties on time break
-// by sequence, as the port comment promises.
-func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditEntry, error) {
-	rows, err := q.db.QueryContext(ctx, listAuditEntries, arg.Namespace, arg.Limit, arg.Offset)
+// One page of the entries of a namespace below a sequence, newest first. It
+// reads the primary key (namespace, sequence) backwards, so a page costs the
+// same at any depth.
+func (q *Queries) ListAuditEntriesBefore(ctx context.Context, arg ListAuditEntriesBeforeParams) ([]AuditEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditEntriesBefore, arg.Namespace, arg.Sequence, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

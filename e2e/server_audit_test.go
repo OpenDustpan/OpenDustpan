@@ -101,7 +101,6 @@ func checkServerAuditList(ctx context.Context, t *testing.T, env *e2e.Env) *audi
 
 	var got struct {
 		Entries []auditListItem `json:"entries"`
-		Total   int64           `json:"total"`
 	}
 
 	if err := json.Unmarshal([]byte(body), &got); err != nil {

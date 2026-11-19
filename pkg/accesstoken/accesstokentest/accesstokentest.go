@@ -699,7 +699,7 @@ func testChangeAppendsEntry(t *testing.T, s Store) {
 		t.Fatalf("touch: %v", err)
 	}
 
-	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
@@ -918,7 +918,7 @@ func testPolicyKeepsChanges(t *testing.T, s Store) {
 		t.Fatalf("update policy: %v", err)
 	}
 
-	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
@@ -1581,7 +1581,7 @@ func auditObjects(t *testing.T, s Store) []string {
 		return nil
 	}
 
-	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

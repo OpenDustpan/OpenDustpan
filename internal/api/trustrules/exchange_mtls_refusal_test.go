@@ -41,7 +41,7 @@ func openOpts(clock *testClock, onRefused func(string), failServer *atomic.Bool)
 func (e *env) serverReasons() []string {
 	e.t.Helper()
 
-	listing, err := e.store.List(e.t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(e.t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		e.t.Fatalf("list server audit: %v", err)
 	}
