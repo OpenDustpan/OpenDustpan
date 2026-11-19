@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -55,6 +56,10 @@ func workRestores(t *testing.T, restores *backup.RestoreService) {
 	})
 }
 
+// unreadableBackupID is a backup that the target names with a live pointer and
+// no manifest. A restore of it starts and ends failed.
+const unreadableBackupID = "bkp-missing000000000001"
+
 // newRestoreFixture builds a Handler with a backup service and a restore
 // service over fresh stores. The registry store doubles as the restore live
 // store, so the restore swaps the database it tracks.
@@ -101,6 +106,16 @@ func newRestoreFixtureWorkers(
 	opts restoreFixtureOptions,
 ) restoreFixture {
 	t.Helper()
+
+	// A restore of a backup with no row starts when the target holds the live
+	// pointer of the backup, as on a new installation. The pointer names an
+	// attempt with no manifest, so the restore starts and then fails fast.
+	key := blob.Key("backups/" + unreadableBackupID + "/live.json")
+
+	err := stores.target.Put(t.Context(), key, strings.NewReader(`{"attempt":"1"}`))
+	if err != nil && !errors.Is(err, blob.ErrExists) {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, err)
+	}
 
 	workers, authz := opts.workers, opts.authz
 	if authz == nil {
@@ -1462,4 +1477,56 @@ func TestStartRestoreBodyTooLarge(t *testing.T) {
 	if got.ErrorCode != "request.body-too-large" || got.ErrorArgs["maxBytes"] != float64(limit) {
 		t.Fatalf("answer = %+v, want request.body-too-large with maxBytes %d", got, limit)
 	}
+}
+
+// TestStartRestoreUnknownBackupAnswers404 proves a start for an ID that has no
+// row and no data in the target answers 404 and makes no restore row.
+func TestStartRestoreUnknownBackupAnswers404(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	status, body := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-nonexistent0000001"}`,
+	)
+	if status != http.StatusNotFound {
+		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	if doc := decodeError(t, body); doc.Message != "backup not found" {
+		t.Fatalf("POST restores error = %+v, want the message backup not found", doc)
+	}
+
+	status, body = serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if status != http.StatusOK || strings.Contains(body, "bkp-nonexistent0000001") {
+		t.Fatalf("GET restores = %d %s, want a list with no restore of the unknown backup", status, body)
+	}
+}
+
+// TestStartRestoreRunningBackupAnswers409 proves a start for a backup that has
+// not ended answers 409 with a text that says it runs, and makes no row.
+func TestStartRestoreRunningBackupAnswers409(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	gate := newGateExporter(stores.registry)
+	fix := newBackupFixture(t, stores, gate, nil)
+	restores := newRestoreFixtureOver(t, stores, stores.target)
+
+	id := startBackup(t, fix.handler)
+
+	waitGateEntered(t, gate)
+
+	status, body := serveRestore(
+		t, restores.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+	)
+	if status != http.StatusConflict {
+		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	if doc := decodeError(t, body); !strings.Contains(doc.Message, "still running") {
+		t.Fatalf("POST restores error = %+v, want a message that says the backup is still running", doc)
+	}
+
+	close(gate.release)
 }

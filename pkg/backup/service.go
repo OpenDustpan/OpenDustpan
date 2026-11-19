@@ -491,6 +491,36 @@ func (s *Service) Get(ctx context.Context, id ID) (Record, error) {
 	return record, nil
 }
 
+// RequireSucceeded returns ErrStillRunning for a backup that runs and
+// ErrEndedFailed for a backup that failed. It returns ErrNotFound for an ID
+// that has no row, and nil for a backup that succeeded. A restore and a check
+// use it before they read the target, so that a partial backup is not
+// reported as corrupt.
+func (s *Service) RequireSucceeded(ctx context.Context, id ID) error {
+	record, err := s.registry.GetBackup(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get backup %s: %w", id, err)
+	}
+
+	return stateRefusal(id, record.State)
+}
+
+// stateRefusal returns the refusal for a backup in state, or nil for a backup
+// that succeeded. An unknown state fails closed.
+func stateRefusal(id ID, state State) error {
+	switch state {
+	case StateSucceeded:
+		return nil
+	case StateRunning:
+		return fmt.Errorf("backup %s: %w", id, ErrStillRunning)
+	case StateFailed:
+		return fmt.Errorf("backup %s: %w", id, ErrEndedFailed)
+	}
+
+	// Fail closed: an unknown state is not a backup that succeeded.
+	return fmt.Errorf("backup %s: %w", id, ErrEndedFailed)
+}
+
 // Check checks that the configured target holds every object the manifest
 // of backup id names with the recorded size and checksum. It returns nil when
 // the backup is complete, else the first missing, short or changed object by
