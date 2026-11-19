@@ -103,9 +103,14 @@ func settingKeepCases() []settingKeepCase {
 			absentBackup: false, liveValue: "false", decision: backup.PlainSwap(false), want: "false", wantErr: nil,
 		},
 		{
-			name: "a long backup row is recorded as the effective false", backupValue: strings.Repeat("x", setting.MaxValueBytes),
-			rawBackup: true, absentBackup: false, liveValue: "false", decision: backup.PlainSwap(false),
-			want: "false", wantErr: nil,
+			name:         "a long backup row is recorded as the effective false",
+			backupValue:  strings.Repeat("x", setting.MaxValueBytes),
+			rawBackup:    true,
+			absentBackup: false,
+			liveValue:    "false",
+			decision:     backup.PlainSwap(false),
+			want:         "false",
+			wantErr:      nil,
 		},
 		{
 			name: "a backup with no row is recorded as the effective false", backupValue: "", rawBackup: false,
