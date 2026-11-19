@@ -61,3 +61,16 @@ func PinnedSums(tool Tool) map[string]string {
 func ArchiveNameFor(tool Tool, version, goos, arch string) string {
 	return tool.archive(version, goos, arch)
 }
+
+// ExpandVersions returns the versions that value of the version variable of
+// tool selects, as Tool.Versions does for the environment, without a read of
+// the environment. An empty value selects the defaults.
+func ExpandVersions(tool Tool, value string) []string {
+	return tool.expandVersions(value)
+}
+
+// VersionsEnv returns the name of the environment variable that selects the
+// versions of tool.
+func VersionsEnv(tool Tool) string {
+	return tool.versionsEnv
+}

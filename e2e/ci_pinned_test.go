@@ -16,32 +16,51 @@ import (
 // targets that it calls. The nightly workflow is not here. Only its latest rows
 // may fetch a published checksum file.
 func ciVersionSources() []string {
-	return []string{"../.github/workflows/ci.yml", "../Makefile"}
+	return []string{".github/workflows/ci.yml", "Makefile"}
 }
 
 // ciVersionPattern finds a version setting in a workflow ("E2E_X_VERSIONS: v")
-// or in a Makefile recipe ("E2E_X_VERSIONS=v").
+// or in a Makefile recipe ("E2E_X_VERSIONS=v"). The value runs to the first
+// space, so a value with a space needs the check for "${{" below.
 var ciVersionPattern = regexp.MustCompile(`\b(E2E_[A-Z]+_VERSIONS)[:=][ \t]*([^\s'"]+)`)
+
+// ciTools lists every tool of the e2e suite, so a tool that no CI file sets
+// still has its defaults checked.
+func ciTools() []e2e.Tool {
+	return []e2e.Tool{e2e.Pulumi(), e2e.OpenTofu(), e2e.Terragrunt()}
+}
 
 // TestCIVersionsHavePinnedSums fails for each tool version that a CI job runs
 // and that has no pinned sum for a CI platform. Without the sum, the fetcher
 // downloads the published checksum file before the cache check, and an outage
 // of that host fails the run. The test reads the same files that CI reads and
-// expands each value with Tool.Versions, as the e2e run does.
-//
-//nolint:paralleltest // t.Setenv sets the variable that Tool.Versions reads.
+// expands each value as the e2e run does. It also checks the defaults of each
+// tool, because a job that leaves the variable unset runs the defaults.
 func TestCIVersionsHavePinnedSums(t *testing.T) {
+	t.Parallel()
+
+	root, err := os.OpenRoot("..")
+	if err != nil {
+		t.Fatalf("open the repository root: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Errorf("close the repository root: %v", err)
+		}
+	})
+
+	byEnv := map[string]e2e.Tool{}
+	for _, tool := range ciTools() {
+		byEnv[e2e.VersionsEnv(tool)] = tool
+		// The variable is unset: the run uses the defaults.
+		checkCIVersions(t, tool, "the defaults of "+e2e.VersionsEnv(tool), "")
+	}
+
 	found := 0
 
 	for _, source := range ciVersionSources() {
-		body, err := os.ReadFile(source) //nolint:gosec // The paths are the fixed list above.
-		if err != nil {
-			t.Fatalf("read %s: %v", source, err)
-		}
-
-		for _, match := range ciVersionPattern.FindAllStringSubmatch(string(body), -1) {
-			found += checkCIVersions(t, source, match[1], match[2])
-		}
+		found += checkCISource(t, root, byEnv, source)
 	}
 
 	if found == 0 {
@@ -49,33 +68,53 @@ func TestCIVersionsHavePinnedSums(t *testing.T) {
 	}
 }
 
-// checkCIVersions checks each version that value selects for env, and returns
-// the number of versions that it checked.
-func checkCIVersions(t *testing.T, source, env, value string) int {
+// checkCISource checks each version setting in source and returns the number
+// of settings that it checked.
+func checkCISource(t *testing.T, root *os.Root, byEnv map[string]e2e.Tool, source string) int {
 	t.Helper()
 
-	tools := map[string]func() e2e.Tool{
-		"E2E_PULUMI_VERSIONS":     e2e.Pulumi,
-		"E2E_TOFU_VERSIONS":       e2e.OpenTofu,
-		"E2E_TERRAGRUNT_VERSIONS": e2e.Terragrunt,
+	body, err := root.ReadFile(source)
+	if err != nil {
+		t.Fatalf("read %s: %v", source, err)
 	}
 
-	newTool, ok := tools[env]
-	if !ok {
-		t.Errorf("%s sets %s, which this test does not know: add the tool to this test", source, env)
+	found := 0
 
-		return 0
+	for _, match := range ciVersionPattern.FindAllStringSubmatch(string(body), -1) {
+		env, value := match[1], match[2]
+		where := source + " sets " + env
+
+		tool, ok := byEnv[env]
+		if !ok {
+			t.Errorf("%s, which this test does not know: add the tool to ciTools", where)
+
+			continue
+		}
+
+		if strings.Contains(value, "${{") {
+			t.Errorf("%s to %q: this test cannot expand an expression, so set a literal value", where, value)
+
+			continue
+		}
+
+		checkCIVersions(t, tool, where+" to "+value, value)
+
+		found++
 	}
 
-	t.Setenv(env, value)
+	return found
+}
 
-	tool := newTool()
+// checkCIVersions checks each version that value selects for tool. The label
+// says where the value comes from.
+func checkCIVersions(t *testing.T, tool e2e.Tool, label, value string) {
+	t.Helper()
+
 	sums := e2e.PinnedSums(tool)
-	versions := tool.Versions()
 
-	for _, version := range versions {
+	for _, version := range e2e.ExpandVersions(tool, value) {
 		if version == e2e.Latest {
-			t.Errorf("%s sets %s to %q: only the nightly run may use latest", source, env, value)
+			t.Errorf("%s: only the nightly run may use latest", label)
 
 			continue
 		}
@@ -83,10 +122,8 @@ func checkCIVersions(t *testing.T, source, env, value string) int {
 		for _, p := range [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}} {
 			archive := e2e.ArchiveNameFor(tool, version, p[0], p[1])
 			if sums[archive] == "" {
-				t.Errorf("%s runs %s version %s in CI, and %s has no pinned sum", source, env, version, archive)
+				t.Errorf("%s: version %s runs in CI, and %s has no pinned sum", label, version, archive)
 			}
 		}
 	}
-
-	return len(versions)
 }
