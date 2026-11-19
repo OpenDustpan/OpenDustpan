@@ -28,8 +28,12 @@ const conflictWait = 30 * time.Second
 // swap only if the second transaction closed the cycle before that moment.
 // If the second transaction is late by more than this time, the swap finds no
 // cycle, never checks again, and the check of the second transaction ends the
-// second transaction. The time is much longer than the delay of the second
-// transaction on a machine under load, which is a few seconds at most.
+// second transaction. The test holds only if the second transaction asks for
+// its lock less than this time after the swap starts to wait. The test cannot
+// wait for the second transaction first: the cycle exists only after the swap
+// waits, and the timer of the swap starts when it waits. The delay is a poll
+// of 5 ms and one statement, so the margin is much more than a loaded machine
+// needs.
 const swapDeadlockWait = 20 * time.Second
 
 // otherDeadlockWait is the deadlock timeout of the second transaction. It is
