@@ -68,7 +68,10 @@ func testUpdateTagsAppendsChangeEntry(t *testing.T, f fixture) {
 		t.Fatalf("audit entries = %+v, want one for each update", entries)
 	}
 
-	got := entries[1]
+	got := entries[0]
+	if entries[1].Sequence > got.Sequence {
+		got = entries[1]
+	}
 	if got.Kind != audit.KindChange || got.ObjectID != st.ID.String() {
 		t.Fatalf("audit entry = %+v, want a change with object ID %s", got, st.ID)
 	}
