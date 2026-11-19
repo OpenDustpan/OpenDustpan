@@ -1665,6 +1665,8 @@ CREATE TABLE unmanaged_scans (
     UNIQUE (namespace_id, seq)
 ) STRICT;
 
+CREATE INDEX stack_tags_name_value ON stack_tags (name, value, stack_id);
+
 CREATE UNIQUE INDEX stacks_id ON stacks (id);
 
 CREATE UNIQUE INDEX updates_one_running ON updates (stack_id)
