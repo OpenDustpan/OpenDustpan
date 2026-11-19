@@ -219,14 +219,21 @@ func TestServeCheckHostileValues(t *testing.T) {
 		return []string{"--oidc-issuer", v, "--oidc-provider", "corp", "--oidc-client-id", "a"}
 	}
 
+	oidcID := func(id string) []string {
+		return []string{"--oidc-issuer", "https://id.example.com", "--oidc-provider", id, "--oidc-client-id", "a"}
+	}
+	ldapID := func(id string) []string {
+		return []string{"--ldap-url", "ldaps://l.example.com", "--ldap-provider", id}
+	}
+
 	cases := []struct {
 		name string
 		args []string
 	}{
-		{"oidc provider control", []string{"--oidc-issuer", "https://id.example.com", "--oidc-provider", "co\x01rp", "--oidc-client-id", "a"}},
-		{"oidc provider CRLF", []string{"--oidc-issuer", "https://id.example.com", "--oidc-provider", "corp\r\nX: y", "--oidc-client-id", "a"}},
-		{"ldap provider control", []string{"--ldap-url", "ldaps://l.example.com", "--ldap-provider", "co\x00rp"}},
-		{"ldap provider CRLF", []string{"--ldap-url", "ldaps://l.example.com", "--ldap-provider", "corp\r\n"}},
+		{"oidc provider control", oidcID("co\x01rp")},
+		{"oidc provider CRLF", oidcID("corp\r\nX: y")},
+		{"ldap provider control", ldapID("co\x00rp")},
+		{"ldap provider CRLF", ldapID("corp\r\n")},
 		{"issuer userinfo", issuer("https://user:secret@id.example.com")},
 		{"issuer userinfo name only", issuer("https://tokenvalue@id.example.com")},
 		{"issuer query", issuer("https://id.example.com?x=1")},
@@ -280,14 +287,16 @@ func TestWarnUnusedS3Endpoint(t *testing.T) {
 
 	const warning = "--s3-endpoint has no effect: --blob-store and --backup-target are not s3:// addresses"
 
+	const s3URL = "http://s3.example.com"
+
 	tests := []struct {
 		name string
 		args []string
 		warn bool
 	}{
-		{"fs and s3 target", []string{"--s3-endpoint", "http://s3.example.com", "--backup-target", "s3://bucket/p"}, false},
-		{"s3 store", []string{"--s3-endpoint", "http://s3.example.com", "--blob-store", "s3://bucket"}, false},
-		{"fs and no target", []string{"--s3-endpoint", "http://s3.example.com"}, true},
+		{"fs and s3 target", []string{"--s3-endpoint", s3URL, "--backup-target", "s3://bucket/p"}, false},
+		{"s3 store", []string{"--s3-endpoint", s3URL, "--blob-store", "s3://bucket"}, false},
+		{"fs and no target", []string{"--s3-endpoint", s3URL}, true},
 		{"no endpoint", nil, false},
 	}
 
@@ -321,7 +330,8 @@ func TestServeStopsOnMissingTLSFileBeforeTheDatabase(t *testing.T) {
 	err := serveWithIO(t.Context(), []string{
 		"--database", "sqlite:" + database, "--tls-cert", missing, "--tls-key", missing,
 	}, &bytes.Buffer{}, false)
-	if err == nil || !errors.Is(err, errTLSFile) || !strings.Contains(err.Error(), "set --tls-cert (DUSTPAN_TLS_CERT)") ||
+	flagText := "set --tls-cert (DUSTPAN_TLS_CERT)"
+	if err == nil || !errors.Is(err, errTLSFile) || !strings.Contains(err.Error(), flagText) ||
 		!strings.Contains(err.Error(), missing) {
 		t.Fatalf("serve = %v, want the TLS cert flag error with the path", err)
 	}
