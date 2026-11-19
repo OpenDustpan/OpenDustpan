@@ -82,12 +82,18 @@ func TestServeCheckNamesSignInFlags(t *testing.T) {
 		},
 		{
 			"oidc provider dev",
-			[]string{"--oidc-issuer", "https://id.example.com", "--oidc-provider", session.DevProviderID, "--oidc-client-id", "a"},
+			[]string{
+				"--oidc-issuer", "https://id.example.com", "--oidc-provider", session.DevProviderID,
+				"--oidc-client-id", "a",
+			},
 			[]string{"--oidc-provider", "reserved"},
 		},
 		{
 			"oidc provider local",
-			[]string{"--oidc-issuer", "https://id.example.com", "--oidc-provider", session.LocalProviderID, "--oidc-client-id", "a"},
+			[]string{
+				"--oidc-issuer", "https://id.example.com", "--oidc-provider", session.LocalProviderID,
+				"--oidc-client-id", "a",
+			},
 			[]string{"--oidc-provider", "reserved"},
 		},
 		{
@@ -301,9 +307,12 @@ func TestWarnUnusedS3Endpoint(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // serve reads process environment, so this test sets it.
+// TestServeStopsOnMissingTLSFileBeforeTheDatabase proves that serve refuses a
+// missing TLS file with the flag before it opens the database. The test sets
+// no admin token and no key, so a start that went on would fail with another
+// error.
 func TestServeStopsOnMissingTLSFileBeforeTheDatabase(t *testing.T) {
-	setServeEnv(t, testKeyBase64())
+	t.Parallel()
 
 	dir := t.TempDir()
 	database := filepath.Join(dir, "dustpan.db")

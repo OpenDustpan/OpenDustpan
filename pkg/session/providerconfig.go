@@ -164,7 +164,7 @@ func (p ProviderConfig) validateMode() error {
 				ModeOIDC)
 		}
 
-		if !validIssuer(p.Issuer) {
+		if !ValidIssuer(p.Issuer) {
 			return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
 				"of at most %d bytes", ErrInvalidProvider, maxIssuer)
 		}
@@ -191,11 +191,6 @@ func (p ProviderConfig) validateMode() error {
 // It is the one issuer rule: the stored providers, the serve flags and the
 // sign-in client use it, so a configured issuer never fails the client.
 func ValidIssuer(issuer string) bool {
-	return validIssuer(issuer)
-}
-
-// validIssuer implements ValidIssuer.
-func validIssuer(issuer string) bool {
 	if issuer == "" || len(issuer) > maxIssuer {
 		return false
 	}
@@ -205,16 +200,11 @@ func validIssuer(issuer string) bool {
 		return false
 	}
 
-	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
+	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && LoopbackHost(u.Hostname()))
 }
 
 // LoopbackHost reports whether host is localhost or a loopback IP address.
 func LoopbackHost(host string) bool {
-	return loopbackHost(host)
-}
-
-// loopbackHost implements LoopbackHost.
-func loopbackHost(host string) bool {
 	if host == "localhost" {
 		return true
 	}
