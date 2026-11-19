@@ -146,7 +146,7 @@ func TestStepSwapFailsTheOperationAtOnce(t *testing.T) {
 
 	runner, err := durable.NewRunner(durable.RunnerConfig{
 		Store: store, Owner: "test", Kinds: []durable.KindSpec{{Kind: kind, Version: 1, MinVersion: 1, Steps: steps}},
-		Lease: time.Minute, RenewEvery: 0, PollEvery: time.Millisecond, MaxAttempts: 50, ExpiryLimit: 50,
+		Lease: time.Minute, RenewEvery: 0, PollEvery: time.Millisecond, MaxAttempts: 50, ExpiryLimit: 50, DeadlineReleaseLimit: 0,
 		Backoff:      durable.Backoff{Base: time.Millisecond, Max: time.Millisecond},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0}, WriteTimeout: time.Second, Deferred: nil,
 		StopOnRenewalError: false, Logger: nil, Rand: nil,
@@ -231,7 +231,7 @@ func TestStepSwapFailsTheOperationOnStoreRefusal(t *testing.T) {
 
 	runner, err := durable.NewRunner(durable.RunnerConfig{
 		Store: store, Owner: "test", Kinds: []durable.KindSpec{{Kind: kind, Version: 1, MinVersion: 1, Steps: steps}},
-		Lease: time.Minute, RenewEvery: 0, PollEvery: time.Millisecond, MaxAttempts: 50, ExpiryLimit: 50,
+		Lease: time.Minute, RenewEvery: 0, PollEvery: time.Millisecond, MaxAttempts: 50, ExpiryLimit: 50, DeadlineReleaseLimit: 0,
 		Backoff:      durable.Backoff{Base: time.Millisecond, Max: time.Millisecond},
 		ClaimBackoff: durable.Backoff{Base: 0, Max: 0}, WriteTimeout: time.Second, Deferred: nil,
 		StopOnRenewalError: false, Logger: nil, Rand: nil,
