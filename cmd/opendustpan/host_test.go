@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -905,6 +906,11 @@ func TestHostRefusesPendingMigrations(t *testing.T) {
 	ctx := t.Context()
 	file := filepath.Join(t.TempDir(), "dustpan.db")
 	db := "sqlite:" + file
+
+	// A new file gets mode 0600, as the store makes it: the store refuses a wider mode.
+	if writeErr := os.WriteFile(file, nil, 0o600); writeErr != nil {
+		t.Fatalf("make raw database file: %v", writeErr)
+	}
 
 	raw, openErr := sql.Open("sqlite", file)
 	if openErr != nil {
