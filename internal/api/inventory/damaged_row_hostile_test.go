@@ -2,11 +2,14 @@ package inventory_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
@@ -246,6 +249,143 @@ func checkSameAnswer(t *testing.T, rec *httptest.ResponseRecorder, want answer, 
 	for _, text := range stored {
 		if strings.Contains(got.body, text) {
 			t.Errorf("body repeats the stored text %q: %s", text, got.body)
+		}
+	}
+}
+
+var errUnitStoreDown = errors.New("unit store is unavailable")
+
+// countingReader is a unit reader that counts GetUnit calls and may fail them.
+type countingReader struct {
+	coreinventory.Reader
+
+	err  error
+	gets atomic.Int64
+}
+
+func (c *countingReader) GetUnit(ctx context.Context, unitID string) (coreinventory.Entry, error) {
+	c.gets.Add(1)
+
+	if c.err != nil {
+		return coreinventory.Entry{}, c.err
+	}
+
+	return c.Reader.GetUnit(ctx, unitID)
+}
+
+// TestUnitByIDMalformedIDNeverReachesTheStore proves that the resolver refuses
+// an ID that is malformed or too long before it reads the store, for a caller
+// that holds every grant.
+func TestUnitByIDMalformedIDNeverReachesTheStore(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{
+		"%20", "ws~bad", "a%20b", "stk-1%00", "stk-1%0d%0aX:%201", "%22%3Cscript%3E", ".hidden", "-lead",
+		strings.Repeat("a", 101), strings.Repeat("a", 5000),
+	}
+
+	for _, id := range ids {
+		t.Run(fmt.Sprintf("ID %.20q", id), func(t *testing.T) {
+			t.Parallel()
+
+			reader := &countingReader{
+				Reader: &memReader{entries: damagedEntries(), err: nil},
+				err:    nil,
+				gets:   atomic.Int64{},
+			}
+			handler := newUnitHandlerLogged(t, hostileCallers()[0].authz, reader, slog.New(slog.DiscardHandler))
+
+			rec := getUnitByID(t, handler, id, "test-token")
+			if rec.Code != http.StatusNotFound || rec.Body.String() != notFoundBody {
+				t.Errorf("status %d body %q, want 404 %q", rec.Code, rec.Body.String(), notFoundBody)
+			}
+
+			if n := reader.gets.Load(); n != 0 {
+				t.Errorf("GetUnit calls = %d, want 0", n)
+			}
+		})
+	}
+}
+
+// TestUnitByIDStorageFailureAnswersAnError proves that a GetUnit failure that
+// is not an unknown unit answers 500, not the 404 of an unknown unit.
+func TestUnitByIDStorageFailureAnswersAnError(t *testing.T) {
+	t.Parallel()
+
+	reader := &countingReader{
+		Reader: &memReader{entries: damagedEntries(), err: nil},
+		err:    errUnitStoreDown, gets: atomic.Int64{},
+	}
+	handler := newUnitHandlerLogged(t, hostileCallers()[0].authz, reader, slog.New(slog.DiscardHandler))
+
+	if rec := getUnitByID(t, handler, "stk-acme", "test-token"); rec.Code != http.StatusInternalServerError {
+		t.Errorf("status %d body %q, want 500", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUnitByIDDamagedRowIsLoggedNotServed proves that the log names the unit ID
+// and the cause of a stored row that fails its checks, that the log bounds the
+// stored text, and that the answer holds neither.
+func TestUnitByIDDamagedRowIsLoggedNotServed(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{damagedToolID, damagedNameID, damagedColonID} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			var logs strings.Builder
+
+			handler := newUnitHandlerLogged(t, hostileCallers()[0].authz,
+				&memReader{entries: damagedEntries(), err: nil}, slog.New(slog.NewTextHandler(&logs, nil)))
+
+			rec := getUnitByID(t, handler, id, "test-token")
+			if rec.Code != http.StatusNotFound || rec.Body.String() != notFoundBody {
+				t.Fatalf("status %d body %q, want 404 %q", rec.Code, rec.Body.String(), notFoundBody)
+			}
+
+			checkDamagedLog(t, logs.String(), rec.Body.String(), id)
+		})
+	}
+}
+
+// TestUnitByIDLogBoundsStoredText proves that a stored tool of 5000 bytes does
+// not make a log line of 5000 bytes.
+func TestUnitByIDLogBoundsStoredText(t *testing.T) {
+	t.Parallel()
+
+	entries := damagedEntries()
+	acme := entries["acme"]
+	if len(acme) < 2 {
+		t.Fatal("damagedEntries holds fewer than two units of acme")
+	}
+
+	acme[len(acme)-2].Name = strings.Repeat("x/", 2500)
+	entries["acme"] = acme
+
+	var logs strings.Builder
+
+	handler := newUnitHandlerLogged(t, hostileCallers()[0].authz,
+		&memReader{entries: entries, err: nil}, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	getUnitByID(t, handler, damagedNameID, "test-token")
+
+	if logs.Len() == 0 || logs.Len() > 1000 {
+		t.Errorf("log line of %d bytes, want 1..1000: %.100s", logs.Len(), logs.String())
+	}
+}
+
+// checkDamagedLog fails when the log lacks the unit ID or the cause, or when
+// the body repeats a stored text.
+func checkDamagedLog(t *testing.T, logText, body, id string) {
+	t.Helper()
+
+	if !strings.Contains(logText, id) || !strings.Contains(logText, "stored unit has no valid object") {
+		t.Errorf("log %q does not name the unit ID %q and the cause", logText, id)
+	}
+
+	for _, text := range []string{"evil", "secret", "a:b"} {
+		if strings.Contains(body, text) {
+			t.Errorf("body repeats the stored text %q: %s", text, body)
 		}
 	}
 }

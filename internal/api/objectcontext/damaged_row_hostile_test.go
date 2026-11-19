@@ -2,6 +2,7 @@ package objectcontext_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,9 +26,10 @@ import (
 // spyUnits is an inventory reader that holds rows by unit ID, as GetUnit
 // finds them, and counts the calls of ListUnits.
 type spyUnits struct {
-	rows  map[string]coreinventory.Entry
-	lists atomic.Int64
-	gets  atomic.Int64
+	rows   map[string]coreinventory.Entry
+	getErr error
+	lists  atomic.Int64
+	gets   atomic.Int64
 }
 
 func (s *spyUnits) ListUnits(context.Context, namespace.Name) ([]coreinventory.Entry, error) {
@@ -52,6 +55,10 @@ func (s *spyUnits) QueryUnits(ctx context.Context, q coreinventory.UnitQuery) ([
 func (s *spyUnits) GetUnit(_ context.Context, unitID string) (coreinventory.Entry, error) {
 	s.gets.Add(1)
 
+	if s.getErr != nil {
+		return coreinventory.Entry{}, s.getErr
+	}
+
 	if e, ok := s.rows[unitID]; ok {
 		return e, nil
 	}
@@ -59,12 +66,18 @@ func (s *spyUnits) GetUnit(_ context.Context, unitID string) (coreinventory.Entr
 	return coreinventory.Entry{}, coreinventory.ErrUnitNotFound
 }
 
-// spyDeleted holds soft-deleted rows.
+// spyDeleted holds soft-deleted rows and counts the calls of each read.
 type spyDeleted struct {
-	rows []coreinventory.DeletedEntry
+	rows    []coreinventory.DeletedEntry
+	lists   atomic.Int64
+	queries atomic.Int64
+	lastMu  sync.Mutex
+	last    *coreinventory.DeletedQuery
 }
 
-func (s spyDeleted) ListDeletedUnits(_ context.Context, ns namespace.Name) ([]coreinventory.DeletedEntry, error) {
+func (s *spyDeleted) ListDeletedUnits(_ context.Context, ns namespace.Name) ([]coreinventory.DeletedEntry, error) {
+	s.lists.Add(1)
+
 	var out []coreinventory.DeletedEntry
 
 	for _, e := range s.rows {
@@ -76,13 +89,32 @@ func (s spyDeleted) ListDeletedUnits(_ context.Context, ns namespace.Name) ([]co
 	return out, nil
 }
 
-func (spyDeleted) QueryDeletedUnits(context.Context, coreinventory.DeletedQuery) (coreinventory.DeletedPage, error) {
-	return coreinventory.DeletedPage{Next: nil, Entries: nil, Total: 0}, nil
+// QueryDeletedUnits answers the rows that match q, as a store does.
+func (s *spyDeleted) QueryDeletedUnits(
+	_ context.Context, q coreinventory.DeletedQuery,
+) (coreinventory.DeletedPage, error) {
+	s.queries.Add(1)
+
+	s.lastMu.Lock()
+	s.last = &q
+	s.lastMu.Unlock()
+
+	var out []coreinventory.DeletedEntry
+
+	for _, e := range s.rows {
+		if q.Matches(e) {
+			out = append(out, e)
+		}
+	}
+
+	return coreinventory.PageDeleted(out, q), nil
 }
 
-func (spyDeleted) GetDeletedUnit(context.Context, namespace.Name, string, string) (coreinventory.DeletedEntry, error) {
+func (*spyDeleted) GetDeletedUnit(context.Context, namespace.Name, string, string) (coreinventory.DeletedEntry, error) {
 	return coreinventory.DeletedEntry{}, coreinventory.ErrNotFound
 }
+
+var errUnitStoreDown = errors.New("unit store is unavailable")
 
 const (
 	storedBadName = "secret//name"
@@ -106,7 +138,7 @@ func goneRow(tool, name, id string) coreinventory.DeletedEntry {
 
 // hostileUnits holds the valid unit ws-1 of acme, the unit of globex, and the
 // stored rows that the resolver must not serve.
-func hostileUnits() (*spyUnits, spyDeleted) {
+func hostileUnits() (*spyUnits, *spyDeleted) {
 	live := map[string]coreinventory.Entry{
 		testUnitID:    liveRow("acme", "opentofu", "net", testUnitID),
 		"ws-globex":   liveRow("globex", "opentofu", "net", "ws-globex"),
@@ -118,18 +150,24 @@ func hostileUnits() (*spyUnits, spyDeleted) {
 		storedBadID: liveRow("acme", "opentofu", "net", storedBadID),
 	}
 
-	gone := spyDeleted{rows: []coreinventory.DeletedEntry{
-		goneRow("opentofu", "old", "ws-gone"),
-		goneRow("opentofu", storedBadName, "ws-gonebadname"),
-		goneRow(storedBadTool, "old", "ws-gonebadtool"),
-		goneRow("opentofu", "old", "ws~gonebadid"),
-	}}
+	gone := &spyDeleted{
+		lists:   atomic.Int64{},
+		queries: atomic.Int64{},
+		lastMu:  sync.Mutex{},
+		last:    nil,
+		rows: []coreinventory.DeletedEntry{
+			goneRow("opentofu", "old", "ws-gone"),
+			goneRow("opentofu", storedBadName, "ws-gonebadname"),
+			goneRow(storedBadTool, "old", "ws-gonebadtool"),
+			goneRow("opentofu", "old", "ws~gonebadid"),
+		},
+	}
 
-	return &spyUnits{rows: live, lists: atomic.Int64{}, gets: atomic.Int64{}}, gone
+	return &spyUnits{rows: live, getErr: nil, lists: atomic.Int64{}, gets: atomic.Int64{}}, gone
 }
 
 func newSpyHandler(
-	t *testing.T, authz identity.Authorizer, units *spyUnits, deleted spyDeleted, logs *strings.Builder,
+	t *testing.T, authz identity.Authorizer, units *spyUnits, deleted *spyDeleted, logs *strings.Builder,
 ) testHandler {
 	t.Helper()
 
@@ -374,6 +412,10 @@ func TestResolverNeverListsUnits(t *testing.T) {
 				t.Errorf("ListUnits calls = %d, want 0", n)
 			}
 
+			if n := deleted.lists.Load(); n != 0 {
+				t.Errorf("ListDeletedUnits calls = %d, want 0", n)
+			}
+
 			if !signedIn(caller.token) && units.gets.Load() != 0 {
 				t.Errorf("GetUnit calls = %d, want 0 for a caller that is not signed in", units.gets.Load())
 			}
@@ -393,6 +435,107 @@ func driveUnitRoutes(t *testing.T, handler http.Handler, token string, ids []str
 				method: method, path: unitContextPath("acme", id), token: token, body: `{"onCall":"pager:x"}`,
 			})
 		}
+	}
+}
+
+// TestMalformedUnitIDNeverReachesTheStore proves that the resolver refuses a
+// unit ID that is malformed or too long before it reads any store. Each row
+// answers the not-found answer, and the spies count no read.
+func TestMalformedUnitIDNeverReachesTheStore(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{
+		"", "a b", "ws~bad", "ws-1/../x", "ws-1\x00", "ws-1\r\nX: 1", "\"<script>", ".hidden", "-lead",
+		strings.Repeat("a", 101), strings.Repeat("a", 5000),
+	}
+
+	for _, id := range ids {
+		t.Run(fmt.Sprintf("ID %.20q", id), func(t *testing.T) {
+			t.Parallel()
+
+			units, deleted := hostileUnits()
+			handler := newSpyHandler(t, newAuthorizer(), units, deleted, nil)
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
+			r.SetPathValue("namespace", "acme")
+			r.SetPathValue("unit_id", id)
+
+			if err := contextapi.ResolveUnitByID(handler.Handler, r); !contextapi.IsNotFoundAnswer(err) {
+				t.Errorf("resolver error = %v, want the not-found answer", err)
+			}
+
+			if units.gets.Load() != 0 || deleted.queries.Load() != 0 || deleted.lists.Load() != 0 {
+				t.Errorf("store reads: GetUnit %d, QueryDeletedUnits %d, ListDeletedUnits %d, want 0",
+					units.gets.Load(), deleted.queries.Load(), deleted.lists.Load())
+			}
+		})
+	}
+}
+
+// TestUnavailableUnitStoreAnswersAnError proves that a storage failure of
+// GetUnit is not an unknown unit: the route answers 500 and never reads the
+// soft-deleted units.
+func TestUnavailableUnitStoreAnswersAnError(t *testing.T) {
+	t.Parallel()
+
+	units, deleted := hostileUnits()
+	units.getErr = errUnitStoreDown
+	handler := newSpyHandler(
+		t,
+		newAuthorizer("namespace:read acme", "unit:read opentofu:acme/net"),
+		units,
+		deleted,
+		nil,
+	)
+
+	rec := serve(t, handler, request{
+		method: http.MethodGet, path: unitContextPath("acme", testUnitID), token: testToken, body: "",
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status %d body %s, want 500", rec.Code, rec.Body.String())
+	}
+
+	if deleted.queries.Load() != 0 {
+		t.Errorf("QueryDeletedUnits calls = %d, want 0 after a storage failure", deleted.queries.Load())
+	}
+}
+
+// TestDeletedUnitFoundByOneRestrictedQuery proves that a soft-deleted unit is
+// found with one query that names the unit ID, not with a list.
+func TestDeletedUnitFoundByOneRestrictedQuery(t *testing.T) {
+	t.Parallel()
+
+	units, deleted := hostileUnits()
+	handler := newSpyHandler(
+		t,
+		newAuthorizer("namespace:read acme", "unit:read opentofu:acme/old"),
+		units,
+		deleted,
+		nil,
+	)
+
+	rec := serve(t, handler, request{
+		method: http.MethodGet, path: unitContextPath("acme", "ws-gone"), token: testToken, body: "",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	if deleted.queries.Load() != 1 || deleted.lists.Load() != 0 {
+		t.Errorf(
+			"QueryDeletedUnits %d, ListDeletedUnits %d, want 1 and 0",
+			deleted.queries.Load(),
+			deleted.lists.Load(),
+		)
+	}
+
+	deleted.lastMu.Lock()
+	q := deleted.last
+	deleted.lastMu.Unlock()
+
+	if q == nil || !q.Restricted || !reflect.DeepEqual(q.UnitIDs, []string{"ws-gone"}) || q.Limit != 2 ||
+		q.Namespace != "acme" {
+		t.Errorf("query = %+v, want a query restricted to the unit ws-gone of acme with limit 2", q)
 	}
 }
 
@@ -421,6 +564,10 @@ func TestDamagedRowIsLoggedNotServed(t *testing.T) {
 			if !strings.Contains(logs.String(), id) {
 				t.Errorf("log %q does not name the unit ID %q", logs.String(), id)
 			}
+
+			if !strings.Contains(logs.String(), "secret") {
+				t.Errorf("log %q does not name the cause", logs.String())
+			}
 		})
 	}
 }
@@ -442,5 +589,25 @@ func compareSeen(t *testing.T, got, want seen, stored []string) {
 		if strings.Contains(got.body, text) {
 			t.Errorf("body repeats the stored text %q: %s", text, got.body)
 		}
+	}
+}
+
+// TestDamagedRowLogBoundsStoredText proves that a stored name of 5000 bytes
+// does not make a log line of 5000 bytes.
+func TestDamagedRowLogBoundsStoredText(t *testing.T) {
+	t.Parallel()
+
+	var logs strings.Builder
+
+	units, deleted := hostileUnits()
+	units.rows["ws-badname"] = liveRow("acme", "opentofu", strings.Repeat("x/", 2500), "ws-badname")
+	handler := newSpyHandler(t, newAuthorizer("namespace:read acme"), units, deleted, &logs)
+
+	serve(t, handler, request{
+		method: http.MethodGet, path: unitContextPath("acme", "ws-badname"), token: testToken, body: "",
+	})
+
+	if logs.Len() == 0 || logs.Len() > 1000 {
+		t.Errorf("log of %d bytes, want 1..1000", logs.Len())
 	}
 }

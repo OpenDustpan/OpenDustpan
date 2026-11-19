@@ -5,16 +5,32 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 )
+
+// maxUnitIDLength bounds the unit ID of a path. A longer value is no unit ID.
+const maxUnitIDLength = 100
+
+// maxLogTextBytes bounds a stored value that a log line repeats.
+const maxLogTextBytes = 200
 
 // resolveUnitByID returns the unit reference of the live unit whose stable
 // ID is in the path. An unknown ID and a deleted unit give the error that
 // answers 404, the same answer as a denied caller gets.
 func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	e, err := h.units.GetUnit(r.Context(), r.PathValue("unitID"))
+	unitID := r.PathValue("unitID")
+
+	// Defense in depth: the store may check the ID too; this boundary check
+	// stays so that a raw path value never reaches the store.
+	if !ident.Valid(unitID, maxUnitIDLength) {
+		return identity.Object{}, coreinventory.ErrUnitNotFound
+	}
+
+	e, err := h.units.GetUnit(r.Context(), unitID)
 	if err != nil {
 		if errors.Is(err, coreinventory.ErrUnitNotFound) {
 			return identity.Object{}, coreinventory.ErrUnitNotFound
@@ -30,7 +46,7 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (ident
 		// does not tell a caller that the damaged row exists and does not
 		// repeat the stored text. The cause goes to the log.
 		h.logger.WarnContext(r.Context(), "stored unit has no valid object",
-			slog.String("unit_id", e.UnitID), slog.String("error", err.Error()))
+			slog.String("unit_id", logText(e.UnitID)), slog.String("error", logText(err.Error())))
 
 		return identity.Object{}, coreinventory.ErrUnitNotFound
 	}
@@ -69,4 +85,14 @@ func (h *Handler) getUnit(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, h.toUnitEntry(e))
+}
+
+// logText cuts a stored value to maxLogTextBytes, so that a damaged row cannot
+// make a log line of any size.
+func logText(s string) string {
+	if len(s) <= maxLogTextBytes {
+		return s
+	}
+
+	return strings.ToValidUTF8(s[:maxLogTextBytes], "") + "..."
 }

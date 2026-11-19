@@ -134,6 +134,15 @@ func newSpyRig(
 ) *spyRig {
 	t.Helper()
 
+	return newSpyRigLogged(t, authz, lie, slog.New(slog.DiscardHandler))
+}
+
+// newSpyRigLogged is newSpyRig with the logger of the caller.
+func newSpyRigLogged(
+	t *testing.T, authz identity.Authorizer, lie func(coreinventory.Entry) coreinventory.Entry, logger *slog.Logger,
+) *spyRig {
+	t.Helper()
+
 	inner := newStore()
 	spy := &spyStore{Store: inner, mu: sync.Mutex{}, reads: nil, fail: map[trigger.ID]error{}}
 	inv := fakeInventory{gone: map[string]bool{}, extra: map[string]coreinventory.Entry{}}
@@ -163,7 +172,7 @@ func newSpyRig(
 		Namespaces: namespaces, Units: liarInventory{fakeInventory: inv, lie: lie}, Store: spy, Manager: manager,
 		Workers: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Audit:          &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
-		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: slog.New(slog.DiscardHandler),
+		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, Logger: logger,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -446,5 +455,82 @@ func TestResolveTriggerRefusesATriggerOfAnotherUnit(t *testing.T) {
 					got.code, got.body, unknown.code, unknown.body)
 			}
 		})
+	}
+}
+
+// TestTriggerDamagedRowIsLoggedNotServed proves that the log names the trigger
+// ID and the cause of a stored row that fails its checks, and that the answer
+// holds neither the cause nor the stored text.
+func TestTriggerDamagedRowIsLoggedNotServed(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []trigger.ID{"trg-damaged", "trg-direct"} {
+		t.Run(string(id), func(t *testing.T) {
+			t.Parallel()
+
+			var logs strings.Builder
+
+			r := newSpyRigLogged(t, newAuthorizer(holdsAll()...), nil, slog.New(slog.NewTextHandler(&logs, nil)))
+			r.plantHostile()
+
+			got := ask(t, r, http.MethodGet, triggerURL("acme", netID, string(id)))
+			if got.code != http.StatusNotFound {
+				t.Fatalf("answer = %d %s, want 404", got.code, got.body)
+			}
+
+			if !strings.Contains(logs.String(), string(id)) ||
+				!strings.Contains(logs.String(), "stored trigger is not served") {
+				t.Errorf("log %q does not name the trigger ID %q and the cause", logs.String(), id)
+			}
+
+			for _, text := range []string{storedErrorText, "bogus", "invalid"} {
+				if strings.Contains(got.body, text) {
+					t.Errorf("body repeats the text %q: %s", text, got.body)
+				}
+			}
+		})
+	}
+}
+
+// TestTriggerLogBoundsStoredText proves that a store error of 5000 bytes does
+// not make a log line of 5000 bytes.
+func TestTriggerLogBoundsStoredText(t *testing.T) {
+	t.Parallel()
+
+	var logs strings.Builder
+
+	r := newSpyRigLogged(t, newAuthorizer(holdsAll()...), nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	r.plantHostile()
+	r.spy.fail["trg-direct"] = fmt.Errorf("get trigger: %w: %s", trigger.ErrInvalid, strings.Repeat("x", 5000))
+
+	ask(t, r, http.MethodGet, triggerURL("acme", netID, "trg-direct"))
+
+	if logs.Len() == 0 || logs.Len() > 1000 {
+		t.Errorf("log of %d bytes, want 1..1000", logs.Len())
+	}
+}
+
+// TestUnitDamagedObjectIsLoggedNotServed proves that the log names the unit ID
+// and the cause of a stored unit with no valid object, and that the answer
+// holds neither.
+func TestUnitDamagedObjectIsLoggedNotServed(t *testing.T) {
+	t.Parallel()
+
+	var logs strings.Builder
+
+	r := newSpyRigLogged(t, allowEverything{}, func(e coreinventory.Entry) coreinventory.Entry {
+		e.Name = "secret//name"
+
+		return e
+	}, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	got := ask(t, r, http.MethodGet, "/api/dustpan/v1/namespaces/acme/units/"+netID+"/triggers")
+	if got.code != http.StatusNotFound || strings.Contains(got.body, "secret") {
+		t.Fatalf("answer = %d %s, want a 404 with no stored text", got.code, got.body)
+	}
+
+	if !strings.Contains(logs.String(), netID) || !strings.Contains(logs.String(), "stored unit has no valid object") ||
+		!strings.Contains(logs.String(), "secret") {
+		t.Errorf("log %q does not name the unit ID and the cause", logs.String())
 	}
 }

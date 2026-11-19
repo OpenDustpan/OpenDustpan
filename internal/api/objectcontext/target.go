@@ -5,13 +5,26 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
+
+// maxUnitIDLength bounds the unit ID of a path. A longer value is no unit ID.
+const maxUnitIDLength = 100
+
+// maxLogTextBytes bounds a stored value that a log line repeats.
+const maxLogTextBytes = 200
+
+// deletedLookupLimit is the page size of the lookup of one deleted unit. Two
+// rows let a store that breaks the unit ID filter show itself.
+const deletedLookupLimit = 2
 
 // target is the object of a request, found before any authorization check.
 // unit is set for a live unit and deleted for a soft-deleted unit; both are
@@ -72,6 +85,12 @@ func (h *Handler) resolveUnitByID(_ http.ResponseWriter, r *http.Request) (targe
 
 	unitID := r.PathValue("unit_id")
 
+	// Defense in depth: the route and the store may check the ID too; this
+	// boundary check stays so that a raw path value never reaches the store.
+	if !ident.Valid(unitID, maxUnitIDLength) {
+		return target{}, errNotFound
+	}
+
 	// The unit ID is unique in the installation, so one indexed read finds the
 	// unit. The read never loads the units of the namespace before any
 	// authorization check.
@@ -112,14 +131,23 @@ func (h *Handler) liveTarget(r *http.Request, ns namespace.Namespace, e coreinve
 // deletedTargetByID returns the target of the soft-deleted unit unitID, or
 // errNotFound.
 func (h *Handler) deletedTargetByID(r *http.Request, ns namespace.Namespace, unitID string) (target, error) {
-	all, err := h.deleted.ListDeletedUnits(r.Context(), ns.Name)
+	// One restricted query finds the unit. It never loads the soft-deleted
+	// units of the namespace before any authorization check. The page holds
+	// two rows at most.
+	page, err := h.deleted.QueryDeletedUnits(r.Context(), coreinventory.DeletedQuery{
+		PurgeBefore: time.Time{}, After: nil, Namespace: ns.Name, Tool: "", NamePrefix: "",
+		UnitIDs: []string{unitID}, Limit: deletedLookupLimit, Restricted: true,
+	})
 	if err != nil {
-		return target{}, fmt.Errorf("list deleted units: %w", err)
+		return target{}, fmt.Errorf("query deleted units: %w", err)
 	}
 
-	for i := range all {
-		if all[i].UnitID == unitID {
-			return h.goneTarget(r, ns, all[i])
+	for i := range page.Entries {
+		// Defense in depth: the store filters by namespace and unit ID. A row
+		// of another namespace or unit must not answer here, whatever the
+		// store returned.
+		if page.Entries[i].UnitID == unitID && page.Entries[i].Namespace == ns.Name {
+			return h.goneTarget(r, ns, page.Entries[i])
 		}
 	}
 
@@ -157,7 +185,17 @@ func unitObject(tool string, ns namespace.Name, name, unitID string) (identity.O
 // that the row exists.
 func (h *Handler) damagedRow(r *http.Request, unitID string, cause error) error {
 	h.logger.WarnContext(r.Context(), "stored unit row is not served",
-		slog.String("unit_id", unitID), slog.String("error", cause.Error()))
+		slog.String("unit_id", logText(unitID)), slog.String("error", logText(cause.Error())))
 
 	return errNotFound
+}
+
+// logText cuts a stored or path value to maxLogTextBytes, so that a damaged row
+// cannot make a log line of any size.
+func logText(s string) string {
+	if len(s) <= maxLogTextBytes {
+		return s
+	}
+
+	return strings.ToValidUTF8(s[:maxLogTextBytes], "") + "..."
 }

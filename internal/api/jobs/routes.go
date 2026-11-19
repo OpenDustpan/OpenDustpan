@@ -308,9 +308,9 @@ func (h *Handler) resolveJob(r *http.Request) (target, error) {
 
 	// Defense in depth: the store looks a job up by its ID alone. A job of
 	// another namespace must not answer under this namespace, whatever the
-	// caller may read there. The IsUnit clause is a defense-in-depth layer: the
-	// UnitID clause also refuses an object that is not a unit, and this clause
-	// does not rely on it.
+	// caller may read there. The IsUnit clause is a defense-in-depth layer that no
+	// stored job reaches today: the UnitID clause also refuses an object that is
+	// not a unit, and this clause does not rely on it.
 	if j.Spec.Unit.Namespace() != ns.Name || !j.Spec.Unit.IsUnit() || j.Spec.Unit.UnitID() == "" {
 		return target{}, errNotFound
 	}

@@ -18,6 +18,9 @@ import (
 // maxUnitIDLength bounds the unit ID of a path. A longer value is no unit ID.
 const maxUnitIDLength = 100
 
+// maxLogTextBytes bounds a stored value that a log line repeats.
+const maxLogTextBytes = 200
+
 // target is the object of a request, found before any authorization check: the
 // namespace, the live unit of the path and its authorization object, and, for
 // a trigger route, the trigger.
@@ -82,7 +85,7 @@ func (h *Handler) resolveUnit(r *http.Request) (target, error) {
 	obj, err := identity.UnitObject(e.Tool, ns.Name, e.Name)
 	if err != nil {
 		h.logger.WarnContext(r.Context(), "stored unit has no valid object",
-			slog.String("unit_id", unitID), slog.String("error", err.Error()))
+			slog.String("unit_id", unitID), slog.String("error", truncate(err.Error(), maxLogTextBytes)))
 
 		return target{}, errNotFound
 	}
@@ -134,7 +137,7 @@ func (h *Handler) resolveWith(
 	// exists. The cause goes to the log.
 	if errors.Is(err, trigger.ErrInvalid) {
 		h.logger.WarnContext(r.Context(), "stored trigger is not served",
-			slog.String("trigger_id", string(id)), slog.String("error", err.Error()))
+			slog.String("trigger_id", string(id)), slog.String("error", truncate(err.Error(), maxLogTextBytes)))
 
 		return target{}, errNotFound
 	}
