@@ -146,10 +146,11 @@ type swapPlan struct {
 // adapter fences the staged file before its rename for the same guarantee: a
 // file rename cannot share a transaction with SQL, so it carries
 // already-fenced versions instead. It returns the count of the dropped
-// temp_admins rows of a swap that keeps the access tables.
-func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
+// temp_admins rows of a swap that keeps the access tables, and the count of
+// the update leases that the swap expired.
+func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (backup.KeepAccessResult, error) {
 	if !hasStagingPrefix(plan.staging) {
-		return 0, fmt.Errorf("apply staging schema %q: %w", plan.staging, backup.ErrCorrupt)
+		return backup.KeepAccessResult{}, fmt.Errorf("apply staging schema %q: %w", plan.staging, backup.ErrCorrupt)
 	}
 
 	opts := pgx.TxOptions{
@@ -160,36 +161,36 @@ func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
 		CommitQuery:    "",
 	}
 
-	var dropped int64
+	var kept backup.KeepAccessResult
 
 	err := s.inLongTx(ctx, backupBound(), opts, func(tx pgx.Tx) error {
-		return s.swapTx(ctx, tx, plan, &dropped)
+		return s.swapTx(ctx, tx, plan, &kept)
 	})
 
-	return dropped, err
+	return kept, err
 }
 
-// swapTx is the transaction of swapStaging on tx. It sets dropped as swapIn
+// swapTx is the transaction of swapStaging on tx. It sets kept as swapIn
 // does.
 //
 // The swap takes the advisory lock of the scope @server first, before the swap
 // lock on the revocation journal. A write that runs in maintenance mode takes
 // the same advisory lock before it inserts into the journal, so the swap and
 // those writes cannot deadlock. The lock lasts to the commit of the swap.
-func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *int64) error {
+func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, kept *backup.KeepAccessResult) error {
 	run := func(_ context.Context, fn func(q *db.Queries) error) error {
 		return fn(s.queries.WithTx(tx))
 	}
 
 	return runServerAuditTx(ctx, run, func(srv serverAuditTx) error {
-		return s.swapLockedTx(ctx, tx, srv, plan, dropped)
+		return s.swapLockedTx(ctx, tx, srv, plan, kept)
 	})
 }
 
 // swapLockedTx is swapTx after the transaction took the advisory lock of the
 // server audit scope.
 func (s *Store) swapLockedTx(
-	ctx context.Context, tx pgx.Tx, srv serverAuditTx, plan swapPlan, dropped *int64,
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, plan swapPlan, kept *backup.KeepAccessResult,
 ) error {
 	var live string
 
@@ -225,12 +226,12 @@ func (s *Store) swapLockedTx(
 		s.swapHook(ctx)
 	}
 
-	if err := s.swapInWithBreakGlassFloor(ctx, tx, srv, swapInTarget{plan: plan, live: live}, dropped); err != nil {
+	if err := s.swapInWithBreakGlassFloor(ctx, tx, srv, swapInTarget{plan: plan, live: live}, kept); err != nil {
 		return err
 	}
 
 	if plan.after != nil {
-		return plan.after(tx, backup.KeepAccessResult{DroppedTempAdmins: *dropped})
+		return plan.after(tx, *kept)
 	}
 
 	return nil
@@ -241,7 +242,7 @@ func (s *Store) swapLockedTx(
 // the live data before the swap and the data that is live after it, in the
 // same transaction.
 func (s *Store) swapInWithBreakGlassFloor(
-	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, kept *backup.KeepAccessResult,
 ) error {
 	nowMs, nowErr := storeNow(ctx, s.queries.WithTx(tx))
 	if nowErr != nil {
@@ -255,7 +256,7 @@ func (s *Store) swapInWithBreakGlassFloor(
 		return beforeErr
 	}
 
-	if err := s.swapIn(ctx, tx, srv, in, dropped); err != nil {
+	if err := s.swapIn(ctx, tx, srv, in, kept); err != nil {
 		return err
 	}
 
@@ -275,18 +276,14 @@ type swapInTarget struct {
 }
 
 // swapIn swaps in.plan.staging in for in.live in tx, after the swap lock and
-// the checks, and sets dropped to the count of the dropped temp_admins rows of
-// a swap that keeps the access tables. srv is the locked server audit
-// transaction of tx.
+// the checks, and sets kept to the count of the dropped temp_admins rows of
+// a swap that keeps the access tables and to the count of the expired update
+// leases. srv is the locked server audit transaction of tx.
 func (s *Store) swapIn(
-	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, kept *backup.KeepAccessResult,
 ) error {
 	if in.plan.keepAccess {
-		n, err := s.keepAccessTx(ctx, tx, srv, in.live, in.plan)
-
-		*dropped = n
-
-		return err
+		return s.keepAccessTx(ctx, tx, srv, in, kept)
 	}
 
 	previous, drop := previousSchema(in.live, in.plan.previous)
@@ -301,7 +298,7 @@ func (s *Store) swapIn(
 
 	return s.finishSwap(ctx, tx, srv, swapNames{
 		live: in.live, previous: previous, staging: in.plan.staging, drop: drop,
-	})
+	}, kept)
 }
 
 // previousSchema returns the name of the old live schema after a swap, and
@@ -330,7 +327,7 @@ type swapNames struct {
 // installation, keeps the durable control tables of the live installation,
 // applies the journaled revocations again, drops the schema previous when
 // names.drop says so and the control schema of the staging area, and fences
-// the restored schema live (see fenceRestored). The installation, backups,
+// the restored schema live (see fenceRestored). It sets kept.ExpiredUpdateLeases. The installation, backups,
 // restores and revocation journal tables live in the control schema, which
 // the swap never renames, so they stay across the swap with no copy.
 //
@@ -341,7 +338,9 @@ type swapNames struct {
 // tables in keepControlTables to the commit: through the copy of those
 // tables, the replay of the revocations and the fence of the namespaces.
 // That time grows with the size of the installation.
-func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames) error {
+func (s *Store) finishSwap(
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames, kept *backup.KeepAccessResult,
+) error {
 	live, previous, staging := names.live, names.previous, names.staging
 
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
@@ -373,7 +372,7 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, srv serverAuditTx, na
 		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
-	if err := fenceRestored(ctx, tx, live); err != nil {
+	if err := fenceRestored(ctx, tx, live, kept); err != nil {
 		return err
 	}
 
@@ -398,11 +397,13 @@ func deriveUnitState(ctx context.Context, tx pgx.Tx, live string, logger *slog.L
 }
 
 // fenceRestored increments the failover version of every namespace of the
-// restored schema live, releases the workspace locks and resets the audit
-// sink cursors and leases, in tx. The control tables stay across the swap,
-// so the running restore row of this installation stays readable during the
-// swap and no restored running row needs failing.
-func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
+// restored schema live, releases the workspace locks, expires the lease of
+// every running update and resets the audit sink cursors and leases, in tx. It
+// sets kept.ExpiredUpdateLeases to the count of the expired leases. The
+// control tables stay across the swap, so the running restore row of this
+// installation stays readable during the swap and no restored running row
+// needs failing.
+func fenceRestored(ctx context.Context, tx pgx.Tx, live string, kept *backup.KeepAccessResult) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 
 	if _, err := tx.Exec(ctx, fenceNamespaces); err != nil {
@@ -428,24 +429,21 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	}
 
 	// The backup holds the lease columns of an update that ran when the backup
-	// was made. The restore ends every running update as canceled, so the CLI
-	// that holds the lease token from before the restore cannot save a
-	// checkpoint or renew its lease. The digest stays, so a retried
-	// completion still finds its record.
-	endUpdates := "UPDATE " + pgIdent(live) + ".updates " +
-		"SET status = $1, ended_at_ms = (extract(epoch FROM now()) * 1000)::bigint, " +
-		"lease_expires_at_ms = 0, revision = revision + 1 WHERE status = $2"
+	// was made. The restore expires the lease of every running update, so the
+	// CLI that holds the lease token from before the restore cannot save a
+	// checkpoint, renew its lease or complete the update. The update stays
+	// running and keeps the stack locked: an operator ends it with a cancel,
+	// which builds the journal as for any update. The revision moves with the
+	// change of the row.
+	expireLeases := "UPDATE " + pgIdent(live) + ".updates " +
+		"SET lease_expires_at_ms = 0, revision = revision + 1 WHERE status = $1"
 
-	if _, err := tx.Exec(ctx, endUpdates, string(stack.StatusCanceled), string(stack.StatusRunning)); err != nil {
-		return fmt.Errorf("end running updates after restore: %w", err)
+	tag, err := tx.Exec(ctx, expireLeases, string(stack.StatusRunning))
+	if err != nil {
+		return fmt.Errorf("expire update leases after restore: %w", err)
 	}
 
-	clearStackInventory := "UPDATE " + pgIdent(live) + ".inventory " +
-		"SET lock_holder = NULL, lock_since_ms = NULL, lock_operation = NULL WHERE tool = $1"
-
-	if _, err := tx.Exec(ctx, clearStackInventory, stack.InventoryTool); err != nil {
-		return fmt.Errorf("clear stack inventory locks after restore: %w", err)
-	}
+	kept.ExpiredUpdateLeases = tag.RowsAffected()
 
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes

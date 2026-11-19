@@ -122,13 +122,17 @@ type KeepAccessResult struct {
 	// dropped because they name a principal that the live principals table
 	// does not hold.
 	DroppedTempAdmins int64
+	// ExpiredUpdateLeases is the count of running updates whose lease the
+	// swap expired. Those updates stay running and keep their stack locked
+	// until an operator cancels them.
+	ExpiredUpdateLeases int64
 }
 
 // Fencer increments the failover version of every namespace (ADR 38
 // decision 7), so writes that carry a fence from before the restore stop
 // working. The version does not end a Pulumi update lease or a workspace
-// lock: the swap ends each running update and releases each workspace lock,
-// in its own transaction.
+// lock: the swap expires the lease of each running update, without ending the
+// update, and releases each workspace lock, in its own transaction.
 type Fencer interface {
 	// BumpFailoverVersions increments the failover version of every
 	// namespace by one and returns the count of namespaces bumped.

@@ -682,6 +682,51 @@ func TestRestoreCountsDroppedTempAdmins(t *testing.T) {
 	}
 }
 
+// TestRestoreAuditsExpiredUpdateLeases checks that the swap result with expired
+// update leases makes one audit entry of the restore that names the count, and
+// that a swap with none makes no such entry.
+func TestRestoreAuditsExpiredUpdateLeases(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		expired int64
+		want    bool
+	}{
+		{name: "two leases", expired: 2, want: true},
+		{name: "no lease", expired: 0, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := newRestoreServiceSetupWith(t, func(*backup.RestoreConfig) {})
+			setup.live.dev.expiredLeases = tc.expired
+
+			id, err := startRestoreOf(t, setup, plainRestore())
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+
+			if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreSucceeded {
+				t.Fatalf("state = %q (%s), want succeeded", row.State, row.Error)
+			}
+
+			setup.live.mu.Lock()
+			appends := slices.Clone(setup.live.dev.appends)
+			setup.live.mu.Unlock()
+
+			found := slices.ContainsFunc(appends, func(e audit.Entry) bool {
+				return strings.Contains(e.Object, "expired the lease of 2 running updates") &&
+					strings.Contains(e.Object, "restore "+id.String())
+			})
+
+			if found != tc.want {
+				t.Errorf("audit entry of the expired leases found = %v, want %v", found, tc.want)
+			}
+		})
+	}
+}
+
 // TestRestoreLogsOneWarningForEachClass checks that the strip logs one
 // warning for each class that removed rows, with the count, and that no line
 // holds a subject, a token or a session ID.

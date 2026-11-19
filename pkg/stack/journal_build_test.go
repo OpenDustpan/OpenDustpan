@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
@@ -668,6 +669,106 @@ func TestJournalBuildCancelStoresReplay(t *testing.T) {
 
 	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 0 {
 		t.Fatalf("journal keys after cancel = %v, want none", keys)
+	}
+}
+
+// expireLeaseAsRestore sets the lease of the running update id as a restore
+// does: the expiry becomes zero, the update stays running and the revision
+// moves.
+func (f *buildFixture) expireLeaseAsRestore(t *testing.T, id stack.UpdateID) {
+	t.Helper()
+
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	u, ok := f.store.updates[id]
+	if !ok || u.Status != stack.StatusRunning {
+		t.Fatalf("update %s = %+v, want a running update", id, u)
+	}
+
+	u.Lease.ExpiresAt = time.UnixMilli(0)
+	u.Revision++
+	f.store.updates[id] = u
+}
+
+// TestRestoredUpdateLeaseStops checks that a client with the lease token from
+// before a restore cannot use the lease after the restore expired it: the
+// token does not renew the lease, save a checkpoint, append to the journal or
+// complete the update. The update stays running and keeps the stack locked.
+func TestRestoredUpdateLeaseStops(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+	ctx := t.Context()
+
+	s := f.startJournaled(t)
+
+	f.expireLeaseAsRestore(t, s.Update.ID)
+
+	if _, err := f.svc.Renew(ctx, f.ref, s.Update.ID, s.Token, time.Minute); !errors.Is(err, stack.ErrLeaseExpired) {
+		t.Errorf("renew with the old token: %v, want ErrLeaseExpired", err)
+	}
+
+	err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, envelope("{}")))
+	if !errors.Is(err, stack.ErrLeaseExpired) {
+		t.Errorf("save checkpoint with the old token: %v, want ErrLeaseExpired", err)
+	}
+
+	_, err = f.svc.Complete(ctx, f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
+	if !errors.Is(err, stack.ErrLeaseExpired) {
+		t.Errorf("complete with the old token: %v, want ErrLeaseExpired", err)
+	}
+
+	got, err := f.svc.Active(ctx, f.ref)
+	if err != nil {
+		t.Fatalf("active update after the lease stopped: %v, want the running update", err)
+	}
+
+	if got.ID != s.Update.ID || got.Status != stack.StatusRunning {
+		t.Errorf("active update = %s %q, want %s %q", got.ID, got.Status, s.Update.ID, stack.StatusRunning)
+	}
+}
+
+// TestRestoredJournaledUpdateCancelBuildsJournal checks the way out after a
+// restore: a journaled update that the restore left running with an expired
+// lease ends through the normal cancel, and the cancel builds the checkpoint
+// from the journal, so the resources of the journal stay in the stack state.
+func TestRestoredJournaledUpdateCancelBuildsJournal(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+
+	s := f.startJournaled(t)
+
+	f.expireLeaseAsRestore(t, s.Update.ID)
+
+	done, err := f.svc.Cancel(t.Context(), f.ref, s.Update.ID)
+	if err != nil {
+		t.Fatalf("cancel the restored update: %v", err)
+	}
+
+	if done.Status != stack.StatusCanceled {
+		t.Fatalf("cancel status = %q, want %q", done.Status, stack.StatusCanceled)
+	}
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("export after cancel: %v", err)
+	}
+
+	want := f.replay(t)
+	if !bytes.Equal(cp.Deployment, want) {
+		t.Fatalf("export after cancel = %s, want replay %s", cp.Deployment, want)
+	}
+
+	if bytes.Equal(cp.Deployment, f.base) {
+		t.Fatal("export after cancel = the base state, want the resource of the journal")
+	}
+
+	if _, activeErr := f.svc.Active(t.Context(), f.ref); !errors.Is(activeErr, stack.ErrUpdateNotFound) {
+		t.Errorf("active update after cancel: %v, want ErrUpdateNotFound", activeErr)
 	}
 }
 
