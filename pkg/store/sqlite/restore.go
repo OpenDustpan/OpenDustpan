@@ -338,12 +338,46 @@ func checkWorkCopy(path string) error {
 	// O_NOFOLLOW refuses it again when the file opens, so a link that another
 	// process puts at the name after the Lstat cannot take the mode change.
 	// The checks on the open descriptor do not rely on the Lstat.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	return chmodWorkCopy(path, info)
+}
+
+// openWorkCopyNoFollow opens the file at path read-only and refuses a link at
+// the last name. The directory is a root, so the name cannot leave it.
+func openWorkCopyNoFollow(path string) (*os.File, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
-		return fmt.Errorf("open work copy: %w", backup.ErrCorrupt)
+		return nil, fmt.Errorf("open work copy directory: %w", backup.ErrExportRead)
 	}
 
-	defer func() { _ = f.Close() }() //nolint:errcheck // Read-only descriptor: nothing to flush.
+	f, openErr := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	closeErr := root.Close() // An open file stays valid after its root closes.
+
+	switch {
+	case openErr != nil:
+		return nil, fmt.Errorf("open work copy: %w", backup.ErrCorrupt)
+	case closeErr != nil:
+		return nil, errors.Join(
+			fmt.Errorf("close work copy directory: %w", backup.ErrExportRead), f.Close(),
+		)
+	default:
+		return f, nil
+	}
+}
+
+// chmodWorkCopy sets the mode of the work copy on an open descriptor. info is
+// the Lstat of path. The checks run on the descriptor, so a link that another
+// process puts at the name after the Lstat cannot take the mode change.
+func chmodWorkCopy(path string, info os.FileInfo) (result error) {
+	f, err := openWorkCopyNoFollow(path)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && result == nil {
+			result = fmt.Errorf("close work copy: %w", backup.ErrExportRead)
+		}
+	}()
 
 	fdInfo, err := f.Stat()
 	if err != nil {

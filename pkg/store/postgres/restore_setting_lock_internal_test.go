@@ -22,11 +22,11 @@ func TestCheckWidenedSettingLocksTheSettingRow(t *testing.T) {
 	s := openKeepLockStore(t, testPostgresURL(t))
 	ctx := t.Context()
 
-	if _, err := s.pool.Exec(
-		ctx, `INSERT INTO settings (scope_id, key, value, updated_at_ms) VALUES ($1, $2, 'true', 0)
-			ON CONFLICT (scope_id, key) DO UPDATE SET value = 'true'`,
-		serverScopeID, backup.SettingRestoreAccessTables,
-	); err != nil {
+	const upsert = `INSERT INTO settings (scope_id, key, value, updated_at_ms) VALUES ($1, $2, 'true', 0)
+		ON CONFLICT (scope_id, key) DO UPDATE SET value = 'true'`
+
+	_, err := s.pool.Exec(ctx, upsert, serverScopeID, backup.SettingRestoreAccessTables)
+	if err != nil {
 		t.Fatalf("write the setting row: %v", err)
 	}
 
