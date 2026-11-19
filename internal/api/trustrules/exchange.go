@@ -60,6 +60,14 @@ func (h *Handler) exchange(w http.ResponseWriter, r *http.Request, _ identity.Pr
 		return
 	}
 
+	// A call with an empty body is an mTLS call. A call with a body is the
+	// exchange of a token.
+	if r.ContentLength == 0 {
+		h.exchangeMtls(w, r, name)
+
+		return
+	}
+
 	var in exchangeRequest
 	if decodeErr := route.DecodeBody(w, r, maxExchangeBytes, &in); decodeErr != nil {
 		h.writeError(ctx, w, fmt.Errorf("exchange body: %w", decodeErr))

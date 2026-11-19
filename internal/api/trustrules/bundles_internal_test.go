@@ -120,7 +120,7 @@ func newGuardHandler(t *testing.T) (*Handler, *guardBundles) {
 	}
 
 	return &Handler{
-		namespaces: nil, rules: svc, exchanger: nil, authn: nil, sessions: nil, guard: nil,
+		namespaces: nil, rules: svc, exchanger: nil, mtls: nil, mtlsGuard: nil, authn: nil, sessions: nil, guard: nil,
 		audit: nil, onAuditFailure: nil, logger: slog.New(slog.DiscardHandler), now: guardNow,
 		mux: nil, routes: nil,
 	}, bundles

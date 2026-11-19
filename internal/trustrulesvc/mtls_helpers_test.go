@@ -39,8 +39,10 @@ type testCA struct {
 
 // commonName returns a subject with a common name only.
 func commonName(cn string) pkix.Name {
-	//nolint:exhaustruct_v5 // A test subject needs only a common name.
-	return pkix.Name{CommonName: cn}
+	var name pkix.Name
+	name.CommonName = cn
+
+	return name
 }
 
 // serial returns a random serial number.
@@ -71,12 +73,14 @@ func signCA(t *testing.T, cn string, parent *testCA) *testCA {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	//nolint:exhaustruct_v5 // A test certificate sets only identity, validity and usage.
-	tmpl := &x509.Certificate{
-		SerialNumber: serial(t), Subject: commonName(cn),
-		NotBefore: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
+	tmpl := new(x509.Certificate)
+	tmpl.SerialNumber = serial(t)
+	tmpl.Subject = commonName(cn)
+	tmpl.NotBefore = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	tmpl.NotAfter = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+	tmpl.IsCA = true
+	tmpl.BasicConstraintsValid = true
+	tmpl.KeyUsage = x509.KeyUsageCertSign
 
 	signer, signerKey := tmpl, key
 	if parent != nil {
@@ -140,12 +144,17 @@ func (ca *testCA) leaf(t *testing.T, s leafSpec) []byte {
 		uris = append(uris, u)
 	}
 
-	//nolint:exhaustruct_v5 // A test certificate sets only identity, validity and usage.
-	tmpl := &x509.Certificate{
-		SerialNumber: serial(t), Subject: commonName("workload"), NotBefore: s.notBefore,
-		NotAfter: s.notAfter, URIs: uris, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: s.ekus,
-		IsCA: s.isCA, BasicConstraintsValid: s.isCA, DNSNames: paddingNames(s.padding),
-	}
+	tmpl := new(x509.Certificate)
+	tmpl.SerialNumber = serial(t)
+	tmpl.Subject = commonName("workload")
+	tmpl.NotBefore = s.notBefore
+	tmpl.NotAfter = s.notAfter
+	tmpl.URIs = uris
+	tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+	tmpl.ExtKeyUsage = s.ekus
+	tmpl.IsCA = s.isCA
+	tmpl.BasicConstraintsValid = s.isCA
+	tmpl.DNSNames = paddingNames(s.padding)
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {

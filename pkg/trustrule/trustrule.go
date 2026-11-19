@@ -33,6 +33,14 @@ import (
 )
 
 // Sentinel errors returned by this package and by Store implementations.
+// copyError is an error with a full sentence of copy for the person who reads
+// it. It is a type of its own, so that the sentence keeps its capital letter
+// and its final period.
+type copyError string
+
+// Error returns the sentence.
+func (e copyError) Error() string { return string(e) }
+
 // spiffeWildcardCopy is the text of ErrSpiffeWildcard. It is a full sentence
 // for the person who reads it: it names the field and the fix.
 const spiffeWildcardCopy = "spiffePattern holds a *. A rule for the mTLS exchange must name an exact " +
@@ -62,7 +70,7 @@ var (
 	// for the mTLS exchange names an exact SPIFFE ID. The check wraps it
 	// together with ErrInvalid, so a caller that tests for ErrInvalid still
 	// sees a refused input.
-	ErrSpiffeWildcard = errors.New(spiffeWildcardCopy) //nolint:staticcheck // Copy that clients show as sent.
+	ErrSpiffeWildcard error = copyError(spiffeWildcardCopy)
 	// ErrIssuerRefused reports an issuer of this installation. A token that
 	// this installation signs never becomes an access token of it.
 	ErrIssuerRefused = errors.New("the issuer is an issuer of this installation")

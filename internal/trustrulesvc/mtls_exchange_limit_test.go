@@ -17,8 +17,12 @@ import (
 // errDiskFull is the store error of the guard tests.
 var errDiskFull = errors.New("disk full")
 
-// noResult is the result of a refused exchange.
-var noResult trustrulesvc.MtlsExchangeResult //nolint:gochecknoglobals // A zero value for the tests.
+// noResult returns the result of a refused exchange: the zero value.
+func noResult() trustrulesvc.MtlsExchangeResult {
+	var zero trustrulesvc.MtlsExchangeResult
+
+	return zero
+}
 
 // countingExchanger counts calls and answers with res and err.
 type countingExchanger struct {
@@ -149,7 +153,7 @@ func testFloodNoCertificate(t *testing.T) {
 func testOversizeBody(t *testing.T) {
 	t.Parallel()
 
-	ex := newCounter(noResult, nil)
+	ex := newCounter(noResult(), nil)
 	g := newGuard(t, ex, newClock(), nil)
 
 	for _, n := range []int64{1025, 1 << 40, -1} {
@@ -182,7 +186,7 @@ func testRefusalCause(t *testing.T) {
 	t.Parallel()
 
 	for _, cause := range []error{trustrulesvc.ErrNoCertificate, trustrulesvc.ErrExpired, trustrule.ErrPrincipal} {
-		g := newGuard(t, newCounter(noResult, cause), newClock(), nil)
+		g := newGuard(t, newCounter(noResult(), cause), newClock(), nil)
 
 		if _, err := g.Exchange(t.Context(), "k", 0, emptyInput()); !errors.Is(err, cause) {
 			t.Fatalf("error = %v, want %v", err, cause)
@@ -223,7 +227,7 @@ func testKeyLimit(t *testing.T) {
 	t.Parallel()
 
 	clock := newClock()
-	g := newGuard(t, newCounter(noResult, nil), clock, nil)
+	g := newGuard(t, newCounter(noResult(), nil), clock, nil)
 
 	if n := countLimited(g, 4, func(int) string { return "a" }); n != 1 {
 		t.Fatalf("limited = %d, want 1", n)
@@ -243,7 +247,7 @@ func testKeyLimit(t *testing.T) {
 func testGlobalLimit(t *testing.T) {
 	t.Parallel()
 
-	g := newGuard(t, newCounter(noResult, nil), newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.MaxKeys = 100 })
+	g := newGuard(t, newCounter(noResult(), nil), newClock(), func(c *trustrulesvc.MtlsGuardConfig) { c.MaxKeys = 100 })
 
 	if n := countLimited(g, 30, func(i int) string { return strings.Repeat("k", i+1) }); n != 20 {
 		t.Fatalf("limited = %d, want 20", n)
@@ -253,7 +257,7 @@ func testGlobalLimit(t *testing.T) {
 func testKeyBound(t *testing.T) {
 	t.Parallel()
 
-	g := newGuard(t, newCounter(noResult, nil), newClock(),
+	g := newGuard(t, newCounter(noResult(), nil), newClock(),
 		func(c *trustrulesvc.MtlsGuardConfig) { c.GlobalLimit = 1_000_000 })
 
 	for i := range 1000 {
@@ -268,7 +272,7 @@ func testKeyBound(t *testing.T) {
 func testOverflowKey(t *testing.T) {
 	t.Parallel()
 
-	g := newGuard(t, newCounter(noResult, nil), newClock(),
+	g := newGuard(t, newCounter(noResult(), nil), newClock(),
 		func(c *trustrulesvc.MtlsGuardConfig) { c.GlobalLimit = 1_000_000 })
 
 	if n := countLimited(g, 4, func(i int) string { return strings.Repeat("k", i+1) }); n != 0 {
@@ -283,7 +287,7 @@ func testOverflowKey(t *testing.T) {
 func testConcurrentLimit(t *testing.T) {
 	t.Parallel()
 
-	g := newGuard(t, newCounter(noResult, nil), newClock(),
+	g := newGuard(t, newCounter(noResult(), nil), newClock(),
 		func(c *trustrulesvc.MtlsGuardConfig) { c.Limit, c.GlobalLimit = 5, 1000 })
 
 	var (
@@ -310,7 +314,7 @@ func testConcurrentLimit(t *testing.T) {
 func TestMtlsGuardConfig(t *testing.T) {
 	t.Parallel()
 
-	ex := newCounter(noResult, nil)
+	ex := newCounter(noResult(), nil)
 
 	for name, change := range map[string]func(*trustrulesvc.MtlsGuardConfig){
 		"no exchanger": func(c *trustrulesvc.MtlsGuardConfig) { c.Exchanger = nil },

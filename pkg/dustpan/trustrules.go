@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/trustkeys"
@@ -133,7 +134,14 @@ func newTrustRuleHandler(
 		}
 	}
 
+	mtls, mtlsGuard, err := newMtlsExchange(svc, cfg, exchanger)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := trustrules.NewHandler(trustrules.Config{
+		MtlsExchanger:  mtls,
+		MtlsGuard:      mtlsGuard,
 		Namespaces:     svc.namespaces,
 		Rules:          ruleSvc,
 		Exchanger:      exchanger,
@@ -191,4 +199,61 @@ func newExchanger(svc services, cfg *settings, exchanges trustrule.ExchangeStore
 	}
 
 	return x, nil
+}
+
+// The limits of the exchange of a client certificate. The call has an empty
+// body, so the body cap is small. The limits are per client address and for
+// all addresses together, in one window.
+const (
+	mtlsMaxBodyBytes = 1024
+	mtlsKeyLimit     = 30
+	mtlsGlobalLimit  = 600
+	mtlsWindow       = time.Minute
+	mtlsMaxKeys      = 4096
+)
+
+// newMtlsExchange builds the exchange of a client certificate and its guard.
+// It returns nil for both when the server has no token exchange or its store
+// keeps no trust bundles. The server has no source of revocation data, so
+// the exchange refuses every certificate with the code
+// mtls.revocation-unknown, until an operator source exists.
+func newMtlsExchange(
+	svc services, cfg *settings, exchanger *trustrulesvc.Exchanger,
+) (*trustrulesvc.MtlsExchanger, *trustrulesvc.MtlsGuard, error) {
+	bundles, hasBundles := cfg.trustRules.store.(trustrule.BundleStore)
+	exchanges, hasExchanges := cfg.trustRules.store.(trustrule.ExchangeStore)
+	principals, hasPrincipals := cfg.namespaceStore.(trustrulesvc.Principals)
+
+	if exchanger == nil || svc.tokens == nil || !hasBundles || !hasExchanges || !hasPrincipals {
+		return nil, nil, nil
+	}
+
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	x, err := trustrulesvc.NewMtlsExchanger(trustrulesvc.MtlsConfig{
+		Rules: cfg.trustRules.store, Exchanges: exchanges, Bundles: bundles, Namespaces: svc.namespaces,
+		Principals: principals, Tokens: svc.tokens, Audit: neutralAudit, ServerAudit: serverAudit,
+		Refusals: nil, Revocation: nil, Now: cfg.now, Log: cfg.logger,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("mTLS exchange: %w", err)
+	}
+
+	guard, err := trustrulesvc.NewMtlsGuard(trustrulesvc.MtlsGuardConfig{
+		Exchanger: x, MaxBodyBytes: mtlsMaxBodyBytes, Limit: mtlsKeyLimit, GlobalLimit: mtlsGlobalLimit,
+		Window: mtlsWindow, MaxKeys: mtlsMaxKeys, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("mTLS exchange guard: %w", err)
+	}
+
+	return x, guard, nil
 }

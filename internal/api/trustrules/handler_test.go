@@ -520,6 +520,8 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	full := func() trustrules.Config {
 		return trustrules.Config{
 			Exchanger:      nil,
+			MtlsExchanger:  nil,
+			MtlsGuard:      nil,
 			Namespaces:     namespaces,
 			Rules:          rules,
 			Authenticator:  tokenAuthenticator{},
