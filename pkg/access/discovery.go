@@ -16,6 +16,11 @@ import (
 // that no grant allowed, such as a site administrator, gets no header.
 const HeaderDiscoveryGrant = "X-Dustpan-Grant-Id"
 
+// ErrInvalidDiscoveryGrantID is the error of a discovery answer whose grant ID
+// is not a valid grant ID. It wraps ErrInvalid. A caller that lists many
+// namespaces may skip the one namespace and record the refusal.
+var ErrInvalidDiscoveryGrantID = fmt.Errorf("%w: discovery grant ID", ErrInvalid)
+
 // DiscoveryGrantID returns the stable ID of one grant that lets p discover
 // ns through authz, and whether authz names its grants at all. It reports
 // false when authz does not implement the check, so the caller falls back to
@@ -23,7 +28,7 @@ const HeaderDiscoveryGrant = "X-Dustpan-Grant-Id"
 // that no grant allows the read, and an error means that the check failed.
 // The ID goes into a response header, so an ID that does not start with
 // GrantIDPrefix, or that is not a valid identifier of at most 64 bytes, is
-// refused with an error that wraps ErrInvalid, never passed on.
+// refused with an error that wraps ErrInvalidDiscoveryGrantID, never passed on.
 func DiscoveryGrantID(
 	ctx context.Context, authz identity.Authorizer, p identity.Principal, ns namespace.Name,
 ) (string, bool, error) {
@@ -45,7 +50,9 @@ func DiscoveryGrantID(
 	// the authorizer that names it is not trusted to give a valid ID. This
 	// check does not rely on the header writer or on the authorizer.
 	if id != "" && (!strings.HasPrefix(id, GrantIDPrefix) || !ident.Valid(id, maxGrantIDLength)) {
-		return "", true, fmt.Errorf("%w: the grant ID of a discovery answer is not a grant ID", ErrInvalid)
+		return "", true, fmt.Errorf(
+			"%w: the grant ID of a discovery answer is not a grant ID", ErrInvalidDiscoveryGrantID,
+		)
 	}
 
 	return id, true, nil
