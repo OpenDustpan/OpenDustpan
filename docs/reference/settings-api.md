@@ -214,6 +214,7 @@ server sets it itself.
 | --- | --- | --- | --- | --- |
 | `accessReview.collectionUnitCap` | `int` | 10000 | `live` | The largest count of units that the export of a collection reads. The server refuses an export over it, and refuses a value outside 1 to 100000. A raise counts as a change that reduces security. |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
+| `decisionRecords.retentionHours` | `int` | `0` | `live` | The hours that the server keeps decision records: `0` keeps them forever, or a whole number from 24 to 87600. The setting never deletes an audit entry. No job deletes decision records yet. A change to a shorter period, or from `0` to a period, counts as a change that reduces security. See [Decision record retention](../guides/decision-record-retention.md). |
 | `egress.allowPlainConnections` | `bool` | `false` | `live` | Allow LDAP and SMTP connections with no TLS. An LDAP bind or an SMTP login then sends its password with no encryption. |
 | `server.drainPeriod` | `string` | `10s` | `restart` | The time between the stop signal and the start of the shutdown. In it, the route `/health/ready` answers 503 to a GET request. The server serves all other requests, so a load balancer takes the instance out of its pool. |
 

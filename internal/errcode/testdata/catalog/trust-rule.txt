@@ -9,3 +9,4 @@ trust-rule.no-match
 trust-rule.not-found
 trust-rule.principal-refused
 trust-rule.sign-in-required
+trust-rule.spiffe-wildcard

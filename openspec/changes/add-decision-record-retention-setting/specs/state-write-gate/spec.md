@@ -9,7 +9,7 @@ The server SHALL declare the installation setting `decisionRecords.retentionHour
 - **THEN** the item `decisionRecords.retentionHours` has value `0` and source `default`
 
 #### Scenario: Valid period is stored
-- **WHEN** an administrator patches `decisionRecords.retentionHours` to `8760` with the current revision
+- **WHEN** an administrator patches `decisionRecords.retentionHours` to the JSON number `8760` with the current revision
 - **THEN** the item shows value `8760` and source `database`
 
 #### Scenario: Hostile value is refused
