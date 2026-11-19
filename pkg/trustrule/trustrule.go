@@ -33,6 +33,11 @@ import (
 )
 
 // Sentinel errors returned by this package and by Store implementations.
+// spiffeWildcardCopy is the text of ErrSpiffeWildcard. It is a full sentence
+// for the person who reads it: it names the field and the fix.
+const spiffeWildcardCopy = "spiffePattern holds a *. A rule for the mTLS exchange must name an exact " +
+	"SPIFFE ID. Remove the * and name the whole SPIFFE ID."
+
 var (
 	// ErrNotFound reports a rule that does not exist.
 	ErrNotFound = errors.New("trust rule not found")
@@ -53,6 +58,11 @@ var (
 	// caller may not write outside the namespace of the path, so the write
 	// is refused as a denial, not as input that is not valid.
 	ErrCrossNamespace = errors.New("the write names an object of another namespace")
+	// ErrSpiffeWildcard reports a SPIFFE ID pattern with a * segment. A rule
+	// for the mTLS exchange names an exact SPIFFE ID. The check wraps it
+	// together with ErrInvalid, so a caller that tests for ErrInvalid still
+	// sees a refused input.
+	ErrSpiffeWildcard = errors.New(spiffeWildcardCopy) //nolint:staticcheck // Copy that clients show as sent.
 	// ErrIssuerRefused reports an issuer of this installation. A token that
 	// this installation signs never becomes an access token of it.
 	ErrIssuerRefused = errors.New("the issuer is an issuer of this installation")
@@ -186,8 +196,8 @@ type Condition struct {
 // holds the JWKS of KeySourceStatic, and is empty for KeySourceDiscovery.
 // Conditions are in the order of their claim names. CreatedBy is the subject
 // of the principal that made the rule. Revision counts the writes of the
-// rule, starting at 1. SpiffeIDPattern is the SPIFFE ID pattern of the mTLS
-// check, empty when the rule has no mTLS check. Bundle is the ID of the
+// rule, starting at 1. SpiffeIDPattern is the exact SPIFFE ID of the mTLS
+// check, with no *, empty when the rule has no mTLS check. Bundle is the ID of the
 // trust bundle of the mTLS check, empty with no check.
 type Rule struct {
 	CreatedAt       time.Time
@@ -400,13 +410,15 @@ func checkBundleCA(cert *x509.Certificate, now time.Time, index int) error {
 }
 
 // ValidateSpiffePattern returns ErrInvalid when pattern is not a usable
-// SPIFFE ID pattern: empty, longer than MaxSpiffePatternLength bytes, or
-// not of the form "spiffe://<trust-domain>/<path>". The trust domain is
-// lowercase [a-z0-9._-] with no port and no wildcard. Each path segment is
-// [A-Za-z0-9._-], not empty, not "." or "..", with no percent. A "*" is
-// allowed only as the whole last segment, and a pattern needs at least one
-// fixed segment before it, so "spiffe://td/*" is refused. The pattern must
-// not end with a slash.
+// SPIFFE ID: empty, longer than MaxSpiffePatternLength bytes, or not of the
+// form "spiffe://<trust-domain>/<path>". The trust domain is lowercase
+// [a-z0-9._-] with no port and no wildcard. Each path segment is
+// [A-Za-z0-9._-], not empty, not "." or "..", with no percent. A segment "*"
+// is refused with an error that wraps ErrSpiffeWildcard and ErrInvalid:
+// the pattern names one exact SPIFFE ID. The pattern must not end with a
+// slash. Rule.Validate calls this check, and the create, the update, the
+// store and the restore each keep their own call of Rule.Validate as a
+// defense-in-depth layer.
 func ValidateSpiffePattern(pattern string) error {
 	if err := checkText("spiffePattern", pattern, MaxSpiffePatternLength); err != nil {
 		return err
@@ -462,9 +474,8 @@ func checkSpiffePath(rawPath, pattern string) error {
 }
 
 // checkSpiffeSegments returns ErrInvalid when a path segment is not usable:
-// a "*" is allowed only as the whole last segment after at least one fixed
-// segment, and any other segment is [A-Za-z0-9._-], not empty, not "." and
-// not "..".
+// a "*" is refused with ErrSpiffeWildcard, and any other segment is
+// [A-Za-z0-9._-], not empty, not "." and not "..".
 func checkSpiffeSegments(segments []string, pattern string) error {
 	if len(segments) == 0 {
 		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds no path",
@@ -481,18 +492,13 @@ func checkSpiffeSegments(segments []string, pattern string) error {
 }
 
 // checkSpiffeSegment returns ErrInvalid when the segment at index i of a
-// SPIFFE ID pattern path is not usable.
+// SPIFFE ID pattern path is not usable. A segment "*" returns an error that
+// wraps ErrSpiffeWildcard and ErrInvalid.
 func checkSpiffeSegment(segments []string, i int, pattern string) error {
 	seg := segments[i]
-	last := i == len(segments)-1
 
 	if seg == "*" {
-		if !last || len(segments) < 2 {
-			return fmt.Errorf("%w: the SPIFFE ID pattern %s holds * outside a trailing /* after a fixed segment",
-				ErrInvalid, ident.Echo(pattern))
-		}
-
-		return nil
+		return fmt.Errorf("%w: %w", ErrInvalid, ErrSpiffeWildcard)
 	}
 
 	if seg == "" || seg == "." || seg == ".." {
@@ -607,6 +613,9 @@ func (r *Rule) Validate() error {
 		return fmt.Errorf("%w: the revision %d is negative", ErrInvalid, r.Revision)
 	}
 
+	// Defense in depth: the create, the update, the store and the restore
+	// each call Validate too, so a rule with a * in its SPIFFE ID is refused
+	// at each of them, and none of them relies on another.
 	if r.SpiffeIDPattern != "" {
 		if err := ValidateSpiffePattern(r.SpiffeIDPattern); err != nil {
 			return err
