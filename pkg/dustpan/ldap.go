@@ -164,8 +164,12 @@ func checkLDAPSubject(p *LDAPProvider) error {
 	// take a DN, a user name or an email as the subject. It does not rely on
 	// those checks.
 	sub := subjectOr(p.Subject)
-	if sub == string(ldapauth.SubjectEntryUUID) || sub == string(ldapauth.SubjectObjectGUID) {
-		return nil
+
+	// Refuse a space around the name. Do not trim it: the allowlist check
+	// runs on the exact value.
+	if sub != strings.TrimSpace(sub) {
+		return fmt.Errorf("%w: provider %q: %w: the subject has a space at its start or its end",
+			errLDAPSetup, p.ID, ldapauth.ErrSubjectAttribute)
 	}
 
 	taken := []string{p.UserNameAttribute, p.EmailAttribute, p.NameAttribute}
@@ -247,7 +251,7 @@ func ldapConfig(cfg *settings, p *LDAPProvider, settingsSvc *setting.Service) ld
 
 // subjectOr returns the subject setting s, or entryUUID when it is empty.
 func subjectOr(s string) string {
-	if strings.TrimSpace(s) == "" {
+	if s == "" {
 		return string(ldapauth.SubjectEntryUUID)
 	}
 

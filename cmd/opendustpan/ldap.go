@@ -263,9 +263,14 @@ func (l *ldapFlags) checkSubject() error {
 	// Defense in depth: NewServer and ldapauth.NewMethod check the subject
 	// attribute too. This check stays so that the start stops at the flag,
 	// with the name of the flag. It does not rely on those checks.
-	sub := strings.TrimSpace(l.subject)
-	if sub == "" || sub == "entryUUID" || sub == "objectGUID" {
+	if l.subject == "" {
 		return nil
+	}
+
+	// Refuse a space around the name. Do not trim it: the allowlist check
+	// runs on the exact value.
+	if l.subject != strings.TrimSpace(l.subject) {
+		return fmt.Errorf("--ldap-subject: %w: the name has a space at its start or its end", ldapauth.ErrSubjectAttribute)
 	}
 
 	taken := []string{l.userNameAttribute, l.emailAttribute, l.nameAttribute}

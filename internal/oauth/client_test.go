@@ -1039,6 +1039,14 @@ func TestNewRefusesAHostileIssuerForm(t *testing.T) {
 		"empty fragment":     "https://idp.example#",
 		"user information":   "https://user:" + "pw" + "@idp.example",
 		"space":              "https://idp.example/a b",
+		"upper-case scheme":  "HTTPS://idp.example",
+		"non-ASCII host":     "https://b\u00fccher.example/",
+		"trailing dot host":  "https://idp.example./",
+		"port over 65535":    "https://idp.example:99999/",
+		"dot-dot segment":    "https://idp.example/a/../b",
+		"dot segment":        "https://idp.example/./x",
+		"right-to-left mark": "https://idp.example/a\u202eb",
+		"over 512 bytes":     "https://idp.example/" + strings.Repeat("a", 600),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

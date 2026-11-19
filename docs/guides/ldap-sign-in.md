@@ -179,7 +179,7 @@ minutes for the first lock, and longer for a lock that follows.
 | User name attribute | `--ldap-user-name-attribute` | `uid` | Optional. Empty uses the typed user name. |
 | Email attribute | `--ldap-email-attribute` | `mail` | Optional. |
 | Name attribute | `--ldap-name-attribute` | `cn` | Optional. |
-| Subject | `--ldap-subject` | `entryUUID` | `entryUUID`, `objectGUID`, or an attribute that you name. |
+| Subject | `--ldap-subject` | `entryUUID` | `entryUUID`, `objectGUID`, `nsUniqueId`, `ipaUniqueID`, `GUID`, `orclGUID` or `ibm-entryUUID`. |
 | Subject failure limit | `--ldap-subject-failure-limit` | `5` | 1 to 100. The count of one person from every source locks the person after this limit. See "Lockout". |
 | Disabled rule | `--ldap-disabled-attribute`, `--ldap-disabled-mask`, `--ldap-disabled-values` | `userAccountControl`, mask `2` | Optional. See "Disabled persons". |
 | Groups | `--ldap-groups` | `off` | `off`, `search` or `memberOf`. See "Groups". |
@@ -257,17 +257,21 @@ The subject identifies the person in the server. It must not change when
 the person changes a name or an email. The server never uses the DN, the
 `uid` or the email as the subject.
 
-The server refuses the start when `--ldap-subject` names the DN (`dn`,
-`entryDN`, `distinguishedName`), a user name (`uid`, `userid`,
-`sAMAccountName`, `userPrincipalName`) or an email (`mail`, `rfc822Mailbox`).
-The start also stops when the subject names the same attribute as the user
-name, the email or the person name (--ldap-name-attribute). The name comparison ignores case.
+The subject attribute must be an attribute that holds a stable directory ID.
+The server accepts only these names: `entryUUID`, `objectGUID`, `nsUniqueId`,
+`ipaUniqueID`, `GUID`, `orclGUID` and `ibm-entryUUID`. The comparison ignores
+case. The server refuses every other name, for example the DN, `uid`, `mail`,
+`cn`, `displayName`, `employeeNumber` and `krbPrincipalName`, and it refuses
+an OID. It refuses a name with a space at its start or its end. It does not
+remove the space for you. The start stops with an error that names the
+attribute. The start also stops when the subject names the same attribute as
+the user name, the email or the person name (--ldap-name-attribute).
 
 | Subject | Directory | Text form |
 | --- | --- | --- |
 | `entryUUID` | OpenLDAP, 389 Directory Server and others (RFC 4530) | The UUID in lowercase, for example `6ba7b810-9dad-11d1-80b4-00c04fd430c8`. |
 | `objectGUID` | Active Directory | The GUID text that Active Directory shows, in lowercase. |
-| A named attribute | Any | Its one value as text, 1 to 255 bytes, with no control character. |
+| `nsUniqueId`, `ipaUniqueID`, `GUID`, `orclGUID`, `ibm-entryUUID` | 389 Directory Server, FreeIPA and other directories | Its one value as text, 1 to 255 bytes, with no control character. |
 
 For `objectGUID`, the first three groups of the text come from the bytes in
 little-endian order, and the last two groups come in the order of the bytes.

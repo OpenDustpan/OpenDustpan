@@ -14,6 +14,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -288,6 +289,12 @@ func (h *Handler) createProvider(
 		return none, errProviderCreateBody
 	}
 
+	if mode == session.ModeOIDC {
+		if err := checkProviderIssuer(req.Issuer); err != nil {
+			return none, err
+		}
+	}
+
 	in := session.ProviderInput{
 		ID: *req.ID, Mode: mode, Issuer: valueOr(req.Issuer, ""), DisplayName: valueOr(req.DisplayName, *req.ID),
 		ClientID: *req.ClientID, ClientSecret: *req.ClientSecret, Scopes: valueOr(req.Scopes, []string{}),
@@ -340,6 +347,12 @@ func (h *Handler) changeProvider(
 		return session.ProviderConfig{}, err
 	}
 
+	if req.Mode == nil || session.ProviderMode(*req.Mode) == session.ModeOIDC {
+		if err := checkProviderIssuer(req.Issuer); err != nil {
+			return session.ProviderConfig{}, err
+		}
+	}
+
 	c := session.ProviderChange{
 		Mode: (*session.ProviderMode)(req.Mode), Issuer: req.Issuer, DisplayName: req.DisplayName,
 		ClientID: req.ClientID, ClientSecret: req.ClientSecret, Scopes: req.Scopes, OAuth: req.oauthChange(),
@@ -352,6 +365,25 @@ func (h *Handler) changeProvider(
 	}
 
 	return p, nil
+}
+
+// checkProviderIssuer refuses an issuer of a request body that
+// session.CheckIssuer refuses. It checks nothing for a request with no issuer.
+// The error never holds the issuer, because the issuer can hold a password.
+func checkProviderIssuer(issuer *string) error {
+	// Defense in depth: the session layer checks the issuer of a provider
+	// that it stores, and the sign-in client checks it when it connects. This
+	// check stays so that the handler stops a hostile issuer at the boundary,
+	// before any write and before any audit text. It does not rely on them.
+	if issuer == nil {
+		return nil
+	}
+
+	if err := session.CheckIssuer(*issuer); err != nil {
+		return fmt.Errorf("%w: %w", session.ErrInvalidProvider, err)
+	}
+
+	return nil
 }
 
 // deleteSignInProvider serves DELETE /api/server/sign-in-providers/{id}:

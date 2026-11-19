@@ -425,20 +425,20 @@ func signInProvider(
 		return none, fmt.Errorf("%w: provider ID %q is used two times", errSignInSetup, p.ID)
 	}
 
-	client, err := oauth.NewLazy(oauth.Config{
-		HTTPClient: p.HTTPClient, Now: now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: p.ClientSecret,
-		RedirectURL: base + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
-	})
-	if err != nil {
-		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, err)
-	}
-
 	// Defense in depth: the flag parser, the sign-in client and
 	// session.BindProviders check the issuer too. This check stays so that an
 	// embedder cannot start with an issuer that has a query, a fragment or
 	// user information. It does not rely on those checks.
 	if issuerErr := session.CheckIssuer(p.Issuer); issuerErr != nil {
 		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, issuerErr)
+	}
+
+	client, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: p.HTTPClient, Now: now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: p.ClientSecret,
+		RedirectURL: base + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
+	})
+	if err != nil {
+		return none, fmt.Errorf("%w: provider %q: %w", errSignInSetup, p.ID, err)
 	}
 
 	method, err := redirectMethod(client, p.ID, session.MethodOIDC, configuredProviderOn, now)

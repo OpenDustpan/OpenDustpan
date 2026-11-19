@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -192,25 +193,187 @@ var ErrIssuer = errors.New("the issuer must be an absolute https URL, or http on
 	"and with no user information, no query and no fragment, so set the issuer (--oidc-issuer) to that form")
 
 // CheckIssuer returns an error that matches ErrIssuer for an issuer that is
-// not an absolute https URL with a host, or an http URL on a loopback host.
+// not an absolute URL of this form: the scheme is exactly "https", or exactly
+// "http" with a loopback host; the host is a list of ASCII letter, digit and
+// hyphen labels with no trailing dot, or an IP address in the form of a
+// literal; the port, if present, is from 1 to 65535; each path segment has
+// only the characters of a URL path segment, and no segment is "." or "..".
 // It refuses user information, a query, a fragment, a space, a control
-// character and a text of more than 512 bytes. It does not change the issuer
-// to make it valid.
+// character, a byte of 0x7f or more and a text of more than 512 bytes. It does
+// not change the issuer to make it valid.
 func CheckIssuer(issuer string) error {
-	if issuer == "" || len(issuer) > maxIssuer || strings.ContainsAny(issuer, "?# \\") || hasControl(issuer) {
+	if issuer == "" || len(issuer) > maxIssuer || !issuerBytesAllowed(issuer) {
 		return ErrIssuer
 	}
 
-	u, err := url.Parse(issuer)
-	if err != nil || u == nil || u.Host == "" || u.User != nil {
+	scheme, rest, found := strings.Cut(issuer, "://")
+	if !found || (scheme != schemeHTTPS && scheme != schemeHTTP) {
 		return ErrIssuer
 	}
 
-	if !secureScheme(u) {
+	authority, path, _ := strings.Cut(rest, "/")
+	if path != "" || strings.HasSuffix(rest, "/") {
+		path = "/" + path
+	}
+
+	host, ok := issuerHost(authority)
+	if !ok || (scheme == schemeHTTP && !loopbackHost(host)) || !issuerPathAllowed(path) {
 		return ErrIssuer
 	}
 
 	return nil
+}
+
+// issuerBytesAllowed reports whether each byte of s is a printable ASCII
+// character that is not a space, a back slash, a query mark or a fragment mark.
+func issuerBytesAllowed(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if c <= 0x20 || c >= 0x7f || c == '\\' || c == '?' || c == '#' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// issuerHost checks the authority of an issuer and returns its host with no
+// brackets. It refuses user information, an empty host and a port that is not
+// from 1 to 65535.
+func issuerHost(authority string) (string, bool) {
+	if authority == "" || strings.Contains(authority, "@") {
+		return "", false
+	}
+
+	host, port := authority, ""
+
+	if strings.HasPrefix(authority, "[") {
+		end := strings.Index(authority, "]")
+		if end < 0 {
+			return "", false
+		}
+
+		host, port = authority[1:end], authority[end+1:]
+
+		a, err := netip.ParseAddr(host)
+		if err != nil || a.Zone() != "" {
+			return "", false
+		}
+
+		if port != "" && (port[0] != ':' || !issuerPort(port[1:])) {
+			return "", false
+		}
+
+		return host, true
+	}
+
+	if i := strings.LastIndex(authority, ":"); i >= 0 {
+		host, port = authority[:i], authority[i+1:]
+		if !issuerPort(port) {
+			return "", false
+		}
+	}
+
+	if !issuerDomain(host) {
+		return "", false
+	}
+
+	return host, true
+}
+
+// issuerPort reports whether p is a port from 1 to 65535 in decimal digits.
+func issuerPort(p string) bool {
+	if p == "" || len(p) > 5 {
+		return false
+	}
+
+	n := 0
+
+	for i := range len(p) {
+		if p[i] < '0' || p[i] > '9' {
+			return false
+		}
+
+		n = n*10 + int(p[i]-'0')
+	}
+
+	return n >= 1 && n <= 65535
+}
+
+// issuerDomain reports whether host is an IPv4 address, or a list of ASCII
+// letter, digit and hyphen labels with no trailing dot. A host of only digits
+// and dots must be an IPv4 address.
+func issuerDomain(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+
+	if strings.Trim(host, "0123456789.") == "" {
+		a, err := netip.ParseAddr(host)
+
+		return err == nil && a.Is4()
+	}
+
+	for label := range strings.SplitSeq(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+
+		for i := range len(label) {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// issuerPathAllowed reports whether each segment of path has only the
+// characters of a URL path segment, with a percent sign only before two hex
+// digits, and is not "." or ".." in plain or in percent-encoded form.
+func issuerPathAllowed(path string) bool {
+	if path == "" {
+		return true
+	}
+
+	for seg := range strings.SplitSeq(path[1:], "/") {
+		if !issuerSegmentAllowed(seg) {
+			return false
+		}
+
+		dec, err := url.PathUnescape(seg)
+		if err != nil || dec == "." || dec == ".." {
+			return false
+		}
+	}
+
+	return true
+}
+
+// issuerSegmentAllowed reports whether seg has only unreserved characters,
+// sub-delimiters, colon, at sign and well-formed percent escapes.
+func issuerSegmentAllowed(seg string) bool {
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("-._~!$&'()*+,;=:@", c) >= 0:
+		case c == '%' && i+2 < len(seg) && isHex(seg[i+1]) && isHex(seg[i+2]):
+			i += 2
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// isHex reports whether c is a hexadecimal digit.
+func isHex(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 // secureScheme reports whether u uses https, or http on a loopback host.

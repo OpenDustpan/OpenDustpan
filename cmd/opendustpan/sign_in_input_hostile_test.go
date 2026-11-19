@@ -23,7 +23,7 @@ func TestLDAPSubjectFlagRefusesAHostileName(t *testing.T) {
 
 	for _, subject := range []string{
 		"dn", "DN", "entryDN", "distinguishedName", "uid", "UID", "mail", "Mail", "userid", "sAMAccountName",
-		"userPrincipalName", "rfc822Mailbox",
+		"userPrincipalName", "rfc822Mailbox", "0.9.2342.19200300.100.1.1", "2.5.4.3", "cn", "displayName", "telephoneNumber", "givenName", "sn", "employeeNumber", "mailPrimaryAddress", "proxyAddresses", "krbPrincipalName", " uid", "uid ", " entryUUID", "entryUUID ", "entry_uuid",
 	} {
 		t.Run(subject, func(t *testing.T) {
 			t.Parallel()
@@ -33,9 +33,9 @@ func TestLDAPSubjectFlagRefusesAHostileName(t *testing.T) {
 	}
 
 	for name, change := range map[string]func(l *ldapFlags){
-		"the user name attribute": func(l *ldapFlags) { l.subject, l.userNameAttribute = "employeeNumber", "EmployeeNumber" },
-		"the email attribute":     func(l *ldapFlags) { l.subject, l.emailAttribute = "employeeNumber", "employeenumber" },
-		"the name attribute":      func(l *ldapFlags) { l.subject, l.nameAttribute = "employeeNumber", "employeeNumber" },
+		"the user name attribute": func(l *ldapFlags) { l.subject, l.userNameAttribute = "nsUniqueId", "NsUniqueId" },
+		"the email attribute":     func(l *ldapFlags) { l.subject, l.emailAttribute = "nsUniqueId", "nsuniqueid" },
+		"the name attribute":      func(l *ldapFlags) { l.subject, l.nameAttribute = "nsUniqueId", "nsUniqueId" },
 	} {
 		t.Run("same as "+name, func(t *testing.T) {
 			t.Parallel()
@@ -44,7 +44,7 @@ func TestLDAPSubjectFlagRefusesAHostileName(t *testing.T) {
 		})
 	}
 
-	for _, ok := range []string{"entryUUID", "objectGUID", "employeeNumber"} {
+	for _, ok := range []string{"entryUUID", "objectGUID", "nsUniqueId", "ipaUniqueID", "GUID", "orclGUID", "ibm-entryUUID", "NSUNIQUEID", "entryuuid"} {
 		t.Run("allowed "+ok, func(t *testing.T) {
 			t.Parallel()
 
@@ -75,6 +75,13 @@ func hostileIssuers() map[string]string {
 		"scheme-relative":        "//idp.example",
 		"opaque URL":             "https:idp.example",
 		"upper-case http scheme": "HTTP://idp.example",
+		"upper-case scheme":      "HTTPS://idp.example",
+		"non-ASCII host":         "https://b\u00fccher.example/",
+		"trailing dot host":      "https://idp.example./",
+		"port over 65535":        "https://idp.example:99999/",
+		"dot-dot segment":        "https://idp.example/a/../b",
+		"dot segment":            "https://idp.example/./x",
+		"right-to-left override": "https://idp.example/a\u202eb",
 	}
 }
 

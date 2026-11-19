@@ -93,7 +93,7 @@ func TestBindProvidersNormalizesTheIssuer(t *testing.T) {
 
 	first := session.Provider{
 		ID:           "corp",
-		Issuer:       "HTTPS://IdP.Example/tenant/",
+		Issuer:       "https://IdP.Example/tenant/",
 		UserinfoURL:  "",
 		SubjectClaim: "",
 		DirectoryURL: "",
@@ -447,17 +447,25 @@ func TestBindProvidersRefusesAHostileIssuer(t *testing.T) {
 	t.Parallel()
 
 	for name, issuer := range map[string]string{
-		"query and fragment": "https://idp.example?x=1#f",
-		"query":              "https://idp.example/?x=1",
-		"fragment":           "https://idp.example#f",
-		"empty query":        "https://idp.example?",
-		"empty fragment":     "https://idp.example#",
-		"user information":   "https://user:" + "pw" + "@idp.example",
-		"space":              "https://idp.example/a b",
-		"control character":  "https://idp.example/\x00",
-		"other scheme":       "ftp://idp.example",
-		"http public host":   "http://idp.example",
-		"no host":            "https://",
+		"query and fragment":     "https://idp.example?x=1#f",
+		"query":                  "https://idp.example/?x=1",
+		"fragment":               "https://idp.example#f",
+		"empty query":            "https://idp.example?",
+		"empty fragment":         "https://idp.example#",
+		"user information":       "https://user:" + "pw" + "@idp.example",
+		"space":                  "https://idp.example/a b",
+		"control character":      "https://idp.example/\x00",
+		"other scheme":           "ftp://idp.example",
+		"http public host":       "http://idp.example",
+		"no host":                "https://",
+		"over 512 bytes":         "https://idp.example/" + strings.Repeat("a", 600),
+		"upper-case scheme":      "HTTPS://idp.example",
+		"non-ASCII host":         "https://b\u00fccher.example/",
+		"trailing dot host":      "https://idp.example./",
+		"port over 65535":        "https://idp.example:99999/",
+		"dot-dot segment":        "https://idp.example/a/../b",
+		"dot segment":            "https://idp.example/./x",
+		"right-to-left override": "https://idp.example/a\u202eb",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
