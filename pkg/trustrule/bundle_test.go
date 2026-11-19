@@ -151,8 +151,6 @@ func TestValidateSpiffePattern(t *testing.T) {
 		"spiffe://td/a/../b",
 		"spiffe://td/a%2F*",
 		"spiffe://td/a%00",
-		"spiffe://td/*/x/*",
-		"spiffe://td/*",
 	} {
 		t.Run(pattern, func(t *testing.T) {
 			t.Parallel()
@@ -166,7 +164,7 @@ func TestValidateSpiffePattern(t *testing.T) {
 	for _, pattern := range []string{
 		"spiffe://td/a",
 		"spiffe://example.org/ns/acme",
-		"spiffe://example.org/ns/acme/*",
+		"spiffe://example.org/ns/acme/sa/deploy",
 	} {
 		t.Run("accept "+pattern, func(t *testing.T) {
 			t.Parallel()

@@ -165,12 +165,16 @@ JSON media type.
 The password budget is separate from the budget of the other sign-ins. The
 budget of one source address (an IPv4 address, or the /64 of an IPv6 address)
 is 30 failures. It gets back one unit each 2 seconds. A request over the
-budget waits 1 second, and then the server handles it. At most 4 requests of
-one source wait at the same time: more answer `429` at once. The
-password sign-in, the use of a set-up or reset code, and the change of the
-own password spend it: a wrong password, a code that is not valid and a
-wrong current password each spend one unit. When the budget of an address is
-empty, these routes answer `429` until it refills.
+budget waits 1 second, and then the server handles it and answers as usual,
+for example `401` for a wrong password. The budget never makes a request in
+a sequence answer `429`. At most 4 requests of one source wait at the same
+time: when more requests of one source arrive at the same time, the extra
+requests answer `429` at once. The password sign-in, the use of a set-up or
+reset code, and the change of the own password spend it: a wrong password, a
+code that is not valid and a wrong current password each spend one unit.
+When the budget of an address is empty, each of these routes makes the
+request wait. It answers `429` only for the requests over the limit of 4 that
+wait at the same time.
 
 ## Lockout by user name
 
