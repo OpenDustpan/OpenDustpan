@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/triggers"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/logtext"
 	"opendustpan.org/opendustpan/internal/logtext/logtexttest"
 	"opendustpan.org/opendustpan/pkg/graph"
@@ -575,14 +576,15 @@ func TestUnitDamagedObjectLogIsBounded(t *testing.T) {
 }
 
 // TestTriggerLogHoldsNoLineBreak proves that the log line of a stored trigger
-// that fails its checks holds no CR and no LF from the text of the store error.
+// that fails its checks holds no CR, no LF and no other hidden rune (for
+// example U+202E) from the text of the store error.
 func TestTriggerLogHoldsNoLineBreak(t *testing.T) {
 	t.Parallel()
 
 	rec := logtexttest.New()
 	r := newSpyRigLogged(t, newAuthorizer(holdsAll()...), nil, rec.Logger())
 	r.plantHostile()
-	r.spy.fail["trg-direct"] = fmt.Errorf("get trigger: %w: line one\r\nERROR forged line %s",
+	r.spy.fail["trg-direct"] = fmt.Errorf("get trigger: %w: line one\r\nERROR forged line name\u202eexe %s",
 		trigger.ErrInvalid, strings.Repeat("x", 5000))
 
 	ask(t, r, http.MethodGet, triggerURL("acme", netID, "trg-direct"))
@@ -608,6 +610,10 @@ func checkBoundedRecords(t *testing.T, rec *logtexttest.Recorder, message string
 		for key, value := range r.Attrs {
 			if strings.ContainsAny(value, "\r\n") {
 				t.Errorf("log attribute %s holds a line break: %q", key, value)
+			}
+
+			if ident.HasHidden(value) {
+				t.Errorf("log attribute %s holds a hidden rune: %q", key, value)
 			}
 
 			if len(value) > logtext.MaxBytes+len("...") {

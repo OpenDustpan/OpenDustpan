@@ -3,9 +3,9 @@ package logtext_test
 import (
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/logtext"
 )
 
@@ -58,28 +58,32 @@ func TestCleanCutsOnRuneBoundary(t *testing.T) {
 	}
 }
 
-func TestCleanRemovesEveryControlRune(t *testing.T) {
+func TestCleanRemovesEveryHiddenRune(t *testing.T) {
 	t.Parallel()
 
 	for name, in := range map[string]string{
-		"NUL":                 "a\x00b",
-		"BEL":                 "a\ab",
-		"backspace":           "a\bb",
-		"tab":                 "a\tb",
-		"vertical tab":        "a\vb",
-		"form feed":           "a\fb",
-		"ESC":                 "a\x1b[31mb",
-		"DEL":                 "a\x7fb",
-		"C1 control":          "a\u0080b",
-		"C1 control CSI":      "a\u009bb",
-		"NEL":                 "a\u0085b",
-		"line separator":      "a\u2028b",
-		"paragraph separator": "a\u2029b",
+		"NUL":                    "a\x00b",
+		"BEL":                    "a\ab",
+		"backspace":              "a\bb",
+		"tab":                    "a\tb",
+		"vertical tab":           "a\vb",
+		"form feed":              "a\fb",
+		"ESC":                    "a\x1b[31mb",
+		"DEL":                    "a\x7fb",
+		"C1 control":             "a\u0080b",
+		"C1 control CSI":         "a\u009bb",
+		"NEL":                    "a\u0085b",
+		"line separator":         "a\u2028b",
+		"paragraph separator":    "a\u2029b",
+		"right-to-left override": "a\u202eb",
+		"left-to-right isolate":  "a\u2066b",
+		"zero width space":       "a\u200bb",
+		"byte order mark":        "a\ufeffb",
 	} {
 		got := logtext.Clean(in)
 
 		for _, r := range got {
-			if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			if ident.IsHiddenRune(r) {
 				t.Errorf("%s: Clean(%q) = %q, holds the rune %U", name, in, got, r)
 			}
 		}
@@ -89,7 +93,7 @@ func TestCleanRemovesEveryControlRune(t *testing.T) {
 		}
 	}
 
-	// Text with no control rune stays as it is, with multibyte runes too.
+	// Text with no hidden rune stays as it is, with multibyte runes too.
 	if got, want := logtext.Clean("naïve €"), "naïve €"; got != want {
 		t.Errorf("Clean changed a clean value: got %q, want %q", got, want)
 	}
