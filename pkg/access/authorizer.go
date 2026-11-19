@@ -792,30 +792,38 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 // and the staged check of a restore refuses a backup that holds one; this
 // check stays so that a row from any other source gives no power.
 func (a *Authorizer) confineSubjects(ctx context.Context, subjects []Subject) ([]Subject, error) {
-	return confineSubjectsOf(ctx, subjects, a.principals)
+	return confineSubjectsOf(ctx, subjects, "", a.principals)
 }
 
 // confineSubjectsOf is confineSubjects over the principal port principals.
-// The reach walker uses it too, so that both read the same rule.
-func confineSubjectsOf(ctx context.Context, subjects []Subject, principals PrincipalNamespaces) ([]Subject, error) {
-	id := ""
-	grouped := false
-
-	for i := range subjects {
-		if subjects[i].Kind == SubjectPrincipal {
-			if id == "" {
-				id = subjects[i].ID
-			}
-
-			continue
-		}
-
-		if subjects[i].Kind == SubjectGroup {
-			grouped = true
-		}
+// The reach walker uses it too, so that both read the same rule. want is the
+// ID of the principal that the subjects belong to, or "" when the caller
+// knows only the subjects: the ID then comes from the one principal subject.
+//
+// The check fails closed with ErrInvalid on a list that it cannot confine:
+// a subject of an unknown kind, a group subject with no principal subject,
+// more than one principal subject, or a principal subject that is not want.
+func confineSubjectsOf(
+	ctx context.Context, subjects []Subject, want string, principals PrincipalNamespaces,
+) ([]Subject, error) {
+	id, grouped, err := principalSubjectOf(subjects)
+	if err != nil {
+		return nil, err
 	}
 
-	if id == "" || !grouped {
+	if id == "" {
+		if grouped {
+			return nil, fmt.Errorf("%w: group subject with no principal subject", ErrInvalid)
+		}
+
+		return subjects, nil
+	}
+
+	if want != "" && id != want {
+		return nil, fmt.Errorf("%w: principal subject %q is not the principal %q", ErrInvalid, id, want)
+	}
+
+	if !grouped {
 		return subjects, nil
 	}
 
@@ -837,6 +845,32 @@ func confineSubjectsOf(ctx context.Context, subjects []Subject, principals Princ
 	}
 
 	return out, nil
+}
+
+// principalSubjectOf returns the ID of the one principal subject of subjects
+// and whether a group subject is present. It returns ErrInvalid for a
+// subject of an unknown kind, for a second principal subject and for a
+// principal subject with an empty ID.
+func principalSubjectOf(subjects []Subject) (string, bool, error) {
+	id := ""
+	grouped := false
+
+	for i := range subjects {
+		switch subjects[i].Kind {
+		case SubjectPrincipal:
+			if id != "" || subjects[i].ID == "" {
+				return "", false, fmt.Errorf("%w: more than one principal subject, or an empty one", ErrInvalid)
+			}
+
+			id = subjects[i].ID
+		case SubjectGroup:
+			grouped = true
+		default:
+			return "", false, fmt.Errorf("%w: subject kind %q", ErrInvalid, subjects[i].Kind)
+		}
+	}
+
+	return id, grouped, nil
 }
 
 // chain returns obj and every object that holds it, innermost first: a unit,
