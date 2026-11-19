@@ -158,7 +158,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          docker buildx build --platform linux/amd64,linux/arm64 --tag "${FORGE_IMAGE}:${TAG}" --push .
+          docker buildx build --platform linux/amd64,linux/arm64 --build-arg VERSION="${TAG}" --tag "${FORGE_IMAGE}:${TAG}" --push .
 
       - name: Push the same digest to Docker Hub
         if: env.MODE == 'build' || env.MODE == 'complete-hub'
