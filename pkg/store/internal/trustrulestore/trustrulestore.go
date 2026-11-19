@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -235,16 +236,140 @@ func CheckExchange(x *trustrule.Exchange) error {
 		return err
 	}
 
-	// Defense in depth: the service makes only tokens of the kind jwt-exchange for
-	// an exchange. This check stays so that no caller of the store makes a
-	// personal or a service token through the path of an exchange.
-	if x.Token.Kind != accesstoken.KindJWTExchange {
-		return fmt.Errorf("%w: an exchange stores only a token of the kind %q, not %q", trustrule.ErrInvalid,
-			accesstoken.KindJWTExchange, x.Token.Kind)
+	// Defense in depth: the service makes only tokens of the kinds jwt-exchange
+	// and mtls-exchange for an exchange. This check stays so that no caller
+	// of the store makes a personal or a service token through the path of
+	// an exchange.
+	if x.Token.Kind != accesstoken.KindJWTExchange && x.Token.Kind != accesstoken.KindMTLSExchange {
+		return fmt.Errorf("%w: an exchange stores only a token of the kind %q or %q, not %q", trustrule.ErrInvalid,
+			accesstoken.KindJWTExchange, accesstoken.KindMTLSExchange, x.Token.Kind)
 	}
 
 	if x.Token.PrincipalID == "" || !x.Token.ExpiresAt.After(x.Token.CreatedAt) {
 		return fmt.Errorf("%w: the token of the exchange has no principal or no lifetime", trustrule.ErrInvalid)
+	}
+
+	// Defense in depth: the mTLS service sets the SPIFFE ID from a verified
+	// chain, and the JWT service never sets it. This check stays so that the
+	// store never stores an mTLS token without its match in the transaction.
+	mtls := x.Token.Kind == accesstoken.KindMTLSExchange
+	if mtls != (x.SPIFFEID != "") || strings.Contains(x.SPIFFEID, "*") {
+		return fmt.Errorf("%w: a token of the kind %q needs a SPIFFE ID with no *, other kinds need none",
+			trustrule.ErrInvalid, accesstoken.KindMTLSExchange)
+	}
+
+	return checkExchangeBundleFields(x)
+}
+
+// checkExchangeBundleFields checks the bundle ID and the bundle version of an
+// exchange of the kind mtls-exchange, or the lack of both for another kind.
+func checkExchangeBundleFields(x *trustrule.Exchange) error {
+	mtls := x.Token.Kind == accesstoken.KindMTLSExchange
+
+	// Defense in depth: the mTLS service sets the bundle and its version from
+	// the verify of the chain. This check stays so that the store never
+	// stores an mTLS token with no bundle version to check in the
+	// transaction, and never a JWT token with one.
+	if mtls {
+		if x.BundleID.Validate() != nil || x.BundleVersion < 1 {
+			return fmt.Errorf("%w: a token of the kind %q needs a bundle ID and a bundle version of 1 or more",
+				trustrule.ErrInvalid, accesstoken.KindMTLSExchange)
+		}
+	} else if x.BundleID != "" || x.BundleVersion != 0 {
+		return fmt.Errorf("%w: a token of the kind %q has no bundle", trustrule.ErrInvalid, x.Token.Kind)
+	}
+
+	return nil
+}
+
+// CheckExchangeBundle returns trustrule.ErrNotFound unless the bundle of the
+// namespace of the fence exists, is the bundle x.BundleID, is the bundle of the
+// rule of the exchange (the row of x.Rule in rows), and has x.BundleVersion as its active
+// version. The adapters call it in the transaction of the exchange with the
+// stored bundle row of that namespace, so a rotate that came after the verify
+// of the chain still refuses the exchange. An exchange of the kind
+// jwt-exchange has no bundle, so it passes with no check. Any other kind
+// returns trustrule.ErrInvalid.
+func CheckExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
+	switch x.Token.Kind {
+	case accesstoken.KindMTLSExchange:
+		return checkMtlsExchangeBundle(row, rows, x)
+	case accesstoken.KindJWTExchange:
+		return nil
+	case accesstoken.KindPersonal, accesstoken.KindService:
+		// No exchange makes these kinds.
+		return unknownExchangeKind(x.Token.Kind)
+	}
+
+	// Fail closed on a kind that no code knows.
+	return unknownExchangeKind(x.Token.Kind)
+}
+
+// unknownExchangeKind is the refusal of a token kind that no exchange makes.
+func unknownExchangeKind(kind accesstoken.Kind) error {
+	return fmt.Errorf("%w: an exchange has no token of the kind %q", trustrule.ErrInvalid, kind)
+}
+
+// checkMtlsExchangeBundle is the bundle check of CheckExchangeBundle for the
+// kind mtls-exchange.
+func checkMtlsExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
+	ruleBundleID := ""
+
+	for i := range rows {
+		if rows[i].ID == string(x.Rule) {
+			ruleBundleID = rows[i].BundleID
+		}
+	}
+
+	switch {
+	case row == nil:
+		return fmt.Errorf("%w: the namespace has no trust bundle", trustrule.ErrNotFound)
+	case row.ID != string(x.BundleID) || ruleBundleID != string(x.BundleID):
+		return fmt.Errorf("%w: the bundle of the exchange is not the bundle of its rule and its namespace",
+			trustrule.ErrNotFound)
+	case row.Active != x.BundleVersion:
+		return fmt.Errorf("%w: version %d of the bundle is not the active version", trustrule.ErrNotFound,
+			x.BundleVersion)
+	default:
+		return nil
+	}
+}
+
+// CheckExchangeMatch returns trustrule.ErrNotFound unless exactly one row of
+// rows has the SPIFFE ID pattern x.SPIFFEID and the bundle of the row of
+// x.Rule, and that row is the row of x.Rule. The adapters call it in the
+// transaction of the exchange with the rule rows of the namespace of the
+// fence, so a rule that another call added after the service read its rules
+// still refuses the exchange. It returns nil for an exchange with no SPIFFE
+// ID.
+func CheckExchangeMatch(rows []Row, x *trustrule.Exchange) error {
+	if x.SPIFFEID == "" {
+		return nil
+	}
+
+	bundle := ""
+
+	for i := range rows {
+		if rows[i].ID == string(x.Rule) {
+			bundle = rows[i].BundleID
+		}
+	}
+
+	if bundle == "" {
+		return fmt.Errorf("%w: the rule of the exchange has no trust bundle", trustrule.ErrNotFound)
+	}
+
+	matched := make([]string, 0, 1)
+
+	for i := range rows {
+		if rows[i].BundleID == bundle && rows[i].SpiffeIDPattern == x.SPIFFEID {
+			matched = append(matched, rows[i].ID)
+		}
+	}
+
+	if len(matched) != 1 || matched[0] != string(x.Rule) {
+		return fmt.Errorf("%w: %d rules name the SPIFFE ID of the exchange, want only its rule",
+			trustrule.ErrNotFound, len(matched))
 	}
 
 	return nil
@@ -275,4 +400,23 @@ func CheckExchangePrincipal(p PrincipalRow, disabledAtMs int64, ns namespace.Nam
 	}
 
 	return nil
+}
+
+// ExchangeKindNeedsBundle tells an adapter what to do with the kind of an
+// exchange before it reads any row: true for mtls-exchange (run the match and
+// the bundle check), false for jwt-exchange (no check), and
+// trustrule.ErrInvalid for any other kind.
+func ExchangeKindNeedsBundle(kind accesstoken.Kind) (bool, error) {
+	switch kind {
+	case accesstoken.KindMTLSExchange:
+		return true, nil
+	case accesstoken.KindJWTExchange:
+		return false, nil
+	case accesstoken.KindPersonal, accesstoken.KindService:
+		// No exchange makes these kinds.
+		return false, unknownExchangeKind(kind)
+	}
+
+	// Fail closed on a kind that no code knows.
+	return false, unknownExchangeKind(kind)
 }

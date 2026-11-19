@@ -101,6 +101,12 @@ func classifyManagement(err error) (problem.Problem, bool) {
 	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error()), true
 	case errors.Is(err, runner.ErrInvalid):
+		// A field error carries fixed text only, never the input of the caller.
+		if fe, ok := errors.AsType[*runner.FieldError](err); ok {
+			return problem.New(http.StatusBadRequest, errcode.RunnerInvalid,
+				runner.ErrInvalid.Error()+": "+fe.Sentence()), true
+		}
+
 		return problem.New(
 			http.StatusBadRequest, errcode.RunnerInvalid,
 			sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid}),

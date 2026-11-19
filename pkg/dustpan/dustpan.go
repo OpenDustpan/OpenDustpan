@@ -3516,9 +3516,6 @@ const requestIDHeader = requestid.Header
 // It holds no path, so it cannot leak a capability token.
 const unmatchedRoute = "unmatched"
 
-// adapterServer is the adapter label for the installation and audit APIs.
-const adapterServer = "server"
-
 // RequestID returns the request ID in ctx, or "" when ctx holds none. The
 // middleware sets it for each request, so handlers and later issues can log
 // it without reading headers.
@@ -3550,40 +3547,6 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 	w.bytes += int64(n)
 
 	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
-}
-
-// adapterForRequest maps a request to its adapter label from the route
-// pattern, or from the path when no pattern matched. It returns pulumi,
-// opentofu, inventory or server. It never returns the path itself.
-func adapterForRequest(pattern, path string) string {
-	route := pattern
-	if route == "" {
-		route = path
-	}
-
-	name := route
-	if _, rest, ok := strings.Cut(route, " "); ok {
-		name = rest
-	}
-
-	switch {
-	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"),
-		strings.HasPrefix(name, v1Prefix+"me/"):
-		return adapterServer
-	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
-		return "inventory"
-	case strings.HasPrefix(name, "/api/audit/"):
-		return adapterServer
-	case strings.HasPrefix(name, "/api/server/"):
-		return adapterServer
-	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"),
-		strings.HasPrefix(name, "/tofu/"):
-		return "opentofu"
-	case strings.HasPrefix(name, "/api/"):
-		return "pulumi"
-	default:
-		return adapterServer
-	}
 }
 
 // debugRoute reports whether pattern logs at debug. Probes and the metrics
@@ -3681,12 +3644,37 @@ type requestAddr struct {
 	warns    *warnLimiter
 }
 
+func adapterLabelForPattern(labels map[string]string, pattern string) string {
+	if label, ok := labels[pattern]; ok {
+		return label
+	}
+
+	return metrics.AdapterServer
+}
+
+// requestMetrics holds what the request middleware needs to record metrics:
+// the recorder, which may be nil, the root mux and the adapter label of each
+// registered pattern.
+type requestMetrics struct {
+	observed *metrics.ServerMetrics
+	root     *rootMux
+	labels   map[string]string
+}
+
+// startAdapter answers the adapter label of the route that the root mux
+// matches for r, before any handler runs.
+func (m requestMetrics) startAdapter(r *http.Request) string {
+	_, pattern := m.root.mux.Handler(r)
+
+	return adapterLabelForPattern(m.labels, pattern)
+}
+
 func withRequestLog(
 	next http.Handler,
 	addr requestAddr,
 	logger *slog.Logger,
 	callers requestCaller,
-	observed *metrics.ServerMetrics,
+	metered requestMetrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resolved := addr.resolver.Resolve(r)
@@ -3713,13 +3701,13 @@ func withRequestLog(
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
 		admitted := callers.admit(wrapped, r, resolved, logger)
 
-		// The route pattern is not known until the handler returns, so the
-		// in-flight gauge tracks the adapter from the path only. The gauge
-		// holds no route label for the same reason.
-		startAdapter := adapterForRequest("", r.URL.Path)
-		if observed != nil {
-			observed.IncInFlight(startAdapter)
-			defer observed.DecInFlight(startAdapter)
+		// The root mux pattern is known before the handler runs. The label is
+		// taken once here and used for the gauge, the counter and the log, so
+		// one request has one label, also when the adapter finds no route.
+		adapter := metered.startAdapter(r)
+		if metered.observed != nil {
+			metered.observed.IncInFlight(adapter)
+			defer metered.observed.DecInFlight(adapter)
 		}
 
 		start := time.Now()
@@ -3730,10 +3718,9 @@ func withRequestLog(
 
 		elapsed := time.Since(start)
 		route := logRoute(r)
-		adapter := adapterForRequest(r.Pattern, r.URL.Path)
 
-		if observed != nil {
-			observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
+		if metered.observed != nil {
+			metered.observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
 		}
 
 		attrs := []slog.Attr{
@@ -3803,22 +3790,30 @@ type rootMux struct {
 	// mounted holds the paths that mountV1 registered from the patterns of an
 	// adapter. The adapter patterns already cover them.
 	mounted []string
+	// labels holds the adapter label of each pattern that code registered
+	// directly. The label is the adapter that serves the pattern.
+	labels labelSet
 }
 
 // newRootMux returns a rootMux ready to register routes.
 func newRootMux() *rootMux {
-	return &rootMux{mux: http.NewServeMux(), patterns: nil, mounted: nil}
+	return &rootMux{
+		mux: http.NewServeMux(), patterns: nil, mounted: nil,
+		labels: labelSet{label: map[string]string{}, owner: map[string]string{}, err: nil},
+	}
 }
 
-// Handle registers handler for pattern and records the pattern.
-func (m *rootMux) Handle(pattern string, handler http.Handler) {
-	m.patterns = append(m.patterns, pattern)
+// Handle registers handler for pattern with the adapter label of the
+// handler, and records the pattern and its label.
+func (m *rootMux) Handle(pattern, label string, handler http.Handler) {
+	m.record(pattern, label)
 	m.mux.Handle(pattern, handler)
 }
 
-// HandleFunc registers handler for pattern and records the pattern.
-func (m *rootMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	m.patterns = append(m.patterns, pattern)
+// HandleFunc registers handler for pattern with an adapter label, and
+// records the pattern and its label.
+func (m *rootMux) HandleFunc(pattern, label string, handler func(http.ResponseWriter, *http.Request)) {
+	m.record(pattern, label)
 	m.mux.HandleFunc(pattern, handler)
 }
 
@@ -3832,6 +3827,16 @@ func (m *rootMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (m *rootMux) handleMounted(path string, handler http.Handler) {
 	m.mounted = append(m.mounted, path)
 	m.mux.Handle(path, handler)
+}
+
+// record keeps pattern and its label. A pattern with two labels leaves the
+// first error in labels.err, which buildMux returns.
+func (m *rootMux) record(pattern, label string) {
+	m.patterns = append(m.patterns, pattern)
+
+	if err := m.labels.add(pattern, label, "root mux"); err != nil && m.labels.err == nil {
+		m.labels.err = err
+	}
 }
 
 // v1NotFound answers 404 for a path under v1Prefix that no handler serves, in
@@ -3886,7 +3891,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// with Retry-After; the installation API stays available, so the
 	// maintenance routes that end the restore keep serving.
 	mux.Handle(
-		"/api/inventory/",
+		"/api/inventory/", metrics.AdapterInventory,
 		withCORS(
 			withMaintenance(withJSONMethodNotAllowed(a.inventory), a.maintenance, shapeInventory, cfg.logger),
 			cfg.allowedOrigins,
@@ -3895,12 +3900,15 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// The audit API is read-only, so it stays available in maintenance mode
 	// like the installation API: an operator reads the log while the
 	// installation is down for a restore.
-	mux.Handle("/api/audit/", withCORS(withJSONMethodNotAllowed(a.audit), cfg.allowedOrigins))
+	mux.Handle("/api/audit/", metrics.AdapterServer, withCORS(withJSONMethodNotAllowed(a.audit), cfg.allowedOrigins))
 	// The runner protocol is outside /api/. A runner sends no cookie and no
 	// Origin header, so it passes no CORS gate. The management API of the
 	// runners is more specific than /api/, so it reaches its own adapter.
 	if a.runners != nil {
-		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
+		mux.Handle(
+			"/runner/v1/", metrics.AdapterServer,
+			withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger),
+		)
 		// The management routes are under v1Prefix. Only the reducing routes
 		// pass in maintenance mode.
 		mountV1(mux, a.runnerPools, func(h http.Handler) http.Handler {
@@ -3930,51 +3938,37 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// A path under the prefix that no handler serves answers 404 in the shape
 	// of the tool-neutral API. Without this row, the console files or the
 	// Pulumi adapter would answer for it.
-	mux.Handle(v1Prefix, withCORS(http.HandlerFunc(v1NotFound), cfg.allowedOrigins))
+	mux.Handle(v1Prefix, metrics.AdapterServer, withCORS(http.HandlerFunc(v1NotFound), cfg.allowedOrigins))
 	mux.Handle(
-		"/api/v2/",
+		"/api/v2/", metrics.AdapterOpenTofu,
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),
 	)
 	// The OpenTofu http backend (ADR 49) answers tool calls under its own
 	// prefix. It is refused in maintenance mode like the other tool adapters.
-	mux.Handle("/tofu/state/", withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger))
-	mux.Handle("/api/server/", withCORS(withJSONMethodNotAllowed(a.server), cfg.allowedOrigins))
-	mux.Handle("/api/", withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins))
+	mux.Handle(
+		"/tofu/state/", metrics.AdapterOpenTofu,
+		withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger),
+	)
+	mux.Handle("/api/server/", metrics.AdapterServer, withCORS(withJSONMethodNotAllowed(a.server), cfg.allowedOrigins))
+	mux.Handle(
+		"/api/", metrics.AdapterPulumi,
+		withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins),
+	)
 	// Service discovery lives outside /api/v2/, so the root mux serves it
 	// through the TFE adapter. It stays available in maintenance mode: the
 	// CLI reads only the service addresses from it, and OpenTofu shows only
 	// the discovery status, never the refusal body. The lock, state and
 	// version endpoints under /api/v2/ pass the maintenance gate, so the
 	// CLI still meets the 503 refusal that names maintenance.
-	mux.Handle("GET /.well-known/terraform.json", a.tfe)
+	mux.Handle("GET /.well-known/terraform.json", metrics.AdapterOpenTofu, a.tfe)
 	// The protocol routes of the OIDC issuers live outside the versioned API:
 	// their path is part of the issuer URL that clouds hold. They answer public
 	// data only, and they stay available in maintenance mode like the
 	// discovery document of the TFE adapter.
 	if a.issuer != nil {
-		mux.Handle("/oidc/", withJSONMethodNotAllowed(a.issuer))
+		mux.Handle("/oidc/", metrics.AdapterServer, withJSONMethodNotAllowed(a.issuer))
 	}
-	// The provider registry protocol of OpenTofu lives outside /api/, at the
-	// path that service discovery names. The handler answers 404 for every path
-	// of it when no registry is set. It is refused in maintenance mode like the
-	// other tool routes.
-	mux.Handle(
-		"/v1/providers/",
-		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
-	)
-	// The module registry protocol lives at the path that service discovery
-	// names as modules.v1, and follows the same rules.
-	mux.Handle(
-		"/v1/modules/",
-		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
-	)
-	// The provider network mirror of OpenTofu lives outside /api/, under its
-	// own prefix. A person writes it in the network_mirror block of the CLI
-	// configuration. It follows the same rules.
-	mux.Handle(
-		"/v1/mirror/",
-		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
-	)
+	mountTofuRegistry(mux, a, cfg)
 
 	if cfg.consoleDir != "" {
 		headers := cfg.consoleHeaders.resolve(cfg.allowedOrigins)
@@ -3987,10 +3981,35 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 			return err
 		}
 
-		mux.Handle("/", console)
+		mux.Handle("/", metrics.AdapterServer, console)
 	}
 
 	return nil
+}
+
+// mountTofuRegistry mounts the OpenTofu registry protocol routes on mux.
+func mountTofuRegistry(mux *rootMux, a adapters, cfg *settings) {
+	// The provider registry protocol of OpenTofu lives outside /api/, at the
+	// path that service discovery names. The handler answers 404 for every path
+	// of it when no registry is set. It is refused in maintenance mode like the
+	// other tool routes.
+	mux.Handle(
+		"/v1/providers/", metrics.AdapterOpenTofu,
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
+	// The module registry protocol lives at the path that service discovery
+	// names as modules.v1, and follows the same rules.
+	mux.Handle(
+		"/v1/modules/", metrics.AdapterOpenTofu,
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
+	// The provider network mirror of OpenTofu lives outside /api/, under its
+	// own prefix. A person writes it in the network_mirror block of the CLI
+	// configuration. It follows the same rules.
+	mux.Handle(
+		"/v1/mirror/", metrics.AdapterOpenTofu,
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
 }
 
 // buildMux builds the root mux: the handlers of the api component, when the
@@ -4008,18 +4027,18 @@ func buildMux(a adapters, cfg *settings) (*rootMux, error) {
 			return nil, err
 		}
 	} else {
-		mux.Handle("GET "+metricsPath, withCORS(a.server, cfg.allowedOrigins))
+		mux.Handle("GET "+metricsPath, metrics.AdapterServer, withCORS(a.server, cfg.allowedOrigins))
 	}
 
 	// The probes have their own prefix, so that ingress controllers that serve
 	// /healthz themselves cannot answer for this server (ADR 34). Liveness
 	// checks nothing; readiness pings the store and the blob store. Both stay
 	// public.
-	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /health/live", metrics.AdapterServer, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.Handle("GET /health/ready", a.ready)
-	mux.HandleFunc("GET /health/ready/{component}", a.ready.ServeOne)
+	mux.Handle("GET /health/ready", metrics.AdapterServer, a.ready)
+	mux.HandleFunc("GET /health/ready/{component}", metrics.AdapterServer, a.ready.ServeOne)
 
 	return mux, nil
 }
@@ -4055,11 +4074,16 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 	}
 
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
+	labels, err := a.adapterLabels(mux.labels)
+	if err != nil {
+		return routeHandlers{}, err
+	}
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
 			gateComponents(gated, cfg.components), addr, cfg.logger,
-			requestCaller{authn: cfg.authenticator, allow: allow}, observed,
+			requestCaller{authn: cfg.authenticator, allow: allow},
+			requestMetrics{observed: observed, root: mux, labels: labels},
 		))),
 		ungated: gated,
 		root:    mux,

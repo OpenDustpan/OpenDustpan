@@ -506,6 +506,51 @@
         ],
         "type": "object"
       },
+      "BackupRegistryFilesTooLargeError": {
+        "description": "The error answer with the code backup.registry-files-too-large.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/BackupRegistryFilesTooLargeErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "backup.registry-files-too-large"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "BackupRegistryFilesTooLargeErrorArgs": {
+        "description": "The arguments of the text of the error with the code backup.registry-files-too-large.",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "size"
+        ],
+        "type": "object"
+      },
       "BackupSummary": {
         "properties": {
           "endedAt": {
@@ -2236,6 +2281,7 @@
           "mapping": {
             "access.collection-unit-cap": "#/components/schemas/AccessCollectionUnitCapError",
             "backup.corrupt": "#/components/schemas/BackupCorruptError",
+            "backup.registry-files-too-large": "#/components/schemas/BackupRegistryFilesTooLargeError",
             "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
@@ -2270,6 +2316,9 @@
           },
           {
             "$ref": "#/components/schemas/BackupCorruptError"
+          },
+          {
+            "$ref": "#/components/schemas/BackupRegistryFilesTooLargeError"
           },
           {
             "$ref": "#/components/schemas/BackupTooManyUnverifiedError"
@@ -2365,6 +2414,7 @@
           "auth.rate-limited",
           "auth.unauthenticated",
           "backup.corrupt",
+          "backup.registry-files-too-large",
           "backup.too-many-unverified",
           "collection.already-exists",
           "collection.changed",
@@ -2453,6 +2503,7 @@
           "local-user.outside-reach",
           "local-user.own-account",
           "local-user.password-sign-in-off",
+          "local-user.public-url-required",
           "local-user.reason-required",
           "local-user.second-factor-required",
           "local-user.session-ended",

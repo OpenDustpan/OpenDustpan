@@ -232,7 +232,7 @@ func (h *Handler) providerPasswordSignIn(
 		return
 	}
 
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
