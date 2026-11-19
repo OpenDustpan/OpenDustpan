@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -313,7 +314,7 @@ func applyStagedFence(
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", execErr), tx.Rollback())
 	}
 
-	if err := releaseStagedWorkspaceLocks(ctx, tx); err != nil {
+	if err := releaseStagedLeases(ctx, tx); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 
@@ -354,6 +355,16 @@ func applyStagedFence(
 	return nil
 }
 
+// releaseStagedLeases releases the leases and locks that the staged file holds
+// from before the restore, in tx: the workspace locks and the running updates.
+func releaseStagedLeases(ctx context.Context, tx *sql.Tx) error {
+	if err := releaseStagedWorkspaceLocks(ctx, tx); err != nil {
+		return err
+	}
+
+	return endStagedRunningUpdates(ctx, tx)
+}
+
 // releaseStagedWorkspaceLocks releases every workspace lock of the staged
 // file, in tx, and clears the lock on the inventory entry of each workspace.
 // The client picks the lock ID, so the ID alone cannot tell a lock from before
@@ -374,6 +385,35 @@ WHERE tool = ?`
 
 	if _, err := tx.ExecContext(ctx, clearInventory, workspaceInventoryTool); err != nil {
 		return fmt.Errorf("clear staged workspace inventory locks: %w", err)
+	}
+
+	return nil
+}
+
+// endStagedRunningUpdates ends every running update of the staged file as
+// canceled, in tx, and clears the lock on the inventory entry of each stack.
+// The backup holds the lease columns of an update that ran when the backup was
+// made, and the restore writes them back. Without this step the CLI that
+// holds the lease token from before the restore could save checkpoints and
+// renew its lease again. The digest stays, so a retried completion of the
+// update still finds its record. The update is no longer running, so no
+// lease check passes.
+func endStagedRunningUpdates(ctx context.Context, tx *sql.Tx) error {
+	const end = `UPDATE main.updates
+SET status = ?, ended_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+    lease_expires_at_ms = 0, revision = revision + 1
+WHERE status = ?`
+
+	if _, err := tx.ExecContext(ctx, end, string(stack.StatusCanceled), string(stack.StatusRunning)); err != nil {
+		return fmt.Errorf("end staged running updates: %w", err)
+	}
+
+	const clearInventory = `UPDATE main.inventory
+SET lock_holder = NULL, lock_since_ms = NULL, lock_operation = NULL
+WHERE tool = ?`
+
+	if _, err := tx.ExecContext(ctx, clearInventory, stack.InventoryTool); err != nil {
+		return fmt.Errorf("clear staged stack inventory locks: %w", err)
 	}
 
 	return nil

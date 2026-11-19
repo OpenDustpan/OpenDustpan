@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -424,6 +425,26 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 
 	if _, err := tx.Exec(ctx, clearInventory, inventoryToolOpenTofu); err != nil {
 		return fmt.Errorf("clear workspace inventory locks after restore: %w", err)
+	}
+
+	// The backup holds the lease columns of an update that ran when the backup
+	// was made. The restore ends every running update as canceled, so the CLI
+	// that holds the lease token from before the restore cannot save a
+	// checkpoint or renew its lease. The digest stays, so a retried
+	// completion still finds its record.
+	endUpdates := "UPDATE " + pgIdent(live) + ".updates " +
+		"SET status = $1, ended_at_ms = (extract(epoch FROM now()) * 1000)::bigint, " +
+		"lease_expires_at_ms = 0, revision = revision + 1 WHERE status = $2"
+
+	if _, err := tx.Exec(ctx, endUpdates, string(stack.StatusCanceled), string(stack.StatusRunning)); err != nil {
+		return fmt.Errorf("end running updates after restore: %w", err)
+	}
+
+	clearStackInventory := "UPDATE " + pgIdent(live) + ".inventory " +
+		"SET lock_holder = NULL, lock_since_ms = NULL, lock_operation = NULL WHERE tool = $1"
+
+	if _, err := tx.Exec(ctx, clearStackInventory, stack.InventoryTool); err != nil {
+		return fmt.Errorf("clear stack inventory locks after restore: %w", err)
 	}
 
 	// The restored log can reuse sequences that a sink already holds, and

@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -95,6 +96,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
 		{name: "apply releases the workspace locks of the backup", test: testRestoreApplyReleasesWorkspaceLocks},
+		{name: "apply ends the running updates of the backup", test: testRestoreApplyEndsRunningUpdates},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
 		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
@@ -1818,6 +1820,93 @@ func testRestoreApplyReleasesWorkspaceLocks(t *testing.T, newStore RestoreFactor
 
 	if other.Lock != clearedLock() {
 		t.Fatalf("lock of %s after restore = %+v, want no lock", free.Ref, other.Lock)
+	}
+}
+
+// testRestoreApplyEndsRunningUpdates proves that a restore ends a Pulumi
+// update that was running when the backup was made. The backup holds the
+// lease columns, so without this step the CLI that holds the lease token from
+// before the restore could save checkpoints and renew its lease again. The
+// ended update keeps its digest, loses its expiry, and no update is active.
+func testRestoreApplyEndsRunningUpdates(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+
+	srcUpdates, srcOK := src.(UpdatesStore)
+	if !srcOK {
+		t.Skip("the store has no update port")
+	}
+
+	f := newFixture(t, srcUpdates)
+	running := f.run(t, f.ref, "u1", mutating())
+	finished := f.end(t, f.run(t, f.other(t), "u2", mutating()), stack.StatusSucceeded)
+
+	if _, err := srcUpdates.ActiveUpdate(ctx, f.ref); err != nil {
+		t.Fatalf("active update before the restore: %v", err)
+	}
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	dst, dstOK := ps.dst.(UpdatesStore)
+	if !dstOK {
+		t.Fatal("the restored store has no update port")
+	}
+
+	checkRestoredRunningUpdate(t, dst, running)
+
+	// An update that ended before the backup keeps its status.
+	after, err := dst.GetUpdate(ctx, finished.Ref, finished.ID)
+	if err != nil {
+		t.Fatalf("get ended update: %v", err)
+	}
+
+	if after.Status != stack.StatusSucceeded {
+		t.Errorf("status of the update that ended before the backup = %q, want %q", after.Status, stack.StatusSucceeded)
+	}
+}
+
+// checkRestoredRunningUpdate proves that the restore ended the update that
+// ran at backup time and kept its digest.
+func checkRestoredRunningUpdate(t *testing.T, dst UpdatesStore, running stack.Update) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	got, err := dst.GetUpdate(ctx, running.Ref, running.ID)
+	if err != nil {
+		t.Fatalf("get restored update: %v", err)
+	}
+
+	if got.Status != stack.StatusCanceled {
+		t.Errorf("status of the restored update = %q, want %q", got.Status, stack.StatusCanceled)
+	}
+
+	if !got.Lease.ExpiresAt.IsZero() && got.Lease.ExpiresAt.UnixMilli() != 0 {
+		t.Errorf("lease expiry of the restored update = %v, want none", got.Lease.ExpiresAt)
+	}
+
+	if got.Lease.Digest != running.Lease.Digest {
+		t.Error("lease digest of the restored update changed, want the digest kept")
+	}
+
+	if got.Revision <= running.Revision {
+		t.Errorf("revision of the restored update = %d, want more than %d", got.Revision, running.Revision)
+	}
+
+	if _, activeErr := dst.ActiveUpdate(ctx, running.Ref); !errors.Is(activeErr, stack.ErrUpdateNotFound) {
+		t.Errorf("active update after the restore: err = %v, want ErrUpdateNotFound", activeErr)
 	}
 }
 
