@@ -21,7 +21,7 @@ func grantServerEntries(t *testing.T, f accessFixture) []audit.Entry {
 	t.Helper()
 
 	listing, err := f.store.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize},
 	)
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
