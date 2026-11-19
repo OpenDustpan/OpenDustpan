@@ -20,9 +20,8 @@ const HeaderDiscoveryGrant = "X-Dustpan-Grant-Id"
 // the scope check with no grant header. With found true, an empty ID means
 // that no grant allows the read, and an error means that the check failed.
 // The ID goes into a response header, so an ID that does not start with
-// GrantIDPrefix, that has no byte after it, that does not start with a
-// lowercase letter or a digit after it, or that holds a byte other than a
-// lowercase letter, a digit or '-', or that is longer than 64 bytes, is
+// GrantIDPrefix, that has no byte after it, that holds a byte other than an
+// ASCII letter, a digit, '-', '_' or '.', or that is longer than 64 bytes, is
 // refused with an error that wraps ErrInvalid, never passed on.
 func DiscoveryGrantID(
 	ctx context.Context, authz identity.Authorizer, p identity.Principal, ns namespace.Name,

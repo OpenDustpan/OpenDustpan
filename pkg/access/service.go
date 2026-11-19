@@ -639,33 +639,15 @@ const maxGrantIDLength = 64
 const minGrantIDSuffixLength = 1
 
 // validGrantID reports whether id has the shape of a grant ID: the prefix in
-// lowercase, then at most maxGrantIDLength bytes in all. The part after the
-// prefix has at least minGrantIDSuffixLength bytes of lowercase letters,
-// digits and '-', and starts with a lowercase letter or a digit. This is
-// narrower than ident.Valid: a grant ID never holds '.', '_' or an uppercase
-// letter, and never ends the prefix with '.', '-' or '_'.
+// lowercase, at least minGrantIDSuffixLength bytes after it, and at most
+// maxGrantIDLength bytes in all, of valid identifier characters (ASCII
+// letters, digits, '-', '_' and '.'). The server makes IDs of lowercase
+// letters and digits, but a stored or restored grant may hold the other valid
+// identifier characters, so this rule is the same as ident.Valid.
 func validGrantID(id string) bool {
-	if !strings.HasPrefix(id, grantIDPrefix) || len(id) > maxGrantIDLength {
-		return false
-	}
-
-	suffix := id[len(grantIDPrefix):]
-	if len(suffix) < minGrantIDSuffixLength || !isGrantIDHead(suffix[0]) {
-		return false
-	}
-
-	for i := range len(suffix) {
-		if c := suffix[i]; !isGrantIDHead(c) && c != '-' {
-			return false
-		}
-	}
-
-	return true
-}
-
-// isGrantIDHead reports whether c is a lowercase ASCII letter or a digit.
-func isGrantIDHead(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+	return strings.HasPrefix(id, grantIDPrefix) &&
+		len(id) >= len(grantIDPrefix)+minGrantIDSuffixLength &&
+		ident.Valid(id, maxGrantIDLength)
 }
 
 // change completes the entry of the caller for one change of the record
