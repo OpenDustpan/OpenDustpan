@@ -280,7 +280,7 @@ func checkInstanceWork(ctx context.Context, work *maskWork, instance map[string]
 // checkValueWork returns ErrStateBound when a value that a reveal answers,
 // below the value path path, would nest deeper than MaxStateDepth or would
 // spend more than maxMaskWorkBytes bytes. It charges the budget of work.
-func checkValueWork(ctx context.Context, work *maskWork, value any, path string) error {
+func checkValueWork(work *maskWork, value any, path string) error {
 	return scanMaskWork(value, len(path), 0, work.budget)
 }
 
@@ -923,29 +923,30 @@ func routeStep(node any, token string) (any, string, bool) {
 	}
 }
 
+// physicalRoute is the result of a walk by physical steps: the route, whether
+// the node holds the path, and whether the walk met a dynamic wrapper before
+// the last token, which the pointer could only pass with a second transparent
+// wrapper.
+type physicalRoute struct {
+	route      []string
+	ok         bool
+	metWrapper bool
+}
+
 // routePhysical resolves tokens under node by physical steps only: no dynamic
 // wrapper is transparent. It appends the canonical token of each step to
-// route and charges each step to the budget of work. It reports false when
-// the node does not hold the path. The last result is true when the walk met
-// a dynamic wrapper before the last token, which the pointer could only pass
-// with a second transparent wrapper.
-func routePhysical(
-	ctx context.Context, work *maskWork, node any, tokens, route []string,
-) ([]string, bool, bool, error) {
+// route and charges each step to the budget of work.
+func routePhysical(work *maskWork, node any, tokens, route []string) (physicalRoute, error) {
 	metWrapper := false
 
 	for i, token := range tokens {
-		if err := ctx.Err(); err != nil {
-			return nil, false, false, err
-		}
-
 		if err := work.step(token); err != nil {
-			return nil, false, false, err
+			return physicalRoute{route: nil, ok: false, metWrapper: false}, err
 		}
 
 		next, key, ok := routeStep(node, token)
 		if !ok {
-			return nil, false, metWrapper, nil
+			return physicalRoute{route: nil, ok: false, metWrapper: metWrapper}, nil
 		}
 
 		route = append(route, key)
@@ -956,7 +957,7 @@ func routePhysical(
 		}
 	}
 
-	return route, true, metWrapper, nil
+	return physicalRoute{route: route, ok: true, metWrapper: metWrapper}, nil
 }
 
 // routeTokens returns the physical route of tokens under node, or false when
@@ -972,7 +973,7 @@ func routePhysical(
 // The route holds the keys read from objects, the decimal index of each list
 // step, and the extra "value" step when the wrapper rule applies. No tokens is
 // an empty route and true. It never changes the tree.
-func routeTokens(ctx context.Context, work *maskWork, node any, tokens []string) ([]string, bool, error) {
+func routeTokens(work *maskWork, node any, tokens []string) ([]string, bool, error) {
 	route := make([]string, 0, len(tokens)+1)
 
 	for i, token := range tokens {
@@ -995,7 +996,7 @@ func routeTokens(ctx context.Context, work *maskWork, node any, tokens []string)
 		}
 
 		if wrapped, isMap := next.(map[string]any); parentIsMap && isMap && isDynamicWrapper(wrapped) {
-			return routeWrapper(ctx, work, wrapped, tokens[i+1:], route)
+			return routeWrapper(work, wrapped, tokens[i+1:], route)
 		}
 	}
 
@@ -1014,27 +1015,25 @@ func routeTokens(ctx context.Context, work *maskWork, node any, tokens []string)
 // reaches. The route then ends at the first wrapper, and the caller masks the
 // whole wrapper. The read never answers a value that a mark may name, and it
 // answers no more than the one wrapper of the pointer.
-func routeWrapper(
-	ctx context.Context, work *maskWork, wrapped map[string]any, rest, route []string,
-) ([]string, bool, error) {
+func routeWrapper(work *maskWork, wrapped map[string]any, rest, route []string) ([]string, bool, error) {
 	metWrapper := false
 
 	if _, member := wrapped[rest[0]]; member {
-		sub, ok, met, err := routePhysical(ctx, work, wrapped, rest, route)
-		if err != nil || ok {
-			return sub, ok, err
+		first, err := routePhysical(work, wrapped, rest, route)
+		if err != nil || first.ok {
+			return first.route, first.ok, err
 		}
 
-		metWrapper = met
+		metWrapper = first.metWrapper
 	}
 
-	sub, ok, met, err := routePhysical(ctx, work, wrapped["value"], rest, append(route[:len(route):len(route)], "value"))
-	if err != nil || ok {
-		return sub, ok, err
+	second, err := routePhysical(work, wrapped["value"], rest, append(slices.Clip(route), "value"))
+	if err != nil || second.ok {
+		return second.route, second.ok, err
 	}
 
 	inner, innerIsMap := wrapped["value"].(map[string]any)
-	if metWrapper || met || (innerIsMap && isDynamicWrapper(inner)) {
+	if metWrapper || second.metWrapper || (innerIsMap && isDynamicWrapper(inner)) {
 		return route, true, nil
 	}
 
@@ -1157,8 +1156,8 @@ func maskRoute(node any, route []string, path string) bool {
 // does not hold the path. It resolves the tokens once, like the mask, and
 // charges the steps to the budget of work. The caller snapshots what a mark
 // masks with it.
-func lookupTokens(ctx context.Context, work *maskWork, node any, tokens []string) (any, bool, error) {
-	route, resolved, err := routeTokens(ctx, work, node, tokens)
+func lookupTokens(work *maskWork, node any, tokens []string) (any, bool, error) {
+	route, resolved, err := routeTokens(work, node, tokens)
 	if err != nil || !resolved {
 		return nil, false, err
 	}
@@ -1247,7 +1246,7 @@ type maskProbe struct {
 
 // newSecretIndex returns the index of secrets. A secret that equals an
 // earlier one adds nothing.
-func newSecretIndex(ctx context.Context, work *maskWork, secrets []any) *secretIndex {
+func newSecretIndex(work *maskWork, secrets []any) *secretIndex {
 	probe := work.probe
 	index := &secretIndex{
 		seed:     maphash.MakeSeed(),
@@ -1515,14 +1514,30 @@ type maskCollectors struct {
 	applied *routeSet
 }
 
+// pointerName is one pointer of a mark: the pointer relative to the attributes
+// and the full value path that its marker records.
+type pointerName struct {
+	relative string
+	full     string
+}
+
+// pointerList is the pointers of one instance with the value path that they
+// hang below.
+type pointerList struct {
+	base     string
+	pointers []string
+}
+
 // maskOnePointer masks the relative pointer under attributes with a marker
 // for full: it records full in the collectors, the masked secret for the
 // duplicate pass, and the physical route. The pointer resolves once: the
 // lookup of the secret and the mask follow the physical route, with no second
 // resolution. A pointer below an already applied route masks nothing. A
 // pointer at the same node is masked again.
-func maskOnePointer(ctx context.Context, work *maskWork, attributes any, relative, full string, out *maskCollectors) error {
-	route, resolved, err := routeTokens(ctx, work, attributes, splitPointer(relative))
+func maskOnePointer(work *maskWork, attributes any, name pointerName, out *maskCollectors) error {
+	relative, full := name.relative, name.full
+
+	route, resolved, err := routeTokens(work, attributes, splitPointer(relative))
 	if err != nil {
 		return err
 	}
@@ -1614,12 +1629,12 @@ func maskTofuInstance(
 	out := maskCollectors{seen: seen, masked: &masked, secrets: &secrets, applied: applied}
 
 	pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
-	if err := maskPointers(ctx, work, attributes, base, pointers, &out); err != nil {
+	if err := maskPointers(ctx, work, attributes, pointerList{base: base, pointers: pointers}, &out); err != nil {
 		return nil, nil, err
 	}
 
 	if len(secrets) > 0 {
-		pass := duplicatePass{index: newSecretIndex(ctx, work, secrets), seen: seen, masked: &masked}
+		pass := duplicatePass{index: newSecretIndex(work, secrets), seen: seen, masked: &masked}
 
 		if err := pass.maskDuplicates(ctx, work, attributes, base); err != nil {
 			return nil, nil, err
@@ -1637,7 +1652,9 @@ func maskTofuInstance(
 // costs its path and the fixed cost of a marker, as a value of the scan does:
 // the scan of the values cannot see a pointer that names no value, so the
 // pointers have a charge of their own. It checks the context at each pointer.
-func maskPointers(ctx context.Context, work *maskWork, attributes any, base string, pointers []string, out *maskCollectors) error {
+func maskPointers(ctx context.Context, work *maskWork, attributes any, list pointerList, out *maskCollectors) error {
+	base, pointers := list.base, list.pointers
+
 	for _, relative := range pointers {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("mask pointers: %w", err)
@@ -1654,7 +1671,7 @@ func maskPointers(ctx context.Context, work *maskWork, attributes any, base stri
 			continue
 		}
 
-		if err := maskOnePointer(ctx, work, attributes, relative, full, out); err != nil {
+		if err := maskOnePointer(work, attributes, pointerName{relative: relative, full: full}, out); err != nil {
 			return err
 		}
 	}

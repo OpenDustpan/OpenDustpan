@@ -17,7 +17,7 @@ func TestSecretIndexMemoPinsDigestedContainers(t *testing.T) {
 
 	work := newMaskWork(nil)
 	secret := map[string]any{"s": "x"}
-	index := newSecretIndex(t.Context(), work, []any{secret})
+	index := newSecretIndex(work, []any{secret})
 
 	const rounds = 300
 
@@ -55,7 +55,7 @@ func TestSecretIndexDigestIsStableAfterGC(t *testing.T) {
 	t.Parallel()
 
 	work := newMaskWork(nil)
-	index := newSecretIndex(t.Context(), work, nil)
+	index := newSecretIndex(work, nil)
 
 	for round := range 200 {
 		index.digest(map[string]any{"k": "v" + strconv.Itoa(round)})
