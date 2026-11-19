@@ -15,7 +15,8 @@ suffix" for each reason that gets this text.
 ## Bootstrap admin token
 
 - The bootstrap admin token holds every action on the installation by a code
-  rule, with no stored grant record. It ends on the first sign-in of a person.
+  rule, with no stored grant record. It stays valid until the operator deletes it
+  from the configuration and restarts the server.
   The access-review export shows it as a row with source `"code-rule"` and
   rule `"bootstrap admin token"`, with no grant ID, no creator and no time.
 
@@ -43,7 +44,7 @@ suffix" for each reason that gets this text.
 
 - Only a person in a console session makes or accepts a link. An accept needs
   a recent sign-in: a session whose sign-in is older than the token freshness
-  window gets 401 with the code `mfa.fresh-step-required`. An access token
+  window gets 403 with the code `mfa.fresh-step-required`. An access token
   gets 403 `git-host.link-person-required`, except on the accept, which
   answers `mfa.fresh-step-required`, and a break-glass account cannot make a
   link ([Git host account links API](git-host-links-api.md)).
@@ -73,28 +74,34 @@ suffix" for each reason that gets this text.
 - The server refuses each change that leaves the installation with no site
   administrator. This covers the delete or the disable of the last site
   administrator, and the end of the last grant, membership or group that gives
-  the role. Only a person counts. The person must be enabled, not
-  deleted and in no namespace, and must hold the role directly or through an
-  active group membership. A service principal does not count. The server
-  answers 409 with the code `access.last-site-administrator` and changes
-  nothing. The store counts the administrators in the same transaction as the
-  change. The store does not refuse a change when the count is already 0
-  before the change. The refusal writes an audit entry with the outcome
-  `failure` and no reason
+  the role. Only a person counts. The person must be enabled, not deleted and
+  in no namespace, and must hold the role through a current grant on the
+  installation, directly or through an active membership of a group that
+  exists. A grant on a namespace or a collection does not count, and a
+  service principal does not count. The server answers 409 with the code
+  `access.last-site-administrator` and changes nothing. The store counts the
+  administrators in the same transaction as the change. The store does not
+  refuse a change when the count is already 0 before the change. The refusal
+  writes an audit entry with the outcome `failure` and no reason
   ([Delete a principal](../guides/principals-and-groups.md#delete-a-principal)).
   Three paths differ:
   - A sign-in through an identity provider that reports the last
-    administrator as disabled keeps the person. The server refuses the sign-in
-    with the reason `identity provider reports the last administrator as
-    disabled, and the server keeps the person`.
+    administrator as disabled keeps the person. The server refuses the
+    sign-in with the outcome `failure`. The entry stores the text `identity
+    provider reports the last administrator as disabled, and the server keeps
+    the person` as a change with the key `reason`, with no route suffix. The
+    server uses the same reason when the disable returns
+    `principal.ErrNoWorkingBreakGlass`.
   - When a group claim at sign-in would end the last membership that gives the
     role, the membership stays and the server answers no 409. The server
-    writes an entry with the action `claim-refuse`, the outcome `denied` and
-    the reason `the removal would leave no site administrator`.
+    writes an entry with the action `group-claim:refuse-member`, the outcome
+    `denied` and the object `group:<id>`. The entry stores the text `the
+    removal would leave no site administrator` as a change with the key
+    `reason`, not in the reason field of the entry.
   - The expiry of a temporary administrator (`ExpireTempAdmin` in each
-    store) runs no guard. It disables the principal and ends its grants and
-    memberships, also when the principal is the last site administrator. This behavior is
-    under owner review.
+    store) runs no guard. It disables the principal, and it ends its grants,
+    its memberships and its live tokens, also when the principal is the last
+    site administrator. This behavior is under owner review.
 
 ## Grants and roles
 
@@ -104,10 +111,16 @@ suffix" for each reason that gets this text.
   covers the create and the revoke of a grant, the create and the update of
   a role, the changes of a group and of its members, the grants on a service
   principal, and the delegation and token actions. The server answers 403.
-  The code is `access.denied` when the refusal wraps a denial. This covers
-  the move of a unit into a collection and the add of a member to a group
-  whose grants exceed the reach of the caller. In other cases the answer has
-  no catalog code.
+  The code depends on the path:
+  - The move of a unit into a collection answers `access.denied` with the
+    message `forbidden`.
+  - A member add first tests the grants of the group. A refusal of that test
+    is a plain refusal: 403 with no catalog code and the text of the error. A
+    member add then tests the reach of the group over service principals. A
+    group grant that reaches a service principal outside the reach of the
+    caller answers `access.denied`. The same answer applies when the server
+    has no reach port and the caller is not an administrator.
+  - In other cases the answer has no catalog code.
   - The grant routes, the role routes and the revoke route write a denied
     audit entry. When the error names missing actions, the reason is
     `outside the reach of the caller: <action> on <object>, ...`, with at most
@@ -115,10 +128,15 @@ suffix" for each reason that gets this text.
     `grant gives more than the granter holds`. Each reason gets the route
     suffix. The limiter can suppress the entry, and the server writes none for
     an empty subject.
-  - The principal routes and the group routes write no denied entry.
-  - A refused grant or role change also writes a second entry with the
-    outcome `failure` and no reason. The principal routes write the
-    `failure` entry with the reason of the missing actions.
+  - The principal routes and the group routes write no denied entry. The
+    exception is `principal.ErrNoWorkingBreakGlass`, which writes a denied
+    entry (see the break-glass rule above).
+  - A failed change on a grant route, a role route or the revoke route also
+    writes a second entry with the outcome `failure` and no reason, when the
+    change names an object. A failed change on a principal route writes a
+    `failure` entry when the change has a record. That entry holds the reason
+    of the missing actions only for a reach refusal that names at least one
+    missing action.
 <!-- code-rule: access.ErrBuiltIn -->
 - A built-in role cannot be changed or deleted. The server answers 409 with
   no specific code. The server writes an audit entry with the outcome
@@ -147,9 +165,10 @@ suffix" for each reason that gets this text.
 - An administrator cannot reset their own password through the administrator
   route. The server answers 403 with the code `local-user.own-account` and
   writes an audit entry with the outcome `denied` and the change cause
-  `own account`. When password sign-in is off, the answer is
-  `local-user.password-sign-in-off` first. The service refuses the delete of
-  the own password too, but no administrator route calls it. A person changes
+  `own account`. When the server has no public URL, the answer is
+  `local-user.public-url-required` first, and when password sign-in is off,
+  the answer is `local-user.password-sign-in-off`. The service refuses the
+  delete of the own password too, but no administrator route calls it. A person changes
   their own password with the change-password route.
 <!-- code-rule: localuser.ErrLastCredential -->
 <!-- code-rule: mfa.ErrLastCredential -->
@@ -166,8 +185,11 @@ suffix" for each reason that gets this text.
     person with no local user, for example one who signs in through an
     identity provider, can delete the last passkey.
   - The server answers 409 with the code `local-user.last-credential`. Only
-    the delete of a passkey has a route. The service methods that delete a
-    password and a local user have no route.
+    the delete of a passkey has a route. The service method that deletes a
+    password has no route. No service method deletes a local user, only the
+    store does.
+  - The delete of a passkey of the demo user answers 409 with the code
+    `local-user.demo-fixed` first.
 - One person holds at most 20 passkeys (`mfa.MaxPasskeys`). The server
   answers 409 with the code `mfa.passkey-limit` and the argument `limit`.
 
@@ -209,8 +231,8 @@ suffix" for each reason that gets this text.
 <!-- code-rule: job.ErrSelfApproval -->
 - The principal that started a job cannot approve it, unless a gate of the
   phase sets `allowSelf`. This also covers a person who approves a job that
-  their agent started. The service refuses an agent that tries to approve earlier, with
-  `job.agent-denied`. The server answers 403 with the code `job.self-approval`
+  their agent started. The service tests for an agent before it tests for the starter. An agent
+  that tries to approve gets `job.agent-denied`, not `job.self-approval`. The server answers 403 with the code `job.self-approval`
   and writes an audit entry for the action `job:approve` with the outcome
   `denied` and the reason `the person who started the job cannot approve it`,
   with the route suffix.
@@ -220,8 +242,10 @@ suffix" for each reason that gets this text.
   The server answers 403 with the code `job.agent-denied`. A refused approval,
   a refused start and a refused confirm write an audit entry with the outcome
   `denied` and the reason `an agent cannot do this`, with the route suffix.
-  The action is `job:approve` for an approval, the start action of the job for
-  a confirm, and the start action for a start. The trigger route answers the
+  The action is `job:approve` for an approval and the start action of the job
+  for a confirm. For a start, the action is the start action of the planned
+  job when the refusal names it, else `unit:run-plan` on the unit of the
+  request. The trigger route answers the
   same 403 and writes no audit entry.
 <!-- code-rule: job.ErrNotRequester -->
 - Only the person who asked the agent for a job can confirm it, whatever
