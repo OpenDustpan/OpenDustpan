@@ -169,6 +169,36 @@ func (s *Store) List(ctx context.Context, f job.Filter) (job.Page, error) {
 	return out, err
 }
 
+// GetDamaged implements job.Store.
+func (s *Store) GetDamaged(ctx context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
+	var (
+		out job.DamagedRow
+		ns  namespace.Name
+	)
+
+	err := s.run.Read(ctx, func(tx Tx) error {
+		r, ok, err := tx.Job(ctx, id)
+		if err != nil {
+			return err
+		}
+
+		if !ok {
+			return job.ErrNotFound
+		}
+
+		if _, err = jobOf(&r); err == nil {
+			return fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+		}
+
+		out = job.DamagedRow{ID: r.ID, UnitID: r.UnitID, Reason: DamageReason(err)}
+		ns = r.Namespace
+
+		return nil
+	})
+
+	return out, ns, err
+}
+
 // CancelDamaged implements job.Store.
 func (s *Store) CancelDamaged(ctx context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {
 	if err := checkEntries(e, fence); err != nil {

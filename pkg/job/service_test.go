@@ -38,6 +38,22 @@ type svcStore struct {
 	jobs     map[job.ID]job.Job
 	// keys holds the job of each idempotency key, as the store contract says.
 	keys map[string]job.Job
+	// damaged holds the rows that Get reports as damaged: the row and the
+	// namespace of the row.
+	damaged map[job.ID]damagedRow
+	// damagedCancels holds the calls of CancelDamaged.
+	damagedCancels []damagedCancel
+}
+
+type damagedRow struct {
+	row job.DamagedRow
+	ns  namespace.Name
+}
+
+type damagedCancel struct {
+	id      job.ID
+	fence   namespace.Fence
+	entries []audit.Entry
 }
 
 type createCall struct {
@@ -49,6 +65,7 @@ type createCall struct {
 
 func newSvcStore() *svcStore {
 	return &svcStore{
+		damaged: nil, damagedCancels: nil,
 		mu:           sync.Mutex{},
 		creates:      nil,
 		applies:      nil,
@@ -108,6 +125,10 @@ func (s *svcStore) Get(_ context.Context, id job.ID) (job.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, ok := s.damaged[id]; ok {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, id)
+	}
+
 	j, ok := s.jobs[id]
 	if !ok {
 		return job.Job{}, job.ErrNotFound
@@ -151,8 +172,25 @@ func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, 
 	return nil, nil, nil
 }
 
-func (*svcStore) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
+func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.damagedCancels = append(s.damagedCancels, damagedCancel{id: id, fence: f, entries: e})
+
 	return nil
+}
+
+func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	d, ok := s.damaged[id]
+	if !ok {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+	}
+
+	return d.row, d.ns, nil
 }
 
 type svcUnits struct {
@@ -172,6 +210,18 @@ func (u svcUnits) Unit(_ context.Context, ref identity.Object) (identity.Object,
 	}
 
 	if ref.String() != u.unit.String() {
+		return identity.Object{}, job.ErrNotFound
+	}
+
+	return u.unit, nil
+}
+
+func (u svcUnits) UnitByID(_ context.Context, ns namespace.Name, unitID string) (identity.Object, error) {
+	if u.err != nil {
+		return identity.Object{}, u.err
+	}
+
+	if u.unit.Namespace() != ns || u.unit.UnitID() != unitID || unitID == "" {
 		return identity.Object{}, job.ErrNotFound
 	}
 

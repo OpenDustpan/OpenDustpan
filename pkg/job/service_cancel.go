@@ -43,6 +43,10 @@ func (s *service) Cancel(ctx context.Context, a Actor, id ID, reason string) (Jo
 	}
 
 	j, err := s.authorizedFor(ctx, a, id, ActionJobCancel)
+	if errors.Is(err, ErrDamaged) {
+		return s.cancelDamaged(ctx, a, id, reason)
+	}
+
 	if err != nil {
 		return Job{}, err
 	}
@@ -74,6 +78,67 @@ func (s *service) Cancel(ctx context.Context, a Actor, id ID, reason string) (Jo
 	}
 
 	return stored, nil
+}
+
+// cancelDamaged cancels the job id, whose stored body does not decode, so that
+// an operator can clear it. It checks job:read and job:cancel on the unit of
+// the row, which it finds from the unit ID column of the row and not from the
+// body, as Cancel does for a job that decodes. A row whose unit it cannot find
+// is ErrNotFound, and no caller learns more. The store ends no durable
+// operation for such a row: the job stays stopped and holds no body to read.
+// It returns a Job that holds only what the row proves: the ID, the unit, the
+// state canceled.
+func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason string) (Job, error) {
+	row, ns, err := s.store.GetDamaged(ctx, id)
+	if err != nil {
+		return Job{}, fmt.Errorf("get damaged job: %w", err)
+	}
+
+	unit, err := s.units.UnitByID(ctx, ns, row.UnitID)
+	if err != nil {
+		return Job{}, fmt.Errorf("get unit of damaged job: %w", err)
+	}
+
+	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobRead, unit)
+
+	switch {
+	case err == nil:
+	case errors.Is(err, identity.ErrDenied):
+		return Job{}, ErrNotFound
+	default:
+		return Job{}, fmt.Errorf("authorize %s: %w", ActionJobRead, err)
+	}
+
+	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobCancel, unit)
+	if err != nil {
+		// Fail closed: a failure of the authorizer allows no one.
+		return Job{}, &DeniedError{
+			Action: ActionJobCancel, Object: unit, Err: fmt.Errorf("%w: %w", identity.ErrDenied, err),
+		}
+	}
+
+	fence, err := s.fences.Fence(ctx, ns)
+	if err != nil {
+		return Job{}, fmt.Errorf("fence of %s: %w", ns, err)
+	}
+
+	var j Job
+
+	j.ID, j.Spec.Unit = id, unit
+
+	entry := s.cancelEntry(&j, a, reason)
+	entry.Changes = append(entry.Changes, audit.Change{
+		Key: "damaged", Old: nil, New: row.Reason, Layer: "", TakesEffect: "",
+	})
+
+	err = s.store.CancelDamaged(ctx, id, fence, []audit.Entry{entry})
+	if err != nil {
+		return Job{}, fmt.Errorf("cancel damaged job: %w", err)
+	}
+
+	j.State, j.Wait = StateCanceled, WaitNone
+
+	return j, nil
 }
 
 // authorizedFor returns the job id for a principal that may read it and do

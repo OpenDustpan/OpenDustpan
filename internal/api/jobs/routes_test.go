@@ -83,10 +83,17 @@ type fakeJobs struct {
 	listed func(job.Filter) job.Page
 	calls  []string
 	mu     sync.Mutex
+	// damaged holds the damaged rows, by job ID: Get answers ErrDamaged for them.
+	damaged map[job.ID]fakeDamaged
+}
+
+type fakeDamaged struct {
+	row job.DamagedRow
+	ns  namespace.Name
 }
 
 func newFakeJobs(jobs ...job.Job) *fakeJobs {
-	f := &fakeJobs{jobs: map[job.ID]job.Job{}, getErr: nil, listed: nil, calls: nil, mu: sync.Mutex{}}
+	f := &fakeJobs{jobs: map[job.ID]job.Job{}, getErr: nil, listed: nil, calls: nil, mu: sync.Mutex{}, damaged: nil}
 	for i := range jobs {
 		f.jobs[jobs[i].ID] = jobs[i]
 	}
@@ -112,7 +119,12 @@ func (f *fakeJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 
 	f.mu.Lock()
 	j, ok := f.jobs[id]
+	_, damaged := f.damaged[id]
 	f.mu.Unlock()
+
+	if damaged {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, id)
+	}
 
 	if !ok {
 		return job.Job{}, job.ErrNotFound
@@ -148,6 +160,20 @@ func (f *fakeJobs) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow
 	f.note("Orphans")
 
 	return nil, nil, errUnexpected
+}
+
+func (f *fakeJobs) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
+	f.note("GetDamaged")
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	d, ok := f.damaged[id]
+	if !ok {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+	}
+
+	return d.row, d.ns, nil
 }
 
 func (f *fakeJobs) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
