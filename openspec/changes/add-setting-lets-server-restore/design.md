@@ -22,7 +22,7 @@ An unexported restoreAccessSetting value made only by a constructor that maps em
 | --- | --- | --- |
 | settings API | Both actions plus fresh session step | Change with an access token only gets 403 |
 | restore service | Snapshot value, fail closed | Stored text maybe leaves the access tables unchanged |
-| store transaction | Two-path count in the write transaction | Concurrent disable gets 409 |
+| store transaction | Two-path count in the write transaction | A restore that leaves fewer than two paths fails with principal.no-working-break-glass |
 
 ## Quality attributes
 

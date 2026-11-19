@@ -42,7 +42,7 @@ When a restore replaces the access tables, the server SHALL refuse a result with
 
 #### Scenario: Last path refused
 - **WHEN** a widened restore leaves fewer than two paths
-- **THEN** the server refuses with 409 and changes nothing
+- **THEN** the restore fails with the code principal.no-working-break-glass and changes nothing
 
 ### Requirement: Invalid stored value fails closed
 
