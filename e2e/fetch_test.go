@@ -22,9 +22,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/internal/testchild"
 )
 
 const fakeVersion = "9.9.9"
@@ -1047,7 +1049,20 @@ func TestFetchRefusesCacheArchiveWithoutMember(t *testing.T) {
 
 	dest := filepath.Join(cacheDir, strings.TrimSuffix(name, ".tar.gz"))
 
-	if err = os.MkdirAll(dest, 0o750); err != nil {
+	// The umask can remove bits from the mode of MkdirAll. The cache check
+	// compares the mode exactly.
+	cacheRoot, err := os.OpenRoot(cacheDir)
+	if err != nil {
+		t.Fatalf("open cache dir: %v", err)
+	}
+
+	defer func() {
+		if closeErr := cacheRoot.Close(); closeErr != nil {
+			t.Errorf("close cache dir: %v", closeErr)
+		}
+	}()
+
+	if err = makeCacheDirs(cacheRoot, filepath.Base(dest)); err != nil {
 		t.Fatalf("create cached CLI dir: %v", err)
 	}
 
@@ -1219,12 +1234,29 @@ func writeCacheEntry(cacheDir, archiveName string, archive []byte, tree cacheFil
 	return errors.Join(err, root.Close())
 }
 
+// makeCacheDirs makes name and its parents, then sets each to the mode that
+// extraction sets. The umask can remove bits from the mode of MkdirAll, and
+// the cache check compares the mode exactly.
+func makeCacheDirs(root *os.Root, name string) error {
+	if err := root.MkdirAll(name, 0o750); err != nil {
+		return fmt.Errorf("make directory: %w", err)
+	}
+
+	for dir := name; dir != "." && dir != "/"; dir = path.Dir(dir) {
+		if err := root.Chmod(dir, 0o750); err != nil {
+			return fmt.Errorf("set the mode of %q: %w", dir, err)
+		}
+	}
+
+	return nil
+}
+
 func fillCacheEntry(root *os.Root, archiveName string, archive []byte, tree cacheFiles) error {
 	dest := strings.TrimSuffix(archiveName, ".tar.gz")
 
 	for name, content := range tree.files {
 		target := path.Join(dest, name)
-		if err := root.MkdirAll(path.Dir(target), 0o750); err != nil {
+		if err := makeCacheDirs(root, path.Dir(target)); err != nil {
 			return fmt.Errorf("create %q: %w", target, err)
 		}
 
@@ -1241,7 +1273,7 @@ func fillCacheEntry(root *os.Root, archiveName string, archive []byte, tree cach
 
 	for name, link := range tree.links {
 		target := path.Join(dest, name)
-		if err := root.MkdirAll(path.Dir(target), 0o750); err != nil {
+		if err := makeCacheDirs(root, path.Dir(target)); err != nil {
 			return fmt.Errorf("create %q: %w", target, err)
 		}
 
@@ -1963,5 +1995,53 @@ func TestCheckCacheRefusesDirectoryModes(t *testing.T) {
 				// The row has the expected result.
 			}
 		})
+	}
+}
+
+const umaskChildEnv = "E2E_FETCH_UMASK_CHILD"
+
+// TestFetchInstallsUnderStrictUmask installs a CLI and checks the cache again
+// under umask 077. The umask is process-wide, so the test runs in a child
+// process. The test fails when extraction does not set the mode of each
+// directory: the second install then refuses the cache entry.
+func TestFetchInstallsUnderStrictUmask(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(umaskChildEnv) == "" {
+		out, err := testchild.Run(t, "^TestFetchInstallsUnderStrictUmask$", umaskChildEnv+"=1")
+		if err != nil {
+			t.Fatalf("child process with umask 077: %v\n%s", err, out)
+		}
+
+		return
+	}
+
+	syscall.Umask(0o077)
+
+	archive := tarball(t, []tar.Header{
+		// No directory entries: extraction makes the parent directories.
+		{Name: "pulumi/pulumi", Typeflag: tar.TypeReg, Mode: 0o755},
+		{Name: "pulumi/lib/deep/plugin", Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	fetcher, tool, _ := release(t, archive, "")
+
+	inst, err := fetcher.Install(t.Context(), tool, e2e.Latest)
+	if err != nil {
+		t.Fatalf("install under umask 077: %v", err)
+	}
+
+	// A refused entry is downloaded again, so the install result alone does
+	// not show the mode. Check each directory of the extracted tree.
+
+	for _, dir := range []string{inst.Dir, filepath.Join(inst.Dir, "lib"), filepath.Join(inst.Dir, "lib", "deep")} {
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			t.Fatalf("stat %q: %v", dir, statErr)
+		}
+
+		if got := info.Mode().Perm(); got != 0o750 {
+			t.Errorf("directory %q has mode %o under umask 077, want 750", dir, got)
+		}
 	}
 }
