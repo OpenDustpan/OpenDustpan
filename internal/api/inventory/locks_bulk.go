@@ -453,6 +453,8 @@ func (h *Handler) bulkLockFailure(r *http.Request, p identity.Principal, unit bu
 			ReasonWithin: nil,
 			Window:       0,
 		})
+	default:
+		// Another error: the service wrote no refusal, so no entry.
 	}
 
 	return h.bulkFailure(r, unit.id, err)

@@ -1414,18 +1414,7 @@ func TestBulkLockAuthorizerFails(t *testing.T) {
 			bulkOptions{noRecords: false, wrap: nil, limiter: lim})
 		if unlock {
 			// Alice holds the locks, so the unlock reaches the check of unit:lock.
-			f.store.mu.Lock()
-
-			for i := range 3 {
-				f.store.locks[mustUnit(t, i).String()] = manuallock.Lock{
-					Target: mustUnit(t, i),
-					Holder: "alice",
-					Since:  time.Time{},
-					Reason: "held",
-				}
-			}
-
-			f.store.mu.Unlock()
+			f.seedAliceLocks(t, 3)
 		}
 
 		got := bulkAnswerOf(t, f.post(t, "alice", path, body))
@@ -2067,13 +2056,19 @@ func (f bulkFixture) seedAliceLocks(t *testing.T, n int) {
 	}
 }
 
-// bulkCase is the path and the body of a bulk lock or a bulk unlock of n units.
-func bulkCase(unlock bool, n int) (string, string) {
-	if unlock {
-		return bulkUnlockPath, bulkUnlockBody(idsUpTo(n)...)
-	}
+// bulkCall is a bulk lock or a bulk unlock call.
+type bulkCall struct {
+	path   string
+	body   string
+	unlock bool
+}
 
-	return bulkLockPath, bulkLockBody(bulkReason, idsUpTo(n)...)
+// bulkCalls returns the bulk lock call and the bulk unlock call of n units.
+func bulkCalls(n int) []bulkCall {
+	return []bulkCall{
+		{path: bulkLockPath, body: bulkLockBody(bulkReason, idsUpTo(n)...), unlock: false},
+		{path: bulkUnlockPath, body: bulkUnlockBody(idsUpTo(n)...), unlock: true},
+	}
 }
 
 // TestBulkLockReplayAfterLockRevoked: a replay checks unit:lock again before it
@@ -2083,7 +2078,8 @@ func bulkCase(unlock bool, n int) (string, string) {
 func TestBulkLockReplayAfterLockRevoked(t *testing.T) {
 	t.Parallel()
 
-	for _, unlock := range []bool{false, true} {
+	for _, c := range bulkCalls(1) {
+		unlock, path, body := c.unlock, c.path, c.body
 		authz := plainAuthz()
 		authz.deny = map[string]bool{}
 		f := newBulkFixture(t, authz, 2)
@@ -2091,8 +2087,6 @@ func TestBulkLockReplayAfterLockRevoked(t *testing.T) {
 		if unlock {
 			f.seedAliceLocks(t, 2)
 		}
-
-		path, body := bulkCase(unlock, 1)
 
 		first := bulkAnswerOf(t, f.keyedPost(t, path, body, "klr"))
 		wantOK(t, &first.Results[0])
@@ -2102,31 +2096,41 @@ func TestBulkLockReplayAfterLockRevoked(t *testing.T) {
 
 		authz.deny[grant(identity.ActionUnitLock, bulkUnitRef(0))] = true
 
-		rec := f.keyedPost(t, path, body, "klr")
-		got := bulkAnswerOf(t, rec)
+		f.wantLockRefusedOnReplay(t, c, "klr", heldBefore, entriesBefore)
+	}
+}
 
-		if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusForbidden {
-			t.Fatalf("unlock=%v: replay result = %+v, want 403", unlock, got.Results[0])
-		}
+// wantLockRefusedOnReplay sends the call again and checks the refusal: a 403
+// result with no stored lock, one denied unit:lock entry with the reason
+// refusal.ReasonPolicy, no header and an unchanged lock store.
+func (f bulkFixture) wantLockRefusedOnReplay(t *testing.T, c bulkCall, key string, heldBefore, entriesBefore int) {
+	t.Helper()
 
-		if got.Results[0].Lock != nil {
-			t.Fatalf("unlock=%v: the replay answered the stored lock %+v", unlock, got.Results[0].Lock)
-		}
+	unlock := c.unlock
+	rec := f.keyedPost(t, c.path, c.body, key)
+	got := bulkAnswerOf(t, rec)
 
-		denied := f.audit.denied()
-		if len(denied) != 1 || denied[0].Action != string(identity.ActionUnitLock) ||
-			!strings.HasPrefix(denied[0].Reason, refusal.ReasonPolicy) {
-			t.Fatalf("unlock=%v: denied audit entries = %+v, want one unit:lock entry with reason %q",
-				unlock, denied, refusal.ReasonPolicy)
-		}
+	if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusForbidden {
+		t.Fatalf("unlock=%v: replay result = %+v, want 403", unlock, got.Results[0])
+	}
 
-		if f.held() != heldBefore || f.lockEntries() != entriesBefore {
-			t.Fatalf("unlock=%v: the replay changed the lock store", unlock)
-		}
+	if got.Results[0].Lock != nil {
+		t.Fatalf("unlock=%v: the replay answered the stored lock %+v", unlock, got.Results[0].Lock)
+	}
 
-		if h := rec.Header().Get("Idempotent-Replayed"); h != "" {
-			t.Fatalf("unlock=%v: Idempotent-Replayed = %q, want none: the item was refused, not replayed", unlock, h)
-		}
+	denied := f.audit.denied()
+	if len(denied) != 1 || denied[0].Action != string(identity.ActionUnitLock) ||
+		!strings.HasPrefix(denied[0].Reason, refusal.ReasonPolicy) {
+		t.Fatalf("unlock=%v: denied audit entries = %+v, want one unit:lock entry with reason %q",
+			unlock, denied, refusal.ReasonPolicy)
+	}
+
+	if f.held() != heldBefore || f.lockEntries() != entriesBefore {
+		t.Fatalf("unlock=%v: the replay changed the lock store", unlock)
+	}
+
+	if h := rec.Header().Get("Idempotent-Replayed"); h != "" {
+		t.Fatalf("unlock=%v: Idempotent-Replayed = %q, want none: the item was refused, not replayed", unlock, h)
 	}
 }
 
@@ -2151,7 +2155,8 @@ func serviceOnlyAuthz(second func(deny map[string]bool)) bulkAuthz {
 func TestBulkLockServiceDenialRecorded(t *testing.T) {
 	t.Parallel()
 
-	for _, unlock := range []bool{false, true} {
+	for _, c := range bulkCalls(1) {
+		unlock := c.unlock
 		authz := serviceOnlyAuthz(func(deny map[string]bool) {
 			deny[grant(identity.ActionUnitLock, bulkUnitRef(0))] = true
 		})
@@ -2162,8 +2167,7 @@ func TestBulkLockServiceDenialRecorded(t *testing.T) {
 			f.seedAliceLocks(t, 1)
 		}
 
-		path, body := bulkCase(unlock, 1)
-		got := bulkAnswerOf(t, f.post(t, "alice", path, body))
+		got := bulkAnswerOf(t, f.post(t, "alice", c.path, c.body))
 
 		if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusForbidden {
 			t.Fatalf("unlock=%v: result = %+v, want 403", unlock, got.Results[0])
@@ -2187,7 +2191,9 @@ func TestBulkLockServiceDenialRecorded(t *testing.T) {
 func TestBulkLockServiceAuthorizerFails(t *testing.T) {
 	t.Parallel()
 
-	for _, unlock := range []bool{false, true} {
+	for _, c := range bulkCalls(1) {
+		unlock := c.unlock
+
 		var calls atomic.Int64
 
 		authz := failOnSecondLockAuthz{Authorizer: plainAuthz(), n: &calls}
@@ -2198,8 +2204,7 @@ func TestBulkLockServiceAuthorizerFails(t *testing.T) {
 			f.seedAliceLocks(t, 1)
 		}
 
-		path, body := bulkCase(unlock, 1)
-		got := bulkAnswerOf(t, f.post(t, "alice", path, body))
+		got := bulkAnswerOf(t, f.post(t, "alice", c.path, c.body))
 
 		if got.Results[0].Error == nil || got.Results[0].Error.Code != http.StatusInternalServerError {
 			t.Fatalf("unlock=%v: result = %+v, want 500", unlock, got.Results[0])
