@@ -65,7 +65,7 @@ the same list.
 | `--oidc-client-id` | `DUSTPAN_OIDC_CLIENT_ID` | `oidc-client-id` | (none) |
 | `--oidc-scopes` | `DUSTPAN_OIDC_SCOPES` | `oidc-scopes` | `profile,email` |
 | `--oidc-no-auto-create` | `DUSTPAN_OIDC_NO_AUTO_CREATE` | `oidc-no-auto-create` | false |
-| `--ldap-url` | `DUSTPAN_LDAP_URL` | `ldap.url` | (none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, except to a loopback IP address or with `egress.allowPlainConnections`. |
+| `--ldap-url` | `DUSTPAN_LDAP_URL` | `ldap.url` | (none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, unless `egress.allowPlainConnections` is on. |
 | `--ldap-provider` | `DUSTPAN_LDAP_PROVIDER` | `ldap.provider` | (none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID. |
 | `--ldap-display-name` | `DUSTPAN_LDAP_DISPLAY_NAME` | `ldap.displayName` | (the provider ID) |
 | `--ldap-start-tls` | `DUSTPAN_LDAP_START_TLS` | `ldap.startTLS` | false |
