@@ -317,3 +317,40 @@ func TestRegistrationHidesAnEndedWindow(t *testing.T) {
 		t.Fatal("a window that ended shows oldSecretEndsAt")
 	}
 }
+
+// TestRegistrationAnswerUsesTheClockOfTheService proves that the stored answer
+// of a keyed put takes the time of the clock of the service and not the clock
+// of the process: the clock moves past the end of the window before the answer
+// is made, and the stored answer shows no end. The clock of the process is
+// before the end of the window in this test, so a view that reads it shows the
+// end.
+func TestRegistrationAnswerUsesTheClockOfTheService(t *testing.T) {
+	t.Parallel()
+
+	e := newHostEnv(t, hostAllowAll())
+
+	first := e.send(t, http.MethodPut, hostAppPath, hostAppBody())
+	wantHost(t, first, http.StatusCreated)
+
+	// Each read of the clock now moves it by 8 days, more than the window of
+	// 7 days. The write sets the end from one read, and the key makes the
+	// stored answer from a later read, after the end.
+	e.stepSeconds.Store(int64((8 * 24 * time.Hour) / time.Second))
+
+	call := hostCall{
+		headers: keyed("rotate-clock-1"), method: http.MethodPut, target: hostAppPath, body: rotationBody(),
+	}
+	wantHost(t, e.do(t, call), http.StatusOK)
+
+	replay := e.do(t, call)
+	wantHost(t, replay, http.StatusOK)
+
+	if replay.header.Get("Idempotent-Replayed") != "true" {
+		t.Fatalf("the second request is not a replay: %v", replay.header)
+	}
+
+	if _, found := endsAtOf(t, replay); found {
+		t.Fatalf("the stored answer shows oldSecretEndsAt after the window ended on the clock of the service: %s",
+			replay.body)
+	}
+}

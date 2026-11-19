@@ -47,6 +47,43 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 	}
 }
 
+// TestBackupCoverageFailsOnAddedEmptiedColumn adds a column to a table of the
+// emptied list, outside the migrations, and proves the coverage check fails
+// with ErrCoverage and names the table and the column.
+func TestBackupCoverageFailsOnAddedEmptiedColumn(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+	addSpikeColumnTo(t, path, "git_host_event_receipts")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	err = s.CheckCoverage(t.Context())
+	if err == nil {
+		t.Fatal("coverage after an added emptied column: err = nil, want ErrCoverage")
+	}
+
+	if !errors.Is(err, backup.ErrCoverage) {
+		t.Fatalf("coverage after an added emptied column: err = %v, want ErrCoverage", err)
+	}
+
+	if !strings.Contains(err.Error(), `"git_host_event_receipts"`) || !strings.Contains(err.Error(), `"spike_new_col"`) {
+		t.Fatalf("coverage error = %v, want the table %q and the column %q",
+			err, "git_host_event_receipts", "spike_new_col")
+	}
+}
+
 // TestBackupCoverageFailsOnUnknownTable adds a table in neither the backup
 // nor the control list and proves the coverage check fails with ErrCoverage
 // and names the table.
@@ -146,7 +183,11 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 // addSpikeColumn adds the probe column to stacks with no store open. The
 // seed store is closed before this runs and the test store opens after, so
 // no guard checkpoint can hold the write lock during the alter.
-func addSpikeColumn(t *testing.T, path string) {
+func addSpikeColumn(t *testing.T, path string) { addSpikeColumnTo(t, path, "stacks") }
+
+// addSpikeColumnTo adds the column spike_new_col to table, as addSpikeColumn
+// does. The name of table is a constant of the test, never an input.
+func addSpikeColumnTo(t *testing.T, path, table string) {
 	t.Helper()
 
 	conn, err := openRawDB(path)
@@ -160,7 +201,7 @@ func addSpikeColumn(t *testing.T, path string) {
 		}
 	}()
 
-	if _, execErr := conn.ExecContext(t.Context(), `ALTER TABLE stacks ADD COLUMN spike_new_col TEXT`); execErr != nil {
+	if _, execErr := conn.ExecContext(t.Context(), `ALTER TABLE `+table+` ADD COLUMN spike_new_col TEXT`); execErr != nil {
 		t.Fatalf("add column: %v", execErr)
 	}
 }

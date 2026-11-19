@@ -192,8 +192,11 @@ type hostEnv struct {
 	opener  *hostOpener
 	// refuseAddress makes the address rules of the service refuse every address.
 	refuseAddress *atomic.Bool
-	mu            sync.Mutex
-	refused       []string
+	// stepSeconds is how many seconds the clock of the service moves at each
+	// read. It is 1 until a test changes it.
+	stepSeconds *atomic.Int64
+	mu          sync.Mutex
+	refused     []string
 }
 
 // refusals returns the reasons that the service counted, in order.
@@ -230,12 +233,23 @@ func newHostEnv(t *testing.T, authz identity.Authorizer) *hostEnv {
 // reads the wall clock.
 func hostNow() time.Time { return time.Date(2030, time.March, 4, 10, 0, 0, 0, time.UTC) }
 
-// hostClock returns a clock that starts at hostNow and moves forward 1 second
-// at each read, so the check limits of the service see time pass.
-func hostClock() func() time.Time {
-	var reads atomic.Int64
+// newStep returns the step of a clock: 1 second at each read.
+func newStep() *atomic.Int64 {
+	step := &atomic.Int64{}
+	step.Store(1)
 
-	return func() time.Time { return hostNow().Add(time.Duration(reads.Add(1)) * time.Second) }
+	return step
+}
+
+// hostClock returns a clock that starts at hostNow and moves forward by step
+// seconds at each read, so the check limits of the service see time pass. A
+// test changes step to move the clock further.
+func hostClock(step *atomic.Int64) func() time.Time {
+	var elapsed atomic.Int64
+
+	return func() time.Time {
+		return hostNow().Add(time.Duration(elapsed.Add(step.Load())) * time.Second)
+	}
 }
 
 // keyMode says whether the handler of a test has the Idempotency-Key middleware.
@@ -285,6 +299,7 @@ func newHostEnvWrapped(
 		store:         st,
 		opener:        nil,
 		refuseAddress: &atomic.Bool{},
+		stepSeconds:   newStep(),
 		mu:            sync.Mutex{},
 		refused:       nil,
 	}
@@ -316,7 +331,7 @@ func newHostEnvWrapped(
 		},
 		CheckLimits: limits,
 		Logger:      nil,
-		Now:         hostClock(),
+		Now:         hostClock(env.stepSeconds),
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)

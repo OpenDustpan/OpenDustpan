@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -117,7 +118,7 @@ func wantReviewEvent() forge.Event {
 }
 
 // sigOf returns the signature header of r.
-func sigOf(r forge.EventRequest) string { return r.Header[headerSignature][0] }
+func sigOf(r forge.EventRequest) string { return http.Header(r.Header).Get(headerSignature) }
 
 // signatureCases are the hostile requests for the signature header.
 func signatureCases() []verifierCase {

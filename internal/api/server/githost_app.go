@@ -86,7 +86,7 @@ func gitHostAppOf(v forge.RegistrationView) gitHostAppDocument {
 // registration and 200 for a replacement, with the ETag of its version. The
 // result is what the store wrote, and it holds the sealed values: the answer
 // takes the view of it and never a secret.
-func gitHostAppAnswer(result any) (idempotency.Answer, error) {
+func (h *Handler) gitHostAppAnswer(result any) (idempotency.Answer, error) {
 	reg, ok := result.(forge.Registration)
 	if !ok {
 		return idempotency.Answer{}, errGitHostResult
@@ -97,7 +97,7 @@ func gitHostAppAnswer(result any) (idempotency.Answer, error) {
 		status = http.StatusCreated
 	}
 
-	return jsonAnswer(status, reg.Version, gitHostAppOf(reg.View()), "")
+	return jsonAnswer(status, reg.Version, gitHostAppOf(h.gitHost.ViewOf(&reg)), "")
 }
 
 var errGitHostResult = errors.New("the store passed a result of another type")
@@ -187,7 +187,7 @@ func (h *Handler) readGitHostApp(w http.ResponseWriter, r *http.Request, _ ident
 // write replaces that version only. A console session needs a recent sign-in.
 func (h *Handler) putGitHostApp(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	h.keyed(w, r, p, keyedCall{
-		build:    gitHostAppAnswer,
+		build:    h.gitHostAppAnswer,
 		serve:    func(w http.ResponseWriter, r *http.Request) { h.writeGitHostApp(w, r, p) },
 		required: false,
 	})

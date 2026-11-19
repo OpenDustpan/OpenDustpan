@@ -133,6 +133,10 @@ func NewService(cfg Config) (*Service, error) {
 
 	openers := make(map[Kind]Opener, len(cfg.Openers))
 	for _, o := range cfg.Openers {
+		if o == nil {
+			return nil, fmt.Errorf("%w: Git host adapter is nil", ErrMissingDependency)
+		}
+
 		openers[o.Kind()] = o
 	}
 

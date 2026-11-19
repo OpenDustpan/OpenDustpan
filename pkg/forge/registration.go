@@ -59,15 +59,8 @@ type RegistrationView struct {
 	OldEventSecretEndsAt time.Time
 }
 
-// View returns r without its sealed key and its sealed event secret.
-// The window of the old event secret shows as open when its end is after the
-// time of the call: View reads the clock of the process, and the methods of
-// Service use ViewAt with their own clock.
-func (r *Registration) View() RegistrationView {
-	return registrationView(r, time.Now())
-}
-
-// ViewAt is View for the time now.
+// ViewAt returns r without its sealed key and its sealed event secret.
+// The window of the old event secret shows as open when its end is after now.
 func (r *Registration) ViewAt(now time.Time) RegistrationView {
 	return registrationView(r, now)
 }
@@ -282,6 +275,13 @@ func (s *Service) ConfirmRotation(
 	}
 
 	return registrationView(&stored, at), nil
+}
+
+// ViewOf returns reg without its sealed key and its sealed event secret. The
+// window of the old event secret shows as open when its end is after the time
+// of the clock of s, so that no caller reads the clock of the process.
+func (s *Service) ViewOf(reg *Registration) RegistrationView {
+	return registrationView(reg, s.now())
 }
 
 // GetRegistration returns the registration of kind without its secrets, or

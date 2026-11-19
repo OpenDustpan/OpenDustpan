@@ -659,12 +659,13 @@ func TestNewServiceNeedsItsDependencies(t *testing.T) {
 	}
 
 	for name, edit := range map[string]func(c *forge.Config){
-		"store":      func(c *forge.Config) { c.Store = nil },
-		"namespaces": func(c *forge.Config) { c.Namespaces = nil },
-		"secrets":    func(c *forge.Config) { c.Secrets = nil },
-		"audit":      func(c *forge.Config) { c.Audit = nil },
-		"check":      func(c *forge.Config) { c.CheckURL = nil },
-		"openers":    func(c *forge.Config) { c.Openers = nil },
+		"store":        func(c *forge.Config) { c.Store = nil },
+		"namespaces":   func(c *forge.Config) { c.Namespaces = nil },
+		"secrets":      func(c *forge.Config) { c.Secrets = nil },
+		"audit":        func(c *forge.Config) { c.Audit = nil },
+		"check":        func(c *forge.Config) { c.CheckURL = nil },
+		"openers":      func(c *forge.Config) { c.Openers = nil },
+		"a nil opener": func(c *forge.Config) { c.Openers = []forge.Opener{nil} },
 	} {
 		cfg := full
 		edit(&cfg)
