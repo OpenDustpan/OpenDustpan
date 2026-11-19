@@ -188,6 +188,9 @@ func maskWorkProbed(
 // MaxMaskWorkBytesForTest is the budget of one masked read.
 const MaxMaskWorkBytesForTest = maxMaskWorkBytes
 
+// MaskStepCostForTest is the fixed cost of one resolved token, besides its length.
+const MaskStepCostForTest = maskStepCost
+
 // ResolvePointerWithSpentForTest resolves tokens under node with a budget that
 // has already spent the given bytes, and returns the error of the resolution.
 func ResolvePointerWithSpentForTest(node any, tokens []string, spent int) error {

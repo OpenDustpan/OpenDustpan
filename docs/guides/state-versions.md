@@ -195,12 +195,20 @@ state and mask its secret values. These routes are:
   the route of one resource, `GET /api/stacks/{namespace}/{project}/{stack}/state/diff`
   and `POST /api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal`.
 
-The server refuses a state that is too deep or too large for a masked read. A
-state is too deep when it nests more than 100 levels. A state is too large when
-the work of one masked read is more than 128 MiB. A diff counts the work of
-both states together. The answer is 413 with the error code
-`state-version.too-complex` for OpenTofu and `stack.state-too-complex` for
-Pulumi. The answer holds no value of the state.
+The server refuses a state for a masked read in three cases. The state is too
+deep when it nests more than 100 levels. The state is too large when the work
+of one masked read is more than 128 MiB. A diff counts the work of both states
+together. In the third case, the state is neither too deep nor too large, but
+a sensitive mark of the state names a value that the server cannot find with
+one rule. This happens when a mark has more than 101 tokens, or when a mark
+goes below a dynamic wrapper (an object that has only the keys `value` and
+`type`) and the wrapper has two readings that both fit, or the mark needs a
+second wrapper. The server does not guess, because a guess can show a secret.
+The answer is 413 with the error code `state-version.too-complex` for OpenTofu
+and `stack.state-too-complex` for Pulumi. For the third case, the detail of
+the answer says that a sensitive mark names a value that the server cannot
+find with one rule. The detail does not repeat the mark. The answer holds no
+value of the state.
 
 A refused reveal writes one audit entry of the kind `reveal` with the outcome
 `failure` and no value path. The server also writes one warning to its log with

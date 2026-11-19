@@ -219,11 +219,37 @@ func (w *maskWork) step(token string) error {
 	return w.budget.charge(len(token) + maskStepCost)
 }
 
-// ErrStateBound reports a state that a masked read refuses because it nests
-// deeper than MaxStateDepth, or because its masked read would spend more than
-// maxMaskWorkBytes bytes. The refusal builds no path and no marker, so a
-// hostile document cannot exhaust the memory of the server.
+// ErrStateBound reports a state that a masked read refuses. It has three
+// causes. The state nests deeper than MaxStateDepth. The masked read would
+// spend more than maxMaskWorkBytes bytes. Or a sensitive mark of the state
+// cannot be resolved with one rule: the mark has more than MaxStateDepth+1
+// tokens, or it names a value below a dynamic wrapper in a way that two
+// readings of the wrapper both fit, or that only a second wrapper can reach.
+// The state is then neither too deep nor too large, and the error is a
+// stateBoundError with its own fixed text. The refusal builds no path and no
+// marker, so a hostile document cannot exhaust the memory of the server.
+// Match all three causes with errors.Is.
 var ErrStateBound = errors.New("state is too deep or too large for a masked read")
+
+// Fixed texts of the causes of ErrStateBound that are not a depth or a size.
+// They hold no text of the state, because a mark comes from the state.
+const (
+	causeMarkNeedsGuess = "a sensitive mark in the state names a value that the server cannot find with one rule"
+	causeMarkTooLong    = "a sensitive mark in the state is longer than the depth limit"
+)
+
+// stateBoundError is an ErrStateBound with a fixed text for its cause. The
+// text holds no pointer and no value of the state.
+type stateBoundError struct {
+	cause string
+}
+
+// Error returns the fixed text of the cause.
+func (e *stateBoundError) Error() string { return e.cause }
+
+// Is reports that the error is ErrStateBound, so that the status mapping and
+// the log of the handlers match it with errors.Is.
+func (e *stateBoundError) Is(target error) bool { return target == ErrStateBound }
 
 // withinDepth reports whether v nests at most MaxStateDepth levels. It stops
 // at the first value past the bound, so its own recursion stays bounded.
@@ -984,22 +1010,22 @@ func unresolvedRoute() tokenRoute {
 // rest. The start node, an object member and a list element are all checked
 // for it, so a wrapper has one rule wherever it stands. At most one wrapper is
 // transparent for each pointer. A wrapper whose own member the next token
-// names reads as a plain object when the rest of the pointer resolves that
-// way, and else the wrapper is transparent: one extra "value" step enters the
+// names reads as a plain object when only that reading resolves the rest of
+// the pointer, and else the wrapper is transparent: one extra "value" step enters the
 // wrapped value. The rest of the pointer then resolves with physical steps
 // only. The work of a pointer is at most twice its length, and each step is
 // charged to the budget of work. A pointer of more than MaxStateDepth+1
 // tokens fails with ErrStateBound before any step, because no state that the
 // read accepts holds such a path. List indexes parse with Atoi. The route
 // holds the keys read from objects, the decimal index of each list step, and
-// the extra "value" step when the wrapper rule applies. Fail closed: when the
-// wrapper rule does not resolve the pointer and a try met a second wrapper,
-// the result is the route to the first wrapper with fellBack set, never an
-// unresolved result. No tokens is an empty route and resolved. It never
+// the extra "value" step when the wrapper rule applies. Fail closed: when both
+// tries resolve the pointer, or when neither does and a try met a second
+// wrapper, the result is the route to the first wrapper with fellBack set,
+// never an unresolved result. No tokens is an empty route and resolved. It never
 // changes the tree.
 func routeTokens(work *maskWork, node any, tokens []string) (tokenRoute, error) {
 	if len(tokens) > MaxStateDepth+1 {
-		return unresolvedRoute(), fmt.Errorf("pointer of %d tokens: %w", len(tokens), ErrStateBound)
+		return unresolvedRoute(), &stateBoundError{cause: causeMarkTooLong}
 	}
 
 	route := make([]string, 0, len(tokens)+1)
@@ -1034,36 +1060,56 @@ func routeTokens(work *maskWork, node any, tokens []string) (tokenRoute, error) 
 }
 
 // routeWrapper resolves rest below the dynamic wrapper wrapped, which sits at
-// route. When the first token of rest is a member of the wrapper, it tries the
-// wrapper as a plain object first. It then makes the wrapper transparent, with
-// one extra "value" step. Both tries take physical steps only, so no pointer
-// takes a second wrapper and the work does not grow with the product of the
-// depth and the count of wrappers.
+// route. It tries the wrapper as a plain object when the first token of rest
+// is a member of the wrapper. It tries the wrapper as transparent, with one
+// extra "value" step. Both tries take physical steps only, so no pointer takes
+// a second wrapper and the work does not grow with the product of the depth
+// and the count of wrappers.
 //
-// Fail closed: when neither try resolves the pointer and a try met a second
-// dynamic wrapper, the pointer may name a value that only a second wrapper
-// reaches. The result then ends at the wrapper with fellBack set, and the
-// caller masks the whole wrapper. The read never answers a value that a mark
-// may name, and it answers no more than the one wrapper of the pointer.
+// Fail closed, ambiguous pointer: when the first token is a member of the
+// wrapper and both tries resolve the pointer, the pointer may name the member
+// of the wrapper or the value inside it, and the read cannot tell which one a
+// mark names. The result then ends at the wrapper with fellBack set. The mask
+// covers the whole wrapper and the reveal refuses it.
+//
+// Fail closed, second wrapper: when no try resolves the pointer and a try met
+// a second dynamic wrapper, the pointer may name a value that only a second
+// wrapper reaches. The result then also ends at the wrapper with fellBack set.
+//
+// The read never answers a value that a mark may name, and it answers no more
+// than the one wrapper of the pointer.
 func routeWrapper(work *maskWork, wrapped map[string]any, rest, route []string) (tokenRoute, error) {
-	metWrapper := false
+	var first physicalRoute
 
-	if _, member := wrapped[rest[0]]; member {
-		first, err := routePhysical(work, wrapped, rest, route)
-		if err != nil || first.ok {
-			return tokenRoute{route: first.route, resolved: first.ok, fellBack: false}, err
+	_, member := wrapped[rest[0]]
+	if member {
+		var err error
+
+		first, err = routePhysical(work, wrapped, rest, route)
+		if err != nil {
+			return tokenRoute{route: first.route, resolved: false, fellBack: false}, err
 		}
-
-		metWrapper = first.metWrapper
 	}
 
 	second, err := routePhysical(work, wrapped["value"], rest, append(slices.Clip(route), "value"))
-	if err != nil || second.ok {
-		return tokenRoute{route: second.route, resolved: second.ok, fellBack: false}, err
+	if err != nil {
+		return tokenRoute{route: second.route, resolved: false, fellBack: false}, err
+	}
+
+	if first.ok && second.ok {
+		return tokenRoute{route: route, resolved: true, fellBack: true}, nil
+	}
+
+	if first.ok {
+		return tokenRoute{route: first.route, resolved: true, fellBack: false}, nil
+	}
+
+	if second.ok {
+		return tokenRoute{route: second.route, resolved: true, fellBack: false}, nil
 	}
 
 	inner, innerIsMap := wrapped["value"].(map[string]any)
-	if metWrapper || second.metWrapper || (innerIsMap && isDynamicWrapper(inner)) {
+	if first.metWrapper || second.metWrapper || (innerIsMap && isDynamicWrapper(inner)) {
 		return tokenRoute{route: route, resolved: true, fellBack: true}, nil
 	}
 
@@ -1569,6 +1615,15 @@ type pointerList struct {
 func maskOnePointer(work *maskWork, attributes any, name pointerName, out *maskCollectors) error {
 	relative, full := name.relative, name.full
 
+	// An empty pointer names the whole value in a JSON Pointer, and a mark
+	// that names the whole attributes has no route that a marker can replace
+	// one by one. The read refuses it instead of masking a member with the
+	// key "". Defense in depth: the reveal does not rely on this check, and
+	// this check does not rely on a check of the source of the mark.
+	if relative == "" {
+		return &stateBoundError{cause: causeMarkNeedsGuess}
+	}
+
 	resolved, err := routeTokens(work, attributes, splitPointer(relative))
 	if err != nil {
 		return err
@@ -1585,7 +1640,7 @@ func maskOnePointer(work *maskWork, attributes any, name pointerName, out *maskC
 	// them, and the read refuses the state instead of answering a value that a
 	// mark may name.
 	if resolved.fellBack && len(route) == 0 {
-		return fmt.Errorf("pointer %q below attributes that are a dynamic wrapper: %w", relative, ErrStateBound)
+		return &stateBoundError{cause: causeMarkNeedsGuess}
 	}
 
 	below, steps := out.applied.below(route)
