@@ -93,7 +93,8 @@ suffix" for each reason that gets this text.
     the reason `the removal would leave no site administrator`.
   - The expiry of a temporary administrator (`ExpireTempAdmin` in each
     store) runs no guard. It disables the principal and ends its grants and
-    memberships, also when the principal is the last site administrator.
+    memberships, also when the principal is the last site administrator. This behavior is
+    under owner review.
 
 ## Grants and roles
 
