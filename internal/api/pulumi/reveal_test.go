@@ -906,3 +906,48 @@ func checkRevealRefusal(t *testing.T, tc revealFresh, rec *httptest.ResponseReco
 		t.Fatalf("refusal holds the secret value: %s", rec.Body.String())
 	}
 }
+
+// TestRevealPathPastTheDepthBoundAnswers413AndAudits proves a reveal path that
+// goes deeper than the bound of a masked read answers 413 with no-store and no
+// value, and leaves one audit entry with the failure outcome.
+func TestRevealPathPastTheDepthBoundAnswers413AndAudits(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := newRevealFixture(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	seedRevealVersion(t, f, "service")
+
+	path := "/resources/0/outputs" + strings.Repeat("/a", stack.MaxStateDepth+1)
+
+	status, header, body := reveal(t, f, revealBody(t, path))
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("deep path answers %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	if header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want %q", header.Get("Cache-Control"), "no-store")
+	}
+
+	if strings.Contains(body, revealSecretValue) {
+		t.Fatalf("413 body holds the secret value: %s", body)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 1 {
+		t.Fatalf("entries = %d, want 1 for a refused deep path", len(entries.entries))
+	}
+
+	if got := entries.entries[0]; got.Outcome != audit.OutcomeFailure || got.Kind != audit.KindReveal ||
+		got.ValuePath != path {
+		t.Fatalf("entry = %+v, want a reveal failure with the path", got)
+	}
+}

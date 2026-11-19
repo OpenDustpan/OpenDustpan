@@ -495,11 +495,22 @@ func (h *Handler) writeStateReadError(
 	ctx context.Context, w http.ResponseWriter, ref stack.Ref, update stack.UpdateID, err error,
 ) {
 	if errors.Is(err, stack.ErrStateBound) {
-		h.logger.WarnContext(ctx, "state past the masked read bound",
-			slog.String("stack", ref.String()), slog.String("update", string(update)))
+		h.logger.WarnContext(ctx, "state is too deep or too large for a masked read",
+			slog.String("stack", oneLine(ref.String())), slog.String("update", oneLine(string(update))))
 	}
 
 	h.writeError(ctx, w, err)
+}
+
+// oneLine returns s with each CR and LF removed, so a logged identifier cannot
+// start a second log line.
+//
+// Defense in depth: names and update IDs are validated at the boundary and the
+// logger may encode its values. This helper does not rely on either layer. It
+// stays so that a value that reaches a log call without those checks cannot
+// forge a log line.
+func oneLine(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 // diffUpdates names the updates that saved the two checkpoints of a diff.
@@ -516,10 +527,10 @@ func (h *Handler) writeStateDiffError(
 	ctx context.Context, w http.ResponseWriter, ref stack.Ref, updates diffUpdates, err error,
 ) {
 	if errors.Is(err, stack.ErrStateBound) {
-		h.logger.WarnContext(ctx, "state past the masked read bound",
-			slog.String("stack", ref.String()),
-			slog.String("from_update", string(updates.from)),
-			slog.String("to_update", string(updates.to)))
+		h.logger.WarnContext(ctx, "state is too deep or too large for a masked read",
+			slog.String("stack", oneLine(ref.String())),
+			slog.String("from_update", oneLine(string(updates.from))),
+			slog.String("to_update", oneLine(string(updates.to))))
 	}
 
 	h.writeError(ctx, w, err)

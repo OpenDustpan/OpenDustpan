@@ -292,9 +292,11 @@ func withinDepth(v any, depth int) bool {
 // past maxMaskWorkBytes. Each value costs the bytes of its path plus
 // maskValueCost. It builds no path itself.
 //
-// Defense in depth: the decoder bounds the depth of the whole document too;
-// this scan stays so that a new caller of the walk cannot skip the bound, and
-// it adds the work bound that the decoder does not have.
+// Defense in depth: decodeDeployment checks the depth of the whole document
+// with withinDepth before a masked read reaches this scan. This scan does not
+// rely on that check. It stays so that a caller of the walk that did not call
+// decodeDeployment cannot skip the depth bound, and it adds the work bound
+// that withinDepth does not have.
 func checkMaskWork(budget *maskBudget, v any, prefix int) error {
 	return scanMaskWork(budget, v, prefix, 0)
 }
@@ -521,7 +523,7 @@ func previousFingerprints(previous []byte) (map[string]string, error) {
 	doc, err := decodeDeployment(previous)
 	if err != nil {
 		if errors.Is(err, ErrStateBound) {
-			return nil, fmt.Errorf("previous state: %w", err)
+			return nil, fmt.Errorf("read previous state: %w", err)
 		}
 
 		return marks, nil

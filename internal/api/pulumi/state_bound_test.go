@@ -61,7 +61,7 @@ func checkBoundLog(t *testing.T, raw []byte, planted string, updateFields ...str
 		t.Fatalf("log %q: want one JSON line: %v", raw, err)
 	}
 
-	if entry["level"] != "WARN" || entry["msg"] != "state past the masked read bound" {
+	if entry["level"] != "WARN" || entry["msg"] != "state is too deep or too large for a masked read" {
 		t.Errorf("log = %v %v, want the WARN of the bound", entry["level"], entry["msg"])
 	}
 

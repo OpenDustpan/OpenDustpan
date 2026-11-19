@@ -2,6 +2,7 @@ package stack
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/json/jsontext"
@@ -144,6 +145,10 @@ func validEscapes(token string) bool {
 	return true
 }
 
+// revealLeadTokens is the number of leading tokens of a reveal path:
+// "resources", the index of the resource and the section.
+const revealLeadTokens = 3
+
 // SecretCiphertextOf returns the ciphertext bytes at path of deployment, and
 // the masked set holding the path. The server streams the deployment to the
 // path and decodes only the value there, so no tree of the whole deployment
@@ -151,12 +156,26 @@ func validEscapes(token string) bool {
 // resource, else it fails with ErrResourceNotFound, so a caller cannot probe
 // paths: the secret check is the masked set check, with the same isSecret as
 // the masked read, so no second masking path exists. A secret with no
-// decodable ciphertext fails with ErrInvalidUpdate.
-func SecretCiphertextOf(deployment []byte, path string) ([]byte, []string, error) {
+// decodable ciphertext fails with ErrInvalidUpdate. A path that goes deeper
+// than MaxStateDepth below the section of the resource fails with
+// ErrStateBound, as the masked read refuses such a value. A canceled ctx
+// fails the lookup after the stream of the whole deployment, and the call
+// returns no ciphertext.
+func SecretCiphertextOf(ctx context.Context, deployment []byte, path string) ([]byte, []string, error) {
 	tokens, ok := splitRevealPath(path)
 	if !ok || len(tokens) < 3 || tokens[0] != "resources" ||
 		(tokens[2] != fieldInputs && tokens[2] != fieldOutputs) {
 		return nil, nil, notFoundCipher(path)
+	}
+
+	// The tokens after the leading ones give the depth of the value under the
+	// section.
+	//
+	// Defense in depth: the handler and the masked read bound the depth too;
+	// this check stays so that a new caller cannot make the lookup walk a
+	// path past the bound.
+	if len(tokens)-revealLeadTokens > MaxStateDepth {
+		return nil, nil, fmt.Errorf("reveal path depth %d: %w", len(tokens)-revealLeadTokens, ErrStateBound)
 	}
 
 	index, ok := parseIndex(tokens[1])
@@ -164,7 +183,9 @@ func SecretCiphertextOf(deployment []byte, path string) ([]byte, []string, error
 		return nil, nil, notFoundCipher(path)
 	}
 
-	cipher, err := streamSecretCipher(deployment, index, tokens[2], tokens[3:], path)
+	target := secretTarget{index: index, section: tokens[2], rest: tokens[revealLeadTokens:], path: path}
+
+	cipher, err := streamSecretCipher(ctx, deployment, target)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -278,14 +299,24 @@ func streamArrayAt(dec *jsontext.Decoder, index int) (bool, error) {
 	}
 }
 
+// secretTarget names the secret that a reveal looks for: the index of the
+// resource, the section (inputs or outputs), the tokens of the path under the
+// section, and the whole path for the error text.
+type secretTarget struct {
+	index   int
+	section string
+	rest    []string
+	path    string
+}
+
 // streamSecretCipher walks the streamed deployment to the secret at
 // /resources/index/section/rest and returns its ciphertext bytes. Values off
 // the path are skipped without building them. An answer is given only after
 // every member of the deployment has streamed, so a duplicate key anywhere
 // fails the lookup, as it fails the masked read's decoder in pkg/workspace.
-func streamSecretCipher(
-	deployment []byte, index int, section string, rest []string, path string,
-) ([]byte, error) {
+func streamSecretCipher(ctx context.Context, deployment []byte, at secretTarget) ([]byte, error) {
+	index, section, rest, path := at.index, at.section, at.rest, at.path
+
 	dec := jsontext.NewDecoder(bytes.NewReader(deployment))
 
 	open, err := openStreamedObject(dec)
@@ -317,6 +348,13 @@ func streamSecretCipher(
 	// answer, so the decoder checks every member.
 	if err := drainAfterElement(dec); err != nil {
 		return nil, err
+	}
+
+	// A canceled call returns no ciphertext. The check follows the drain, the
+	// longest step of the lookup, so a call that the caller left does not hand
+	// out a secret.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("reveal secret: %w", err)
 	}
 
 	return cipher, nil

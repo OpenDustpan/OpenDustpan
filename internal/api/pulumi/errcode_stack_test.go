@@ -35,7 +35,7 @@ func TestStackAndSecretErrorsCarryACode(t *testing.T) {
 			errcode.StackResourceNotFound, nil,
 		},
 		{
-			"state past the masked read bound", fmt.Errorf("read resource: %w", stack.ErrStateBound),
+			"state is too deep or too large for a masked read", fmt.Errorf("read resource: %w", stack.ErrStateBound),
 			http.StatusRequestEntityTooLarge, errcode.StackStateTooComplex, nil,
 		},
 		{"has resources", stack.ErrHasResources, http.StatusBadRequest, errcode.StackHasResources, nil},
