@@ -427,9 +427,13 @@ func checkGrantIDRefused(t *testing.T, want string, p identity.Principal, ns nam
 	id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: want, err: nil}, p, ns)
 	ref := access.GrantIDRef(want)
 
-	if !found || id != "" || !errors.Is(err, access.ErrInvalid) || ref != "grant:invalid" {
-		t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v and GrantIDRef = %q; want no ID, true, ErrInvalid, grant:invalid",
-			want, id, found, err, ref)
+	if !found || id != "" || !errors.Is(err, access.ErrInvalid) ||
+		!errors.Is(err, access.ErrInvalidDiscoveryGrantID) || ref != "grant:invalid" {
+		t.Fatalf(
+			"DiscoveryGrantID(%q) = %q, %v, %v and GrantIDRef = %q; "+
+				"want no ID, true, ErrInvalidDiscoveryGrantID, grant:invalid",
+			want, id, found, err, ref,
+		)
 	}
 }
 
