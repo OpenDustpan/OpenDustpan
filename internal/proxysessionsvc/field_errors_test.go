@@ -27,14 +27,16 @@ func TestPutSettingsNamesTheInvalidCredentialField(t *testing.T) {
 		{"colon in the user name", upstreamURL, marker + ":x", "p", "upstreamCredential.username"},
 		{"empty user name", upstreamURL, "", "p", "upstreamCredential.username"},
 		{
-			"long user name", upstreamURL, strings.Repeat("u", proxysessionsvc.MaxUsernameBytes+1), "p",
+			"long user name", upstreamURL, marker + strings.Repeat("u", proxysessionsvc.MaxUsernameBytes), "p",
 			"upstreamCredential.username",
 		},
 		{
-			"long password", upstreamURL, "u", strings.Repeat("p", proxysessionsvc.MaxPasswordBytes+1),
+			"long password", upstreamURL, "u", marker + strings.Repeat("p", proxysessionsvc.MaxPasswordBytes),
 			"upstreamCredential.password",
 		},
 		{"control character", upstreamURL, "u" + marker + "\x07", "p", "upstreamCredential"},
+		{"control character in the password", upstreamURL, "u", marker + "\u202e", "upstreamCredential"},
+		{"user name not UTF-8", upstreamURL, "u" + marker + "\xff", "p", "upstreamCredential"},
 		{"no upstream", "", "u" + marker, "p", "upstreamCredential"},
 	}
 

@@ -38,22 +38,22 @@ func TestPoolCreateNamesTheInvalidField(t *testing.T) {
 		{
 			"lease too short",
 			map[string]any{"name": "prod", "purpose": "jobs", "lease": 1000},
-			"lease: use 0, or 30000 to 600000 milliseconds.",
+			"lease: use 30000 to 600000 milliseconds.",
 		},
 		{
 			"lease too long",
 			map[string]any{"name": "prod", "purpose": "jobs", "lease": 700000},
-			"lease: use 0, or 30000 to 600000 milliseconds.",
+			"lease: use 30000 to 600000 milliseconds.",
 		},
 		{
 			"concurrency too high",
 			map[string]any{"name": "prod", "purpose": "jobs", "concurrency": 65},
-			"concurrency: use 0, or 1 to 64.",
+			"concurrency: use 0 to 64 workers.",
 		},
 		{
 			"concurrency negative",
 			map[string]any{"name": "prod", "purpose": "jobs", "concurrency": -1},
-			"concurrency: use 0, or 1 to 64.",
+			"concurrency: use 0 to 64 workers.",
 		},
 		{
 			"isolation unknown",

@@ -301,18 +301,34 @@ func ValidName(s string) bool {
 }
 
 // FieldError is the error of a field of a pool that is not valid. It wraps
-// ErrInvalid. Its field and its rule are fixed text of this package: the
-// error never holds the value that the caller sent, so a log line or an
-// answer that shows it cannot carry hostile input.
+// ErrInvalid. Its field and its rule are constant text. The error never
+// holds the value that the caller sent.
 type FieldError struct {
 	field string
 	rule  string
 }
 
-// NewFieldError makes a FieldError. The field and the rule must be constant
-// text: never pass a value that the caller of the API sent.
-func NewFieldError(field, rule string) *FieldError {
-	return &FieldError{field: field, rule: rule}
+// fieldText is the type of the text of a FieldError. Only a constant converts
+// to it without a cast, and the type has no name outside this package, so
+// another package cannot pass a variable or the result of fmt.Sprintf.
+type fieldText string
+
+// NewFieldError makes a FieldError. The field and the rule are constant
+// text: the compiler refuses a string variable.
+func NewFieldError(field, rule fieldText) *FieldError {
+	return &FieldError{field: string(field), rule: string(rule)}
+}
+
+// NewFieldRangeError makes a FieldError with the rule "use lo to hi unit.".
+// The field and the unit are constant text. The bounds are numbers.
+func NewFieldRangeError(field, unit fieldText, lo, hi int64) *FieldError {
+	return newFieldErrorf(string(field), "use %d to %d %s.", lo, hi, string(unit))
+}
+
+// newFieldErrorf makes a FieldError from a constant format and constant
+// arguments of this package.
+func newFieldErrorf(field, format string, args ...any) *FieldError {
+	return &FieldError{field: field, rule: fmt.Sprintf(format, args...)}
 }
 
 // Field returns the name of the field in the request, for example "lease".
@@ -339,22 +355,20 @@ func (e *FieldError) Unwrap() error { return ErrInvalid }
 func (p *Pool) Validate() error {
 	switch {
 	case !ValidName(p.Name):
-		return NewFieldError("name", fmt.Sprintf(
-			"use 1 to %d lowercase letters, digits and '-'. Start and end with a letter or digit.", MaxNameLength,
-		))
+		return newFieldErrorf("name",
+			"use 1 to %d lowercase letters, digits and '-'. Start and end with a letter or digit.", MaxNameLength)
 	case !p.Purpose.Valid():
-		return NewFieldError("purpose", fmt.Sprintf("use %s or %s.", PurposeJobs, PurposeSweeps))
+		return newFieldErrorf("purpose", "use %s or %s.", PurposeJobs, PurposeSweeps)
 	case p.Lease != 0 && (p.Lease < MinLease || p.Lease > MaxLease):
-		return NewFieldError("lease", fmt.Sprintf("use 0, or %d to %d milliseconds.",
-			MinLease.Milliseconds(), MaxLease.Milliseconds()))
+		return NewFieldRangeError("lease", "milliseconds", MinLease.Milliseconds(), MaxLease.Milliseconds())
 	case p.Concurrency < 0 || p.Concurrency > MaxConcurrency:
-		return NewFieldError("concurrency", fmt.Sprintf("use 0, or 1 to %d.", MaxConcurrency))
+		return NewFieldRangeError("concurrency", "workers", 0, MaxConcurrency)
 	}
 
 	for _, k := range p.Isolation {
 		if !k.Valid() {
-			return NewFieldError("isolation", fmt.Sprintf("use %s, %s, %s or %s.",
-				IsolationKubernetes, IsolationFirecracker, IsolationGVisor, IsolationProcess))
+			return newFieldErrorf("isolation", "use %s, %s, %s or %s.",
+				IsolationKubernetes, IsolationFirecracker, IsolationGVisor, IsolationProcess)
 		}
 	}
 
@@ -420,8 +434,8 @@ func (g GitCredentials) Validate() error {
 	case GitCredentialsCustom:
 		return validateHelper(g.Helper)
 	default:
-		return NewFieldError("gitCredentials.mode", fmt.Sprintf("use %s, %s or %s.",
-			GitCredentialsNone, GitCredentialsForge, GitCredentialsCustom))
+		return newFieldErrorf("gitCredentials.mode", "use %s, %s or %s.",
+			GitCredentialsNone, GitCredentialsForge, GitCredentialsCustom)
 	}
 }
 

@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -18,7 +17,7 @@ const (
 	fieldAllowedRanges = "allowedRanges"
 	fieldUpstreamProxy = "upstreamProxy"
 	rangeRule          = "use network ranges in CIDR form with no host bits, for example 10.0.0.0/8. " +
-		"A range that is too wide, or that opens an address that must stay closed, is not allowed."
+		"Do not use a range that is too wide or that opens a blocked address."
 )
 
 // MaxProxyRanges is the most private ranges that one pool may allow. A save
@@ -40,10 +39,10 @@ type ProxySettings struct {
 // ErrInvalid for a range that egress.ParseAllowedRanges refuses, a range with
 // a host bit, more than MaxProxyRanges ranges, and an upstream URL that is
 // not an http or https URL with a host that the job proxy may open. The
-// errors never repeat the upstream URL.
+// errors never repeat a range or the upstream URL.
 func NewProxySettings(ranges []string, upstreamURL string) (ProxySettings, error) {
 	if len(ranges) > MaxProxyRanges {
-		return ProxySettings{}, NewFieldError(fieldAllowedRanges, fmt.Sprintf("use 0 to %d ranges.", MaxProxyRanges))
+		return ProxySettings{}, NewFieldRangeError(fieldAllowedRanges, "ranges", 0, MaxProxyRanges)
 	}
 
 	if _, err := egress.ParseAllowedRanges(ranges); err != nil {

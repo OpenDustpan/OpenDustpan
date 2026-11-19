@@ -102,6 +102,7 @@ func TestNewProxySettingsNamesTheField(t *testing.T) {
 		{"range with a host bit", []string{"10.0.0.1/8"}, "", "allowedRanges"},
 		{"upstream scheme", nil, "ZZ-marker://x", "upstreamProxy"},
 		{"upstream user information", nil, "http://ZZ-marker:pw@proxy.example:3128", "upstreamProxy"},
+		{"upstream empty fragment", nil, "http://proxy.example.com#", "upstreamProxy"},
 	}
 
 	for _, tc := range tests {

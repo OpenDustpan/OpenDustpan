@@ -828,15 +828,15 @@ func (s *Service) unseal(ctx context.Context, pool runner.Pool, sealed []byte) (
 func checkCredential(c *Credential) error {
 	switch {
 	case c.Username == "" || len(c.Username) > MaxUsernameBytes:
-		return runner.NewFieldError("upstreamCredential.username", fmt.Sprintf("use 1 to %d bytes.", MaxUsernameBytes))
+		return runner.NewFieldRangeError("upstreamCredential.username", "bytes", 1, MaxUsernameBytes)
 	case len(c.Password) > MaxPasswordBytes:
-		return runner.NewFieldError("upstreamCredential.password", fmt.Sprintf("use 0 to %d bytes.", MaxPasswordBytes))
+		return runner.NewFieldRangeError("upstreamCredential.password", "bytes", 0, MaxPasswordBytes)
 	case !utf8.ValidString(c.Username) || !utf8.ValidString(c.Password):
 		return runner.NewFieldError("upstreamCredential", "use valid UTF-8 text for the user name and the password.")
 	case strings.Contains(c.Username, ":"):
 		return runner.NewFieldError("upstreamCredential.username", "use a user name with no colon.")
 	case strings.ContainsFunc(c.Username+c.Password, ident.IsHiddenRune):
-		return runner.NewFieldError("upstreamCredential", "use no control, format or separator character.")
+		return runner.NewFieldError("upstreamCredential", "do not use a control, format or separator character.")
 	}
 
 	return nil
