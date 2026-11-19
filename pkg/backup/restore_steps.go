@@ -1114,7 +1114,17 @@ func (s *RestoreService) stepSwap(ctx context.Context, sc durable.StepContext, i
 	}
 
 	if _, err := s.live.ApplyRestoreArea(ctx, sc.Fence, area, d); err != nil {
-		return nil, fmt.Errorf("apply staged data for restore %s: %w", in.ID, err)
+		wrapped := fmt.Errorf("apply staged data for restore %s: %w", in.ID, err)
+
+		// The store returns ErrCorrupt when it refuses a widened swap (the
+		// live setting row does not say true). A retry decides the same way,
+		// so this step makes the error permanent: the restore fails at once
+		// and writes its failure entry.
+		if errors.Is(err, ErrCorrupt) {
+			return nil, durable.Permanent(wrapped)
+		}
+
+		return nil, wrapped
 	}
 
 	return nil, nil

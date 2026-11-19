@@ -334,12 +334,32 @@ func checkWorkCopy(path string) error {
 		return fmt.Errorf("work copy is not a regular file: %w", backup.ErrCorrupt)
 	}
 
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	// Defense in depth: the Lstat check above refuses a link at the name, and
+	// O_NOFOLLOW refuses it again when the file opens, so a link that another
+	// process puts at the name after the Lstat cannot take the mode change.
+	// The checks on the open descriptor do not rely on the Lstat.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open work copy: %w", backup.ErrCorrupt)
+	}
+
+	defer func() { _ = f.Close() }() //nolint:errcheck // Read-only descriptor: nothing to flush.
+
+	fdInfo, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("check work copy: %w", backup.ErrExportRead)
+	}
+
+	if !fdInfo.Mode().IsRegular() || !os.SameFile(info, fdInfo) {
+		return fmt.Errorf("work copy is not the file that was checked: %w", backup.ErrCorrupt)
+	}
+
+	stat, ok := fdInfo.Sys().(*syscall.Stat_t)
 	if !ok || stat.Nlink != 1 {
 		return fmt.Errorf("work copy has more than one hard link: %w", backup.ErrCorrupt)
 	}
 
-	if chmodErr := os.Chmod(path, workCopyMode); chmodErr != nil {
+	if chmodErr := f.Chmod(workCopyMode); chmodErr != nil {
 		return fmt.Errorf("set mode of work copy: %w", backup.ErrExportRead)
 	}
 

@@ -335,3 +335,26 @@ func TestRemoveEndedAreasRemovesTheWorkCopyJournal(t *testing.T) {
 		t.Errorf("%s still exists after the cleanup: %v", filepath.Base(journal), statErr)
 	}
 }
+
+// TestRemoveSnapshotRemovesTheSidecars proves that removeSnapshot removes the
+// WAL, shared-memory and rollback journal files with the database file.
+func TestRemoveSnapshotRemovesTheSidecars(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "work")
+
+	names := []string{base, base + "-wal", base + "-shm", base + "-journal"}
+	for _, name := range names {
+		if err := os.WriteFile(name, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	removeSnapshot(base)
+
+	for _, name := range names {
+		if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s still exists after removeSnapshot: %v", filepath.Base(name), err)
+		}
+	}
+}

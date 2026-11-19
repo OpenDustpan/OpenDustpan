@@ -869,7 +869,13 @@ func (s *Store) ApplyRestoreArea(
 
 // checkWidenedSetting refuses a swap that widens when the live row of the
 // restore access setting does not say true. A swap that does not widen needs
-// no check. The failure is permanent: a retry decides the same way.
+// no check. The swap step makes the failure permanent (the error is
+// ErrCorrupt): a retry decides the same way.
+//
+// The store reads only the database row. Today no static source maps this
+// key, so the effective value of the service and the row of the store cannot
+// differ. If a static source is added, this check must read the effective
+// value too.
 //
 // Defense in depth: the service checks the setting too. This check stays so
 // that a bug in swapDecision or widenedAccess, or a new caller of the store,
