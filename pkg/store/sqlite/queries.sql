@@ -184,6 +184,14 @@ SELECT id
 FROM stacks
 WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
+-- name: GetPlacedStack :one
+-- The stack ID with whether a collection holds the stack, read in one
+-- statement. The writes of a running update use it, so that a stack in no
+-- collection is refused in the same transaction as the write.
+SELECT id, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
+FROM stacks
+WHERE stacks.namespace = ? AND stacks.project = ? AND stacks.name = ? AND deleted_at_ms IS NULL;
+
 -- name: StackRefByID :one
 SELECT namespace, project, name
 FROM stacks

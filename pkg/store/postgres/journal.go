@@ -30,7 +30,7 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 
 	retried := false
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, row.Ref)
+		stackID, err := placedStackIDFor(ctx, q, row.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
 			return stack.ErrWrongUpdateState
 		}
@@ -651,7 +651,7 @@ func (s *Store) PutBuiltCheckpoint(
 	var keys []blob.Key
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, cp.Ref)
+		stackID, err := placedStackIDFor(ctx, q, cp.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
 			return stack.ErrWrongUpdateState
 		}

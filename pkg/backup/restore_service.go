@@ -524,12 +524,40 @@ func (s *RestoreService) admitStart(
 		return nil, fmt.Errorf("begin restore %s: %w", id, err)
 	}
 
+	if err := s.requireRestorable(ctx, req.BackupID); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
 	warnings, err := s.startDevCheck(ctx, req.BackupID)
 	if err != nil {
 		return nil, fmt.Errorf("begin restore %s: %w", id, err)
 	}
 
 	return warnings, nil
+}
+
+// requireRestorable refuses a start for a backup that cannot restore, before
+// the start makes a row. A backup with a row must have succeeded. A backup
+// with no row can come from another installation, so the target decides: it
+// must hold the live pointer of the backup. An ID that the registry and the
+// target both do not know is ErrNotFound. A read error that is not a missing
+// pointer refuses: the start does not make a row.
+func (s *RestoreService) requireRestorable(ctx context.Context, id ID) error {
+	err := s.backups.RequireSucceeded(ctx, id)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
+	_, pointerErr := readLivePointerLimit(ctx, s.target, id, maxLivePointerBytes)
+	if errors.Is(pointerErr, blob.ErrNotFound) {
+		return fmt.Errorf("backup %s: %w", id, ErrNotFound)
+	}
+
+	if pointerErr != nil {
+		return fmt.Errorf("backup %s: %w", id, pointerErr)
+	}
+
+	return nil
 }
 
 // startInput returns the input of the operation of restore id, with a new

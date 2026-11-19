@@ -836,12 +836,12 @@ func TestReleaseRecordTargetMode(t *testing.T) {
 	}{
 		{"no VERSION", nil, false, "go test", script},
 		{"VERSION in the environment", []string{"VERSION=v9.9.9"}, false, "go test", script},
-		{"VERSION on the command line", nil, true, script + " 'v0.1.0'", "go test"},
+		{"VERSION on the command line", nil, true, script + ` "$RELEASE_VERSION"`, "go test"},
 		{
 			"VERSION in both",
 			[]string{"VERSION=v9.9.9"},
 			true,
-			script + " 'v0.1.0'",
+			script + ` "$RELEASE_VERSION"`,
 			"v9.9.9",
 		},
 	}

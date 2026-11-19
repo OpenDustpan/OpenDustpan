@@ -1131,6 +1131,10 @@ type sqlUpdatesStore struct {
 	path string
 }
 
+// Unwrap implements storetest.Unwrapper: the embedded interface hides the
+// collection methods that the suites use to put a stack in a collection.
+func (s *sqlUpdatesStore) Unwrap() any { return s.UpdatesStore }
+
 var (
 	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
 	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)

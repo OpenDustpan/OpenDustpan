@@ -89,6 +89,13 @@ var (
 // same backup command against the same server.
 const rerunHelp = "run opendustpan backup --server %s again"
 
+// backupResumeHelp says what to do when the command cannot read a backup that
+// started: the server continues the backup on its own, for example after a
+// restart, so a second run is not needed. The operator reads the state of the
+// backup instead. A second start answers 409 while the backup runs.
+const backupResumeHelp = "the server continues backup %s on its own and it needs no second run: " +
+	"read its state with GET %s/api/dustpan/v1/backups/%s"
+
 // backupFlags holds the settings of the backup subcommand.
 type backupFlags struct {
 	server string
@@ -341,11 +348,13 @@ func readBackup(
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return BackupStatusResponse{}, fmt.Errorf(
-			"%w %s: %w: "+rerunHelp,
+			"%w %s: %w: "+backupResumeHelp,
 			ErrBackupRead,
 			id,
 			err,
+			id,
 			server,
+			id,
 		)
 	}
 
@@ -354,11 +363,13 @@ func readBackup(
 	resp, err := client.Do(req)
 	if err != nil {
 		return BackupStatusResponse{}, fmt.Errorf(
-			"%w %s: %w: "+rerunHelp,
+			"%w %s: %w: "+backupResumeHelp,
 			ErrBackupRead,
 			id,
 			err,
+			id,
 			server,
+			id,
 		)
 	}
 
@@ -367,7 +378,7 @@ func readBackup(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		hint := fmt.Sprintf(rerunHelp, server)
+		hint := fmt.Sprintf(backupResumeHelp, id, server, id)
 
 		return BackupStatusResponse{}, fmt.Errorf(
 			"%w %s: %s",
@@ -381,11 +392,13 @@ func readBackup(
 
 	if err := decodeCappedJSON(resp.Body, MaxManifestAnswerBytes, &doc); err != nil {
 		return BackupStatusResponse{}, fmt.Errorf(
-			"%w %s: %w: "+rerunHelp,
+			"%w %s: %w: "+backupResumeHelp,
 			ErrBackupRead,
 			id,
 			err,
+			id,
 			server,
+			id,
 		)
 	}
 
@@ -413,10 +426,12 @@ func waitBackup(
 		select {
 		case <-ctx.Done():
 			return BackupStatusResponse{}, fmt.Errorf(
-				"wait for backup %s: %w: "+rerunHelp,
+				"wait for backup %s: %w: "+backupResumeHelp,
 				id,
 				ctx.Err(),
+				id,
 				server,
+				id,
 			)
 		case <-timer.C:
 			timer.Reset(backupPollInterval)
