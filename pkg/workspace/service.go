@@ -1577,9 +1577,13 @@ func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersio
 func (s *Service) StateVersionWorkspace(ctx context.Context, id StateVersionID) (ID, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return "", fmt.Errorf("locate state %s: %w", id, err)
+		return "", fmt.Errorf("locate state %q: %w", id, err)
 	}
 
+	// Defense in depth: this check stays so that a resolver never authorizes
+	// a pending version, and so that a new caller of this method cannot skip
+	// it. It does not rely on the later ReadState of the handler, which
+	// checks the status too, and it does not rely on the authorization guard.
 	if sv.Status != StatusFinalized {
 		return "", fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, id, sv.Status)
 	}
