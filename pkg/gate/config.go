@@ -118,9 +118,14 @@ const (
 )
 
 // ApprovalDefault returns the approval default of scope. It returns
-// ErrNotFound when scope sets none.
+// ErrNotFound when scope sets none. It returns namespace.ErrNotFound when no
+// namespace has the name of scope.
 func (s *ConfigService) ApprovalDefault(ctx context.Context, scope Scope) (ApprovalDefault, error) {
 	if err := requireNamespaceScope(scope); err != nil {
+		return ApprovalDefault{}, err
+	}
+
+	if err := s.requireNamespace(ctx, scope); err != nil {
 		return ApprovalDefault{}, err
 	}
 
@@ -202,9 +207,14 @@ func (s *ConfigService) DeleteApprovalDefault(
 }
 
 // ApprovalRules returns the approval rules stored at scope, ordered by ID.
-// It returns none of a wider scope.
+// It returns none of a wider scope. It returns namespace.ErrNotFound when no
+// namespace has the name of scope.
 func (s *ConfigService) ApprovalRules(ctx context.Context, scope Scope) ([]ApprovalRule, error) {
 	if err := requireNamespaceScope(scope); err != nil {
+		return nil, err
+	}
+
+	if err := s.requireNamespace(ctx, scope); err != nil {
 		return nil, err
 	}
 
@@ -222,9 +232,14 @@ func (s *ConfigService) ApprovalRules(ctx context.Context, scope Scope) ([]Appro
 	return rules, nil
 }
 
-// ApprovalRule returns the approval rule id of scope, or ErrNotFound.
+// ApprovalRule returns the approval rule id of scope, or ErrNotFound. It
+// returns namespace.ErrNotFound when no namespace has the name of scope.
 func (s *ConfigService) ApprovalRule(ctx context.Context, scope Scope, id ID) (ApprovalRule, error) {
 	if err := requireNamespaceScope(scope); err != nil {
+		return ApprovalRule{}, err
+	}
+
+	if err := s.requireNamespace(ctx, scope); err != nil {
 		return ApprovalRule{}, err
 	}
 
@@ -319,6 +334,18 @@ func requireNamespaceScope(scope Scope) error {
 	default:
 		return fmt.Errorf("%w: the scope is empty", ErrInvalid)
 	}
+}
+
+// requireNamespace returns an error that matches namespace.ErrNotFound when
+// no namespace has the name of scope. A read of a namespace that does not
+// exist then answers as a write does, not as a namespace with no
+// configuration.
+func (s *ConfigService) requireNamespace(ctx context.Context, scope Scope) error {
+	if _, err := s.ns.Get(ctx, scope.Namespace()); err != nil {
+		return fmt.Errorf("read the namespace %q: %w", scope.Namespace(), err)
+	}
+
+	return nil
 }
 
 // prepare reads the fence of the namespace of scope and completes e.
