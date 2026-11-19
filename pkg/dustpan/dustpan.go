@@ -1758,7 +1758,7 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	if cfg.secretWrapper == nil {
 		return baseurl.Resolver{}, fmt.Errorf(
 			"%w: WithSecretWrapper: the server needs a key-encryption key to seal OpenTofu state and "+
-				"Pulumi secrets (ADR 41)",
+				"Pulumi secrets",
 			ErrMissingOption,
 		)
 	}

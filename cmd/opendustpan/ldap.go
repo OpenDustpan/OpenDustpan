@@ -225,6 +225,7 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 
 	return dustpan.LDAPProvider{
 		RootCAs:                   roots,
+		CAFile:                    strings.TrimSpace(l.caFile),
 		AllowedRanges:             ranges,
 		ID:                        l.providerID,
 		DisplayName:               l.displayName,

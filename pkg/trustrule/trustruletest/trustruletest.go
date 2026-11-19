@@ -96,6 +96,8 @@ func cases() []suiteCase {
 		// An update checks the revision, the fence and the principal, and
 		// keeps what never changes.
 		updateCases(),
+		// A SPIFFE ID pattern with a * is refused, and nothing changes.
+		spiffeWildcardCases(),
 		// The trust bundle of a namespace keeps append-only versions with one
 		// active pointer, and refuses input that fails its checks.
 		bundleCases(),

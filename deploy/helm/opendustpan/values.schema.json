@@ -312,7 +312,7 @@
       ],
       "properties": {
         "existingSecret": {
-          "$ref": "#/definitions/optionalSecretRef"
+          "$ref": "#/definitions/requiredSecretRef"
         }
       }
     },

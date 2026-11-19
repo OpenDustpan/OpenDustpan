@@ -544,3 +544,19 @@ func healthTLSServerWithoutCert(t *testing.T) {
 		t.Fatal("health of a TLS server over plain HTTP succeeded, want an error")
 	}
 }
+
+// TestHealthPlainProbeOfATLSServerNamesTheFlag proves that health against a
+// TLS server with no --tls-cert names --tls-cert in its error.
+func TestHealthPlainProbeOfATLSServerNamesTheFlag(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := runHealthCommand(t, "--listen", healthListenOf(t, server.URL))
+	if err == nil || !strings.Contains(err.Error(), "--tls-cert") {
+		t.Fatalf("health = %v, want an error that names --tls-cert", err)
+	}
+}

@@ -34,6 +34,10 @@ const (
 	// TrustRuleSignInRequired means that an access token cannot create a
 	// trust rule, and the caller must sign in.
 	TrustRuleSignInRequired = "trust-rule.sign-in-required"
+	// TrustRuleSpiffeWildcard means that the SPIFFE ID pattern of the trust
+	// rule holds a *, and a rule for the mTLS exchange names an exact SPIFFE
+	// ID.
+	TrustRuleSpiffeWildcard = "trust-rule.spiffe-wildcard"
 )
 
 // trustRuleSpecs are the codes of the workload trust rules. No code of the
@@ -54,6 +58,10 @@ func trustRuleSpecs() []Spec {
 		{TrustRuleNotFound, "the namespace has no trust rule with the ID"},
 		{TrustRulePrincipalRefused, "the principal cannot be the principal of a trust rule of the namespace"},
 		{TrustRuleSignInRequired, "an access token cannot create a trust rule, and the caller must sign in"},
+		{
+			TrustRuleSpiffeWildcard,
+			"the SPIFFE ID pattern of the trust rule holds a *, and a rule for the mTLS exchange names an exact SPIFFE ID",
+		},
 	}
 
 	out := make([]Spec, 0, len(meanings))

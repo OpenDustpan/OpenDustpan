@@ -616,12 +616,36 @@ func (w *reachWalker) visit(ctx context.Context, id string) error {
 		return fmt.Errorf("read subjects of caller: %w", err)
 	}
 
+	// Defense in depth: the principal service and the restore check refuse
+	// a group membership of a principal of a namespace; this check stays so
+	// that a row from any other source widens no reach. It does not rely on
+	// those layers.
+	subjects, err = confineSubjectsOf(ctx, subjects, rec.ID, w.cfg.Principals)
+	if err != nil {
+		return fmt.Errorf("confine subjects of %q: %w", id, err)
+	}
+
 	var fresh []Grant
 
 	for _, subject := range subjects {
 		grants, err := w.cfg.Grants.GrantsOf(ctx, subject)
 		if err != nil {
 			return fmt.Errorf("read grants of %s: %w", subject.String(), err)
+		}
+
+		// Defense in depth: the store reads only the subject that it is
+		// asked for. This check stays so that a grant of another subject,
+		// for example a namespace principal, never counts for this one.
+		if subjectErr := requireGrantSubject(subject, grants); subjectErr != nil {
+			return subjectErr
+		}
+
+		// Defense in depth: the store and the restore check refuse a grant
+		// of a principal of a namespace on another namespace; this check
+		// stays so that a row from any other source widens no reach.
+		grants, err = confineGrantsOf(ctx, grants, w.cfg.Principals)
+		if err != nil {
+			return fmt.Errorf("confine grants of %s: %w", subject.String(), err)
 		}
 
 		fresh = append(fresh, w.remember(grants)...)
@@ -641,7 +665,36 @@ func (w *reachWalker) seedGroup(ctx context.Context, groupID string) error {
 		return fmt.Errorf("read grants of %s: %w", subject.String(), err)
 	}
 
+	// Defense in depth: same checks as in visit. A hostile port could answer
+	// a group read with the grant of a principal of a namespace; these
+	// checks stay so that such a row gives no reach. They do not rely on the
+	// store. requireGrantSubject alone stops a grant of another subject, so
+	// confineGrantsOf matters here only if requireGrantSubject is changed or
+	// removed; it stays for that case, and requireGrantSubject does not rely
+	// on it.
+	if subjectErr := requireGrantSubject(subject, grants); subjectErr != nil {
+		return subjectErr
+	}
+
+	grants, err = confineGrantsOf(ctx, grants, w.cfg.Principals)
+	if err != nil {
+		return fmt.Errorf("confine grants of %s: %w", subject.String(), err)
+	}
+
 	return w.follow(ctx, w.remember(grants))
+}
+
+// requireGrantSubject returns ErrInvalid when a grant is not a grant of
+// subject: the store answered for another subject, so the walk fails closed.
+func requireGrantSubject(subject Subject, grants []Grant) error {
+	for i := range grants {
+		if grants[i].Subject != subject {
+			return fmt.Errorf("%w: grant %s of subject %s that the read did not ask for (want %s)",
+				ErrInvalid, grants[i].ID, grants[i].Subject.String(), subject.String())
+		}
+	}
+
+	return nil
 }
 
 // remember records grants that the walker does not hold yet and returns
@@ -747,7 +800,10 @@ func (w *reachWalker) namespacePrincipals(ctx context.Context, ns namespace.Name
 			return out, nil
 		}
 
-		after = rows[len(rows)-1].Subject
+		after, err = nextPrincipalCursor(ns, after, rows)
+		if err != nil {
+			return nil, err
+		}
 	}
 }
 

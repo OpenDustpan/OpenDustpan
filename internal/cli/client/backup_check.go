@@ -101,7 +101,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 
-	token, err := BackupToken()
+	token, err := backupTokenFor("run opendustpan backup check again")
 	if err != nil {
 		return err
 	}

@@ -508,6 +508,13 @@ func (h *Handler) includeNamespace(
 			ReasonWithin: nil, Window: 0,
 		})
 
+		// One grant with an invalid ID hides only its own namespace: the
+		// namespace is skipped, not an error, so the other namespaces stay
+		// in the list. The denial entry above is the record of the skip.
+		if errors.Is(holdsErr, access.ErrInvalidDiscoveryGrantID) {
+			return false, "", nil
+		}
+
 		return false, "", holdsErr
 	}
 
