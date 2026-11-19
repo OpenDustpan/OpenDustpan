@@ -76,6 +76,11 @@ const (
 	// JWT through a trust rule. It belongs to a service principal, lives one
 	// exchange lifetime, and no rotation renews it.
 	KindJWTExchange Kind = "jwt-exchange"
+	// KindMTLSExchange is a token that a workload got in a token exchange of
+	// a TLS client certificate through a trust rule. It belongs to a service
+	// principal, lives one exchange lifetime capped at the leaf not-after
+	// time, and no rotation renews it.
+	KindMTLSExchange Kind = "mtls-exchange"
 )
 
 // Valid reports whether k is a kind that this version issues. It is the
@@ -83,7 +88,7 @@ const (
 // credential of a token refuse every other value.
 func (k Kind) Valid() bool {
 	switch k {
-	case KindPersonal, KindService, KindJWTExchange:
+	case KindPersonal, KindService, KindJWTExchange, KindMTLSExchange:
 		return true
 	default:
 		return false
@@ -95,7 +100,7 @@ func (k Kind) Valid() bool {
 // rule of the service tokens. The unexported set in this method is the only
 // place that names the kinds of an exchange.
 func (k Kind) FromExchange() bool {
-	return slices.Contains([]Kind{KindJWTExchange}, k)
+	return slices.Contains([]Kind{KindJWTExchange, KindMTLSExchange}, k)
 }
 
 // KindFor returns the kind of the token of a principal of kind k, or

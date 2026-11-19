@@ -1,57 +1,41 @@
 ## ADDED Requirements
 
-### Requirement: namespace-lock
-
-When a manual lock covers a namespace, the server SHALL refuse each state-changing write that a unit lock refuses on every unit of the namespace.
-
-#### Scenario: Lock namespace
-- **WHEN** a holder with unit:lock on the namespace locks it with a reason
-- **THEN** every unit of the namespace reports the lock flag with holder and reason
-
-### Requirement: covered-check
-
-When any caller asks whether a unit is covered, the server SHALL answer the holder and the reason when the unit, its collection or its namespace holds a manual lock.
-
-#### Scenario: Covered by namespace
-- **WHEN** Covering is called for a unit whose namespace is locked
-- **THEN** the answer holds the holder and the reason of the namespace lock
-
-#### Scenario: Not covered
-- **WHEN** Covering is called for a unit with no lock on any of the three levels
-- **THEN** the answer is ErrNotLocked (the object has no manual lock)
-
-### Requirement: job-dispatch-waits
-
-While a manual lock covers a unit, the server SHALL dispatch no queued phase of the unit.
-
-#### Scenario: Queued job waits
-- **WHEN** a manual lock covers the unit of a queued job
-- **THEN** the job stays queued with reason locked and keeps its queue timeout
-
-#### Scenario: Running phase ends
-- **WHEN** a lock arrives while a phase runs
-- **THEN** the phase runs to its end
-
-### Requirement: running-job-tool-lock
-
-When a tool lock request carries the job token of a phase that started before the manual lock, the server SHALL allow the tool lock.
-
-#### Scenario: Pre-lock phase
-- **WHEN** the phase start time is before the lock time
-- **THEN** the tool lock succeeds
-
-#### Scenario: Equal time
-- **WHEN** the lock time equals the phase start time
-- **THEN** the server refuses with lock.locked
-
 ### Requirement: bulk-lock
 
-When a caller bulk-locks or bulk-unlocks from 1 to 100 IDs, the server SHALL check each item on its own and answer one result per ID.
+When a caller sends 1 to 100 unit IDs and a reason to the bulk-lock route of a namespace, the server SHALL do the lock of each unit on its own, as a lock call on that unit alone does, and SHALL answer 200 with one result for each ID in the order of the request.
 
 #### Scenario: Mixed result
-- **WHEN** one of the IDs is already locked
-- **THEN** the answer is 200 with one result per ID in request order
+- **WHEN** one of the units already has a manual lock and the others have none
+- **THEN** the answer is 200 with one result for each ID, the result of the locked unit has the error lock.already-locked, the other units are locked with the holder and the reason of the call, and each locked unit has one audit entry
 
-#### Scenario: Too many IDs
-- **WHEN** a call holds 101 IDs
-- **THEN** the server answers 400 and changes nothing
+#### Scenario: Too many units
+- **WHEN** a call names 101 units, or no unit
+- **THEN** the server answers 400 with the error code lock.bulk-size and changes nothing
+
+#### Scenario: A unit that the caller cannot lock
+- **WHEN** the caller has unit:read and no unit:lock on one of the units
+- **THEN** the result of that unit has the 403 error of a lock call on that unit alone, the server writes a denied audit entry for it, and the other units are locked
+
+#### Scenario: A unit that is not visible
+- **WHEN** an ID names a unit that does not exist, a unit in another namespace, or a unit that the caller cannot read
+- **THEN** the three results are equal: 404 with the error code lock.target-not-found
+
+#### Scenario: Retry with the same key
+- **WHEN** the caller sends the call again with the same Idempotency-Key and the same body
+- **THEN** each unit that the first call locked answers its stored result and is not locked a second time, and each unit that failed with 5xx or 429 is done again
+
+### Requirement: bulk-unlock
+
+When a caller sends 1 to 100 unit IDs to the bulk-unlock route of a namespace, the server SHALL remove the lock of each unit that the caller holds, as an unlock call on that unit alone does, and SHALL answer 200 with one result for each ID in the order of the request.
+
+#### Scenario: Lock of another holder
+- **WHEN** another person holds the lock of one of the units
+- **THEN** the result of that unit has the error lock.not-holder and the lock stays, and the locks that the caller holds are removed
+
+#### Scenario: Unit with no lock
+- **WHEN** a unit has no manual lock
+- **THEN** the result of that unit has the error lock.not-locked and the other units keep their results
+
+#### Scenario: Repeated ID
+- **WHEN** one ID is in the call two times and the caller holds the lock
+- **THEN** the first result is ok and the second result has the error lock.not-locked

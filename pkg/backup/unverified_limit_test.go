@@ -33,6 +33,7 @@ type unverifiedFixture struct {
 	service  *backup.Service
 	registry *fakeRegistry
 	target   *memStore
+	source   *memStore
 	logs     *syncBuffer
 }
 
@@ -44,6 +45,7 @@ func newUnverifiedFixture(t *testing.T, exporter backup.PortableExporter, limit 
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	registry := newFakeRegistry()
 	target := newMemStore()
+	source := newMemStore()
 	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	service, err := backup.NewService(backup.Config{
@@ -51,7 +53,7 @@ func newUnverifiedFixture(t *testing.T, exporter backup.PortableExporter, limit 
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,
 		Operations:  registry.ops,
-		Blobs:       newMemStore(),
+		Blobs:       source,
 		StateOpener: nil,
 		Target:      target,
 		TargetName:  "mem:target",
@@ -68,7 +70,7 @@ func newUnverifiedFixture(t *testing.T, exporter backup.PortableExporter, limit 
 
 	backup.SetMaxUnverifiedKeysForTest(service, limit)
 
-	return &unverifiedFixture{service: service, registry: registry, target: target, logs: logs}
+	return &unverifiedFixture{service: service, registry: registry, target: target, source: source, logs: logs}
 }
 
 // TestBackupRefusesTooManyUnverifiedKeys proves the bound on the unverified

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/metrics"
 )
 
 // operationsHandler is an adapter that lists the given operations.
@@ -89,7 +90,9 @@ func TestDescribeOperationsRefusesAHandlerThatHidesItsRoutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := describeHandlers([]namedHandler{{name: "wrapped", handler: tt.handler}})
+			_, err := describeHandlers([]namedHandler{
+				{name: "wrapped", handler: tt.handler, label: metrics.AdapterServer},
+			})
 			if tt.bad != errors.Is(err, errUnlisted) {
 				t.Fatalf("describeHandlers() = %v, want a refusal: %v", err, tt.bad)
 			}
@@ -123,7 +126,11 @@ func goodOperation() apidesc.Operation {
 // operation.
 func describeOne(op apidesc.Operation) ([]apidesc.Operation, error) {
 	return describeHandlers([]namedHandler{
-		{name: "server", handler: operationsHandler{Handler: http.NotFoundHandler(), ops: []apidesc.Operation{op}}},
+		{
+			name:    "server",
+			handler: operationsHandler{Handler: http.NotFoundHandler(), ops: []apidesc.Operation{op}},
+			label:   metrics.AdapterServer,
+		},
 	})
 }
 
