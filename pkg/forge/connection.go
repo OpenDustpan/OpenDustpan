@@ -271,7 +271,36 @@ func (r *Registration) Validate() error {
 		return fmt.Errorf("%w: the address digest does not match the address", ErrInvalid)
 	}
 
+	if err := r.validateOldEventSecret(); err != nil {
+		return err
+	}
+
 	return validateVersionAndTimes("registration", r.Version, r.CreatedAt, r.UpdatedAt)
+}
+
+// validateOldEventSecret checks that the three old fields are all set or all
+// zero. A partial set is a row that the schema refuses, so a row that another
+// version of the server wrote fails closed here too.
+func (r *Registration) validateOldEventSecret() error {
+	parts := []bool{r.OldEventSecretSetID != "", len(r.OldSealedEventSecret) > 0, !r.OldEventSecretEndsAt.IsZero()}
+	set := 0
+
+	for _, ok := range parts {
+		if ok {
+			set++
+		}
+	}
+
+	switch {
+	case set == 0:
+		return nil
+	case set != len(parts):
+		return fmt.Errorf("%w: the old event secret fields are all set or all empty", ErrInvalid)
+	case !ValidSetID(r.OldEventSecretSetID):
+		return fmt.Errorf("%w: the set ID of the old event secret is not valid", ErrInvalid)
+	}
+
+	return nil
 }
 
 // Assignment gives one GitHub App installation to one namespace. The
