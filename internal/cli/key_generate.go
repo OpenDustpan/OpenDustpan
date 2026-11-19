@@ -67,7 +67,7 @@ func runKeyGenerate(_ context.Context, args []string, stdout, stderr io.Writer) 
 
 	if writeErr := writeNewKey(path); writeErr != nil {
 		if errors.Is(writeErr, ErrKeyFileExists) {
-			return fmt.Errorf("the key file exists: %s: set --out to a new path: %w", path, writeErr)
+			return fmt.Errorf("%w: %s: set --out to a new path", ErrKeyFileExists, path)
 		}
 
 		return fmt.Errorf("make the key file %s: %w", path, writeErr)
