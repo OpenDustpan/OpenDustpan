@@ -88,15 +88,7 @@ func (h *Handler) revealStateValue(
 		return
 	}
 
-	cipher, _, err := stack.SecretCiphertextOf(current.Checkpoint.Deployment, path)
-	if err != nil {
-		// A path outside the masked set answers 404 with no audit entry
-		// and no value, so a caller cannot probe paths.
-		h.writeNoStore(ctx, w, err)
-
-		return
-	}
-
+	cipher, _, err := stack.SecretCiphertextOf(ctx, current.Checkpoint.Deployment, path)
 	entry := revealAudit{
 		request:   r,
 		principal: p,
@@ -104,6 +96,25 @@ func (h *Handler) revealStateValue(
 		version:   current.VersionLabel(),
 		path:      path,
 		outcome:   audit.OutcomeSuccess,
+	}
+
+	if err != nil {
+		// A path past the depth bound is a refused reveal of a secret path
+		// shape, so it leaves an audit entry with no value.
+		if errors.Is(err, stack.ErrStateBound) {
+			entry.outcome = audit.OutcomeFailure
+			if !h.appendRevealEntry(ctx, entry) {
+				h.writeNoStore(ctx, w, errAuditFailed)
+
+				return
+			}
+		}
+
+		// A path outside the masked set answers 404 with no audit entry
+		// and no value, so a caller cannot probe paths.
+		h.writeNoStore(ctx, w, err)
+
+		return
 	}
 
 	if err := stack.CheckServiceSecrets(current.Checkpoint.Deployment); err != nil {
@@ -142,7 +153,7 @@ func (h *Handler) answerReveal(
 
 			return
 		}
-		h.logger.WarnContext(ctx, "reveal decrypt failed", slog.String("path", entry.path))
+		h.logger.WarnContext(ctx, "reveal decrypt failed", slog.String("path", oneLine(entry.path)))
 		h.writeNoStore(ctx, w, fmt.Errorf("reveal %q: %w", entry.path, errRevealDecrypt))
 
 		return
@@ -154,7 +165,7 @@ func (h *Handler) answerReveal(
 		return
 	}
 
-	h.logger.InfoContext(ctx, "reveal completed", slog.String("path", entry.path))
+	h.logger.InfoContext(ctx, "reveal completed", slog.String("path", oneLine(entry.path)))
 
 	w.Header().Set("Cache-Control", noStoreValue)
 	h.writeJSON(ctx, w, http.StatusOK, revealResponse{Path: entry.path, Value: stack.PlainValue(plain[0])})

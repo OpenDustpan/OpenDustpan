@@ -428,7 +428,7 @@ The list pages with a token:
   to the next.
 
 ```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+curl -g -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=acme&pageSize=50"
 ```
 
@@ -504,23 +504,6 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 Each export writes one entry of the kind `audit-read` in the log that it
 reads. If the server cannot write that entry, it sends no line.
 
-`GET /api/audit/export?organization=<namespace>` sends the entries of the
-namespace oldest first, one JSON object for each line. It needs the same
-action. Use it to keep a copy of a range, or to check a range with no help
-from the server. The lines hold the previous hash and the hash, so a reader
-can compute each hash again. See
-[Audit export API](../reference/audit-export-api.md) for the query values, the
-fields and the steps of the offline check.
-
-```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/audit/export?organization=acme&fromSequence=100" \
-  > acme-audit.jsonl
-```
-
-Each export writes one entry of the kind `audit-read` in the log that it
-reads. If the server cannot write that entry, it sends no line.
-
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the installation log (`@server`). Read that log with
 `organization=@server`. It needs the action `server:read-audit` on the
@@ -532,7 +515,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
-A new namespace audit log starts with the grant of its creator.
+The audit log of a new namespace holds no entry until the first change in it. The creation of the namespace is an entry in the `@server` scope, with the action `server:create-namespace`.
 
 ## Turn the chain on or off
 

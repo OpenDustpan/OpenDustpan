@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -55,3 +56,13 @@ var (
 	ErrViewBody           = errViewBody
 	ErrViewIdempotencyKey = errViewIdempotencyKey
 )
+
+// ReadAtQuery reads the at query value of r, for the tests of the refusal of
+// atQuery alone, with no other read of the query.
+func ReadAtQuery(r *http.Request) (time.Time, bool, error) {
+	return atQuery(r)
+}
+
+// UnitListPattern is the route pattern of the unit list, for the tests that
+// call atQuery with no router.
+const UnitListPattern = http.MethodGet + " " + namespacePath + "/units"

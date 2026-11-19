@@ -9,11 +9,36 @@ The end-to-end suite covers the metrics route and both probes.
 It checks nothing and answers 204 with no body.
 It needs no sign-in.
 `GET /health/ready` is readiness.
-It pings the store and the blob store.
+It runs the checks of each component that the process runs (`api` and `worker`).
 Each ping gets 2 seconds.
-It answers 200 with `{"status":"ok"}` when each ping succeeds.
-It answers 503 with the names of failed checks and no error text.
-Failed checks are `store` and `blob`.
+It answers 200 when each check succeeds:
+
+```json
+{"status":"ok","components":[{"name":"api","status":"ok","info":{"audit-chain":"admits"}},{"name":"worker","status":"ok"}]}
+```
+
+The field `components` lists each component with its `status`.
+The `info` of the `api` component shows the state of the audit chain gate: `admits`, or `waiting` while a change of the chain waits for approval.
+The `info` never makes the probe answer 503.
+`GET /health/ready/{component}` answers for one component, and answers 404 for a component that the process does not run.
+It answers 503 with `"status":"unavailable"` and the names of the failed checks, and no error text:
+
+```json
+{"status":"unavailable","components":[...],"failed":["store"]}
+```
+
+The field `failed` holds each failed check once, and each component also lists its own failed checks.
+The names are:
+
+| Check | Meaning |
+| --- | --- |
+| `store` | The store does not answer. |
+| `store-read-only` | The database refuses writes, for example an old primary after a failover. |
+| `blob` | The blob store does not answer. The `api` component runs this check. |
+| `binary-minimum` | The binary is older than the minimum version of the schema. |
+| `claim-loop` | The claim loop of the `worker` component did not run in the last 2 claim intervals. |
+| `draining` | The process stops. The body then holds `status` and `failed` only, and the header `Retry-After` names the drain time. |
+
 The body has media type `application/json`.
 Both probes stay public and need no sign-in.
 Both log at `debug`.
@@ -82,6 +107,15 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_audit_sink_skipped_total` | `sink` |
 | `dustpan_audit_sink_lag_seconds` | `sink` |
 | `dustpan_audit_sink_lag_entries` | `sink` |
+| `dustpan_audit_chain_invalid` | (none) |
+| `dustpan_audit_chain_check_errors_total` | (none) |
+| `dustpan_audit_chain_read_errors_total` | (none) |
+| `dustpan_audit_restore_check_failures_total` | (none) |
+| `dustpan_log_sink_dropped_total` | `sink` |
+| `dustpan_git_host_connection_refused_total` | `reason` |
+| `dustpan_worker_silent_seconds` | (none) |
+| `dustpan_oldest_unclaimed_operation_age_seconds` | (none) |
+| `dustpan_job_claim_poll_skipped_total` | (none) |
 | `dustpan_config_reloads_total` | `result` |
 | `dustpan_config_last_reload_success` | (none) |
 | `dustpan_inactivity_sweeps_total` | `result` |
@@ -123,6 +157,11 @@ requirement 10.7. The audit log in the database keeps every entry, and the sink
 is its live copy.
 `dustpan_audit_sink_lag_entries` holds the count of entries a sink has not
 delivered yet, or 0 when the sink is up to date.
+The server sets both lag gauges to 0 when it starts, and sets the measured
+value after each delivery round of the sink. So a sink with undelivered
+entries can show 0 until its first round ends.
+A sink has no series in `dustpan_audit_sink_entries_total` until it accepts its
+first entry.
 Alert when it keeps growing: the sink falls behind.
 The audit guide shows the rules.
 
@@ -190,6 +229,19 @@ A take that stops because its caller was canceled, for example at shutdown,
 counts nothing.
 A counter that rises for a long time while no backup or restore runs means
 the deletes do not drain.
+
+The audit chain families are explained in the audit log guide.
+`dustpan_git_host_connection_refused_total` counts the connections to a Git
+host that the server refused to open. The `reason` label is
+`installation-not-assigned`, `address-changed`, `no-registration`,
+`key-not-opened`, `address-refused` or `other`.
+`dustpan_worker_silent_seconds` holds the seconds since a worker last claimed
+or renewed a claim, on the clock of the store.
+`dustpan_oldest_unclaimed_operation_age_seconds` holds the seconds that the
+oldest unclaimed durable operation or due schedule waits, or 0 when none
+waits. Alert when either gauge keeps growing: no worker takes the work.
+`dustpan_job_claim_poll_skipped_total` counts the operations that one claim
+poll skipped past its bound. Alert when it keeps growing.
 
 ## Request log
 

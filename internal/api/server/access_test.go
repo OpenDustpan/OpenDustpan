@@ -148,6 +148,9 @@ type accessFixtureParts struct {
 	// noSignIn builds the handler with no console sign-in, as a server with
 	// no public URL does.
 	noSignIn bool
+	// getGrantErr is the error of each read of a grant by the access service.
+	// With nil, the read goes to the store.
+	getGrantErr error
 }
 
 // newAccessFixturePorts is newAccessFixture with the collection port and the
@@ -158,7 +161,7 @@ func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -174,7 +177,7 @@ func newAccessFixtureSignIn(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -197,7 +200,7 @@ func newAccessFixtureLinks(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -212,7 +215,7 @@ func newAccessFixtureClock(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -262,7 +265,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Store: readFailStore{Store: st, err: parts.getGrantErr}, Directory: st, Namespaces: st, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
@@ -1180,4 +1183,20 @@ func consoleOf(parts accessFixtureParts, in *apiserver.SignIn) *apiserver.SignIn
 	}
 
 	return in
+}
+
+// readFailStore is the store of the access service. A non-nil err fails each
+// read of a grant by ID.
+type readFailStore struct {
+	*sqlite.Store
+
+	err error
+}
+
+func (s readFailStore) GetGrant(ctx context.Context, id string) (access.Grant, error) {
+	if s.err != nil {
+		return access.Grant{}, s.err
+	}
+
+	return s.Store.GetGrant(ctx, id)
 }

@@ -506,6 +506,18 @@ func testGrantOnCaller(t *testing.T, s access.Store) {
 func testMissingGrant(t *testing.T, s access.Store) {
 	t.Helper()
 
+	// Hostile table of the store layer: a text that is not a grant ID is
+	// refused with ErrInvalid by both calls, whatever the rows hold.
+	for _, id := range HostileGrantIDs() {
+		if _, err := s.GetGrant(t.Context(), id); !errors.Is(err, access.ErrInvalid) {
+			t.Fatalf("get grant %.20q = %v, want ErrInvalid", id, err)
+		}
+
+		if err := revokeGrant(t, s, id, "", entry()); !errors.Is(err, access.ErrInvalid) {
+			t.Fatalf("revoke grant %.20q = %v, want ErrInvalid", id, err)
+		}
+	}
+
 	if _, err := s.GetGrant(t.Context(), "grt-missing"); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("get missing grant = %v, want ErrNotFound", err)
 	}
