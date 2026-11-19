@@ -248,7 +248,7 @@ func newMtlsExchange(
 	}
 
 	guard, err := trustrulesvc.NewMtlsGuard(trustrulesvc.MtlsGuardConfig{
-		Exchanger: x, MaxBodyBytes: mtlsMaxBodyBytes, Limit: mtlsKeyLimit, GlobalLimit: mtlsGlobalLimit,
+		MaxBodyBytes: mtlsMaxBodyBytes, Limit: mtlsKeyLimit, GlobalLimit: mtlsGlobalLimit,
 		Window: mtlsWindow, MaxKeys: mtlsMaxKeys, Now: cfg.now,
 	})
 	if err != nil {

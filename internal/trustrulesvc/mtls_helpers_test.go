@@ -486,5 +486,8 @@ func (e *mtlsEnv) mustRefuse(err, want error, ns namespace.Name, principalID str
 	}
 }
 
+// errDiskFull is the store error of the service tests.
+var errDiskFull = errors.New("disk full")
+
 // isErr reports whether err wraps want.
 func isErr(err, want error) bool { return errors.Is(err, want) }

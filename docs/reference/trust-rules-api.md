@@ -213,6 +213,11 @@ body is an exchange of the client certificate of the TLS connection. It needs no
 sign-in. The server takes the certificate chain from the TLS handshake only. A
 header that holds a chain is not read.
 
+Today this call does not issue a token. No listener asks for a client
+certificate yet, so a call answers `mtls.no-client-certificate`. The server has
+no revocation source yet, so a call that has a certificate answers
+`mtls.revocation-unknown`.
+
 The server checks that the chain leads to the active version of the trust bundle
 of the namespace, that the leaf is in its validity time, and that the
 revocation check passes. The leaf must name exactly one SPIFFE ID. The server
@@ -223,7 +228,10 @@ revoked, it refuses the exchange.
 The answer is 201 with `Cache-Control: no-store`, in the form of the token
 exchange above. The token never lives longer than the leaf certificate. Each
 exchange writes the audit entry `trust-rule:exchange`, and each refusal writes
-an audit entry with the outcome `denied`.
+an audit entry with the outcome `denied`. This includes a refusal for the rate
+limit or the body size. For each window, the server writes the first refusal
+and counts the others. A call to a namespace that does not exist writes no
+entry, because that namespace has no audit log.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |

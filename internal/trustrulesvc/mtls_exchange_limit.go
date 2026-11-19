@@ -1,10 +1,8 @@
 package trustrulesvc
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -16,17 +14,9 @@ import (
 // A longer key becomes its digest, so no key costs more than this in memory.
 const maxGuardKeyBytes = 64
 
-// MtlsExchanging is the exchange that a guard protects. *MtlsExchanger meets
-// it.
-type MtlsExchanging interface {
-	Exchange(ctx context.Context, in *MtlsExchangeInput) (MtlsExchangeResult, error)
-}
-
 // MtlsGuardConfig holds the settings of an MtlsGuard. Each number must be
 // positive.
 type MtlsGuardConfig struct {
-	// Exchanger is the exchange that the guard protects.
-	Exchanger MtlsExchanging
 	// MaxBodyBytes is the largest request body that the guard admits.
 	MaxBodyBytes int64
 	// Limit is the number of calls that one key makes in one window.
@@ -43,10 +33,9 @@ type MtlsGuardConfig struct {
 	Now func() time.Time
 }
 
-// MtlsGuard limits the calls of the mTLS exchange before and around the
-// exchange: the size of the body, the rate of the calls of each key and of
-// all keys, and it fails closed: a call gets a token only when the exchange
-// answers with no error. The guard is safe for concurrent use.
+// MtlsGuard limits the calls of the mTLS exchange before any other work: the
+// size of the body, and the rate of the calls of each key and of all keys.
+// The guard is safe for concurrent use.
 type MtlsGuard struct {
 	cfg MtlsGuardConfig
 	now func() time.Time
@@ -65,12 +54,8 @@ type guardWindow struct {
 }
 
 // NewMtlsGuard returns an MtlsGuard, or trustrule.ErrMissingDependency for a
-// config with no exchanger or a number that is not positive.
+// config with a number that is not positive.
 func NewMtlsGuard(cfg MtlsGuardConfig) (*MtlsGuard, error) {
-	if cfg.Exchanger == nil {
-		return nil, fmt.Errorf("%w: the guard needs an exchanger", trustrule.ErrMissingDependency)
-	}
-
 	if cfg.MaxBodyBytes < 0 || cfg.Limit < 1 || cfg.GlobalLimit < 1 || cfg.Window <= 0 || cfg.MaxKeys < 1 {
 		return nil, fmt.Errorf("%w: the guard needs a body cap that is not negative, and a rate limit, a global "+
 			"limit, a window and a key bound that are positive", trustrule.ErrMissingDependency)
@@ -134,25 +119,6 @@ func (g *MtlsGuard) Tracked() int {
 	return len(g.keys)
 }
 
-// Exchange admits the call, then runs the exchange of in. It fails closed:
-// the result holds a token only when the answer has no error, and an error
-// that is not a refusal of the exchange, for example the failure of a store,
-// becomes ErrIssueFailed.
-func (g *MtlsGuard) Exchange(
-	ctx context.Context, key string, bodyLen int64, in *MtlsExchangeInput,
-) (MtlsExchangeResult, error) {
-	if err := g.Admit(key, bodyLen); err != nil {
-		return MtlsExchangeResult{}, err
-	}
-
-	res, err := g.cfg.Exchanger.Exchange(ctx, in)
-	if err != nil {
-		return MtlsExchangeResult{}, failClosed(err)
-	}
-
-	return res, nil
-}
-
 // count adds one call to w, after it starts a new window when the window of w
 // is over, and returns the count of the window.
 func (g *MtlsGuard) count(w *guardWindow, now time.Time) int {
@@ -192,20 +158,4 @@ func (g *MtlsGuard) windowOf(key string, now time.Time) *guardWindow {
 	g.keys[key] = w
 
 	return w
-}
-
-// failClosed returns err when it is a refusal of the mTLS exchange, and
-// ErrIssueFailed with err for every other error.
-func failClosed(err error) error {
-	for _, refusal := range []error{
-		ErrNoCertificate, ErrUnknownIssuer, ErrExpired, ErrNotYetValid, ErrRevoked, ErrRevocationUnknown,
-		ErrNoMatchingRule, ErrAmbiguousRule, ErrBundleUnknown, ErrInvalid, ErrIssueFailed, ErrRateLimited,
-		ErrBodyTooLarge, trustrule.ErrPrincipal,
-	} {
-		if errors.Is(err, refusal) {
-			return err
-		}
-	}
-
-	return fmt.Errorf("%w: %w", ErrIssueFailed, err)
 }

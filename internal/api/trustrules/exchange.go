@@ -143,7 +143,10 @@ func (h *Handler) exchangeMtls(w http.ResponseWriter, r *http.Request, name name
 	// Each call counts, also one with no certificate: it is the call that
 	// costs the server no work, and the one that a flood sends.
 	if err := h.mtlsGuard.Admit(clientip.String(r), r.ContentLength); err != nil {
-		h.writeMtlsError(ctx, w, err)
+		// The refusal writes a denial entry through the limiter of the
+		// exchanger, so a flood writes one entry and a count for each window.
+		// An unknown namespace has no audit log: its answer replaces this one.
+		h.writeMtlsError(ctx, w, h.mtls.RefuseCall(ctx, name, h.requestEntry(r), err))
 
 		return
 	}

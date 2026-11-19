@@ -120,6 +120,10 @@ func VerifyChain(
 
 	leaf := certs[0]
 
+	// Defense in depth: verifyPaths asks x509 for a chain that is valid at
+	// now, and x509 refuses an expired leaf too. This check stays so that
+	// the time of the leaf does not depend on x509, and so that the answer
+	// names expired or not yet valid.
 	if timeErr := checkLeafTime(leaf, now); timeErr != nil {
 		return VerifiedChain{}, timeErr
 	}
@@ -210,6 +214,10 @@ func leafSPIFFEID(leaf *x509.Certificate) (string, error) {
 	}
 
 	id := leaf.URIs[0].String()
+
+	// Defense in depth: ValidateSpiffePattern below refuses a * too. This
+	// check stays so that a change to that function cannot let a wildcard
+	// SPIFFE ID of a leaf match a rule.
 	if strings.Contains(id, "*") {
 		return "", fmt.Errorf("%w: the SPIFFE ID holds a *", ErrInvalid)
 	}
@@ -477,6 +485,23 @@ func (e *MtlsExchanger) Verify(ctx context.Context, in *MtlsVerifyInput) (Verifi
 	chain.bundleID, chain.bundleVersion = bundle.ID, version
 
 	return chain, nil
+}
+
+// RefuseCall writes the denial entry of a call that the guard refused before
+// Verify ran, for example a call over the rate limit, and returns cause. The
+// entry goes through the same limiter as the other refusals of the namespace:
+// the first refusal of a window writes an entry, and the later ones are
+// counted. An unknown namespace has no audit log, so the answer is the error
+// of the namespace and no entry is written.
+func (e *MtlsExchanger) RefuseCall(
+	ctx context.Context, name namespace.Name, request audit.Entry, cause error,
+) error {
+	ns, err := e.cfg.Namespaces.WritableHere(ctx, name)
+	if err != nil {
+		return namespaceError(err)
+	}
+
+	return e.refuse(ctx, ns, request, nil, cause)
 }
 
 // namespaceError turns the error of a namespace read into the answer of the

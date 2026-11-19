@@ -199,7 +199,7 @@ func (e *env) newMtlsServer(o mtlsOpts) *mtlsServer {
 	}
 
 	guard, err := trustrulesvc.NewMtlsGuard(trustrulesvc.MtlsGuardConfig{
-		Exchanger: mtls, MaxBodyBytes: 1024, Limit: limit, GlobalLimit: 1000, Window: time.Minute, MaxKeys: 100,
+		MaxBodyBytes: 1024, Limit: limit, GlobalLimit: 1000, Window: time.Minute, MaxKeys: 100,
 		Now: testNow,
 	})
 	if err != nil {
@@ -670,5 +670,47 @@ func TestExchangeMtlsNotConfigured(t *testing.T) {
 
 	if got := e.exchangeEntries(); len(got) != 0 {
 		t.Errorf("exchange entries = %+v, want none", got)
+	}
+}
+
+// TestExchangeMtlsRateLimitAudit makes the calls of one window with a good
+// certificate. The call over the limit answers 429 and writes one denial
+// entry. Each later call of the window is counted and writes no entry.
+func TestExchangeMtlsRateLimitAudit(t *testing.T) {
+	t.Parallel()
+
+	e, ca, _ := mtlsFixture(t)
+	m := e.newMtlsServer(mtlsOpts{revocation: noRevocation, failWrite: false, limit: 2, noMtls: false})
+	cert := ca.goodLeaf(t)
+
+	for i := 1; i <= 2; i++ {
+		if status, _, body := m.call(t, mtlsExchangeURL, &cert, nil); status != http.StatusCreated {
+			t.Fatalf("call %d = %d %s, want 201", i, status, body)
+		}
+	}
+
+	denied := func() int {
+		n := 0
+
+		for _, entry := range e.exchangeEntries() {
+			if entry.Outcome == audit.OutcomeDenied {
+				n++
+			}
+		}
+
+		return n
+	}
+
+	for i := 3; i <= 4; i++ {
+		status, _, body := m.call(t, mtlsExchangeURL, &cert, nil)
+		if status != http.StatusTooManyRequests || errorCode(t, body) != "mtls.rate-limited" {
+			t.Fatalf("call %d = %d %s, want 429 mtls.rate-limited", i, status, body)
+		}
+
+		assertNoToken(t, body)
+
+		if got := denied(); got != 1 {
+			t.Fatalf("after call %d: %d denial entries, want 1", i, got)
+		}
 	}
 }
