@@ -138,6 +138,9 @@ type stateWriteRun struct {
 	result    Result
 	refusal   *RefusalError
 	policy    ApproverPolicy
+	// onlyErrors is true when the gates in error are the only reason of the
+	// refusal: no deny, no approval and no engine failure.
+	onlyErrors bool
 }
 
 // unitEffect collects what the enforced gates say about one unit.
@@ -168,10 +171,9 @@ func (e *unitEffect) result() Result {
 // and writes the decision record. policy is the approver policy of the
 // installation, read once for the call.
 func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy ApproverPolicy) (Decision, error) {
-	if c.BreakGlass != "" {
-		return Decision{}, fmt.Errorf(
-			"%w: a break-glass for a gate in error is not implemented in this version", ErrUnavailable,
-		)
+	passKey, setsPass, err := s.breakGlassKey(c)
+	if err != nil {
+		return Decision{}, err
 	}
 
 	// Defense in depth: the store checks the fence of the record too. This
@@ -185,7 +187,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy Appro
 	// configuration, so a hostile change costs no store call. Defense in
 	// depth: the adapter reads the state from the store, and the facts
 	// builder checks the change again. This check does not rely on either.
-	if err := checkStateChange(c); err != nil {
+	if err = checkStateChange(c); err != nil {
 		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}}
 	}
 
@@ -195,6 +197,9 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy Appro
 	}
 
 	rec := run.record()
+	if setsPass {
+		run.applyBreakGlass(ctx, &rec, passKey)
+	}
 
 	if err = s.store.Records().Put(ctx, rec, c.Fence); err != nil {
 		// The record ID is known, but the record is not stored. The refusal
@@ -250,6 +255,8 @@ func (s *Service) newStateWriteRun(ctx context.Context, c Change, policy Approve
 		result:   ResultAllow,
 		refusal:  nil,
 		policy:   policy,
+
+		onlyErrors: false,
 	}
 
 	run.invalid, run.engineErr = s.recheck(ctx, run.gates)
@@ -302,6 +309,7 @@ func (r *stateWriteRun) record() Record {
 // decide sets the result of the record and the refusal of the run.
 func (r *stateWriteRun) decide(rec *Record, total *unitEffect, engineDown bool) {
 	rec.Result = total.result()
+	r.onlyErrors = len(total.denies) == 0 && !engineDown && len(total.approvals) == 0 && len(total.errs) > 0
 
 	switch {
 	case len(total.denies) > 0:
@@ -777,5 +785,67 @@ func factText(v any) string {
 		return fmt.Sprintf("%.0f", t)
 	default:
 		return fmt.Sprint(t)
+	}
+}
+
+// breakGlassKey checks the break-glass of c and returns the key of its pass
+// and true, or false when c sets no break-glass. It returns ErrUnavailable when no store
+// is wired, so that nothing reads the configuration and no pass is used.
+func (s *Service) breakGlassKey(c Change) (BreakGlassKey, bool, error) {
+	if c.BreakGlass == "" {
+		return noBreakGlassKey(), false, nil
+	}
+
+	if _, ok := s.breakGlass.(unwiredBreakGlassStore); ok {
+		return noBreakGlassKey(), false, fmt.Errorf(
+			"%w: a break-glass for a gate in error needs a pass store, and none is wired", ErrUnavailable,
+		)
+	}
+
+	if len(c.Units) != 1 {
+		return noBreakGlassKey(), false, fmt.Errorf(
+			"%w: a break-glass names exactly one unit, not %d",
+			ErrInvalid,
+			len(c.Units),
+		)
+	}
+
+	key, err := NewBreakGlassKey(c.Subject.ID, c.Units[0], c.Operation)
+	if err != nil {
+		return noBreakGlassKey(), false, err
+	}
+
+	return key, true, nil
+}
+
+// applyBreakGlass passes the gates in error of the run when the change sets
+// a break-glass and one pass of key is valid. It uses the pass last, after
+// each other check, and only when a gate in error is the sole reason of the
+// refusal. A deny, an approval and an engine failure never pass. The record
+// names the break-glass.
+//
+// Defense in depth: the decision above this call and the store each check the
+// whole key. This check stays so that a store that skips a check cannot pass
+// a deny.
+func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key BreakGlassKey) {
+	if r.refusal == nil || !r.onlyErrors || !errors.Is(r.refusal.Err, ErrRuleFailed) {
+		return
+	}
+
+	err := r.svc.breakGlass.Consume(ctx, key, r.svc.now())
+
+	switch {
+	case err == nil:
+		r.refusal = nil
+		rec.BreakGlass = r.change.BreakGlass
+		rec.Warnings = append(rec.Warnings, "a break-glass pass let the write through a gate in error")
+		r.warnings = rec.Warnings
+	case errors.Is(err, ErrNotFound):
+		r.refusal.Messages = append(r.refusal.Messages, "no valid break-glass pass: it is missing, used or expired")
+	default:
+		r.refusal = &RefusalError{
+			Err: fmt.Errorf("%w: break-glass pass: %w", ErrUnavailable, err), Record: "",
+			Messages: []string{"The break-glass pass could not be checked, so the write is refused."},
+		}
 	}
 }

@@ -130,6 +130,29 @@ func newKindSWEnv(
 ) swEnv {
 	t.Helper()
 
+	return newBreakGlassSWEnv(t, swSetup{
+		units: units, engineErr: engineErr, wrap: wrap, kinds: kinds, breakGlass: nil, now: nil,
+	})
+}
+
+// swSetup is what newBreakGlassSWEnv builds a service from. A nil breakGlass
+// wires no pass store, and a nil now is time.Now.
+type swSetup struct {
+	units      gate.UnitSource
+	engineErr  error
+	wrap       func(*sqlite.Store) gate.Store
+	kinds      gate.KindReader
+	breakGlass gate.BreakGlassStore
+	now        func() time.Time
+}
+
+// newBreakGlassSWEnv is newKindSWEnv with the pass store and the clock of
+// setup.
+func newBreakGlassSWEnv(t *testing.T, setup swSetup) swEnv {
+	t.Helper()
+
+	units, engineErr, wrap, kinds := setup.units, setup.engineErr, setup.wrap, setup.kinds
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -194,7 +217,8 @@ func newKindSWEnv(
 		Fences:     swFences{nss: nss},
 		KindReader: kinds,
 		IsDev:      principalpkg.IsDevSubject,
-		Now:        nil,
+		BreakGlass: setup.breakGlass,
+		Now:        setup.now,
 		Log:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
