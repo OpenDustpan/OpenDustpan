@@ -107,8 +107,63 @@ func DecodeForTest(text string) (any, error) {
 	return doc, nil
 }
 
-// WithOneDigest returns ctx with the hook that gives every value of the
-// secret index one digest.
-func WithOneDigest(ctx context.Context) context.Context {
-	return context.WithValue(ctx, oneDigestKey{}, true)
+// MaskWork is the count of work units of one maskTofuInstance call.
+type MaskWork struct {
+	// Pointers is the count of sensitive pointers that the mask pass visited.
+	Pointers int
+	// RouteSteps is the count of tokens that the applied-route lookups compared.
+	RouteSteps int
+	// Digests is the count of values that the secret index digested.
+	Digests int
+	// Comparisons is the count of deep equality checks of the duplicate pass.
+	Comparisons int
+}
+
+// MaskResult is the result of MaskInstanceWorkForTest.
+type MaskResult struct {
+	// Attributes are the masked attributes.
+	Attributes any
+	// Masked holds each marker path.
+	Masked []string
+	// Work holds the work counts of the call.
+	Work MaskWork
+}
+
+// MaskInstanceWorkForTest runs maskTofuInstance and returns its work counts.
+func MaskInstanceWorkForTest(
+	ctx context.Context, instance map[string]any, address string, marks SensitiveMarks,
+) (MaskResult, error) {
+	return maskWorkProbed(ctx, instance, address, marks, false)
+}
+
+// MaskInstanceWithOneDigestForTest runs maskTofuInstance with an index that
+// gives every value one digest, so only the equality check can tell a
+// duplicate from a collision.
+func MaskInstanceWithOneDigestForTest(
+	ctx context.Context, instance map[string]any, address string, marks SensitiveMarks,
+) (any, []string, error) {
+	result, err := maskWorkProbed(ctx, instance, address, marks, true)
+
+	return result.Attributes, result.Masked, err
+}
+
+func maskWorkProbed(
+	ctx context.Context, instance map[string]any, address string, marks SensitiveMarks, oneDigest bool,
+) (MaskResult, error) {
+	probe := &maskProbe{oneDigest: oneDigest, pointers: 0, routeSteps: 0, digests: 0, comparisons: 0}
+
+	attributes, masked, err := maskTofuInstanceProbed(
+		ctx, instance, instanceSite{resource: 0, position: 0, address: address}, marks, probe,
+	)
+
+	return MaskResult{
+		Attributes: attributes,
+		Masked:     masked,
+		Work: MaskWork{
+			Pointers:    probe.pointers,
+			RouteSteps:  probe.routeSteps,
+			Digests:     probe.digests,
+			Comparisons: probe.comparisons,
+		},
+	}, err
 }

@@ -502,6 +502,29 @@ func (h *Handler) writeStateReadError(
 	h.writeError(ctx, w, err)
 }
 
+// diffUpdates names the updates that saved the two checkpoints of a diff.
+type diffUpdates struct {
+	from stack.UpdateID
+	to   stack.UpdateID
+}
+
+// writeStateDiffError answers the error of a diff of two states. A diff past
+// the bound answers 413 and leaves a warning that names the stack and both
+// updates, because either side can hold the state that is past the bound. The
+// record holds no value of the state.
+func (h *Handler) writeStateDiffError(
+	ctx context.Context, w http.ResponseWriter, ref stack.Ref, updates diffUpdates, err error,
+) {
+	if errors.Is(err, stack.ErrStateBound) {
+		h.logger.WarnContext(ctx, "state past the masked read bound",
+			slog.String("stack", ref.String()),
+			slog.String("from_update", string(updates.from)),
+			slog.String("to_update", string(updates.to)))
+	}
+
+	h.writeError(ctx, w, err)
+}
+
 // diffCheckpointOf resolves one side of a diff request: "latest" names the
 // latest checkpoint, otherwise a non-negative integer version. It writes the
 // error and reports false when the value is missing or invalid, or when the
@@ -569,7 +592,7 @@ func (h *Handler) diffState(
 
 	diff, err := stack.DiffStates(ctx, from.Deployment, to.Deployment, cursor, limit)
 	if err != nil {
-		h.writeStateReadError(ctx, w, ref, to.Update, err)
+		h.writeStateDiffError(ctx, w, ref, diffUpdates{from: from.Update, to: to.Update}, err)
 
 		return
 	}

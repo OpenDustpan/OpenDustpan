@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -22,9 +21,13 @@ const (
 	// maxRefusedReadBytes is the ceiling of the allocation that a refused
 	// read adds to the decode of the same state.
 	maxRefusedReadBytes = 64 << 20
-	// duplicateDeadline ends a duplicate pass that grows with the product of
-	// the secrets and the values. The linear pass ends in well under a second.
-	duplicateDeadline = 30 * time.Second
+	// manyPointers is the count of sensitive pointers of the hostile tables of
+	// the mark pass. A mark pass that scans each applied route for each
+	// pointer needs about manyPointers squared steps.
+	manyPointers = 40_000
+	// pointerBudgetOverflow is a count of pointers that the work budget of one
+	// instance refuses: each pointer charges its path and the cost of a marker.
+	pointerBudgetOverflow = 600_000
 )
 
 // leafObject returns a JSON object of count leaves with distinct keys.
@@ -185,19 +188,39 @@ func duplicateInstance(
 
 // TestMaskTofuInstanceDuplicatePassIsLinear is the hostile table of the
 // duplicate pass: many secrets and many values that match none of them. The
-// pass compares each value with an index of the secrets. A pass that compares
-// each value with each secret does not end before the deadline of the context.
+// proof counts work and does not read the clock: a pass that compares each
+// value with each secret makes about secrets times values comparisons, and a
+// pass that digests the subtree of each container again digests each value
+// once for each level.
 func TestMaskTofuInstanceDuplicatePassIsLinear(t *testing.T) {
 	t.Parallel()
 
-	instance, marks := duplicateInstance(t, 16_000, 160_000)
+	const (
+		secrets = 2_000
+		values  = 20_000
+		// nodes is a bound of the values of the instance: each secret, each
+		// plain value, the lists, the copy and the attributes object.
+		nodes = secrets + values + 10
+	)
 
-	ctx, cancel := context.WithTimeout(t.Context(), duplicateDeadline)
-	defer cancel()
+	instance, marks := duplicateInstance(t, secrets, values)
 
-	attributes, masked, err := workspace.MaskInstanceForTest(ctx, instance, resourceAddress, marks)
+	result, err := workspace.MaskInstanceWorkForTest(t.Context(), instance, resourceAddress, marks)
 	if err != nil {
 		t.Fatalf("mask: %v", err)
+	}
+
+	attributes, masked, work := result.Attributes, result.Masked, result.Work
+
+	if work.Comparisons > 2*nodes {
+		t.Fatalf("comparisons = %d, want at most %d: the pass compares values with secrets one by one",
+			work.Comparisons, 2*nodes)
+	}
+
+	// A leaf is digested inside the digest of its container and again when the
+	// walk checks it, so the bound is three digests for each value.
+	if work.Digests > 3*nodes {
+		t.Fatalf("digests = %d, want at most %d", work.Digests, 3*nodes)
 	}
 
 	if !slices.Contains(masked, "/resources/0/instances/0/attributes/copy") {
@@ -214,6 +237,55 @@ func TestMaskTofuInstanceDuplicatePassIsLinear(t *testing.T) {
 	}
 }
 
+// TestMaskTofuInstanceDigestsEachValueOnce is the hostile table of the digest:
+// a deep chain whose levels are objects with many bool and null leaves, with
+// one secret. A digest that walks the subtree again at each level digests
+// each leaf once for each level above it. The digest holds the count of
+// values, not the count of values times the depth.
+func TestMaskTofuInstanceDigestsEachValueOnce(t *testing.T) {
+	t.Parallel()
+
+	const (
+		depth          = 90
+		leavesPerLevel = 1_000
+		nodes          = depth * (leavesPerLevel + 1)
+	)
+
+	var chain any = map[string]any{"end": "secret-chain"}
+
+	for range depth {
+		level := make(map[string]any, leavesPerLevel+1)
+		for i := range leavesPerLevel {
+			if i%2 == 0 {
+				level["b"+strconv.Itoa(i)] = i%4 == 0
+			} else {
+				level["n"+strconv.Itoa(i)] = nil
+			}
+		}
+
+		level["next"] = chain
+		chain = level
+	}
+
+	instance := map[string]any{"attributes": map[string]any{"chain": chain, "key": "secret-chain"}}
+	marks := workspace.SensitiveMarks{resourceAddress: {"/key"}}
+
+	result, err := workspace.MaskInstanceWorkForTest(t.Context(), instance, resourceAddress, marks)
+	if err != nil {
+		t.Fatalf("mask: %v", err)
+	}
+
+	masked, work := result.Masked, result.Work
+
+	if work.Digests > 2*nodes {
+		t.Fatalf("digests = %d, want at most %d for %d values", work.Digests, 2*nodes, nodes)
+	}
+
+	if len(masked) == 0 {
+		t.Fatal("masked is empty: want the marked key")
+	}
+}
+
 // TestDuplicatePassComparesValuesOnADigestCollision proves that the duplicate
 // pass compares the values when two digests are equal. Every value has one
 // digest here. The copy of a secret is masked, and a value that is not a copy
@@ -223,8 +295,8 @@ func TestDuplicatePassComparesValuesOnADigestCollision(t *testing.T) {
 
 	instance, marks := duplicateInstance(t, 1, 3)
 
-	attributes, masked, err := workspace.MaskInstanceForTest(
-		workspace.WithOneDigest(t.Context()),
+	attributes, masked, err := workspace.MaskInstanceWithOneDigestForTest(
+		t.Context(),
 		instance,
 		resourceAddress,
 		marks,
@@ -271,9 +343,134 @@ func TestMaskTofuInstanceDuplicatePassHonorsCancellation(t *testing.T) {
 
 	// The context ends after the mark pass and before the first container of
 	// the duplicate pass answers.
-	_, _, err := workspace.MaskInstanceForTest(&cancelAfter{calls: 0, limit: 0}, instance, resourceAddress, marks)
+	_, _, err := workspace.MaskInstanceForTest(&cancelAfter{calls: 0, limit: 4}, instance, resourceAddress, marks)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// pointerInstance returns an instance of count scalar attributes and the
+// marks that name each one: count sensitive pointers with distinct routes.
+func pointerInstance(count int) (map[string]any, workspace.SensitiveMarks) {
+	attributes := make(map[string]any, count)
+	marks := make([]string, count)
+
+	for i := range count {
+		key := "k" + strconv.Itoa(i)
+		attributes[key] = "v" + strconv.Itoa(i)
+		marks[i] = "/" + key
+	}
+
+	return map[string]any{"attributes": attributes}, workspace.SensitiveMarks{resourceAddress: marks}
+}
+
+// TestMaskTofuInstanceMarkPassIsLinear is the hostile table of the mark pass:
+// many pointers with distinct routes. The proof counts the tokens that the
+// applied-route lookups compare. A lookup that scans each applied route for
+// each pointer compares about the square of the pointer count.
+func TestMaskTofuInstanceMarkPassIsLinear(t *testing.T) {
+	t.Parallel()
+
+	instance, marks := pointerInstance(manyPointers)
+
+	result, err := workspace.MaskInstanceWorkForTest(t.Context(), instance, resourceAddress, marks)
+	if err != nil {
+		t.Fatalf("mask: %v", err)
+	}
+
+	masked, work := result.Masked, result.Work
+
+	if len(masked) != manyPointers {
+		t.Fatalf("masked = %d paths, want %d", len(masked), manyPointers)
+	}
+
+	// The marks of the address and of the resource base both name each pointer
+	// of an unindexed instance, so the pass visits each pointer twice.
+	if work.Pointers != 2*manyPointers {
+		t.Fatalf("pointers = %d, want %d", work.Pointers, 2*manyPointers)
+	}
+
+	// A route has one token here, so a lookup costs one step.
+	if work.RouteSteps > 4*manyPointers {
+		t.Fatalf("route steps = %d, want at most %d", work.RouteSteps, 4*manyPointers)
+	}
+}
+
+// TestMaskTofuInstanceMarkPassStillSkipsNestedPointers proves that the route
+// set keeps the rule of the pass: a pointer below a masked pointer masks
+// nothing, and a pointer beside it does.
+func TestMaskTofuInstanceMarkPassStillSkipsNestedPointers(t *testing.T) {
+	t.Parallel()
+
+	instance := map[string]any{"attributes": map[string]any{
+		"a": map[string]any{"b": "inner"}, "c": "beside",
+	}}
+	marks := workspace.SensitiveMarks{resourceAddress: {"/a", "/a/b", "/c"}}
+
+	_, masked, err := workspace.MaskInstanceForTest(t.Context(), instance, resourceAddress, marks)
+	if err != nil {
+		t.Fatalf("mask: %v", err)
+	}
+
+	want := []string{
+		"/resources/0/instances/0/attributes/a",
+		"/resources/0/instances/0/attributes/c",
+	}
+
+	slices.Sort(masked)
+
+	if !slices.Equal(masked, want) {
+		t.Fatalf("masked = %v, want %v", masked, want)
+	}
+}
+
+// TestMaskTofuInstanceChargesEachPointer proves that the work budget bounds
+// the count of pointers: more pointers than the budget holds end with
+// ErrStateBound, before the pass visits all of them.
+func TestMaskTofuInstanceChargesEachPointer(t *testing.T) {
+	t.Parallel()
+
+	instance := map[string]any{"attributes": map[string]any{}}
+
+	marks := make([]string, pointerBudgetOverflow)
+	for i := range marks {
+		marks[i] = "/m" + strconv.Itoa(i)
+	}
+
+	result, err := workspace.MaskInstanceWorkForTest(
+		t.Context(), instance, resourceAddress, workspace.SensitiveMarks{resourceAddress: marks},
+	)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("err = %v, want ErrStateBound", err)
+	}
+
+	work := result.Work
+
+	if work.Pointers >= pointerBudgetOverflow {
+		t.Fatalf("pointers = %d, want fewer than %d: the budget must stop the pass",
+			work.Pointers, pointerBudgetOverflow)
+	}
+}
+
+// TestMaskTofuInstanceMarkPassHonorsCancellation proves that the mark pass
+// checks the context at each pointer: a context that ends after 10 checks
+// stops the pass after about 10 pointers, not after all of them.
+func TestMaskTofuInstanceMarkPassHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	instance, marks := pointerInstance(manyPointers)
+
+	result, err := workspace.MaskInstanceWorkForTest(
+		&cancelAfter{calls: 0, limit: 10}, instance, resourceAddress, marks,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+
+	work := result.Work
+
+	if work.Pointers > 10 {
+		t.Fatalf("pointers = %d, want at most 10 after the context ended", work.Pointers)
 	}
 }
 

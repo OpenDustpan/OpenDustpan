@@ -976,16 +976,62 @@ func routeListAt(list []any, tokens []string) ([]string, bool) {
 	return []string{}, false
 }
 
-// belowAppliedRoute reports whether route sits strictly below an applied
-// route: an applied route is a proper prefix of route.
-func belowAppliedRoute(applied [][]string, route []string) bool {
-	for _, done := range applied {
-		if isTokenPrefix(done, route) && len(done) < len(route) {
-			return true
+// routeSet holds the physical routes that a mask applied, as a trie of
+// tokens. A lookup walks at most the length of the route, so the check of one
+// pointer does not grow with the count of applied routes.
+type routeSet struct {
+	root routeNode
+}
+
+// routeNode is one token of a routeSet. applied is true when a route ends here.
+type routeNode struct {
+	applied  bool
+	children map[string]*routeNode
+}
+
+// add records route as applied.
+func (s *routeSet) add(route []string) {
+	node := &s.root
+
+	for _, token := range route {
+		if node.children == nil {
+			node.children = map[string]*routeNode{}
 		}
+
+		next, ok := node.children[token]
+		if !ok {
+			next = &routeNode{applied: false, children: nil}
+			node.children[token] = next
+		}
+
+		node = next
 	}
 
-	return false
+	node.applied = true
+}
+
+// below reports whether route sits strictly below an applied route: an
+// applied route is a proper prefix of route. It returns the count of tokens
+// that it compared, so the caller can charge the work.
+func (s *routeSet) below(route []string) (bool, int) {
+	node := &s.root
+	steps := 0
+
+	for i, token := range route {
+		if i > 0 && node.applied {
+			return true, steps
+		}
+
+		next, ok := node.children[token]
+		if !ok {
+			return false, steps
+		}
+
+		steps++
+		node = next
+	}
+
+	return false, steps
 }
 
 // lookupTokens returns the value at tokens under node, or false when the
@@ -1075,23 +1121,55 @@ func propagableSecret(value any) bool {
 type secretIndex struct {
 	seed     maphash.Seed
 	byDigest map[uint64][]any
-	// oneDigest gives every value the digest 0. Only a test sets it.
+	// memo holds the digest of each container that the index has digested, by
+	// the identity of the container. A container is digested once, bottom-up,
+	// so the digests of a whole tree cost one walk of the tree.
+	memo map[containerID]uint64
+	// probe counts the work of the index and holds the hook of the tests.
+	probe *maskProbe
+}
+
+// containerID is the identity of one map or list of a decoded document.
+type containerID struct {
+	pointer uintptr
+	length  int
+	isMap   bool
+}
+
+// maskProbe counts the work of one maskTofuInstance call. A test reads the
+// counts, so a proof of linear work does not depend on the clock. The test
+// code sets oneDigest through the constructors of the test export; no server
+// code sets it, and no context value carries it.
+type maskProbe struct {
+	// oneDigest gives every value the digest 0, so the equality check is the
+	// only guard against a collision.
 	oneDigest bool
+	// pointers counts the sensitive pointers that the mask pass visited.
+	pointers int
+	// routeSteps counts the tokens that the applied-route lookups compared.
+	routeSteps int
+	// digests counts the values that the index digested; a memo hit is free.
+	digests int
+	// comparisons counts the deep equality checks of the duplicate pass.
+	comparisons int
 }
 
 // newSecretIndex returns the index of secrets. A secret that equals an
 // earlier one adds nothing.
-func newSecretIndex(ctx context.Context, secrets []any) *secretIndex {
+func newSecretIndex(secrets []any, probe *maskProbe) *secretIndex {
 	index := &secretIndex{
-		seed:      maphash.MakeSeed(),
-		byDigest:  map[uint64][]any{},
-		oneDigest: ctx.Value(oneDigestKey{}) != nil,
+		seed:     maphash.MakeSeed(),
+		byDigest: map[uint64][]any{},
+		memo:     map[containerID]uint64{},
+		probe:    probe,
 	}
 
 	for _, secret := range secrets {
 		digest := index.digest(secret)
 
 		known := slices.ContainsFunc(index.byDigest[digest], func(other any) bool {
+			probe.comparisons++
+
 			return reflect.DeepEqual(other, secret)
 		})
 		if !known {
@@ -1102,11 +1180,6 @@ func newSecretIndex(ctx context.Context, secrets []any) *secretIndex {
 	return index
 }
 
-// oneDigestKey is the context key of a hook for the tests of this package.
-// A context that holds it gives every value one digest, so the equality check
-// of duplicates is the only guard against a collision. No server code sets it.
-type oneDigestKey struct{}
-
 // Digest tags: each type of value starts from another number, so a string and
 // a number with the same text do not share a digest.
 const (
@@ -1114,6 +1187,9 @@ const (
 	digestTagNumber uint64 = 0xc2b2ae3d27d4eb4f
 	digestTagMap    uint64 = 0x165667b19e3779f9
 	digestTagList   uint64 = 0x27d4eb2f165667c5
+	digestTrue      uint64 = 0x94d049bb133111eb
+	digestFalse     uint64 = 0xbf58476d1ce4e5b9
+	digestNull      uint64 = 0x2545f4914f6cdd1d
 	digestMultiply  uint64 = 0xff51afd7ed558ccd
 	digestRotate           = 23
 )
@@ -1124,36 +1200,90 @@ func mixDigest(a, b uint64) uint64 {
 }
 
 // digest returns the digest of v. Equal values have equal digests: the digest
-// of a map does not depend on the order of its keys. One call walks v once.
+// of a map does not depend on the order of its keys. The digest of each
+// container is computed once and kept, so the digests of a node and of all
+// its descendants cost one walk of the node.
 func (x *secretIndex) digest(v any) uint64 {
-	if x.oneDigest {
+	if x.probe.oneDigest {
 		return 0
 	}
 
 	switch typed := v.(type) {
 	case string:
+		x.probe.digests++
+
 		return mixDigest(digestTagString, maphash.String(x.seed, typed))
 	case json.Number:
+		x.probe.digests++
+
 		return mixDigest(digestTagNumber, maphash.String(x.seed, string(typed)))
+	case bool:
+		x.probe.digests++
+
+		if typed {
+			return digestTrue
+		}
+
+		return digestFalse
+	case nil:
+		x.probe.digests++
+
+		return digestNull
 	case map[string]any:
-		sum := mixDigest(digestTagMap, uint64(len(typed)))
-
-		for key, elem := range typed {
-			sum += mixDigest(maphash.String(x.seed, key), x.digest(elem))
-		}
-
-		return sum
+		return x.digestMap(typed)
 	case []any:
-		sum := mixDigest(digestTagList, uint64(len(typed)))
-
-		for _, elem := range typed {
-			sum = mixDigest(sum, x.digest(elem))
-		}
-
-		return sum
+		return x.digestList(typed)
 	default:
+		x.probe.digests++
+
 		return maphash.String(x.seed, fmt.Sprintf("%T:%v", v, v))
 	}
+}
+
+// digestMap returns the digest of doc, from the memo when it has one.
+func (x *secretIndex) digestMap(doc map[string]any) uint64 {
+	id := containerID{pointer: reflect.ValueOf(doc).Pointer(), length: len(doc), isMap: true}
+	if sum, ok := x.memo[id]; ok {
+		return sum
+	}
+
+	x.probe.digests++
+
+	sum := mixDigest(digestTagMap, uint64(len(doc)))
+
+	for key, elem := range doc {
+		sum += mixDigest(maphash.String(x.seed, key), x.digest(elem))
+	}
+
+	x.memo[id] = sum
+
+	return sum
+}
+
+// digestList returns the digest of list, from the memo when it has one.
+func (x *secretIndex) digestList(list []any) uint64 {
+	if len(list) == 0 {
+		x.probe.digests++
+
+		return mixDigest(digestTagList, 0)
+	}
+
+	id := containerID{pointer: reflect.ValueOf(list).Pointer(), length: len(list), isMap: false}
+	if sum, ok := x.memo[id]; ok {
+		return sum
+	}
+
+	x.probe.digests++
+
+	sum := mixDigest(digestTagList, uint64(len(list)))
+
+	for _, elem := range list {
+		sum = mixDigest(sum, x.digest(elem))
+	}
+
+	x.memo[id] = sum
+
+	return sum
 }
 
 // duplicates reports whether child equals a masked secret. A secret is a
@@ -1166,6 +1296,8 @@ func (x *secretIndex) duplicates(child any) bool {
 	}
 
 	return slices.ContainsFunc(x.byDigest[x.digest(child)], func(secret any) bool {
+		x.probe.comparisons++
+
 		return reflect.DeepEqual(child, secret)
 	})
 }
@@ -1288,7 +1420,8 @@ type maskCollectors struct {
 	seen    map[string]bool
 	masked  *[]string
 	secrets *[]any
-	applied *[][]string
+	applied *routeSet
+	probe   *maskProbe
 }
 
 // maskOnePointer masks the relative pointer under attributes with a marker
@@ -1297,8 +1430,13 @@ type maskCollectors struct {
 // applied route masks nothing. A pointer at the same node is masked again.
 func maskOnePointer(attributes any, relative, full string, out *maskCollectors) {
 	route, resolved := routeTokens(attributes, splitPointer(relative))
-	if resolved && belowAppliedRoute(*out.applied, route) {
-		return
+	if resolved {
+		below, steps := out.applied.below(route)
+		out.probe.routeSteps += steps
+
+		if below {
+			return
+		}
 	}
 
 	original, found := lookupPointer(attributes, relative)
@@ -1311,7 +1449,7 @@ func maskOnePointer(attributes any, relative, full string, out *maskCollectors) 
 	*out.masked = append(*out.masked, full)
 
 	if resolved {
-		*out.applied = append(*out.applied, route)
+		out.applied.add(route)
 	}
 
 	if found && propagableSecret(original) {
@@ -1339,6 +1477,18 @@ type instanceSite struct {
 func maskTofuInstance(
 	ctx context.Context, instance map[string]any, site instanceSite, marks SensitiveMarks,
 ) (any, []string, error) {
+	return maskTofuInstanceProbed(ctx, instance, site, marks, &maskProbe{
+		oneDigest: false, pointers: 0, routeSteps: 0, digests: 0, comparisons: 0,
+	})
+}
+
+// maskTofuInstanceProbed is maskTofuInstance with a probe that counts its
+// work. The mark pass charges each pointer to a budget of its own and checks
+// the context at each pointer, so a state with many pointers ends with
+// ErrStateBound or with the end of the context.
+func maskTofuInstanceProbed(
+	ctx context.Context, instance map[string]any, site instanceSite, marks SensitiveMarks, probe *maskProbe,
+) (any, []string, error) {
 	resource, position, address := site.resource, site.position, site.address
 	base := tofuAttributesBase(resource, position)
 
@@ -1364,11 +1514,24 @@ func maskTofuInstance(
 
 	var secrets []any
 
-	var applied [][]string
-
-	out := maskCollectors{seen: seen, masked: &masked, secrets: &secrets, applied: &applied}
+	applied := &routeSet{root: routeNode{applied: false, children: nil}}
+	out := maskCollectors{seen: seen, masked: &masked, secrets: &secrets, applied: applied, probe: probe}
+	budget := newMaskBudget()
 
 	for _, relative := range tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, fmt.Errorf("mask pointers: %w", err)
+		}
+
+		// Each pointer costs its path and the fixed cost of a marker, as a
+		// value of the scan does. The scan of the values cannot see a pointer
+		// that names no value, so the pointers have a charge of their own.
+		if err := budget.charge(len(base) + len(relative) + maskValueCost); err != nil {
+			return nil, nil, err
+		}
+
+		probe.pointers++
+
 		full := base + relative
 		if seen[full] {
 			continue
@@ -1378,7 +1541,7 @@ func maskTofuInstance(
 	}
 
 	if len(secrets) > 0 {
-		pass := duplicatePass{index: newSecretIndex(ctx, secrets), seen: seen, masked: &masked}
+		pass := duplicatePass{index: newSecretIndex(secrets, probe), seen: seen, masked: &masked}
 
 		if err := pass.maskDuplicates(ctx, attributes, base); err != nil {
 			return nil, nil, err

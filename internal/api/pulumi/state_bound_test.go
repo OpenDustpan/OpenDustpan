@@ -44,33 +44,44 @@ func TestStateReadsPastTheBoundAnswer413AndLog(t *testing.T) {
 				t.Fatalf("GET %s answers %d, want 413 (%s)", tt.target, status, body)
 			}
 
-			checkBoundLog(t, buf.Bytes(), planted)
+			checkBoundLog(t, buf.Bytes(), planted, "update")
 		})
 	}
 }
 
 // checkBoundLog proves that raw holds one WARN record of the bound with the
-// stack and the update, and no value of the state.
-func checkBoundLog(t *testing.T, raw []byte, planted string) {
+// stack, a non-empty value for each of updateFields, and no value of the
+// state. Two update fields name two different updates.
+func checkBoundLog(t *testing.T, raw []byte, planted string, updateFields ...string) {
 	t.Helper()
 
-	var entry struct {
-		Level  string `json:"level"`
-		Msg    string `json:"msg"`
-		Stack  string `json:"stack"`
-		Update string `json:"update"`
-	}
+	var entry map[string]any
 
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		t.Fatalf("log %q: want one JSON line: %v", raw, err)
 	}
 
-	if entry.Level != "WARN" || entry.Msg != "state past the masked read bound" {
-		t.Errorf("log = %q %q, want the WARN of the bound", entry.Level, entry.Msg)
+	if entry["level"] != "WARN" || entry["msg"] != "state past the masked read bound" {
+		t.Errorf("log = %v %v, want the WARN of the bound", entry["level"], entry["msg"])
 	}
 
-	if entry.Stack != "acme/web/prod" || entry.Update == "" {
-		t.Errorf("log stack %q update %q, want acme/web/prod and an update ID", entry.Stack, entry.Update)
+	if entry["stack"] != "acme/web/prod" {
+		t.Errorf("log stack %v, want acme/web/prod", entry["stack"])
+	}
+
+	seen := map[string]bool{}
+
+	for _, field := range updateFields {
+		value, isString := entry[field].(string)
+		if !isString || value == "" {
+			t.Errorf("log field %q is empty, want an update ID: %q", field, raw)
+		}
+
+		if seen[value] {
+			t.Errorf("log field %q repeats update %q, want two different updates", field, value)
+		}
+
+		seen[value] = true
 	}
 
 	if strings.Contains(string(raw), planted) {
@@ -122,5 +133,5 @@ func TestStateDiffPastTheWorkBoundAnswer413AndLogs(t *testing.T) {
 		t.Fatalf("diff answers %d, want 413 (%.200s)", status, body)
 	}
 
-	checkBoundLog(t, buf.Bytes(), "100000")
+	checkBoundLog(t, buf.Bytes(), "100000", "from_update", "to_update")
 }
