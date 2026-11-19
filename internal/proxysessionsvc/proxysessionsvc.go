@@ -482,7 +482,10 @@ func (s *Service) saveOnce(
 	// Fail closed: a credential with no upstream proxy has no use, so the save
 	// refuses it and keeps the credential out of the row.
 	if len(next.Credential) != 0 && settings.UpstreamURL() == "" {
-		return runner.ProxySettingsRecord{}, fmt.Errorf("%w: a credential needs an upstream URL", runner.ErrInvalid)
+		return runner.ProxySettingsRecord{}, runner.NewFieldError(
+			"upstreamCredential",
+			"set upstreamProxy, or remove the credential.",
+		)
 	}
 
 	return s.settings.SetProxySettings(ctx, fence, req.Pool.ID, next, s.settingsEntry(req, &current, &next))
@@ -825,15 +828,15 @@ func (s *Service) unseal(ctx context.Context, pool runner.Pool, sealed []byte) (
 func checkCredential(c *Credential) error {
 	switch {
 	case c.Username == "" || len(c.Username) > MaxUsernameBytes:
-		return fmt.Errorf("%w: the user name of the credential is 1 to %d bytes", runner.ErrInvalid, MaxUsernameBytes)
+		return runner.NewFieldError("upstreamCredential.username", fmt.Sprintf("use 1 to %d bytes.", MaxUsernameBytes))
 	case len(c.Password) > MaxPasswordBytes:
-		return fmt.Errorf("%w: the password of the credential is at most %d bytes", runner.ErrInvalid, MaxPasswordBytes)
+		return runner.NewFieldError("upstreamCredential.password", fmt.Sprintf("use 0 to %d bytes.", MaxPasswordBytes))
 	case !utf8.ValidString(c.Username) || !utf8.ValidString(c.Password):
-		return fmt.Errorf("%w: the credential is not valid text", runner.ErrInvalid)
+		return runner.NewFieldError("upstreamCredential", "use valid UTF-8 text for the user name and the password.")
 	case strings.Contains(c.Username, ":"):
-		return fmt.Errorf("%w: the user name of the credential holds no colon", runner.ErrInvalid)
+		return runner.NewFieldError("upstreamCredential.username", "use a user name with no colon.")
 	case strings.ContainsFunc(c.Username+c.Password, ident.IsHiddenRune):
-		return fmt.Errorf("%w: the credential has a control, format or separator character", runner.ErrInvalid)
+		return runner.NewFieldError("upstreamCredential", "use no control, format or separator character.")
 	}
 
 	return nil

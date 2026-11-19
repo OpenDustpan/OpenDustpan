@@ -86,3 +86,38 @@ func TestNewProxySettingsValid(t *testing.T) {
 		t.Fatalf("NewProxySettings(nil, \"\") = %+v, %v; want the default", none, err)
 	}
 }
+
+// TestNewProxySettingsNamesTheField checks that each refusal names the field
+// and holds no text of the input.
+func TestNewProxySettingsNamesTheField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		ranges []string
+		url    string
+		field  string
+	}{
+		{"range text", []string{"ZZ-marker"}, "", "allowedRanges"},
+		{"range with a host bit", []string{"10.0.0.1/8"}, "", "allowedRanges"},
+		{"upstream scheme", nil, "ZZ-marker://x", "upstreamProxy"},
+		{"upstream user information", nil, "http://ZZ-marker:pw@proxy.example:3128", "upstreamProxy"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := runner.NewProxySettings(tc.ranges, tc.url)
+
+			fe, ok := errors.AsType[*runner.FieldError](err)
+			if !ok || fe.Field() != tc.field {
+				t.Fatalf("NewProxySettings error = %v, want a field error of %s", err, tc.field)
+			}
+
+			if strings.Contains(err.Error(), "ZZ-marker") || strings.Contains(err.Error(), "10.0.0.1") {
+				t.Errorf("error text %q repeats the input", err)
+			}
+		})
+	}
+}

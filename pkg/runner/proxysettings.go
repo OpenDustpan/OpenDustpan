@@ -13,6 +13,14 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+// The fields of the proxy settings in a request, and the rule of a range.
+const (
+	fieldAllowedRanges = "allowedRanges"
+	fieldUpstreamProxy = "upstreamProxy"
+	rangeRule          = "use network ranges in CIDR form with no host bits, for example 10.0.0.0/8. " +
+		"A range that is too wide, or that opens an address that must stay closed, is not allowed."
+)
+
 // MaxProxyRanges is the most private ranges that one pool may allow. A save
 // with more ranges fails with ErrInvalid.
 const MaxProxyRanges = 64
@@ -35,11 +43,11 @@ type ProxySettings struct {
 // errors never repeat the upstream URL.
 func NewProxySettings(ranges []string, upstreamURL string) (ProxySettings, error) {
 	if len(ranges) > MaxProxyRanges {
-		return ProxySettings{}, fmt.Errorf("%w: a pool allows at most %d ranges", ErrInvalid, MaxProxyRanges)
+		return ProxySettings{}, NewFieldError(fieldAllowedRanges, fmt.Sprintf("use 0 to %d ranges.", MaxProxyRanges))
 	}
 
 	if _, err := egress.ParseAllowedRanges(ranges); err != nil {
-		return ProxySettings{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return ProxySettings{}, NewFieldError(fieldAllowedRanges, rangeRule)
 	}
 
 	for _, s := range ranges {
@@ -48,7 +56,7 @@ func NewProxySettings(ranges []string, upstreamURL string) (ProxySettings, error
 		// that a stored range is never wider than the operator wrote.
 		p, err := netip.ParsePrefix(s)
 		if err != nil || p != p.Masked() {
-			return ProxySettings{}, fmt.Errorf("%w: range %s is not a network address", ErrInvalid, s)
+			return ProxySettings{}, NewFieldError(fieldAllowedRanges, rangeRule)
 		}
 	}
 
@@ -79,31 +87,34 @@ func checkUpstreamURL(raw string) error {
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: the upstream URL does not parse", ErrInvalid)
+		return NewFieldError(fieldUpstreamProxy, "use an http or https URL with a host.")
 	}
 
 	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
-		return fmt.Errorf("%w: the upstream URL scheme is http or https", ErrInvalid)
+		return NewFieldError(fieldUpstreamProxy, "use an http or https URL.")
 	}
 
 	if u.User != nil {
-		return fmt.Errorf("%w: the upstream URL holds no user information; use the credential", ErrInvalid)
+		return NewFieldError(
+			fieldUpstreamProxy,
+			"use a URL with no user information. Set upstreamCredential for the user name and the password.",
+		)
 	}
 
 	if u.Fragment != "" || strings.Contains(raw, "#") {
-		return fmt.Errorf("%w: the upstream URL holds no fragment", ErrInvalid)
+		return NewFieldError(fieldUpstreamProxy, "use a URL with no fragment.")
 	}
 
 	host := u.Hostname()
 	if host == "" {
-		return fmt.Errorf("%w: the upstream URL has no host", ErrInvalid)
+		return NewFieldError(fieldUpstreamProxy, "use a URL with a host.")
 	}
 
 	if a, err := netip.ParseAddr(host); err == nil {
 		// Defense in depth: the job proxy checks the resolved address too; this
 		// check stops a literal that no range opens at the save.
 		if err := egress.CheckAllowedRange(netip.PrefixFrom(a, a.BitLen())); err != nil {
-			return fmt.Errorf("%w: the upstream host is an address that no range opens", ErrInvalid)
+			return NewFieldError(fieldUpstreamProxy, "use a host name, or an address that an allowed range opens.")
 		}
 	}
 

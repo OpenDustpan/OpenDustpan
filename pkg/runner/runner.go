@@ -309,9 +309,9 @@ type FieldError struct {
 	rule  string
 }
 
-// newFieldError makes a FieldError. The callers in this package pass
-// constant text only.
-func newFieldError(field, rule string) *FieldError {
+// NewFieldError makes a FieldError. The field and the rule must be constant
+// text: never pass a value that the caller of the API sent.
+func NewFieldError(field, rule string) *FieldError {
 	return &FieldError{field: field, rule: rule}
 }
 
@@ -339,21 +339,21 @@ func (e *FieldError) Unwrap() error { return ErrInvalid }
 func (p *Pool) Validate() error {
 	switch {
 	case !ValidName(p.Name):
-		return newFieldError("name", fmt.Sprintf(
+		return NewFieldError("name", fmt.Sprintf(
 			"use 1 to %d lowercase letters, digits and '-'. Start and end with a letter or digit.", MaxNameLength,
 		))
 	case !p.Purpose.Valid():
-		return newFieldError("purpose", fmt.Sprintf("use %s or %s.", PurposeJobs, PurposeSweeps))
+		return NewFieldError("purpose", fmt.Sprintf("use %s or %s.", PurposeJobs, PurposeSweeps))
 	case p.Lease != 0 && (p.Lease < MinLease || p.Lease > MaxLease):
-		return newFieldError("lease", fmt.Sprintf("use 0, or %d to %d milliseconds.",
+		return NewFieldError("lease", fmt.Sprintf("use 0, or %d to %d milliseconds.",
 			MinLease.Milliseconds(), MaxLease.Milliseconds()))
 	case p.Concurrency < 0 || p.Concurrency > MaxConcurrency:
-		return newFieldError("concurrency", fmt.Sprintf("use 0, or 1 to %d.", MaxConcurrency))
+		return NewFieldError("concurrency", fmt.Sprintf("use 0, or 1 to %d.", MaxConcurrency))
 	}
 
 	for _, k := range p.Isolation {
 		if !k.Valid() {
-			return newFieldError("isolation", fmt.Sprintf("use %s, %s, %s or %s.",
+			return NewFieldError("isolation", fmt.Sprintf("use %s, %s, %s or %s.",
 				IsolationKubernetes, IsolationFirecracker, IsolationGVisor, IsolationProcess))
 		}
 	}
@@ -420,7 +420,7 @@ func (g GitCredentials) Validate() error {
 	case GitCredentialsCustom:
 		return validateHelper(g.Helper)
 	default:
-		return newFieldError("gitCredentials.mode", fmt.Sprintf("use %s, %s or %s.",
+		return NewFieldError("gitCredentials.mode", fmt.Sprintf("use %s, %s or %s.",
 			GitCredentialsNone, GitCredentialsForge, GitCredentialsCustom))
 	}
 }
