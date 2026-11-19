@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -33,6 +32,8 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Errors of the client. Each one wraps the reason. No error holds a code,
@@ -318,13 +319,7 @@ func (b *limitedBody) Close() error {
 
 // loopback reports whether host names the loopback interface.
 func loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-
-	return ip != nil && ip.IsLoopback()
+	return session.LoopbackHost(host)
 }
 
 // providerAlgorithms returns the signature algorithms that both the

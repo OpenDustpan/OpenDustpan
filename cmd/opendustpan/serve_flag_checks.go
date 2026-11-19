@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -23,7 +24,16 @@ var (
 			"because --oidc-issuer is set",
 	)
 	errOIDCIssuer = errors.New(
-		"invalid --oidc-issuer (DUSTPAN_OIDC_ISSUER): use an https:// address, or http:// to a loopback host",
+		"invalid --oidc-issuer (DUSTPAN_OIDC_ISSUER): use an https:// address, or http:// to a loopback host, " +
+			"with no user name, query or fragment",
+	)
+	errOIDCReservedID = errors.New(
+		"invalid --oidc-provider (DUSTPAN_OIDC_PROVIDER): the ID is reserved for the dev and local sign-in: " +
+			"use another ID",
+	)
+	errLDAPReservedID = errors.New(
+		"invalid --ldap-provider (DUSTPAN_LDAP_PROVIDER): the ID is reserved for the dev and local sign-in: " +
+			"use another ID",
 	)
 	errLDAPProviderID = errors.New(
 		"invalid --ldap-provider (DUSTPAN_LDAP_PROVIDER): use 1 to 32 lower-case letters, digits and '-', " +
@@ -36,7 +46,7 @@ var (
 		"invalid --allowed-origins (DUSTPAN_ALLOWED_ORIGINS): use http:// or https:// with a host and an " +
 			"optional port, in lower case, with no path, query or fragment, for example https://console.example.com",
 	)
-	errTLSFile = errors.New("the TLS file cannot be read")
+	errTLSFile = errors.New("the TLS file does not exist")
 )
 
 // checkSignInFlags refuses a sign-in setting that the server refuses later,
@@ -44,9 +54,15 @@ var (
 // names the flag. A process without the api component ignores the settings,
 // so it skips the check. The server keeps its own checks.
 func (f *serveFlags) checkSignInFlags() error {
+	// Defense in depth: check parses --components first; this parse stays so
+	// that a caller of this function alone cannot skip the refusal.
 	set, err := dustpan.ParseComponents(f.components)
-	if err != nil || !set.Has(dustpan.ComponentAPI) {
-		return nil //nolint:nilerr // check reports a bad --components value.
+	if err != nil {
+		return fmt.Errorf("--components: %w", err)
+	}
+
+	if !set.Has(dustpan.ComponentAPI) {
+		return nil
 	}
 
 	if f.oidcIssuer != "" {
@@ -66,6 +82,10 @@ func (f *serveFlags) checkSignInFlags() error {
 func (f *serveFlags) checkLDAPFlags() error {
 	if !session.ValidProviderID(f.ldap.providerID) {
 		return fmt.Errorf("%w: %q", errLDAPProviderID, f.ldap.providerID)
+	}
+
+	if reservedProviderID(f.ldap.providerID) {
+		return fmt.Errorf("%w: %q", errLDAPReservedID, f.ldap.providerID)
 	}
 
 	if f.ldap.groups == "search" && strings.TrimSpace(f.ldap.groupBaseDN) == "" {
@@ -89,21 +109,40 @@ func (f *serveFlags) checkOIDCFlags() error {
 		return fmt.Errorf("%w: %q", errOIDCProviderID, f.oidcProvider)
 	}
 
+	if reservedProviderID(f.oidcProvider) {
+		return fmt.Errorf("%w: %q", errOIDCReservedID, f.oidcProvider)
+	}
+
 	if f.oidcClientID == "" {
 		return errOIDCClientID
 	}
 
-	u, err := url.Parse(f.oidcIssuer)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("%w: %q", errOIDCIssuer, f.oidcIssuer)
-	}
-
-	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
-	if u.Scheme != "https" && (u.Scheme != "http" || !loopback) {
-		return fmt.Errorf("%w: %q", errOIDCIssuer, f.oidcIssuer)
+	// The issuer is never printed: it may hold a user name and a password.
+	if !session.ValidIssuer(f.oidcIssuer) {
+		return fmt.Errorf("%w: %s", errOIDCIssuer, redactIssuer(f.oidcIssuer))
 	}
 
 	return nil
+}
+
+// reservedProviderID reports whether id is an ID that the server keeps for the
+// dev sign-in or for the local users.
+func reservedProviderID(id string) bool {
+	return id == session.DevProviderID || id == session.LocalProviderID
+}
+
+// redactIssuer returns the issuer for an error text, with its
+// user information removed. A value that does not parse gives a fixed text, so
+// the error never holds a secret.
+func redactIssuer(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return "(not a valid URL)"
+	}
+
+	u.User = nil
+
+	return strconv.Quote(u.String())
 }
 
 // checkOriginFlags refuses an --allowed-origins item that the server refuses.
@@ -129,7 +168,8 @@ func (f *serveFlags) checkTLSFiles() error {
 		}
 
 		if _, err := os.Stat(item.path); err != nil {
-			return fmt.Errorf("%w: %s (%s) %s: %w", errTLSFile, item.flag, item.env, item.path, unwrapPathError(err))
+			return fmt.Errorf("%w: %s: set %s (%s) to a readable PEM file: %w",
+				errTLSFile, item.path, item.flag, item.env, unwrapPathError(err))
 		}
 	}
 

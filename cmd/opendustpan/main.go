@@ -1022,10 +1022,7 @@ func (f *serveFlags) openBlobStores(
 //
 //nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
 func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (blob.Store, error) {
-	if strings.TrimSpace(f.s3Endpoint) != "" && !strings.HasPrefix(strings.TrimSpace(f.blobStore), "s3://") {
-		logger.WarnContext(ctx, "--s3-endpoint has no effect: --blob-store is not an s3:// address",
-			slog.String("blob_store", blobStoreKind(f.blobStore)))
-	}
+	f.warnUnusedS3Endpoint(ctx, logger)
 
 	cfg := blobOpenConfig{
 		database: f.database,
@@ -1036,6 +1033,20 @@ func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (bl
 	}
 
 	return openBlobs(ctx, cfg, logger)
+}
+
+// warnUnusedS3Endpoint warns when --s3-endpoint is set and neither
+// --blob-store nor --backup-target is an s3:// address. Both flags use the
+// endpoint.
+func (f *serveFlags) warnUnusedS3Endpoint(ctx context.Context, logger *slog.Logger) {
+	if strings.TrimSpace(f.s3Endpoint) == "" ||
+		strings.HasPrefix(strings.TrimSpace(f.blobStore), "s3://") ||
+		strings.HasPrefix(strings.TrimSpace(f.backupTarget), "s3://") {
+		return
+	}
+
+	logger.WarnContext(ctx, "--s3-endpoint has no effect: --blob-store and --backup-target are not s3:// addresses",
+		slog.String("blob_store", blobStoreKind(f.blobStore)))
 }
 
 // closeLiveStore closes the live blob store when it holds a directory
@@ -1823,8 +1834,8 @@ func readKeyFile(path string) ([]byte, error) {
 	return decodeKey(keyFileEnvVar, string(raw))
 }
 
-// blobStoreKind returns the kind of a --blob-store value for a log record:
-// "fs" for the default, else the value with no bucket or path.
+// blobStoreKind returns the --blob-store value for a log record: "fs" when the
+// value is empty, else the value with the white space around it removed.
 func blobStoreKind(v string) string {
 	if strings.TrimSpace(v) == "" {
 		return "fs"

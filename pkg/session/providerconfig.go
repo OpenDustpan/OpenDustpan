@@ -186,24 +186,34 @@ func (p ProviderConfig) validateMode() error {
 	}
 }
 
-// validIssuer reports whether issuer is an absolute https URL with a host,
-// or an http URL on a loopback host, with no query and no fragment. The
-// sign-in client applies the same scheme rule when it fetches the
-// discovery document, so a stored issuer never fails it.
+// ValidIssuer reports whether issuer is an absolute https URL with a host,
+// or an http URL on a loopback host, with no user, no query and no fragment.
+// It is the one issuer rule: the stored providers, the serve flags and the
+// sign-in client use it, so a configured issuer never fails the client.
+func ValidIssuer(issuer string) bool {
+	return validIssuer(issuer)
+}
+
+// validIssuer implements ValidIssuer.
 func validIssuer(issuer string) bool {
 	if issuer == "" || len(issuer) > maxIssuer {
 		return false
 	}
 
 	u, err := url.Parse(issuer)
-	if err != nil || u == nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 
 	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
 }
 
-// loopbackHost reports whether host is localhost or a loopback IP address.
+// LoopbackHost reports whether host is localhost or a loopback IP address.
+func LoopbackHost(host string) bool {
+	return loopbackHost(host)
+}
+
+// loopbackHost implements LoopbackHost.
 func loopbackHost(host string) bool {
 	if host == "localhost" {
 		return true
