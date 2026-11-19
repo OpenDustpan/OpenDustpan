@@ -276,6 +276,11 @@ func TestReadMapsTheRefusalsOfTheTools(t *testing.T) {
 			"unknown workspace version", workspace.ErrStateVersionNotFound,
 			http.StatusNotFound, errcode.StateVersionNotFound,
 		},
+		{"stack unreadable shape", stack.ErrUnreadableState, http.StatusInternalServerError, errcode.ServerInternal},
+		{
+			"workspace unreadable shape", workspace.ErrUnreadableState,
+			http.StatusInternalServerError, errcode.ServerInternal,
+		},
 		{"an error that no class knows", errUnknown, http.StatusInternalServerError, errcode.ServerInternal},
 	}
 

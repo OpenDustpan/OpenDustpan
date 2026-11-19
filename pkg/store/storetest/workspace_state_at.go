@@ -34,6 +34,7 @@ func RunWorkspaceStateAt(t *testing.T, newStore WorkspaceStateAtFactory) {
 		{name: "state at a time after a fence in the current millisecond", test: testWorkspaceStateAtFenceTie},
 		{name: "state version list after finalizes in one millisecond", test: testWorkspaceListOrderTie},
 		{name: "state at a time of a deleted and of an unknown workspace", test: testWorkspaceStateAtDeleted},
+		{name: "state version of one workspace in one namespace", test: testGetWorkspaceStateVersion},
 	}
 
 	for _, tc := range cases {

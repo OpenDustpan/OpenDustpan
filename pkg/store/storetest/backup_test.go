@@ -1719,6 +1719,30 @@ func (s *fakeBackupStore) CreateStateVersion(
 	return nil
 }
 
+// GetWorkspaceStateVersion implements workspace.StateStore.
+func (s *fakeBackupStore) GetWorkspaceStateVersion(
+	_ context.Context, ns namespace.Name, ws workspace.ID, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return workspace.StateVersion{}, errFakeClosed
+	}
+
+	sv, ok := s.data.states[id.String()]
+	if !ok || sv.Workspace != ws {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	w, ok := s.data.workspaces[ws.String()]
+	if !ok || w.Ref.Namespace != ns {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	return sv, nil
+}
+
 // GetStateVersion implements workspace.StateStore.
 func (s *fakeBackupStore) GetStateVersion(
 	_ context.Context, id workspace.StateVersionID,

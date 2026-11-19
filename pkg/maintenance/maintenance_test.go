@@ -436,6 +436,12 @@ func (fakeStates) CreateStateVersion(
 	return nil
 }
 
+func (fakeStates) GetWorkspaceStateVersion(
+	context.Context, namespace.Name, workspace.ID, workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+}
+
 func (fakeStates) GetStateVersion(context.Context, workspace.StateVersionID) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 }
@@ -1021,6 +1027,16 @@ func (s encryptedStates) CurrentStateVersion(context.Context, workspace.ID) (wor
 }
 
 func (s encryptedStates) GetStateVersion(context.Context, workspace.StateVersionID) (workspace.StateVersion, error) {
+	return s.version, nil
+}
+
+func (s encryptedStates) GetWorkspaceStateVersion(
+	_ context.Context, _ namespace.Name, ws workspace.ID, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	if s.version.ID != id || s.version.Workspace != ws {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
 	return s.version, nil
 }
 

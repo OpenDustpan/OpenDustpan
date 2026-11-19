@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,20 @@ const maskedCursorTTL = 10 * time.Minute
 // maskedHMACBytes is the size of the signature of a cursor.
 const maskedHMACBytes = sha256.Size
 
+// maskedMaxDepth is the deepest nesting of a JSON document that a masked read
+// accepts. A document that nests deeper is refused before it is decoded.
+const maskedMaxDepth = 100
+
+// maskedMaxMarkers is the most markers that one version may hold for a masked
+// read. A version with more markers is refused before the server builds the
+// path of any marker.
+const maskedMaxMarkers = 10000
+
+// maskedMaxPathBytes is the most bytes that the value paths of one version may
+// need in all. It is the bound on the memory that the paths can use: a path
+// holds its whole prefix, so a long key above many values would multiply.
+const maskedMaxPathBytes = 32 << 20
+
 var (
 	// ErrBadPath is the refusal of a version, a value path or a cursor of a
 	// masked read that fails the boundary check. It carries no value of the
@@ -60,6 +75,13 @@ var (
 	// ErrReadDeadline is the refusal when the read exceeds the deadline of
 	// its caller. The answer carries no bytes of the version.
 	ErrReadDeadline = errors.New("state: read deadline exceeded")
+
+	// ErrUnreadableState is the refusal when the server cannot read the shape
+	// of a version: a state that the client encrypted, a document that is not
+	// an object, a resources value that is not an array, or a resource with no
+	// type or name. The answer carries no content, so a reader cannot mistake
+	// it for a state with no secrets.
+	ErrUnreadableState = errors.New("state: unreadable shape")
 )
 
 const (
@@ -157,9 +179,9 @@ func (s *Service) ReadMasked(ctx context.Context, args ReadMaskedArgs) (MaskedPa
 // maskedRead runs the steps of a masked read after the authorization. It
 // returns the reason of a refusal, or an empty reason for a plain error.
 func (s *Service) maskedRead(ctx context.Context, args ReadMaskedArgs) (MaskedPage, string, error) {
-	w, err := s.Get(ctx, args.Ref)
+	w, err := s.maskedWorkspace(ctx, args)
 	if err != nil {
-		return MaskedPage{}, "", fmt.Errorf("masked read of %s: %w", args.Ref, err)
+		return MaskedPage{}, "", err
 	}
 
 	sv, err := s.maskedVersion(ctx, w, args.Selector)
@@ -199,6 +221,36 @@ func (s *Service) maskedRead(ctx context.Context, args ReadMaskedArgs) (MaskedPa
 	return page, "", err
 }
 
+// maskedWorkspace returns the workspace that the caller was authorized on. It
+// reads by the stable ID of the authorized object, never by name: a name can
+// move to another workspace between the check and the read, and the ID
+// cannot. A workspace that was deleted and made again has a new ID, so the
+// read refuses it as not found.
+func (s *Service) maskedWorkspace(ctx context.Context, args ReadMaskedArgs) (Workspace, error) {
+	id := ID(args.Object.UnitID())
+	if id == "" {
+		// Defense in depth: the lookup by ID below answers ErrNotFound for an
+		// empty ID too, and the handler always sets the ID; this check stays so
+		// that a store that answers an empty ID cannot be reached. Fail closed: with no ID the read cannot tell which workspace the
+		// grant covers.
+		return Workspace{}, fmt.Errorf("masked read of %s: %w: no unit ID", args.Ref, ErrNotFound)
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("masked read of %s: %w", args.Ref, err)
+	}
+
+	// Defense in depth: the store answers by ID, so the namespace of the
+	// object is compared with the namespace of the row. A mismatch is a unit
+	// that the grant does not name.
+	if w.Ref.Namespace != args.Object.Namespace() {
+		return Workspace{}, fmt.Errorf("masked read of %s: %w", args.Ref, ErrNotFound)
+	}
+
+	return w, nil
+}
+
 // maskedFailure maps an error of a step of the masked read to the refusal it
 // reports. The boundary check, the size limit and the deadline are refusals;
 // any other error has no reason and is returned as it is.
@@ -208,6 +260,8 @@ func maskedFailure(ctx context.Context, err error) (string, error) {
 		return RefusalTooLarge, err
 	case errors.Is(err, ErrBadPath):
 		return RefusalBadPath, err
+	case errors.Is(err, ErrReadDeadline):
+		return RefusalDeadline, ErrReadDeadline
 	case ctx.Err() != nil:
 		return RefusalDeadline, ErrReadDeadline
 	default:
@@ -234,6 +288,12 @@ func (s *Service) maskedVersion(ctx context.Context, w Workspace, sel VersionSel
 			return StateVersion{}, fmt.Errorf("current state of %s: %w", w.ID, err)
 		}
 
+		// Defense in depth: the store follows the pointer of the workspace; the
+		// owner is checked here too, as for a pinned version.
+		if sv.Workspace != w.ID {
+			return StateVersion{}, fmt.Errorf("%w: current state of %s", ErrStateVersionNotFound, w.ID)
+		}
+
 		return sv, nil
 	}
 
@@ -241,13 +301,18 @@ func (s *Service) maskedVersion(ctx context.Context, w Workspace, sel VersionSel
 		return StateVersion{}, err
 	}
 
-	sv, err := s.states.GetStateVersion(ctx, sel.ID)
+	// The store takes the namespace and the workspace with the ID of the
+	// version, so it cannot answer the version of another workspace.
+	sv, err := s.states.GetWorkspaceStateVersion(ctx, w.Ref.Namespace, w.ID, sel.ID)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("read state %s: %w", sel.ID, err)
 	}
 
-	// Defense in depth: the store answers a version of any workspace by its ID,
-	// so the owner and the status are checked here too.
+	// Defense in depth: the store lookup takes the workspace too; the owner and
+	// the status are checked here as well, so a store that ignores the
+	// workspace still cannot answer the version of another workspace or a
+	// version that is not finalized. The status check does not rely on the check
+	// of Open, which refuses a version that is not finalized later.
 	if sv.Workspace != w.ID || sv.Status != StatusFinalized {
 		return StateVersion{}, fmt.Errorf("%w: state version %s", ErrStateVersionNotFound, sel.ID)
 	}
@@ -256,14 +321,16 @@ func (s *Service) maskedVersion(ctx context.Context, w Workspace, sel VersionSel
 }
 
 // maskedPaths loads the content of sv and returns the sorted value paths of its
-// secrets. The content is loaded only after the size of the record passed.
+// secrets. The content is loaded only after the size of the record passed. The
+// deadline is checked after the parse and after the walk, so a read never
+// answers after its deadline.
 func (s *Service) maskedPaths(ctx context.Context, sv StateVersion) ([]string, error) {
 	content, err := s.readMaskedContent(ctx, sv)
 	if err != nil {
 		return nil, err
 	}
 
-	return maskedStatePaths(content, sv.SensitiveMarks)
+	return maskedStatePaths(ctx, content, sv.SensitiveMarks)
 }
 
 // maskedPageOf returns the page of paths that starts at offset. A page after
@@ -271,6 +338,13 @@ func (s *Service) maskedPaths(ctx context.Context, sv StateVersion) ([]string, e
 func maskedPageOf(
 	paths []string, offset int, key []byte, bind maskedBinding, now time.Time,
 ) (MaskedPage, error) {
+	// Defense in depth: verifyMaskedCursor refuses a negative offset and the
+	// signature covers it; this check stays so that a new caller cannot slice
+	// the paths with a negative offset.
+	if offset < 0 {
+		return MaskedPage{}, fmt.Errorf("%w: offset", ErrBadPath)
+	}
+
 	if offset > len(paths) {
 		offset = len(paths)
 	}
@@ -379,9 +453,13 @@ func readMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
 
 // maskedStatePaths returns the sorted, unique JSON Pointer value paths of the
 // secrets of state: the masked resource values of MaskedPaths, and each
-// sensitive output. An error carries no bytes of the state.
-func maskedStatePaths(state []byte, marks SensitiveMarks) ([]string, error) {
-	paths, err := maskedResourcePaths(state, marks)
+// sensitive output. An error carries no bytes of the state. The work is
+// bounded by the shape of the state: a nesting depth above maskedMaxDepth or
+// more than maskedMaxMarkers markers is refused with ErrTooLarge before the
+// server builds the path of any marker. The deadline is checked after the
+// parse and after the walk.
+func maskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	paths, err := maskedResourcePaths(ctx, state, marks)
 	if err != nil {
 		return nil, err
 	}
@@ -395,19 +473,54 @@ func maskedStatePaths(state []byte, marks SensitiveMarks) ([]string, error) {
 
 	slices.Sort(paths)
 
-	return slices.Compact(paths), nil
+	paths = slices.Compact(paths)
+
+	// Defense in depth: the walk and maskedResourcePaths bound the markers of the
+	// resources; this check bounds the markers with the sensitive outputs added,
+	// so it does not rely on those checks.
+	if len(paths) > maskedMaxMarkers {
+		return nil, fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+	}
+
+	if ctx.Err() != nil {
+		return nil, ErrReadDeadline
+	}
+
+	return paths, nil
 }
 
 // maskedResourcePaths returns the masked set of state: the value path of each
 // marker of every resource instance, masked with marks. With no kept marks
-// for the version, every attribute value is a marker.
-func maskedResourcePaths(state []byte, marks SensitiveMarks) ([]string, error) {
+// for the version, every attribute value is a marker. It refuses a state that
+// it cannot read with ErrUnreadableState, and a state over the bounds of the
+// work with ErrTooLarge, before it builds a path.
+func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	if err := maskedCheckDepth(state); err != nil {
+		return nil, err
+	}
+
+	encrypted, err := IsClientEncrypted(state)
+	if err != nil || encrypted {
+		return nil, fmt.Errorf("%w: the state is encrypted by the client or not an object", ErrUnreadableState)
+	}
+
 	doc, err := decodeState(state)
 	if err != nil {
 		return nil, err
 	}
 
-	entries, _ := tofuStateResources(doc)
+	if ctx.Err() != nil {
+		return nil, ErrReadDeadline
+	}
+
+	entries, skipped := tofuStateResources(doc)
+	if skipped {
+		return nil, fmt.Errorf("%w: resources has an entry that the server cannot read", ErrUnreadableState)
+	}
+
+	if err := maskedCheckWork(entries, marks); err != nil {
+		return nil, err
+	}
 
 	masked := []string{}
 
@@ -420,7 +533,127 @@ func maskedResourcePaths(state []byte, marks SensitiveMarks) ([]string, error) {
 		}
 	}
 
+	// The copies of a masked secret add markers that the pointers did not
+	// count, so the count is checked after the masking too.
+	if len(masked) > maskedMaxMarkers {
+		return nil, fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+	}
+
 	return masked, nil
+}
+
+// maskedCheckDepth refuses a document that nests deeper than maskedMaxDepth.
+// It scans the bytes and allocates nothing, so a deep document never reaches
+// the decoder.
+func maskedCheckDepth(state []byte) error {
+	depth := 0
+	inString := false
+
+	for i := 0; i < len(state); i++ {
+		c := state[i]
+
+		if inString {
+			switch c {
+			case '\\':
+				i++
+			case '"':
+				inString = false
+			}
+
+			continue
+		}
+
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+
+			if depth > maskedMaxDepth {
+				return fmt.Errorf("%w: nesting deeper than %d", ErrTooLarge, maskedMaxDepth)
+			}
+		case '}', ']':
+			depth--
+		}
+	}
+
+	return nil
+}
+
+// maskedWork is the count of the work of one masked read, made before any path
+// is built: the leaf values, the kept marks and the bytes that the paths of
+// all values need.
+type maskedWork struct {
+	markers   int
+	pathBytes int
+}
+
+// maskedCheckWork refuses a state whose markers or paths are over the bounds.
+// It builds no path: it carries the length of the path of each value as a
+// number. With no kept marks every leaf is a marker; with marks the markers
+// come from the pointers that the instance names.
+func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
+	var work maskedWork
+
+	for _, entry := range entries {
+		for i, instance := range tofuInstances(entry.obj) {
+			base := len("/resources/") + len(strconv.Itoa(entry.index)) +
+				len("/instances/") + len(strconv.Itoa(i)) + len("/attributes")
+
+			if len(marks) > 0 {
+				address := tofuInstanceAddress(entry.obj, instance)
+				work.markers += len(tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks))
+			}
+
+			attributes := instance["attributes"]
+			if attributes == nil {
+				// The masking replaces missing attributes with an empty object.
+				attributes = map[string]any{}
+			}
+
+			if err := work.walk(attributes, base, len(marks) == 0); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// walk adds the values under v to the work. pathLen is the length of the path
+// of v. A leaf counts as a marker when leaves is true.
+func (w *maskedWork) walk(v any, pathLen int, leaves bool) error {
+	w.pathBytes += pathLen
+
+	if w.pathBytes > maskedMaxPathBytes {
+		return fmt.Errorf("%w: the value paths need more than %d bytes", ErrTooLarge, maskedMaxPathBytes)
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for key, elem := range typed {
+			escaped := len(key) + strings.Count(key, "~") + strings.Count(key, "/")
+			if err := w.walk(elem, pathLen+1+escaped, leaves); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, elem := range typed {
+			if err := w.walk(elem, pathLen+1+len(strconv.Itoa(i)), leaves); err != nil {
+				return err
+			}
+		}
+	default:
+		if leaves {
+			w.markers++
+		}
+	}
+
+	if w.markers > maskedMaxMarkers {
+		return fmt.Errorf("%w: more than %d markers", ErrTooLarge, maskedMaxMarkers)
+	}
+
+	return nil
 }
 
 // maskedOutputPaths returns the value path of each sensitive output of state.

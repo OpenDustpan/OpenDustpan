@@ -2,6 +2,7 @@ package stack
 
 import (
 	"strconv"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
@@ -75,4 +76,13 @@ func ParseRootOutputs(deployment []byte) ([]outputshare.Output, error) {
 // replay error err.
 func MapReplayBound(id UpdateID, err error) error {
 	return new(Updates).mapReplayBound(id, err)
+}
+
+// MaskedPageAt answers the page of paths that starts at offset, as the masked
+// read does after the cursor check. The tests call it with an offset that a
+// signed cursor never holds, to reach the guard against a negative offset.
+func MaskedPageAt(key []byte, paths []string, offset int) (MaskedPage, error) {
+	bind := cursorPayload{Unit: "", Version: "1", Subject: "", Offset: 0, Expiry: 0}
+
+	return maskedPageOf(key, bind, paths, offset, time.Unix(0, 0))
 }

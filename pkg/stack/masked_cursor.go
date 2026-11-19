@@ -41,6 +41,12 @@ var (
 	// ErrReadDeadline is the refusal when the read exceeds the deadline of
 	// its caller. The answer carries no bytes of the version.
 	ErrReadDeadline = errors.New("state: read deadline exceeded")
+
+	// ErrUnreadableState is the refusal when the server cannot read the shape
+	// of a stored version: the content does not decode, its top-level value is
+	// not an object, or its resources member is not an array. The server
+	// answers with an error and no content.
+	ErrUnreadableState = errors.New("state: the stored version cannot be read")
 )
 
 const (
@@ -56,6 +62,9 @@ const (
 	// RefusalDeadline is the reason a read reports when the context of its
 	// caller is past its deadline.
 	RefusalDeadline = "deadline"
+	// RefusalUnreadable is the reason a read reports when the server cannot
+	// read the shape of the stored version.
+	RefusalUnreadable = "unreadable"
 )
 
 // RefusalSink counts one refusal of a masked read. The object is the unit

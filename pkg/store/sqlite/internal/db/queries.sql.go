@@ -10204,6 +10204,51 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 	return i, err
 }
 
+const getWorkspaceStateVersion = `-- name: GetWorkspaceStateVersion :one
+SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size, sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms, sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed, sv.sensitive_marks, sv.fenced_by, sv.unlocked_write, sv.origin_job, sv.client_encrypted
+FROM state_versions sv
+JOIN workspaces w ON w.id = sv.workspace_id
+WHERE sv.id = ? AND sv.workspace_id = ? AND w.namespace = ?
+`
+
+type GetWorkspaceStateVersionParams struct {
+	ID          string
+	WorkspaceID string
+	Namespace   string
+}
+
+// One state version, only when it belongs to the workspace in the namespace.
+func (q *Queries) GetWorkspaceStateVersion(ctx context.Context, arg GetWorkspaceStateVersionParams) (StateVersion, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspaceStateVersion, arg.ID, arg.WorkspaceID, arg.Namespace)
+	var i StateVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.Serial,
+		&i.Lineage,
+		&i.Md5,
+		&i.Size,
+		&i.ContentKey,
+		&i.Outputs,
+		&i.Force,
+		&i.UploadDigest,
+		&i.UploadExpiresAtMs,
+		&i.Holder,
+		&i.LockID,
+		&i.CreatedAtMs,
+		&i.FinalizedAtMs,
+		&i.RestoredFrom,
+		&i.Sealed,
+		&i.SensitiveMarks,
+		&i.FencedBy,
+		&i.UnlockedWrite,
+		&i.OriginJob,
+		&i.ClientEncrypted,
+	)
+	return i, err
+}
+
 const getWriteState = `-- name: GetWriteState :one
 SELECT
     i.state AS state,

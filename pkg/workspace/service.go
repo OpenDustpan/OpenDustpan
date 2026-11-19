@@ -150,6 +150,15 @@ type StateStore interface {
 	) error
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
+	// GetWorkspaceStateVersion returns the state version id only when it
+	// belongs to workspace ws in namespace ns. A missing version, a version of
+	// another workspace of the same namespace, and a version of a workspace of
+	// another namespace all return the same ErrStateVersionNotFound. It exists
+	// so that a read of one workspace cannot get the version of another
+	// workspace, even when the check of the service is missing.
+	GetWorkspaceStateVersion(
+		ctx context.Context, ns namespace.Name, ws ID, id StateVersionID,
+	) (StateVersion, error)
 	// FinalizeStateVersion saves the finalized sv (with its Content key),
 	// stamps the version's finalize time and the workspace's UpdatedAt, and
 	// makes sv the workspace's current state. The stamped time is

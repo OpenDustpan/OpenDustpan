@@ -87,6 +87,13 @@ A cursor that breaks one of these rules answers 400 with the code
 `state.bad-path`. The server reads no state for a cursor that is too long.
 To start again, send the request with no cursor.
 
+A cursor is valid only on the instance of the server that made it. Each
+instance makes its own signing key when it starts. If more than one instance
+runs behind a load balancer, a cursor that one instance made answers 400 on
+another instance. A restart of an instance also ends the cursors that it made.
+Read the first page again, with no cursor, to get a cursor that the instance
+accepts.
+
 ## Errors
 
 | Status | Code | Meaning |
@@ -96,7 +103,8 @@ To start again, send the request with no cursor.
 | 404 | `unit.not-found` | The unit does not exist. |
 | 404 | `unit.no-state` | The unit has no state yet. |
 | 404 | `state-version.not-found` | The version does not exist. |
-| 413 | `state-version.too-large` | The version is larger than 5 MB. The server does not load it. |
+| 413 | `state-version.too-large` | The version is larger than 5 MB, nests deeper than 100 levels, or holds more than 10000 markers. The server refuses it. |
+| 500 | `server.internal` | The server cannot read the shape of the version, for example an OpenTofu state that the client encrypted. The answer has no content. |
 | 504 | `state.read-timeout` | The read took more than 30 seconds. |
 
 The server counts each refusal with its denial limiter and writes one audit
@@ -105,7 +113,23 @@ entry for each window. The answer of a refusal keeps its own status.
 ## Limits
 
 - The server refuses a version larger than 5 MB before it loads the version.
-- The server loads the version in chunks of 256 KB. It then decodes the
-  whole state document in memory. The chunked load limits the read of the
-  blob store. It does not limit the memory that the decode uses.
-- A read that takes more than 30 seconds ends with 504 and no bytes.
+- For OpenTofu, the server loads the version in chunks of 256 KB and stops
+  at 5 MB. For Pulumi, the server checks the size of the stored version
+  before it loads the version, and checks the size again after the load. A
+  Pulumi version that an update still writes through its journal is checked
+  by the size of its journal batches before the server builds it.
+- The server limits the work of one read by the shape of the state, not only
+  by its size. It refuses a version with a nesting depth above 100, with more
+  than 10000 markers, or whose value paths need more bytes than the limit of
+  the tool (8 MB for Pulumi, 32 MB for OpenTofu), with 413. It decides this
+  before it builds the path of any marker.
+- The server refuses an OpenTofu state that it cannot read, with 500 and no
+  content. A reader can then tell this answer from a state with no secrets.
+  Examples are a state that the client encrypted, a `resources` value that is
+  not an array, and a resource with no type or name.
+- A read that takes more than 30 seconds ends with 504 and no bytes. The
+  server checks the time after it parses the state and after it walks the
+  state, so a read never answers 200 after the deadline.
+- The read uses the stable ID of the unit that the grant names, not its name.
+  A unit that is deleted and made again with the same name, while the read
+  runs, has a new ID. The read refuses it and answers 404.

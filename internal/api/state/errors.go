@@ -38,6 +38,8 @@ const (
 		"read the first page again without a cursor"
 	msgTooLarge = "the state version is larger than 5 MB: the masked read refuses it"
 	msgTimeout  = "the state read did not end within 30 seconds: try again later"
+	msgUnread   = "the server cannot read the shape of this state version: " +
+		"read another version, or ask an administrator to check the state"
 	msgNotFound = "the unit does not exist, or you cannot read its namespace"
 	msgNoState  = "the state version does not exist: read the unit without a version for its current state"
 	msgDenied   = "forbidden: you need the action unit:read on this unit: " +
@@ -77,6 +79,8 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusBadRequest, errcode.StateBadPath, msgBadPath), true
 	case errors.Is(err, stack.ErrTooLarge), errors.Is(err, workspace.ErrTooLarge):
 		return problem.New(http.StatusRequestEntityTooLarge, errcode.StateVersionTooLarge, msgTooLarge), true
+	case errors.Is(err, stack.ErrUnreadableState), errors.Is(err, workspace.ErrUnreadableState):
+		return problem.New(http.StatusInternalServerError, errcode.ServerInternal, msgUnread), true
 	case errors.Is(err, stack.ErrReadDeadline), errors.Is(err, workspace.ErrReadDeadline),
 		errors.Is(err, context.DeadlineExceeded):
 		return problem.New(http.StatusGatewayTimeout, errcode.StateReadTimeout, msgTimeout), true

@@ -35,7 +35,7 @@ func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string
 // of every resource instance, masked with marks. With no kept marks for the
 // version, every attribute value is a marker.
 func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
-	return maskedResourcePaths(state, marks)
+	return maskedResourcePaths(context.Background(), state, marks)
 }
 
 // MaskedCursorSpec names what a test cursor of the masked read binds.
@@ -78,3 +78,15 @@ const MaskedMaxCursorBytes = maskedMaxCursorBytes
 
 // MaskedPageMarkers is the size of a page of the masked read, for the tests.
 const MaskedPageMarkers = maskedPageMarkers
+
+// MaskedMaxDepth is the deepest nesting of a masked read, for the tests.
+const MaskedMaxDepth = maskedMaxDepth
+
+// MaskedMaxMarkers is the most markers of one version, for the tests.
+const MaskedMaxMarkers = maskedMaxMarkers
+
+// MaskedStatePaths is maskedStatePaths for the tests: the resource markers and
+// the sensitive outputs of state, under the bounds of the read.
+func MaskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	return maskedStatePaths(ctx, state, marks)
+}

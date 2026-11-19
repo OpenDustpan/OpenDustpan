@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -25,6 +26,19 @@ const maskedPageMarkers = 200
 // its content is held. The size comes from the version record, not from the
 // content.
 const maskedMaxVersionBytes = 5 << 20
+
+// maskedMaxDepth is the deepest nesting of objects and arrays that a masked
+// read decodes. A deeper version is refused before it is decoded.
+const maskedMaxDepth = 100
+
+// maskedMaxMarkers is the most markers that one version may hold. A version
+// with more is refused before the server builds any path.
+const maskedMaxMarkers = 10000
+
+// maskedMaxPathBytes is the most bytes that the paths of all markers of one
+// version may hold together. A version with more is refused before the
+// server builds any path.
+const maskedMaxPathBytes = 8 << 20
 
 // ReadMaskedArgs are the arguments of one masked read. Key is the HMAC key
 // of the cursors, bound by the server; Sink counts the refusals of the
@@ -108,11 +122,22 @@ func (s *Updates) maskedPage(ctx context.Context, args ReadMaskedArgs) (MaskedPa
 		return MaskedPage{}, maskedRefused(RefusalDeadline, ErrReadDeadline)
 	}
 
+	// The stable ID of the unit names the stack that the caller authorizes.
+	// Each row that the read resolves by name must carry this ID, so the
+	// read never serves the content of a stack that the grant does not name.
+	// An object with no stable ID names no stack: the read fails closed.
+	stackID := ID(args.Object.UnitID())
+	if stackID == "" {
+		return MaskedPage{}, maskedRefused(
+			RefusalDenied, fmt.Errorf("masked read of %s: %w: the unit has no stable ID", args.Ref, ErrNotFound),
+		)
+	}
+
 	if err := args.Authorizer.Authorize(ctx, args.Principal, identity.ActionUnitRead, args.Object); err != nil {
 		return MaskedPage{}, maskedRefused(RefusalDenied, fmt.Errorf("masked read of the unit: %w", err))
 	}
 
-	update, err := s.maskedUpdate(ctx, args.Ref, args.Selector)
+	cp, update, err := s.maskedUpdate(ctx, args.Ref, args.Selector, stackID)
 	if err != nil {
 		return MaskedPage{}, err
 	}
@@ -130,7 +155,7 @@ func (s *Updates) maskedPage(ctx context.Context, args ReadMaskedArgs) (MaskedPa
 		return MaskedPage{}, maskedRefused(RefusalBadPath, err)
 	}
 
-	paths, err := s.maskedPaths(ctx, args.Ref, update.Version)
+	paths, err := s.maskedPaths(ctx, args.Ref, cp)
 	if err != nil {
 		return MaskedPage{}, err
 	}
@@ -138,26 +163,46 @@ func (s *Updates) maskedPage(ctx context.Context, args ReadMaskedArgs) (MaskedPa
 	return maskedPageOf(args.Key, bind, paths, offset, s.now())
 }
 
-// maskedUpdate resolves the selector of a read to the update of its
-// version, without holding the content. The size of the version record
-// refuses an oversized version before the content is loaded.
-func (s *Updates) maskedUpdate(ctx context.Context, ref Ref, sel StateSelector) (Update, error) {
+// maskedUpdate resolves the selector of a read to the checkpoint row and the
+// update of its version, without holding the content. The checkpoint row
+// must belong to the stack that the caller authorized; a row of another
+// stack is refused before any content is read. The size of the version
+// record refuses an oversized version before the content is loaded.
+//
+// The masked read serves only a stored checkpoint row. It never replays the
+// journal of a running update, so no journal batch is read and the size of
+// the version record is the size of the content that the load reads.
+func (s *Updates) maskedUpdate(
+	ctx context.Context, ref Ref, sel StateSelector, stackID ID,
+) (Checkpoint, Update, error) {
 	cp, err := s.maskedCheckpoint(ctx, ref, sel)
 	if err != nil {
 		if errors.Is(err, ErrBadPath) {
-			return Update{}, maskedRefused(RefusalBadPath, err)
+			return Checkpoint{}, Update{}, maskedRefused(RefusalBadPath, err)
 		}
 
-		return Update{}, err
+		return Checkpoint{}, Update{}, err
+	}
+
+	// The name of the stack may now map to another stack than the one that
+	// the caller authorized: the stack was deleted and made again, or
+	// renamed, between the lookup of the handler and this read. Defense in
+	// depth: the handler authorizes on the stable ID, and the load below
+	// reads in the scope of the row, not of the name. This comparison stays
+	// so that neither layer has to hold the other.
+	if cp.StackID != stackID {
+		return Checkpoint{}, Update{}, maskedRefused(
+			RefusalDenied, fmt.Errorf("masked read of %s: %w: the name maps to another stack", ref, ErrNotFound),
+		)
 	}
 
 	update, err := s.Get(ctx, ref, cp.Update)
 	if err != nil {
 		if ctx.Err() != nil {
-			return Update{}, maskedRefused(RefusalDeadline, ErrReadDeadline)
+			return Checkpoint{}, Update{}, maskedRefused(RefusalDeadline, ErrReadDeadline)
 		}
 
-		return Update{}, fmt.Errorf("masked read of %s: %w", ref, err)
+		return Checkpoint{}, Update{}, fmt.Errorf("masked read of %s: %w", ref, err)
 	}
 
 	// Defense in depth: the size is checked from the version record before
@@ -165,42 +210,53 @@ func (s *Updates) maskedUpdate(ctx context.Context, ref Ref, sel StateSelector) 
 	// blob store. The length check after the load in maskedPaths stays, so
 	// a record that understates the content still stops at the same refusal.
 	if update.CheckpointBytes > maskedMaxVersionBytes {
-		return Update{}, maskedRefused(RefusalTooLarge, ErrTooLarge)
+		return Checkpoint{}, Update{}, maskedRefused(RefusalTooLarge, ErrTooLarge)
 	}
 
-	return update, nil
+	return cp, update, nil
 }
 
-// maskedPaths loads the content of version and returns the value paths of
-// its secrets.
-func (s *Updates) maskedPaths(ctx context.Context, ref Ref, version int64) ([]string, error) {
-	state, err := s.ExportVersion(ctx, ref, version)
+// maskedPaths loads the content of the checkpoint row cp and returns the
+// value paths of its secrets. The content comes from the blob scope of the
+// stack and the namespace that the row names, never from a second lookup by
+// name.
+func (s *Updates) maskedPaths(ctx context.Context, ref Ref, cp Checkpoint) ([]string, error) {
+	bl, err := s.blobs.scope(cp.NamespaceID, cp.StackID)
+	if err != nil {
+		return nil, fmt.Errorf("masked read of %s: %w", ref, err)
+	}
+
+	resolved, err := s.resolveCheckpoint(ctx, bl, cp)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, maskedRefused(RefusalDeadline, ErrReadDeadline)
 		}
 
-		return nil, fmt.Errorf("masked read of %s version %d: %w", ref, version, err)
+		return nil, fmt.Errorf("masked read of %s: %w", ref, err)
 	}
+
+	deployment := innerDeployment(resolved).Deployment
 
 	// Defense in depth: maskedUpdate checks the size of the version record
 	// before the load; this check stays so that a record that understates
 	// the content cannot skip the limit.
-	if int64(len(state.Deployment)) > maskedMaxVersionBytes {
+	if int64(len(deployment)) > maskedMaxVersionBytes {
 		return nil, maskedRefused(RefusalTooLarge, ErrTooLarge)
 	}
 
-	paths, err := maskedValuePaths(state.Deployment)
-	if err != nil {
-		return nil, fmt.Errorf("masked read of %s version %d: %w", ref, version, err)
-	}
-
-	return paths, nil
+	return maskedValuePaths(ctx, deployment)
 }
 
 // maskedPageOf answers the page of paths that starts at offset, with the
 // cursor of the next page bound to bind, or no cursor on the last page.
 func maskedPageOf(key []byte, bind cursorPayload, paths []string, offset int, now time.Time) (MaskedPage, error) {
+	// Defense in depth: only a signed cursor holds an offset, and verifyCursor
+	// refuses a negative one after the HMAC check. This check stays so that a
+	// caller that skips both cannot slice the paths with a negative start.
+	if offset < 0 {
+		return MaskedPage{}, maskedRefused(RefusalBadPath, ErrBadPath)
+	}
+
 	offset = min(offset, len(paths))
 	end := min(offset+maskedPageMarkers, len(paths))
 	next := ""
@@ -248,27 +304,179 @@ func (s *Updates) maskedCheckpoint(ctx context.Context, ref Ref, sel StateSelect
 
 // maskedValuePaths decodes deployment and returns the sorted, unique JSON
 // Pointer value paths of its secrets. The walk mirrors maskValue of the
-// masked read: a secret is not descended into. The deployment must decode;
-// an error carries no bytes of it.
-func maskedValuePaths(deployment []byte) ([]string, error) {
-	doc, err := decodeDeployment(deployment)
-	if err != nil {
-		return nil, err
+// masked read: a secret is not descended into. Each step is bounded and
+// fails closed:
+//
+//  1. a byte scan refuses a nesting depth above maskedMaxDepth before any
+//     decoding;
+//  2. the decoded document must have an object at the top and, when it
+//     holds resources, an array there;
+//  3. a counting pass builds no path and refuses more than maskedMaxMarkers
+//     markers or more than maskedMaxPathBytes bytes of marker paths;
+//  4. only then the walk builds one path for each marker, never one for a
+//     container.
+//
+// The deadline of ctx is checked after the decode and after the walk. An
+// error carries no bytes of the deployment.
+func maskedValuePaths(ctx context.Context, deployment []byte) ([]string, error) {
+	if !nestingWithin(deployment, maskedMaxDepth) {
+		return nil, maskedRefused(RefusalTooLarge, ErrTooLarge)
 	}
 
-	var paths []string
+	doc, err := decodeDeployment(deployment)
+	if err != nil {
+		return nil, maskedRefused(RefusalUnreadable, ErrUnreadableState)
+	}
 
-	collectMarkers(doc, "", &paths)
+	if ctx.Err() != nil {
+		return nil, maskedRefused(RefusalDeadline, ErrReadDeadline)
+	}
 
-	slices.Sort(paths)
+	if !readableShape(doc) {
+		return nil, maskedRefused(RefusalUnreadable, ErrUnreadableState)
+	}
 
-	return slices.Compact(paths), nil
+	var total markerTotals
+
+	if !countMarkers(doc, 0, &total) {
+		return nil, maskedRefused(RefusalTooLarge, ErrTooLarge)
+	}
+
+	paths := make([]string, 0, total.markers)
+	walker := markerWalker{keys: nil, paths: paths}
+	walker.walk(doc)
+
+	slices.Sort(walker.paths)
+
+	if ctx.Err() != nil {
+		return nil, maskedRefused(RefusalDeadline, ErrReadDeadline)
+	}
+
+	return slices.Compact(walker.paths), nil
 }
 
-// collectMarkers appends the base path of each secret value of v to masked.
-func collectMarkers(v any, base string, masked *[]string) {
+// nestingWithin reports whether the JSON text has at most limit levels of
+// objects and arrays. It scans the bytes and builds nothing: braces and
+// brackets inside a string, and a string escape, do not count. The scan
+// runs before the decode, so a deep document never reaches the decoder.
+func nestingWithin(text []byte, limit int) bool {
+	depth := 0
+	inString := false
+	escaped := false
+
+	for _, c := range text {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			default:
+			}
+
+			continue
+		}
+
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+			if depth > limit {
+				return false
+			}
+		case '}', ']':
+			depth--
+		default:
+		}
+	}
+
+	return true
+}
+
+// readableShape reports whether doc has the shape of a Pulumi deployment: an
+// object at the top, whose resources member, when present, is an array.
+func readableShape(doc any) bool {
+	top, ok := doc.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	raw, present := top["resources"]
+	if !present {
+		return true
+	}
+
+	_, isArray := raw.([]any)
+
+	return isArray
+}
+
+// markerTotals counts the markers of a document and the bytes of their
+// paths.
+type markerTotals struct {
+	markers   int
+	pathBytes int64
+}
+
+// pointerTokenLen returns the length of EscapePointerToken(key) without
+// building the token: each "~" and each "/" takes one more byte.
+func pointerTokenLen(key string) int {
+	return len(key) + strings.Count(key, "~") + strings.Count(key, "/")
+}
+
+// countMarkers counts the secret values below v, with the byte length of
+// each path, and builds no string. pathLen is the byte length of the path of
+// v. It reports false as soon as a bound is crossed. The nesting depth of v
+// is bounded by the scan before the decode, so the recursion is bounded.
+func countMarkers(v any, pathLen int64, total *markerTotals) bool {
 	if isSecret(v) {
-		*masked = append(*masked, base)
+		total.markers++
+		total.pathBytes += pathLen
+
+		return total.markers <= maskedMaxMarkers && total.pathBytes <= maskedMaxPathBytes
+	}
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for key, elem := range typed {
+			if !countMarkers(elem, pathLen+1+int64(pointerTokenLen(key)), total) {
+				return false
+			}
+		}
+
+	case []any:
+		for i, elem := range typed {
+			if !countMarkers(elem, pathLen+1+int64(len(strconv.Itoa(i))), total) {
+				return false
+			}
+		}
+
+	default:
+	}
+
+	return true
+}
+
+// markerWalker walks a document and keeps a stack of the escaped keys on the
+// way down. It builds one path string for each secret and none for another
+// node.
+type markerWalker struct {
+	keys  []string
+	paths []string
+}
+
+// walk appends the path of each secret value below v to w.paths.
+func (w *markerWalker) walk(v any) {
+	if isSecret(v) {
+		path := ""
+		if len(w.keys) > 0 {
+			path = "/" + strings.Join(w.keys, "/")
+		}
+
+		w.paths = append(w.paths, path)
 
 		return
 	}
@@ -276,12 +484,16 @@ func collectMarkers(v any, base string, masked *[]string) {
 	switch typed := v.(type) {
 	case map[string]any:
 		for key, elem := range typed {
-			collectMarkers(elem, base+"/"+EscapePointerToken(key), masked)
+			w.keys = append(w.keys, EscapePointerToken(key))
+			w.walk(elem)
+			w.keys = w.keys[:len(w.keys)-1]
 		}
 
 	case []any:
 		for i, elem := range typed {
-			collectMarkers(elem, base+"/"+strconv.Itoa(i), masked)
+			w.keys = append(w.keys, strconv.Itoa(i))
+			w.walk(elem)
+			w.keys = w.keys[:len(w.keys)-1]
 		}
 
 	default:
