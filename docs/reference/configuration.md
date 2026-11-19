@@ -192,9 +192,9 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_KEY_ENCRYPTION_KEY` | The base64 text of 32 random bytes. It can stay unset while the database holds no secrets. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | A file that holds that value. Only its owner can read it. |
 | `DUSTPAN_AUDIT_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. Required when `--audit-sink` names a webhook and you set no secret file. |
-| `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. The server keeps each space of a secret. From a file, it removes only one line ending at the end of the file. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
 | `DUSTPAN_LOG_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. Required when `--log-sink` names a webhook and you set no secret file. |
-| `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. The server keeps each space of a secret. From a file, it removes only one line ending at the end of the file. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
 | `DUSTPAN_AUDIT_OTLP_HEADERS` | Extra headers of each request of an `otlp:` audit sink, as `Name=Value` items separated by commas or line breaks. Percent-encode a value. Optional. |
 | `DUSTPAN_AUDIT_OTLP_HEADERS_FILE` | A file that holds those headers. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_OTLP_HEADERS` wins. |
 | `DUSTPAN_LOG_OTLP_HEADERS` | Extra headers of each request of an `otlp:` log sink, in the same form. Optional. |

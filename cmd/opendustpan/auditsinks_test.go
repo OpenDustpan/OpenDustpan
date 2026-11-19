@@ -825,3 +825,75 @@ func TestServeRefusesAnUnknownAuditSink(t *testing.T) {
 		t.Fatalf("serve with an unknown sink: got %v, want an --audit-sink error", err)
 	}
 }
+
+// TestSecretFromKeepsSpaces proves that a space at the start or at the end of
+// a secret reaches the consumer, from the variable and from the file, and that
+// the file loses only one final line ending.
+func TestSecretFromKeepsSpaces(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"leading space", " pass", " pass"},
+		{"trailing space", "pass ", "pass "},
+		{"both", "  pass  ", "  pass  "},
+		{"trailing space and LF", "pass \n", "pass "},
+		{"trailing space and CR LF", "pass \r\n", "pass "},
+		{"space inside", "pa ss", "pa ss"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fromVar, err := secretFrom(
+				envOf(map[string]string{oidcSecretEnvVar: strings.TrimRight(tc.content, "\r\n")}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if err != nil || string(fromVar) != tc.want {
+				t.Fatalf("from variable = %q, %v; want %q", fromVar, err, tc.want)
+			}
+
+			path := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-"))
+			if writeErr := os.WriteFile(path, []byte(tc.content), 0o600); writeErr != nil {
+				t.Fatalf("write secret file: %v", writeErr)
+			}
+
+			fromFile, err := secretFrom(
+				envOf(map[string]string{oidcSecretFileEnvVar: path}),
+				oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret,
+			)
+			if err != nil || string(fromFile) != tc.want {
+				t.Fatalf("from file = %q, %v; want %q", fromFile, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestSecretFromRefusesWhiteSpaceOnly proves that a value of spaces only
+// counts as not set, in the variable and in the file.
+func TestSecretFromRefusesWhiteSpaceOnly(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "blank")
+	if err := os.WriteFile(path, []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	for name, vars := range map[string]map[string]string{
+		"variable": {oidcSecretEnvVar: "   "},
+		"file":     {oidcSecretFileEnvVar: path},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := secretFrom(envOf(vars), oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)
+			if !errors.Is(err, errNoOIDCSecret) {
+				t.Fatalf("got %v, want %v", err, errNoOIDCSecret)
+			}
+		})
+	}
+}

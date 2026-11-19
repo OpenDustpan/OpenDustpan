@@ -489,7 +489,9 @@ func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) 
 // secretFrom reads a secret from the variable env, else from the file that
 // the variable fileEnv names. The file must allow no group or other
 // access. A missing or empty secret answers errMissing. A secret with a
-// control character is refused.
+// control character is refused. The variable value is used as it is. From a
+// file, the function removes one final line ending (LF or CR LF). It keeps
+// every space.
 func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMissing error) ([]byte, error) {
 	secret, source, err := secretTextFrom(lookup, env, fileEnv, errMissing)
 	if err != nil {
@@ -513,8 +515,11 @@ func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMiss
 func secretTextFrom(
 	lookup func(string) (string, bool), env, fileEnv string, errMissing error,
 ) ([]byte, string, error) {
+	// A space at the start or at the end can be part of a secret, so the
+	// variable keeps its value as it is. Only a value of white space only
+	// counts as not set.
 	if raw, ok := lookup(env); ok && strings.TrimSpace(raw) != "" {
-		return []byte(strings.TrimSpace(raw)), env, nil
+		return []byte(raw), env, nil
 	}
 
 	path, ok := lookup(fileEnv)
@@ -537,8 +542,11 @@ func secretTextFrom(
 		return nil, "", fmt.Errorf("%s: read file: %w", fileEnv, err)
 	}
 
-	secret := strings.TrimSpace(string(raw))
-	if secret == "" {
+	// Remove one line ending at the end of the file (the editor case). Keep
+	// every other character, spaces included.
+	secret := strings.TrimSuffix(string(raw), "\n")
+	secret = strings.TrimSuffix(secret, "\r")
+	if strings.TrimSpace(secret) == "" {
 		return nil, "", fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
 	}
 
