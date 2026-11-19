@@ -2453,6 +2453,7 @@
           "local-user.outside-reach",
           "local-user.own-account",
           "local-user.password-sign-in-off",
+          "local-user.public-url-required",
           "local-user.reason-required",
           "local-user.second-factor-required",
           "local-user.session-ended",

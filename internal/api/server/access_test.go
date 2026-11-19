@@ -145,6 +145,9 @@ type accessFixtureParts struct {
 	ports    accessPorts
 	now      func() time.Time
 	logger   *slog.Logger
+	// noSignIn builds the handler with no console sign-in, as a server with
+	// no public URL does.
+	noSignIn bool
 }
 
 // newAccessFixturePorts is newAccessFixture with the collection port and the
@@ -155,6 +158,7 @@ func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
+		noSignIn: false,
 	})
 }
 
@@ -170,6 +174,7 @@ func newAccessFixtureSignIn(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
+		noSignIn: false,
 	})
 }
 
@@ -192,6 +197,7 @@ func newAccessFixtureLinks(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
+		noSignIn: false,
 	})
 }
 
@@ -206,6 +212,7 @@ func newAccessFixtureClock(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
+		noSignIn: false,
 	})
 }
 
@@ -364,7 +371,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		IPAllowlists:     nil,
 		Gates:            nil,
 		SessionPolicy:    nil,
-		SignIn:           signIn,
+		SignIn:           consoleOf(parts, signIn),
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,
 		Instances:        nil,
@@ -1163,4 +1170,14 @@ func TestEscalationRefusalIsAudited(t *testing.T) {
 		!strings.Contains(denied[0].Reason, "server:backup on the installation") {
 		t.Fatalf("reason = %q, want the missing actions of the escalation", denied[0].Reason)
 	}
+}
+
+// consoleOf returns the console sign-in of the fixture, or nil for a fixture
+// of a server with no public URL.
+func consoleOf(parts accessFixtureParts, in *apiserver.SignIn) *apiserver.SignIn {
+	if parts.noSignIn {
+		return nil
+	}
+
+	return in
 }
