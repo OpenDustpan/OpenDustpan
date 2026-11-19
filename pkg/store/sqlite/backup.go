@@ -952,6 +952,10 @@ func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) err
 		return ownedErr
 	}
 
+	if idErr := checkStagedGrantIDs(ctx, conn); idErr != nil {
+		return idErr
+	}
+
 	if grantErr := checkStagedNamespacePrincipalGrants(ctx, conn); grantErr != nil {
 		return grantErr
 	}

@@ -245,7 +245,9 @@ The server refuses a removal in these cases:
   password, or of a break-glass account. The answer is 409 with the error code
   `local-user.last-credential`. Set a password or add a second passkey first.
 - The person is the demo user of a dev installation. The answer is 409 with
-  the error code `local-user.demo-fixed`.
+  the error code `local-user.demo-fixed`. A default `dev` has no passkey
+  routes (see [Passkeys and dev](#passkeys-and-dev)), so this answer does not
+  occur there.
 
 ## Rename a passkey
 
@@ -264,8 +266,21 @@ the installation (the scope `@server`). The entries have these actions:
 | `passkey.add-refused` | A start or an end of a register ceremony was refused |
 | `passkey.remove-refused` | A removal was refused |
 | `passkey.list-refused` | A list was refused, for example for an access token |
+| `passkey.ceremony-refused` | A start or an end of a sign-in ceremony was refused. Examples: no open challenge, a suspended passkey, a source with too many open challenges. The change `cause` holds the cause |
+| `passkey.sign-in-refused` | The sign-in route refused a finish before the check of the response, for example for a body that is not valid. The change `cause` holds the cause |
+| `passkey.suspended` | A response with a signature counter that did not grow suspended the passkey |
 
 A refusal of the step-up check writes an entry for the action
 `caller:manage-sign-in` with the outcome `failure`. A refusal of the policy
 check, for example for a person without the action, writes the entry of any
 other refused request. No entry holds a challenge, a key or a response.
+
+## Passkeys and dev
+
+The command `opendustpan dev` sets its public URL to the address that it
+listens on. This is an IP address, also when you give `--listen localhost:8080`
+or set `--tls`. An IP address cannot be a relying party ID, so `dev` starts
+with no passkey routes. The routes `/me/passkeys/...` and
+`/sign-in/passkey/...` answer 404 with the error code `server.route-not-found`,
+and the log has the line `passkeys are off: the public URL gives no relying
+party`. To use passkeys, run `serve` with a public URL that has a host name.
