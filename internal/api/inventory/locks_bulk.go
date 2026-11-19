@@ -182,7 +182,11 @@ func (h *Handler) bulkLock(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
-	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: *body.Reason, unlock: false, call: nil, ran: false, replayed: false})
+	run := &bulkRun{
+		raw: raw, units: body.Units, reason: *body.Reason, unlock: false, call: nil, ran: false, replayed: false,
+	}
+
+	h.runBulk(w, r, p, obj, run)
 }
 
 // bulkUnlock serves POST .../unit-locks/bulk-unlock. It removes the lock that
@@ -205,7 +209,13 @@ func (h *Handler) bulkUnlock(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: "", unlock: true, call: nil, ran: false, replayed: false})
+	h.runBulk(
+		w,
+		r,
+		p,
+		obj,
+		&bulkRun{raw: raw, units: body.Units, reason: "", unlock: true, call: nil, ran: false, replayed: false},
+	)
 }
 
 // checkLockReason refuses a reason that a lock refuses.
@@ -274,7 +284,7 @@ func (h *Handler) runBulk(
 			return
 		}
 
-		out.Results = append(out.Results, h.bulkItem(r, p, obj, run, pos, item.ID))
+		out.Results = append(out.Results, h.bulkItem(r, p, obj, run, bulkEntry{pos: pos, id: item.ID}))
 	}
 
 	run.call.finish()
@@ -298,10 +308,18 @@ type bulkTarget struct {
 	pos int
 }
 
+// bulkEntry is an item of the request: its position and the ID that it names.
+type bulkEntry struct {
+	pos int
+	id  string
+}
+
 // bulkItem runs one item.
 func (h *Handler) bulkItem(
-	r *http.Request, p identity.Principal, ns identity.Object, run *bulkRun, pos int, id string,
+	r *http.Request, p identity.Principal, ns identity.Object, run *bulkRun, entry bulkEntry,
 ) bulkResult {
+	pos, id := entry.pos, entry.id
+
 	obj, err := h.bulkUnit(r, p, ns, id)
 	if err != nil {
 		out := h.bulkFailure(r, id, err)

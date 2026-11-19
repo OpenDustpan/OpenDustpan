@@ -1039,7 +1039,11 @@ func TestBulkLockReadDeniedAudit(t *testing.T) {
 
 	for _, path := range []string{bulkLockPath, bulkUnlockPath} {
 		authz := bulkAuthz{
-			deny: map[string]bool{grant(identity.ActionUnitRead, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
+			deny: map[string]bool{
+				grant(identity.ActionUnitRead, bulkUnitRef(1)): true,
+			},
+			onLock: nil,
+			n:      &atomic.Int64{},
 		}
 		f := newBulkFixture(t, authz, 3)
 
@@ -1062,17 +1066,14 @@ func TestBulkLockReadDeniedAudit(t *testing.T) {
 func TestBulkUnlockDeniedAudit(t *testing.T) {
 	t.Parallel()
 
-	authz := bulkAuthz{
-		deny: map[string]bool{grant(identity.ActionUnitLock, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
-	}
+	authz := plainAuthz()
+	authz.deny = map[string]bool{}
 	f := newBulkFixture(t, authz, 3)
 
-	// The lock on unit 1 is the lock of the caller, put there with no check.
-	if err := f.store.PutLock(t.Context(), manuallock.Lock{
-		Target: mustUnit(t, 1), Holder: "alice", Reason: "r",
-	}, namespace.Fence{}, audit.Entry{}); err != nil {
-		t.Fatalf("seed lock: %v", err)
-	}
+	// Alice holds the lock on unit 1. The check of unit:lock denies her after that.
+	answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, bulkUnitID(1))))
+
+	authz.deny[grant(identity.ActionUnitLock, bulkUnitRef(1))] = true
 
 	got := answerOf(t, f.post(t, "alice", bulkUnlockPath, bulkUnlockBody(bulkUnitID(1))))
 	wantError(t, &got.Results[0], http.StatusForbidden, got.Results[0].Error.ErrorCode)
@@ -1141,9 +1142,14 @@ func (w wrongIDReader) GetUnit(ctx context.Context, id string) (coreinventory.En
 func TestBulkLockUnitIDMustMatch(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixtureWith(t, plainAuthz(), 2, bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
-		return wrongIDReader{Reader: r, from: bulkUnitID(0), to: bulkUnitID(1)}
-	}})
+	f := newBulkFixtureWith(
+		t,
+		plainAuthz(),
+		2,
+		bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
+			return wrongIDReader{Reader: r, from: bulkUnitID(0), to: bulkUnitID(1)}
+		}},
+	)
 
 	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, bulkUnitID(0))))
 	wantError(t, &got.Results[0], http.StatusNotFound, "lock.target-not-found")
@@ -1228,6 +1234,83 @@ func TestBulkLockLatency(t *testing.T) {
 func runBulkLatency(t *testing.T, s latencyStore, records idempotency.Store) {
 	t.Helper()
 
+	f, ids := newLatencyFixture(t, s, records)
+	lockBody := bulkLockBody(bulkReason, ids...)
+	unlockBody := bulkUnlockBody(ids...)
+
+	for _, keyed := range []bool{false, true} {
+		name := "no key"
+		if keyed {
+			name = "key"
+		}
+
+		times := timeBulkLocks(t, f, latencyCall{name: name, keyed: keyed, lockBody: lockBody, unlockBody: unlockBody})
+
+		slices.Sort(times)
+
+		p50 := times[(len(times)-1)/2]
+		p95 := times[(len(times)*95+99)/100-1]
+		maxTime := times[len(times)-1]
+
+		t.Logf("bulk-lock of %d units, %s, %d runs: p50 %v, p95 %v, max %v",
+			latencyUnits, name, len(times), p50, p95, maxTime)
+
+		if p95 > latencyP95Limit {
+			t.Errorf("%s: p95 %v is above the limit %v", name, p95, latencyP95Limit)
+		}
+	}
+}
+
+// latencyCall is one series of timed calls.
+type latencyCall struct {
+	name                 string
+	keyed                bool
+	lockBody, unlockBody string
+}
+
+// timeBulkLocks posts the bulk lock latencyRuns times and returns the time of
+// each call. After each call it unlocks the units outside the timing.
+func timeBulkLocks(t *testing.T, f bulkFixture, c latencyCall) []time.Duration {
+	t.Helper()
+
+	name, keyed, lockBody, unlockBody := c.name, c.keyed, c.lockBody, c.unlockBody
+
+	times := make([]time.Duration, 0, latencyRuns)
+
+	for run := range latencyRuns {
+		var headers []string
+		if keyed {
+			headers = []string{"Idempotency-Key", fmt.Sprintf("latency-%d", run)}
+		}
+
+		// A latency test measures the wall clock by definition: the clock is the
+		// quantity under test, not a source of flakes in an assertion on time.
+		start := time.Now() // nosemgrep: tests-no-wall-clock
+		rec := f.post(t, "alice", bulkLockPath, lockBody, headers...)
+		took := time.Since(start) // nosemgrep: tests-no-wall-clock
+
+		for i, r := range answerOf(t, rec).Results {
+			if r.Status != "ok" {
+				t.Fatalf("%s run %d item %d: status %q, want ok", name, run, i, r.Status)
+			}
+		}
+
+		times = append(times, took)
+
+		// Unlock outside the timing, so that the next run locks 100 unlocked units.
+		if un := f.post(t, "alice", bulkUnlockPath, unlockBody); un.Code != http.StatusOK {
+			t.Fatalf("%s run %d: bulk unlock status %d, body %s", name, run, un.Code, un.Body.String())
+		}
+	}
+
+	return times
+}
+
+// newLatencyFixture seeds the namespace acme and latencyUnits workspaces in s,
+// and returns a handler over the real stores and the IDs of the units.
+func newLatencyFixture(t *testing.T, s latencyStore, records idempotency.Store) (bulkFixture, []string) {
+	t.Helper()
+
 	ctx := t.Context()
 
 	ns := namespace.Namespace{
@@ -1262,8 +1345,8 @@ func runBulkLatency(t *testing.T, s latencyStore, records idempotency.Store) {
 	}
 
 	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ids = append(ids, e.UnitID)
+	for i := range entries {
+		ids = append(ids, entries[i].UnitID)
 	}
 
 	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Installation: "test-region"})
@@ -1292,59 +1375,7 @@ func runBulkLatency(t *testing.T, s latencyStore, records idempotency.Store) {
 		t.Fatalf("inventory handler: %v", err)
 	}
 
-	f := bulkFixture{handler: handler, store: nil, audit: nil, records: nil}
-	lockBody := bulkLockBody(bulkReason, ids...)
-	unlockBody := bulkUnlockBody(ids...)
-
-	for _, keyed := range []bool{false, true} {
-		name := "no key"
-		if keyed {
-			name = "key"
-		}
-
-		times := make([]time.Duration, 0, latencyRuns)
-
-		for run := range latencyRuns {
-			var headers []string
-			if keyed {
-				headers = []string{"Idempotency-Key", fmt.Sprintf("latency-%d", run)}
-			}
-
-			start := time.Now()
-			rec := f.post(t, "alice", bulkLockPath, lockBody, headers...)
-			took := time.Since(start)
-
-			if rec.Code != http.StatusOK {
-				t.Fatalf("%s run %d: bulk lock status %d, body %s", name, run, rec.Code, rec.Body.String())
-			}
-
-			for i, r := range answerOf(t, rec).Results {
-				if r.Status != "ok" {
-					t.Fatalf("%s run %d item %d: status %q, want ok", name, run, i, r.Status)
-				}
-			}
-
-			times = append(times, took)
-
-			// Unlock outside the timing, so that the next run locks 100 unlocked units.
-			if un := f.post(t, "alice", bulkUnlockPath, unlockBody); un.Code != http.StatusOK {
-				t.Fatalf("%s run %d: bulk unlock status %d, body %s", name, run, un.Code, un.Body.String())
-			}
-		}
-
-		slices.Sort(times)
-
-		p50 := times[(len(times)-1)/2]
-		p95 := times[(len(times)*95+99)/100-1]
-		maxTime := times[len(times)-1]
-
-		t.Logf("bulk-lock of %d units, %s, %d runs: p50 %v, p95 %v, max %v",
-			latencyUnits, name, len(times), p50, p95, maxTime)
-
-		if p95 > latencyP95Limit {
-			t.Errorf("%s: p95 %v is above the limit %v", name, p95, latencyP95Limit)
-		}
-	}
+	return bulkFixture{handler: handler, store: nil, audit: nil, records: nil}, ids
 }
 
 // latencyPostgresURL makes a database for one test on the server of base: it
@@ -1367,7 +1398,7 @@ func latencyPostgresURL(t *testing.T, base string) string {
 			return fmt.Errorf("open store: %w", openErr)
 		}
 
-		s.Close()
+		s.Close() //nolint:contextcheck // Close takes no context, and the store has no other work.
 
 		return nil
 	}
