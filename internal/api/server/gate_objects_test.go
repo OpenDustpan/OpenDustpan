@@ -626,26 +626,6 @@ func TestGateRoutesAnswerCodes(t *testing.T) {
 			"gate.limit-membership",
 		},
 		{
-			"limit names a group that does not exist",
-			nil,
-			http.MethodPut,
-			"/access-limits/x",
-			`{"policy":"forbid (principal in OpenDustpan::Group::\"ghost\", action, resource);"}`,
-			"",
-			http.StatusUnprocessableEntity,
-			"gate.limit-group-name",
-		},
-		{
-			"limit names a group in another case",
-			nil,
-			http.MethodPut,
-			"/access-limits/x",
-			`{"policy":"forbid (principal in OpenDustpan::Group::\"SRE\", action, resource);"}`,
-			"",
-			http.StatusUnprocessableEntity,
-			"gate.limit-group-name",
-		},
-		{
 			"limit names a group that the caller cannot manage",
 			nil,
 			http.MethodPut,
@@ -863,7 +843,12 @@ func TestAccessLimitNamesOnlyManagedGroups(t *testing.T) {
 	groupInUnless := `{"policy":"forbid (principal, action, resource) unless { principal in ` +
 		`OpenDustpan::Group::\"ops\" };"}`
 
+	missing := `{"policy":"forbid (principal in OpenDustpan::Group::\"ghost\", action, resource);"}`
+	otherCase := `{"policy":"forbid (principal in OpenDustpan::Group::\"OPS\", action, resource);"}`
+
 	tests := []accessLimitGroupCase{
+		{"group that does not exist", groupManagerGates(), missing, http.StatusUnprocessableEntity, false, false},
+		{"group in another case", groupManagerGates(), otherCase, http.StatusUnprocessableEntity, false, false},
 		{"group in the principal scope", adminGates(), groupInPrincipal, http.StatusForbidden, false, true},
 		{"group in a when clause", adminGates(), groupInWhen, http.StatusForbidden, false, true},
 		{"group in an unless clause", adminGates(), groupInUnless, http.StatusForbidden, false, true},
