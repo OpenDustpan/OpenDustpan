@@ -27,6 +27,8 @@ page is relative to that prefix.
 | `GET /namespaces/{namespace}/lock` | `namespace:read` | The manual lock of the namespace |
 | `DELETE /namespaces/{namespace}/lock` | `unit:lock`, and the caller holds the lock | No body |
 | `POST /namespaces/{namespace}/lock/force-unlock` | `unit:manage` | No body |
+| `POST /namespaces/{namespace}/unit-locks/bulk-lock` | `namespace:read` for the route, then `unit:read` and `unit:lock` on each unit | One result for each unit: the manual lock or the error of that unit. The `Idempotency-Key` header is optional. A retry with the same key and body answers the stored result of each unit that the first call changed. It does again each unit that failed with 5xx or 429 |
+| `POST /namespaces/{namespace}/unit-locks/bulk-unlock` | `namespace:read` for the route, then `unit:read` and `unit:lock` on each unit, and the caller holds the lock | One result for each unit. The `Idempotency-Key` rules are the rules of `bulk-lock` |
 | `GET /namespaces/{namespace}/output-sharing` | `namespace:read` | The output sharing setting of the namespace |
 | `PUT /namespaces/{namespace}/output-sharing` | `unit:manage-sharing` | The new output sharing setting |
 | `GET /namespaces/{namespace}/units/{unit_id}/outputs` | `unit:read-outputs` | The root outputs of the latest state of the unit |

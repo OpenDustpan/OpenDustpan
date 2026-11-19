@@ -429,6 +429,24 @@ func manualLockAllowEntries() []AllowEntry {
 	}
 }
 
+// manualLockBulkAllowEntries returns the bulk lock routes of a namespace. No
+// CLI calls them: the steps of TestManualLockBulk call both with the token of a
+// person and run OpenTofu against a workspace that the bulk call locked.
+func manualLockBulkAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/unit-locks"
+		test = "TestManualLockBulk"
+	)
+
+	reason := "Console and client route: no CLI locks many units. The harness steps of " +
+		test + " call it and run OpenTofu against a workspace that it locked."
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: base + "/bulk-lock", CoveringTest: test, Reason: reason},
+		{Method: http.MethodPost, Path: base + "/bulk-unlock", CoveringTest: test, Reason: reason},
+	}
+}
+
 // placementAllowEntries returns the routes of the placement rules of a
 // namespace. No CLI reads or writes a rule: the console and the clients of the
 // API do. The steps of TestPlacementRuleAPI call each of them with the token of

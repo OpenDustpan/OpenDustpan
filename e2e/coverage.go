@@ -227,6 +227,7 @@ func CoverageAllowlist() []AllowEntry {
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
+		manualLockBulkAllowEntries(),
 		jobAllowEntries(),
 		driftAllowEntries(),
 		triggerAllowEntries(),

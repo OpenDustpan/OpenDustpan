@@ -159,6 +159,7 @@ again under the same name has no lock.
 | Remove your own lock | `unit:lock` | The stack, workspace, collection or namespace | `maintainer`, `admin` |
 | Remove the lock of another person (force-unlock) | `unit:manage` | The stack, workspace, collection or namespace | `maintainer`, `admin` |
 | Read a lock | `unit:read` for a stack or workspace, `collection:read` for a collection, `namespace:read` for a namespace | The stack, workspace, collection or namespace | Every role that reads |
+| Lock or unlock many units | `namespace:read` for the route, then `unit:read` and `unit:lock` for each unit | The namespace for the route, each unit for its item | `maintainer`, `admin` |
 
 For a namespace, the role must be granted on the namespace itself. A grant on one
 collection or one unit does not reach the lock of the namespace.
@@ -224,6 +225,99 @@ The server answers:
 - 404 when the stack, workspace, collection or namespace does not exist.
 - 409 when the object already has a manual lock. The message names the holder
   and the reason. Remove the lock, or ask the holder to remove it.
+
+## Lock many units
+
+To lock several stacks or workspaces of one namespace with one call, use the
+bulk routes. They take the unit IDs, not the unit references. Read the IDs from
+the field `unitID` of `GET /api/dustpan/v1/namespaces/<namespace>/units`.
+
+Lock the units, with one reason for all of them:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -d '{"reason": "change window closed", "units": [{"id": "stk-1"}, {"id": "wsp-2"}, {"id": "stk-3"}]}' \
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/unit-locks/bulk-lock"
+```
+
+Remove your own locks from the units:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -d '{"units": [{"id": "stk-1"}, {"id": "wsp-2"}, {"id": "stk-3"}]}' \
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/unit-locks/bulk-unlock"
+```
+
+Each unit is a separate lock call on that unit. One unit that fails does not
+stop the others. The answer is 200 with one result for each unit, in the order
+of the request. This example is the answer of `bulk-lock` when `stk-3` already
+had a lock of another person:
+
+```json
+{
+  "results": [
+    {
+      "id": "stk-1",
+      "status": "ok",
+      "lock": {
+        "kind": "unit",
+        "object": "pulumi:acme/web/prod",
+        "holder": "alice",
+        "reason": "change window closed",
+        "since": "2026-10-19T10:00:00Z"
+      }
+    },
+    {
+      "id": "wsp-2",
+      "status": "ok",
+      "lock": {
+        "kind": "unit",
+        "object": "opentofu:acme/network",
+        "holder": "alice",
+        "reason": "change window closed",
+        "since": "2026-10-19T10:00:00Z"
+      }
+    },
+    {
+      "id": "stk-3",
+      "status": "error",
+      "error": {
+        "code": 409,
+        "errorCode": "lock.already-locked",
+        "message": "pulumi:acme/web/staging already has a manual lock by bob since 2026-10-19T09:00:00Z: deploy in progress"
+      }
+    }
+  ]
+}
+```
+
+A result with `status` `ok` has the field `lock` for a lock call, and no field
+`lock` for an unlock call. A result with `status` `error` has the field `error`
+with the same `code`, `errorCode` and `message` that a call on that unit alone
+gives. The call needs 1 to 100 units, and the body has at most 20480 bytes. A
+call with no unit or with more than 100 units gets 400 and the error code
+`lock.bulk-size`. A body larger than 20480 bytes gets 413. In both cases the
+server changes nothing. If one unit ID is in the call two
+times, each entry is one lock call: the second entry meets the lock of the
+first.
+
+The `errorCode` of an error result is one of these:
+
+| `errorCode` | Code | Meaning |
+| --- | --- | --- |
+| `lock.bulk-size` | 400 | The call names no unit or more than 100 units. This code is on the whole answer, not on one result. |
+| `lock.already-locked` | 409 | The unit already has a manual lock. The message names the holder and the reason. |
+| `lock.not-holder` | 409 | Another person holds the lock, so `bulk-unlock` leaves it. Use the force-unlock of the unit. |
+| `lock.not-locked` | 404 | The unit has no manual lock, so `bulk-unlock` has nothing to remove. |
+| `lock.target-not-found` | 404 | The unit does not exist, is in another namespace, or you cannot read it. The three cases give the same result. |
+
+A unit that you can read but cannot lock gives the 403 result of a lock call on
+that unit, and the server writes a denied audit entry for it.
+
+The call accepts the header `Idempotency-Key`. A retry with the same key and the
+same body answers the stored result of each unit that the first call changed,
+and does not lock that unit a second time. A retry does again each unit that
+failed with a 5xx status or with 429. The same key with another body gives 422.
 
 ## Read a lock
 
