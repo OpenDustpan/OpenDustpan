@@ -270,7 +270,13 @@ func TestAuthorizeObjectNilNotFoundFailsClosed(t *testing.T) {
 
 			g := guard(t, new([]string), newAuthorizer(tc.allow, nil))
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
-			checks := route.Checks{Namespace: nsObject, Reads: tc.reads, Actions: nil, NotFound: nil, RequireAction: false}
+			checks := route.Checks{
+				Namespace:     nsObject,
+				Reads:         tc.reads,
+				Actions:       nil,
+				NotFound:      nil,
+				RequireAction: false,
+			}
 
 			err := g.AuthorizeObject(t.Context(), r, p, nsObject, checks)
 			if !errors.Is(err, identity.ErrDenied) {

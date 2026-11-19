@@ -1106,7 +1106,7 @@ type answerOf struct {
 // value are removed, so that two answers to the same refusal compare equal.
 func answerFor(rec *httptest.ResponseRecorder) answerOf {
 	h := rec.Header().Clone()
-	h.Del("X-Request-Id")
+	h.Del("X-Request-ID")
 	h.Del("Date")
 
 	return answerOf{code: rec.Code, body: rec.Body.String(), header: h}
@@ -1117,7 +1117,35 @@ func sameAnswer(t *testing.T, label string, got, want answerOf) {
 	t.Helper()
 
 	if got.code != want.code || got.body != want.body || !maps.EqualFunc(got.header, want.header, slices.Equal) {
-		t.Fatalf("%s = %d %q %v, want %d %q %v", label, got.code, got.body, got.header, want.code, want.body, want.header)
+		t.Fatalf("%s = %d %q %v, want %d %q %v",
+			label, got.code, got.body, got.header, want.code, want.body, want.header)
+	}
+}
+
+// checkMalformedDeleted checks that a malformed unit ID cannot name a unit, so
+// syntax validation refuses it with the same 400 before any lookup or check:
+// the answer is the same for a denied and an allowed caller. A malformed tool
+// answers 400 request.invalid-object.
+func checkMalformedDeleted(t *testing.T, denied deletedFixture, method, known string) {
+	t.Helper()
+
+	badID := strings.Replace(known, seededUnitID, "stk%00..%2F", 1)
+	allowedCaller := newDeletedFixture(
+		t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
+	)
+
+	badAnswer := answerFor(denied.serve(t, method, badID, ""))
+	if badAnswer.code != http.StatusBadRequest {
+		t.Fatalf("malformed unit ID = %d %s, want 400", badAnswer.code, badAnswer.body)
+	}
+
+	sameAnswer(t, "malformed unit ID, allowed caller", answerFor(allowedCaller.serve(t, method, badID, "")), badAnswer)
+
+	bad := strings.Replace(known, "/pulumi/", "/Bad!Tool/", 1)
+
+	rec := denied.serve(t, method, bad, "")
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "request.invalid-object") {
+		t.Fatalf("malformed tool = %d %s, want 400 request.invalid-object", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1163,27 +1191,7 @@ func TestUnknownToolAnswersLikeAKnownOne(t *testing.T) {
 				sameAnswer(t, label, answerFor(denied.serve(t, tc.method, target, "")), want)
 			}
 
-			// A malformed unit ID cannot name a unit, so syntax validation
-			// refuses it with the same 400 before any lookup or check: the
-			// answer is the same for a denied and an allowed caller.
-			badID := strings.Replace(tc.known, seededUnitID, "stk%00..%2F", 1)
-			allowedCaller := newDeletedFixture(
-				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
-			)
-
-			badAnswer := answerFor(denied.serve(t, tc.method, badID, ""))
-			if badAnswer.code != http.StatusBadRequest {
-				t.Fatalf("malformed unit ID = %d %s, want 400", badAnswer.code, badAnswer.body)
-			}
-
-			sameAnswer(t, "malformed unit ID, allowed caller", answerFor(allowedCaller.serve(t, tc.method, badID, "")), badAnswer)
-
-			bad := strings.Replace(tc.known, "/pulumi/", "/Bad!Tool/", 1)
-
-			rec := denied.serve(t, tc.method, bad, "")
-			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "request.invalid-object") {
-				t.Fatalf("malformed tool = %d %s, want 400 request.invalid-object", rec.Code, rec.Body.String())
-			}
+			checkMalformedDeleted(t, denied, tc.method, tc.known)
 
 			allowed := newDeletedFixture(
 				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil,
