@@ -146,7 +146,8 @@ func DigestsEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// ValidateReason reports, with the rule of a temporary administrator's reason, whether reason is usable: not blank, UTF-8, at most
+// ValidateReason reports whether reason is usable. It uses the rule of the
+// reason of a temporary administrator: not blank, UTF-8, at most
 // audit.MaxReasonLen characters, and with no control or format character. It
 // returns ErrReasonInvalid otherwise.
 func ValidateReason(reason string) error {

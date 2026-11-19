@@ -117,3 +117,13 @@ Each error answer has the header `Cache-Control: no-store`.
 | 404 | `audit.entry-not-found` | No entry at this sequence |
 | 501 | `audit.entry-read-unavailable` | The store cannot read one entry: list the entries |
 | 500 | `audit.export-not-recorded` | The server could not write the audit entry of the export, so it sent no entries |
+
+## First administrator API
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `first-administrator.code-invalid` | The code is wrong, used, expired, or for another person. One text covers the four cases. Ask the operator for a new code with `POST /api/server/first-administrator` |
+| 400 | `first-administrator.principal-invalid` | The principal is not an enabled person of the installation, or it is a service, a break-glass person, a temporary administrator, or a `dev:` user |
+| 400 | `first-administrator.reason-invalid` | The reason is blank, has more than 500 characters, is not UTF-8, or has a control or format character |
+| 409 | `first-administrator.already-made` | The server made the first administrator already, so the offer and the redeem do not work. To get an administrator again, run `opendustpan host create-temp-admin` on the server host |
+| 409 | `first-administrator.grant-exists` | The person holds the `site-administrator` role already. The code is not used |
