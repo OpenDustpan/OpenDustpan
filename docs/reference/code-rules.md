@@ -42,12 +42,15 @@ suffix" for each reason that gets this text.
 
 ## Git host links
 
-- Only a person in a console session makes or accepts a link. An accept needs
-  a recent sign-in: a session whose sign-in is older than the token freshness
-  window gets 403 with the code `mfa.fresh-step-required`. An access token
-  gets 403 `git-host.link-person-required`, except on the accept, which
-  answers `mfa.fresh-step-required`, and a break-glass account cannot make a
-  link ([Git host account links API](git-host-links-api.md)).
+- Only a person in a console session makes or accepts a link. A principal
+  that is not a person, a disabled person and a break-glass account get 403
+  with the code `git-host.link-person-required`. On the accept, the server
+  tests the freshness first, so a request with no console session, for
+  example one with an access token, gets 403 with the code
+  `mfa.fresh-step-required`. A session whose sign-in is older than the token
+  freshness window gets the same answer. The answer also covers a window of
+  0, a window out of range, a policy read that fails, and a sign-in dated in
+  the future ([Git host account links API](git-host-links-api.md)).
 
 ## Break-glass accounts
 
@@ -98,10 +101,18 @@ suffix" for each reason that gets this text.
     `denied` and the object `group:<id>`. The entry stores the text `the
     removal would leave no site administrator` as a change with the key
     `reason`, not in the reason field of the entry.
-  - The expiry of a temporary administrator (`ExpireTempAdmin` in each
-    store) runs no guard. It disables the principal, and it ends its grants,
-    its memberships and its live tokens, also when the principal is the last
-    site administrator. This behavior is under owner review.
+  - The expiry of a temporary administrator (`ExpireTempAdmin`, the same in
+    both dialects) runs no guard, and the disable of the principal tests no
+    break-glass rule either. In one transaction it ends the record of the
+    temporary administrator (`tempadmin.ErrExpired` when the record already
+    ended, `tempadmin.ErrNotFound` when none exists), disables the principal,
+    ends the grants of the principal and the grants held on it, ends its group
+    memberships, and ends its live tokens, which are the tokens that no one
+    revoked or disabled and whose expiry is later than the time of the
+    expiry. It does this also when the principal is the last site
+    administrator. In maintenance mode it writes the expiry to the
+    revocation journal, and a restore replays it. It writes the audit entry
+    in the same transaction. This behavior is under owner review.
 
 ## Grants and roles
 
@@ -109,8 +120,11 @@ suffix" for each reason that gets this text.
 - A person cannot give more than they hold. The server refuses a change that
   gives more on its object than the person who makes it holds there. This
   covers the create and the revoke of a grant, the create and the update of
-  a role, the changes of a group and of its members, the grants on a service
-  principal, and the delegation and token actions. The server answers 403.
+  a role, the delete, the enable and the disable of a principal, the changes
+  of a group and of its members, a group change that would lift an access
+  limit, a gate or an approval rule that names the group, the grants on a
+  service principal, and the delegation and token actions. The server
+  answers 403.
   The code depends on the path:
   - The move of a unit into a collection answers `access.denied` with the
     message `forbidden`.
@@ -120,23 +134,31 @@ suffix" for each reason that gets this text.
     group grant that reaches a service principal outside the reach of the
     caller answers `access.denied`. The same answer applies when the server
     has no reach port and the caller is not an administrator.
+  - In an installation that keeps no grants, the guard allows only an
+    administrator to change who holds grants. Any other caller who adds a
+    member, deletes a principal or makes a similar change gets `access.denied`
+    with the message `forbidden`.
   - In other cases the answer has no catalog code.
   - The grant routes, the role routes and the revoke route write a denied
     audit entry. When the error names missing actions, the reason is
     `outside the reach of the caller: <action> on <object>, ...`, with at most
     20 actions and then `, and N more`. Else the reason is
     `grant gives more than the granter holds`. Each reason gets the route
-    suffix. The limiter can suppress the entry, and the server writes none for
-    an empty subject.
+    suffix. The reason holds at most 20 actions, and the byte budget of the
+    reason can give a shorter list. The limiter can suppress the entry, and
+    the server writes none for an empty subject. When the namespace of the
+    entry does not exist, the entry moves to the installation scope and the
+    reason ends with ` (namespace <name> does not exist)` after the route
+    suffix.
   - The principal routes and the group routes write no denied entry. The
     exception is `principal.ErrNoWorkingBreakGlass`, which writes a denied
     entry (see the break-glass rule above).
   - A failed change on a grant route, a role route or the revoke route also
     writes a second entry with the outcome `failure` and no reason, when the
-    change names an object. A failed change on a principal route writes a
-    `failure` entry when the change has a record. That entry holds the reason
-    of the missing actions only for a reach refusal that names at least one
-    missing action.
+    change names an object. A failed change on a principal route or a
+    group route writes a `failure` entry when the change has a record. That
+    entry holds the reason of the missing actions for any escalation refusal
+    that names at least one missing action.
 <!-- code-rule: access.ErrBuiltIn -->
 - A built-in role cannot be changed or deleted. The server answers 409 with
   no specific code. The server writes an audit entry with the outcome
@@ -245,8 +267,13 @@ suffix" for each reason that gets this text.
   The action is `job:approve` for an approval and the start action of the job
   for a confirm. For a start, the action is the start action of the planned
   job when the refusal names it, else `unit:run-plan` on the unit of the
-  request. The trigger route answers the
-  same 403 and writes no audit entry.
+  request. The drift start route answers the same 403 and writes a
+  `denied` entry with the reason `an agent cannot do this`, with the route
+  suffix, the action `unit:run-plan` and the unit. The trigger route answers
+  the same 403 and writes no audit entry. Limit: no production code sets a
+  non-empty agent on the actor of a start, an approval, a confirm, a drift
+  start or a trigger. The agent rules guard the service, and no route reaches
+  them today.
 <!-- code-rule: job.ErrNotRequester -->
 - Only the person who asked the agent for a job can confirm it, whatever
   grant another principal holds. The rule applies to a verdict of approve
