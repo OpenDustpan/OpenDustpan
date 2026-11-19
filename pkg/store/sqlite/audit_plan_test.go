@@ -128,6 +128,44 @@ func explainPlan(t *testing.T, conn *sql.DB, query string) string {
 	return plan.String()
 }
 
+// primaryKeyIndexName returns the name of the index that SQLite made for the
+// primary key of table, from PRAGMA index_list (origin pk).
+func primaryKeyIndexName(t *testing.T, conn *sql.DB, table string) string {
+	t.Helper()
+
+	rows, err := conn.QueryContext(t.Context(), "SELECT name FROM pragma_index_list(?) WHERE origin = 'pk'", table)
+	if err != nil {
+		t.Fatalf("index list of %s: %v", table, err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close index rows: %v", closeErr)
+		}
+	}()
+
+	var names []string
+
+	for rows.Next() {
+		var name string
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			t.Fatalf("scan index name: %v", scanErr)
+		}
+
+		names = append(names, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read index list: %v", err)
+	}
+
+	if len(names) != 1 {
+		t.Fatalf("table %s has %d primary key indexes, want 1: %v", table, len(names), names)
+	}
+
+	return names[0]
+}
+
 // TestListPlanUsesThePrimaryKey proves that the page query reads the primary
 // key (namespace, sequence) backwards: the plan searches by the key and holds
 // no temporary B-tree for a sort.
@@ -142,8 +180,9 @@ func TestListPlanUsesThePrimaryKey(t *testing.T) {
 	plan := explainPlan(t, conn, query)
 
 	// SQLite names the index of the primary key (namespace, sequence) of a
-	// table with a row ID sqlite_autoindex_audit_entries_1.
-	const want = "SEARCH audit_entries USING INDEX sqlite_autoindex_audit_entries_1 (namespace=? AND sequence<?)"
+	// table with a row ID. The test reads the name from the database.
+	want := "SEARCH audit_entries USING INDEX " + primaryKeyIndexName(t, conn, "audit_entries") +
+		" (namespace=? AND sequence<?)"
 
 	if !strings.Contains(plan, want) || strings.Contains(plan, "USE TEMP B-TREE") {
 		t.Fatalf("plan = %q, want a search by the primary key and no temporary B-tree", plan)
