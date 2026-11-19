@@ -669,3 +669,13 @@ func (g gitHost) DeleteAssignment(ctx context.Context, installationID string, if
 		return finishCompletion(ctx, q, current)
 	})
 }
+
+// ConfirmRotation is not built yet.
+func (g gitHost) ConfirmRotation(context.Context, forge.Kind, int64, audit.Entry) (forge.Registration, error) {
+	return forge.Registration{}, errors.New("not built yet")
+}
+
+// RecordEventReceipt is not built yet.
+func (g gitHost) RecordEventReceipt(context.Context, forge.EventReceipt) (bool, error) {
+	return false, errors.New("not built yet")
+}

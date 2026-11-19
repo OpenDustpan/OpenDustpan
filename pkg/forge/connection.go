@@ -317,6 +317,7 @@ type Store interface {
 	ConnectionStore
 	RegistrationStore
 	AssignmentStore
+	ReceiptStore
 }
 
 // ConnectionStore keeps the connections of the namespaces. See Store for the
@@ -368,6 +369,12 @@ type RegistrationStore interface {
 	// ErrNoRegistration, ErrRegistrationInUse while an installation is
 	// assigned, and ErrVersionConflict.
 	DeleteRegistration(ctx context.Context, kind Kind, ifVersion int64, e audit.Entry) error
+	// ConfirmRotation clears the old event secret of the registration of kind
+	// and gives it the next version, in one write with the audit entry e. It
+	// returns ErrNoRegistration, ErrVersionConflict, and ErrNoRotation when
+	// the registration holds no old event secret. It returns the stored
+	// registration.
+	ConfirmRotation(ctx context.Context, kind Kind, ifVersion int64, e audit.Entry) (Registration, error)
 }
 
 // AssignmentStore keeps the installation-to-namespace map. See Store for the

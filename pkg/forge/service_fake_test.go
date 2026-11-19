@@ -570,3 +570,11 @@ func (r *rig) registration(t *testing.T) forge.Registration {
 
 	return reg
 }
+
+func (m *memStore) ConfirmRotation(context.Context, forge.Kind, int64, audit.Entry) (forge.Registration, error) {
+	return forge.Registration{}, errors.New("not built yet")
+}
+
+func (m *memStore) RecordEventReceipt(context.Context, forge.EventReceipt) (bool, error) {
+	return false, errors.New("not built yet")
+}
