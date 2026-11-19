@@ -116,7 +116,7 @@ type ServerMetrics struct {
 	blobWait   *Counter
 	signin     *Counter
 	gitHost    *Counter
-	gitEvent  *Counter
+	gitEvent   *Counter
 	claimSkip  *Counter
 	mtlsRefuse *Counter
 }
@@ -180,7 +180,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		blobWait:   newBlobDeleteWaitCounter(reg),
 		signin:     newSignInCounterErrors(reg),
 		gitHost:    newGitHostRefusedCounter(reg),
-		gitEvent:  newGitHostEventRejectedCounter(reg),
+		gitEvent:   newGitHostEventRejectedCounter(reg),
 		claimSkip:  newClaimPollSkippedCounter(reg),
 		mtlsRefuse: newMtlsRefusedCounter(reg),
 	}
