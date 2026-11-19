@@ -363,8 +363,9 @@ func checkSubject(cfg Config) error {
 		// Defense in depth: the flag parser and NewServer check the name too.
 		// This check stays so that a caller of NewMethod cannot take a name,
 		// an email or a DN as the subject. It does not rely on those checks.
-		if err := CheckSubjectAttribute(cfg.Subject.Attribute, cfg.UserNameAttribute, cfg.EmailAttribute,
-			cfg.NameAttribute); err != nil {
+		taken := []string{cfg.UserNameAttribute, cfg.EmailAttribute, cfg.NameAttribute}
+
+		if err := CheckSubjectAttribute(cfg.Subject.Attribute, taken...); err != nil {
 			return configError(err.Error())
 		}
 	default:
@@ -452,12 +453,14 @@ func groupFilter(g Groups, escapedMember string) string {
 // person changes a name, an email or a place in the directory.
 var ErrSubjectAttribute = errors.New("the subject attribute must not be the DN, a user name or an email")
 
-// refusedSubjectAttributes are the attribute names that hold a DN, a user
-// name or an email, in lowercase. The value of each one can change while the
-// person stays the same.
-var refusedSubjectAttributes = []string{
-	"dn", "entrydn", "distinguishedname", "uid", "userid", "samaccountname", "userprincipalname", "mail",
-	"rfc822mailbox",
+// refusedSubjectAttribute reports whether lower, an attribute name in
+// lowercase, holds a DN, a user name or an email. The value of each one can
+// change while the person stays the same.
+func refusedSubjectAttribute(lower string) bool {
+	return slices.Contains([]string{
+		"dn", "entrydn", "distinguishedname", "uid", "userid", "samaccountname", "userprincipalname", "mail",
+		"rfc822mailbox",
+	}, lower)
 }
 
 // CheckSubjectAttribute returns an error that matches ErrSubjectAttribute
@@ -466,7 +469,7 @@ var refusedSubjectAttributes = []string{
 // or a display name. It compares with no regard to case. It does not change
 // name to make it valid.
 func CheckSubjectAttribute(name string, taken ...string) error {
-	if slices.Contains(refusedSubjectAttributes, strings.ToLower(name)) {
+	if refusedSubjectAttribute(strings.ToLower(name)) {
 		return fmt.Errorf("%w: %q is not allowed, so name an attribute of the entry that never changes",
 			ErrSubjectAttribute, name)
 	}

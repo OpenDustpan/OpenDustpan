@@ -212,14 +212,8 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 		mask = parsed
 	}
 
-	// Defense in depth: NewServer and ldapauth.NewMethod check the subject
-	// attribute too. This check stays so that the start stops at the flag,
-	// with the name of the flag. It does not rely on those checks.
-	if sub := strings.TrimSpace(l.subject); sub != "" && sub != "entryUUID" && sub != "objectGUID" {
-		if subErr := ldapauth.CheckSubjectAttribute(l.subject, l.userNameAttribute, l.emailAttribute,
-			l.nameAttribute); subErr != nil {
-			return none, fmt.Errorf("--ldap-subject: %w", subErr)
-		}
+	if subErr := l.checkSubject(); subErr != nil {
+		return none, subErr
 	}
 
 	// No CA file means the system roots: a nil pool.
@@ -262,6 +256,24 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 		SubjectFailureLimit:       int(l.subjectFailureLimit),
 		SubjectFailureLimitSource: limitSource,
 	}, nil
+}
+
+// checkSubject refuses a subject that holds a DN, a user name or an email.
+func (l *ldapFlags) checkSubject() error {
+	// Defense in depth: NewServer and ldapauth.NewMethod check the subject
+	// attribute too. This check stays so that the start stops at the flag,
+	// with the name of the flag. It does not rely on those checks.
+	sub := strings.TrimSpace(l.subject)
+	if sub == "" || sub == "entryUUID" || sub == "objectGUID" {
+		return nil
+	}
+
+	taken := []string{l.userNameAttribute, l.emailAttribute, l.nameAttribute}
+	if err := ldapauth.CheckSubjectAttribute(l.subject, taken...); err != nil {
+		return fmt.Errorf("--ldap-subject: %w", err)
+	}
+
+	return nil
 }
 
 // ldapRoots returns the certificate authorities of the file path. It opens

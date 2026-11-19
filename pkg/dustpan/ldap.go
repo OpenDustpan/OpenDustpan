@@ -108,15 +108,8 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 			}
 		}
 
-		// Defense in depth: the flag parser and ldapauth.NewMethod check the
-		// subject attribute too. This check stays so that an embedder cannot
-		// take a DN, a user name or an email as the subject. It does not rely
-		// on those checks.
-		if sub := subjectOr(p.Subject); sub != string(ldapauth.SubjectEntryUUID) && sub != string(ldapauth.SubjectObjectGUID) {
-			if subErr := ldapauth.CheckSubjectAttribute(sub, p.UserNameAttribute, p.EmailAttribute,
-				p.NameAttribute); subErr != nil {
-				return nil, fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, subErr)
-			}
+		if subErr := checkLDAPSubject(p); subErr != nil {
+			return nil, subErr
 		}
 
 		limit, source, limitErr := subjectFailureLimitOf(p)
@@ -161,6 +154,26 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 	}
 
 	return out, nil
+}
+
+// checkLDAPSubject refuses a subject attribute that holds a DN, a user name
+// or an email.
+func checkLDAPSubject(p *LDAPProvider) error {
+	// Defense in depth: the flag parser and ldapauth.NewMethod check the
+	// subject attribute too. This check stays so that an embedder cannot
+	// take a DN, a user name or an email as the subject. It does not rely on
+	// those checks.
+	sub := subjectOr(p.Subject)
+	if sub == string(ldapauth.SubjectEntryUUID) || sub == string(ldapauth.SubjectObjectGUID) {
+		return nil
+	}
+
+	taken := []string{p.UserNameAttribute, p.EmailAttribute, p.NameAttribute}
+	if err := ldapauth.CheckSubjectAttribute(sub, taken...); err != nil {
+		return fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, err)
+	}
+
+	return nil
 }
 
 // subjectFailureLimitOf returns the effective limit of the failed sign-ins of

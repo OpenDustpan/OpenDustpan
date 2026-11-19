@@ -53,27 +53,29 @@ func TestLDAPSubjectFlagRefusesAHostileName(t *testing.T) {
 	}
 }
 
-// hostileIssuers are issuers that the server must refuse, and the reason.
-var hostileIssuers = map[string]string{
-	"query and fragment":     "https://idp.example?x=1#f",
-	"query":                  "https://idp.example/?x=1",
-	"fragment":               "https://idp.example#f",
-	"empty query":            "https://idp.example?",
-	"empty fragment":         "https://idp.example#",
-	"user information":       "https://user:" + "pw" + "@idp.example",
-	"space":                  "https://idp.example/a b",
-	"control character":      "https://idp.example/\x00",
-	"line feed":              "https://idp.example/\n",
-	"back slash":             "https://idp.example\\@evil.example",
-	"other scheme":           "ftp://idp.example",
-	"http on a public host":  "http://idp.example",
-	"no host":                "https://",
-	"relative":               "idp.example",
-	"more than 512 bytes":    "https://idp.example/" + strings.Repeat("a", 600),
-	"http on a lookalike":    "http://localhost.example",
-	"scheme-relative":        "//idp.example",
-	"opaque URL":             "https:idp.example",
-	"upper-case http scheme": "HTTP://idp.example",
+// hostileIssuers returns issuers that the server must refuse, by reason.
+func hostileIssuers() map[string]string {
+	return map[string]string{
+		"query and fragment":     "https://idp.example?x=1#f",
+		"query":                  "https://idp.example/?x=1",
+		"fragment":               "https://idp.example#f",
+		"empty query":            "https://idp.example?",
+		"empty fragment":         "https://idp.example#",
+		"user information":       "https://user:" + "pw" + "@idp.example",
+		"space":                  "https://idp.example/a b",
+		"control character":      "https://idp.example/\x00",
+		"line feed":              "https://idp.example/\n",
+		"back slash":             "https://idp.example\\@evil.example",
+		"other scheme":           "ftp://idp.example",
+		"http on a public host":  "http://idp.example",
+		"no host":                "https://",
+		"relative":               "idp.example",
+		"more than 512 bytes":    "https://idp.example/" + strings.Repeat("a", 600),
+		"http on a lookalike":    "http://localhost.example",
+		"scheme-relative":        "//idp.example",
+		"opaque URL":             "https:idp.example",
+		"upper-case http scheme": "HTTP://idp.example",
+	}
 }
 
 // TestOIDCIssuerFlagRefusesAHostileIssuer proves that --oidc-issuer stops
@@ -81,7 +83,7 @@ var hostileIssuers = map[string]string{
 func TestOIDCIssuerFlagRefusesAHostileIssuer(t *testing.T) {
 	t.Parallel()
 
-	for name, issuer := range hostileIssuers {
+	for name, issuer := range hostileIssuers() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

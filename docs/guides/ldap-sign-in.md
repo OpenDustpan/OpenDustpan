@@ -257,6 +257,12 @@ The subject identifies the person in the server. It must not change when
 the person changes a name or an email. The server never uses the DN, the
 `uid` or the email as the subject.
 
+The server refuses the start when `--ldap-subject` names the DN (`dn`,
+`entryDN`, `distinguishedName`), a user name (`uid`, `userid`,
+`sAMAccountName`, `userPrincipalName`) or an email (`mail`, `rfc822Mailbox`).
+The start also stops when the subject names the same attribute as the user
+name, the email or the person name (--ldap-name-attribute). The name comparison ignores case.
+
 | Subject | Directory | Text form |
 | --- | --- | --- |
 | `entryUUID` | OpenLDAP, 389 Directory Server and others (RFC 4530) | The UUID in lowercase, for example `6ba7b810-9dad-11d1-80b4-00c04fd430c8`. |

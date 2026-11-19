@@ -202,9 +202,14 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: issuer %q must use https", ErrConfig, cfg.Issuer)
 	}
 
-	// The text of this error never holds the issuer, because user
-	// information can hold a password.
-	if issuer.User != nil || strings.ContainsAny(cfg.Issuer, "?# \\") || issuer.RawQuery != "" || issuer.Fragment != "" {
+	return checkIssuerForm(cfg.Issuer, issuer)
+}
+
+// checkIssuerForm returns ErrConfig for an issuer with user information, a
+// query, a fragment or a space. The text of the error never holds the issuer,
+// because user information can hold a password.
+func checkIssuerForm(raw string, u *url.URL) error {
+	if u.User != nil || strings.ContainsAny(raw, "?# \\") || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("%w: the issuer must have no user information, no query and no fragment", ErrConfig)
 	}
 

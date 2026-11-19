@@ -202,15 +202,20 @@ func CheckIssuer(issuer string) error {
 	}
 
 	u, err := url.Parse(issuer)
-	if err != nil || u == nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u == nil || u.Host == "" || u.User != nil {
 		return ErrIssuer
 	}
 
-	if u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname())) {
-		return nil
+	if !secureScheme(u) {
+		return ErrIssuer
 	}
 
-	return ErrIssuer
+	return nil
+}
+
+// secureScheme reports whether u uses https, or http on a loopback host.
+func secureScheme(u *url.URL) bool {
+	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
 }
 
 // validIssuer reports whether issuer passes CheckIssuer. The sign-in client

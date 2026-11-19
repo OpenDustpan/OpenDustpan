@@ -52,7 +52,9 @@ that its group or other users can read. Run `chmod 600` on the file.
 The server keeps each space of the client secret. From the file, it ignores
 one line ending at the end of the file.
 
-The issuer must use HTTPS. The server reads the discovery document of the
+The issuer must use HTTPS. It must have no user information, no query and
+no fragment. The server refuses the start with such an issuer, and it does not
+change the issuer. The server reads the discovery document of the
 provider at the first sign-in, not at start. So the server starts while the
 provider is down. When the provider does not answer, the start of a
 sign-in answers 502.
