@@ -114,6 +114,7 @@ func FromWorkspaceRow(row WorkspaceRow) workspace.Workspace {
 		Overrides:   namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
 		Revision:    row.Revision,
 		LastRelease: releaseFromRow(row), Origin: identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 

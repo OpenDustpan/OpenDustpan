@@ -211,7 +211,8 @@ func (foreignRestoreWorkspaces) GetByID(
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, nil
 }
 
@@ -298,7 +299,8 @@ func (lockedRestoreWorkspaces) GetByID(
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, nil
 }
 

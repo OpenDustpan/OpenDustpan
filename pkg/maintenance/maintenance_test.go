@@ -740,7 +740,8 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	f.workspaces.workspaces[w.ID] = w
 }

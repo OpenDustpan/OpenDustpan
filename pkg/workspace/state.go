@@ -232,6 +232,10 @@ type NewState struct {
 	Outputs []byte
 	Serial  int64
 	Force   bool
+	// RequireCollection refuses the declare with collection.ErrNoCollection
+	// when no collection holds the workspace. The service reads this from the
+	// read of the workspace that the declare makes anyway.
+	RequireCollection bool
 }
 
 // parse validates the declared metadata.

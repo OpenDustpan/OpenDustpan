@@ -123,11 +123,12 @@ func beginTFEUpload(t *testing.T, srv *dustpan.Server, store any) (string, strin
 	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 
 	pending, err := svc.BeginState(ctx, w.ID, "admin", workspace.NewState{
-		Lineage: "l1",
-		MD5:     hex.EncodeToString(sum[:]),
-		Outputs: nil,
-		Serial:  1,
-		Force:   false,
+		Lineage:           "l1",
+		MD5:               hex.EncodeToString(sum[:]),
+		Outputs:           nil,
+		Serial:            1,
+		Force:             false,
+		RequireCollection: false,
 	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if err != nil {
 		t.Fatalf("begin state: %v", err)

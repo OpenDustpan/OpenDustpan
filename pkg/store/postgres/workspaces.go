@@ -135,7 +135,10 @@ func (s *Store) GetWorkspace(ctx context.Context, ref workspace.Ref) (workspace.
 		return workspace.Workspace{}, fmt.Errorf("select workspace: %w", err)
 	}
 
-	return workspaceFromRow(row.Workspace, row.NamespaceID), nil
+	w := workspaceFromRow(row.Workspace, row.NamespaceID)
+	w.InCollection = row.InCollection
+
+	return w, nil
 }
 
 // GetWorkspaceByID implements workspace.Store.
@@ -149,7 +152,10 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspac
 		return workspace.Workspace{}, fmt.Errorf("select workspace: %w", err)
 	}
 
-	return workspaceFromRow(row.Workspace, row.NamespaceID), nil
+	w := workspaceFromRow(row.Workspace, row.NamespaceID)
+	w.InCollection = row.InCollection
+
+	return w, nil
 }
 
 // ListWorkspaces implements workspace.Store.

@@ -801,13 +801,15 @@ ORDER BY name;
 -- name: ReadWorkspace :one
 -- The read behind the store port: the workspace with the ID of its namespace,
 -- from the join with the namespace row, so a caller needs no second read.
-SELECT sqlc.embed(w), n.id AS namespace_id
+SELECT sqlc.embed(w), n.id AS namespace_id,
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = ? AND w.name = ? AND w.deleted_at_ms IS NULL;
 
 -- name: ReadWorkspaceByID :one
-SELECT sqlc.embed(w), n.id AS namespace_id
+SELECT sqlc.embed(w), n.id AS namespace_id,
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.id = ? AND w.deleted_at_ms IS NULL;

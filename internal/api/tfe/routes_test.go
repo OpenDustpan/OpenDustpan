@@ -361,7 +361,8 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.P
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, nil
 }
 
@@ -387,7 +388,7 @@ func (stubWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspa
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (stubWorkspaces) LockForJob(
+func (stubWorkspaces) LockForJobInCollection(
 	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
 	ws, err := stubWorkspaceByID(id)
@@ -944,7 +945,8 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, nil
 }
 
@@ -1820,7 +1822,7 @@ func (errorWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (worksp
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (errorWorkspaces) LockForJob(
+func (errorWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal

@@ -83,11 +83,12 @@ func TestUploadCleanupSurvivesTheRequest(t *testing.T) {
 	}
 
 	pending, err := svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
-		Lineage: "l",
-		MD5:     md5Hex(body),
-		Outputs: nil,
-		Serial:  1,
-		Force:   false,
+		Lineage:           "l",
+		MD5:               md5Hex(body),
+		Outputs:           nil,
+		Serial:            1,
+		Force:             false,
+		RequireCollection: false,
 	}, authority(noOverrides(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)

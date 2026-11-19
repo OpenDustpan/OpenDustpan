@@ -670,8 +670,9 @@ func mustCreateWorkspace(t *testing.T, s access.Store, ws interface {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 
 	if err := ws.CreateWorkspace(t.Context(), w, fenceOf(t, s, "acme")); err != nil {

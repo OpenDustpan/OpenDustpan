@@ -88,11 +88,12 @@ func parseStateVersionCreate(body []byte) (workspace.NewState, error) {
 	force := attrs.Force != nil && *attrs.Force
 
 	return workspace.NewState{
-		Lineage: *attrs.Lineage,
-		MD5:     *attrs.MD5,
-		Outputs: outputs,
-		Serial:  *attrs.Serial,
-		Force:   force,
+		Lineage:           *attrs.Lineage,
+		MD5:               *attrs.MD5,
+		Outputs:           outputs,
+		Serial:            *attrs.Serial,
+		Force:             force,
+		RequireCollection: false,
 	}, nil
 }
 
@@ -191,12 +192,16 @@ func (h *Handler) createStateVersion(
 
 	id := workspace.ID(r.PathValue("id"))
 
-	// A workspace that no collection holds takes no state.
-	if err = h.placer.Require(ctx, obj); err != nil {
+	// A workspace that no collection holds takes no state. The declare reads
+	// the membership with the workspace, so it adds no round trip. This check
+	// only keeps a server with no collections closed.
+	if err = h.placer.RequireEnabled(obj); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
+
+	in.RequireCollection = true
 
 	allow, err := h.allowance(ctx, p, id, obj)
 	if err != nil {

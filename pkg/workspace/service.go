@@ -527,7 +527,8 @@ func newWorkspaceOf(ref Ref) Workspace {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 
@@ -765,6 +766,38 @@ func (s *Service) LockForJob(ctx context.Context, id ID, holder, reason, jobID s
 	// next request meets the lock.
 	if err := s.checkManualLock(ctx, id, jobID); err != nil {
 		return Workspace{}, err
+	}
+
+	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		return w.lock(now, holder, reason)
+	})
+}
+
+// LockForJobInCollection is LockForJob for a workspace that a collection must
+// hold. It returns an error that matches collection.ErrNoCollection, and
+// writes nothing, when no collection holds the workspace. The membership comes
+// from the read of the workspace that the lock makes anyway, so the check adds
+// no round trip. The check runs before the manual lock check: a workspace in no
+// collection takes no lock, whatever manual locks cover it.
+func (s *Service) LockForJobInCollection(ctx context.Context, id ID, holder, reason, jobID string) (Workspace, error) {
+	if holder == "" {
+		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	// Defense in depth: the handler and the authorizer also refuse a lock on a
+	// workspace in no collection; this check stays so that a new caller of the
+	// service cannot skip it.
+	if !w.InCollection {
+		return Workspace{}, fmt.Errorf("lock %s: %w", w.Ref, collection.ErrNoCollection)
+	}
+
+	if lockErr := s.refuseManualLock(ctx, w, jobID); lockErr != nil {
+		return Workspace{}, lockErr
 	}
 
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
@@ -1122,6 +1155,16 @@ func (s *Service) BeginState(
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return PendingState{}, err
+	}
+
+	// A workspace that no collection holds takes no state. The read above
+	// carries the membership, so the check adds no round trip.
+	//
+	// Defense in depth: the handler, the authorizer and the gates also refuse
+	// a write to a workspace in no collection; this check stays so that a new
+	// caller of the service cannot skip it.
+	if in.RequireCollection && !w.InCollection {
+		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, collection.ErrNoCollection)
 	}
 
 	current, hasState, err := s.followedState(ctx, w, in)
@@ -2196,11 +2239,12 @@ func (s *Service) copyState(
 	// The hex MD5 in NewState is display only; createPending stores the
 	// validated sum passed alongside it, which is src.MD5 here.
 	pending, err := s.createPending(ctx, w, NewState{
-		Lineage: src.Lineage,
-		MD5:     hex.EncodeToString(src.MD5[:]),
-		Outputs: outputs,
-		Serial:  src.Serial,
-		Force:   true,
+		Lineage:           src.Lineage,
+		MD5:               hex.EncodeToString(src.MD5[:]),
+		Outputs:           outputs,
+		Serial:            src.Serial,
+		Force:             true,
+		RequireCollection: false,
 	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false, origin: identity.StateOrigin{Job: "", Commit: ""}})
 	if err != nil {
 		return StateVersion{}, err

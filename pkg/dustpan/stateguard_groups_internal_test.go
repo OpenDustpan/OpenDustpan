@@ -101,6 +101,7 @@ func newGroupsGuard(t *testing.T, limit gate.AccessLimit) groupsGuard {
 		Ref:         workspace.Ref{Namespace: "acme", Name: "web"},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err = st.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

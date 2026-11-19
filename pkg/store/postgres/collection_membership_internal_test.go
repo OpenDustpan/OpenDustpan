@@ -127,7 +127,8 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if createErr := s.CreateWorkspace(ctx, w, ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)

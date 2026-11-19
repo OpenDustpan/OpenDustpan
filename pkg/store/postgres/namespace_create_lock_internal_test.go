@@ -287,7 +287,8 @@ func newCreateLockWorkspace(ns namespace.Name, name string) workspace.Workspace 
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 

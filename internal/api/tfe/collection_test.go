@@ -1,6 +1,8 @@
 package tfe_test
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,11 +13,13 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // newPlacedHandler returns a production Handler over stubWorkspaces whose
-// Placer is placer.
-func newPlacedHandler(t *testing.T, placer *tofuunit.Placer) *tfe.Handler {
+// Placer is placer and whose workspace service is workspaces.
+func newPlacedHandler(t *testing.T, placer *tofuunit.Placer, workspaces tfe.WorkspaceService) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
@@ -25,7 +29,7 @@ func newPlacedHandler(t *testing.T, placer *tofuunit.Placer) *tfe.Handler {
 		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
-		Workspaces:     stubWorkspaces{},
+		Workspaces:     workspaces,
 		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
@@ -43,6 +47,30 @@ func newPlacedHandler(t *testing.T, placer *tofuunit.Placer) *tfe.Handler {
 	}
 
 	return handler
+}
+
+// noCollectionWorkspaces is stubWorkspaces with the answer of the real service
+// for a workspace in no collection: a lock and a declare return
+// collection.ErrNoCollection. The service tests prove that the service gives
+// that answer; this stub proves that the handler maps it.
+type noCollectionWorkspaces struct{ stubWorkspaces }
+
+var errRequireCollectionUnset = errors.New("the handler did not set RequireCollection")
+
+func (noCollectionWorkspaces) LockForJobInCollection(
+	_ context.Context, _ workspace.ID, _, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, collection.ErrNoCollection
+}
+
+func (noCollectionWorkspaces) BeginState(
+	_ context.Context, _ workspace.ID, _ string, in workspace.NewState, _ workspace.Authority,
+) (workspace.PendingState, error) {
+	if !in.RequireCollection {
+		return workspace.PendingState{}, errRequireCollectionUnset
+	}
+
+	return workspace.PendingState{}, collection.ErrNoCollection
 }
 
 // TestWriteToAWorkspaceInNoCollectionIsRefused proves that a lock and a state
@@ -89,7 +117,11 @@ func TestWriteToAWorkspaceInNoCollectionIsRefused(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer test-token")
 
 				rec := httptest.NewRecorder()
-				newPlacedHandler(t, tc.placer).ServeHTTP(rec, req)
+				newPlacedHandler(
+					t,
+					tc.placer,
+					noCollectionWorkspaces{stubWorkspaces: stubWorkspaces{}},
+				).ServeHTTP(rec, req)
 
 				if rec.Code != tc.wantStatus || !strings.Contains(rec.Body.String(), tc.wantText) {
 					t.Fatalf(

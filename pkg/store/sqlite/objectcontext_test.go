@@ -63,6 +63,7 @@ func contextUnit(t *testing.T, s *sqlite.Store, u graph.Unit) {
 		Ref:         workspace.Ref{Namespace: n.Name, Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 
 	if err = s.CreateWorkspace(t.Context(), w, n.Fence()); err != nil {

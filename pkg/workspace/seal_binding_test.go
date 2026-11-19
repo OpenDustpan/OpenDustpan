@@ -85,11 +85,12 @@ func uploadSealedStateAtSerial(
 	}
 
 	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
-		Lineage: "l1",
-		MD5:     sum(content),
-		Outputs: sealedOutputsDoc(outputValue),
-		Serial:  serial,
-		Force:   false,
+		Lineage:           "l1",
+		MD5:               sum(content),
+		Outputs:           sealedOutputsDoc(outputValue),
+		Serial:            serial,
+		Force:             false,
+		RequireCollection: false,
 	}, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)

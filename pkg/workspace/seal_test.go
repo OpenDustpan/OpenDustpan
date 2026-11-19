@@ -108,11 +108,12 @@ func (f sealFixture) pushSealed(t *testing.T, content string, outputs []byte, se
 	}
 
 	pending, err := f.sealed.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
-		Lineage: "l1",
-		MD5:     sum(content),
-		Outputs: outputs,
-		Serial:  serial,
-		Force:   false,
+		Lineage:           "l1",
+		MD5:               sum(content),
+		Outputs:           outputs,
+		Serial:            serial,
+		Force:             false,
+		RequireCollection: false,
 	}, authority(noOverrides(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)

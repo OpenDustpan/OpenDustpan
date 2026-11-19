@@ -176,8 +176,9 @@ func createGateWorkspace(t *testing.T, st *sqlite.Store, id workspace.ID, name w
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, ns.Fence())
 	if err != nil {
 		t.Fatalf("create workspace %s: %v", name, err)

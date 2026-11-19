@@ -40,16 +40,17 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	id := workspace.ID(ident.NewID("ws-"))
 
 	w := workspace.Workspace{
-		NamespaceID: "",
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(),
-		ID:          id,
-		Ref:         ref,
-		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Origin:      identity.StateOrigin{Job: "", Commit: ""},
+		NamespaceID:  "",
+		CreatedAt:    at,
+		UpdatedAt:    at,
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		ID:           id,
+		Ref:          ref,
+		Revision:     1,
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if createErr := s.CreateWorkspace(ctx, w, ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)

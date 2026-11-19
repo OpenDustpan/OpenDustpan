@@ -169,8 +169,9 @@ func newKindSWEnv(
 				Forced:   false,
 				Unlocked: false,
 			},
-			Revision: 1,
-			Origin:   identity.StateOrigin{Job: "", Commit: ""},
+			Revision:     1,
+			Origin:       identity.StateOrigin{Job: "", Commit: ""},
+			InCollection: false,
 		}
 		if err = st.CreateWorkspace(t.Context(), w, fence); err != nil {
 			t.Fatalf("create workspace %s: %v", name, err)
@@ -1160,8 +1161,9 @@ func TestStateWriteGateStaysWithTheUnit(t *testing.T) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err = e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
 		t.Fatalf("create workspace again: %v", err)
@@ -1201,8 +1203,9 @@ func (e swEnv) reuseSWWeb(t *testing.T) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err := e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
 		t.Fatalf("create workspace again: %v", err)

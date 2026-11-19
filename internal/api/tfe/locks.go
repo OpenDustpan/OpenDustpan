@@ -117,7 +117,7 @@ func (h *Handler) lockWorkspace(
 
 	// A held lock refuses the call with 409 whatever the gates say, and a CLI
 	// that waits under -lock-timeout retries it. The answer comes from this
-	// read alone: the handler never calls LockForJob for a lock that it saw
+	// read alone: the handler never calls LockForJobInCollection for a lock that it saw
 	// held. If the holder unlocks after the read, the caller gets 409 and
 	// retries, so no call takes the lock without the gates. A retry writes no
 	// new decision record.
@@ -158,7 +158,7 @@ type lockCall struct {
 }
 
 // lockOnce takes the lock of a workspace that was free at the last read. The
-// gates run before the LockForJob call. It answers every outcome itself and
+// gates run before the LockForJobInCollection call. It answers every outcome itself and
 // returns false, except a lost compare-and-swap: it then writes nothing and
 // returns true, so that the caller can read the holder and try again. A win
 // answers 200 with the workspace. A refusal answers 409 with a detail holding
@@ -169,14 +169,16 @@ func (h *Handler) lockOnce(ctx context.Context, c lockCall) bool {
 		return false
 	}
 
-	// A workspace that no collection holds takes no lock.
-	if err := h.placer.Require(ctx, c.obj); err != nil {
+	// A workspace that no collection holds takes no lock. The lock reads the
+	// membership with the workspace, so it adds no round trip. This check
+	// only keeps a server with no collections closed.
+	if err := h.placer.RequireEnabled(c.obj); err != nil {
 		h.writeError(ctx, c.w, err)
 
 		return false
 	}
 
-	locked, err := h.workspaces.LockForJob(ctx, c.id, c.p.Subject, c.reason, c.p.JobTokenID())
+	locked, err := h.workspaces.LockForJobInCollection(ctx, c.id, c.p.Subject, c.reason, c.p.JobTokenID())
 
 	switch {
 	case err == nil:

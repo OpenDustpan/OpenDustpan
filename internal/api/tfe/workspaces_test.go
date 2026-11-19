@@ -722,7 +722,8 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 				Forced:   false,
 				Unlocked: false,
 			},
-			Origin: identity.StateOrigin{Job: "", Commit: ""},
+			Origin:       identity.StateOrigin{Job: "", Commit: ""},
+			InCollection: false,
 		})
 	}
 
@@ -762,7 +763,7 @@ func (p pagingWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (wor
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (p pagingWorkspaces) LockForJob(
+func (p pagingWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound

@@ -81,6 +81,7 @@ func (w *contextWorld) pushState(t *testing.T, svc *workspace.Service) workspace
 
 	pending, err := svc.BeginState(t.Context(), id, "alice", workspace.NewState{
 		Lineage: "lin-1", MD5: hex.EncodeToString(digest[:]), Outputs: nil, Serial: 1, Force: false,
+		RequireCollection: false,
 	}, auth)
 	if err != nil {
 		t.Fatalf("begin state: %v", err)

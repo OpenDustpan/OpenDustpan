@@ -316,11 +316,12 @@ func uploadWorkspaceState(
 	sum := md5.Sum([]byte(content))
 
 	pending, err := svc.BeginState(t.Context(), id, "admin", workspace.NewState{
-		Lineage: "l1",
-		MD5:     hex.EncodeToString(sum[:]),
-		Outputs: nil,
-		Serial:  1,
-		Force:   false,
+		Lineage:           "l1",
+		MD5:               hex.EncodeToString(sum[:]),
+		Outputs:           nil,
+		Serial:            1,
+		Force:             false,
+		RequireCollection: false,
 	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if err != nil {
 		t.Fatalf("begin state: %v", err)

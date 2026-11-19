@@ -402,7 +402,8 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 
@@ -4564,6 +4565,7 @@ func pushThrough(
 	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 	in := workspace.NewState{
 		Lineage: "l1", MD5: hex.EncodeToString(sum[:]), Outputs: nil, Serial: serial, Force: false,
+		RequireCollection: false,
 	}
 
 	pending, err := svc.BeginState(t.Context(), id, "alice", in, workspace.Authority{

@@ -99,7 +99,7 @@ func (coverageWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (wor
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (coverageWorkspaces) LockForJob(
+func (coverageWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	var none workspace.Workspace
