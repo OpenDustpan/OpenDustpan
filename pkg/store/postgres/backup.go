@@ -1132,7 +1132,7 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows, the grants and the
+// sealed state, the namespace IDs, the owned rows, the tag values, the grants and the
 // memberships of principals of a namespace, the removal alert markers and the
 // feature rows. q is the handle of the transaction, so a check can read the
 // clock of the store in it.
@@ -1151,6 +1151,10 @@ func checkStaged(ctx context.Context, q db.DBTX, staging string, restoreAt time.
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if tagsErr := checkStagedStackTags(ctx, q, staging); tagsErr != nil {
+		return tagsErr
 	}
 
 	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {

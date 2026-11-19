@@ -110,6 +110,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			test: testRestoreStagingRefusesNamespacePrincipalGrants,
 		},
 		{
+			name: "staging refuses a tag value that no port writes",
+			test: testRestoreStagingRefusesHostileTagValues,
+		},
+		{
 			name: "staging refuses a membership of a namespace principal in a group",
 			test: testRestoreStagingRefusesNamespacePrincipalMemberships,
 		},

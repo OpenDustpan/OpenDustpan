@@ -165,8 +165,8 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 }
 
 // TestCreatePlacedRefusesHostileTags proves that CreatePlaced checks the tags
-// itself: with a complete placement and a store that accepts any placement, a
-// hostile tag returns ErrInvalidTags and the stack does not exist.
+// itself: with a complete placement and a store that records each create and
+// accepts it, a hostile tag returns ErrInvalidTags and the store gets no call.
 func TestCreatePlacedRefusesHostileTags(t *testing.T) {
 	t.Parallel()
 
@@ -189,7 +189,7 @@ func TestCreatePlacedRefusesHostileTags(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			svc, ref := permissiveService(t)
+			svc, rec, ref := recordingPlacedService(t)
 
 			placement := stack.Placement{
 				Collection:   collection.Ref{Namespace: "acme", Name: "payments"},
@@ -202,10 +202,32 @@ func TestCreatePlacedRefusesHostileTags(t *testing.T) {
 				t.Fatalf("CreatePlaced err = %v, want ErrInvalidTags", err)
 			}
 
-			if _, getErr := svc.Get(t.Context(), ref); !errors.Is(getErr, stack.ErrNotFound) {
-				t.Fatalf("Get after the refused create = %v, want stack.ErrNotFound", getErr)
+			if rec.count() != 0 {
+				t.Fatalf("store creates = %d, want 0", rec.count())
 			}
 		})
+	}
+}
+
+// TestCreatePlacedPassesValidTagsToTheStore proves the recording store of the
+// hostile-tag test sees a create that the service accepts, so that a count of
+// zero there means a refusal and not a broken fake.
+func TestCreatePlacedPassesValidTagsToTheStore(t *testing.T) {
+	t.Parallel()
+
+	svc, rec, ref := recordingPlacedService(t)
+
+	placement := stack.Placement{
+		Collection:   collection.Ref{Namespace: "acme", Name: "payments"},
+		CollectionID: "col-1",
+		Entry:        zeroEntry(),
+	}
+
+	// The recording store keeps nothing, so the read after the create may fail.
+	_, _ = svc.CreatePlaced(t.Context(), ref, map[string]string{"pulumi:description": "a\nb\tc"}, placement)
+
+	if rec.count() != 1 {
+		t.Fatalf("store creates = %d, want 1", rec.count())
 	}
 }
 
