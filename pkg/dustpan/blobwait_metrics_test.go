@@ -211,10 +211,14 @@ func driveArtifactSweep(t *testing.T, w blobWaitWorld) {
 		t.Fatalf("get namespace: %v", err)
 	}
 
-	unit, err := identity.UnitObject("opentofu", "acme", "network")
+	unit, err := identity.UnitObject("opentofu", "acme", "e2e-workspace")
 	if err != nil {
 		t.Fatalf("unit object: %v", err)
 	}
+
+	// The job names a live unit of its namespace: the store refuses a unit ID
+	// that no live unit has.
+	live := createLockedWorkspace(t, w.srv.Workspaces(), w.store)
 
 	const (
 		jobID  = job.ID("job-wait00000000000001")
@@ -224,7 +228,7 @@ func driveArtifactSweep(t *testing.T, w blobWaitWorld) {
 	j := job.Job{
 		ID:             jobID,
 		NamespaceID:    ns.ID,
-		Spec:           artifactJobSpec(unit.WithUnitID("ws-wait00000000000001")),
+		Spec:           artifactJobSpec(unit.WithUnitID(live.ID.String())),
 		State:          job.StateQueued,
 		Wait:           job.WaitNone,
 		Reason:         "",
