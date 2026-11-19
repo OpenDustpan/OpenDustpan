@@ -200,6 +200,10 @@ func checkFailsClosed(t *testing.T, mk func(id string) error, op, who string) {
 	svc := serviceOver(t, &f, errStore{Store: f.store, err: mk})
 
 	err := ownOpOn(t, svc, op, p, tok.ID)
+	if err == nil {
+		t.Fatalf("%s as %s: err = nil, want ErrNotFound", op, who)
+	}
+
 	if !errors.Is(err, accesstoken.ErrNotFound) || errors.Is(err, accesstoken.ErrUnknownKind) ||
 		strings.Contains(err.Error(), "unknown") {
 		t.Errorf("%s as %s: err = %v, want ErrNotFound only", op, who, err)
