@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -43,6 +44,8 @@ func RunIPAllowlist(t *testing.T, newStore IPAllowlistFactory) {
 		{name: "two namespaces with a list and one without", test: testIPAllowlistNamespacesWithListOrder},
 		{name: "a removed list leaves no namespace", test: testIPAllowlistNamespacesWithListRemoved},
 		{name: "a namespace without a list sorts first", test: testIPAllowlistNamespacesWithListSkipsEmpty},
+		{name: "the limit of namespaces with a list is read whole", test: testIPAllowlistNamespacesWithListAtLimit},
+		{name: "one past the limit is ErrTooManyLists", test: testIPAllowlistNamespacesWithListPastLimit},
 		{name: "an unknown namespace is ErrNotFound", test: testIPAllowlistUnknownNamespace},
 		{name: "a stale fence is ErrFenced and writes nothing", test: testIPAllowlistStaleFence},
 		{name: "the audit entry joins the chain of the namespace", test: testIPAllowlistAuditEntry},
@@ -287,6 +290,51 @@ func testIPAllowlistNamespacesWithListSkipsEmpty(t *testing.T, s IPAllowlistStor
 	want := []namespace.Name{"beta"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("namespaces with a list = %v, want %v", got, want)
+	}
+}
+
+// setManyLists makes n namespaces that each have a list.
+func setManyLists(t *testing.T, s IPAllowlistStore, n int) {
+	t.Helper()
+
+	for i := range n {
+		ns := newNamespace(t, s, fmt.Sprintf("ns-%04d", i))
+		mustSetIPAllowlist(t, s, ns, []string{"10.0.0.0/8"}, ipAllowlistEntry(ns.Name))
+	}
+}
+
+// testIPAllowlistNamespacesWithListAtLimit checks that a store with exactly
+// ipallow.MaxNamespacesWithList lists returns each name, in name order.
+func testIPAllowlistNamespacesWithListAtLimit(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	setManyLists(t, s, ipallow.MaxNamespacesWithList)
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list at the limit: %v", err)
+	}
+
+	if len(got) != ipallow.MaxNamespacesWithList || !slices.IsSorted(got) {
+		t.Fatalf("namespaces with a list = %d names (sorted: %t), want %d in name order",
+			len(got), slices.IsSorted(got), ipallow.MaxNamespacesWithList)
+	}
+}
+
+// testIPAllowlistNamespacesWithListPastLimit checks that one list past
+// ipallow.MaxNamespacesWithList gives ErrTooManyLists and no names.
+func testIPAllowlistNamespacesWithListPastLimit(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	setManyLists(t, s, ipallow.MaxNamespacesWithList+1)
+
+	got, err := s.NamespacesWithList(t.Context())
+	if !errors.Is(err, ipallow.ErrTooManyLists) {
+		t.Fatalf("list namespaces with a list past the limit: err = %v, want ErrTooManyLists", err)
+	}
+
+	if got != nil {
+		t.Fatalf("namespaces with a list past the limit = %d names, want none", len(got))
 	}
 }
 

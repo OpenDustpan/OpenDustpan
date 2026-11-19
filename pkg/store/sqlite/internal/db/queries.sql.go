@@ -20202,11 +20202,12 @@ SELECT name
 FROM namespaces
 WHERE ip_allowlist <> ''
 ORDER BY name
+LIMIT ?1
 `
 
-// Lists the namespaces that have an IP allowlist.
-func (q *Queries) NamespacesWithList(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, namespacesWithList)
+// Lists the namespaces that have an IP allowlist, at most lim of them.
+func (q *Queries) NamespacesWithList(ctx context.Context, lim int64) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, namespacesWithList, lim)
 	if err != nil {
 		return nil, err
 	}
