@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -54,12 +53,14 @@ func newPKICA(t *testing.T) *pkiCA {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	//nolint:exhaustruct_v5 // A test certificate sets only identity, validity and usage.
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test ca"},
-		NotBefore: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
+	tmpl := new(x509.Certificate)
+	tmpl.SerialNumber = big.NewInt(1)
+	tmpl.Subject.CommonName = "test ca"
+	tmpl.NotBefore = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	tmpl.NotAfter = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+	tmpl.IsCA = true
+	tmpl.BasicConstraintsValid = true
+	tmpl.KeyUsage = x509.KeyUsageCertSign
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -91,12 +92,14 @@ func (ca *pkiCA) leaf(t *testing.T, id string, notBefore, notAfter time.Time) tl
 		t.Fatalf("parse URI: %v", err)
 	}
 
-	//nolint:exhaustruct_v5 // A test certificate sets only identity, validity and usage.
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "workload"}, NotBefore: notBefore,
-		NotAfter: notAfter, URIs: []*url.URL{u}, KeyUsage: x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
+	tmpl := new(x509.Certificate)
+	tmpl.SerialNumber = big.NewInt(2)
+	tmpl.Subject.CommonName = "workload"
+	tmpl.NotBefore = notBefore
+	tmpl.NotAfter = notAfter
+	tmpl.URIs = []*url.URL{u}
+	tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+	tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
