@@ -62,8 +62,10 @@ func TestMissingTokenNamesTheFailedCommand(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases { //nolint:paralleltest // The test sets an environment variable with t.Setenv.
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			var stdout, stderr bytes.Buffer
 
 			err := tc.run(t.Context(), &stdout, &stderr)

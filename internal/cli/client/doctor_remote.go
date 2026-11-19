@@ -171,9 +171,12 @@ func getJSON(ctx context.Context, client *http.Client, endpoint, token string, d
 
 	if resp.StatusCode != http.StatusOK {
 		message := decodeErrorAnswer(resp)
-		_ = resp.Body.Close() //nolint:errcheck // The answer is an error and the body was read as far as it matters.
+		closeErr := resp.Body.Close()
 
-		return fmt.Errorf("%w: %s", ErrBackupRead, answerText(resp.StatusCode, message, "check the server log"))
+		return errors.Join(
+			fmt.Errorf("%w: %s", ErrBackupRead, answerText(resp.StatusCode, message, "check the server log")),
+			closeErr,
+		)
 	}
 
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxClientBodyBytes+1))

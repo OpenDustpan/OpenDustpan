@@ -19,13 +19,19 @@ func TestGetJSONShowsTheMessageOfTheServer(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 
-		_, _ = w.Write([]byte(`{"code":503,"message":"` + message + `"}`)) //nolint:errcheck // A test answer.
+		if _, err := w.Write([]byte(`{"code":503,"message":"` + message + `"}`)); err != nil {
+			t.Errorf("write the test answer: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
 	var doc backupListDocument
 
 	err := getJSON(t.Context(), srv.Client(), srv.URL, "test-token", &doc)
+	if err == nil {
+		t.Fatal("getJSON error = nil, want ErrBackupRead")
+	}
+
 	if !errors.Is(err, ErrBackupRead) {
 		t.Fatalf("getJSON error = %v, want ErrBackupRead", err)
 	}
