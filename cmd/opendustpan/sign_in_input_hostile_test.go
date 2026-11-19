@@ -124,7 +124,8 @@ func TestLDAPSubjectFlagRefusesASpaceItself(t *testing.T) {
 		l.subject = subject
 
 		err := l.checkSubject()
-		if !errors.Is(err, ldapauth.ErrSubjectAttribute) || !strings.Contains(err.Error(), "space at its start") {
+		if err == nil || !errors.Is(err, ldapauth.ErrSubjectAttribute) ||
+			!strings.Contains(err.Error(), "space at its start") {
 			t.Errorf("checkSubject(%q) = %v, want ErrSubjectAttribute about the space", subject, err)
 		}
 	}
