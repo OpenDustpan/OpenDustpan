@@ -412,6 +412,7 @@ const (
 	ErrorCodeTokenNotFound                         ErrorCode = "token.not-found"
 	ErrorCodeTokenOutsideReach                     ErrorCode = "token.outside-reach"
 	ErrorCodeTokenRequiresSignIn                   ErrorCode = "token.requires-sign-in"
+	ErrorCodeTokenUnknownKind                      ErrorCode = "token.unknown-kind"
 	ErrorCodeTokenUnsupported                      ErrorCode = "token.unsupported"
 	ErrorCodeTokenWrongKind                        ErrorCode = "token.wrong-kind"
 	ErrorCodeTriggerCycle                          ErrorCode = "trigger.cycle"

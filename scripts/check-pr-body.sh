@@ -5,6 +5,8 @@
 # The script passes when one line outside a fenced code block matches, case
 # insensitively, one of these forms:
 #   Closes #<digits>, Fixes #<digits>, Resolves #<digits>, Part of #<digits>
+#   Issue: #<digits>, as the first text of a line, with a number and no other
+#   repository name. It links the issue and does not close it.
 #   No issue, or No issue followed by a colon or a dash and a reason
 # GitHub closes an issue when a merged pull request body says "Closes #N", so
 # the body decides whether the issue stays open.
@@ -43,9 +45,16 @@ if printf '%s\n' "$prose" | grep -Eiq '(^|[^[:alnum:]_])(closes|fixes|resolves|p
   exit 0
 fi
 
+# "Issue: #N" counts only at the start of a line, and the number must end at a
+# character that is not a letter, a digit or an underscore. A reference to
+# another repository ("Issue: owner/repo#N") and "Issue: #" do not match.
+if printf '%s\n' "$prose" | grep -Eiq '^[[:space:]]*issue:[[:space:]]*#[0-9]+([^[:alnum:]_]|$)'; then
+  exit 0
+fi
+
 if printf '%s\n' "$prose" | grep -Eiq '^[[:space:]]*no issue[[:space:]]*([:-].*)?[[:space:]]*$'; then
   exit 0
 fi
 
-echo "check-pr-body: the PR body names no issue. Add 'Closes #N', 'Part of #N' or 'No issue: <reason>'." >&2
+echo "check-pr-body: the PR body names no issue. Add 'Closes #N', 'Part of #N', 'Issue: #N' or 'No issue: <reason>'." >&2
 exit 1

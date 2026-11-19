@@ -2309,6 +2309,8 @@ CREATE INDEX sign_in_failures_window_end ON sign_in_failures USING btree (window
 
 CREATE INDEX sign_in_requests_expiry ON sign_in_requests USING btree (expires_at_ms);
 
+CREATE INDEX stack_tags_name_value ON stack_tags USING btree (name, value, stack_id);
+
 CREATE UNIQUE INDEX stacks_id ON stacks USING btree (id);
 
 CREATE INDEX state_versions_workspace_finalized ON state_versions USING btree (workspace_id, finalized_at_ms DESC);

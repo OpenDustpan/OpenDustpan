@@ -124,6 +124,29 @@ func (l *ldapFlags) partial() bool {
 func (f *serveFlags) ldapOptions(
 	getenv func(string) (string, bool), unsetenv func(string) error,
 ) ([]dustpan.Option, error) {
+	providers, err := f.ldapProviders(getenv, unsetenv)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := make([]dustpan.Option, 0, len(providers))
+	for i := range providers {
+		opts = append(opts, dustpan.WithLDAPProvider(providers[i]))
+	}
+
+	if len(opts) == 0 {
+		return nil, nil
+	}
+
+	return opts, nil
+}
+
+// ldapProviders returns the LDAP providers of the serve flags for
+// ldapOptions: one provider when --ldap-url is set, else none. The tests
+// read the bind password of the provider through it.
+func (f *serveFlags) ldapProviders(
+	getenv func(string) (string, bool), unsetenv func(string) error,
+) ([]dustpan.LDAPProvider, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -166,7 +189,7 @@ func (f *serveFlags) ldapOptions(
 		return nil, err
 	}
 
-	return []dustpan.Option{dustpan.WithLDAPProvider(p)}, nil
+	return []dustpan.LDAPProvider{p}, nil
 }
 
 // provider returns the provider of l with the password of the service account

@@ -172,8 +172,8 @@ type Record struct {
 	// AutoApply is true only for the result allow.
 	AutoApply bool           `json:"autoApply"`
 	Controls  []FixedControl `json:"controls"`
-	// BreakGlass is the ID of the audit entry of a break-glass for gates
-	// in error, or empty.
+	// BreakGlass is the ID of the audit entry of a break-glass that this
+	// decision tried, or empty. Result says whether it passed.
 	BreakGlass string `json:"breakGlass"`
 	Result     Result `json:"result"`
 	// Action is the authorization action of the refused call. It is empty

@@ -353,8 +353,10 @@ func startServerLogs(t *testing.T, args ...string) (string, error) {
 
 				return logs.String(), err
 			}
+		case runErr := <-done:
+			t.Fatalf("serve stopped before it listened: %v\n%s", runErr, logs.String())
 		case <-timeout.C:
-			t.Fatal("server did not start in time")
+			t.Fatalf("server did not start in time; logs:\n%s", logs.String())
 		}
 	}
 }

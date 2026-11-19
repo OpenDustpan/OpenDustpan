@@ -17,12 +17,12 @@ import (
 // 400 ms, and a heartbeat goes out at most every 50 ms.
 const beatLease = 200 * time.Millisecond
 
-// pauseFor waits for d or until the test context ends.
-func pauseFor(t *testing.T, d time.Duration) {
+// pauseBeatWait waits for beatWait or until the test context ends.
+func pauseBeatWait(t *testing.T) {
 	t.Helper()
 
 	select {
-	case <-time.After(d):
+	case <-time.After(beatWait):
 	case <-t.Context().Done():
 	}
 }
@@ -97,7 +97,7 @@ func TestNoWorkerRefusesAfterTwoLeasesAndNotBefore(t *testing.T) {
 		t.Fatalf("start right after the process began: %v, want it admitted", err)
 	}
 
-	pauseFor(t, beatWait)
+	pauseBeatWait(t)
 
 	err := admitStartOf(t, api)
 	if !errors.Is(err, noworker.ErrNoWorker) {
@@ -107,20 +107,23 @@ func TestNoWorkerRefusesAfterTwoLeasesAndNotBefore(t *testing.T) {
 
 // TestBusyWorkerGivesNoRefusal proves that a worker that holds one long job
 // and only renews its claim keeps the gate open, while other work waits
-// unclaimed longer than 2 lease periods. The claim has a long lease: a stall
-// of the test on a loaded machine must not end the claim, because the case
-// tests the heartbeat and not the end of a claim.
+// unclaimed longer than 2 lease periods. The heartbeats run on a clock that
+// the test moves, so a stall of the test on a loaded machine cannot open a
+// gap between two renewals. The test starts both operations first and then
+// creates the clock at the real time, because the store stamps each operation
+// with its own clock. A stall of the test cannot make the waiting operation
+// younger than the clock.
 func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 	t.Parallel()
 
 	st := openTestStore(t)
 	store := st.DurableOperations()
 	startOldOperation(t, store)
+	startOldOperation2(t, store)
 
-	api := newTestWatch(store, apiOnly(), beatLease, time.Now)
+	clock := &testClock{mu: sync.Mutex{}, now: time.Now().UTC()}
+	api, tracked := clockedWatches(store, clock)
 	api.begin(t.Context())
-
-	_, tracked := workerOf(api)
 
 	claim, err := tracked.Claim(t.Context(), durable.ClaimRequest{
 		Owner: "worker-1", Kinds: []durable.Kind{"any"}, Lease: heldLease, MaxVersions: map[durable.Kind]int{"any": 0},
@@ -130,13 +133,11 @@ func TestBusyWorkerGivesNoRefusal(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	startOldOperation2(t, store)
-
 	held := claim.Claim
-	deadline := time.Now().Add(beatWait + beatLease)
+	end := clock.Now().Add(beatWait + beatLease)
 
-	for time.Now().Before(deadline) {
-		pauseFor(t, beatLease/8)
+	for clock.Now().Before(end) {
+		clock.Set(clock.Now().Add(beatLease / 8))
 
 		held, err = tracked.Extend(t.Context(), held, heldLease)
 		if err != nil {
@@ -330,7 +331,7 @@ func TestWorkerThatStopsIsMissedAfterTwoLeases(t *testing.T) {
 		t.Fatalf("start right after a heartbeat: %v, want it admitted", err)
 	}
 
-	pauseFor(t, beatWait)
+	pauseBeatWait(t)
 
 	if err := admitStartOf(t, api); !errors.Is(err, noworker.ErrNoWorker) {
 		t.Fatalf("start 2 leases after the last heartbeat: %v, want ErrNoWorker", err)
@@ -375,7 +376,7 @@ func TestSkewedProcessClockMovesNoResult(t *testing.T) {
 				t.Fatalf("fresh operation, report = %+v, want a live worker and an age far below the skew", report)
 			}
 
-			pauseFor(t, beatWait)
+			pauseBeatWait(t)
 			claimAttempt(t, tracked)
 
 			api.mu.Lock()
@@ -557,7 +558,7 @@ func TestWorkerLeaseDecidesWhenAWorkerIsAbsent(t *testing.T) {
 
 			// The worker beat once and is silent from now on. The wait is past
 			// 2 periods of the shorter lease and far below 2 of the longer one.
-			pauseFor(t, beatWait)
+			pauseBeatWait(t)
 
 			err := admitStartOf(t, api)
 			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {

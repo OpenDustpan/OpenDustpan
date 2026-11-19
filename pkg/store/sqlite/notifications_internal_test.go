@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/notify"
+	"opendustpan.org/opendustpan/pkg/store/internal/notifystore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -132,6 +133,24 @@ func TestCheckStagedNotificationsRefusesBadRows(t *testing.T) {
 			},
 			"names a notification of another scope",
 		},
+		{
+			"a delivered delivery with no stop time", false,
+			[]string{`INSERT INTO notification_deliveries ` + deliveryColumns + `
+					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'delivered', 1, 1, 0, 1, '', 0, '', 0, 1)`},
+			"staged delivery",
+		},
+		{
+			"a abandoned delivery with no stop time", false,
+			[]string{`INSERT INTO notification_deliveries ` + deliveryColumns + `
+					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'abandoned', 1, 1, 0, 1, '', 0, '', 0, 1)`},
+			"staged delivery",
+		},
+		{
+			"a skipped delivery with no stop time", false,
+			[]string{`INSERT INTO notification_deliveries ` + deliveryColumns + `
+					VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'skipped', 1, 1, 0, 1, '', 0, '', 0, 1)`},
+			"staged delivery",
+		},
 	}
 
 	for _, tc := range tests {
@@ -173,7 +192,7 @@ func TestNotificationDeliveriesRefuseNegativeRedeliveries(t *testing.T) {
 }
 
 // TestNotificationDeliveryRedeliverPredicates checks the predicates of the
-// update on their own, as if two redelivers had read the row at the same time.
+// update of the adapter on their own, as if two redelivers had read the row at the same time.
 func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
 	t.Parallel()
 
@@ -201,9 +220,9 @@ func TestNotificationDeliveryRedeliverPredicates(t *testing.T) {
 				t.Fatalf("plant the delivery: %v", err)
 			}
 
-			n, err := s.queries.RedeliverNotificationDelivery(t.Context(), db.RedeliverNotificationDeliveryParams{
-				ID: "dlv-1", Scope: "@server", MaxRedeliveries: notify.MaxAttempts,
-			})
+			// The helper of the adapter holds the limit argument, so a change of
+			// that argument to MaxAttempts+1 fails the "at the limit" case.
+			n, err := redeliverRow(t.Context(), s.queries, "dlv-1", "@server")
 			if err != nil {
 				t.Fatalf("redeliver the delivery: %v", err)
 			}
@@ -277,5 +296,90 @@ func TestAppendNotificationsRefusesAnotherScope(t *testing.T) {
 	got, afterErr = s.Notifications().After(t.Context(), "acme", 0, 10)
 	if afterErr != nil || len(got) != 0 {
 		t.Fatalf("After in acme = %v (%v), want none", got, afterErr)
+	}
+}
+
+// TestCheckRedeliverRefusesNoStopTime sends a stopped delivery with no stop
+// time straight to the redeliver check, as if Delivery.Validate had passed it.
+// Without the check, the wait starts at year 1 and a person sends the delivery
+// again at once.
+func TestCheckRedeliverRefusesNoStopTime(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []notify.DeliveryState{notify.DeliveryDone, notify.DeliveryAbandoned, notify.DeliverySkipped} {
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+
+			d := notify.Delivery{
+				ID:           "dlv-1",
+				Notification: "ntf-1",
+				Scope:        "acme",
+				Subscription: "sub-1",
+				Sink:         "snk-1",
+				Contact:      "",
+				Principal:    "alice",
+				State:        state,
+				Attempts:     1,
+				CreatedAt:    time.UnixMilli(1),
+				Redeliveries: 0,
+				NextAt:       time.Time{},
+				LastError:    "",
+				DeliveredAt:  time.Time{},
+				Owner:        "",
+				LeaseUntil:   time.Time{},
+				Version:      1,
+			}
+
+			err := checkRedeliver(d, time.UnixMilli(1_700_000_000_000))
+			if !errors.Is(err, notifystore.ErrCorrupt) {
+				t.Fatalf("checkRedeliver = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+// TestRecordNotificationAttemptNeedsStopTime calls the update on its own, as
+// if the checks of Attempt.Validate had failed. A stopped state with
+// delivered_at_ms 0 changes no row.
+func TestRecordNotificationAttemptNeedsStopTime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		state       string
+		deliveredAt int64
+		want        int64
+	}{
+		{"a delivered state with no time", "delivered", 0, 0},
+		{"an abandoned state with no time", "abandoned", 0, 0},
+		{"a skipped state with no time", "skipped", 0, 0},
+		{"an abandoned state with a time", "abandoned", 5, 1},
+		{"a pending state with no time", "pending", 0, 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openInternalTemplated(t)
+
+			_, err := s.conn.ExecContext(t.Context(), `INSERT INTO notification_deliveries `+deliveryColumns+`
+				VALUES ('dlv-1', '@server', 'ntf-1', '', '', 'a@example.com', 'alice', 'pending', 0, 1, 0, 1, '', 0, 'o', 100, 1)`)
+			if err != nil {
+				t.Fatalf("plant the delivery: %v", err)
+			}
+
+			n, err := s.queries.RecordNotificationAttempt(t.Context(), db.RecordNotificationAttemptParams{
+				State: tc.state, Attempts: 1, NextAtMs: 1, LastError: "", DeliveredAtMs: tc.deliveredAt,
+				ID: "dlv-1", Scope: "@server", Owner: "o", Version: 1, NowMs: 50,
+			})
+			if err != nil {
+				t.Fatalf("record the attempt: %v", err)
+			}
+
+			if n != tc.want {
+				t.Fatalf("rows of the record = %d, want %d", n, tc.want)
+			}
+		})
 	}
 }

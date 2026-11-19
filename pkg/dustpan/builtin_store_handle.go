@@ -145,6 +145,12 @@ func newBuiltinStore(parts builtinStoreParts) *BuiltinStore {
 // form fails with an error that names the accepted forms and repeats no part
 // of the value. Any other open failure can name the user, the host and the
 // database, never the password. The caller closes the store.
+//
+// The open runs the schema check of the adapter and sets the kind marker of
+// the installation, with the binary version and the installation kind that
+// the store options give. A store that WithBuiltinStore adopts gets neither
+// check again, so open it with WithStoreBinaryVersion and
+// WithStoreInstallationKind of the binary.
 func OpenStore(ctx context.Context, database string, opts ...StoreOption) (*BuiltinStore, error) {
 	return openStoreConfig(ctx, database, newStoreConfig(opts))
 }

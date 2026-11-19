@@ -88,14 +88,16 @@ func (g Guard) AuthorizeObject(
 // readRefusal maps the result of a read check. A refusal is notFound, except
 // the refusal of an address that the IP allowlist refuses: that one keeps its
 // own 403 code, and it names no object, so it does not tell whether the object
-// exists. Any other error is wrapped with its action name.
+// exists. Any other error is wrapped with its action name. A denied read with
+// no notFound answer keeps its denial: the read never passes when the caller
+// forgot to set Checks.NotFound.
 func readRefusal(action identity.Action, err, notFound error) error {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, ipallow.ErrAddressNotAllowed):
 		return fmt.Errorf("authorize %s: %w", action, err)
-	case errors.Is(err, identity.ErrDenied):
+	case errors.Is(err, identity.ErrDenied) && notFound != nil:
 		return notFound
 	default:
 		return fmt.Errorf("authorize %s: %w", action, err)
