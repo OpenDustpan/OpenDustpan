@@ -429,8 +429,11 @@ func checkGrantIDRefused(t *testing.T, want string, p identity.Principal, ns nam
 
 	if !found || id != "" || !errors.Is(err, access.ErrInvalid) ||
 		!errors.Is(err, access.ErrInvalidDiscoveryGrantID) || ref != "grant:invalid" {
-		t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v and GrantIDRef = %q; want no ID, true, ErrInvalidDiscoveryGrantID, grant:invalid",
-			want, id, found, err, ref)
+		t.Fatalf(
+			"DiscoveryGrantID(%q) = %q, %v, %v and GrantIDRef = %q; "+
+				"want no ID, true, ErrInvalidDiscoveryGrantID, grant:invalid",
+			want, id, found, err, ref,
+		)
 	}
 }
 
