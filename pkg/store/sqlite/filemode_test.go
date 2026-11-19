@@ -42,7 +42,11 @@ func TestOpenMakesOwnerOnlyFiles(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	t.Cleanup(func() { _ = st.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
 
 	for _, name := range []string{db, db + "-wal", db + "-shm", db + "-lock"} {
 		if got := fileMode(t, name); got&0o077 != 0 {
@@ -108,7 +112,9 @@ func requireFileModeRefused(t *testing.T, db, file string, mode os.FileMode, opt
 
 	st, err := sqlite.Open(t.Context(), db, opts...)
 	if st != nil {
-		_ = st.Close() //nolint:errcheck // Test cleanup.
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
 	}
 
 	if !errors.Is(err, sqlite.ErrFileMode) {

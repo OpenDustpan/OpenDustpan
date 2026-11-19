@@ -167,7 +167,9 @@ func TestOpenDatabaseRefusesHostileFiles(t *testing.T) {
 
 			conn, err := openDatabase(t.Context(), db, nil)
 			if conn != nil {
-				_ = conn.Close() //nolint:errcheck // Test cleanup.
+				if closeErr := conn.Close(); closeErr != nil {
+					t.Errorf("close: %v", closeErr)
+				}
 			}
 
 			if !errors.Is(err, ErrFileMode) {
@@ -188,7 +190,11 @@ func TestOpenDatabaseKeepsSidecarFilesOwnerOnly(t *testing.T) {
 		t.Fatalf("openDatabase: %v", err)
 	}
 
-	t.Cleanup(func() { _ = conn.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
 
 	if _, err := conn.ExecContext(t.Context(), "CREATE TABLE t (x INTEGER)"); err != nil {
 		t.Fatalf("create table: %v", err)
@@ -206,19 +212,13 @@ func TestSwapDatabaseRefusesWideStagedFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-
-	st, err := Open(t.Context(), filepath.Join(dir, "dustpan.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-
-	t.Cleanup(func() { _ = st.Close() }) //nolint:errcheck // Test cleanup.
+	st := openTestStore(t, filepath.Join(dir, "dustpan.db"))
 
 	staged := filepath.Join(dir, "staged.db")
 	writeMode(t, staged, 0o644)
 
 	st.mu.Lock()
-	err = st.swapDatabaseLocked(t.Context(), staged)
+	err := st.swapDatabaseLocked(t.Context(), staged)
 	st.mu.Unlock()
 
 	if !errors.Is(err, ErrFileMode) {
@@ -238,12 +238,10 @@ func TestSwapDatabaseRefusesWideStagedFile(t *testing.T) {
 	}
 }
 
-func TestSnapshotPathAndCaptureAreOwnerOnly(t *testing.T) {
+func TestSnapshotPathIsOwnerOnly(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-
-	snap, err := snapshotPath(dir)
+	snap, err := snapshotPath(t.TempDir())
 	if err != nil {
 		t.Fatalf("snapshotPath: %v", err)
 	}
@@ -253,13 +251,12 @@ func TestSnapshotPathAndCaptureAreOwnerOnly(t *testing.T) {
 	if got := modeOf(t, snap); got != databaseFileMode {
 		t.Fatalf("snapshot mode = %04o, want %04o", got, databaseFileMode)
 	}
+}
 
-	st, err := Open(t.Context(), filepath.Join(dir, "dustpan.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+func TestCaptureIsOwnerOnly(t *testing.T) {
+	t.Parallel()
 
-	t.Cleanup(func() { _ = st.Close() }) //nolint:errcheck // Test cleanup.
+	st := openTestStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	captured, err := st.capture(t.Context())
 	if err != nil {
@@ -268,25 +265,47 @@ func TestSnapshotPathAndCaptureAreOwnerOnly(t *testing.T) {
 
 	t.Cleanup(func() { removeSnapshot(captured) })
 
-	if got := modeOf(t, captured); got&groupOtherBits != 0 {
-		t.Fatalf("captured snapshot mode = %04o", got)
-	}
-
 	// A reader of the snapshot makes the -wal and -shm files: they stay owner only.
 	conn, err := sql.Open("sqlite", "file:"+captured+"?_pragma=journal_mode(wal)")
 	if err != nil {
 		t.Fatalf("open snapshot: %v", err)
 	}
 
-	t.Cleanup(func() { _ = conn.Close() }) //nolint:errcheck // Test cleanup.
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
 
-	if err := conn.PingContext(t.Context()); err != nil {
-		t.Fatalf("ping snapshot: %v", err)
+	if pingErr := conn.PingContext(t.Context()); pingErr != nil {
+		t.Fatalf("ping snapshot: %v", pingErr)
 	}
 
 	for _, f := range databaseFiles(captured) {
-		if info, statErr := os.Lstat(f); statErr == nil && info.Mode().Perm()&groupOtherBits != 0 {
-			t.Fatalf("%s mode = %04o", filepath.Base(f), info.Mode().Perm())
+		if _, statErr := os.Lstat(f); statErr != nil {
+			continue
+		}
+
+		if got := modeOf(t, f); got&groupOtherBits != 0 {
+			t.Fatalf("%s mode = %04o", filepath.Base(f), got)
 		}
 	}
+}
+
+// openTestStore opens a store at path and closes it when the test ends.
+func openTestStore(t *testing.T, path string) *Store {
+	t.Helper()
+
+	st, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
+
+	return st
 }

@@ -34,7 +34,9 @@ func TestOpenSQLiteStoreRefusesWideFiles(t *testing.T) {
 
 			st, err := openSQLiteStore(t.Context(), db, newStoreConfig(nil))
 			if st != nil {
-				_ = st.Close() //nolint:errcheck // Test cleanup.
+				if closeErr := st.Close(); closeErr != nil {
+					t.Errorf("close: %v", closeErr)
+				}
 			}
 
 			if !errors.Is(err, sqlite.ErrFileMode) {

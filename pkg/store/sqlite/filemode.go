@@ -93,8 +93,7 @@ func prepareDatabaseFile(path string) error {
 	case err == nil:
 		// The file exists: the check below decides.
 	case errors.Is(err, os.ErrNotExist):
-		//nolint:gosec // The operator names the database path.
-		file, createErr := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, databaseFileMode)
+		file, createErr := os.OpenFile(filepath.Clean(path), os.O_RDWR|os.O_CREATE|os.O_EXCL, databaseFileMode)
 		if createErr != nil && !errors.Is(createErr, os.ErrExist) {
 			return fmt.Errorf("create database file: %w", createErr)
 		}
