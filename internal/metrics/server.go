@@ -189,8 +189,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 	// starts at 1: an alert on 0 fires only after a failed reload.
 	m.reloadOK.Set(1, []string{}...)
 
-	build := reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount)
-	build.Set(1, version)
+	reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount).Set(1, version)
 
 	start := reg.NewGauge("dustpan_process_start_time_seconds", "Process start time in seconds.", nil, 1)
 	start.Set(float64(startedAt.Unix()), []string{}...)
