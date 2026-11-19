@@ -36,13 +36,23 @@ func TestCancelRestoreBeforeTheSwap(t *testing.T) {
 		}
 	}()
 
-	// The gate holds the restore in its stage step, before the swap.
+	// The backup runs over the plain target, so the restore finds a live
+	// pointer and a manifest, and the gate holds it in its stage step,
+	// before the swap. A backup that does not exist fails the restore at its
+	// first read, before the gate, and the cancel then races the worker.
+	plain := newRestoreFixtureOver(t, stores, stores.target)
+
+	backupID := backup.ID("bkp-cancel0000000000002")
+	if _, err := plain.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup %s: %v", backupID, err)
+	}
+
 	fix := newRestoreFixtureOver(
 		t,
 		stores,
 		&gatedRestoreTarget{inner: stores.target, gate: gate, reads: atomic.Int32{}},
 	)
-	doc := startRestore(t, fix.handler, `{"backupID":"bkp-missing000000000001"}`)
+	doc := startRestore(t, fix.handler, `{"backupID":"`+backupID.String()+`"}`)
 
 	for range 2 {
 		status, body := serveRestore(t, fix.handler, http.MethodPost, cancelPath(doc.ID), "")

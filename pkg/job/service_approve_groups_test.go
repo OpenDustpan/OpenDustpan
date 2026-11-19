@@ -16,8 +16,12 @@ var errGroupsDown = errors.New("principal store is down")
 // groups. Like the real reader, it compares IDs and never names.
 type fakeGroups struct {
 	members map[string][]string
-	err     error
-	asked   [][]string
+	// suspended and removed map a subject to the IDs of the groups in which
+	// the membership is not active. Like the real reader, the fake ignores them.
+	suspended map[string][]string
+	removed   map[string][]string
+	err       error
+	asked     [][]string
 }
 
 func (f *fakeGroups) MemberOfAny(_ context.Context, subject string, groupIDs []string) (bool, error) {
@@ -27,7 +31,13 @@ func (f *fakeGroups) MemberOfAny(_ context.Context, subject string, groupIDs []s
 		return false, f.err
 	}
 
-	return slices.ContainsFunc(groupIDs, func(id string) bool { return slices.Contains(f.members[subject], id) }), nil
+	active := func(id string) bool {
+		return slices.Contains(f.members[subject], id) &&
+			!slices.Contains(f.suspended[subject], id) &&
+			!slices.Contains(f.removed[subject], id)
+	}
+
+	return slices.ContainsFunc(groupIDs, active), nil
 }
 
 // groupGate returns a mod that gives the apply gate the groups names with the
@@ -132,7 +142,7 @@ func TestApproveChecksTheGroupsOfTheGate(t *testing.T) {
 func checkGroupCase(t *testing.T, tc *groupCase) {
 	t.Helper()
 
-	reader := &fakeGroups{members: tc.members, err: tc.err, asked: nil}
+	reader := &fakeGroups{members: tc.members, suspended: nil, removed: nil, err: tc.err, asked: nil}
 
 	var port job.GroupReader = reader
 	if tc.nilPort {
@@ -168,5 +178,60 @@ func checkGroupCase(t *testing.T, tc *groupCase) {
 
 	if tc.asked > 0 && !slices.Equal(reader.asked[0], tc.ids) {
 		t.Errorf("reader asked for %v, want the IDs %v of the gate", reader.asked[0], tc.ids)
+	}
+}
+
+// TestApproveRefusesAnInactiveMemberOfTheGroup proves that a member whose
+// membership is suspended or removed cannot approve, and that an active member
+// of the same group can. The reader owns the rule of what is active, so the
+// fake keeps the state of each membership and the approval must follow its
+// answer.
+func TestApproveRefusesAnInactiveMemberOfTheGroup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		suspended map[string][]string
+		removed   map[string][]string
+		want      error
+	}{
+		{"an active member", nil, nil, nil},
+		{"a suspended member", map[string][]string{"carol": {"grp-1"}}, nil, identity.ErrDenied},
+		{"a removed member", nil, map[string][]string{"carol": {"grp-1"}}, identity.ErrDenied},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			members := map[string][]string{"carol": {"grp-1"}}
+			ids := []string{"grp-1"}
+			names := []string{"platform"}
+
+			reader := &fakeGroups{
+				members: members, suspended: tc.suspended, removed: tc.removed, err: nil, asked: nil,
+			}
+
+			r := approveRigWithGroups(t, openPolicy(), reader)
+			r.seed(groupGate(names, ids))
+
+			_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Approve = %v, want %v", err, tc.want)
+			}
+
+			wantChanges := 1
+			if tc.want != nil {
+				wantChanges = 0
+
+				if _, ok := errors.AsType[*job.DeniedError](err); !ok {
+					t.Errorf("Approve = %v, want a *DeniedError that the handler audits", err)
+				}
+			}
+
+			if len(r.store.applies) != wantChanges {
+				t.Errorf("changes = %d, want %d", len(r.store.applies), wantChanges)
+			}
+		})
 	}
 }

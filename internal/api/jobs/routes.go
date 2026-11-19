@@ -314,6 +314,9 @@ func (h *Handler) pathJob(r *http.Request) (namespace.Namespace, job.ID, error) 
 	}
 
 	ns, err := h.namespaces.Get(r.Context(), name)
+	// Defense in depth: writeError maps the raw namespace.ErrNotFound to the
+	// same 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, namespace.ErrNotFound) {
 		return namespace.Namespace{}, "", errNotFound
 	}
@@ -334,6 +337,9 @@ func (h *Handler) pathJob(r *http.Request) (namespace.Namespace, job.ID, error) 
 // gives an error that wraps job.ErrDamaged.
 func (h *Handler) loadTarget(ctx context.Context, ns namespace.Namespace, id job.ID) (target, error) {
 	j, err := h.jobs.Get(ctx, id)
+	// Defense in depth: writeError maps the raw job.ErrNotFound to the same
+	// 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, job.ErrNotFound) {
 		return target{}, errNotFound
 	}

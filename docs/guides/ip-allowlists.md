@@ -231,6 +231,20 @@ deleted in two ways.
 The [security model](../explanation/security-model.md) describes the recovery
 in more detail.
 
+## Limits
+
+A namespace list holds at most 64 entries. The server also reads the
+namespaces that have a list, in one read of at most 1000 namespaces. This
+limit is a [code rule](../reference/code-rules.md#ip-allowlists): no grant or
+setting changes it, and the API does not show it yet.
+
+When more than 1000 namespaces have a list, the read fails with the error
+`ipallow: too many namespaces have an IP allowlist`. The server fails closed:
+it does not cover every object. Once a list check calls the read, the server
+refuses a principal whose scope covers every object on every list while more
+than 1000 namespaces have a list. To end the refusal, delete the lists that you do not
+need until 1000 namespaces or fewer have a list.
+
 ## Errors
 
 | Code | Status | Meaning |
