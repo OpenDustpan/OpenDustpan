@@ -35,7 +35,7 @@ const (
 	// through the GitHub API, which limits the rate of calls.
 	terraformPackageVersion = "6.0.2"
 	// tfeProviderVersion pins the tfe provider of the tfe_outputs steps.
-	tfeProviderVersion = "0.82.0"
+	tfeProviderVersion = e2e.TFEProviderVersion
 	// sharingRulesSkip is the reason of each step that needs the sharing
 	// rules. Remove it in the slice that serves the routes of the step.
 	sharingRulesSkip = "the server has no outputs route and no sharing rules yet; " +

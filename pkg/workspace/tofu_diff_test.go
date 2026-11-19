@@ -115,7 +115,7 @@ func diffStates(
 ) (workspace.StateDiff, error) {
 	t.Helper()
 
-	return workspace.DiffStates(from, to, cursor, size)
+	return workspace.DiffStates(t.Context(), from, to, cursor, size)
 }
 
 // diffStandard returns the diff of the standard states with the test marks.

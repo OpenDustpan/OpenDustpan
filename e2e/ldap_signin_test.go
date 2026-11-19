@@ -169,6 +169,8 @@ func (c ldapClient) checkSession(ctx context.Context, t *testing.T) {
 func setPlainConnections(ctx context.Context, t *testing.T, env *e2e.Env, value string) {
 	t.Helper()
 
+	env.PrepareFreshAdmin(ctx, t)
+
 	read, err := env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
 		Token: env.AdminToken(), Method: http.MethodGet, Path: settingsRoute, ContentType: "", Body: "", IfMatch: "",
 	})

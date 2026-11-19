@@ -92,10 +92,16 @@ type ProviderConfig struct {
 // Binding returns what identifies the people of p, for BindProviders.
 func (p ProviderConfig) Binding() Provider {
 	if p.Mode == ModeOAuth {
-		return Provider{ID: p.ID, Issuer: "", UserinfoURL: p.OAuth.UserinfoURL, SubjectClaim: p.OAuth.SubjectClaim}
+		return Provider{
+			ID:           p.ID,
+			Issuer:       "",
+			UserinfoURL:  p.OAuth.UserinfoURL,
+			SubjectClaim: p.OAuth.SubjectClaim,
+			DirectoryURL: "",
+		}
 	}
 
-	return Provider{ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: ""}
+	return Provider{ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: "", DirectoryURL: ""}
 }
 
 // Validate returns ErrInvalidProvider for a provider that a store must

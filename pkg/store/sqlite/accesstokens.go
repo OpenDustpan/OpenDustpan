@@ -291,6 +291,23 @@ func (s *Store) RevokeToken(ctx context.Context, id string, e audit.Entry) error
 	rev := revocation{kind: maintenance.RevokedToken, target: id, endReason: ""}
 
 	return s.inRevokingTx(ctx, e, rev, func(q *db.Queries) error {
+		// Fail closed: a row of a kind that this version does not know
+		// is not revoked. The revoke answers ErrUnknownKind, the
+		// transaction ends, and the row, the audit log and the
+		// maintenance journal stay as they were.
+		row, err := q.GetAccessToken(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return accesstoken.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select access token: %w", err)
+		}
+
+		if _, err = codec.FromAccessTokenRow(tokenRow(db.ListAccessTokensRow(row))); err != nil {
+			return fmt.Errorf("revoke access token: %w", err)
+		}
+
 		n, err := q.RevokeAccessToken(ctx, db.RevokeAccessTokenParams{RevokedAtMs: codec.Millis(e.At), ID: id})
 		if err != nil {
 			return fmt.Errorf("revoke access token: %w", err)

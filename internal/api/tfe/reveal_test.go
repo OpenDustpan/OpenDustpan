@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -99,7 +100,7 @@ func (r revealWorkspaces) ReadState(
 	sv.SensitiveMarks = stubResourceMarks()
 
 	switch id.String() {
-	case "sv-test123", "sv-encrypted123":
+	case "sv-test123", "sv-encrypted123", "sv-bound123":
 		sv.ID = id
 
 		return sv, nil
@@ -119,6 +120,8 @@ func (r revealWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io
 		return io.NopCloser(strings.NewReader(stubResourceState())), nil
 	case "sv-encrypted123":
 		return io.NopCloser(strings.NewReader(stubEncryptedState())), nil
+	case "sv-bound123":
+		return nil, fmt.Errorf("open state: %w", workspace.ErrStateBound)
 	case "sv-entangled-large123":
 		return io.NopCloser(strings.NewReader(revealEntangledLargeState())), nil
 	case "sv-marks-large123":
@@ -256,7 +259,12 @@ func revealResultPath(t *testing.T) string {
 	var masked []string
 
 	for _, address := range stubResourceAddresses() {
-		detail, err := workspace.ReadStateResource([]byte(stubResourceState()), stubResourceMarks(), address)
+		detail, err := workspace.ReadStateResource(
+			t.Context(),
+			[]byte(stubResourceState()),
+			stubResourceMarks(),
+			address,
+		)
 		if err != nil {
 			t.Fatalf("masked read of %s: %v", address, err)
 		}
@@ -1002,4 +1010,48 @@ func checkRevealRefusal(t *testing.T, tc revealFresh, rec *httptest.ResponseReco
 // stubResourceAddresses names the resource instances of the stub state.
 func stubResourceAddresses() []string {
 	return []string{"terraform_data.smoke", "random_password.pw"}
+}
+
+// TestRevealPastTheBoundAnswers413AndLogs proves that a reveal on a state past
+// the bound answers 413 with no value, and that the server logs one warning
+// with the state version and no value of the state. The store of the test
+// answers the bound, so only the handler can write the log.
+func TestRevealPastTheBoundAnswers413AndLogs(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	handler := newRevealHandler(
+		t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, entries, nil, logger,
+	)
+
+	status, _, body := sendReveal(
+		t, handler, "/api/v2/state-versions/sv-bound123/actions/reveal",
+		revealBody(t, "/resources/0/instances/0/attributes/token"),
+	)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("reveal past the bound answers %d, want 413 (%s)", status, body)
+	}
+
+	line := logs.String()
+	if !strings.Contains(line, `"msg":"state is too deep or too large for a masked read"`) ||
+		!strings.Contains(line, `"state_version":"sv-bound123"`) || !strings.Contains(line, `"level":"WARN"`) {
+		t.Fatalf("log misses the warning of the bound: %q", line)
+	}
+
+	if strings.Contains(line+body, "s3cr3t") {
+		t.Fatalf("log or body holds the value: %q %q", line, body)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 1 || entries.entries[0].Outcome != audit.OutcomeFailure ||
+		entries.entries[0].Kind != audit.KindReveal || entries.entries[0].ValuePath != "" {
+		t.Fatalf("entries = %+v, want one failure entry of the kind reveal with no path", entries.entries)
+	}
 }

@@ -61,72 +61,72 @@ func internalTemplate() (string, error) {
 
 // copyInternalTemplate copies the migrated empty database to dst, with its
 // write-ahead log and shared memory files when present.
-func copyInternalTemplate(t *testing.T, dst string) {
-	t.Helper()
+func copyInternalTemplate(tb testing.TB, dst string) {
+	tb.Helper()
 
 	src, err := internalTemplate()
 	if err != nil {
-		t.Fatalf("build store template: %v", err)
+		tb.Fatalf("build store template: %v", err)
 	}
 
-	copyInternalFile(t, src, dst)
+	copyInternalFile(tb, src, dst)
 
 	for _, ext := range []string{"-wal", "-shm"} {
 		if _, statErr := os.Stat(src + ext); statErr == nil {
-			copyInternalFile(t, src+ext, dst+ext)
+			copyInternalFile(tb, src+ext, dst+ext)
 		}
 	}
 }
 
 // copyInternalFile copies one file from src to dst.
-func copyInternalFile(t *testing.T, src, dst string) {
-	t.Helper()
+func copyInternalFile(tb testing.TB, src, dst string) {
+	tb.Helper()
 
 	in, err := os.Open(src) //nolint:gosec // Test copies its own template file to a temporary path.
 	if err != nil {
-		t.Fatalf("open store template: %v", err)
+		tb.Fatalf("open store template: %v", err)
 	}
 
 	defer func() {
 		if closeErr := in.Close(); closeErr != nil {
-			t.Errorf("close store template: %v", closeErr)
+			tb.Errorf("close store template: %v", closeErr)
 		}
 	}()
 
 	//nolint:gosec // Test copies its own template file to a temporary path.
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		t.Fatalf("create store copy: %v", err)
+		tb.Fatalf("create store copy: %v", err)
 	}
 
 	defer func() {
 		if closeErr := out.Close(); closeErr != nil {
-			t.Errorf("close store copy: %v", closeErr)
+			tb.Errorf("close store copy: %v", closeErr)
 		}
 	}()
 
 	if _, err := io.Copy(out, in); err != nil {
-		t.Fatalf("copy store template: %v", err)
+		tb.Fatalf("copy store template: %v", err)
 	}
 }
 
 // openInternalTemplated opens a fresh store from the template copy in a
 // temporary directory.
-func openInternalTemplated(t *testing.T) *Store {
-	t.Helper()
+func openInternalTemplated(tb testing.TB) *Store {
+	tb.Helper()
 
-	path := filepath.Join(t.TempDir(), "dustpan.db")
+	path := filepath.Join(tb.TempDir(), "dustpan.db")
 
-	copyInternalTemplate(t, path)
+	copyInternalTemplate(tb, path)
 
-	s, err := Open(t.Context(), path)
+	s, err := Open(tb.Context(), path)
 	if err != nil {
-		t.Fatalf("open store: %v", err)
+		tb.Fatalf("open store: %v", err)
 	}
 
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
+			tb.Errorf("close store: %v", err)
 		}
 	})
 

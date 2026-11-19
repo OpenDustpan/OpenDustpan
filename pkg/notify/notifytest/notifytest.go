@@ -72,6 +72,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"record after a later claim is ErrConflict", testRecordConflict},
 		{"redeliver makes a delivery pending again", testRedeliver},
 		{"redeliver waits after a delivery stops", testRedeliverWait},
+		{"redeliver waits after a delivery is abandoned", testRedeliverWaitAbandoned},
+		{"record refuses a stopped delivery with no delivered time", testRecordNeedsDeliveredAt},
 		{"redeliver stops at its limit", testRedeliverLimit},
 		{"redeliver follows the retry schedule", testRedeliverSchedule},
 		{"redeliver counts manual redeliveries only", testRedeliveriesCount},
@@ -787,6 +789,52 @@ func testRedeliverWait(t *testing.T, h Harness) {
 			checkRedeliverAccepted(t, h, fence, tc.id, tc.at)
 		})
 	}
+}
+
+// testRedeliverWaitAbandoned checks that the wait before a redeliver also
+// applies to a delivery that the dispatcher abandons.
+func testRedeliverWaitAbandoned(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+	abandon(t, h, fence, shop)
+
+	if got := mustDelivery(t, h, "dlv-1"); got.DeliveredAt.IsZero() {
+		t.Fatalf("abandoned delivery = %+v, want a delivered time", got)
+	}
+
+	checkRedeliverTooSoon(t, h, fence, "dlv-1", now().Add(notify.RetryWait(1)-time.Millisecond))
+	checkRedeliverAccepted(t, h, fence, "dlv-1", now().Add(notify.RetryWait(1)))
+}
+
+// testRecordNeedsDeliveredAt checks that Record refuses each stopped state
+// with no delivered time, and changes no row.
+func testRecordNeedsDeliveredAt(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	subscribe(t, h, fence)
+	enqueue(t, h, fence, delivery("dlv-1", "ntf-1", now()))
+
+	got := claim(t, h, fence, now(), 1)
+	if len(got) != 1 {
+		t.Fatalf("Claim = %s, want one", ids(got))
+	}
+
+	before := mustDelivery(t, h, "dlv-1")
+
+	for _, state := range []notify.DeliveryState{notify.DeliveryAbandoned, notify.DeliveryDone, notify.DeliverySkipped} {
+		a := attempt(got[0], now())
+		a.State, a.DeliveredAt = state, time.Time{}
+
+		if err := h.Deliveries.Record(t.Context(), fence, a); !errors.Is(err, notify.ErrInvalid) {
+			t.Fatalf("Record %s with no delivered time: err = %v, want ErrInvalid", state, err)
+		}
+	}
+
+	checkDeliveryUnchanged(t, mustDelivery(t, h, "dlv-1"), before)
 }
 
 // checkRedeliverTooSoon checks a redeliver of id at the time at that the wait
