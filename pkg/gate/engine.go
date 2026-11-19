@@ -128,6 +128,12 @@ type Engine interface {
 	// guard refuses a change that the text could make it lift. It returns
 	// nil for any other text, which Check then refuses with a diagnostic.
 	CheckLimitMembership(ctx context.Context, text string) error
+	// LimitGroupNames returns the name of each group that the text of an
+	// access limit names, each name once, sorted. It returns an error that
+	// wraps ErrLimitMembership for a text whose membership test of principal
+	// names a value that is not a group, and ErrInvalid for a text that
+	// does not parse as one policy.
+	LimitGroupNames(ctx context.Context, text string) ([]string, error)
 	// Evaluate evaluates set for each request, and returns one answer for
 	// each request in request order. An error of one policy, also a policy
 	// that does not compile, is a diagnostic of each answer, never an error

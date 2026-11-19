@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -103,6 +104,20 @@ func (*fakeEngine) Version() string { return "fake/1" }
 
 func (f *fakeEngine) CheckLimitMembership(context.Context, string) error {
 	return f.membershipErr
+}
+
+var fakeGroupLiteral = regexp.MustCompile(`Group::"([^"]*)"`)
+
+// LimitGroupNames returns each name in a Group::"name" literal of text.
+func (*fakeEngine) LimitGroupNames(_ context.Context, text string) ([]string, error) {
+	matches := fakeGroupLiteral.FindAllStringSubmatch(text, -1)
+	names := make([]string, 0, len(matches))
+
+	for _, m := range matches {
+		names = append(names, m[1])
+	}
+
+	return names, nil
 }
 
 func (f *fakeEngine) Check(_ context.Context, schema gate.Schema, ps []gate.Policy) ([]gate.Diagnostic, error) {

@@ -66,6 +66,11 @@ var (
 	// such a text names, so it refuses an access limit at save and refuses
 	// a change of the members of a group at check time.
 	ErrLimitMembership = errors.New("a membership test of principal can name only a group or a set of groups")
+	// ErrLimitGroupName reports an access limit whose text names a group that
+	// does not exist, or that names a group in another case than the stored
+	// name of the group. A limit that matches the name by case matches no
+	// one, so a limit that forbids members of the group would forbid no one.
+	ErrLimitGroupName = errors.New("an access limit names a group that does not exist")
 	// ErrLimitGroupReach reports an access limit whose text names a group
 	// that its author may not manage. The save refuses it, because the
 	// group guard would then let only a site administrator change the
@@ -103,6 +108,7 @@ func codes() []errorCode {
 		{ErrAuthorApproval, "gate.author-approval"},
 		{ErrRuleFailed, "gate.rule-failed"},
 		{ErrFinal, "gate.final"},
+		{ErrLimitGroupName, "gate.limit-group-name"},
 		{ErrInvalid, "gate.invalid"},
 		{ErrLimit, "gate.limit"},
 		{ErrLimitGroupReach, "gate.limit-group-reach"},

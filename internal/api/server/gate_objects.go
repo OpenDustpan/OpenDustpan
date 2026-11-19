@@ -223,6 +223,9 @@ type accessLimitBody struct {
 	ID      string `json:"id,omitempty"`
 	Policy  string `json:"policy"`
 	Version int64  `json:"version,omitempty"`
+	// StaleGroups holds the group names of the policy that no group has now
+	// in the same case. A read sets it, and a write ignores it.
+	StaleGroups []string `json:"staleGroups,omitempty"`
 }
 
 // accessLimitListBody is the answer of the list route of the access limits.
@@ -243,8 +246,8 @@ func gateOf(g gate.Gate) gateBody {
 	}
 }
 
-func accessLimitOf(l gate.AccessLimit) accessLimitBody {
-	return accessLimitBody{ID: string(l.ID), Policy: l.Policy, Version: l.Version}
+func accessLimitOf(l gate.AccessLimit, stale []string) accessLimitBody {
+	return accessLimitBody{ID: string(l.ID), Policy: l.Policy, Version: l.Version, StaleGroups: stale}
 }
 
 // gateScopeOf returns the scope that the path names: the namespace of obj, or
@@ -481,7 +484,8 @@ func (h *Handler) listAccessLimits(
 
 		out := accessLimitListBody{AccessLimits: make([]accessLimitBody, 0, len(limits))}
 		for i := range limits {
-			out.AccessLimits = append(out.AccessLimits, accessLimitOf(limits[i]))
+			stale := h.gates.StaleGroups(ctx, limits[i].Policy)
+			out.AccessLimits = append(out.AccessLimits, accessLimitOf(limits[i], stale))
 		}
 
 		return out, nil
@@ -509,7 +513,7 @@ func (h *Handler) readAccessLimit(
 	}
 
 	w.Header().Set("ETag", etag(l.Version))
-	h.writeJSON(ctx, w, http.StatusOK, accessLimitOf(l))
+	h.writeJSON(ctx, w, http.StatusOK, accessLimitOf(l, h.gates.StaleGroups(ctx, l.Policy)))
 }
 
 // writeAccessLimit serves PUT {scope}/access-limits/{id}. The version rules
@@ -578,7 +582,7 @@ func (h *Handler) writeAccessLimit(
 	}
 
 	w.Header().Set("ETag", etag(stored.Version))
-	h.writeJSON(ctx, w, http.StatusOK, accessLimitOf(stored))
+	h.writeJSON(ctx, w, http.StatusOK, accessLimitOf(stored, nil))
 }
 
 // limitGroupReach checks that p may manage the groups of the installation,

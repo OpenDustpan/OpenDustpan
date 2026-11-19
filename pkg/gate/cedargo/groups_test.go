@@ -449,3 +449,28 @@ func TestLimitGroupDirectionsErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestLimitGroupNames checks that the engine lists each group name once, in
+// the case of the text, and refuses a text that names no group.
+func TestLimitGroupNames(t *testing.T) {
+	t.Parallel()
+
+	e := cedargo.New()
+	text := `forbid (principal in OpenDustpan::Group::"sre", action, resource) ` +
+		`unless { principal in [OpenDustpan::Group::"SRE", OpenDustpan::Group::"sre"] };`
+
+	got, err := e.LimitGroupNames(t.Context(), text)
+	if err != nil || len(got) != 2 || got[0] != "SRE" || got[1] != "sre" {
+		t.Errorf("LimitGroupNames() = %v, %v; want [SRE sre]", got, err)
+	}
+
+	_, err = e.LimitGroupNames(t.Context(),
+		`forbid (principal, action, resource) when { principal in resource.owners };`)
+	if !errors.Is(err, gate.ErrLimitMembership) {
+		t.Errorf("LimitGroupNames(no group) = %v, want ErrLimitMembership", err)
+	}
+
+	if _, err = e.LimitGroupNames(t.Context(), "forbid ("); !errors.Is(err, gate.ErrInvalid) {
+		t.Errorf("LimitGroupNames(bad text) = %v, want ErrInvalid", err)
+	}
+}

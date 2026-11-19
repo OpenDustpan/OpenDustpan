@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -175,6 +176,75 @@ func (s *ConfigService) AccessLimit(ctx context.Context, scope Scope, id ID) (Ac
 	return l, nil
 }
 
+// StaleGroups returns the group names that the policy of an access limit names
+// and that no group has now, in exactly that case. A group that someone
+// deleted or renamed after the save makes its name match no one. It returns
+// none when it cannot read the names or the groups: a read of a limit does not
+// fail for this check, and the save checks the names again.
+func (s *ConfigService) StaleGroups(ctx context.Context, policy string) []string {
+	if s.engine == nil {
+		return nil
+	}
+
+	names, err := s.engine.LimitGroupNames(ctx, policy)
+	if err != nil {
+		return nil
+	}
+
+	stale := make([]string, 0, len(names))
+
+	for _, name := range names {
+		if err := s.checkLimitGroup(ctx, name); err != nil {
+			if errors.Is(err, ErrLimitGroupName) {
+				stale = append(stale, name)
+			}
+		}
+	}
+
+	if len(stale) == 0 {
+		return nil
+	}
+
+	return stale
+}
+
+// checkLimitGroup returns an error that wraps ErrLimitGroupName when no group
+// is called name in exactly that case. A name in another case than the
+// stored name matches no one in the policy engine, so it counts as missing.
+func (s *ConfigService) checkLimitGroup(ctx context.Context, name string) error {
+	ref, err := s.groups.ResolveGroup(ctx, name)
+
+	switch {
+	case errors.Is(err, ErrInvalid), errors.Is(err, ErrNotFound):
+		return fmt.Errorf("%w: the group %q does not exist: make the group first", ErrLimitGroupName, name)
+	case err != nil:
+		return fmt.Errorf("read the group %q: %w", name, err)
+	case ref.Name != name:
+		return fmt.Errorf("%w: the group %q is called %q: write the name in the same case",
+			ErrLimitGroupName, name, ref.Name)
+	default:
+		return nil
+	}
+}
+
+// checkLimitGroups checks each group name that the policy of l names. It
+// returns an error that wraps ErrLimitGroupName for the first name that no
+// group has in exactly that case.
+func (s *ConfigService) checkLimitGroups(ctx context.Context, l AccessLimit) error {
+	names, err := s.engine.LimitGroupNames(ctx, l.Policy)
+	if err != nil {
+		return fmt.Errorf("check %s: %w", l.PolicyID(), err)
+	}
+
+	for _, name := range names {
+		if err := s.checkLimitGroup(ctx, name); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // PutAccessLimit checks l with the engine, stores it at l.Scope and returns
 // it with its new version. The version rules and the entry follow PutGate.
 // It returns ErrInvalid for a limit that is not valid or that the engine
@@ -191,6 +261,12 @@ func (s *ConfigService) PutAccessLimit(
 	}
 
 	if err := s.checkPolicy(ctx, Schema{Version: accessSchema(), PathSets: nil}, accessLimitPolicy(l)); err != nil {
+		return AccessLimit{}, err
+	}
+
+	// The names are checked after the policy check: a text that the engine
+	// refuses gets its own diagnostic first.
+	if err := s.checkLimitGroups(ctx, l); err != nil {
 		return AccessLimit{}, err
 	}
 

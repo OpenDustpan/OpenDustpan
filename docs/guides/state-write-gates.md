@@ -197,6 +197,13 @@ with `400` and the code `gate.limit-membership`, for example `principal in
 resource.owners`. The server cannot check a change of the members of a group
 against such a limit, so it refuses to store one.
 
+The group name in a limit must be the name of a group that exists, in the same
+case as the stored name. The save refuses a name that no group has, and a name
+that differs from a stored name only in case, with `422` and the code
+`gate.limit-group-name`. A limit with a name in another case matches no one.
+When someone deletes or renames a group after the save, the read of the limit
+lists that name in `staleGroups`. Such a limit forbids no one until you fix it.
+
 A limit can name a group only when its author may manage groups with
 `server:manage-groups`, or is the bootstrap administrator.
 

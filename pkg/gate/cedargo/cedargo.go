@@ -131,6 +131,31 @@ func (e *Engine) CheckLimitMembership(ctx context.Context, text string) error {
 	return nil
 }
 
+// LimitGroupNames implements gate.Engine.
+func (e *Engine) LimitGroupNames(ctx context.Context, text string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("read the group names of an access limit: %w", err)
+	}
+
+	directions, err := LimitGroupDirections(text)
+	if err != nil {
+		if errors.Is(err, gate.ErrLimitMembership) {
+			return nil, err
+		}
+
+		return nil, fmt.Errorf("%w: read the group names of an access limit: %w", gate.ErrInvalid, err)
+	}
+
+	names := make([]string, 0, len(directions))
+	for name := range directions {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	return names, nil
+}
+
 // Evaluate implements gate.Engine.
 func (e *Engine) Evaluate(ctx context.Context, set gate.PolicySet, requests []gate.Request) ([]gate.Answer, error) {
 	if err := ctx.Err(); err != nil {

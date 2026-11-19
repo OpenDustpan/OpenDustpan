@@ -97,6 +97,12 @@
           "policy": {
             "type": "string"
           },
+          "staleGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "version": {
             "format": "int64",
             "type": "integer"
@@ -2388,6 +2394,7 @@
           "gate.final",
           "gate.invalid",
           "gate.limit",
+          "gate.limit-group-name",
           "gate.limit-group-reach",
           "gate.limit-membership",
           "gate.limited",

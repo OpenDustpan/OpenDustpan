@@ -77,6 +77,9 @@ type AccessLimitObjects interface {
 	PutAccessLimit(ctx context.Context, l gate.AccessLimit, prev int64, e audit.Entry) (gate.AccessLimit, error)
 	// DeleteAccessLimit removes the access limit ref at its version.
 	DeleteAccessLimit(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error
+	// StaleGroups returns the group names that the policy names and that no
+	// group has now, in exactly that case.
+	StaleGroups(ctx context.Context, policy string) []string
 }
 
 // maxGateConfigBodyBytes bounds the body of an approval default or an
@@ -670,7 +673,8 @@ func classifyGateConfig(err error) (failure, bool) {
 		return classifyApprovers(err)
 	case errors.Is(err, gate.ErrLimit):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateLimit), true
-	case errors.Is(err, gate.ErrLimitGroupReach), errors.Is(err, gate.ErrLimitMembership):
+	case errors.Is(err, gate.ErrLimitGroupName), errors.Is(err, gate.ErrLimitGroupReach),
+		errors.Is(err, gate.ErrLimitMembership):
 		return classifyGateLimitMembership(err)
 	case errors.Is(err, gate.ErrInvalid):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateInvalid), true
@@ -685,6 +689,10 @@ func classifyGateConfig(err error) (failure, bool) {
 // classifyGateLimitMembership maps the refusal of the group names of an
 // access limit to its status and its code.
 func classifyGateLimitMembership(err error) (failure, bool) {
+	if errors.Is(err, gate.ErrLimitGroupName) {
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateLimitGroupName), true
+	}
+
 	if errors.Is(err, gate.ErrLimitGroupReach) {
 		return failCoded(http.StatusForbidden, gate.ErrLimitGroupReach.Error(), errcode.GateLimitGroupReach), true
 	}
