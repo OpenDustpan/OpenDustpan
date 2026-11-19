@@ -178,7 +178,7 @@ code `placement.unavailable`.
 ### A unit in no collection
 
 A stack or a workspace that is in no collection takes no new write. This holds
-for a stack that was made before collections existed, or that came back from an
+for a stack from before collections existed, or a stack that came back from an
 old backup. The server refuses these writes with `409` and the code
 `unit.no-collection`:
 
