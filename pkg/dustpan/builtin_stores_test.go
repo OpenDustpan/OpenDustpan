@@ -666,3 +666,55 @@ func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 		t.Fatalf("close the server: %v", closeErr)
 	}
 }
+
+// TestWithOpenStoreNil proves that NewServer refuses a nil store of either
+// dialect and names the option.
+func TestWithOpenStoreNil(t *testing.T) {
+	t.Parallel()
+
+	for name, opt := range map[string]dustpan.Option{
+		"sqlite":   dustpan.WithOpenSQLiteStore(nil),
+		"postgres": dustpan.WithOpenPostgresStore(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := dustpan.NewServer(opt)
+			if err == nil || !strings.Contains(err.Error(), "WithBuiltinStore") {
+				t.Fatalf("NewServer error = %v, want the nil store error", err)
+			}
+		})
+	}
+}
+
+// TestWithOpenSQLiteStoreLeavesTheStoreOpen proves that a store that the
+// caller opened gets the ports of the built-in store, and that Close of the
+// server leaves it open.
+func TestWithOpenSQLiteStoreLeavesTheStoreOpen(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+
+	opts := builtinServerOptions(t)
+	opts = append(opts, dustpan.WithOpenSQLiteStore(st))
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	if closeErr := srv.Close(); closeErr != nil {
+		t.Fatalf("close the server: %v", closeErr)
+	}
+
+	if _, readErr := st.GetNamespace(t.Context(), "acme"); !errors.Is(readErr, namespace.ErrNotFound) {
+		t.Fatalf("read through the store after Close = %v, want the store to answer", readErr)
+	}
+
+	if closeErr := st.Close(); closeErr != nil {
+		t.Fatalf("close the store: %v", closeErr)
+	}
+}

@@ -9,25 +9,11 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
-
-// sinkStoreOptions returns the option that gives the in-process server the
-// notification sink store of st.
-func sinkStoreOptions(st serverStore) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
-	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
-	default:
-		return nil
-	}
-}
 
 // errDeliverySeam reports a delivery that the harness cannot store.
 var errDeliverySeam = errors.New("a seeded delivery needs the in-process server")

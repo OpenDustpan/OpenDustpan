@@ -189,14 +189,31 @@ func openSQLiteStore(ctx context.Context, path string, config storeConfig) (*Bui
 		return nil, fmt.Errorf("open sqlite store: %w", err)
 	}
 
+	return sqliteBuiltinStore(st, st.Close), nil
+}
+
+// sqliteBuiltinStore returns the handle of st. closeFn closes st.
+func sqliteBuiltinStore(st *sqlite.Store, closeFn func() error) *BuiltinStore {
 	return newBuiltinStore(builtinStoreParts{
 		ports:                 st,
 		options:               func(cfg *settings) []Option { return sqliteStoreOptions(cfg, st) },
 		settingStore:          st.SettingStore(),
 		settingDeclarations:   nil,
 		minimumBinaryVersions: minimumBinaryVersionsOf(st),
-		close:                 st.Close,
-	}), nil
+		close:                 closeFn,
+	})
+}
+
+// postgresBuiltinStore returns the handle of st. closeFn closes st.
+func postgresBuiltinStore(st *postgres.Store, closeFn func() error) *BuiltinStore {
+	return newBuiltinStore(builtinStoreParts{
+		ports:                 st,
+		options:               func(cfg *settings) []Option { return postgresStoreOptions(cfg, st) },
+		settingStore:          st.SettingStore(),
+		settingDeclarations:   postgres.SettingDeclarations(),
+		minimumBinaryVersions: minimumBinaryVersionsOf(st),
+		close:                 closeFn,
+	})
 }
 
 // openPostgresStore opens the PostgreSQL store at dsn. It refuses a dsn of
@@ -215,17 +232,10 @@ func openPostgresStore(ctx context.Context, dsn string, config storeConfig) (*Bu
 
 	logFailoverSettings(ctx, config.loggerValue(), st.FailoverSettings())
 
-	return newBuiltinStore(builtinStoreParts{
-		ports:                 st,
-		options:               func(cfg *settings) []Option { return postgresStoreOptions(cfg, st) },
-		settingStore:          st.SettingStore(),
-		settingDeclarations:   postgres.SettingDeclarations(),
-		minimumBinaryVersions: minimumBinaryVersionsOf(st),
-		close: func() error {
-			st.CloseContext(context.WithoutCancel(ctx))
+	return postgresBuiltinStore(st, func() error {
+		st.CloseContext(context.WithoutCancel(ctx))
 
-			return nil
-		},
+		return nil
 	}), nil
 }
 

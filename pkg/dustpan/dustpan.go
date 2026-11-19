@@ -307,6 +307,8 @@ type settings struct {
 	// jobClaimer builds the claimer of the phases of runner jobs for the
 	// runners of the protocol, or is nil. See WithJobClaimer.
 	jobClaimer JobClaimerFunc
+	// jobClaimerWrap wraps the claimer that jobClaimer built, or is nil.
+	jobClaimerWrap func(job.Claimer) job.Claimer
 	// jobRecorder records the steps and the log chunks of the launchers of
 	// the runner protocol, or is nil. See WithJobRecorder.
 	jobRecorder job.CheckedRecorder
@@ -790,6 +792,7 @@ func defaultSettings() *settings {
 		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
 		selfService:             selfServiceSettings{store: nil},
 		jobClaimer:              nil,
+		jobClaimerWrap:          nil,
 		jobRecorder:             nil,
 		components:              AllComponents(),
 		operationLease:          0,

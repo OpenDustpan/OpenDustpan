@@ -3,53 +3,28 @@
 package e2e
 
 import (
+	"testing"
+
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// jobStoreOptions returns the options that give the in-process server the job
-// store of st, the runner stores that a job needs for its pool and the drift
-// result store.
-func jobStoreOptions(st serverStore) []dustpan.Option {
-	var opts []dustpan.Option
+// builtinStoreOption returns the option that gives the in-process server every
+// store option of the built-in store of st, as the binary gives them. A port
+// that the binary does not wire fails the suites. A test adds only what it
+// must replace.
+func builtinStoreOption(tb testing.TB, st serverStore) dustpan.Option {
+	tb.Helper()
 
-	if jobs, ok := jobsOf(st); ok {
-		opts = append(opts, dustpan.WithJobStore(jobs))
-	}
-
-	switch s := any(st).(type) {
-	case *sqlite.Store:
-		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters()),
-			dustpan.WithDurableStore(s.DurableOperations()),
-			dustpan.WithJobTokenStore(s.JobTokens()),
-			dustpan.WithTriggerStore(s.Triggers()),
-			dustpan.WithUnitSettingsStore(s.UnitSettings()),
-			dustpan.WithDriftStore(s.DriftResults()))
-	case *postgres.Store:
-		opts = append(opts, dustpan.WithRunners(s.Runners()), dustpan.WithSourceFilters(s.SourceFilters()),
-			dustpan.WithDurableStore(s.DurableOperations()),
-			dustpan.WithJobTokenStore(s.JobTokens()),
-			dustpan.WithTriggerStore(s.Triggers()),
-			dustpan.WithUnitSettingsStore(s.UnitSettings()),
-			dustpan.WithDriftStore(s.DriftResults()))
-	default:
-	}
-
-	return opts
-}
-
-// jobsOf returns the job store of st, and false for a store that keeps none.
-//
-//nolint:ireturn // The harness takes the port of whichever store the run uses.
-func jobsOf(st any) (job.Store, bool) {
 	switch s := st.(type) {
 	case *sqlite.Store:
-		return s.Jobs(), true
+		return dustpan.WithOpenSQLiteStore(s)
 	case *postgres.Store:
-		return s.Jobs(), true
+		return dustpan.WithOpenPostgresStore(s)
 	default:
-		return nil, false
+		tb.Fatalf("no built-in store option for %T", st)
+
+		return nil
 	}
 }

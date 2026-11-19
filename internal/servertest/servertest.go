@@ -40,7 +40,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -530,37 +529,14 @@ func serverOptions(
 
 	return []dustpan.Option{
 		dustpan.WithInstallation(Installation),
-		dustpan.WithNamespaceStore(store),
-		dustpan.WithStackStore(store),
-		dustpan.WithUpdateStore(store),
-		dustpan.WithCheckpointStore(store),
-		dustpan.WithEventStore(store),
-		dustpan.WithSecretKeyStore(store),
+		// The built-in store options give every port, as the binary does.
+		dustpan.WithOpenPostgresStore(store),
 		dustpan.WithSecretWrapper(wrapper),
-		dustpan.WithWorkspaceStore(store),
-		dustpan.WithStateStore(store),
 		dustpan.WithBlobStore(blobs),
-		dustpan.WithInventoryReader(store),
-		dustpan.WithIPAllowlistStore(store),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListener(ln),
-		dustpan.WithDurableStore(store.DurableOperations()),
-		// The job, trigger and drift routes need their stores, as the binary gives them.
-		dustpan.WithRunners(store.Runners()),
-		dustpan.WithSourceFilters(store.SourceFilters()),
-		dustpan.WithTrustRules(store.TrustRules()),
-		dustpan.WithJobStore(store.Jobs()),
-		dustpan.WithJobTokenStore(store.JobTokens()),
-		dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g, job.WithClaimerLogger(logger))
-		}),
-		dustpan.WithTriggerStore(store.Triggers()),
-		dustpan.WithUnitSettingsStore(store.UnitSettings()),
-		dustpan.WithDriftStore(store.DriftResults()),
 		dustpan.WithInstanceID(InstanceID(i)),
-		dustpan.WithInstallationKindStore(store),
-		dustpan.WithInstanceStore(store),
 	}
 }
 

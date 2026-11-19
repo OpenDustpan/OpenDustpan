@@ -192,6 +192,29 @@ func WithBuiltinStore(b *BuiltinStore) Option {
 	}
 }
 
+// WithOpenSQLiteStore sets every store option of the server from st, which the
+// caller opened. It gives the same ports as WithSQLite. The caller closes st.
+// The store options apply after all other options. A nil st fails NewServer.
+func WithOpenSQLiteStore(st *sqlite.Store) Option {
+	if st == nil {
+		return WithBuiltinStore(nil)
+	}
+
+	return WithBuiltinStore(sqliteBuiltinStore(st, nil))
+}
+
+// WithOpenPostgresStore sets every store option of the server from st, which
+// the caller opened. It gives the same ports as WithPostgreSQL. The caller
+// closes st. The store options apply after all other options. A nil st fails
+// NewServer.
+func WithOpenPostgresStore(st *postgres.Store) Option {
+	if st == nil {
+		return WithBuiltinStore(nil)
+	}
+
+	return WithBuiltinStore(postgresBuiltinStore(st, nil))
+}
+
 // Close closes the store that WithSQLite or WithPostgreSQL opened. It does
 // nothing for a store that the caller opened, and nothing when no built-in
 // store was opened. A second call returns nil.

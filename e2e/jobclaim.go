@@ -11,8 +11,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/job"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // errNoClaimer reports a step that claims a phase on a server whose claimer
@@ -54,30 +52,20 @@ func (s *claimerSlot) keep(c *job.DurableClaimer) *job.DurableClaimer {
 	return c
 }
 
-// claimerOptions returns the option that gives the in-process server the job
-// claimer of st, and keeps the claimer in slot. It returns nil for a store
-// that keeps no jobs or a nil slot.
-func claimerOptions(st serverStore, slot *claimerSlot) []dustpan.Option {
+// claimerOptions returns the option that keeps the job claimer that the
+// in-process server builds in slot. It returns nil for a nil slot.
+func claimerOptions(slot *claimerSlot) []dustpan.Option {
 	if slot == nil {
 		return nil
 	}
 
-	var build dustpan.JobClaimerFunc
-
-	switch s := any(st).(type) {
-	case *sqlite.Store:
-		build = func(g job.GateGuard) job.Claimer {
-			return slot.keep(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s, g))
+	return []dustpan.Option{dustpan.WithJobClaimerWrapForTests(func(c job.Claimer) job.Claimer {
+		if durableClaimer, ok := c.(*job.DurableClaimer); ok {
+			slot.keep(durableClaimer)
 		}
-	case *postgres.Store:
-		build = func(g job.GateGuard) job.Claimer {
-			return slot.keep(job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s, g))
-		}
-	default:
-		return nil
-	}
 
-	return []dustpan.Option{dustpan.WithJobClaimer(build)}
+		return c
+	})}
 }
 
 // ClaimJobPhase claims one phase of the runner pool poolID for owner with the

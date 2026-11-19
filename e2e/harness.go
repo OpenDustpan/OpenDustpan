@@ -40,7 +40,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -814,40 +813,6 @@ type serverArgs struct {
 	listener net.Listener
 }
 
-// profileStoreOptions returns the option that gives the in-process server the
-// profile store of st.
-func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	case *postgres.Store:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	default:
-		return nil
-	}
-}
-
-// blueprintStoreOptions returns the option that gives the in-process server the
-// self-service blueprint store of st, as the built-in stores of the binary do.
-func blueprintStoreOptions(st serverStore) []dustpan.Option {
-	switch s := st.(type) {
-	case *sqlite.Store:
-		return []dustpan.Option{dustpan.WithSelfServiceBlueprints(s.SelfServiceBlueprints())}
-	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithSelfServiceBlueprints(s.SelfServiceBlueprints())}
-	default:
-		return nil
-	}
-}
-
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
 // the feature on, so the in-process server checks the lists of every
 // namespace, including for the bootstrap admin token.
@@ -865,18 +830,13 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 
 // storeOptions returns the options that give the in-process server the optional
 // stores of st and the public URL.
-func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+func storeOptions(tb testing.TB, st serverStore, args serverArgs) []dustpan.Option {
+	tb.Helper()
+
 	return slices.Concat(
-		profileStoreOptions(
-			st,
-			wrapper,
-		),
-		jobStoreOptions(st),
-		claimerOptions(st, args.claimers),
-		savedViewStoreOptions(st),
-		blueprintStoreOptions(st),
-		settingStoreOptions(st), trustRuleStoreOptions(st, args.issuer), registryStoreOptions(st),
-		sinkStoreOptions(st),
+		[]dustpan.Option{builtinStoreOption(tb, st)},
+		claimerOptions(args.claimers),
+		settingStoreOptions(st), trustRuleOptions(args.issuer),
 		publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)
@@ -884,10 +844,10 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 
 // featureStoreOptions returns the options that give the in-process server the
 // stores of the features that the store of the test keeps.
-func featureStoreOptions(tb testing.TB, st serverStore, wrapper secret.Wrapper, args serverArgs) []dustpan.Option {
+func featureStoreOptions(tb testing.TB, st serverStore, args serverArgs) []dustpan.Option {
 	tb.Helper()
 
-	opts := append(storeOptions(st, wrapper, args), gitHostOptions(tb, st)...)
+	opts := append(storeOptions(tb, st, args), gitHostOptions(tb)...)
 
 	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
@@ -957,7 +917,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			featureStoreOptions(tb, st, wrapper, args),
+			featureStoreOptions(tb, st, args),
 			[]dustpan.Option{
 				dustpan.WithInstallation(installationName),
 				dustpan.WithNamespaceStore(st),
