@@ -199,7 +199,7 @@ func testRefuseSharedCount(t *testing.T) {
 	held := []trustrulesvc.HeldCount{{Namespace: "", Count: 5}}
 
 	request := emptyEntry()
-	request.SourceIP, request.UserAgent = "192.0.2.9", "attacker"
+	request.SourceIP, request.UserAgent, request.RequestID = "192.0.2.9", "attacker", "req-current"
 
 	unwritten, err := x.RefuseCall(t.Context(), "acme", request, trustrulesvc.ErrRateLimited, held)
 	if err != nil || len(unwritten) != 0 {
@@ -222,9 +222,9 @@ func testRefuseSharedCount(t *testing.T) {
 
 		found = true
 
-		if l.Entries[i].SourceIP != "" || l.Entries[i].UserAgent != "" {
-			t.Fatalf("entry has the address %q and the agent %q of the current caller, want none",
-				l.Entries[i].SourceIP, l.Entries[i].UserAgent)
+		if l.Entries[i].SourceIP != "" || l.Entries[i].UserAgent != "" || l.Entries[i].RequestID != "" {
+			t.Fatalf("entry has the address %q, the agent %q and the request ID %q of the current caller, want none",
+				l.Entries[i].SourceIP, l.Entries[i].UserAgent, l.Entries[i].RequestID)
 		}
 	}
 

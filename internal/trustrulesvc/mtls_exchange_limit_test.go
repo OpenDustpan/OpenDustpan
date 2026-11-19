@@ -470,6 +470,71 @@ func TestMtlsGuardBounds(t *testing.T) {
 	t.Run("a Rearm of an old window keeps the slot of the new one", testRearmOldWindow)
 	t.Run("the carry holds at most 8 names and one sum", testCarryBound)
 	t.Run("GiveBack returns counts to the next first refusal", testGiveBack)
+	t.Run("a refusal past the rearm bound is counted", testRearmPastBoundCounts)
+	t.Run("forget of the shared slot gives the first refusal back", testForgetSharedFirstAgain)
+}
+
+func testRearmPastBoundCounts(t *testing.T) {
+	t.Parallel()
+
+	g, clock := rearmGuard(t)
+
+	admitOK(t, g, "a")
+
+	// Two Rearm calls give the first refusal back. The third is at the bound:
+	// the slot stays marked and counts that refusal.
+	for range 3 {
+		r := admitRefused(t, g, "a")
+		if !r.First {
+			t.Fatal("a refusal before the bound is not first")
+		}
+
+		g.Rearm(r)
+	}
+
+	for range 2 {
+		if admitRefused(t, g, "a").First {
+			t.Fatal("a refusal after the bound is first")
+		}
+	}
+
+	clock.advance(time.Minute)
+
+	admitOK(t, g, "a")
+
+	next := admitRefused(t, g, "a")
+	if !next.First {
+		t.Fatal("the first refusal of the next window is not first")
+	}
+
+	if len(next.Held) != 1 || next.Held[0].Namespace != "a" || next.Held[0].Count != 3 {
+		t.Fatalf("held = %+v, want a 3 (the refusal at the bound and the two after it)", next.Held)
+	}
+}
+
+func testForgetSharedFirstAgain(t *testing.T) {
+	t.Parallel()
+
+	g, _ := rearmGuard(t)
+
+	admitOK(t, g, "n1")
+
+	for i := 1; i <= 8; i++ {
+		if !admitRefused(t, g, fmt.Sprintf("n%d", i)).First {
+			t.Fatalf("refusal of n%d is not first", i)
+		}
+	}
+
+	ghost := admitRefused(t, g, "ghost")
+	if !ghost.First {
+		t.Fatal("the first refusal of the shared slot is not first")
+	}
+
+	g.Forget(ghost)
+
+	if !admitRefused(t, g, "real9").First {
+		t.Fatal("a refusal after Forget of the shared slot is not first")
+	}
 }
 
 func testRearmBound(t *testing.T) {

@@ -230,7 +230,8 @@ exchange above. The token never lives longer than the leaf certificate. Each
 exchange writes the audit entry `trust-rule:exchange`, and each refusal writes
 an audit entry with the outcome `denied`. This includes a refusal for the rate
 limit or the body size. For each window, the server tracks 8 namespace names for
-each address. It writes the first refusal of each tracked name and counts the
+each address. Under a flood from many addresses, the 8 names are for the whole
+installation. It writes the first refusal of each tracked name and counts the
 others in memory, so a flood of refused calls to these names causes a bounded
 number of namespace reads for each window. The server writes the count of the
 others as an entry with the reason "N refused exchanges wrote no entry of

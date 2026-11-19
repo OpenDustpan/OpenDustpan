@@ -159,9 +159,11 @@ func newGuardWindow() guardWindow {
 // trusted, so the guard bounds the memory that keys take.
 //
 // namespace is the name of the namespace of the call. The first refusal is
-// reported for each window and namespace name, so a refusal to a namespace
-// that does not exist never hides the refusals of another one. A window
-// tracks at most maxRefusalNames names. The refusal that Admit returns with an
+// reported for each window and namespace name. A refusal to a namespace that
+// does not exist frees its slot, at most maxRefusalNames times in a window.
+// After that, such names keep their slots, and the refusals of the other
+// names share one slot whose count goes to the log of the installation. A
+// window tracks at most maxRefusalNames names. The refusal that Admit returns with an
 // error says if the caller must write the denial entry (First). While all
 // keys together are over the limit, the window of all keys is the one that
 // counts, so a flood from many keys also gives one first refusal for each

@@ -641,9 +641,9 @@ func (e *MtlsExchanger) Exchange(ctx context.Context, in *MtlsExchangeInput) (Mt
 func (e *MtlsExchanger) writeHeld(ctx context.Context, request audit.Entry, held []HeldCount) []HeldCount {
 	var unwritten []HeldCount
 
-	// A count holds refusals of earlier windows, so the address and the agent
-	// of the current caller do not belong on it.
-	request.SourceIP, request.UserAgent = "", ""
+	// A count holds refusals of earlier windows, so the address, the agent and
+	// the request ID of the current caller do not belong on it.
+	request.SourceIP, request.UserAgent, request.RequestID = "", "", ""
 
 	for _, h := range held {
 		var err error
