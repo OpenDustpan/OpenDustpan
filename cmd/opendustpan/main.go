@@ -657,6 +657,16 @@ func (f *serveFlags) beforeServe(
 	ctx context.Context, st store, logger *slog.Logger, reloads *reloadMetrics, started *startedReloader,
 ) func(context.Context) error {
 	return func(hookCtx context.Context) error {
+		// The clear leaves HTTP_PROXY, HTTPS_PROXY and ALL_PROXY set: they may
+		// carry a password, but the Go HTTP client reads them once, at its first
+		// outbound request. That request can come before this hook or after it,
+		// by configuration: with an S3 blob store, the probe writes of
+		// blobs3.Open come before it; without S3, the first request can come
+		// after it. The clear would then make each later request skip the proxy.
+		if clearErr := clearSensitiveEnv(hookCtx, logger, os.LookupEnv, os.Unsetenv); clearErr != nil {
+			return clearErr
+		}
+
 		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
 			return startErr
 		}
@@ -1736,6 +1746,10 @@ func splitList(s string) []string {
 // memory that child processes inherit.
 func loadKeyEncryptionKey() ([]byte, error) {
 	if raw, ok := os.LookupEnv(keyEnvVar); ok && strings.TrimSpace(raw) != "" {
+		// Defense in depth: the serve hook (clearSensitiveEnv) clears this
+		// variable too, after the start. This clear stays so that the key leaves
+		// the environment at the read, for a caller that runs before the hook or
+		// never reaches it. It does not rely on the hook.
 		if err := os.Unsetenv(keyEnvVar); err != nil {
 			return nil, fmt.Errorf("%s: clear variable: %w", keyEnvVar, err)
 		}
