@@ -42,7 +42,8 @@ type Created struct {
 // or sees the password of a person.
 //
 // It returns localuser.ErrInvalid for a user name that does not match
-// localuser.UserNamePattern, localuser.ErrReasonRequired for no reason, and
+// localuser.UserNamePattern, localuser.ErrReasonRequired for no reason,
+// audit.ErrInvalidReason for a reason that the audit log refuses, and
 // localuser.ErrAlreadyExists for a user name that a local user holds. When the
 // record or the code fails after the person was made, the person stays with
 // no credential: it cannot sign in, and an administrator can delete it.
@@ -54,7 +55,7 @@ func (s *Service) CreateUser(ctx context.Context, a Actor, in CreateInput) (Crea
 	}
 
 	if err := validReason(in.Reason); err != nil {
-		return Created{}, s.refuse(ctx, a.Entry, on(ActionUserCreated, unknownObject), "no reason", err)
+		return Created{}, s.refuse(ctx, a.Entry, on(ActionUserCreated, unknownObject), reasonCause(err), err)
 	}
 
 	p, err := s.Policy(ctx)
@@ -116,8 +117,9 @@ type ResetInput struct {
 //
 // It returns localuser.ErrPasswordSignInOff while the password sign-in is
 // off, localuser.ErrOwnAccount for the own account,
-// localuser.ErrReasonRequired for no reason, localuser.ErrNotFound for a
-// person with no local user, localuser.ErrBreakGlass for a break-glass
+// localuser.ErrReasonRequired for no reason, audit.ErrInvalidReason for a
+// reason that the audit log refuses, localuser.ErrNotFound for a person with
+// no local user, localuser.ErrBreakGlass for a break-glass
 // person, and localuser.ErrDemoFixed for the demo person.
 func (s *Service) StartReset(ctx context.Context, a Actor, principalID string, in ResetInput) (Code, error) {
 	object := principal.Ref(principalID)
@@ -134,7 +136,7 @@ func (s *Service) StartReset(ctx context.Context, a Actor, principalID string, i
 	}
 
 	if reasonErr := validReason(in.Reason); reasonErr != nil {
-		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), "no reason", reasonErr)
+		return Code{}, s.refuse(ctx, a.Entry, on(ActionResetCreated, object), reasonCause(reasonErr), reasonErr)
 	}
 
 	u, err := s.store.UserByPrincipal(ctx, principalID)
@@ -493,8 +495,9 @@ func (s *Service) currentRefusal(ctx context.Context, a Actor, object string, er
 // RemovePassword removes the password of the local user of the person
 // principalID. It returns localuser.ErrLastCredential when the person keeps
 // no other credential, localuser.ErrOwnAccount for the own account,
-// localuser.ErrReasonRequired for no reason, and localuser.ErrNotFound for a
-// person with no local user.
+// localuser.ErrReasonRequired for no reason, audit.ErrInvalidReason for a
+// reason that the audit log refuses, and localuser.ErrNotFound for a person
+// with no local user.
 func (s *Service) RemovePassword(ctx context.Context, a Actor, principalID, reason string) error {
 	object := principal.Ref(principalID)
 
@@ -505,7 +508,7 @@ func (s *Service) RemovePassword(ctx context.Context, a Actor, principalID, reas
 	}
 
 	if err := validReason(reason); err != nil {
-		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), "no reason", err)
+		return s.refuse(ctx, a.Entry, on(ActionPasswordRemoved, object), reasonCause(err), err)
 	}
 
 	u, err := s.store.UserByPrincipal(ctx, principalID)
