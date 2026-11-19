@@ -280,7 +280,16 @@ func bindingOf(cfg *settings, signIn *serverapi.SignIn) providerBinding {
 
 	providers := make([]session.Provider, 0, len(cfg.oidcProviders))
 	for _, p := range cfg.oidcProviders {
-		providers = append(providers, session.Provider{ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: ""})
+		providers = append(providers, session.Provider{
+			ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: "", DirectoryURL: "",
+		})
+	}
+
+	for i := range cfg.ldapProviders {
+		p := &cfg.ldapProviders[i]
+		providers = append(providers, session.Provider{
+			ID: p.ID, Issuer: "", UserinfoURL: "", SubjectClaim: "", DirectoryURL: p.URL,
+		})
 	}
 
 	return providerBinding{store: store, providers: providers}

@@ -296,7 +296,7 @@ func (s *Server) supersededSweepKind() durable.KindSpec {
 // nameLockPruneKind returns the runner kind of the schedule of the prune of
 // the name counts. Its step returns the error of a run, so the runner counts
 // a failed run as a failed attempt. The store appends one audit entry for
-// each run, in the transaction of the delete, with the count that it
+// each batch, in the transaction of the delete, with the count that it
 // deleted. The output of the step is the result of the run in JSON, and the
 // step writes one log line.
 func (s *Server) nameLockPruneKind() durable.KindSpec {
@@ -306,14 +306,20 @@ func (s *Server) nameLockPruneKind() durable.KindSpec {
 		MinVersion: jobScheduleVersion,
 		Steps: []durable.Step{
 			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
-				res, err := localusersvc.PruneLocks(ctx, s.nameLocks.locks, s.now())
+				res, err := localusersvc.PruneLocks(ctx, s.nameLocks.locks, localusersvc.NewPruneClock(s.now))
 				if err != nil {
+					// The batches before the error are deleted and have audit entries.
+					s.logger.ErrorContext(ctx, "name lock prune: a batch failed",
+						slog.Int64("deleted", res.Deleted), slog.Int("batches", res.Batches),
+						slog.String("stop_reason", res.StopReason), slog.Any("error", err))
+
 					return nil, fmt.Errorf("name lock prune: %w", err)
 				}
 
 				s.logger.InfoContext(ctx, "name lock prune: deleted the counts past their age",
 					slog.Int64("deleted", res.Deleted), slog.Int64("age_seconds", res.AgeSeconds),
-					slog.Int("max_rows", res.MaxRows))
+					slog.Int("max_rows", res.MaxRows), slog.Int("batches", res.Batches),
+					slog.String("stop_reason", res.StopReason))
 
 				out, err := json.Marshal(res)
 				if err != nil {

@@ -159,3 +159,51 @@ func TestRunRefusesAnotherIssuer(t *testing.T) {
 		t.Fatalf("run with another issuer = %q, want both issuers named", text)
 	}
 }
+
+// ldapBindServer builds a server on st with the LDAP provider corp-ldap at
+// url.
+func ldapBindServer(t *testing.T, st *sqlite.Store, url string) *dustpan.Server {
+	t.Helper()
+
+	p := ldapProvider()
+	p.URL = url
+
+	opts := append(auditSinkServerOptions(t, st),
+		dustpan.WithPublicURL("https://dustpan.example"), dustpan.WithLDAPProvider(p))
+
+	srv, err := dustpan.NewServer(opts...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	return srv
+}
+
+// TestStartRefusesAnotherLDAPDirectory proves that the first start binds an
+// LDAP provider ID to its directory URL, that a later start with the same
+// URL starts, and that a start with another URL for the same ID is refused
+// before it serves, with an error that names the ID and both URLs.
+func TestStartRefusesAnotherLDAPDirectory(t *testing.T) {
+	t.Parallel()
+
+	st := openAuditStore(t)
+
+	if err := ldapBindServer(t, st, "ldaps://ldap.example.org").Start(t.Context()); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+
+	if err := ldapBindServer(t, st, "ldaps://ldap.example.org").Start(t.Context()); err != nil {
+		t.Fatalf("start with the same URL: %v", err)
+	}
+
+	err := ldapBindServer(t, st, "ldaps://ldap.other.example").Start(t.Context())
+	if err == nil || !errors.Is(err, session.ErrIssuerChanged) {
+		t.Fatalf("start with another URL = %v, want ErrIssuerChanged", err)
+	}
+
+	for _, want := range []string{`"corp-ldap"`, `"ldaps://ldap.example.org"`, `"ldaps://ldap.other.example"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("start with another URL = %q, want it to name %s", err, want)
+		}
+	}
+}

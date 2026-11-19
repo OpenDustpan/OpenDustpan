@@ -155,7 +155,7 @@ func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) pr
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, authz: nil, namespaces: nil, hostile: nil,
-		passwords: passwords, failPolicyRead: nil, idempotency: false,
+		passwords: passwords, failPolicyRead: nil, idempotency: false, failTempAdminRead: false,
 		stored: func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders) {
 			beta = oauthtest.New(t, oauthtest.Config{
 				Now: clock.Now, ClientID: "dustpan-beta", ClientSecret: betaSecret, RedirectURI: betaCallback,

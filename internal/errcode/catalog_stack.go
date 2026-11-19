@@ -28,6 +28,9 @@ const (
 	// StackRevealPathTooLong is a reveal request whose value path is longer
 	// than maxBytes bytes.
 	StackRevealPathTooLong = "stack.reveal-path-too-long"
+	// StackStateTooComplex is a state that is too deep or too large for a
+	// masked read.
+	StackStateTooComplex = "stack.state-too-complex"
 )
 
 // stackSpecs are the codes of the stacks of the Pulumi Cloud-compatible API.
@@ -57,6 +60,11 @@ func stackSpecs() []Spec {
 			Args:    nil,
 		},
 		{Code: StackResourceNotFound, Meaning: "the state of the stack has no such resource", Args: nil},
+		{
+			Code:    StackStateTooComplex,
+			Meaning: "the state is too deep or too large for a masked read",
+			Args:    nil,
+		},
 		{
 			Code:    StackRevealPathTooLong,
 			Meaning: "the value path of the reveal request is longer than maxBytes bytes",

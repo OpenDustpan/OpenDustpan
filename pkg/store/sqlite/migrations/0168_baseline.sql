@@ -1665,6 +1665,8 @@ CREATE TABLE unmanaged_scans (
     UNIQUE (namespace_id, seq)
 ) STRICT;
 
+CREATE INDEX stack_tags_name_value ON stack_tags (name, value, stack_id);
+
 CREATE UNIQUE INDEX stacks_id ON stacks (id);
 
 CREATE UNIQUE INDEX updates_one_running ON updates (stack_id)
@@ -1823,6 +1825,12 @@ CREATE INDEX forge_account_links_principal ON forge_account_links (principal_id)
 CREATE INDEX forge_link_requests_principal ON forge_link_requests (principal_id, expires_at_ms);
 
 CREATE INDEX inventory_namespace_unit_id ON inventory (namespace, unit_id);
+
+-- The units that a lock holds, in the order of the unit list. The locked filter
+-- of the unit list reads this index first, so the cost follows the count of
+-- locked units and not the count of units. The predicate is the lock test of
+-- the filter.
+CREATE INDEX inventory_locked ON inventory (namespace, unit_id) WHERE (COALESCE(lock_holder, '') <> '' OR lock_since_ms IS NOT NULL OR COALESCE(lock_operation, '') <> '');
 
 CREATE INDEX inventory_labels_value ON inventory_labels (namespace, label_key, label_value, unit_id);
 

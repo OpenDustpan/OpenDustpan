@@ -332,6 +332,39 @@ func (s localServer) checkAdministratorRoutes(t *testing.T) {
 	}
 
 	checkLockRules(t, policy.Body.Bytes())
+	checkLockPrune(t, policy.Body.Bytes())
+}
+
+// lockPruneBody is the lockPrune part of the policy answer.
+type lockPruneBody struct {
+	IntervalSeconds  int64 `json:"intervalSeconds"`
+	MaxRows          int   `json:"maxRows"`
+	MaxEndedLocks    int   `json:"maxEndedLocks"`
+	MaxRunSeconds    int64 `json:"maxRunSeconds"`
+	BatchPauseMillis int64 `json:"batchPauseMillis"`
+}
+
+// checkLockPrune checks that the policy answer shows the effective schedule
+// of the prune of the name counts, with the time bound of a run and the
+// pause between two batches.
+func checkLockPrune(t *testing.T, body []byte) {
+	t.Helper()
+
+	var got struct {
+		LockPrune lockPruneBody `json:"lockPrune"`
+	}
+
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode the policy: %v", err)
+	}
+
+	p := got.LockPrune
+	if p.IntervalSeconds != 3600 || p.MaxRows != authgate.MaxNamePruneRows ||
+		p.MaxEndedLocks != authgate.MaxNamePruneEnded ||
+		p.MaxRunSeconds != int64(authgate.NamePruneMaxRun/time.Second) ||
+		p.BatchPauseMillis != authgate.NamePruneBatchPause.Milliseconds() {
+		t.Fatalf("lockPrune = %+v, want the effective schedule with the time bound and the pause", p)
+	}
 }
 
 // lockRuleBody is one rule of the policy answer.

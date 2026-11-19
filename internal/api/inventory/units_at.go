@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
+	"regexp"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -37,32 +37,104 @@ type unitAtEntry struct {
 }
 
 // listUnitsAtResponse is the answered document of the unit list at a time.
-// At is the time of the request in Unix milliseconds. Purged counts the units
+// At is the time of the request as an RFC 3339 time in UTC. Purged counts the units
 // that existed at the time and that a purge removed since: the view never
 // names them. Omitted counts the units that the caller may not read now.
 //
 // Contract: never remove or rename these fields.
 type listUnitsAtResponse struct {
 	Units   []unitAtEntry `json:"units"`
-	At      int64         `json:"at"`
+	At      string        `json:"at"`
 	Purged  int           `json:"purged"`
 	Omitted int           `json:"omitted"`
 }
 
-// atQuery reads the query value at: a time in Unix milliseconds. The bool is
-// false when the request has no such value.
+// errAtFormat is the text of the 400 answer for an at value that is not an
+// RFC 3339 time.
+const errAtFormat = "at must be an RFC 3339 time, for example 2026-10-18T09:30:00Z"
+
+// errAtBeforeEpoch is the text of the 400 answer for an at value that is a
+// valid RFC 3339 time before the Unix epoch.
+const errAtBeforeEpoch = "at must not be before 1970-01-01T00:00:00Z"
+
+// errAtRepeated is the text of the 400 answer for a request with more than one
+// at query value.
+const errAtRepeated = "send at most one at query value"
+
+// atMaxLength is the length of the longest at value that atGrammar matches.
+const atMaxLength = 35
+
+// atGrammar is the allowlist for the at value: a date, the letter T, a time
+// with an optional fraction of 1 to 9 digits, and Z or a numeric offset. It is
+// stricter than time.Parse, which also takes a comma as the fraction mark and
+// an offset of 24 hours. It also bounds the length: the longest match has 35
+// characters.
+var atGrammar = regexp.MustCompile(
+	`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`,
+)
+
+// atQuery reads the query value at: an RFC 3339 time, with or without a
+// fraction, with Z or any numeric offset. It returns the time in UTC, cut to
+// whole milliseconds, which is the precision of the store. The bool is false
+// when the request has no such value. A time before 1970-01-01T00:00:00Z is
+// refused.
 func atQuery(r *http.Request) (time.Time, bool, error) {
-	raw := queryOf(r).Get("at")
-	if raw == "" {
+	query := queryOf(r)
+
+	// Defense in depth: parseUnitFilter refuses a query string that does not
+	// parse too; this check stays so that the at value is never read from a
+	// query string that did not parse, and so that a change of the order of
+	// the two reads cannot let a second at value through.
+	if query.Err() != nil {
+		return time.Time{}, false, fmt.Errorf("%w: the query string is not valid", errInvalidQuery)
+	}
+
+	values := query.All("at")
+
+	// A repeated name is refused, so that a check of one value never lets
+	// another value reach the store. This holds for an empty value too.
+	if len(values) > 1 {
+		return time.Time{}, false, fmt.Errorf("%w: %s", errInvalidQuery, errAtRepeated)
+	}
+
+	if len(values) == 0 || values[0] == "" {
 		return time.Time{}, false, nil
 	}
 
-	ms, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || ms < 0 {
-		return time.Time{}, false, fmt.Errorf("%w: at must be a time in Unix milliseconds", errInvalidQuery)
+	raw := values[0]
+
+	at, err := parseAt(raw)
+	if err != nil {
+		return time.Time{}, false, err
 	}
 
-	return time.UnixMilli(ms).UTC(), true, nil
+	return at, true, nil
+}
+
+// parseAt checks one at value with the allowlist and reads it.
+func parseAt(raw string) (time.Time, error) {
+	// Defense in depth: the anchored grammar below bounds the length too; this
+	// check stays so that the regular expression never reads a long value, and
+	// so that a change of the grammar cannot lift the bound.
+	if len(raw) > atMaxLength {
+		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtFormat)
+	}
+
+	if !atGrammar.MatchString(raw) {
+		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtFormat)
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtFormat)
+	}
+
+	ms := t.UnixMilli()
+	if ms < 0 {
+		return time.Time{}, fmt.Errorf("%w: %s", errInvalidQuery, errAtBeforeEpoch)
+	}
+
+	return time.UnixMilli(ms).UTC(), nil
 }
 
 // toUnitAtEntry maps one unit of the view to its wire shape.
@@ -163,6 +235,6 @@ func (h *Handler) listUnitsAt(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listUnitsAtResponse{
-		Units: units, At: at.UnixMilli(), Purged: view.Purged, Omitted: omitted,
+		Units: units, At: formatTime(at), Purged: view.Purged, Omitted: omitted,
 	})
 }

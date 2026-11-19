@@ -38,6 +38,8 @@ var (
 	// ErrSelfReview reports a verdict by a person of Use.People: the
 	// person who used break-glass, the owner of the break-glass account,
 	// or a principal that could act as the person at the time of the use.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrSelfReview = errors.New("a person of the break-glass use cannot review it")
 	// ErrAgentDenied reports a verdict that an agent records.
 	ErrAgentDenied = errors.New("an agent cannot review a break-glass")

@@ -51,15 +51,21 @@ var (
 	// ErrManagedByDirectory reports a membership change through the API of
 	// a group that a directory sync keeps (ADR 55). The error names the
 	// directory.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrManagedByDirectory = errors.New("group is managed by a directory")
 	// ErrNotDisabled reports an enable of a principal that is not disabled.
 	ErrNotDisabled = errors.New("principal is not disabled")
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
 	// ErrNoWorkingBreakGlass reports a change that leaves too few working
 	// break-glass accounts. An installation keeps its floors of break-glass
 	// accounts, as an emergency way in.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNoWorkingBreakGlass = errors.New("the change leaves too few working break-glass accounts")
 	// ErrBreakGlassUnavailable reports that the store cannot count the
 	// working break-glass accounts. A caller that cannot count refuses the
@@ -74,7 +80,13 @@ var (
 	// ErrNotSignInTarget reports a principal that a sign-in through an
 	// identity provider cannot name: one that is not a person, a principal
 	// of a namespace, a break-glass account, or a temporary administrator.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
+	// ErrTempAdminRead reports a failed read of the temporary administrator
+	// records during a sign-in. The sign-in is refused: the person may be a
+	// temporary administrator.
+	ErrTempAdminRead = errors.New("read of the temporary administrator failed")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )

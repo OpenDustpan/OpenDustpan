@@ -255,7 +255,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 		var none audit.Entry
 
 		if res, err := h.runTokenOp(w, r, op, p, none); err == nil {
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, readResult)
 		}
 	}
 }
@@ -277,7 +277,7 @@ func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHand
 
 		if err == nil {
 			w.Header().Set("Cache-Control", "no-store")
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, committedWrite)
 		}
 	}
 }
@@ -1087,6 +1087,10 @@ func classifyTokenRequest(err error) (failure, bool) {
 	return fail(0, ""), false
 }
 
+// errTokenUnknownKindText is the answer for a token of a kind that this
+// version does not know.
+const errTokenUnknownKindText = "the access token has a kind that this version does not know"
+
 // classifyTokenState maps the errors of an unknown, wrong, ended or taken
 // token, of a reach that is not inside the reach of the caller, and of a
 // store with no token port.
@@ -1112,6 +1116,9 @@ func classifyTokenState(err error) (failure, bool) {
 		return failCoded(http.StatusConflict, err.Error(), errcode.TokenEnded), true
 	case errors.Is(err, accesstoken.ErrAlreadyExists):
 		return failCoded(http.StatusConflict, err.Error(), errcode.TokenAlreadyExists), true
+	case errors.Is(err, accesstoken.ErrUnknownKind):
+		// The text is fixed: the error text names the row and its stored kind.
+		return failCoded(http.StatusConflict, errTokenUnknownKindText, errcode.TokenUnknownKind), true
 	case errors.Is(err, errNoTokenStore):
 		return failCoded(http.StatusNotImplemented, err.Error(), errcode.TokenUnsupported), true
 	}
