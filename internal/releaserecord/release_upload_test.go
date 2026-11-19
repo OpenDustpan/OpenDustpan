@@ -2,6 +2,8 @@ package releaserecord_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -114,12 +116,9 @@ func newFakeGH(t *testing.T, r uploadRun) fakeDirs {
 	}
 
 	// The fake must be executable.
-	err := os.WriteFile(
-		filepath.Join(bin, "gh"),
-		[]byte(uploadFakeGH),
-		0o700,
-	) //nolint:gosec // a test fake, in a temporary directory
-	if err != nil {
+	writeIn(t, bin, "gh", []byte(uploadFakeGH))
+
+	if err := os.Chmod(filepath.Join(bin, "gh"), 0o500); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +177,7 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 	var stdout, stderr bytes.Buffer
 
 	// The version and the directory are arguments, with no shell between.
-	cmd := exec.CommandContext( //nolint:gosec // the script of the work tree, run on purpose
+	cmd := exec.CommandContext( //nolint:gosec // the script of the work tree runs on purpose; the version and the directory are single arguments
 		t.Context(), "bash", filepath.Join(tree, "scripts", "release-upload.sh"), r.version, dir,
 	)
 	cmd.Dir = tree
@@ -199,10 +198,10 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 
 	res.stdout, res.stderr, res.calls = stdout.String(), stderr.String(), readCalls(t, fake)
 
-	raw, err := os.ReadFile(
-		filepath.Join(fake, "create.cwd"),
-	) //nolint:gosec // a file of the fake, in a temporary directory
-	if err == nil {
+	fakeRoot := openRootOf(t, fake)
+	defer closeRoot(t, fakeRoot)
+
+	if raw, err := fakeRoot.ReadFile("create.cwd"); err == nil {
 		res.cwd = strings.TrimSpace(string(raw))
 	}
 
@@ -213,7 +212,10 @@ func runUpload(t *testing.T, r uploadRun) uploadResult {
 func readCalls(t *testing.T, fake string) [][]string {
 	t.Helper()
 
-	raw, err := os.ReadFile(filepath.Join(fake, "calls")) //nolint:gosec // a file of the fake, in a temporary directory
+	fakeRoot := openRootOf(t, fake)
+	defer closeRoot(t, fakeRoot)
+
+	raw, err := fakeRoot.ReadFile("calls")
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -400,7 +402,7 @@ func TestReleaseUploadRefusesABadVersion(t *testing.T) {
 
 	versions := []string{
 		"v1$(id)", "v1.2.3`id`", "v1.2.3;id", "v1.2.3 ", "v1.2.3\nv1.2.4", "v1.2.3\n", "-x", "v1.2", "v01.2.3",
-		"v1.2.3-rc1", "v1." + strings.Repeat("2", 62), "", "V1.2.3", "1.2.3", "v1.2.3.4",
+		"v1.2.3-rc1", "v1.2." + strings.Repeat("1", 60), "", "V1.2.3", "1.2.3", "v1.2.3.4",
 	}
 
 	// The second run replaces the verify script, so that the allowlist of
@@ -535,6 +537,39 @@ func TestReleaseUploadRefusesAChangedSet(t *testing.T) {
 		{"link in place of SHA256SUMS", replaceWithLink("SHA256SUMS")},
 		{"missing archive", removeFile(archiveName("darwin_arm64"))},
 		{"empty SHA256SUMS", func(t *testing.T, dir string) { t.Helper(); writeIn(t, dir, "SHA256SUMS", nil) }},
+		{"extra line with an absolute path", extraSumsLine(func(t *testing.T, _, _ string) string {
+			t.Helper()
+
+			outside := t.TempDir()
+			writeIn(t, outside, "outside.txt", []byte("x"))
+
+			return sha256Hex([]byte("x")) + "  " + filepath.Join(outside, "outside.txt")
+		})},
+		{"extra line with a parent path", extraSumsLine(func(t *testing.T, dir, sum string) string {
+			t.Helper()
+
+			return sum + "  ../" + filepath.Base(dir) + "/" + archiveName("linux_amd64")
+		})},
+		{"extra line with a dot path", extraSumsLine(func(t *testing.T, _, sum string) string {
+			t.Helper()
+
+			return sum + "  ./" + archiveName("linux_amd64")
+		})},
+		{"extra BSD tag line", extraSumsLine(func(t *testing.T, _, sum string) string {
+			t.Helper()
+
+			return "SHA256 (" + archiveName("linux_amd64") + ") = " + sum
+		})},
+		{"extra comment line", extraSumsLine(func(t *testing.T, _, sum string) string {
+			t.Helper()
+
+			return "# " + sum
+		})},
+		{"extra blank line", extraSumsLine(func(t *testing.T, _, _ string) string {
+			t.Helper()
+
+			return ""
+		})},
 	}
 
 	// Only the verify script reads the entries of an archive: a replaced
@@ -565,6 +600,28 @@ func TestReleaseUploadRefusesAChangedSet(t *testing.T) {
 				checkRefusal(t, res, 0, "rebuild the set, then run make release-verify VERSION=v1.2.3")
 			})
 		}
+	}
+}
+
+// sha256Hex returns the lowercase hex SHA-256 of data.
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+
+	return hex.EncodeToString(sum[:])
+}
+
+// extraSumsLine appends one line to SHA256SUMS. The line holds a checksum that
+// is right for the file that it names, so that sha256sum alone would pass it.
+// line gets the directory of the set and the real checksum of the linux_amd64
+// archive.
+func extraSumsLine(line func(t *testing.T, dir, sum string) string) func(t *testing.T, dir string) {
+	return func(t *testing.T, dir string) {
+		t.Helper()
+
+		sum := sha256Hex(readIn(t, dir, archiveName("linux_amd64")))
+		sums := readIn(t, dir, "SHA256SUMS")
+
+		writeIn(t, dir, "SHA256SUMS", append(sums, []byte(line(t, dir, sum)+"\n")...))
 	}
 }
 
@@ -784,16 +841,17 @@ func TestInstallGuideReleaseSection(t *testing.T) {
 }
 
 // TestReleaseRecordCheckTargetKeepsTheVersionOutOfTheShell runs the make
-// target with a version that holds a quote and a command. The command must
-// not run.
+// target, in a copy of the work tree, with a version that holds a quote and a
+// command. The command must not run.
 func TestReleaseRecordCheckTargetKeepsTheVersionOutOfTheShell(t *testing.T) {
 	t.Parallel()
 
+	tree := copyWorkTree(t)
 	marker := filepath.Join(t.TempDir(), "marker")
 	version := "v1'; touch " + marker + "; '"
 
-	cmd := exec.CommandContext( //nolint:gosec // the hostile version is the input of the test, passed as one argument
-		t.Context(), "make", "--no-print-directory", "-C", "../..", "release-record-check", "VERSION="+version,
+	cmd := exec.CommandContext( //nolint:gosec // make of a copy of the work tree runs on purpose; the hostile version is one argument
+		t.Context(), "make", "--no-print-directory", "-C", tree, "release-record-check", "VERSION="+version,
 	)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
 
@@ -809,4 +867,66 @@ func TestReleaseRecordCheckTargetKeepsTheVersionOutOfTheShell(t *testing.T) {
 	if !strings.Contains(string(out), "is not vMAJOR.MINOR.PATCH") {
 		t.Errorf("output lacks the version message of the script:\n%s", out)
 	}
+}
+
+// TestReleaseUploadScriptHasNoTraceOrEval checks that the script has no
+// command that prints the environment or runs a string as code.
+func TestReleaseUploadScriptHasNoTraceOrEval(t *testing.T) {
+	t.Parallel()
+
+	script := uploadScriptText(t)
+
+	for _, deny := range []*regexp.Regexp{
+		regexp.MustCompile(`(?m)^\s*set\s+-[a-z]*x`),
+		regexp.MustCompile(`(?i)xtrace`),
+		regexp.MustCompile(`(?m)(^|[;&|(]\s*|\s)eval\s`),
+		regexp.MustCompile(`\bbash\s+-c\b`),
+		regexp.MustCompile(`\bsh\s+-c\b`),
+	} {
+		if m := deny.FindString(script); m != "" {
+			t.Errorf("the script holds %q", m)
+		}
+	}
+}
+
+// TestReleaseUploadCreatesFromTheFileList checks that the create line passes
+// the five names as the list and does not use a glob.
+func TestReleaseUploadCreatesFromTheFileList(t *testing.T) {
+	t.Parallel()
+
+	script := uploadScriptText(t)
+
+	var create string
+
+	for line := range strings.SplitSeq(script, "\n") {
+		if strings.Contains(line, "gh release create") && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			create = line
+		}
+	}
+
+	if create == "" {
+		t.Fatal("the script has no gh release create line")
+	}
+
+	if !strings.Contains(create, `-- "${files[@]}"`) {
+		t.Errorf("the create line does not pass the file list: %s", create)
+	}
+
+	if strings.ContainsAny(strings.ReplaceAll(create, "[@]", ""), "*?") {
+		t.Errorf("the create line holds a glob: %s", create)
+	}
+}
+
+func uploadScriptText(t *testing.T) string {
+	t.Helper()
+
+	root := openRootOf(t, "../..")
+	defer closeRoot(t, root)
+
+	raw, err := root.ReadFile("scripts/release-upload.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(raw)
 }

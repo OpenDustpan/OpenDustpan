@@ -42,15 +42,15 @@ When the archives and the registry pushes pass, the release workflow SHALL creat
 
 ### Requirement: The upload checks the set itself
 
-When `scripts/release-upload.sh` runs, it SHALL check the version, run `scripts/release-verify.sh` and `sha256sum --check --strict SHA256SUMS` on the files in its directory, and call `gh` only after both pass.
+When `scripts/release-upload.sh` runs, it SHALL check the version, run `scripts/release-verify.sh`, check the shape of the set against an allowlist (exactly the five names as regular files, exactly one SHA256SUMS line for each archive and no other line), and run `sha256sum --check --strict SHA256SUMS` on the files in its directory, and call `gh` only after all pass.
 
 #### Scenario: A changed archive
 - **WHEN** one byte of an archive differs from its `SHA256SUMS` line
 - **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
 
 #### Scenario: A hostile set
-- **WHEN** `SHA256SUMS` names another file, lacks an archive, repeats a line, or the directory holds an extra file or a link
-- **THEN** the script exits with a non-zero status and makes no `gh` call.
+- **WHEN** `SHA256SUMS` names another file, lacks an archive, repeats a line, or holds any other line, or the directory holds an extra file or a link
+- **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
 
 #### Scenario: A bad version
 - **WHEN** the version holds `$(id)`, a backtick, a semicolon, a space, a newline, a leading dash, a suffix, or more than 64 characters

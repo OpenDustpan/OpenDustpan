@@ -144,7 +144,7 @@ If this command does not find a draft by tag, delete it by release id. Get the
 id first:
 
 ```sh
-gh api repos/OpenDustpan/OpenDustpan/releases --jq '.[] | select(.tag_name=="<tag>") | .id'
+gh api repos/OpenDustpan/OpenDustpan/releases --paginate --jq '.[] | select(.tag_name=="<tag>") | .id'
 gh api -X DELETE repos/OpenDustpan/OpenDustpan/releases/<id>
 ```
 

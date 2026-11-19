@@ -24,8 +24,8 @@ fi
 version="$1"
 dir="$2"
 
-# refuse prints one line and stops. It never prints the version or the repo
-# that the caller gave, so a hostile value cannot reach a log.
+# refuse prints one line and stops. It never prints a value that the caller
+# gave before its allowlist has passed, so a hostile value cannot reach a log.
 refuse() {
   echo "release-upload: $1" >&2
   exit 1
@@ -38,6 +38,7 @@ refuse() {
 if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
   refuse "bad version; use v followed by three dot separated numbers, for example v0.1.0: run make release-verify VERSION=v0.1.0"
 fi
+[[ ${#version} -le 64 ]] || refuse "bad version; use v followed by three dot separated numbers, for example v0.1.0: run make release-verify VERSION=v0.1.0"
 
 # Allowlist of the repository. Defense in depth: gh checks the value too; this
 # check stays so that the repository name in a message or in an API path never
@@ -85,10 +86,24 @@ for path in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
   ((known)) || refuse "SHA256SUMS does not match the files: the directory holds a file that is not in the set; $help"
 done
 
-# One line for each archive. A line for another name makes sha256sum fail.
-sums="$(<"$dir/SHA256SUMS")"
+# The lines of SHA256SUMS are an allowlist: exactly one line for each archive,
+# in the form <64 lowercase hex>, two spaces, the archive name, and no other
+# line. sha256sum --check --strict checks only the listed files, so a line for
+# a path outside the set would pass it. A refused line is never repaired.
+mapfile -t sum_lines <"$dir/SHA256SUMS"
+[[ ${#sum_lines[@]} -eq ${#archives[@]} ]] || refuse "SHA256SUMS does not match the files: it must hold exactly one line for each of the four archives; $help"
+for line in "${sum_lines[@]}"; do
+  ok=0
+  for name in "${archives[@]}"; do
+    [[ "$line" =~ ^[0-9a-f]{64}\ \ ${name//./\.}$ ]] && ok=1
+  done
+  ((ok)) || refuse "SHA256SUMS does not match the files: a line is not <64 hex>, two spaces and an archive name; $help"
+done
 for name in "${archives[@]}"; do
-  count="$(printf '%s\n' "$sums" | grep -c -E -- "^[0-9a-f]{64}  ${name//./\\.}\$" || true)"
+  count=0
+  for line in "${sum_lines[@]}"; do
+    [[ "${line:66}" == "$name" ]] && count=$((count + 1))
+  done
   [[ "$count" -eq 1 ]] || refuse "SHA256SUMS does not match the files: $name has no line or more than one; $help"
 done
 
@@ -113,7 +128,7 @@ Check one archive: grep ' <archive>\$' SHA256SUMS | sha256sum -c -"
 
 # The five names are written out, with no glob. A draft only: there is no
 # publish flag and no --clobber.
-cd "$dir"
+cd -- "$dir"
 if ! gh release create "$version" --draft --verify-tag --title "$version" --notes "$notes" -- "${files[@]}" >/dev/null; then
   refuse "the draft may exist with some files; delete it with: gh release delete $version --repo $repo, then re-run the failed job"
 fi
