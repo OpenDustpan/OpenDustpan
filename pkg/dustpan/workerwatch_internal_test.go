@@ -17,12 +17,12 @@ import (
 // 400 ms, and a heartbeat goes out at most every 50 ms.
 const beatLease = 200 * time.Millisecond
 
-// pauseFor waits for d or until the test context ends.
-func pauseFor(t *testing.T, d time.Duration) {
+// pauseBeatWait waits for beatWait or until the test context ends.
+func pauseBeatWait(t *testing.T) {
 	t.Helper()
 
 	select {
-	case <-time.After(d):
+	case <-time.After(beatWait):
 	case <-t.Context().Done():
 	}
 }
@@ -97,7 +97,7 @@ func TestNoWorkerRefusesAfterTwoLeasesAndNotBefore(t *testing.T) {
 		t.Fatalf("start right after the process began: %v, want it admitted", err)
 	}
 
-	pauseFor(t, beatWait)
+	pauseBeatWait(t)
 
 	err := admitStartOf(t, api)
 	if !errors.Is(err, noworker.ErrNoWorker) {
@@ -330,7 +330,7 @@ func TestWorkerThatStopsIsMissedAfterTwoLeases(t *testing.T) {
 		t.Fatalf("start right after a heartbeat: %v, want it admitted", err)
 	}
 
-	pauseFor(t, beatWait)
+	pauseBeatWait(t)
 
 	if err := admitStartOf(t, api); !errors.Is(err, noworker.ErrNoWorker) {
 		t.Fatalf("start 2 leases after the last heartbeat: %v, want ErrNoWorker", err)
@@ -375,7 +375,7 @@ func TestSkewedProcessClockMovesNoResult(t *testing.T) {
 				t.Fatalf("fresh operation, report = %+v, want a live worker and an age far below the skew", report)
 			}
 
-			pauseFor(t, beatWait)
+			pauseBeatWait(t)
 			claimAttempt(t, tracked)
 
 			api.mu.Lock()
@@ -557,7 +557,7 @@ func TestWorkerLeaseDecidesWhenAWorkerIsAbsent(t *testing.T) {
 
 			// The worker beat once and is silent from now on. The wait is past
 			// 2 periods of the shorter lease and far below 2 of the longer one.
-			pauseFor(t, beatWait)
+			pauseBeatWait(t)
 
 			err := admitStartOf(t, api)
 			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
