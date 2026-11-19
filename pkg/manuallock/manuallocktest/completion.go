@@ -105,12 +105,13 @@ func testCompletionPut(t *testing.T, s Store, r idempotency.Store) {
 	ref, material, c := begin(t, r, "put", alice)
 
 	l := manuallock.Lock{Since: now(), Target: target, Holder: alice, Reason: testReason}
-	if err := s.PutLock(
+	err := s.PutLock(
 		idempotency.WithCompletion(t.Context(), c),
 		l,
 		f.ns.Fence(),
 		lockAudit(f.ns.Fence()),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("PutLock: %v", err)
 	}
 
@@ -130,9 +131,10 @@ func testCompletionRemove(t *testing.T, s Store, r idempotency.Store) {
 
 	ref, material, c := begin(t, r, "remove", alice)
 
-	if _, err := s.RemoveLock(
+	_, err := s.RemoveLock(
 		idempotency.WithCompletion(t.Context(), c), target, alice, f.ns.Fence(), lockAudit(f.ns.Fence()),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("RemoveLock: %v", err)
 	}
 
@@ -152,9 +154,10 @@ func testCompletionForce(t *testing.T, s Store, r idempotency.Store) {
 
 	ref, material, c := begin(t, r, "force", bob)
 
-	if _, err := s.ForceRemoveLock(
+	_, err := s.ForceRemoveLock(
 		idempotency.WithCompletion(t.Context(), c), target, f.ns.Fence(), lockAudit(f.ns.Fence()),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("ForceRemoveLock: %v", err)
 	}
 
