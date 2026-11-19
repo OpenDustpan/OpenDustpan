@@ -1,96 +1,121 @@
 package server_test
 
 import (
+	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
-	"opendustpan.org/opendustpan/pkg/access"
-	"opendustpan.org/opendustpan/pkg/accesstoken"
-	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-// TestRevokeTokenOfUnknownKindAnswers409 checks, through the HTTP handler and
-// the real token service, that a revoke of a stored token of a kind that this
-// version does not know answers a defined 409 with a fixed message that does
-// not name the row, and that the row stays unrevoked.
-func TestRevokeTokenOfUnknownKindAnswers409(t *testing.T) {
+// TestUnknownKindTokenAnswers checks, through the HTTP handler and the real
+// token service, the answer of each token route for a stored token of a kind
+// that this version does not know. The own routes answer the owner 409 and
+// every other person 404 with the body of an ID that does not exist: a
+// person learns nothing about the row of another person. The administrator
+// routes answer 409. No 409 body names the token ID, and no change reaches
+// the row. Each hostile kind is one run.
+func TestUnknownKindTokenAnswers(t *testing.T) {
 	t.Parallel()
 
-	const adminSecret = "revoke-unknown-kind-admin-secret-0123456789"
+	for _, kind := range []string{
+		"trust", "", "Personal", "PERSONAL", "personal ", " personal", "personal\x00", "../personal",
+	} {
+		t.Run(strconv.Quote(kind), func(t *testing.T) {
+			t.Parallel()
 
-	admin, err := identity.NewStaticToken("admin", adminSecret)
-	if err != nil {
-		t.Fatalf("static token: %v", err)
+			f := newAccessFixture(t)
+			f.seedService(t, "deploy")
+
+			var personal, service tokenDoc
+
+			f.as(t, "alice", apiCall{
+				http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"laptop"}`, http.StatusCreated,
+			}, &personal)
+			f.as(t, "admin", apiCall{
+				http.MethodPost, "/api/server/principals/prn-deploy/tokens", `{"name":"ci"}`, http.StatusCreated,
+			}, &service)
+
+			setStoredTokenKind(t, f.path, personal.ID, kind)
+			setStoredTokenKind(t, f.path, service.ID, kind)
+
+			const own = "/api/dustpan/v1/me/tokens/"
+
+			p, svc := personal.ID, service.ID
+			conflict, notFound := http.StatusConflict, http.StatusNotFound
+
+			for _, c := range []unknownKindCase{
+				{"own revoke, owner", "alice", http.MethodDelete, own + p, "", p, conflict, errcode.TokenUnknownKind},
+				{"own revoke, non-owner", "bob", http.MethodDelete, own + p, "", p, notFound, errcode.TokenNotFound},
+				{"own rotate, owner", "alice", http.MethodPost, own + p + "/rotate", `{}`, p, conflict, errcode.TokenUnknownKind},
+				{"own rotate, non-owner", "bob", http.MethodPost, own + p + "/rotate", `{}`, p, notFound, errcode.TokenNotFound},
+				{"admin revoke", "admin", http.MethodDelete, "/api/server/tokens/" + p, "", p, conflict, errcode.TokenUnknownKind},
+				{"admin get", "admin", http.MethodGet, "/api/server/tokens/" + p, "", p, conflict, errcode.TokenUnknownKind},
+				{
+					"service route rotate", "admin", http.MethodPost, "/api/server/service-tokens/" + svc + "/rotate", `{}`,
+					svc, conflict, errcode.TokenUnknownKind,
+				},
+				{
+					"principal route revoke", "admin", http.MethodDelete, "/api/server/principals/prn-deploy/tokens/" + svc, "",
+					svc, conflict, errcode.TokenUnknownKind,
+				},
+			} {
+				f.checkUnknownKindCase(t, c)
+			}
+		})
+	}
+}
+
+// unknownKindCase is one request of TestUnknownKindTokenAnswers.
+type unknownKindCase struct {
+	name     string
+	subject  string
+	method   string
+	path     string
+	body     string
+	token    string
+	want     int
+	wantCode string
+}
+
+// checkUnknownKindCase sends c and checks its status, its error code, that a
+// 409 body does not name the token ID, and that a 404 body equals the body for
+// an ID that does not exist.
+func (f accessFixture) checkUnknownKindCase(t *testing.T, c unknownKindCase) {
+	t.Helper()
+
+	body := f.rawAs(t, c.subject, apiCall{c.method, c.path, c.body, c.want})
+
+	if !strings.Contains(body, c.wantCode) {
+		t.Errorf("%s: body %q lacks the code %q", c.name, body, c.wantCode)
 	}
 
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-	handler, st := newServiceBackedHandlerAt(t, path, admin, identity.AdminOnly{})
-
-	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
-
-	prn := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, ID: "prn-ci", Subject: "ci", DisplayName: "",
-		Kind: principal.KindService, Source: principal.SourceLocal, Namespace: "",
-		GroupCount: 0, BreakGlass: false, DisabledAt: time.Time{},
-	}
-	createErr := st.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID))
-	if createErr != nil {
-		t.Fatalf("seed principal: %v", createErr)
+	if c.want == http.StatusConflict && strings.Contains(body, c.token) {
+		t.Errorf("%s: body %q names the token ID", c.name, body)
 	}
 
-	svc, err := accesstoken.NewService(accesstoken.Config{
-		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
-		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
-		},
-		Logger: nil, Now: func() time.Time { return at }, NewID: nil,
-	})
-	if err != nil {
-		t.Fatalf("token service: %v", err)
+	if c.want != http.StatusNotFound {
+		return
 	}
 
-	issued, err := svc.NewTrustToken(t.Context(), at, prn.ID, "old kind", "trust-rule:old")
-	if err != nil {
-		t.Fatalf("NewTrustToken: %v", err)
+	missingPath := strings.Replace(c.path, c.token, "tok-missing", 1)
+	missing := f.rawAs(t, c.subject, apiCall{c.method, missingPath, c.body, c.want})
+
+	if strings.ReplaceAll(body, c.token, "ID") != strings.ReplaceAll(missing, "tok-missing", "ID") {
+		t.Errorf("%s: body %q differs from the body for an unknown ID %q", c.name, body, missing)
 	}
+}
 
-	entry := storetest.ServerChange(at, "token:"+issued.Token.ID)
-	if createErr := st.CreateToken(t.Context(), issued.Token, issued.Digest, entry); createErr != nil {
-		t.Fatalf("store the token: %v", createErr)
-	}
+// rawAs sends c as subject, fails unless it answers c.want, and returns the
+// body.
+func (f accessFixture) rawAs(t *testing.T, subject string, c apiCall) string {
+	t.Helper()
 
-	setStoredTokenKind(t, path, issued.Token.ID, "trust")
+	var raw json.RawMessage
 
-	routes := []string{
-		"/api/server/tokens/" + issued.Token.ID,
-		"/api/server/principals/" + prn.ID + "/tokens/" + issued.Token.ID,
-	}
+	f.as(t, subject, c, &raw)
 
-	for _, route := range routes {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, route, nil)
-		req.Header.Set("Authorization", "Bearer "+adminSecret)
-
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusConflict {
-			t.Errorf("DELETE %s answers %d, want %d (%s)", route, rec.Code, http.StatusConflict, rec.Body.String())
-		}
-
-		if !strings.Contains(rec.Body.String(), errcode.TokenUnknownKind) {
-			t.Errorf("DELETE %s body %q lacks the code %q", route, rec.Body.String(), errcode.TokenUnknownKind)
-		}
-
-		if strings.Contains(rec.Body.String(), issued.Token.ID) {
-			t.Errorf("DELETE %s body %q names the token ID", route, rec.Body.String())
-		}
-	}
+	return string(raw)
 }
