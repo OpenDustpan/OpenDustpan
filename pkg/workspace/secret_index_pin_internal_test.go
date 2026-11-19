@@ -1,7 +1,7 @@
 package workspace
 
 import (
-	"runtime"
+	"runtime/debug"
 	"strconv"
 	"testing"
 )
@@ -15,9 +15,9 @@ import (
 func TestSecretIndexMemoPinsDigestedContainers(t *testing.T) {
 	t.Parallel()
 
-	work := newMaskWork(t.Context(), nil)
+	work := newMaskWork(nil)
 	secret := map[string]any{"s": "x"}
-	index := newSecretIndex(work, []any{secret})
+	index := newSecretIndex(t.Context(), work, []any{secret})
 
 	const rounds = 300
 
@@ -30,7 +30,7 @@ func TestSecretIndexMemoPinsDigestedContainers(t *testing.T) {
 
 		parent["child"] = "replaced"
 
-		runtime.GC() //nolint:revive // the test needs a collection, to free the dropped containers
+		debug.FreeOSMemory() // forces a collection that frees the dropped containers
 
 		// Allocate containers of the same length, which reuse a freed address.
 		for i := range 64 {
@@ -54,14 +54,14 @@ func TestSecretIndexMemoPinsDigestedContainers(t *testing.T) {
 func TestSecretIndexDigestIsStableAfterGC(t *testing.T) {
 	t.Parallel()
 
-	work := newMaskWork(t.Context(), nil)
-	index := newSecretIndex(work, nil)
+	work := newMaskWork(nil)
+	index := newSecretIndex(t.Context(), work, nil)
 
 	for round := range 200 {
 		index.digest(map[string]any{"k": "v" + strconv.Itoa(round)})
 		index.digest([]any{"a" + strconv.Itoa(round)})
 
-		runtime.GC() //nolint:revive // the test needs a collection, to free the dropped containers
+		debug.FreeOSMemory() // forces a collection that frees the dropped containers
 
 		value := map[string]any{"k": "w" + strconv.Itoa(round)}
 		list := []any{"b" + strconv.Itoa(round)}

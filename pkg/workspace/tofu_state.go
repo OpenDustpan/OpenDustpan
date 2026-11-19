@@ -198,19 +198,18 @@ func (b *maskBudget) charge(n int) error {
 // the probe that counts the work. The fields are unexported, so a walk cannot
 // swap the budget for a fresh one and spend the bound again.
 type maskWork struct {
-	ctx    context.Context //nolint:containedctx // the work object of one read, never stored past it
 	budget *maskBudget
 	probe  *maskProbe
 }
 
 // newMaskWork returns the work object of one masked read, with nothing spent.
 // A nil probe makes a probe of its own.
-func newMaskWork(ctx context.Context, probe *maskProbe) *maskWork {
+func newMaskWork(probe *maskProbe) *maskWork {
 	if probe == nil {
 		probe = &maskProbe{oneDigest: false, pointers: 0, routeSteps: 0, resolveSteps: 0, digests: 0, comparisons: 0}
 	}
 
-	return &maskWork{ctx: ctx, budget: newMaskBudget(), probe: probe}
+	return &maskWork{budget: newMaskBudget(), probe: probe}
 }
 
 // step charges one resolved token of a pointer to the budget and counts it.
@@ -263,8 +262,8 @@ func withinDepth(v any, depth int) bool {
 // whole document too; this scan stays so that a new caller of the walk cannot
 // skip the bound, and it adds the path-byte bound that the decoder does not
 // have.
-func checkInstanceWork(work *maskWork, instance map[string]any, resource, position int) error {
-	if err := work.ctx.Err(); err != nil {
+func checkInstanceWork(ctx context.Context, work *maskWork, instance map[string]any, resource, position int) error {
+	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("scan instance: %w", err)
 	}
 
@@ -281,7 +280,7 @@ func checkInstanceWork(work *maskWork, instance map[string]any, resource, positi
 // checkValueWork returns ErrStateBound when a value that a reveal answers,
 // below the value path path, would nest deeper than MaxStateDepth or would
 // spend more than maxMaskWorkBytes bytes. It charges the budget of work.
-func checkValueWork(work *maskWork, value any, path string) error {
+func checkValueWork(ctx context.Context, work *maskWork, value any, path string) error {
 	return scanMaskWork(value, len(path), 0, work.budget)
 }
 
@@ -927,23 +926,37 @@ func routeStep(node any, token string) (any, string, bool) {
 // routePhysical resolves tokens under node by physical steps only: no dynamic
 // wrapper is transparent. It appends the canonical token of each step to
 // route and charges each step to the budget of work. It reports false when
-// the node does not hold the path.
-func routePhysical(work *maskWork, node any, tokens, route []string) ([]string, bool, error) {
-	for _, token := range tokens {
+// the node does not hold the path. The last result is true when the walk met
+// a dynamic wrapper before the last token, which the pointer could only pass
+// with a second transparent wrapper.
+func routePhysical(
+	ctx context.Context, work *maskWork, node any, tokens, route []string,
+) ([]string, bool, bool, error) {
+	metWrapper := false
+
+	for i, token := range tokens {
+		if err := ctx.Err(); err != nil {
+			return nil, false, false, err
+		}
+
 		if err := work.step(token); err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 
 		next, key, ok := routeStep(node, token)
 		if !ok {
-			return nil, false, nil
+			return nil, false, metWrapper, nil
 		}
 
 		route = append(route, key)
 		node = next
+
+		if wrapped, isMap := next.(map[string]any); isMap && i < len(tokens)-1 && isDynamicWrapper(wrapped) {
+			metWrapper = true
+		}
 	}
 
-	return route, true, nil
+	return route, true, metWrapper, nil
 }
 
 // routeTokens returns the physical route of tokens under node, or false when
@@ -959,7 +972,7 @@ func routePhysical(work *maskWork, node any, tokens, route []string) ([]string, 
 // The route holds the keys read from objects, the decimal index of each list
 // step, and the extra "value" step when the wrapper rule applies. No tokens is
 // an empty route and true. It never changes the tree.
-func routeTokens(work *maskWork, node any, tokens []string) ([]string, bool, error) {
+func routeTokens(ctx context.Context, work *maskWork, node any, tokens []string) ([]string, bool, error) {
 	route := make([]string, 0, len(tokens)+1)
 
 	for i, token := range tokens {
@@ -982,7 +995,7 @@ func routeTokens(work *maskWork, node any, tokens []string) ([]string, bool, err
 		}
 
 		if wrapped, isMap := next.(map[string]any); parentIsMap && isMap && isDynamicWrapper(wrapped) {
-			return routeWrapper(work, wrapped, tokens[i+1:], route)
+			return routeWrapper(ctx, work, wrapped, tokens[i+1:], route)
 		}
 	}
 
@@ -995,15 +1008,37 @@ func routeTokens(work *maskWork, node any, tokens []string) ([]string, bool, err
 // step. Both tries take physical steps only, so no pointer takes a second
 // wrapper and the work does not grow with the product of the depth and the
 // count of wrappers.
-func routeWrapper(work *maskWork, wrapped map[string]any, rest, route []string) ([]string, bool, error) {
+//
+// Fail closed: when neither try resolves the pointer and a try met a second
+// dynamic wrapper, the pointer may name a value that only a second wrapper
+// reaches. The route then ends at the first wrapper, and the caller masks the
+// whole wrapper. The read never answers a value that a mark may name, and it
+// answers no more than the one wrapper of the pointer.
+func routeWrapper(
+	ctx context.Context, work *maskWork, wrapped map[string]any, rest, route []string,
+) ([]string, bool, error) {
+	metWrapper := false
+
 	if _, member := wrapped[rest[0]]; member {
-		sub, ok, err := routePhysical(work, wrapped, rest, route)
+		sub, ok, met, err := routePhysical(ctx, work, wrapped, rest, route)
 		if err != nil || ok {
 			return sub, ok, err
 		}
+
+		metWrapper = met
 	}
 
-	return routePhysical(work, wrapped["value"], rest, append(route, "value"))
+	sub, ok, met, err := routePhysical(ctx, work, wrapped["value"], rest, append(route[:len(route):len(route)], "value"))
+	if err != nil || ok {
+		return sub, ok, err
+	}
+
+	inner, innerIsMap := wrapped["value"].(map[string]any)
+	if metWrapper || met || (innerIsMap && isDynamicWrapper(inner)) {
+		return route, true, nil
+	}
+
+	return nil, false, nil
 }
 
 // routeSet holds the physical routes that a mask applied, as a trie of
@@ -1122,8 +1157,8 @@ func maskRoute(node any, route []string, path string) bool {
 // does not hold the path. It resolves the tokens once, like the mask, and
 // charges the steps to the budget of work. The caller snapshots what a mark
 // masks with it.
-func lookupTokens(work *maskWork, node any, tokens []string) (any, bool, error) {
-	route, resolved, err := routeTokens(work, node, tokens)
+func lookupTokens(ctx context.Context, work *maskWork, node any, tokens []string) (any, bool, error) {
+	route, resolved, err := routeTokens(ctx, work, node, tokens)
 	if err != nil || !resolved {
 		return nil, false, err
 	}
@@ -1212,7 +1247,7 @@ type maskProbe struct {
 
 // newSecretIndex returns the index of secrets. A secret that equals an
 // earlier one adds nothing.
-func newSecretIndex(work *maskWork, secrets []any) *secretIndex {
+func newSecretIndex(ctx context.Context, work *maskWork, secrets []any) *secretIndex {
 	probe := work.probe
 	index := &secretIndex{
 		seed:     maphash.MakeSeed(),
@@ -1389,23 +1424,23 @@ func (p *duplicatePass) maskDuplicateAt(child any, path string) bool {
 // rendering does not mark, as the output of a terraform_data resource, so
 // the copy answers masked too. Path is the value path of node. It checks the
 // context of work at each container and stops with its error.
-func (p *duplicatePass) maskDuplicates(work *maskWork, node any, path string) error {
-	if err := work.ctx.Err(); err != nil {
+func (p *duplicatePass) maskDuplicates(ctx context.Context, work *maskWork, node any, path string) error {
+	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("mask duplicates: %w", err)
 	}
 
 	switch typed := node.(type) {
 	case map[string]any:
-		return p.maskDuplicateMap(work, typed, path)
+		return p.maskDuplicateMap(ctx, work, typed, path)
 	case []any:
-		return p.maskDuplicateList(work, typed, path)
+		return p.maskDuplicateList(ctx, work, typed, path)
 	default:
 		return nil
 	}
 }
 
 // maskDuplicateMap masks each duplicating entry of doc.
-func (p *duplicatePass) maskDuplicateMap(work *maskWork, doc map[string]any, path string) error {
+func (p *duplicatePass) maskDuplicateMap(ctx context.Context, work *maskWork, doc map[string]any, path string) error {
 	for key, child := range doc {
 		childPath := path + "/" + escapeTofuPointerToken(key)
 
@@ -1416,7 +1451,7 @@ func (p *duplicatePass) maskDuplicateMap(work *maskWork, doc map[string]any, pat
 			continue
 		}
 
-		if err := p.maskDuplicates(work, child, childPath); err != nil {
+		if err := p.maskDuplicates(ctx, work, child, childPath); err != nil {
 			return err
 		}
 	}
@@ -1425,7 +1460,7 @@ func (p *duplicatePass) maskDuplicateMap(work *maskWork, doc map[string]any, pat
 }
 
 // maskDuplicateList masks each duplicating element of list.
-func (p *duplicatePass) maskDuplicateList(work *maskWork, list []any, path string) error {
+func (p *duplicatePass) maskDuplicateList(ctx context.Context, work *maskWork, list []any, path string) error {
 	for i, child := range list {
 		childPath := path + "/" + strconv.Itoa(i)
 
@@ -1436,7 +1471,7 @@ func (p *duplicatePass) maskDuplicateList(work *maskWork, list []any, path strin
 			continue
 		}
 
-		if err := p.maskDuplicates(work, child, childPath); err != nil {
+		if err := p.maskDuplicates(ctx, work, child, childPath); err != nil {
 			return err
 		}
 	}
@@ -1486,8 +1521,8 @@ type maskCollectors struct {
 // lookup of the secret and the mask follow the physical route, with no second
 // resolution. A pointer below an already applied route masks nothing. A
 // pointer at the same node is masked again.
-func maskOnePointer(work *maskWork, attributes any, relative, full string, out *maskCollectors) error {
-	route, resolved, err := routeTokens(work, attributes, splitPointer(relative))
+func maskOnePointer(ctx context.Context, work *maskWork, attributes any, relative, full string, out *maskCollectors) error {
+	route, resolved, err := routeTokens(ctx, work, attributes, splitPointer(relative))
 	if err != nil {
 		return err
 	}
@@ -1544,9 +1579,9 @@ type instanceSite struct {
 // a state with many pointers ends with ErrStateBound or with the end of the
 // context.
 func maskTofuInstance(
-	work *maskWork, instance map[string]any, site instanceSite, marks SensitiveMarks,
+	ctx context.Context, work *maskWork, instance map[string]any, site instanceSite, marks SensitiveMarks,
 ) (any, []string, error) {
-	if err := work.ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, nil, fmt.Errorf("mask instance: %w", err)
 	}
 
@@ -1579,14 +1614,14 @@ func maskTofuInstance(
 	out := maskCollectors{seen: seen, masked: &masked, secrets: &secrets, applied: applied}
 
 	pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
-	if err := maskPointers(work, attributes, base, pointers, &out); err != nil {
+	if err := maskPointers(ctx, work, attributes, base, pointers, &out); err != nil {
 		return nil, nil, err
 	}
 
 	if len(secrets) > 0 {
-		pass := duplicatePass{index: newSecretIndex(work, secrets), seen: seen, masked: &masked}
+		pass := duplicatePass{index: newSecretIndex(ctx, work, secrets), seen: seen, masked: &masked}
 
-		if err := pass.maskDuplicates(work, attributes, base); err != nil {
+		if err := pass.maskDuplicates(ctx, work, attributes, base); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -1602,9 +1637,9 @@ func maskTofuInstance(
 // costs its path and the fixed cost of a marker, as a value of the scan does:
 // the scan of the values cannot see a pointer that names no value, so the
 // pointers have a charge of their own. It checks the context at each pointer.
-func maskPointers(work *maskWork, attributes any, base string, pointers []string, out *maskCollectors) error {
+func maskPointers(ctx context.Context, work *maskWork, attributes any, base string, pointers []string, out *maskCollectors) error {
 	for _, relative := range pointers {
-		if err := work.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("mask pointers: %w", err)
 		}
 
@@ -1619,7 +1654,7 @@ func maskPointers(work *maskWork, attributes any, base string, pointers []string
 			continue
 		}
 
-		if err := maskOnePointer(work, attributes, relative, full, out); err != nil {
+		if err := maskOnePointer(ctx, work, attributes, relative, full, out); err != nil {
 			return err
 		}
 	}
@@ -1696,10 +1731,10 @@ func ReadStateResource(
 	// walk of every instance spend from one budget, and the scan of all
 	// instances ends before the walk builds the first marker. Instances that
 	// share base marks cannot spend the bound again for each instance.
-	work := newMaskWork(ctx, nil)
+	work := newMaskWork(nil)
 
 	for i, instance := range instances {
-		if err := checkInstanceWork(work, instance, position, i); err != nil {
+		if err := checkInstanceWork(ctx, work, instance, position, i); err != nil {
 			return StateDetail{}, err
 		}
 	}
@@ -1707,7 +1742,7 @@ func ReadStateResource(
 	for i, instance := range instances {
 		site := instanceSite{resource: position, position: i, address: tofuInstanceAddress(obj, instance)}
 
-		attributes, masked, maskErr := maskTofuInstance(work, instance, site, marks)
+		attributes, masked, maskErr := maskTofuInstance(ctx, work, instance, site, marks)
 		if maskErr != nil {
 			return StateDetail{}, fmt.Errorf("mask instance %d: %w", i, maskErr)
 		}
@@ -2066,7 +2101,7 @@ type tofuDiffResource struct {
 // markers. With no kept marks for the version every attribute value answers
 // as a marker.
 func maskedInstanceCopy(
-	work *maskWork, instance map[string]any, site instanceSite, marks SensitiveMarks,
+	ctx context.Context, work *maskWork, instance map[string]any, site instanceSite, marks SensitiveMarks,
 ) (any, error) {
 	copied, err := json.Marshal(instance)
 	if err != nil {
@@ -2082,7 +2117,7 @@ func maskedInstanceCopy(
 		return nil, fmt.Errorf("copy instance %s: %w", site.address, decodeErr)
 	}
 
-	masked, _, err := maskTofuInstance(work, fresh, site, marks)
+	masked, _, err := maskTofuInstance(ctx, work, fresh, site, marks)
 	if err != nil {
 		return nil, err
 	}
@@ -2238,7 +2273,7 @@ type tofuResourcePair struct {
 
 // maskSide returns the sorted instances of side with their addresses and
 // their masked attribute copies.
-func maskSide(work *maskWork, side tofuResourceSide) (tofuDiffSide, error) {
+func maskSide(ctx context.Context, work *maskWork, side tofuResourceSide) (tofuDiffSide, error) {
 	instances := tofuInstances(side.obj)
 	sorted, addrs := sortTofuInstances(side.obj, instances)
 
@@ -2246,7 +2281,7 @@ func maskSide(work *maskWork, side tofuResourceSide) (tofuDiffSide, error) {
 
 	for i, instance := range sorted {
 		copied, err := maskedInstanceCopy(
-			work, instance, instanceSite{resource: side.index, position: i, address: addrs[i]}, side.marks,
+			ctx, work, instance, instanceSite{resource: side.index, position: i, address: addrs[i]}, side.marks,
 		)
 		if err != nil {
 			return tofuDiffSide{}, err
@@ -2263,7 +2298,7 @@ func maskSide(work *maskWork, side tofuResourceSide) (tofuDiffSide, error) {
 // module, mode) compare as plain paths; the instances compare with their
 // masked copies side by side, so a sensitive change lands in secrets. The
 // result holds empty slices, never nil, when nothing changed.
-func diffTofuResource(work *maskWork, pair tofuResourcePair) (tofuDiffResource, error) {
+func diffTofuResource(ctx context.Context, work *maskWork, pair tofuResourcePair) (tofuDiffResource, error) {
 	out := tofuDiffResource{paths: []string{}, secrets: []string{}}
 
 	for _, field := range []string{"type", "provider", "module", "mode"} {
@@ -2272,12 +2307,12 @@ func diffTofuResource(work *maskWork, pair tofuResourcePair) (tofuDiffResource, 
 		}
 	}
 
-	fromSide, err := maskSide(work, pair.from)
+	fromSide, err := maskSide(ctx, work, pair.from)
 	if err != nil {
 		return tofuDiffResource{}, err
 	}
 
-	toSide, err := maskSide(work, pair.to)
+	toSide, err := maskSide(ctx, work, pair.to)
 	if err != nil {
 		return tofuDiffResource{}, err
 	}
@@ -2336,7 +2371,7 @@ type tofuVersionSide struct {
 // addresses only in to, removed those only in from, and changed those in
 // both with a change. Differing holds the sorted addresses that differ in
 // any way.
-func collectTofuDiff(work *maskWork, from, to tofuVersionSide) (tofuDiffMismatch, error) {
+func collectTofuDiff(ctx context.Context, work *maskWork, from, to tofuVersionSide) (tofuDiffMismatch, error) {
 	var out tofuDiffMismatch
 
 	for address := range to.byBase {
@@ -2364,7 +2399,7 @@ func collectTofuDiff(work *maskWork, from, to tofuVersionSide) (tofuDiffMismatch
 			to:   tofuResourceSide{obj: toObj, marks: to.marks, index: to.index[address]},
 		}
 
-		entry, err := diffTofuResource(work, pair)
+		entry, err := diffTofuResource(ctx, work, pair)
 		if err != nil {
 			return tofuDiffMismatch{}, err
 		}
@@ -2470,11 +2505,11 @@ func tofuVersionSideOf(entries []tofuResourceEntry, marks SensitiveMarks) tofuVe
 // checkEntriesWork runs checkInstanceWork over every instance of each side
 // with the budget of work. The diff passes the same work object on to the
 // walk, so the bound covers the scan and the walk of both sides.
-func checkEntriesWork(work *maskWork, sides ...[]tofuResourceEntry) error {
+func checkEntriesWork(ctx context.Context, work *maskWork, sides ...[]tofuResourceEntry) error {
 	for _, entries := range sides {
 		for _, entry := range entries {
 			for i, instance := range tofuInstances(entry.obj) {
-				if err := checkInstanceWork(work, instance, entry.index, i); err != nil {
+				if err := checkInstanceWork(ctx, work, instance, entry.index, i); err != nil {
 					return err
 				}
 			}
@@ -2492,13 +2527,13 @@ func walkTofuDiff(
 ) (tofuDiffMismatch, error) {
 	var none tofuDiffMismatch
 
-	work := newMaskWork(ctx, nil)
+	work := newMaskWork(nil)
 
-	if workErr := checkEntriesWork(work, entries[0], entries[1]); workErr != nil {
+	if workErr := checkEntriesWork(ctx, work, entries[0], entries[1]); workErr != nil {
 		return none, workErr
 	}
 
-	mismatch, err := collectTofuDiff(work, from, to)
+	mismatch, err := collectTofuDiff(ctx, work, from, to)
 	if err != nil {
 		return none, fmt.Errorf("diff states: %w", err)
 	}

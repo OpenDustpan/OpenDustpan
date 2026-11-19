@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,8 +131,11 @@ func TestMaskWrapperChainIsLinear(t *testing.T) {
 		t.Fatalf("mask: %v", err)
 	}
 
-	if len(result.Masked) != 0 {
-		t.Fatalf("masked = %v, want none for a missing leaf", result.Masked)
+	// The leaf is missing below nested wrappers, so a second wrapper might
+	// hide the value that the mark names: the read masks the first wrapper.
+	wantMasked := "/resources/0/instances/0/attributes" + pointer
+	if len(result.Masked) != 1 || result.Masked[0] != wantMasked {
+		t.Fatalf("masked = %v, want the one path of the pointer (fail closed at the first wrapper)", result.Masked)
 	}
 
 	const stepsPerLevel = 4
@@ -174,6 +178,44 @@ func TestMaskWrapperTakesOneTransparentLevel(t *testing.T) {
 
 	if len(result.Masked) != len(want) || result.Masked[0] != want[0] || result.Masked[1] != want[1] {
 		t.Fatalf("masked = %v, want %v", result.Masked, want)
+	}
+}
+
+// TestMaskWrapperNeedingTwoWrappersFailsClosed proves that a pointer that only
+// a second wrapper resolves never answers the marked value in clear. The
+// value "hunter2" sits below two wrappers; the mark names it as if one wrapper
+// stood there.
+func TestMaskWrapperNeedingTwoWrappersFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	instance, err := workspace.DecodeForTest(
+		`{"attributes":{"in":{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}}}`,
+	)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	object, ok := instance.(map[string]any)
+	if !ok {
+		t.Fatalf("instance is %T, want an object", instance)
+	}
+
+	marks := workspace.SensitiveMarks{"terraform_data.x": {"/in/k"}}
+
+	result, err := workspace.MaskInstanceWorkForTest(t.Context(), object, "terraform_data.x", marks)
+	if err != nil {
+		t.Fatalf("mask: %v", err)
+	}
+
+	if strings.Contains(fmt.Sprint(result.Attributes), "hunter2") {
+		t.Fatalf("attributes = %v, want no clear secret", result.Attributes)
+	}
+
+	// The marker path names the pointer; the marker itself replaces the whole
+	// first wrapper.
+	want := "/resources/0/instances/0/attributes/in/k"
+	if len(result.Masked) != 1 || result.Masked[0] != want {
+		t.Fatalf("masked = %v, want [%s]", result.Masked, want)
 	}
 }
 

@@ -53,13 +53,14 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 
 	var masked []string
 
-	work := newMaskWork(context.Background(), nil)
+	work := newMaskWork(nil)
+	ctx := context.Background()
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
 			site := instanceSite{resource: entry.index, position: i, address: tofuInstanceAddress(entry.obj, instance)}
 
-			_, paths, err := maskTofuInstance(work, instance, site, marks)
+			_, paths, err := maskTofuInstance(ctx, work, instance, site, marks)
 			if err != nil {
 				return nil, err
 			}
@@ -78,16 +79,17 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 // InstanceWorkBound runs the work scan of a masked read over one instance, so
 // the external tests reach it without a state.
 func InstanceWorkBound(instance map[string]any, resource, position int) error {
-	return checkInstanceWork(newMaskWork(context.Background(), nil), instance, resource, position)
+	return checkInstanceWork(context.Background(), newMaskWork(nil), instance, resource, position)
 }
 
 // InstancesWorkBound runs the work scan over each instance with one budget,
 // as a masked read of a resource does.
 func InstancesWorkBound(instances []map[string]any, resource int) error {
-	work := newMaskWork(context.Background(), nil)
+	ctx := context.Background()
+	work := newMaskWork(nil)
 
 	for position, instance := range instances {
-		if err := checkInstanceWork(work, instance, resource, position); err != nil {
+		if err := checkInstanceWork(ctx, work, instance, resource, position); err != nil {
 			return err
 		}
 	}
@@ -101,7 +103,7 @@ func MaskInstanceForTest(
 ) (any, []string, error) {
 	site := instanceSite{resource: 0, position: 0, address: address}
 
-	return maskTofuInstance(newMaskWork(ctx, nil), instance, site, marks)
+	return maskTofuInstance(ctx, newMaskWork(nil), instance, site, marks)
 }
 
 // DecodeForTest decodes a JSON text with no bound check, so a test hands the
@@ -167,7 +169,7 @@ func maskWorkProbed(
 	probe := &maskProbe{oneDigest: oneDigest, pointers: 0, routeSteps: 0, resolveSteps: 0, digests: 0, comparisons: 0}
 
 	attributes, masked, err := maskTofuInstance(
-		newMaskWork(ctx, probe), instance, instanceSite{resource: 0, position: 0, address: address}, marks,
+		ctx, newMaskWork(probe), instance, instanceSite{resource: 0, position: 0, address: address}, marks,
 	)
 
 	return MaskResult{
