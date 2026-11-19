@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A measurement exceeds its budget | The nightly job failed on a budget breach and opened or updated one issue with the numbers. The run lists the measurement name, the scope, the measured value, the budget and the run id. | `gh run view <run-id>` |
+| A measurement exceeds its budget | The nightly job failed on a budget breach and opened or updated one issue with the numbers. The run lists the measurement name, the suite, the measured value, the budget and the run id. | `gh run view <run-id>` |
 | A service container is unhealthy, the harness crashed, the run timed out, or a report cannot be read | The job log names the container or the step. No regression issue is filed. Run the workflow again. | `gh workflow run nightly-perf.yml` |
 
 Evidence for the claims above:
@@ -30,9 +30,8 @@ Evidence for the claims above:
 
 Everything below is a new file. No server code, no harness code and no soak code changes.
 
-- NEW `perf/compare/perfcheck/`: a Go package with three adapters (load report, soak CSV, fault test events) that write the common measurements file, the budget comparison and the issue plan. NEW `perf/compare/main.go` is its command line.
-- NEW `perf/budgets.json`: the budgets. It starts with no entries, so the first run only records values.
-- NEW `perf/run-load.sh`, `perf/run-soak.sh`, `perf/run-toxiproxy.sh`: thin wrappers around `go run ./load`, `make soak` and `make faults`.
+- NEW `perf/compare/`: a Go package with three adapters (load report, soak CSV, fault test events) that write the common measurements file, the budget comparison and the issue sync. NEW `cmd/perfcompare/main.go` is its command line. A prior branch holds a first version of both (see the design, "Reuse of prior work").
+- NEW `perf/run-load.sh`, `perf/run-soak.sh`, `perf/run-toxiproxy.sh`: thin wrappers around `go run -tags journalrecording ./load`, `make soak` and `make faults`, on PostgreSQL.
 - NEW `.github/workflows/nightly-perf.yml`, delivered as a workflow patch in the pull request body (a cloud session cannot push workflow files).
 - The two existing guides get the section "The nightly run", and lose the bullets of "What this guide does not cover" that this change answers.
 
@@ -42,6 +41,7 @@ Out of scope:
 - Soak duration and CLI matrix changes
 - The S3 latency benchmark (`make bench-s3`). Its report, the blob flow report (`-flows blobs`) and the scale report (`-flows scale`) are not part of the nightly job.
 - Release sizing guide tables
+- A SQLite run of the nightly job. The nightly job runs PostgreSQL only; SQLite is a later change.
 - Crash tests and fault wrappers, which stay in `make check` and the e2e suite
 - Any change to the faults job of the existing CI workflow
 
@@ -49,7 +49,7 @@ Out of scope:
 
 Where the path still costs the person time or surprises them:
 
-- An Operator reads three job logs to find the regression. The compare step writes one table to the job summary with name, scope, measured value, budget and run id.
+- An Operator reads three job logs to find the regression. The compare step writes one table to the job summary with name, suite, measured value, budget and run id.
 - First budgets need a person. The job summary and the artifact `measurements.json` hold the measured values to copy into `perf/budgets.json` in a reviewed pull request. There is no automatic budget change.
 - The built-in growth rule of the soak run (docs/guides/soak.md "Growth rule") stays as it is and decides the result of `make soak` by hand. In the nightly job the soak budgets decide. Until a person accepts soak budgets, a soak run that fails the built-in rule does not fail the nightly job. The job summary shows the built-in verdict as a line, so the person sees it.
 
@@ -68,7 +68,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 More facts on main, in paths that the fact check does not read. The harness report type is `Report` in (read only) `load/harness.go:232`; times are milliseconds. The default run set of the harness is `all`, in (read only) `load/main.go:117`. Without the `journalrecording` tag the report has no journal runs (read only `load/harness.go:185`), and the load guide says the nightly run uses the tag. The package `soak` is importable: `Assess` (read only `soak/soak.go:192`) computes the slopes and the verdict from the samples, and `WriteCSV` (read only `soak/soak.go:290`) writes the samples; the `.md` holds the verdict only. The workflow `ci.yml` runs `make faults` on a digest-pinned Toxiproxy service container, on pull requests that touch the e2e paths and not on the schedule ((read only) `.github/workflows/ci.yml:815`). The nightly workflow pattern is `schedule` with a minute other than 0, `workflow_dispatch` and `permissions: contents: read` ((read only) `.github/workflows/e2e-ha-nightly.yml:13`). The issue pattern is a text search `in:title` and `gh issue create` ((read only) `.github/workflows/cli-release-watch.yml:57`); the search is not an exact title match, so the new job does not copy it as it is.
 
-New in this change (does not exist on main, checked with `ls perf .github/workflows/nightly-perf.yml`): the `perf/` directory, `perf/budgets.json`, `perf/compare/main.go`, `perf/compare/perfcheck`, `perf/run-*.sh` and `.github/workflows/nightly-perf.yml`. Every measurement name and every Go name in this change is NEW.
+New in this change (does not exist on main, checked with `ls perf .github/workflows/nightly-perf.yml`): the `perf/` directory, `perf/budgets.json`, `perf/compare`, `cmd/perfcompare/main.go`, `perf/run-*.sh` and `.github/workflows/nightly-perf.yml`. Every measurement name and every Go name in this change is NEW.
 
 ## Judgement on the form of this change
 
