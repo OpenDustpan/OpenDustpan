@@ -28,7 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/manuallock"
 )
 
-// MaxBulkLocks is the most units that one bulk lock or bulk unlock call names.
+// MaxBulkLocks is the most stacks and workspaces that one bulk lock or bulk unlock call names.
 const MaxBulkLocks = 100
 
 // maxBulkBodyBytes bounds the body of a bulk call. The reason takes up to 6000
@@ -54,13 +54,15 @@ const reasonBulkLockDenied = "unit:lock denied for a unit of a bulk call"
 
 var (
 	// errBulkSize reports a bulk call with no unit or with too many.
-	errBulkSize = fmt.Errorf("a bulk call needs 1 to %d units", MaxBulkLocks)
+	errBulkSize = fmt.Errorf("a bulk call needs 1 to %d stacks or workspaces", MaxBulkLocks)
 
 	// errBulkNotFound is the result of an item that names no unit that the
 	// caller can read. A unit that does not exist, a unit of another namespace
 	// and a unit that the caller cannot read all give this one error, so a
 	// bulk call tells no more than the single calls do.
-	errBulkNotFound = fmt.Errorf("%w: the unit does not exist or you cannot read it", manuallock.ErrTargetNotFound)
+	errBulkNotFound = fmt.Errorf(
+		"%w: the stack or workspace does not exist or you cannot read it", manuallock.ErrTargetNotFound,
+	)
 
 	// errBulkKeyUnsupported reports a request with the Idempotency-Key header
 	// to a server that keeps no replay records.
@@ -167,6 +169,9 @@ func (h *Handler) bulkLock(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
+	// Defense in depth: checkLockReason below refuses an empty reason too, and
+	// the request decode marks the field as required. This check stays so that
+	// the dereference below never relies on the decode or on the reason check.
 	if body.Reason == nil {
 		h.writeError(ctx, w, errLockBody)
 
@@ -392,6 +397,15 @@ func (h *Handler) bulkUnit(
 func (h *Handler) bulkApply(r *http.Request, p identity.Principal, unit bulkTarget, run *bulkRun) bulkResult {
 	ctx := r.Context()
 
+	// Defense in depth: Service.Lock and Service.Unlock check unit:lock too.
+	// This check stays so that an Authorizer that fails, and not only one that
+	// denies, writes one audit entry and fails the item closed, and it relies
+	// on neither the service nor the store. A refusal here is recorded by the
+	// guard, so the item writes one entry and the service is not called.
+	if err := h.guard.Authorize(ctx, r, p, identity.ActionUnitLock, unit.obj); err != nil {
+		return h.bulkFailure(r, unit.id, err)
+	}
+
 	if run.unlock {
 		if err := h.unlockOne(ctx, r, p, unit.obj); err != nil {
 			return h.bulkLockFailure(r, p, unit, err)
@@ -408,9 +422,10 @@ func (h *Handler) bulkApply(r *http.Request, p identity.Principal, unit bulkTarg
 	return lockedResult(unit.id, l)
 }
 
-// bulkLockFailure makes the result of an item that the lock service refused. A
-// denial of unit:lock writes an audit entry of the outcome denied, as the route
-// check of a single call does.
+// bulkLockFailure makes the result of an item that the lock service refused. The
+// check of unit:lock in bulkApply already wrote the entry of a refusal that it
+// decided. A denial that only the service decides writes one entry here, as
+// the route check of a single call does.
 func (h *Handler) bulkLockFailure(r *http.Request, p identity.Principal, unit bulkTarget, err error) bulkResult {
 	if errors.Is(err, identity.ErrDenied) {
 		h.guard.Record(r.Context(), r, p, refusal.Denial{
@@ -608,8 +623,11 @@ func (h *Handler) bulkItemKeyed(r *http.Request, p identity.Principal, unit bulk
 		return h.bulkFailure(r, id, keyRefusal(http.StatusUnprocessableEntity,
 			errcode.RequestIdempotencyKeyReused, "this Idempotency-Key was used with another request"))
 	case idempotency.InProgress:
-		return h.bulkFailure(r, id, keyRefusal(http.StatusConflict,
-			errcode.RequestIdempotencyKeyInProgress, "the first request for this unit has not ended: retry later"))
+		return h.bulkFailure(r, id, keyRefusal(
+			http.StatusConflict,
+			errcode.RequestIdempotencyKeyInProgress,
+			"the first request for this stack or workspace has not ended: retry later",
+		))
 	case idempotency.Started:
 		run.ran = true
 
@@ -720,6 +738,10 @@ func (h *Handler) keepBulkFailure(ctx context.Context, pending *pendingBulkItem,
 func (h *Handler) replayedBulkItem(r *http.Request, id string, a *idempotency.Answer) bulkResult {
 	var out bulkResult
 
+	// Defense in depth: the key of the item holds the ID, so a stored result
+	// has the ID of the item. This check stays so that an item never answers
+	// the stored result of another unit, and it relies on neither the key of
+	// the item nor the store.
 	if err := json.Unmarshal(a.Body, &out); err != nil || out.ID != id {
 		return h.bulkFailure(r, id, errBulkWritten)
 	}

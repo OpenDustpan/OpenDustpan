@@ -159,7 +159,7 @@ again under the same name has no lock.
 | Remove your own lock | `unit:lock` | The stack, workspace, collection or namespace | `maintainer`, `admin` |
 | Remove the lock of another person (force-unlock) | `unit:manage` | The stack, workspace, collection or namespace | `maintainer`, `admin` |
 | Read a lock | `unit:read` for a stack or workspace, `collection:read` for a collection, `namespace:read` for a namespace | The stack, workspace, collection or namespace | Every role that reads |
-| Lock or unlock many stacks and workspaces | `namespace:read` for the route, then `unit:read` and `unit:lock` for each unit | The namespace for the route, each unit for its item | `maintainer`, `admin` |
+| Lock or unlock many stacks and workspaces | `namespace:read` for the route, then `unit:read` and `unit:lock` for each stack or workspace | The namespace for the route, each stack or workspace for its item | `maintainer`, `admin` |
 
 For a namespace, the role must be granted on the namespace itself. A grant on one
 collection or one unit does not reach the lock of the namespace.
