@@ -216,9 +216,9 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	}
 
 	h, err := trustrules.NewHandler(trustrules.Config{
-		Exchanger:  exchanger,
+		Exchanger: exchanger, MtlsExchanger: nil, MtlsGuard: nil,
 		Namespaces: namespaces, Rules: rules, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: e.audit, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
+		Audit: e.audit, OnAuditFailure: nil, OnMtlsRefused: nil, DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
 	})
 	if err != nil {

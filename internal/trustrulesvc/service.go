@@ -271,6 +271,10 @@ func (s *Service) Create(
 		PrincipalID: in.PrincipalID, CreatedBy: caller.Subject, Conditions: trustrule.SortConditions(in.Conditions),
 	}
 
+	// Defense in depth: the handler and the store check the rule too, among
+	// them the * in a SPIFFE ID. This check stays so that no other caller
+	// can create a rule for the mTLS exchange that names more than one SPIFFE
+	// ID.
 	if err := r.Validate(); err != nil {
 		return trustrule.Rule{}, err
 	}
