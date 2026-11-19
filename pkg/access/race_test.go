@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -102,7 +103,7 @@ func once(change func()) func() {
 
 // grantID is the ID that fixture.grant gives a grant.
 func grantID(subject access.Subject, role string, obj identity.Object) string {
-	return "grt-" + subject.ID + "-" + role + "-" + obj.String()
+	return accesstest.GrantID(subject.ID + "-" + role + "-" + obj.String())
 }
 
 // revokeRace returns a race that revokes the grant of role on obj to

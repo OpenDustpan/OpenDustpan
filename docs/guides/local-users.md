@@ -106,7 +106,20 @@ refuses answers `400` with the code of the rule, and the code stays valid.
 | At most 256 characters and 1024 bytes | `password.too-long` |
 | Valid UTF-8 with no control character | `password.form` |
 | A letter and a digit, when `password.requireLettersAndDigits` is on | `password.letters-and-digits` |
-| Not a common password of the list in the binary. Not the user name, a word of the name of the person, or the product name. Not one character again and again, or a plain sequence. | `password.blocked` |
+| Not a common password of the list in the binary. Not a password that holds the user name, a word of the name of the person, or the product name (`dustpan`, `opendustpan`). Not one character again and again, or a plain sequence. | `password.blocked` |
+
+A name or a word counts only when it has 3 characters or more, and the check
+ignores case. A word of the name of the person ends at a space, `.`, `_`, `-` or
+`@`. A plain sequence is a whole password where each character is the
+character before it, or one code point above or below it, for example
+`abcdefghijklmnop` or `zyxwvutsrqponml`. The check ignores case. A password such as
+`1234567890123456` is not a plain sequence, because `0` does not follow `9`
+by one code point. The server checks the rules in this order: form, length,
+letters and digits, repeat or sequence, names, common passwords. A refusal
+shows the first rule that fails.
+
+The `password.blocked` text is "the password is too common or holds a name:
+choose another password". It does not tell which rule refused the password.
 
 The server counts Unicode code points after the NFC form, and hashes the NFC
 form. It never cuts a password. It has no rule on upper case, digits or
@@ -149,17 +162,11 @@ reads the store, and spends no unit of the password budget. A client that is
 not a browser, for example curl, sends neither header and passes with the
 JSON media type.
 
-The server refuses a sign-in that another site can send, so that a page of
-another site cannot sign your browser in to an account of the attacker. The
-request must have the media type `application/json`. When the browser sends
-an `Origin` header, it must be one of the allowed origins of the console.
-When the browser sends `Sec-Fetch-Site`, it must not be `cross-site`. A
-request that fails this check gets the same `401` answer before the server
-reads the store, and spends no unit of the password budget. A client that is
-not a browser, for example curl, sends neither header and passes with the
-JSON media type.
-
 The password budget is separate from the budget of the other sign-ins. The
+budget of one source address (an IPv4 address, or the /64 of an IPv6 address)
+is 30 failures. It gets back one unit each 2 seconds. A request over the
+budget waits 1 second, and then the server handles it. At most 4 requests of
+one source wait at the same time: more answer `429` at once. The
 password sign-in, the use of a set-up or reset code, and the change of the
 own password spend it: a wrong password, a code that is not valid and a
 wrong current password each spend one unit. When the budget of an address is
@@ -240,7 +247,9 @@ holds the entry of each lock. A lock of one name from every source sends its
 notification at once, each time. Only a principal that can manage the
 notifications of the installation can read the notification.
 
-Read the counts of a local user:
+Read the counts of a local user. The query parameter `principal` is
+required. Without it, the answer is `404` with the error code
+`local-user.not-found`:
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" \
@@ -250,6 +259,12 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```json
 {"locks": [{"scope": "password", "source": "192.0.2.1", "lockedUntil": "2026-11-01T12:30:00Z", "failures": 10, "level": 1}]}
 ```
+
+The `scope` of a count is `password` for the count of one source, and
+`passwordname` for the count of every source, in lower case. The rule that
+`GET /api/dustpan/v1/local-users/policy` shows for the second count is named
+`passwordName`. A count of every source has an empty `source`, and an empty
+`lockedUntil` while it holds no lock.
 
 End every count and lock of the name, with a reason:
 
@@ -364,8 +379,18 @@ session that a sign-in started while the change ran.
 | `password.requireLettersAndDigits` | `false` | `true`, `false` | from `true` to `false` |
 | `password.resetLifetime` | `1h0m0s` | 10 minutes to 24 hours, as a Go duration | a longer value |
 
-The settings resource (`GET /api/dustpan/v1/settings`) shows the effective
-value and the source of each one.
+`password.minLength` is a JSON number, for example `{"password.minLength": 20}`.
+The other values are JSON strings or booleans as the table shows. The
+settings resource (`GET /api/dustpan/v1/settings`) shows the effective value
+and the source of each one.
+
+A change to a value that the setting refuses answers `400` with the error
+code `settings.value-invalid` and the key in `errorArgs`. The text tells
+that the value is not valid, for example "the value needs the kind int" or
+"the value is outside the allowed values". It does not give the range: use
+the range in the table above. A value outside the range of
+`password.resetLifetime` has the text "invalid local user value: the value
+is outside the allowed values".
 
 ## Audit entries
 
