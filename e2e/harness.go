@@ -2541,6 +2541,14 @@ type cliCall struct {
 // stdin is piped to the CLI as standard input, or no input when empty. A
 // non-zero exit is reported in the Result, not as an error.
 func (e *Env) runCLI(ctx context.Context, call cliCall) (Result, error) {
+	// The CLI configuration of OpenTofu takes its providers from the mirror
+	// only, so the mirror must hold them before init.
+	if call.cli.Tool == ToolTofu && len(call.args) > 0 && call.args[0] == "init" {
+		if err := fillProviderMirror(ctx); err != nil {
+			return Result{}, err
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 

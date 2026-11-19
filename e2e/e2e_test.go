@@ -6811,6 +6811,26 @@ output "secret_out" {
 `, host, e2e.Namespace, workspace, e2e.RandomProviderVersion)
 }
 
+// maskedCloudConfig puts each value in its own block: the host in the cloud
+// block, the namespace as the organization, the workspace as the name and the
+// pinned version in required_providers.
+func TestMaskedCloudConfigArgumentOrder(t *testing.T) {
+	t.Parallel()
+
+	cfg := maskedCloudConfig("tf.example.test", "ws-name")
+
+	for _, want := range []string{
+		`hostname     = "tf.example.test"`,
+		`organization = "` + e2e.Namespace + `"`,
+		`name = "ws-name"`,
+		`version = "` + e2e.RandomProviderVersion + `"`,
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("configuration lacks %s:\n%s", want, cfg)
+		}
+	}
+}
+
 // maskedApplyEnv returns the step environment that sets the sensitive
 // variable of the masked scenario to secret.
 func maskedApplyEnv(secret string) []string {

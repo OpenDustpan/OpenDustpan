@@ -310,29 +310,43 @@ func CacheDir() (string, error) {
 	return filepath.Join(base, "opendustpan-e2e"), nil
 }
 
-// providerMirrorDir makes the provider mirror hold each pinned provider and
-// returns its directory. It keeps no state in the process: Fill checks each
-// archive against its pinned sum and makes no request for one that matches,
-// and the lock of each archive serializes the callers. A failure stops the
-// test: no test falls back to the registry.
+// providerMirrorDir returns the directory of the provider mirror. It makes no
+// request and fills nothing: a test that writes a CLI configuration but never
+// runs init needs no network. fillProviderMirror fills the mirror before init.
 func providerMirrorDir(tb testing.TB) string {
 	tb.Helper()
 
 	cache, err := CacheDir()
 	if err != nil {
-		tb.Fatalf("fill the provider mirror: %v", err)
+		tb.Fatalf("find the provider mirror: %v", err)
+	}
+
+	return (&ProviderMirror{Client: nil, CacheDir: cache, ReleaseURL: "", Pins: nil}).Dir()
+}
+
+// fillProviderMirror makes the provider mirror hold each pinned provider.
+// Fill checks each archive against its pinned sum and makes no request for one
+// that matches, and the lock of each archive serializes the callers. The run of
+// each init calls it, so the check of the cache happens when a test needs the
+// providers. An error means no test falls back to the registry.
+func fillProviderMirror(ctx context.Context) error {
+	cache, err := CacheDir()
+	if err != nil {
+		return fmt.Errorf("fill the provider mirror: %w", err)
 	}
 
 	mirror := &ProviderMirror{Client: http.DefaultClient, CacheDir: cache, ReleaseURL: "", Pins: nil}
 
-	// The fill goes through an interface: the helpers of the harness have no
-	// context to pass, and the fill makes its own.
-	var filler mirrorFiller = detachedFiller{mirror: mirror}
-	if err := filler.fill(tb); err != nil {
-		tb.Fatalf("fill the provider mirror: %v", err)
+	// Not the context of one test: another test of the process reuses the
+	// archives, so the fill keeps its own deadline.
+	fillCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerFillTimeout)
+	defer cancel()
+
+	if err := mirror.Fill(fillCtx); err != nil {
+		return fmt.Errorf("fill the provider mirror: %w", err)
 	}
 
-	return mirror.Dir()
+	return nil
 }
 
 // providerInstallation returns the provider_installation block of the CLI
@@ -387,25 +401,4 @@ func openMirrorRoot(dir string) (*os.Root, error) {
 	}
 
 	return root, nil
-}
-
-// mirrorFiller fills a provider mirror for a test.
-type mirrorFiller interface {
-	fill(tb testing.TB) error
-}
-
-// detachedFiller runs Fill with a deadline and without the cancel of the
-// test: another test of the process reuses the archives, so the fill does not
-// stop when the first test ends.
-type detachedFiller struct {
-	mirror *ProviderMirror
-}
-
-func (d detachedFiller) fill(tb testing.TB) error {
-	tb.Helper()
-
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), providerFillTimeout)
-	defer cancel()
-
-	return d.mirror.Fill(ctx)
 }
