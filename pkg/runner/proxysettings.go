@@ -82,7 +82,7 @@ func checkUpstreamURL(raw string) error {
 		return fmt.Errorf("%w: the upstream URL does not parse", ErrInvalid)
 	}
 
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 		return fmt.Errorf("%w: the upstream URL scheme is http or https", ErrInvalid)
 	}
 
