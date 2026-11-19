@@ -256,6 +256,7 @@ func guardedConfig(t *testing.T, spec guardSpec) (apiinventory.Config, *memLifec
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
 	return apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,

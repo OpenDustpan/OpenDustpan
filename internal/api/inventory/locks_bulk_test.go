@@ -32,19 +32,23 @@ const (
 
 // bulkResultDoc is one result of a bulk answer.
 type bulkResultDoc struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Lock   *struct {
-		Kind   string `json:"kind"`
-		Object string `json:"object"`
-		Holder string `json:"holder"`
-		Reason string `json:"reason"`
-	} `json:"lock"`
-	Error *struct {
-		Code      int    `json:"code"`
-		ErrorCode string `json:"errorCode"`
-		Message   string `json:"message"`
-	} `json:"error"`
+	ID     string        `json:"id"`
+	Status string        `json:"status"`
+	Lock   *bulkLockDoc  `json:"lock"`
+	Error  *bulkErrorDoc `json:"error"`
+}
+
+type bulkLockDoc struct {
+	Kind   string `json:"kind"`
+	Object string `json:"object"`
+	Holder string `json:"holder"`
+	Reason string `json:"reason"`
+}
+
+type bulkErrorDoc struct {
+	Code      int    `json:"code"`
+	ErrorCode string `json:"errorCode"`
+	Message   string `json:"message"`
 }
 
 type bulkAnswerDoc struct {
@@ -78,6 +82,9 @@ func (bulkAuthz) ListObjects(_ context.Context, p identity.Principal, _ identity
 	return identity.AdminScope(p), nil
 }
 
+// errStoreDown is the error of a store that fails.
+var errStoreDown = errors.New("store down")
+
 // bulkFixture is a handler with the bulk lock routes over in-memory ports.
 type bulkFixture struct {
 	handler testHandler
@@ -92,18 +99,22 @@ func bulkUnitID(i int) string { return fmt.Sprintf("u-%03d", i) }
 func bulkUnitRef(i int) string { return fmt.Sprintf("pulumi:acme/web/bulk-%03d", i) }
 
 // newBulkFixture makes a handler with n units in acme, one unit in globex with
-// the ID u-other, and the replay records. withRecords false leaves them out.
-func newBulkFixture(t *testing.T, authz identity.Authorizer, n int, withRecords bool) bulkFixture {
+// the ID u-other, and the replay records.
+func newBulkFixture(t *testing.T, authz identity.Authorizer, n int) bulkFixture {
 	t.Helper()
 
-	return newBulkFixtureWith(t, authz, n, withRecords, func(r coreinventory.Reader) coreinventory.Reader { return r })
+	return newBulkFixtureWith(t, authz, n, bulkOptions{noRecords: false, wrap: nil})
 }
 
-// newBulkFixtureWith is newBulkFixture with a wrapper around the unit reader.
-func newBulkFixtureWith(
-	t *testing.T, authz identity.Authorizer, n int, withRecords bool,
-	wrap func(coreinventory.Reader) coreinventory.Reader,
-) bulkFixture {
+// bulkOptions changes the fixture: noRecords leaves out the replay records, and
+// wrap puts a wrapper around the unit reader.
+type bulkOptions struct {
+	noRecords bool
+	wrap      func(coreinventory.Reader) coreinventory.Reader
+}
+
+// newBulkFixtureWith is newBulkFixture with the options.
+func newBulkFixtureWith(t *testing.T, authz identity.Authorizer, n int, opts bulkOptions) bulkFixture {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -140,21 +151,26 @@ func newBulkFixtureWith(
 		LastRelease: nil, ManualLock: nil, Collection: "", Labels: map[string]string{},
 	}
 
+	var units coreinventory.Reader = &memReader{
+		entries: map[namespace.Name][]coreinventory.Entry{"acme": entries, "globex": {other}}, err: nil,
+	}
+	if opts.wrap != nil {
+		units = opts.wrap(units)
+	}
+
 	records := idempotencytest.NewMemory()
 	store.records = records
 
 	cfg := apiinventory.Config{
 		Placements: nil, OutputSharing: nil, Outputs: nil, Views: nil, Namespaces: nsSvc,
-		Units: wrap(&memReader{
-			entries: map[namespace.Name][]coreinventory.Entry{"acme": entries, "globex": {other}}, err: nil,
-		}),
+		Units:   units,
 		Deleted: &memDeleted{entries: nil}, History: nil, Lifecycles: testLifecycles(),
 		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: locks, Records: nil,
 		Moves: nil, Authenticator: subjectAuthenticator{}, Authorizer: authz, Audit: orTestAudit(auditStore),
 		OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, PublicURL: "",
 		Logger: slog.New(slog.DiscardHandler), Now: nil, StateGuard: stategate.Off("the test keeps no gates"),
 	}
-	if withRecords {
+	if !opts.noRecords {
 		cfg.Records = records
 	}
 
@@ -170,14 +186,12 @@ func newBulkFixtureWith(
 func (f bulkFixture) post(t *testing.T, subject, path, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	return f.postCtx(t, t.Context(), subject, path, body, headers...)
+	return f.postCtx(t.Context(), subject, path, body, headers...)
 }
 
 func (f bulkFixture) postCtx(
-	t *testing.T, ctx context.Context, subject, path, body string, headers ...string,
+	ctx context.Context, subject, path, body string, headers ...string,
 ) *httptest.ResponseRecorder {
-	t.Helper()
-
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "token "+subject+"-token")
 
@@ -275,14 +289,14 @@ func (f bulkFixture) held() int {
 	return len(f.store.locks)
 }
 
-func (f bulkFixture) auditActions(action string) int {
+func (f bulkFixture) lockEntries() int {
 	f.store.mu.Lock()
 	defer f.store.mu.Unlock()
 
 	n := 0
 
 	for i := range f.store.entries {
-		if f.store.entries[i].Action == action {
+		if f.store.entries[i].Action == string(identity.ActionUnitLock) {
 			n++
 		}
 	}
@@ -290,14 +304,14 @@ func (f bulkFixture) auditActions(action string) int {
 	return n
 }
 
-func plainAuthz() identity.Authorizer { return bulkAuthz{deny: nil, onLock: nil, n: &atomic.Int64{}} }
+func plainAuthz() bulkAuthz { return bulkAuthz{deny: nil, onLock: nil, n: &atomic.Int64{}} }
 
 // TestBulkLockMixed: one unit has a lock already, the others get the lock of
 // the call, and the results keep the order of the request.
 func TestBulkLockMixed(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 5, true)
+	f := newBulkFixture(t, plainAuthz(), 5)
 
 	if rec := f.post(t, "bob", bulkLockPath, bulkLockBody("earlier", bulkUnitID(2))); rec.Code != http.StatusOK {
 		t.Fatalf("seed lock: %d %s", rec.Code, rec.Body.String())
@@ -325,22 +339,29 @@ func TestBulkLockMixed(t *testing.T) {
 		t.Fatalf("lock of the first result = %+v", l)
 	}
 
-	// The single read route shows the same holder and reason.
+	f.wantSingleRead(t, 4)
+
+	// The earlier holder keeps the lock.
+	held, err := f.store.GetLock(t.Context(), mustUnit(t, 2))
+	if err != nil || held.Holder != "bob" {
+		t.Fatalf("lock of unit 2 = %+v, %v; the old lock must stay", held, err)
+	}
+}
+
+// wantSingleRead checks that the single read route shows the holder alice and
+// the reason of the bulk call for unit i.
+func (f bulkFixture) wantSingleRead(t *testing.T, i int) {
+	t.Helper()
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
-		"/api/inventory/unit-lock?unit="+bulkUnitRef(4), nil)
+		"/api/inventory/unit-lock?unit="+bulkUnitRef(i), nil)
 	req.Header.Set("Authorization", "token alice-token")
 	f.handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), bulkReason) ||
 		!strings.Contains(rec.Body.String(), `"alice"`) {
 		t.Fatalf("single read: %d %s", rec.Code, rec.Body.String())
-	}
-
-	// The earlier holder keeps the lock.
-	held, err := f.store.GetLock(t.Context(), mustUnit(t, 2))
-	if err != nil || held.Holder != "bob" {
-		t.Fatalf("lock of unit 2 = %+v, %v; the old lock must stay", held, err)
 	}
 }
 
@@ -362,7 +383,7 @@ func mustUnit(t *testing.T, i int) manuallock.Target {
 func TestBulkLockAudit(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 3, true)
+	f := newBulkFixture(t, plainAuthz(), 3)
 
 	ids := []string{bulkUnitID(0), bulkUnitID(1), bulkUnitID(0)}
 	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, ids...)))
@@ -371,7 +392,7 @@ func TestBulkLockAudit(t *testing.T) {
 	wantOK(t, &got.Results[1])
 	wantError(t, &got.Results[2], http.StatusConflict, "lock.already-locked")
 
-	if n := f.auditActions(string(identity.ActionUnitLock)); n != 2 {
+	if n := f.lockEntries(); n != 2 {
 		t.Fatalf("lock audit entries = %d, want 2", n)
 	}
 
@@ -391,7 +412,7 @@ func TestBulkLockDenied(t *testing.T) {
 	authz := bulkAuthz{
 		deny: map[string]bool{grant(identity.ActionUnitLock, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
 	}
-	f := newBulkFixture(t, authz, 3, true)
+	f := newBulkFixture(t, authz, 3)
 
 	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...)))
 
@@ -431,7 +452,7 @@ func TestBulkLockNotVisible(t *testing.T) {
 	authz := bulkAuthz{
 		deny: map[string]bool{grant(identity.ActionUnitRead, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
 	}
-	f := newBulkFixture(t, authz, 3, true)
+	f := newBulkFixture(t, authz, 3)
 
 	ids := []string{"u-missing", "u-other", bulkUnitID(1), "a/b", "", strings.Repeat("x", 101), "u-000?x=1"}
 	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, ids...)))
@@ -461,7 +482,7 @@ func TestBulkLockNotVisible(t *testing.T) {
 func TestBulkUnlockHolder(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 3, true)
+	f := newBulkFixture(t, plainAuthz(), 3)
 	answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...)))
 
 	got := answerOf(t, f.post(t, "alice", bulkUnlockPath,
@@ -475,7 +496,7 @@ func TestBulkUnlockHolder(t *testing.T) {
 		t.Fatalf("locks = %d, want 1", f.held())
 	}
 
-	if n := f.auditActions(string(identity.ActionUnitLock)); n != 3+2 {
+	if n := f.lockEntries(); n != 3+2 {
 		t.Fatalf("audit entries = %d, want 5", n)
 	}
 }
@@ -485,7 +506,7 @@ func TestBulkUnlockHolder(t *testing.T) {
 func TestBulkUnlockNotHolder(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 3, true)
+	f := newBulkFixture(t, plainAuthz(), 3)
 	answerOf(t, f.post(t, "bob", bulkLockPath, bulkLockBody("b", bulkUnitID(1))))
 	answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody("a", bulkUnitID(0), bulkUnitID(2))))
 
@@ -509,7 +530,7 @@ func TestBulkUnlockNotHolder(t *testing.T) {
 func TestBulkUnlockNotLocked(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 2, true)
+	f := newBulkFixture(t, plainAuthz(), 2)
 
 	got := answerOf(t, f.post(t, "alice", bulkUnlockPath, bulkUnlockBody(idsUpTo(2)...)))
 	wantError(t, &got.Results[0], http.StatusNotFound, "lock.not-locked")
@@ -526,7 +547,7 @@ func TestBulkUnlockNotLocked(t *testing.T) {
 func TestBulkLockLimits(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 101, true)
+	f := newBulkFixture(t, plainAuthz(), 101)
 
 	for _, n := range []int{0, 101} {
 		rec := f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(n)...))
@@ -544,12 +565,11 @@ func TestBulkLockLimits(t *testing.T) {
 		t.Fatalf("a refused call changed %d locks", f.held())
 	}
 
-	if got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(1)...))); len(got.Results) != 1 {
-		t.Fatalf("1 unit: %d results", len(got.Results))
-	}
-
-	if got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(100)...))); len(got.Results) != 100 {
-		t.Fatalf("100 units: %d results", len(got.Results))
+	for _, n := range []int{1, 100} {
+		got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(n)...)))
+		if len(got.Results) != n {
+			t.Fatalf("%d units: %d results", n, len(got.Results))
+		}
 	}
 
 	const limit = 20480
@@ -574,96 +594,94 @@ func TestBulkLockLimits(t *testing.T) {
 }
 
 // TestBulkLockReplay: a retry with the same key answers the stored results and
-// writes no second lock or audit entry. The same key with another body gives
-// 422. An item with a 5xx store error is done again on the retry.
+// writes no second lock or audit entry.
 func TestBulkLockReplay(t *testing.T) {
 	t.Parallel()
 
-	t.Run("same body", func(t *testing.T) {
-		t.Parallel()
+	f := newBulkFixture(t, plainAuthz(), 3)
+	body := bulkLockBody(bulkReason, idsUpTo(3)...)
 
-		f := newBulkFixture(t, plainAuthz(), 3, true)
-		body := bulkLockBody(bulkReason, idsUpTo(3)...)
+	first := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k1"))
+	entries := f.lockEntries()
 
-		first := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k1"))
-		entries := f.auditActions(string(identity.ActionUnitLock))
+	second := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k1"))
 
-		second := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k1"))
+	for i := range second.Results {
+		wantOK(t, &second.Results[i])
 
-		for i := range second.Results {
-			wantOK(t, &second.Results[i])
+		if second.Results[i].ID != first.Results[i].ID {
+			t.Fatalf("replay result %d has another ID", i)
+		}
+	}
 
-			if second.Results[i].ID != first.Results[i].ID {
-				t.Fatalf("replay result %d has another ID", i)
-			}
+	if n := f.lockEntries(); n != entries || n != 3 {
+		t.Fatalf("audit entries = %d after the retry, want 3", n)
+	}
+}
+
+// TestBulkLockReplayOtherBody: the same key with another body gives 422.
+func TestBulkLockReplayOtherBody(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 3)
+	answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(2)...), "Idempotency-Key", "k1"))
+
+	rec := f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...), "Idempotency-Key", "k1")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("same key, other body = %d, want 422", rec.Code)
+	}
+
+	if f.held() != 2 {
+		t.Fatalf("locks = %d, want 2", f.held())
+	}
+}
+
+// TestBulkLockReplayServerError: an item with a 5xx store error is done again
+// on the retry.
+func TestBulkLockReplayServerError(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 3)
+
+	f.store.putErr = func(target string) error {
+		if target == bulkUnitRef(1) {
+			return errStoreDown
 		}
 
-		if n := f.auditActions(string(identity.ActionUnitLock)); n != entries || n != 3 {
-			t.Fatalf("audit entries = %d after the retry, want 3", n)
-		}
-	})
+		return nil
+	}
 
-	t.Run("other body", func(t *testing.T) {
-		t.Parallel()
+	body := bulkLockBody(bulkReason, idsUpTo(3)...)
 
-		f := newBulkFixture(t, plainAuthz(), 3, true)
-		answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(2)...), "Idempotency-Key", "k1"))
+	first := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k2"))
+	wantOK(t, &first.Results[0])
 
-		rec := f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...), "Idempotency-Key", "k1")
-		if rec.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("same key, other body = %d, want 422", rec.Code)
-		}
+	if first.Results[1].Error == nil || first.Results[1].Error.Code != http.StatusInternalServerError {
+		t.Fatalf("second result = %+v, want 500", first.Results[1])
+	}
 
-		if f.held() != 2 {
-			t.Fatalf("locks = %d, want 2", f.held())
-		}
-	})
+	f.store.putErr = nil
 
-	t.Run("server error is done again", func(t *testing.T) {
-		t.Parallel()
+	second := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k2"))
+	for i := range second.Results {
+		wantOK(t, &second.Results[i])
+	}
 
-		f := newBulkFixture(t, plainAuthz(), 3, true)
-		fail := errors.New("store down")
+	if f.held() != 3 || f.lockEntries() != 3 {
+		t.Fatalf("locks = %d, entries = %d, want 3 and 3", f.held(), f.lockEntries())
+	}
+}
 
-		f.store.putErr = func(target string) error {
-			if target == bulkUnitRef(1) {
-				return fail
-			}
+// TestBulkLockReplayNoPort: a key on a server with no replay records gives 400.
+func TestBulkLockReplayNoPort(t *testing.T) {
+	t.Parallel()
 
-			return nil
-		}
+	f := newBulkFixtureWith(t, plainAuthz(), 1, bulkOptions{noRecords: true, wrap: nil})
 
-		body := bulkLockBody(bulkReason, idsUpTo(3)...)
-
-		first := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k2"))
-		wantOK(t, &first.Results[0])
-
-		if first.Results[1].Error == nil || first.Results[1].Error.Code != http.StatusInternalServerError {
-			t.Fatalf("second result = %+v, want 500", first.Results[1])
-		}
-
-		f.store.putErr = nil
-
-		second := answerOf(t, f.post(t, "alice", bulkLockPath, body, "Idempotency-Key", "k2"))
-		for i := range second.Results {
-			wantOK(t, &second.Results[i])
-		}
-
-		if f.held() != 3 || f.auditActions(string(identity.ActionUnitLock)) != 3 {
-			t.Fatalf("locks = %d, entries = %d, want 3 and 3", f.held(), f.auditActions(string(identity.ActionUnitLock)))
-		}
-	})
-
-	t.Run("no replay port", func(t *testing.T) {
-		t.Parallel()
-
-		f := newBulkFixture(t, plainAuthz(), 1, false)
-
-		rec := f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(1)...), "Idempotency-Key", "k3")
-		if rec.Code != http.StatusBadRequest || f.held() != 0 {
-			t.Fatalf("key with no records = %d, locks = %d; want 400 and none", rec.Code, f.held())
-		}
-	})
+	rec := f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(1)...), "Idempotency-Key", "k3")
+	if rec.Code != http.StatusBadRequest || f.held() != 0 {
+		t.Fatalf("key with no records = %d, locks = %d; want 400 and none", rec.Code, f.held())
+	}
 }
 
 // TestBulkLockRoundTrips: an item uses no more store calls than the single PUT
@@ -671,7 +689,7 @@ func TestBulkLockReplay(t *testing.T) {
 func TestBulkLockRoundTrips(t *testing.T) {
 	t.Parallel()
 
-	f := newBulkFixture(t, plainAuthz(), 100, true)
+	f := newBulkFixture(t, plainAuthz(), 100)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
 		"/api/inventory/unit-lock?unit="+bulkUnitRef(0), strings.NewReader(`{"reason":"x"}`))
@@ -710,15 +728,15 @@ func TestBulkLockContextEnds(t *testing.T) {
 			}
 		},
 	}
-	f := newBulkFixture(t, authz, 10, true)
+	f := newBulkFixture(t, authz, 10)
 
-	f.postCtx(t, ctx, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(10)...))
+	f.postCtx(ctx, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(10)...))
 
 	if f.held() != 3 {
 		t.Fatalf("locks = %d, want 3: the loop must stop when the context ends", f.held())
 	}
 
-	if n := f.auditActions(string(identity.ActionUnitLock)); n != 3 {
+	if n := f.lockEntries(); n != 3 {
 		t.Fatalf("audit entries = %d, want 3", n)
 	}
 }
@@ -751,10 +769,16 @@ func TestBulkLockHostile(t *testing.T) {
 		{"null units", bulkLockPath, `{"reason":"r","units":null}`, nil, 400},
 		{"empty body", bulkLockPath, ``, nil, 400},
 		{"unlock with reason", bulkUnlockPath, `{"reason":"r","units":` + unit + `}`, nil, 400},
-		{"two key headers", bulkLockPath, `{"reason":"r","units":` + unit + `}`,
-			[]string{"Idempotency-Key", "a", "Idempotency-Key", "b"}, 400},
-		{"key with control byte", bulkLockPath, `{"reason":"r","units":` + unit + `}`,
-			[]string{"Idempotency-Key", "a\tb"}, 400},
+		{
+			"two key headers", bulkLockPath, `{"reason":"r","units":` + unit + `}`,
+			[]string{"Idempotency-Key", "a", "Idempotency-Key", "b"},
+			400,
+		},
+		{
+			"key with control byte", bulkLockPath, `{"reason":"r","units":` + unit + `}`,
+			[]string{"Idempotency-Key", "a\tb"},
+			400,
+		},
 		{"empty key", bulkLockPath, `{"reason":"r","units":` + unit + `}`, []string{"Idempotency-Key", ""}, 400},
 	}
 
@@ -762,7 +786,7 @@ func TestBulkLockHostile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newBulkFixture(t, plainAuthz(), 2, true)
+			f := newBulkFixture(t, plainAuthz(), 2)
 
 			rec := f.post(t, "alice", tc.path, tc.body, tc.headers...)
 			if rec.Code != tc.want {
@@ -786,7 +810,7 @@ func TestBulkLockRouteNeedsTheNamespace(t *testing.T) {
 			deny:   map[string]bool{grant(identity.ActionNamespaceRead, "acme"): true},
 			onLock: nil, n: &atomic.Int64{},
 		}
-		f := newBulkFixture(t, authz, 2, true)
+		f := newBulkFixture(t, authz, 2)
 
 		body := bulkLockBody(bulkReason, idsUpTo(2)...)
 		if path == bulkUnlockPath {
@@ -823,11 +847,16 @@ func TestBulkLockIDCheckBeforeLookup(t *testing.T) {
 	t.Parallel()
 
 	log := &lookupLog{Reader: nil, mu: sync.Mutex{}, ids: nil}
-	f := newBulkFixtureWith(t, plainAuthz(), 1, true, func(r coreinventory.Reader) coreinventory.Reader {
-		log.Reader = r
+	f := newBulkFixtureWith(
+		t,
+		plainAuthz(),
+		1,
+		bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
+			log.Reader = r
 
-		return log
-	})
+			return log
+		}},
+	)
 
 	bad := []string{"a/b", "a?b=1", "a b", "a\tb", "-lead", ".lead", strings.Repeat("x", 101), ""}
 	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, bad...)))

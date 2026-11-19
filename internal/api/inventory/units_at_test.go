@@ -114,6 +114,7 @@ func newHistoryHandlerWithURL(
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,

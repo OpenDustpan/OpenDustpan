@@ -52,7 +52,15 @@ type memLocks struct {
 }
 
 func newMemLocks() *memLocks {
-	return &memLocks{mu: sync.Mutex{}, locks: map[string]manuallock.Lock{}, entries: nil, removeErr: nil, putErr: nil, records: nil, calls: 0}
+	return &memLocks{
+		mu:        sync.Mutex{},
+		locks:     map[string]manuallock.Lock{},
+		entries:   nil,
+		removeErr: nil,
+		putErr:    nil,
+		records:   nil,
+		calls:     0,
+	}
 }
 
 func (m *memLocks) PutLock(ctx context.Context, l manuallock.Lock, _ namespace.Fence, e audit.Entry) error {
@@ -79,19 +87,6 @@ func (m *memLocks) PutLock(ctx context.Context, l manuallock.Lock, _ namespace.F
 	m.entries = append(m.entries, e)
 
 	return m.finish(ctx, l)
-}
-
-// finish stores the answer of the Completion of ctx, if any, with the lock of
-// the write as its result.
-func (m *memLocks) finish(ctx context.Context, l manuallock.Lock) error {
-	c, ok := idempotency.CompletionFrom(ctx)
-	if !ok || m.records == nil {
-		return nil
-	}
-
-	return c.Finish(l, func(token string, a idempotency.Answer) error {
-		return m.records.Complete(ctx, c.Ref, token, a)
-	})
 }
 
 func (m *memLocks) RemoveLock(
@@ -134,7 +129,25 @@ func (m *memLocks) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]man
 	return nil, manuallock.ErrNotLocked
 }
 
-func (m *memLocks) remove(ctx context.Context, t manuallock.Target, holder string, e audit.Entry) (manuallock.Lock, error) {
+// finish stores the answer of the Completion of ctx, if any, with the lock of
+// the write as its result.
+func (m *memLocks) finish(ctx context.Context, l manuallock.Lock) error {
+	c, ok := idempotency.CompletionFrom(ctx)
+	if !ok || m.records == nil {
+		return nil
+	}
+
+	return c.Finish(l, func(token string, a idempotency.Answer) error {
+		return m.records.Complete(ctx, c.Ref, token, a)
+	})
+}
+
+func (m *memLocks) remove(
+	ctx context.Context,
+	t manuallock.Target,
+	holder string,
+	e audit.Entry,
+) (manuallock.Lock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -169,7 +182,9 @@ func (m *memLocks) remove(ctx context.Context, t manuallock.Target, holder strin
 
 // known reports whether the route tests have the object.
 func (m *memLocks) known(t manuallock.Target) bool {
-	return t.String() == lockUnitRef || strings.HasPrefix(t.String(), "pulumi:acme/web/bulk-") || t.String() == "collection acme/payments" || t.String() == "namespace acme"
+	return t.String() == lockUnitRef || strings.HasPrefix(t.String(), "pulumi:acme/web/bulk-") ||
+		t.String() == "collection acme/payments" ||
+		t.String() == "namespace acme"
 }
 
 // subjectAuthenticator maps the token "<subject>-token" to the subject.

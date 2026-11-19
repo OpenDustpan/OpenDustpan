@@ -127,6 +127,9 @@ func unlockedResult(id string) bulkResult {
 // bulkRun is what one item of a call shares with the others: the reason (empty
 // for an unlock), the direction and the replay record of the call.
 type bulkRun struct {
+	// raw is the body of the call, which the call record is compared by.
+	raw    []byte
+	units  []bulkItem
 	reason string
 	unlock bool
 	// call is nil for a call with no Idempotency-Key header.
@@ -183,7 +186,7 @@ func (h *Handler) bulkLock(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
-	h.runBulk(w, r, p, obj, raw, body.Units, &bulkRun{reason: *body.Reason, unlock: false, call: nil})
+	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: *body.Reason, unlock: false, call: nil})
 }
 
 // bulkUnlock serves POST .../unit-locks/bulk-unlock. It removes the lock that
@@ -206,7 +209,7 @@ func (h *Handler) bulkUnlock(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.runBulk(w, r, p, obj, raw, body.Units, &bulkRun{reason: "", unlock: true, call: nil})
+	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: "", unlock: true, call: nil})
 }
 
 // checkLockReason refuses a reason that a lock refuses.
@@ -241,10 +244,10 @@ func (h *Handler) readBulkBody(w http.ResponseWriter, r *http.Request, v any) ([
 // runBulk checks the count, starts the call record when the request has the
 // key, runs the items in order and answers.
 func (h *Handler) runBulk(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
-	raw []byte, units []bulkItem, run *bulkRun,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, run *bulkRun,
 ) {
 	ctx := r.Context()
+	units := run.units
 
 	if len(units) == 0 || len(units) > MaxBulkLocks {
 		h.writeError(ctx, w, errBulkSize)
@@ -253,7 +256,7 @@ func (h *Handler) runBulk(
 	}
 
 	if idempotent.Present(r) {
-		call, err := h.beginBulkCall(r, p, raw)
+		call, err := h.beginBulkCall(r, p, run.raw)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
@@ -286,20 +289,29 @@ func (h *Handler) runBulk(
 	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
+// bulkTarget is the unit of an item: the ID that the item named and the object
+// that the ID resolved to.
+type bulkTarget struct {
+	id  string
+	obj identity.Object
+}
+
 // bulkItem runs one item.
 func (h *Handler) bulkItem(
 	r *http.Request, p identity.Principal, ns identity.Object, run *bulkRun, id string,
 ) bulkResult {
-	unit, err := h.bulkUnit(r, p, ns, id)
+	obj, err := h.bulkUnit(r, p, ns, id)
 	if err != nil {
 		return h.bulkFailure(r, id, err)
 	}
 
+	unit := bulkTarget{id: id, obj: obj}
+
 	if run.call == nil {
-		return h.bulkApply(r, p, unit, run, id)
+		return h.bulkApply(r, p, unit, run)
 	}
 
-	return h.bulkItemKeyed(r, p, unit, run, id)
+	return h.bulkItemKeyed(r, p, unit, run)
 }
 
 // bulkUnit finds the unit of an item and checks unit:read on it. A unit that
@@ -350,40 +362,40 @@ func (h *Handler) bulkUnit(
 }
 
 // bulkApply locks or unlocks one unit with the same code as the single call.
-func (h *Handler) bulkApply(
-	r *http.Request, p identity.Principal, unit identity.Object, run *bulkRun, id string,
-) bulkResult {
+func (h *Handler) bulkApply(r *http.Request, p identity.Principal, unit bulkTarget, run *bulkRun) bulkResult {
 	ctx := r.Context()
 
 	if run.unlock {
-		if err := h.unlockOne(ctx, r, p, unit); err != nil {
-			return h.bulkLockFailure(r, p, unit, id, err)
+		if err := h.unlockOne(ctx, r, p, unit.obj); err != nil {
+			return h.bulkLockFailure(r, p, unit, err)
 		}
 
-		return unlockedResult(id)
+		return unlockedResult(unit.id)
 	}
 
-	l, err := h.lockOne(ctx, r, p, unit, run.reason)
+	l, err := h.lockOne(ctx, r, p, unit.obj, run.reason)
 	if err != nil {
-		return h.bulkLockFailure(r, p, unit, id, err)
+		return h.bulkLockFailure(r, p, unit, err)
 	}
 
-	return lockedResult(id, l)
+	return lockedResult(unit.id, l)
 }
 
 // bulkLockFailure makes the result of an item that the lock service refused. A
 // denial of unit:lock writes an audit entry of the outcome denied, as the route
 // check of a single call does.
-func (h *Handler) bulkLockFailure(
-	r *http.Request, p identity.Principal, unit identity.Object, id string, err error,
-) bulkResult {
+func (h *Handler) bulkLockFailure(r *http.Request, p identity.Principal, unit bulkTarget, err error) bulkResult {
 	if errors.Is(err, identity.ErrDenied) {
 		h.guard.Record(r.Context(), r, p, refusal.Denial{
-			Action: identity.ActionUnitLock, Object: unit, Reason: reasonBulkLockDenied, ReasonWithin: nil, Window: 0,
+			Action:       identity.ActionUnitLock,
+			Object:       unit.obj,
+			Reason:       reasonBulkLockDenied,
+			ReasonWithin: nil,
+			Window:       0,
 		})
 	}
 
-	return h.bulkFailure(r, id, err)
+	return h.bulkFailure(r, unit.id, err)
 }
 
 // bulkFailure makes the result of an item that failed. The error is the error
@@ -530,10 +542,9 @@ type itemMaterial struct {
 // before its record, so a replay checks the actions of the caller on the unit
 // again. An item that the store wrote answers its stored result on a retry. An
 // item that failed leaves no record, so a retry does it again.
-func (h *Handler) bulkItemKeyed(
-	r *http.Request, p identity.Principal, unit identity.Object, run *bulkRun, id string,
-) bulkResult {
+func (h *Handler) bulkItemKeyed(r *http.Request, p identity.Principal, unit bulkTarget, run *bulkRun) bulkResult {
 	ctx := r.Context()
+	id := unit.id
 
 	itemKey, err := digestKey("item-", run.call.key, id)
 	if err != nil {
@@ -567,7 +578,7 @@ func (h *Handler) bulkItemKeyed(
 		return h.bulkFailure(r, id, keyRefusal(http.StatusConflict,
 			errcode.RequestIdempotencyKeyInProgress, "the first request for this unit has not ended: retry later"))
 	case idempotency.Started:
-		return h.writeBulkItem(r, p, unit, run, id, ref, res.Token)
+		return h.writeBulkItem(r, p, unit, run, &pendingBulkItem{ref: ref, token: res.Token})
 	default:
 		return h.bulkFailure(r, id, fmt.Errorf("%w: unknown outcome %d", idempotency.ErrInvalid, res.Outcome))
 	}
@@ -576,7 +587,7 @@ func (h *Handler) bulkItemKeyed(
 // bulkItemAnswer makes the answer that the record of one item keeps: the
 // result of the item. The store calls it with the lock that the write made or
 // removed, in the transaction of the write.
-func bulkItemAnswer(id string, unlock bool) func(result any) (idempotency.Answer, error) {
+func bulkItemAnswer(id string, run *bulkRun) func(result any) (idempotency.Answer, error) {
 	return func(result any) (idempotency.Answer, error) {
 		l, ok := result.(manuallock.Lock)
 		if !ok {
@@ -584,7 +595,7 @@ func bulkItemAnswer(id string, unlock bool) func(result any) (idempotency.Answer
 		}
 
 		out := lockedResult(id, l)
-		if unlock {
+		if run.unlock {
 			out = unlockedResult(id)
 		}
 
@@ -597,17 +608,22 @@ func bulkItemAnswer(id string, unlock bool) func(result any) (idempotency.Answer
 	}
 }
 
+// pendingBulkItem names the pending record that an item started.
+type pendingBulkItem struct {
+	ref   idempotency.Ref
+	token string
+}
+
 // writeBulkItem writes one item with a Completion, so the store keeps the
 // result of the item in the transaction of the write. A write that fails frees
 // the key.
 func (h *Handler) writeBulkItem(
-	r *http.Request, p identity.Principal, unit identity.Object, run *bulkRun, id string,
-	ref idempotency.Ref, token string,
+	r *http.Request, p identity.Principal, unit bulkTarget, run *bulkRun, pending *pendingBulkItem,
 ) bulkResult {
-	completion := idempotency.NewCompletion(ref, token, bulkItemAnswer(id, run.unlock))
+	completion := idempotency.NewCompletion(pending.ref, pending.token, bulkItemAnswer(unit.id, run))
 	keyed := r.WithContext(idempotency.WithCompletion(r.Context(), completion))
 
-	out := h.bulkApply(keyed, p, unit, run, id)
+	out := h.bulkApply(keyed, p, unit, run)
 
 	if out.Status != bulkStatusOK || !completion.Stored() {
 		if out.Status == bulkStatusOK {
@@ -617,7 +633,7 @@ func (h *Handler) writeBulkItem(
 				faultlog.CauseUnclassified, "bulk.item")
 		}
 
-		h.abandon(context.WithoutCancel(r.Context()), ref, token)
+		h.abandon(context.WithoutCancel(r.Context()), pending.ref, pending.token)
 	}
 
 	return out
