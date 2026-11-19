@@ -906,11 +906,14 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 		return nil, false, fmt.Errorf("decode revealed value: %w", err)
 	}
 
-	_, masked, err := maskTofuInstance(
-		context.Background(), side.instance, target.resource, target.position, address, target.marks,
+	// The reveal holds other bounds on the work: one instance, the size of the
+	// state and the limit of the full decode, so this masking has no deadline.
+	_, masked, maskErr := maskTofuInstance(
+		newUnboundedTicker(), side.instance, instanceSlot{resource: target.resource, position: target.position},
+		address, target.marks,
 	)
-	if err != nil {
-		return nil, false, fmt.Errorf("mask instance: %w", err)
+	if maskErr != nil {
+		return nil, false, fmt.Errorf("mask instance: %w", maskErr)
 	}
 
 	if !slices.Contains(masked, target.path) {

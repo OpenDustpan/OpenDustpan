@@ -256,7 +256,12 @@ func revealResultPath(t *testing.T) string {
 	var masked []string
 
 	for _, address := range stubResourceAddresses() {
-		detail, err := workspace.ReadStateResource([]byte(stubResourceState()), stubResourceMarks(), address)
+		detail, err := workspace.ReadStateResource(
+			t.Context(),
+			[]byte(stubResourceState()),
+			stubResourceMarks(),
+			address,
+		)
 		if err != nil {
 			t.Fatalf("masked read of %s: %v", address, err)
 		}

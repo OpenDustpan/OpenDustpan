@@ -79,8 +79,8 @@ func secretsAndFiller(secrets, filler int) (string, workspace.SensitiveMarks) {
 // TestMaskedPathsDuplicateWorkBound proves the bound on the nodes times the
 // secrets of one instance: kept marks that name distinct objects and 40000
 // small filler objects, under 1 MB, are refused with ErrTooLarge before any
-// masking. The context expires after 5 seconds, so a read without the bound
-// ends with the deadline error and fails this case fast. The case with 4000
+// masking. The context expires after a few thousand values, so a read without
+// the bound ends with the deadline error and fails this case fast. The case with 4000
 // secrets stays under the bound of the markers, so only the work bound can
 // refuse it.
 func TestMaskedPathsDuplicateWorkBound(t *testing.T) {
@@ -97,14 +97,13 @@ func TestMaskedPathsDuplicateWorkBound(t *testing.T) {
 				t.Fatalf("the test state has %d bytes, want at most 1 MiB", len(state))
 			}
 
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			defer cancel()
-
-			start := time.Now()
+			// The context expires at the third check, a few thousand values into
+			// the masking, so a read without the bound ends fast with the deadline.
+			ctx := expiringCtx{calls: &atomic.Int64{}, after: 2}
 
 			_, err := workspace.MaskedPathsContext(ctx, []byte(state), marks)
 			if !errors.Is(err, workspace.ErrTooLarge) {
-				t.Fatalf("err = %v after %s, want ErrTooLarge", err, time.Since(start))
+				t.Fatalf("err = %v, want ErrTooLarge", err)
 			}
 		})
 	}

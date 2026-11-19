@@ -919,20 +919,40 @@ func propagableSecret(value any) bool {
 const maskTickEvery = 4096
 
 // maskTicker counts the nodes that a masking walk visits and checks the
-// context every maskTickEvery nodes.
+// deadline every maskTickEvery nodes. It holds a function and not a context,
+// so a walk passes one value.
 type maskTicker struct {
-	nodes int
+	nodes   int
+	expired func() bool
 }
 
-// tick counts one node. It answers ErrReadDeadline when the context is done.
-func (t *maskTicker) tick(ctx context.Context) error {
+// newCtxTicker returns a ticker that expires when ctx is done.
+func newCtxTicker(ctx context.Context) *maskTicker {
+	return &maskTicker{nodes: 0, expired: func() bool { return ctx.Err() != nil }}
+}
+
+// newUnboundedTicker returns a ticker that never expires, for a masking that
+// has no deadline of its own: the callers hold other bounds on the work.
+func newUnboundedTicker() *maskTicker {
+	return &maskTicker{nodes: 0, expired: func() bool { return false }}
+}
+
+// tick counts one node. It answers ErrReadDeadline when the ticker expired.
+func (t *maskTicker) tick() error {
 	t.nodes++
 
-	if t.nodes%maskTickEvery == 0 && ctx.Err() != nil {
+	if t.nodes%maskTickEvery == 0 && t.expired() {
 		return ErrReadDeadline
 	}
 
 	return nil
+}
+
+// instanceSlot is the place of one instance in the state: the index of its
+// resource and its position in the instances of that resource.
+type instanceSlot struct {
+	resource int
+	position int
 }
 
 // dupPass is the state of the duplicate pass of one instance: seen holds the
@@ -942,7 +962,7 @@ type dupPass struct {
 	seen    map[string]bool
 	masked  *[]string
 	secrets []any
-	ticker  maskTicker
+	ticker  *maskTicker
 }
 
 // maskDuplicateAt replaces child with a marker for path when it duplicates a
@@ -968,21 +988,21 @@ func (p *dupPass) maskDuplicateAt(child any, path string) bool {
 // rendering does not mark, as the output of a terraform_data resource, so
 // the copy answers masked too. Path is the value path of node. It checks the
 // context every maskTickEvery nodes and answers ErrReadDeadline.
-func (p *dupPass) maskDuplicates(ctx context.Context, node any, path string) error {
+func (p *dupPass) maskDuplicates(node any, path string) error {
 	switch typed := node.(type) {
 	case map[string]any:
-		return p.maskDuplicateMap(ctx, typed, path)
+		return p.maskDuplicateMap(typed, path)
 	case []any:
-		return p.maskDuplicateList(ctx, typed, path)
+		return p.maskDuplicateList(typed, path)
 	default:
 		return nil
 	}
 }
 
 // maskDuplicateMap masks each duplicating entry of doc.
-func (p *dupPass) maskDuplicateMap(ctx context.Context, doc map[string]any, path string) error {
+func (p *dupPass) maskDuplicateMap(doc map[string]any, path string) error {
 	for key, child := range doc {
-		if err := p.ticker.tick(ctx); err != nil {
+		if err := p.ticker.tick(); err != nil {
 			return err
 		}
 
@@ -995,7 +1015,7 @@ func (p *dupPass) maskDuplicateMap(ctx context.Context, doc map[string]any, path
 			continue
 		}
 
-		if err := p.maskDuplicates(ctx, child, childPath); err != nil {
+		if err := p.maskDuplicates(child, childPath); err != nil {
 			return err
 		}
 	}
@@ -1004,9 +1024,9 @@ func (p *dupPass) maskDuplicateMap(ctx context.Context, doc map[string]any, path
 }
 
 // maskDuplicateList masks each duplicating element of list.
-func (p *dupPass) maskDuplicateList(ctx context.Context, list []any, path string) error {
+func (p *dupPass) maskDuplicateList(list []any, path string) error {
 	for i, child := range list {
-		if err := p.ticker.tick(ctx); err != nil {
+		if err := p.ticker.tick(); err != nil {
 			return err
 		}
 
@@ -1019,7 +1039,7 @@ func (p *dupPass) maskDuplicateList(ctx context.Context, list []any, path string
 			continue
 		}
 
-		if err := p.maskDuplicates(ctx, child, childPath); err != nil {
+		if err := p.maskDuplicates(child, childPath); err != nil {
 			return err
 		}
 	}
@@ -1030,8 +1050,8 @@ func (p *dupPass) maskDuplicateList(ctx context.Context, list []any, path string
 // maskAllLeaves replaces each leaf value under v with a marker for its path,
 // and appends each marker path to masked. Containers keep their shape. It
 // checks the context every maskTickEvery nodes and answers ErrReadDeadline.
-func maskAllLeaves(ctx context.Context, v any, base string, masked *[]string, ticker *maskTicker) (any, error) {
-	if err := ticker.tick(ctx); err != nil {
+func maskAllLeaves(v any, base string, masked *[]string, ticker *maskTicker) (any, error) {
+	if err := ticker.tick(); err != nil {
 		return nil, err
 	}
 
@@ -1040,7 +1060,7 @@ func maskAllLeaves(ctx context.Context, v any, base string, masked *[]string, ti
 		out := make(map[string]any, len(typed))
 
 		for key, elem := range typed {
-			child, err := maskAllLeaves(ctx, elem, base+"/"+escapeTofuPointerToken(key), masked, ticker)
+			child, err := maskAllLeaves(elem, base+"/"+escapeTofuPointerToken(key), masked, ticker)
 			if err != nil {
 				return nil, err
 			}
@@ -1053,7 +1073,7 @@ func maskAllLeaves(ctx context.Context, v any, base string, masked *[]string, ti
 		out := make([]any, len(typed))
 
 		for i, elem := range typed {
-			child, err := maskAllLeaves(ctx, elem, base+"/"+strconv.Itoa(i), masked, ticker)
+			child, err := maskAllLeaves(elem, base+"/"+strconv.Itoa(i), masked, ticker)
 			if err != nil {
 				return nil, err
 			}
@@ -1118,9 +1138,9 @@ func maskOnePointer(attributes any, relative, full string, out *maskCollectors) 
 // an already masked pointer masks nothing. A pointer at the same node is
 // masked again.
 func maskTofuInstance(
-	ctx context.Context, instance map[string]any, resource, position int, address string, marks SensitiveMarks,
+	ticker *maskTicker, instance map[string]any, slot instanceSlot, address string, marks SensitiveMarks,
 ) (any, []string, error) {
-	base := "/resources/" + strconv.Itoa(resource) + "/instances/" + strconv.Itoa(position) + "/attributes"
+	base := "/resources/" + strconv.Itoa(slot.resource) + "/instances/" + strconv.Itoa(slot.position) + "/attributes"
 
 	attributes := instance["attributes"]
 	if attributes == nil {
@@ -1130,7 +1150,7 @@ func maskTofuInstance(
 	if len(marks) == 0 {
 		var masked []string
 
-		out, err := maskAllLeaves(ctx, attributes, base, &masked, &maskTicker{nodes: 0})
+		out, err := maskAllLeaves(attributes, base, &masked, ticker)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1162,9 +1182,9 @@ func maskTofuInstance(
 	}
 
 	if len(secrets) > 0 {
-		pass := dupPass{seen: seen, masked: &masked, secrets: secrets, ticker: maskTicker{nodes: 0}}
+		pass := dupPass{seen: seen, masked: &masked, secrets: secrets, ticker: ticker}
 
-		if err := pass.maskDuplicates(ctx, attributes, base); err != nil {
+		if err := pass.maskDuplicates(attributes, base); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -1211,7 +1231,7 @@ func findTofuResource(doc any, address string) (int, map[string]any, error) {
 
 // ReadStateResource returns one resource of state with its instances masked.
 // Missing attributes read as an empty object.
-func ReadStateResource(state []byte, marks SensitiveMarks, address string) (StateDetail, error) {
+func ReadStateResource(ctx context.Context, state []byte, marks SensitiveMarks, address string) (StateDetail, error) {
 	doc, err := decodeState(state)
 	if err != nil {
 		return StateDetail{}, err
@@ -1224,6 +1244,8 @@ func ReadStateResource(state []byte, marks SensitiveMarks, address string) (Stat
 
 	base := tofuResourceBase(obj)
 
+	ticker := newCtxTicker(ctx)
+
 	detail := StateDetail{
 		Address:   base,
 		Type:      tofuField(obj, "type"),
@@ -1235,7 +1257,7 @@ func ReadStateResource(state []byte, marks SensitiveMarks, address string) (Stat
 
 	for i, instance := range tofuInstances(obj) {
 		attributes, masked, err := maskTofuInstance(
-			context.Background(), instance, position, i, tofuInstanceAddress(obj, instance), marks,
+			ticker, instance, instanceSlot{resource: position, position: i}, tofuInstanceAddress(obj, instance), marks,
 		)
 		if err != nil {
 			return StateDetail{}, err
@@ -1591,7 +1613,7 @@ type tofuDiffResource struct {
 // markers. With no kept marks for the version every attribute value answers
 // as a marker.
 func maskedInstanceCopy(
-	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
+	ticker *maskTicker, instance map[string]any, slot instanceSlot, address string, marks SensitiveMarks,
 ) any {
 	copied, err := json.Marshal(instance)
 	if err != nil {
@@ -1603,11 +1625,11 @@ func maskedInstanceCopy(
 	dec := json.NewDecoder(bytes.NewReader(copied))
 	dec.UseNumber()
 
-	if err := dec.Decode(&fresh); err != nil {
+	if decodeErr := dec.Decode(&fresh); decodeErr != nil {
 		return instance["attributes"]
 	}
 
-	masked, _, err := maskTofuInstance(context.Background(), fresh, resource, position, address, marks)
+	masked, _, err := maskTofuInstance(ticker, fresh, slot, address, marks)
 	if err != nil {
 		// Fail closed: no attribute values leave with an error.
 		return nil
@@ -1764,14 +1786,17 @@ type tofuResourcePair struct {
 
 // maskSide returns the sorted instances of side with their addresses and
 // their masked attribute copies.
-func maskSide(side tofuResourceSide) tofuDiffSide {
+func maskSide(ticker *maskTicker, side tofuResourceSide) tofuDiffSide {
 	instances := tofuInstances(side.obj)
 	sorted, addrs := sortTofuInstances(side.obj, instances)
 
 	masked := make([]any, 0, len(sorted))
 
 	for i, instance := range sorted {
-		masked = append(masked, maskedInstanceCopy(instance, side.index, i, addrs[i], side.marks))
+		masked = append(
+			masked,
+			maskedInstanceCopy(ticker, instance, instanceSlot{resource: side.index, position: i}, addrs[i], side.marks),
+		)
 	}
 
 	return tofuDiffSide{instances: sorted, addrs: addrs, masked: masked}
@@ -1782,7 +1807,7 @@ func maskSide(side tofuResourceSide) tofuDiffSide {
 // module, mode) compare as plain paths; the instances compare with their
 // masked copies side by side, so a sensitive change lands in secrets. The
 // result holds empty slices, never nil, when nothing changed.
-func diffTofuResource(pair tofuResourcePair) tofuDiffResource {
+func diffTofuResource(ticker *maskTicker, pair tofuResourcePair) tofuDiffResource {
 	out := tofuDiffResource{paths: []string{}, secrets: []string{}}
 
 	for _, field := range []string{"type", "provider", "module", "mode"} {
@@ -1791,7 +1816,7 @@ func diffTofuResource(pair tofuResourcePair) tofuDiffResource {
 		}
 	}
 
-	entry := diffTofuInstances(maskSide(pair.from), maskSide(pair.to))
+	entry := diffTofuInstances(maskSide(ticker, pair.from), maskSide(ticker, pair.to))
 	out.paths = append(out.paths, entry.paths...)
 	out.secrets = append(out.secrets, entry.secrets...)
 
@@ -1845,7 +1870,7 @@ type tofuVersionSide struct {
 // addresses only in to, removed those only in from, and changed those in
 // both with a change. Differing holds the sorted addresses that differ in
 // any way.
-func collectTofuDiff(from, to tofuVersionSide) tofuDiffMismatch {
+func collectTofuDiff(ticker *maskTicker, from, to tofuVersionSide) tofuDiffMismatch {
 	var out tofuDiffMismatch
 
 	for address := range to.byBase {
@@ -1873,7 +1898,7 @@ func collectTofuDiff(from, to tofuVersionSide) tofuDiffMismatch {
 			to:   tofuResourceSide{obj: toObj, marks: to.marks, index: to.index[address]},
 		}
 
-		entry := diffTofuResource(pair)
+		entry := diffTofuResource(ticker, pair)
 		if len(entry.paths) == 0 && len(entry.secrets) == 0 {
 			continue
 		}
@@ -1980,7 +2005,7 @@ func tofuVersionSideOf(entries []tofuResourceEntry, marks SensitiveMarks) tofuVe
 // NextCursor of an earlier page; size is the page size, or zero for the
 // default page, and counts differing addresses. Resources match by base
 // address across versions.
-func DiffStates(from, to StateWithMarks, cursor string, size int) (StateDiff, error) {
+func DiffStates(ctx context.Context, from, to StateWithMarks, cursor string, size int) (StateDiff, error) {
 	offset, err := tofuOffset(cursor)
 	if err != nil {
 		return StateDiff{}, err
@@ -2009,6 +2034,7 @@ func DiffStates(from, to StateWithMarks, cursor string, size int) (StateDiff, er
 	}
 
 	mismatch := collectTofuDiff(
+		newCtxTicker(ctx),
 		tofuVersionSideOf(fromEntries, from.Marks),
 		tofuVersionSideOf(toEntries, to.Marks),
 	)

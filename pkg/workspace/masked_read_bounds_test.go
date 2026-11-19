@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -192,7 +193,7 @@ func refusedAllocation(t *testing.T, state string) uint64 {
 
 	data := []byte(state)
 
-	runtime.GC()
+	debug.FreeOSMemory()
 
 	var before, after runtime.MemStats
 
@@ -231,11 +232,9 @@ func TestMaskedPathsRefusalBuildsNoPath(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := refusedAllocation(t, tc.state); got > limit {
-				t.Fatalf("a refusal allocated %d bytes, want at most %d", got, limit)
-			}
-		})
+		if got := refusedAllocation(t, tc.state); got > limit {
+			t.Fatalf("%s: a refusal allocated %d bytes, want at most %d", tc.name, got, limit)
+		}
 	}
 }
 

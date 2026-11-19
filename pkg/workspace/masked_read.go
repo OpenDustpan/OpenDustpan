@@ -530,11 +530,16 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 	}
 
 	masked := []string{}
+	ticker := newCtxTicker(ctx)
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
 			_, paths, err := maskTofuInstance(
-				ctx, instance, entry.index, i, tofuInstanceAddress(entry.obj, instance), marks,
+				ticker,
+				instance,
+				instanceSlot{resource: entry.index, position: i},
+				tofuInstanceAddress(entry.obj, instance),
+				marks,
 			)
 			if err != nil {
 				return nil, err
@@ -608,45 +613,57 @@ type maskedWork struct {
 // number. With no kept marks every leaf is a marker; with marks the markers
 // come from the pointers that the instance names.
 func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
-	work := maskedWork{markers: 0, pathBytes: 0, countLeaves: len(marks) == 0}
+	work := maskedWork{markers: 0, pathBytes: 0, nodes: 0, countLeaves: len(marks) == 0}
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
 			base := len("/resources/") + len(strconv.Itoa(entry.index)) +
 				len("/instances/") + len(strconv.Itoa(i)) + len("/attributes")
 
-			attributes := instance["attributes"]
-			if attributes == nil {
-				// The masking replaces missing attributes with an empty object.
-				attributes = map[string]any{}
-			}
-
-			secrets := 0
-
-			if len(marks) > 0 {
-				address := tofuInstanceAddress(entry.obj, instance)
-				pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
-				work.markers += len(pointers)
-
-				for _, relative := range pointers {
-					if value, found := lookupPointer(attributes, relative); found && propagableSecret(value) {
-						secrets++
-					}
-				}
-			}
-
-			work.nodes = 0
-
-			if err := work.walk(attributes, base); err != nil {
+			if err := work.addInstance(instance, base, tofuInstanceAddress(entry.obj, instance), marks); err != nil {
 				return err
 			}
+		}
+	}
 
-			// The duplicate pass compares each node with each secret.
-			if secrets > 0 && work.nodes > maskedMaxDuplicateWork/secrets {
-				return fmt.Errorf("%w: %d values and %d secrets need more than %d comparisons",
-					ErrTooLarge, work.nodes, secrets, maskedMaxDuplicateWork)
+	return nil
+}
+
+// addInstance adds one instance to the work and checks the duplicate pass of
+// the instance: its values times its propagable secrets. base is the length
+// of the path of its attributes.
+func (w *maskedWork) addInstance(
+	instance map[string]any, base int, address string, marks SensitiveMarks,
+) error {
+	attributes := instance["attributes"]
+	if attributes == nil {
+		// The masking replaces missing attributes with an empty object.
+		attributes = map[string]any{}
+	}
+
+	secrets := 0
+
+	if len(marks) > 0 {
+		pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
+		w.markers += len(pointers)
+
+		for _, relative := range pointers {
+			if value, found := lookupPointer(attributes, relative); found && propagableSecret(value) {
+				secrets++
 			}
 		}
+	}
+
+	w.nodes = 0
+
+	if err := w.walk(attributes, base); err != nil {
+		return err
+	}
+
+	// The duplicate pass compares each node with each secret.
+	if secrets > 0 && w.nodes > maskedMaxDuplicateWork/secrets {
+		return fmt.Errorf("%w: %d values and %d secrets need more than %d comparisons",
+			ErrTooLarge, w.nodes, secrets, maskedMaxDuplicateWork)
 	}
 
 	return nil

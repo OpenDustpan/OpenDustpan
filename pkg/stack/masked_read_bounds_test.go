@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -217,7 +218,7 @@ func TestMaskedReadNestingScanIgnoresStrings(t *testing.T) {
 // allocDuring returns the bytes that fn allocates. The caller must not run in
 // parallel, because the counter holds the allocations of the whole process.
 func allocDuring(fn func()) uint64 {
-	runtime.GC()
+	debug.FreeOSMemory()
 
 	var before, after runtime.MemStats
 
@@ -300,25 +301,23 @@ func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
 		{"depth 8000 with 5000 secret objects", deepSecretsDoc(8000, 5000)},
 		{"10001 markers at depth 90", chainSecretsDoc(90, 10001)},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if len(tc.doc) >= fiveMB {
-				t.Fatalf("hostile document has %d bytes, want less than 5 MB", len(tc.doc))
-			}
+		if len(tc.doc) >= fiveMB {
+			t.Fatalf("hostile document has %d bytes, want less than 5 MB", len(tc.doc))
+		}
 
-			r, _ := plantedReader(t, tc.doc, -1)
+		r, _ := plantedReader(t, tc.doc, -1)
 
-			var err error
+		var err error
 
-			got := allocDuring(func() { _, err = r.read(t, nil, "") })
+		got := allocDuring(func() { _, err = r.read(t, nil, "") })
 
-			if !errors.Is(err, stack.ErrTooLarge) {
-				t.Fatalf("err = %v, want the size error of the read", err)
-			}
+		if !errors.Is(err, stack.ErrTooLarge) {
+			t.Fatalf("err = %v, want the size error of the read", err)
+		}
 
-			if got > bound {
-				t.Fatalf("the refused read allocated %d bytes, want at most %d", got, bound)
-			}
-		})
+		if got > bound {
+			t.Fatalf("the refused read allocated %d bytes, want at most %d", got, bound)
+		}
 	}
 }
 
@@ -620,6 +619,9 @@ func TestMaskedReadNegativeOffset(t *testing.T) {
 	}
 }
 
+// errReplayerCalled is the error of a replayer that the read must not call.
+var errReplayerCalled = errors.New("replayer must not be called")
+
 // uncalledReplayer is a journal replayer that fails the test when the read
 // calls it: the masked read must never replay a journal.
 type uncalledReplayer struct {
@@ -632,7 +634,7 @@ func (r uncalledReplayer) Replay(
 ) error {
 	r.t.Error("the masked read called the journal replayer")
 
-	return errors.New("replayer must not be called")
+	return errReplayerCalled
 }
 
 // TestMaskedReadSkipsRunningJournal proves the masked read serves stored
