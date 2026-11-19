@@ -616,12 +616,29 @@ func (w *reachWalker) visit(ctx context.Context, id string) error {
 		return fmt.Errorf("read subjects of caller: %w", err)
 	}
 
+	// Defense in depth: the principal service and the restore check refuse
+	// a group membership of a principal of a namespace; this check stays so
+	// that a row from any other source widens no reach. It does not rely on
+	// those layers.
+	subjects, err = confineSubjectsOf(ctx, subjects, w.cfg.Principals)
+	if err != nil {
+		return fmt.Errorf("confine subjects of %q: %w", id, err)
+	}
+
 	var fresh []Grant
 
 	for _, subject := range subjects {
 		grants, err := w.cfg.Grants.GrantsOf(ctx, subject)
 		if err != nil {
 			return fmt.Errorf("read grants of %s: %w", subject.String(), err)
+		}
+
+		// Defense in depth: the store and the restore check refuse a grant
+		// of a principal of a namespace on another namespace; this check
+		// stays so that a row from any other source widens no reach.
+		grants, err = confineGrantsOf(ctx, grants, w.cfg.Principals)
+		if err != nil {
+			return fmt.Errorf("confine grants of %s: %w", subject.String(), err)
 		}
 
 		fresh = append(fresh, w.remember(grants)...)
@@ -639,6 +656,13 @@ func (w *reachWalker) seedGroup(ctx context.Context, groupID string) error {
 	grants, err := w.cfg.Grants.GrantsOf(ctx, subject)
 	if err != nil {
 		return fmt.Errorf("read grants of %s: %w", subject.String(), err)
+	}
+
+	// Defense in depth: same confinement as in visit; a group subject holds
+	// no principal grant, so this stays a no-op that a new caller cannot skip.
+	grants, err = confineGrantsOf(ctx, grants, w.cfg.Principals)
+	if err != nil {
+		return fmt.Errorf("confine grants of %s: %w", subject.String(), err)
 	}
 
 	return w.follow(ctx, w.remember(grants))

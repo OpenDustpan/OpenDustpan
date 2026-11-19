@@ -571,6 +571,12 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 // one; this check stays so that a row from any other source gives no
 // power.
 func (a *Authorizer) confineGrants(ctx context.Context, grants []Grant) ([]Grant, error) {
+	return confineGrantsOf(ctx, grants, a.principals)
+}
+
+// confineGrantsOf is confineGrants over the principal port principals. The
+// reach walker uses it too, so that both read the same rule.
+func confineGrantsOf(ctx context.Context, grants []Grant, principals PrincipalNamespaces) ([]Grant, error) {
 	out := make([]Grant, 0, len(grants))
 	scopes := map[string]subjectScope{}
 
@@ -585,7 +591,7 @@ func (a *Authorizer) confineGrants(ctx context.Context, grants []Grant) ([]Grant
 
 		scope, read := scopes[g.Subject.ID]
 		if !read {
-			ns, found, err := principalNamespaceOf(ctx, g.Subject.ID, a.principals)
+			ns, found, err := principalNamespaceOf(ctx, g.Subject.ID, principals)
 			if err != nil {
 				return nil, err
 			}
@@ -786,6 +792,12 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 // and the staged check of a restore refuses a backup that holds one; this
 // check stays so that a row from any other source gives no power.
 func (a *Authorizer) confineSubjects(ctx context.Context, subjects []Subject) ([]Subject, error) {
+	return confineSubjectsOf(ctx, subjects, a.principals)
+}
+
+// confineSubjectsOf is confineSubjects over the principal port principals.
+// The reach walker uses it too, so that both read the same rule.
+func confineSubjectsOf(ctx context.Context, subjects []Subject, principals PrincipalNamespaces) ([]Subject, error) {
 	id := ""
 	grouped := false
 
@@ -807,7 +819,7 @@ func (a *Authorizer) confineSubjects(ctx context.Context, subjects []Subject) ([
 		return subjects, nil
 	}
 
-	_, namespaced, err := principalNamespaceOf(ctx, id, a.principals)
+	_, namespaced, err := principalNamespaceOf(ctx, id, principals)
 	if err != nil {
 		return nil, err
 	}
