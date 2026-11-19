@@ -43,6 +43,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Exchanger:      exchanger,
 		MtlsExchanger:  nil,
 		MtlsGuard:      nil,
+		OnMtlsRefused:  nil,
 		Namespaces:     namespaces,
 		Rules:          rules,
 		Authenticator:  coverageAuthenticator{},
