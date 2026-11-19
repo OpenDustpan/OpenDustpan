@@ -29,6 +29,10 @@ func TestFirstAdministratorConformance(t *testing.T) {
 			InsertCode: func(ctx context.Context, r firstadmintest.CodeRow) error {
 				return insertFirstAdminCode(ctx, conn, r)
 			},
+			PutSession: func(ctx context.Context, r firstadmintest.SessionRow) error {
+				return putFirstAdminSession(ctx, conn, r)
+			},
+			IgnoreCodeDeletes: func(ctx context.Context) error { return ignoreFirstAdminCodeDeletes(ctx, conn) },
 			InsertMarker: func(ctx context.Context, r firstadmintest.MarkerRow) error {
 				return insertFirstAdminMarker(ctx, conn, r)
 			},
@@ -76,6 +80,39 @@ func insertFirstAdminMarker(ctx context.Context, conn *sql.DB, r firstadmintest.
 		r.ID, r.PrincipalID, r.GrantID, r.SessionID, r.CreatedBy, r.MadeAtMs)
 	if err != nil {
 		return fmt.Errorf("insert marker row: %w", err)
+	}
+
+	return nil
+}
+
+// putFirstAdminSession writes a session row with direct SQL, or replaces the row
+// with the same ID.
+func putFirstAdminSession(ctx context.Context, conn *sql.DB, r firstadmintest.SessionRow) error {
+	var ended any
+	if r.EndedAtMs != 0 {
+		ended = r.EndedAtMs
+	}
+
+	_, err := conn.ExecContext(ctx, `INSERT INTO sessions
+(id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, generation)
+VALUES (?, ?, ?, 'corp', ?, ?, ?, ?, 1)
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, created_at_ms = excluded.created_at_ms,
+  last_seen_at_ms = excluded.last_seen_at_ms, auth_time_ms = excluded.auth_time_ms, ended_at_ms = excluded.ended_at_ms`,
+		r.ID, r.PrincipalID, "digest-of-"+r.ID, r.CreatedAtMs, r.LastSeenAtMs, r.AuthTimeMs, ended)
+	if err != nil {
+		return fmt.Errorf("put session row: %w", err)
+	}
+
+	return nil
+}
+
+// ignoreFirstAdminCodeDeletes makes each later delete in the code table match
+// no row.
+func ignoreFirstAdminCodeDeletes(ctx context.Context, conn *sql.DB) error {
+	_, err := conn.ExecContext(ctx, `CREATE TRIGGER ignore_code_deletes BEFORE DELETE ON first_administrator_codes
+BEGIN SELECT RAISE(IGNORE); END`)
+	if err != nil {
+		return fmt.Errorf("create the trigger: %w", err)
 	}
 
 	return nil

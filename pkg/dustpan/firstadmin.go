@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/firstadminsvc"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -21,21 +20,27 @@ import (
 const firstAdministratorPolicyTimeout = 5 * time.Second
 
 // newFirstAdministrator builds the service of the first administrator on the
-// namespace store. It returns nil, with no error, when the store keeps no
-// first administrator port, no temporary administrator records or no server
-// audit log, or when the server has no principal service: the three routes
-// are then not mounted. It never returns a typed nil.
-//
-//nolint:ireturn // The server API reads the service through its own port.
-func newFirstAdministrator(in *serverHandlerInputs) (serverapi.FirstAdministratorService, error) {
+// namespace store. It returns mounted false, and a nil service, when the store
+// keeps no first administrator port or no temporary administrator records, or
+// when the server has no principal service or no audit log: the three routes
+// are then not mounted, and the function logs the reason at Info level. The
+// caller must not put the nil service in an interface.
+func newFirstAdministrator(in *serverHandlerInputs) (*firstadminsvc.Service, bool, error) {
 	store, ok := in.store.(firstadmin.Store)
 	if !ok || in.principals == nil || in.extras.audit == nil {
-		return nil, nil //nolint:nilnil // No store port: the routes are not mounted.
+		in.logger.Info("first administrator: the routes are not mounted: the store has no first administrator port, " +
+			"or the server has no principal service or no audit log")
+
+		return nil, false, nil
 	}
 
 	temps := tempReaderOf(in.store)
 	if temps == nil {
-		return nil, nil //nolint:nilnil // No temporary administrator records: the routes are not mounted.
+		in.logger.Info(
+			"first administrator: the routes are not mounted: the store has no temporary administrator records",
+		)
+
+		return nil, false, nil
 	}
 
 	now := in.now
@@ -51,10 +56,10 @@ func newFirstAdministrator(in *serverHandlerInputs) (serverapi.FirstAdministrato
 		Logger:  in.logger,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("first administrator: %w", err)
+		return nil, false, fmt.Errorf("first administrator: %w", err)
 	}
 
-	return svc, nil
+	return svc, true, nil
 }
 
 // freshnessWindowOf returns the token freshness window of the session policy.

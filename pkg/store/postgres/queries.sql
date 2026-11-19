@@ -2804,6 +2804,14 @@ CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
 
+-- name: GetSessionForShare :one
+-- The redeem of the first administrator reads the session row with a share
+-- lock, so a sign-out cannot end the session between the read and the commit.
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
+FROM sessions WHERE id = $1
+FOR SHARE;
+
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
 -- created_after_ms are the bounds of an active session at at_ms.
@@ -4911,10 +4919,14 @@ DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
 -- name: DeleteFirstAdministratorCode :execrows
-DELETE FROM first_administrator_codes WHERE id = 1;
+-- The delete is a check: it matches the code row only when the digest, the
+-- principal and the open time are those that the redeem checked.
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = sqlc.arg(digest) AND principal_id = sqlc.arg(principal_id) AND expires_at_ms > sqlc.arg(now_ms);
 
 -- name: GetFirstAdministratorCode :one
-SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1;
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+FOR UPDATE;
 
 -- name: GetFirstAdministratorMarker :one
 SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1;

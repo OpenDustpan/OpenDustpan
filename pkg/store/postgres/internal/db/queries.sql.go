@@ -3797,11 +3797,20 @@ func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64)
 }
 
 const deleteFirstAdministratorCode = `-- name: DeleteFirstAdministratorCode :execrows
-DELETE FROM first_administrator_codes WHERE id = 1
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = $1 AND principal_id = $2 AND expires_at_ms > $3
 `
 
-func (q *Queries) DeleteFirstAdministratorCode(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteFirstAdministratorCode)
+type DeleteFirstAdministratorCodeParams struct {
+	Digest      string
+	PrincipalID string
+	NowMs       int64
+}
+
+// The delete is a check: it matches the code row only when the digest, the
+// principal and the open time are those that the redeem checked.
+func (q *Queries) DeleteFirstAdministratorCode(ctx context.Context, arg DeleteFirstAdministratorCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFirstAdministratorCode, arg.Digest, arg.PrincipalID, arg.NowMs)
 	if err != nil {
 		return 0, err
 	}
@@ -6971,6 +6980,7 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 
 const getFirstAdministratorCode = `-- name: GetFirstAdministratorCode :one
 SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+FOR UPDATE
 `
 
 type GetFirstAdministratorCodeRow struct {
@@ -10137,6 +10147,48 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.AccountsInactivityMs,
 		&i.AccountsDisable,
 		&i.PrincipalGeneration,
+	)
+	return i, err
+}
+
+const getSessionForShare = `-- name: GetSessionForShare :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
+FROM sessions WHERE id = $1
+FOR SHARE
+`
+
+type GetSessionForShareRow struct {
+	ID           string
+	PrincipalID  string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    pgtype.Int8
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+	Generation   int64
+}
+
+// The redeem of the first administrator reads the session row with a share
+// lock, so a sign-out cannot end the session between the read and the commit.
+func (q *Queries) GetSessionForShare(ctx context.Context, id string) (GetSessionForShareRow, error) {
+	row := q.db.QueryRow(ctx, getSessionForShare, id)
+	var i GetSessionForShareRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Generation,
 	)
 	return i, err
 }

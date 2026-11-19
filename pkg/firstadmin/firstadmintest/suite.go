@@ -12,6 +12,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,17 @@ type MarkerRow struct {
 	ID          int
 }
 
+// SessionRow is a row of the session table, as a hostile case writes it with
+// direct SQL. A time of 0 for EndedAtMs means a session that did not end.
+type SessionRow struct {
+	ID           string
+	PrincipalID  string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    int64
+}
+
 // Harness is a fresh, empty store and the direct access that the hostile cases
 // need. The adapters give each function in dialect SQL.
 type Harness struct {
@@ -69,6 +81,12 @@ type Harness struct {
 	// InsertCode inserts a row in the code table with no validation of the
 	// service. The schema alone can refuse it.
 	InsertCode func(ctx context.Context, r CodeRow) error
+	// PutSession inserts the session row r, or replaces the row with the same ID,
+	// with no validation of the session service.
+	PutSession func(ctx context.Context, r SessionRow) error
+	// IgnoreCodeDeletes makes each later delete in the code table match 0 rows,
+	// with no error, as a concurrent change of the row does.
+	IgnoreCodeDeletes func(ctx context.Context) error
 	// InsertMarker inserts a row in the marker table with no validation of
 	// the service. The schema alone can refuse it.
 	InsertMarker func(ctx context.Context, r MarkerRow) error
@@ -87,6 +105,7 @@ const (
 )
 
 const (
+	day          = 24 * time.Hour
 	aliceSubject = "alice"
 	createdBy    = "host"
 	reason       = "the operator lost the admin session"
@@ -130,6 +149,8 @@ func RunFirstAdministrator(t *testing.T, newHarness Factory) {
 		{name: "TestRedeemGrantExists", test: testRedeemGrantExists},
 		{name: "TestOneRowOnly", test: testOneRowOnly},
 		{name: "TestRedeemEntryReasonFromCodeRow", test: testRedeemEntryReasonFromCodeRow},
+		{name: "TestRedeemConcurrent", test: testRedeemConcurrent},
+		{name: "TestRedeemDeleteMatchesNothing", test: testRedeemDeleteMatchesNothing},
 	}
 
 	for _, tc := range cases {
@@ -243,8 +264,47 @@ func redeemInput(id, digest, grantID string) firstadmin.RedeemInput {
 	}
 }
 
+// sessionRowOf returns the row of an active session of the person of in, made
+// at the base time, with the sign-in time of in.
+func sessionRowOf(in firstadmin.RedeemInput) SessionRow {
+	return SessionRow{
+		ID:           in.SessionID,
+		PrincipalID:  in.PrincipalID,
+		CreatedAtMs:  at(minuteBase).UnixMilli(),
+		LastSeenAtMs: in.Now.UnixMilli(),
+		AuthTimeMs:   in.AuthTime.UnixMilli(),
+		EndedAtMs:    0,
+	}
+}
+
+// redeem stores the active session row that matches in, and then redeems. A
+// person that does not exist has no session row, so that the redeem of a
+// person that does not exist still reaches the check of the person.
 func redeem(h Harness, in firstadmin.RedeemInput) (firstadmin.Result, error) {
+	// A session of a person that does not exist cannot be stored. The redeem
+	// then runs with no session row, and it fails closed.
+	if err := h.PutSession(context.Background(), sessionRowOf(in)); err != nil {
+		return redeemStored(h, in)
+	}
+
+	return redeemStored(h, in)
+}
+
+// redeemStored redeems with the session rows as they are.
+func redeemStored(h Harness, in firstadmin.RedeemInput) (firstadmin.Result, error) {
 	return h.Store.Redeem(context.Background(), in, entry(redeemAction, "@server"))
+}
+
+// redeemWithSession stores the session row r and then redeems. The row, not
+// in.AuthTime, is the truth that the store must use.
+func redeemWithSession(t *testing.T, h Harness, in firstadmin.RedeemInput, r SessionRow) (firstadmin.Result, error) {
+	t.Helper()
+
+	if err := h.PutSession(t.Context(), r); err != nil {
+		t.Fatalf("put session %q: %v", r.ID, err)
+	}
+
+	return redeemStored(h, in)
 }
 
 func wantErr(t *testing.T, what string, err, want error) {
@@ -641,6 +701,7 @@ func testStoreHostileRows(t *testing.T, newHarness Factory) {
 
 	t.Run("principals", func(t *testing.T) { t.Parallel(); testHostilePrincipals(t, newHarness) })
 	t.Run("sign-in time", func(t *testing.T) { t.Parallel(); testHostileSignIn(t, newHarness) })
+	t.Run("session row", func(t *testing.T) { t.Parallel(); testHostileSession(t, newHarness) })
 	t.Run("input digest", func(t *testing.T) { t.Parallel(); testHostileInputDigest(t, newHarness) })
 	t.Run("redeem form", func(t *testing.T) { t.Parallel(); testHostileRedeemForm(t, newHarness) })
 	t.Run("offer form", func(t *testing.T) { t.Parallel(); testHostileOfferForm(t, newHarness) })
@@ -779,8 +840,14 @@ func testHostileSignIn(t *testing.T, newHarness Factory) {
 			mutate: func(in *firstadmin.RedeemInput) { in.AuthTime = in.Now.Add(-window - time.Millisecond) },
 		},
 		{name: "after now", mutate: func(in *firstadmin.RedeemInput) { in.AuthTime = in.Now.Add(time.Millisecond) }},
-		{name: "window of 0", mutate: func(in *firstadmin.RedeemInput) { in.Window = 0 }},
-		{name: "negative window", mutate: func(in *firstadmin.RedeemInput) { in.Window = -time.Minute }},
+		// The sign-in time equals Now in the two rows below, so that only the
+		// window can refuse them: an age of 0 passes each other check.
+		{name: "window of 0", mutate: func(in *firstadmin.RedeemInput) {
+			in.AuthTime, in.Window = in.Now, 0
+		}},
+		{name: "negative window", mutate: func(in *firstadmin.RedeemInput) {
+			in.AuthTime, in.Window = in.Now, -time.Minute
+		}},
 		{name: "no sign-in time", mutate: func(in *firstadmin.RedeemInput) { in.AuthTime = time.Time{} }},
 	}
 
@@ -816,6 +883,200 @@ func testHostileSignIn(t *testing.T, newHarness Factory) {
 			t.Fatalf("redeem with a sign-in as old as the window: %v", err)
 		}
 	})
+}
+
+// sessionCase is one row of testHostileSession. A nil row stores no session.
+type sessionCase struct {
+	row  func(r *SessionRow)
+	want error
+	name string
+}
+
+// sessionCases returns the session rows that the store must refuse. The input
+// of the redeem is valid in each row: only the stored row decides.
+func sessionCases() []sessionCase {
+	long := day
+
+	return []sessionCase{
+		{name: "unknown session", row: nil, want: firstadmin.ErrSessionInvalid},
+		{
+			name: "revoked session", want: firstadmin.ErrSessionInvalid,
+			row: func(r *SessionRow) { r.EndedAtMs = at(minuteRedeem).UnixMilli() - 1 },
+		},
+		{
+			name: "session of another person", want: firstadmin.ErrSessionInvalid,
+			row: func(r *SessionRow) { r.PrincipalID = bob },
+		},
+		{
+			name: "idle session", want: firstadmin.ErrSessionInvalid,
+			row: func(r *SessionRow) { r.LastSeenAtMs = at(minuteRedeem).Add(-long).UnixMilli() },
+		},
+		{
+			name: "expired session", want: firstadmin.ErrSessionInvalid,
+			row: func(r *SessionRow) { r.CreatedAtMs = at(minuteRedeem).Add(-2 * long).UnixMilli() },
+		},
+		{
+			// The input says that the sign-in is fresh. The stored row says that
+			// it is older than the window, so the stored row wins.
+			name: "fresh input over a stale session row", want: firstadmin.ErrStaleSignIn,
+			row: func(r *SessionRow) { r.AuthTimeMs = at(minuteRedeem).Add(-window - time.Millisecond).UnixMilli() },
+		},
+	}
+}
+
+// testHostileSession sends a session row that the store must refuse, or must
+// read for its own values. A row fails when the store trusts the input.
+func testHostileSession(t *testing.T, newHarness Factory) {
+	t.Helper()
+
+	for _, tc := range sessionCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			mustPrincipal(t, h, person(alice, aliceSubject))
+			mustPrincipal(t, h, person(bob, "bob"))
+			mustOffer(t, h, alice, digestA())
+
+			entries := serverEntries(t, h)
+			in := redeemInput(alice, digestA(), aliceGrantID)
+			in.AuthTime = in.Now // The input claims a sign-in right now.
+
+			var err error
+
+			if tc.row == nil {
+				_, err = redeemStored(h, in)
+			} else {
+				row := sessionRowOf(in)
+				tc.row(&row)
+
+				_, err = redeemWithSession(t, h, in, row)
+			}
+
+			wantErr(t, "redeem", err, tc.want)
+			wantUnchanged(t, h, alice, aliceGrantID, entries)
+		})
+	}
+
+	t.Run("sign-in time of the row, not of the input", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		mustPrincipal(t, h, person(alice, aliceSubject))
+		mustOffer(t, h, alice, digestA())
+
+		// The input has a stale time, and the row a fresh one: the row wins.
+		in := redeemInput(alice, digestA(), aliceGrantID)
+		row := sessionRowOf(in)
+		row.AuthTimeMs = in.Now.UnixMilli()
+		in.AuthTime = in.Now.Add(-day)
+
+		if _, err := redeemWithSession(t, h, in, row); err != nil {
+			t.Fatalf("redeem with a fresh session row and a stale input: %v", err)
+		}
+	})
+}
+
+// raceCallers is the number of goroutines of testRedeemConcurrent.
+const raceCallers = 8
+
+// raceGrant returns the grant ID of caller i of the race.
+func raceGrant(i int) string { return "grt-race-" + strconv.Itoa(i) }
+
+// testRedeemConcurrent redeems one code from many goroutines. Exactly one wins
+// and makes the one grant and the one marker.
+func testRedeemConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	mustPrincipal(t, h, person(alice, aliceSubject))
+	mustOffer(t, h, alice, digestA())
+
+	if err := h.PutSession(t.Context(), sessionRowOf(redeemInput(alice, digestA(), aliceGrantID))); err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+
+	errs := make([]error, raceCallers)
+
+	var wg sync.WaitGroup
+
+	for i := range raceCallers {
+		wg.Go(func() {
+			_, errs[i] = redeemStored(h, redeemInput(alice, digestA(), raceGrant(i)))
+		})
+	}
+
+	wg.Wait()
+
+	winner := raceWinner(t, errs)
+
+	// One grant: the grant of the winner exists and no other grant of the callers does.
+	for i := range raceCallers {
+		_, err := h.Store.GetGrant(t.Context(), raceGrant(i))
+		if i == winner && err != nil {
+			t.Fatalf("grant of the winner %d: %v", i, err)
+		}
+
+		if i != winner && !errors.Is(err, access.ErrNotFound) {
+			t.Fatalf("grant of loser %d: err = %v, want access.ErrNotFound", i, err)
+		}
+	}
+
+	// One marker, the one of the winner, and no open code.
+	st := mustState(t, h, at(minuteRedeem))
+	if st.Marker == nil || st.Marker.GrantID != raceGrant(winner) || st.Offer != nil {
+		t.Fatalf("state = %+v %+v, want the marker of caller %d and no code", st.Marker, st.Offer, winner)
+	}
+}
+
+// raceWinner returns the one caller that redeemed the code. It fails when no
+// caller or more than one did, or when a caller that lost has another error
+// than ErrAlreadyMade, ErrCodeInvalid or ErrGrantExists.
+func raceWinner(t *testing.T, errs []error) int {
+	t.Helper()
+
+	winner := -1
+
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			if winner >= 0 {
+				t.Fatalf("callers %d and %d both redeemed the code", winner, i)
+			}
+
+			winner = i
+		case errors.Is(err, firstadmin.ErrAlreadyMade), errors.Is(err, firstadmin.ErrCodeInvalid),
+			errors.Is(err, firstadmin.ErrGrantExists):
+			// A caller that lost.
+		default:
+			t.Fatalf("caller %d: err = %v, want nil, ErrAlreadyMade, ErrCodeInvalid or ErrGrantExists", i, err)
+		}
+	}
+
+	if winner < 0 {
+		t.Fatal("no caller redeemed the code")
+	}
+
+	return winner
+}
+
+// testRedeemDeleteMatchesNothing makes the delete of the code row match 0
+// rows. The redeem must then fail and store nothing: the grant, the marker
+// and the entry roll back.
+func testRedeemDeleteMatchesNothing(t *testing.T, h Harness) {
+	t.Helper()
+
+	mustPrincipal(t, h, person(alice, aliceSubject))
+	mustOffer(t, h, alice, digestA())
+
+	entries := serverEntries(t, h)
+
+	if err := h.IgnoreCodeDeletes(t.Context()); err != nil {
+		t.Fatalf("ignore code deletes: %v", err)
+	}
+
+	_, err := redeem(h, redeemInput(alice, digestA(), aliceGrantID))
+	wantErr(t, "redeem with a delete that matches no row", err, firstadmin.ErrCodeInvalid)
+	wantUnchanged(t, h, alice, aliceGrantID, entries)
 }
 
 func testHostileInputDigest(t *testing.T, newHarness Factory) {
@@ -1122,7 +1383,12 @@ func testRedeemEntryReasonFromCodeRow(t *testing.T, h Harness) {
 		t.Fatalf("second offer: %v", err)
 	}
 
-	if _, err := h.Store.Redeem(t.Context(), redeemInput(alice, digestB(), aliceGrantID), callerEntry); err != nil {
+	in := redeemInput(alice, digestB(), aliceGrantID)
+	if err := h.PutSession(t.Context(), sessionRowOf(in)); err != nil {
+		t.Fatalf("put session: %v", err)
+	}
+
+	if _, err := h.Store.Redeem(t.Context(), in, callerEntry); err != nil {
 		t.Fatalf("redeem: %v", err)
 	}
 

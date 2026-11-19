@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/firstadmin"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // zeroReader gives the same byte for each read, so a code is the same each time.
@@ -328,6 +329,7 @@ func goodFacts() firstadmin.Facts {
 		HaveCode:    true,
 		HavePrin:    true,
 		TempAdmin:   false,
+		HaveSession: true, SessionOwner: testPrincipalID, SessionStatus: session.StatusActive,
 	}
 }
 
@@ -469,6 +471,31 @@ func TestCheckRedeemTable(t *testing.T) {
 			want:   firstadmin.ErrStaleSignIn,
 		},
 		{
+			name:   "no session row",
+			change: func(f *firstadmin.Facts) { f.HaveSession = false },
+			want:   firstadmin.ErrSessionInvalid,
+		},
+		{
+			name:   "session of another person",
+			change: func(f *firstadmin.Facts) { f.SessionOwner = "prn-other" },
+			want:   firstadmin.ErrSessionInvalid,
+		},
+		{
+			name:   "ended session",
+			change: func(f *firstadmin.Facts) { f.SessionStatus = session.StatusEnded },
+			want:   firstadmin.ErrSessionInvalid,
+		},
+		{
+			name:   "idle session",
+			change: func(f *firstadmin.Facts) { f.SessionStatus = session.StatusIdle },
+			want:   firstadmin.ErrSessionInvalid,
+		},
+		{
+			name:   "expired session",
+			change: func(f *firstadmin.Facts) { f.SessionStatus = session.StatusExpired },
+			want:   firstadmin.ErrSessionInvalid,
+		},
+		{
 			// A wrong code is reported before a stale sign-in, so a stale
 			// sign-in never tells whether the code was right.
 			name: "wrong code wins over a stale sign-in",
@@ -585,9 +612,29 @@ func TestCheckPrincipalTable(t *testing.T) {
 				t.Fatalf("CheckPrincipal error = %v, want ErrPrincipalInvalid", err)
 			}
 
-			if !strings.Contains(err.Error(), tc.text) {
-				t.Errorf("CheckPrincipal error = %q, want the rule %q in the text", err, tc.text)
+			if want := ruleOf(tc.text); !errors.Is(err, want) {
+				t.Errorf("CheckPrincipal error = %q, want the sentinel of the rule %q (%v)", err, tc.text, want)
 			}
 		})
+	}
+}
+
+// ruleOf maps the label of a row to the sentinel of its rule.
+func ruleOf(label string) error {
+	switch label {
+	case "ID", "person", "namespace":
+		return firstadmin.ErrPrincipalNotPerson
+	case "disabled":
+		return firstadmin.ErrPrincipalDisabled
+	case "break-glass":
+		return firstadmin.ErrPrincipalBreakGlass
+	case "temporary":
+		return firstadmin.ErrPrincipalTempAdmin
+	case "dev:":
+		return firstadmin.ErrPrincipalDevSubject
+	case "bootstrap":
+		return firstadmin.ErrPrincipalBootstrapSubject
+	default:
+		return firstadmin.ErrPrincipalInvalid
 	}
 }

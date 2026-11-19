@@ -90,9 +90,16 @@ type serverHandlerInputs struct {
 // the upgrade check reads, and the principal service when the store keeps
 // principals.
 func newServerHandler(in *serverHandlerInputs) (http.Handler, error) {
-	firstAdmin, err := newFirstAdministrator(in)
+	firstAdminSvc, firstAdminMounted, err := newFirstAdministrator(in)
 	if err != nil {
 		return nil, err
+	}
+
+	// A nil *Service in the interface would not be a nil interface, so the
+	// interface is set only when the routes are mounted.
+	var firstAdmin serverapi.FirstAdministratorService
+	if firstAdminMounted {
+		firstAdmin = firstAdminSvc
 	}
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{

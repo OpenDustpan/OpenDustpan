@@ -89,7 +89,7 @@ func (s *Store) Offer(ctx context.Context, in firstadmin.OfferInput, e audit.Ent
 		}
 
 		if !live.found {
-			return fmt.Errorf("%w: the principal is not live", firstadmin.ErrPrincipalInvalid)
+			return firstadmin.ErrPrincipalNotLive
 		}
 
 		if checkErr := firstadmin.CheckPrincipal(live.p, live.tempAdmin); checkErr != nil {
@@ -155,43 +155,8 @@ func (s *Store) Redeem(ctx context.Context, in firstadmin.RedeemInput, e audit.E
 			return checkErr
 		}
 
-		grant := access.Grant{
-			CreatedAt: in.Now,
-			Condition: nil,
-			Object:    identity.ServerObject(),
-			ID:        in.GrantID,
-			Role:      firstadmin.Role,
-			CreatedBy: code.CreatedBy,
-			Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: in.PrincipalID},
-		}
-
-		if grantErr := insertGrant(ctx, q, grant); errors.Is(grantErr, access.ErrAlreadyExists) {
-			return firstadmin.ErrGrantExists
-		} else if grantErr != nil {
-			return grantErr
-		}
-
-		spent, err := q.DeleteFirstAdministratorCode(ctx)
-		if err != nil {
-			return fmt.Errorf("spend first administrator code: %w", err)
-		}
-
-		// Defense in depth: the read of the code row above already found it in this
-		// transaction. This check stays so that a code row that is gone before the
-		// delete never gives a grant, whatever the isolation of the dialect is.
-		if spent != 1 {
-			return firstadmin.ErrCodeInvalid
-		}
-
-		marker := db.InsertFirstAdministratorMarkerParams{
-			PrincipalID: in.PrincipalID,
-			GrantID:     in.GrantID,
-			SessionID:   in.SessionID,
-			CreatedBy:   code.CreatedBy,
-			MadeAtMs:    codec.Millis(in.Now),
-		}
-		if err := q.InsertFirstAdministratorMarker(ctx, marker); err != nil {
-			return fmt.Errorf("insert first administrator marker: %w", err)
+		if err := spendCode(ctx, q, in, code); err != nil {
+			return err
 		}
 
 		// The reason and the creator come from the code row of this
@@ -201,7 +166,7 @@ func (s *Store) Redeem(ctx context.Context, in firstadmin.RedeemInput, e audit.E
 		e = firstadmin.StampRedeemEntry(e, code.CreatedBy, code.Reason)
 
 		result = firstadmin.Result{
-			MadeAt:      codec.FromMillis(marker.MadeAtMs),
+			MadeAt:      codec.FromMillis(codec.Millis(in.Now)),
 			PrincipalID: in.PrincipalID,
 			GrantID:     in.GrantID,
 		}
@@ -277,7 +242,7 @@ func readRedeemFacts(
 	var facts firstadmin.Facts
 
 	facts.Now = in.Now
-	facts.AuthTime = in.AuthTime
+	// The sign-in time is the stored one: SetSession reads it from the session row.
 	facts.InDigest = in.Digest
 	facts.InPrincipal = in.PrincipalID
 	facts.Window = in.Window
@@ -318,5 +283,93 @@ func readRedeemFacts(
 	facts.TempAdmin = live.tempAdmin
 	facts.HavePrin = live.found
 
+	if err := readRedeemSession(ctx, q, in.SessionID, &facts); err != nil {
+		return facts, code, err
+	}
+
 	return facts, code, nil
+}
+
+// readRedeemSession reads the session row by its ID and the session policy in
+// the transaction of q, and puts them in facts. A session that does not exist
+// leaves HaveSession false, and CheckRedeem refuses it. The row, not the
+// caller, gives the owner, the status and the sign-in time.
+func readRedeemSession(ctx context.Context, q *db.Queries, id string, facts *firstadmin.Facts) error {
+	row, err := q.GetSession(ctx, id)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("select session: %w", err)
+	}
+
+	policy, err := q.GetSessionPolicy(ctx)
+	if err != nil {
+		return fmt.Errorf("select session policy: %w", err)
+	}
+
+	facts.SetSession(sessionOfRow(row), sessionPolicyOf(policy).Limits)
+
+	return nil
+}
+
+// spendCode makes the grant, spends the code row and stores the marker in the
+// transaction of q. The delete matches the digest, the principal and the time
+// that CheckRedeem checked.
+func spendCode(
+	ctx context.Context,
+	q *db.Queries,
+	in firstadmin.RedeemInput,
+	code db.GetFirstAdministratorCodeRow,
+) error {
+	grant := access.Grant{
+		CreatedAt: in.Now,
+		Condition: nil,
+		Object:    identity.ServerObject(),
+		ID:        in.GrantID,
+		Role:      firstadmin.Role,
+		CreatedBy: code.CreatedBy,
+		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: in.PrincipalID},
+	}
+
+	if grantErr := insertGrant(ctx, q, grant); errors.Is(grantErr, access.ErrAlreadyExists) {
+		return firstadmin.ErrGrantExists
+	} else if grantErr != nil {
+		return grantErr
+	}
+
+	spent, err := q.DeleteFirstAdministratorCode(ctx, db.DeleteFirstAdministratorCodeParams{
+		Digest: in.Digest, PrincipalID: in.PrincipalID, NowMs: codec.Millis(in.Now),
+	})
+	if err != nil {
+		return fmt.Errorf("spend first administrator code: %w", err)
+	}
+
+	// Defense in depth: the read of the code row above already found it in this
+	// transaction, and CheckRedeem compared the digest, the principal and the
+	// time. The delete repeats the three checks in its WHERE clause. This
+	// check stays so that a delete that matches no row never gives a grant,
+	// whatever the isolation of the dialect is.
+	if spent != 1 {
+		return firstadmin.ErrCodeInvalid
+	}
+
+	marker := db.InsertFirstAdministratorMarkerParams{
+		PrincipalID: in.PrincipalID,
+		GrantID:     in.GrantID,
+		SessionID:   in.SessionID,
+		CreatedBy:   code.CreatedBy,
+		MadeAtMs:    codec.Millis(in.Now),
+	}
+	if err := q.InsertFirstAdministratorMarker(ctx, marker); err != nil {
+		if isUniqueViolation(err) {
+			// Another transaction stored the marker first: the route is closed.
+			return firstadmin.ErrAlreadyMade
+		}
+
+		return fmt.Errorf("insert first administrator marker: %w", err)
+	}
+
+	return nil
 }

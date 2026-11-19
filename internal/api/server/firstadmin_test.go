@@ -18,6 +18,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/firstadminsvc"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -117,7 +118,12 @@ func (l *faLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return l.buf.Write(p) //nolint:wrapcheck // A test sink.
+	n, err := l.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write the log buffer: %w", err)
+	}
+
+	return n, nil
 }
 
 func (l *faLog) text() string {
@@ -130,7 +136,13 @@ func (l *faLog) text() string {
 // faClock is the one clock of the fixtures of this file. The server under
 // test reads the same clock, so the sign-in ages and the policy times that a
 // test sets are relative to the time that the server sees.
-func faClock() func() time.Time { return time.Now }
+//
+// The clock is frozen: the time of a sign-in that a row makes with age 0 is
+// equal to the time of the server, so that only the window decides the row
+// "redeem with a window of 0".
+func faClock() func() time.Time {
+	return func() time.Time { return time.Date(2026, time.November, 19, 12, 0, 0, 0, time.UTC) }
+}
 
 // faNow returns the time of faClock.
 func faNow() time.Time { return faClock()() }
@@ -203,12 +215,14 @@ func newFAFixture(t *testing.T) faFixture {
 		t.Fatalf("token service: %v", err)
 	}
 
-	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: nil})
+	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: faClock()})
 	if err != nil {
 		t.Fatalf("session policy service: %v", err)
 	}
 
-	sessions, err := session.NewSessions(session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: nil})
+	sessions, err := session.NewSessions(
+		session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: faClock()},
+	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
@@ -234,21 +248,52 @@ func newFAFixture(t *testing.T) faFixture {
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules: nil, Cursors: testCursors(t), LocalUsers: nil, Preferences: nil, GitHostLinks: nil,
-		Settings: nil, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
-		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:             nil, TempAdmins: nil, Authenticator: faAuthenticator{}, Authorizer: authz, Logger: logger,
-		Namespaces: namespaces, Backups: nil, Restores: nil, Maintenance: newFakeMaintenance(maintenance.StateNormal),
-		Metrics: stubMetrics{}, Version: "", Schema: stubSchema{migrations: nil}, Journal: nil, Principals: principals,
-		Tokens: tokens, Access: grants, Audit: st, OnAuditFailure: nil, DeletedUnits: nil, AuditChain: nil,
-		AuditSinks: nil, IPAllowlists: nil, Gates: nil, SessionPolicy: policies,
+		ProxyRules:       nil,
+		Cursors:          testCursors(t),
+		LocalUsers:       nil,
+		Preferences:      nil,
+		GitHostLinks:     nil,
+		Settings:         nil,
+		GitHost:          nil,
+		Idempotency:      nil,
+		Workers:          nil,
+		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:              faClock(),
+		TempAdmins:       nil,
+		Authenticator:    faAuthenticator{},
+		Authorizer:       authz,
+		Logger:           logger,
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       principals,
+		Tokens:           tokens,
+		Access:           grants,
+		Audit:            st,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    policies,
 		SignIn: &apiserver.SignIn{
 			Service: newTestSignInService(t, st, sessions, principals), OnDevRefused: nil, DevCode: nil,
 			DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: limiter, Stored: nil, Admin: nil,
 			PasswordProviders: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil, Passkeys: nil,
 			PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 		},
-		CheckpointEpochs: nil, DenialLimiter: nil, Instances: nil, StoreChecks: nil, Reach: reach,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
+		Reach:              reach,
 		FirstAdministrator: spy,
 	})
 	if err != nil {
@@ -530,8 +575,9 @@ const (
 	faNoCost  = 0
 )
 
-// faWrongCode is a code of the right form that no offer made.
-var faWrongCode = strings.Repeat("A", firstadmin.CodeLength) //nolint:gochecknoglobals // A frozen test value.
+// faWrongCode is a code of the right form that no offer made: 43 characters
+// "A". TestFirstAdministratorWrongCodeForm checks the form.
+const faWrongCode = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 func faOfferReq(body string, who faCaller) faReq {
 	return faReq{method: http.MethodPost, target: faOfferPath, body: body, who: who}
@@ -1043,53 +1089,57 @@ func (f faFixture) wantDigestNowhere(t *testing.T, when, digest string) {
 	}
 }
 
-// tableTexts returns the text of every row of every table, by table name.
+// faDumpQueries is the fixed allowlist of the tables that tableTexts reads:
+// the tables that could hold a code or its digest (the audit chain, the
+// sessions, the grants, the keys of replay, the notifications and the two
+// tables of the first administrator). Each value is a constant query. The
+// key is the table name that a failure message shows.
+func faDumpQueries() map[string]string {
+	return map[string]string{
+		"access_tkn":                "SELECT * FROM access_tokens",
+		"audit_chain_state":         "SELECT * FROM audit_chain_state",
+		"audit_chain_check":         "SELECT * FROM audit_chain_check",
+		"audit_chain_mark":          "SELECT * FROM audit_chain_mark",
+		"durable_operations":        "SELECT * FROM durable_operations",
+		"durable_steps":             "SELECT * FROM durable_steps",
+		"first_administrator":       "SELECT * FROM first_administrator",
+		"first_administrator_codes": "SELECT * FROM first_administrator_codes",
+		"grants":                    "SELECT * FROM grants",
+		"idempotency_records":       "SELECT * FROM idempotency_records",
+		"installation":              "SELECT * FROM installation",
+		"local_user_resets":         "SELECT * FROM local_user_resets",
+		"local_users":               "SELECT * FROM local_users",
+		"notification_deliveries":   "SELECT * FROM notification_deliveries",
+		"notifications":             "SELECT * FROM notifications",
+		"object_context":            "SELECT * FROM object_context",
+		"principals":                "SELECT * FROM principals",
+		"sessions":                  "SELECT * FROM sessions",
+		"sign_in_failures":          "SELECT * FROM sign_in_failures",
+		"sign_in_requests":          "SELECT * FROM sign_in_requests",
+		"temp_admins":               "SELECT * FROM temp_admins",
+	}
+}
+
+// tableTexts returns the text of every row of each table in faDumpQueries, by
+// table name. It fails when the database lacks a table of the allowlist, so a
+// renamed table cannot leave a hole in the check.
 func (f faFixture) tableTexts(t *testing.T) map[string]string {
 	t.Helper()
 
 	conn := f.sqlDB(t)
+	queries := faDumpQueries()
+	out := make(map[string]string, len(queries))
 
-	tables, err := conn.QueryContext(t.Context(), "SELECT name FROM sqlite_master WHERE type = 'table'")
-	if err != nil {
-		t.Fatalf("list tables: %v", err)
-	}
-
-	defer func() {
-		if closeErr := tables.Close(); closeErr != nil {
-			t.Errorf("close tables: %v", closeErr)
-		}
-	}()
-
-	var names []string
-
-	for tables.Next() {
-		var name string
-		if scanErr := tables.Scan(&name); scanErr != nil {
-			t.Fatalf("scan table name: %v", scanErr)
-		}
-
-		names = append(names, name)
-	}
-
-	if err = tables.Err(); err != nil {
-		t.Fatalf("list tables: %v", err)
-	}
-
-	out := make(map[string]string, len(names))
-	for _, name := range names {
-		out[name] = f.dumpTable(t, conn, name)
+	for name, query := range queries {
+		out[name] = f.dumpQuery(t, conn, name, query)
 	}
 
 	return out
 }
 
-// dumpTable returns every value of every row of table as text.
-func (f faFixture) dumpTable(t *testing.T, conn *sql.DB, table string) string {
+// dumpQuery returns every value of every row of the constant query as text.
+func (f faFixture) dumpQuery(t *testing.T, conn *sql.DB, table, query string) string {
 	t.Helper()
-
-	// The name comes from sqlite_master of the database of this test, and the
-	// quote is removed from it.
-	query := `SELECT * FROM "` + strings.ReplaceAll(table, `"`, "") + `"` //nolint:gosec,unqueryvet // See above.
 
 	rows, err := conn.QueryContext(t.Context(), query)
 	if err != nil {
@@ -1230,4 +1280,76 @@ func (l *fakeLimiter) refuseFromNow() {
 	defer l.mu.Unlock()
 
 	l.refuse = true
+}
+
+// TestFirstAdministratorWrongCodeForm checks that the wrong code has the form
+// of a code, so that only the value, not the form, makes the refusal.
+func TestFirstAdministratorWrongCodeForm(t *testing.T) {
+	t.Parallel()
+
+	if !firstadmin.Code(faWrongCode).ValidForm() {
+		t.Fatal("faWrongCode has the form of a code: want true, got false")
+	}
+}
+
+// TestFirstAdministratorPrincipalRules sends each rule of CheckPrincipal, bare
+// and wrapped, through the mapping of the route. Each rule has its own text,
+// and an error that names no rule gets the text that lists all rules.
+func TestFirstAdministratorPrincipalRules(t *testing.T) {
+	t.Parallel()
+
+	const code = errcode.FirstAdministratorPrincipalInvalid
+
+	rows := []struct {
+		name    string
+		err     error
+		message string
+	}{
+		{
+			"not a person", firstadmin.ErrPrincipalNotPerson,
+			"the principal is not a person of this installation: use the ID of an enabled person, not a service",
+		},
+		{
+			"disabled", firstadmin.ErrPrincipalDisabled,
+			"the principal is disabled: enable the person, or use the ID of an enabled person",
+		},
+		{
+			"break-glass", firstadmin.ErrPrincipalBreakGlass,
+			"the principal is a break-glass person: use the ID of a person who is not a break-glass person",
+		},
+		{
+			"temporary administrator", firstadmin.ErrPrincipalTempAdmin,
+			"the principal is a temporary administrator: use the ID of a person who is not a temporary administrator",
+		},
+		{
+			"dev subject", firstadmin.ErrPrincipalDevSubject,
+			"the principal has a dev: subject: use the ID of a person who signs in with a real identity provider",
+		},
+		{
+			"bootstrap subject", firstadmin.ErrPrincipalBootstrapSubject,
+			"the principal has the subject of the bootstrap administrator: use the ID of a person",
+		},
+		{
+			"not live", firstadmin.ErrPrincipalNotLive,
+			"the principal is not live: use the ID of an enabled person of this installation, " +
+				"and sign in as that person to redeem",
+		},
+		{
+			"no rule", firstadmin.ErrPrincipalInvalid,
+			"this principal cannot be the first administrator: use the ID of an enabled person of this " +
+				"installation, not a service, a break-glass person, a temporary administrator, or a dev: user",
+		},
+	}
+
+	for _, tc := range rows {
+		for _, err := range []error{tc.err, fmt.Errorf("check the principal: %w", tc.err)} {
+			t.Run(tc.name+"/"+err.Error(), func(t *testing.T) {
+				t.Parallel()
+
+				checkWriteErrorRow(t, writeErrorRow{
+					name: tc.name, err: err, status: http.StatusBadRequest, code: code, args: nil, message: tc.message,
+				}, apiserver.FirstAdminErrorForTest(err))
+			})
+		}
+	}
 }

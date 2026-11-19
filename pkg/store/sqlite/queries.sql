@@ -4416,7 +4416,10 @@ DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (CAST(sqlc.arg(if_version) AS INTEGER) = 0 OR version = CAST(sqlc.arg(if_version) AS INTEGER));
 
 -- name: DeleteFirstAdministratorCode :execrows
-DELETE FROM first_administrator_codes WHERE id = 1;
+-- The delete is a check: it matches the code row only when the digest, the
+-- principal and the open time are those that the redeem checked.
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = sqlc.arg(digest) AND principal_id = sqlc.arg(principal_id) AND expires_at_ms > sqlc.arg(now_ms);
 
 -- name: GetFirstAdministratorCode :one
 SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1;

@@ -50,6 +50,7 @@ const (
 	RuleAlreadyMade         = "already-made"
 	RuleGrantExists         = "grant-exists"
 	RuleStaleSignIn         = "stale-sign-in"
+	RuleSessionInvalid      = "session-invalid"
 	RuleSessionInput        = "session-input"
 	RuleSubjectMismatch     = "subject-mismatch"
 	RuleRandomSource        = "random-source"
@@ -249,7 +250,7 @@ func screenOffer(in OfferInput) (string, error) {
 	case !IsBootstrap(in.Caller):
 		return RuleCallerNotBootstrap, ErrNotBootstrap
 	case !validPrincipalID(in.PrincipalID):
-		return RulePrincipalForm, fmt.Errorf("%w: the principal ID is not an ID", firstadmin.ErrPrincipalInvalid)
+		return RulePrincipalForm, fmt.Errorf("%w: the principal ID is not an ID", firstadmin.ErrPrincipalNotPerson)
 	default:
 		if err := firstadmin.ValidateReason(in.Reason); err != nil {
 			return RuleReasonInvalid, err
@@ -408,7 +409,7 @@ func (s *Service) checkSession(ctx context.Context, a attempt, in RedeemInput) e
 		if errors.Is(err, principal.ErrNotFound) {
 			s.refuse(ctx, a, RulePrincipalNotAllowed)
 
-			return fmt.Errorf("%w: no such principal", firstadmin.ErrPrincipalInvalid)
+			return fmt.Errorf("%w: no such principal", firstadmin.ErrPrincipalNotLive)
 		}
 
 		s.refuse(ctx, a, RuleStoreError)
@@ -419,7 +420,7 @@ func (s *Service) checkSession(ctx context.Context, a attempt, in RedeemInput) e
 	if person.Subject != in.Caller.Subject {
 		s.refuse(ctx, a, RuleSubjectMismatch)
 
-		return fmt.Errorf("%w: the session and the principal differ", firstadmin.ErrPrincipalInvalid)
+		return fmt.Errorf("%w: the session and the principal differ", firstadmin.ErrPrincipalNotLive)
 	}
 
 	if err := s.checkPrincipal(ctx, in.PrincipalID); err != nil {
@@ -442,7 +443,7 @@ func (s *Service) checkPrincipal(ctx context.Context, id string) error {
 	p, err := s.cfg.Principals.GetPrincipal(ctx, id)
 	if err != nil {
 		if errors.Is(err, principal.ErrNotFound) {
-			return fmt.Errorf("%w: no such principal", firstadmin.ErrPrincipalInvalid)
+			return fmt.Errorf("%w: no such principal", firstadmin.ErrPrincipalNotLive)
 		}
 
 		return fmt.Errorf("%w: read the principal: %w", ErrUnavailable, err)
@@ -518,10 +519,17 @@ func (s *Service) refuseStore(ctx context.Context, a attempt, err error) error {
 		{err: firstadmin.ErrPrincipalInvalid, rule: RulePrincipalNotAllowed},
 		{err: firstadmin.ErrGrantExists, rule: RuleGrantExists},
 		{err: firstadmin.ErrStaleSignIn, rule: RuleStaleSignIn},
+		{err: firstadmin.ErrSessionInvalid, rule: RuleSessionInvalid},
 		{err: firstadmin.ErrReasonInvalid, rule: RuleReasonInvalid},
 	} {
 		if errors.Is(err, known.err) {
 			s.refuse(ctx, a, known.rule)
+
+			// The error keeps the sentinel of the failed rule of the principal,
+			// so that the API names the rule. The text of each sentinel is fixed.
+			if principalRule := principalRuleOf(err); principalRule != nil {
+				return fmt.Errorf("%w", principalRule)
+			}
 
 			return fmt.Errorf("%w", known.err)
 		}
@@ -530,4 +538,20 @@ func (s *Service) refuseStore(ctx context.Context, a attempt, err error) error {
 	s.refuse(ctx, a, RuleStoreError)
 
 	return fmt.Errorf("%w: %w", ErrUnavailable, err)
+}
+
+// principalRuleOf returns the sentinel of the rule of CheckPrincipal that err
+// wraps, or nil when err wraps none of them.
+func principalRuleOf(err error) error {
+	for _, rule := range []error{
+		firstadmin.ErrPrincipalNotPerson, firstadmin.ErrPrincipalDisabled, firstadmin.ErrPrincipalBreakGlass,
+		firstadmin.ErrPrincipalTempAdmin, firstadmin.ErrPrincipalDevSubject, firstadmin.ErrPrincipalBootstrapSubject,
+		firstadmin.ErrPrincipalNotLive,
+	} {
+		if errors.Is(err, rule) {
+			return rule
+		}
+	}
+
+	return nil
 }

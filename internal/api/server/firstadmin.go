@@ -147,12 +147,47 @@ var (
 	}
 	errFirstAdminAlreadyMade = &codedError{
 		status: http.StatusConflict, code: errcode.FirstAdministratorAlreadyMade, args: nil,
-		message: "the first administrator is made already: the route is closed",
+		message: "the first administrator is made already: the route is closed. " +
+			"To get an administrator again, run opendustpan host create-temp-admin on the server host",
 	}
 	errFirstAdminCodeInvalid = &codedError{
 		status: http.StatusBadRequest, code: errcode.FirstAdministratorCodeInvalid, args: nil,
-		message: "the code is not valid: ask the operator for a new code",
+		message: "the code is not valid: ask the operator for a new code with POST /api/server/first-administrator",
 	}
+	errFirstAdminPrincipalNotPerson = &codedError{
+		status: http.StatusBadRequest, code: errcode.FirstAdministratorPrincipalInvalid, args: nil,
+		message: "the principal is not a person of this installation: use the ID of an enabled person, not a service",
+	}
+	errFirstAdminPrincipalDisabled = &codedError{
+		status: http.StatusBadRequest, code: errcode.FirstAdministratorPrincipalInvalid, args: nil,
+		message: "the principal is disabled: enable the person, or use the ID of an enabled person",
+	}
+	errFirstAdminPrincipalBreakGlass = &codedError{
+		status: http.StatusBadRequest, code: errcode.FirstAdministratorPrincipalInvalid, args: nil,
+		message: "the principal is a break-glass person: use the ID of a person who is not a break-glass person",
+	}
+	errFirstAdminPrincipalTempAdmin = &codedError{
+		status:  http.StatusBadRequest,
+		code:    errcode.FirstAdministratorPrincipalInvalid,
+		args:    nil,
+		message: "the principal is a temporary administrator: use the ID of a person who is not a temporary administrator",
+	}
+	errFirstAdminPrincipalDevSubject = &codedError{
+		status: http.StatusBadRequest, code: errcode.FirstAdministratorPrincipalInvalid, args: nil,
+		message: "the principal has a dev: subject: use the ID of a person who signs in with a real identity provider",
+	}
+	errFirstAdminPrincipalBootstrapSubject = &codedError{
+		status: http.StatusBadRequest, code: errcode.FirstAdministratorPrincipalInvalid, args: nil,
+		message: "the principal has the subject of the bootstrap administrator: use the ID of a person",
+	}
+	errFirstAdminPrincipalNotLive = &codedError{
+		status:  http.StatusBadRequest,
+		code:    errcode.FirstAdministratorPrincipalInvalid,
+		args:    nil,
+		message: "the principal is not live: use the ID of an enabled person of this installation, and sign in as that person to redeem",
+	}
+	// errFirstAdminPrincipalInvalid is the answer of a principal error that
+	// names no rule.
 	errFirstAdminPrincipalInvalid = &codedError{
 		status: http.StatusBadRequest, code: errcode.FirstAdministratorPrincipalInvalid, args: nil,
 		message: "this principal cannot be the first administrator: use the ID of an enabled person of this " +
@@ -473,11 +508,15 @@ func firstAdminError(err error) error {
 	case errors.Is(err, firstadmin.ErrCodeInvalid):
 		return errFirstAdminCodeInvalid
 	case errors.Is(err, firstadmin.ErrPrincipalInvalid):
-		return errFirstAdminPrincipalInvalid
+		return firstAdminPrincipalError(err)
 	case errors.Is(err, firstadmin.ErrReasonInvalid):
 		return errFirstAdminReasonInvalid
 	case errors.Is(err, firstadmin.ErrGrantExists):
 		return errFirstAdminGrantExists
+	case errors.Is(err, firstadmin.ErrSessionInvalid):
+		// The stored session is gone, ended, idle, expired or of another person.
+		// The caller needs a new sign-in, as for a stale sign-in.
+		return errFreshStepRequired
 	case errors.Is(err, firstadmin.ErrStaleSignIn):
 		// The store refused the sign-in time that the handler accepted. The
 		// answer is the one of a stale sign-in, with no path of a new sign-in:
@@ -486,4 +525,30 @@ func firstAdminError(err error) error {
 	default:
 		return errFirstAdminFailed
 	}
+}
+
+// firstAdminPrincipalError maps an error of ErrPrincipalInvalid to the answer
+// of the rule that failed. An error that names no rule gets the answer that
+// lists all rules.
+func firstAdminPrincipalError(err error) error {
+	rules := []struct {
+		rule   error
+		answer error
+	}{
+		{firstadmin.ErrPrincipalNotPerson, errFirstAdminPrincipalNotPerson},
+		{firstadmin.ErrPrincipalDisabled, errFirstAdminPrincipalDisabled},
+		{firstadmin.ErrPrincipalBreakGlass, errFirstAdminPrincipalBreakGlass},
+		{firstadmin.ErrPrincipalTempAdmin, errFirstAdminPrincipalTempAdmin},
+		{firstadmin.ErrPrincipalDevSubject, errFirstAdminPrincipalDevSubject},
+		{firstadmin.ErrPrincipalBootstrapSubject, errFirstAdminPrincipalBootstrapSubject},
+		{firstadmin.ErrPrincipalNotLive, errFirstAdminPrincipalNotLive},
+	}
+
+	for _, r := range rules {
+		if errors.Is(err, r.rule) {
+			return r.answer
+		}
+	}
+
+	return errFirstAdminPrincipalInvalid
 }

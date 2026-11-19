@@ -26,7 +26,32 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
+)
+
+// The rules of CheckPrincipal. Each error wraps ErrPrincipalInvalid, so a
+// caller that checks only ErrPrincipalInvalid sees all of them, and a caller
+// that needs the rule checks one of these.
+var (
+	// ErrPrincipalNotPerson reports a principal that is not a person of the
+	// installation: its ID has not the form of a person ID, it is a service,
+	// or it belongs to a namespace.
+	ErrPrincipalNotPerson = fmt.Errorf("%w: the principal is not a person of the installation", ErrPrincipalInvalid)
+	// ErrPrincipalDisabled reports a principal that is disabled.
+	ErrPrincipalDisabled = fmt.Errorf("%w: the principal is disabled", ErrPrincipalInvalid)
+	// ErrPrincipalBreakGlass reports a break-glass person.
+	ErrPrincipalBreakGlass = fmt.Errorf("%w: the principal is a break-glass person", ErrPrincipalInvalid)
+	// ErrPrincipalTempAdmin reports a temporary administrator.
+	ErrPrincipalTempAdmin = fmt.Errorf("%w: the principal is a temporary administrator", ErrPrincipalInvalid)
+	// ErrPrincipalDevSubject reports a principal with a dev: subject.
+	ErrPrincipalDevSubject = fmt.Errorf("%w: the principal has a dev: subject", ErrPrincipalInvalid)
+	// ErrPrincipalBootstrapSubject reports a principal with the subject of the
+	// bootstrap administrator.
+	ErrPrincipalBootstrapSubject = fmt.Errorf("%w: the principal has a bootstrap subject", ErrPrincipalInvalid)
+	// ErrPrincipalNotLive reports a principal that does not exist in the live
+	// rows, or that is not the principal of the session.
+	ErrPrincipalNotLive = fmt.Errorf("%w: the principal is not live", ErrPrincipalInvalid)
 )
 
 // Sentinel errors returned by this package and by Store implementations.
@@ -46,6 +71,10 @@ var (
 	// ErrReasonInvalid reports a reason that is blank, too long, not UTF-8
 	// or that holds a control or format character.
 	ErrReasonInvalid = errors.New("invalid reason")
+	// ErrSessionInvalid reports a console session that the store cannot use for
+	// the redeem: it does not exist, it ended, it is idle or expired under the
+	// session policy, or it belongs to another person.
+	ErrSessionInvalid = errors.New("the console session is not valid for the redeem")
 	// ErrGrantExists reports a person that holds the role already. Nothing
 	// is spent and no marker is stored.
 	ErrGrantExists = errors.New("the person holds the role already")
@@ -202,8 +231,10 @@ type OfferResult struct {
 
 // RedeemInput is the input of Store.Redeem. PrincipalID and SessionID come
 // from the console session of the caller, never from the body. Digest is the
-// digest of the code in the body. AuthTime is the sign-in time of the
-// session and Window is the freshness window of the session policy. GrantID
+// digest of the code in the body. Window is the freshness window of the
+// session policy. AuthTime is the sign-in time that the caller read. The
+// store does not trust it: it reads the session row by SessionID in its
+// transaction, and it uses the sign-in time of that row. GrantID
 // is the ID the service made for the grant.
 type RedeemInput struct {
 	Now         time.Time
@@ -233,7 +264,8 @@ type Result struct {
 // Redeem checks, in this order: the marker is not set, the code row exists
 // and has not expired, the digest matches in constant time, the principal of
 // the code is the principal of the session, the live row passes
-// CheckPrincipal, the sign-in is fresh. It then inserts the grant (the role
+// CheckPrincipal, the session row exists, is active and is of that principal,
+// the stored sign-in is fresh. It then inserts the grant (the role
 // Role on the installation, with the creator of the code row as granter),
 // deletes the code row, stores the marker and appends the entry. Before the
 // append, the transaction sets the reason of the entry to the reason of the
@@ -242,7 +274,7 @@ type Result struct {
 // facts: an offer that replaced the code after the caller read State cannot
 // leave the reason or the creator of the old offer in the entry. Redeem
 // returns ErrAlreadyMade, ErrCodeInvalid, ErrPrincipalInvalid, ErrStaleSignIn
-// or ErrGrantExists, and then changes nothing: a code that fails
+// ErrSessionInvalid or ErrGrantExists, and then changes nothing: a code that fails
 // ErrGrantExists is not spent.
 //
 // State returns the marker and the open offer. It never returns a code or a
@@ -307,6 +339,23 @@ type Facts struct {
 	HaveCode    bool
 	HavePrin    bool
 	TempAdmin   bool
+	// HaveSession is false when no session row has the ID of the session.
+	HaveSession bool
+	// SessionOwner is the principal ID of the session row, and SessionStatus is
+	// its status at Now under the limits of the session policy. AuthTime is the
+	// stored sign-in time of the row, never the time that the caller sent.
+	SessionOwner  string
+	SessionStatus session.Status
+}
+
+// SetSession puts the stored session row s in f: its owner, its status at
+// f.Now under the limits l, and its sign-in time. Both store adapters call it
+// on the row that they read in the redeem transaction.
+func (f *Facts) SetSession(s session.Session, l session.Limits) {
+	f.HaveSession = true
+	f.SessionOwner = s.PrincipalID
+	f.SessionStatus = s.StatusAt(f.Now, l)
+	f.AuthTime = s.AuthTime
 }
 
 // CheckRedeem applies the rules of the redeem to the facts, in the order of
@@ -318,6 +367,34 @@ func CheckRedeem(f Facts) error {
 		return ErrAlreadyMade
 	}
 
+	if err := checkCode(f); err != nil {
+		return err
+	}
+
+	if !f.HavePrin || f.Principal.ID != f.CodePrin {
+		return ErrPrincipalNotLive
+	}
+
+	if err := CheckPrincipal(f.Principal, f.TempAdmin); err != nil {
+		return err
+	}
+
+	// The session must exist, be active under the policy, and belong to the
+	// person of the code. The sign-in time below is the stored one.
+	if !f.HaveSession || f.SessionOwner != f.InPrincipal || f.SessionStatus != session.StatusActive {
+		return ErrSessionInvalid
+	}
+
+	if !fresh(f.Now, f.AuthTime, f.Window) {
+		return ErrStaleSignIn
+	}
+
+	return nil
+}
+
+// checkCode applies the rules of the code row to the facts: it exists, it has
+// not expired, the digest matches and it names the person of the session.
+func checkCode(f Facts) error {
 	// The compare runs even when no code row exists, so that the time of an
 	// absent code and a wrong code is the same.
 	digest := f.CodeDigest
@@ -333,18 +410,6 @@ func CheckRedeem(f Facts) error {
 
 	if f.CodePrin == "" || f.CodePrin != f.InPrincipal {
 		return ErrCodeInvalid
-	}
-
-	if !f.HavePrin || f.Principal.ID != f.CodePrin {
-		return ErrPrincipalInvalid
-	}
-
-	if err := CheckPrincipal(f.Principal, f.TempAdmin); err != nil {
-		return err
-	}
-
-	if !fresh(f.Now, f.AuthTime, f.Window) {
-		return ErrStaleSignIn
 	}
 
 	return nil
@@ -370,21 +435,21 @@ func fresh(now, authTime time.Time, window time.Duration) bool {
 func CheckPrincipal(p principal.Principal, tempAdmin bool) error {
 	switch {
 	case !ident.Valid(p.ID, maxIDLength) || len(p.ID) <= len(principal.IDPrefix) || p.ID[:len(principal.IDPrefix)] != principal.IDPrefix:
-		return fmt.Errorf("%w: the principal ID is not an ID", ErrPrincipalInvalid)
+		return ErrPrincipalNotPerson
 	case p.Kind != principal.KindPerson:
-		return fmt.Errorf("%w: the principal is not a person", ErrPrincipalInvalid)
+		return ErrPrincipalNotPerson
 	case p.Namespace != "":
-		return fmt.Errorf("%w: the principal belongs to a namespace", ErrPrincipalInvalid)
+		return ErrPrincipalNotPerson
 	case !p.DisabledAt.IsZero():
-		return fmt.Errorf("%w: the principal is disabled", ErrPrincipalInvalid)
+		return ErrPrincipalDisabled
 	case p.BreakGlass:
-		return fmt.Errorf("%w: the principal is a break-glass person", ErrPrincipalInvalid)
+		return ErrPrincipalBreakGlass
 	case tempAdmin:
-		return fmt.Errorf("%w: the principal is a temporary administrator", ErrPrincipalInvalid)
+		return ErrPrincipalTempAdmin
 	case principal.IsDevSubject(p.Subject):
-		return fmt.Errorf("%w: the principal has a dev: subject", ErrPrincipalInvalid)
+		return ErrPrincipalDevSubject
 	case principal.IsBootstrapSubject(p.Subject):
-		return fmt.Errorf("%w: the principal has a bootstrap subject", ErrPrincipalInvalid)
+		return ErrPrincipalBootstrapSubject
 	}
 
 	return nil

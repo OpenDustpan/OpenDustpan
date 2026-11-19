@@ -35,7 +35,7 @@ func CheckOffer(in firstadmin.OfferInput) error {
 	}
 
 	if !principalID(in.PrincipalID) {
-		return fmt.Errorf("%w: the principal ID is not an ID", firstadmin.ErrPrincipalInvalid)
+		return firstadmin.ErrPrincipalNotPerson
 	}
 
 	if in.CreatedBy == "" || ident.HasHidden(in.CreatedBy) {
@@ -59,7 +59,7 @@ func CheckRedeem(in firstadmin.RedeemInput) error {
 	}
 
 	if !principalID(in.PrincipalID) {
-		return fmt.Errorf("%w: the principal ID is not an ID", firstadmin.ErrPrincipalInvalid)
+		return firstadmin.ErrPrincipalNotPerson
 	}
 
 	if in.Now.IsZero() {

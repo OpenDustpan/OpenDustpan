@@ -3383,11 +3383,20 @@ func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64)
 }
 
 const deleteFirstAdministratorCode = `-- name: DeleteFirstAdministratorCode :execrows
-DELETE FROM first_administrator_codes WHERE id = 1
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = ?1 AND principal_id = ?2 AND expires_at_ms > ?3
 `
 
-func (q *Queries) DeleteFirstAdministratorCode(ctx context.Context) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteFirstAdministratorCode)
+type DeleteFirstAdministratorCodeParams struct {
+	Digest      string
+	PrincipalID string
+	NowMs       int64
+}
+
+// The delete is a check: it matches the code row only when the digest, the
+// principal and the open time are those that the redeem checked.
+func (q *Queries) DeleteFirstAdministratorCode(ctx context.Context, arg DeleteFirstAdministratorCodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteFirstAdministratorCode, arg.Digest, arg.PrincipalID, arg.NowMs)
 	if err != nil {
 		return 0, err
 	}

@@ -219,3 +219,7 @@ func FlagsOfBodiesForTest(bodies []any) []bool {
 
 	return flags
 }
+
+// FirstAdminErrorForTest maps an error of the first administrator to the
+// answer of the route, as the handlers do.
+func FirstAdminErrorForTest(err error) error { return firstAdminError(err) }
