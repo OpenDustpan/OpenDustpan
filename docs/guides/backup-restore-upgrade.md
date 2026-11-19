@@ -125,7 +125,7 @@ backup before restore: bkp-cnsz7imkyfh4mcrk5n3z
 It ends with `restore rst-aaa succeeded`. Only one restore runs
 at a time. A second start while one runs answers 409.
 
-A start for a backup that is still running, or that ended with an error, answers 409 with a text that names the state. A start for a backup ID that the server does not know answers 404 with the text `backup not found`. A backup that has no record on this installation starts when the target holds its live pointer. Use this to restore into a new installation. If the target holds a live pointer that the server cannot read, the start is refused and makes no restore.
+A start for a backup that is still running answers 409 with the code `backup.still-running`. A start for a backup that ended with an error answers 409 with the code `backup.ended-failed`. Each answer has a text that names the state. A start for a backup ID that the server does not know answers 404 with the text `backup not found`. A backup that has no record on this installation starts when the target holds its live pointer. Use this to restore into a new installation. If the target holds a live pointer that the server cannot read, the start is refused and makes no restore.
 
 The server answers the start with 202 and the restore ID. A `worker` process
 runs the restore in steps, and records the result of each step in the

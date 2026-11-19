@@ -750,9 +750,9 @@ func classifyRequest(err error) (failure, bool) {
 func classifyRegistry(err error) failure {
 	switch {
 	case errors.Is(err, backup.ErrStillRunning):
-		return fail(http.StatusConflict, backup.ErrStillRunning.Error())
+		return failCoded(http.StatusConflict, backup.ErrStillRunning.Error(), errcode.BackupStillRunning)
 	case errors.Is(err, backup.ErrEndedFailed):
-		return fail(http.StatusConflict, backup.ErrEndedFailed.Error())
+		return failCoded(http.StatusConflict, backup.ErrEndedFailed.Error(), errcode.BackupEndedFailed)
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return fail(http.StatusConflict, "a backup is already running")
 	case errors.Is(err, backup.ErrRestoreRunning):
