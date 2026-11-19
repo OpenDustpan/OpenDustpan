@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
@@ -289,7 +288,7 @@ func bindingOf(cfg *settings, signIn *serverapi.SignIn) providerBinding {
 	for i := range cfg.ldapProviders {
 		p := &cfg.ldapProviders[i]
 		providers = append(providers, session.Provider{
-			ID: p.ID, Issuer: "", UserinfoURL: "", SubjectClaim: "", DirectoryURL: strings.TrimSpace(p.URL),
+			ID: p.ID, Issuer: "", UserinfoURL: "", SubjectClaim: "", DirectoryURL: p.URL,
 		})
 	}
 
