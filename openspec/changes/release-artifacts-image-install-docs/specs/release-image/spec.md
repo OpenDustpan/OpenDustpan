@@ -1,57 +1,69 @@
 ## ADDED Requirements
 
-### Requirement: versioned multi-arch image
+### Requirement: version input of the image scripts
 
-When a version is given, the server release workflow SHALL build a container image for linux/amd64 and linux/arm64 with that version stamp.
+When `IMAGE_VERSION` is set, the scripts `scripts/build-image-local.sh` and `scripts/smoke-image.sh` SHALL pass it as the build argument VERSION, and SHALL refuse a value outside the allowlist before any `docker` call.
 
-#### Scenario: Build image from version
-- **WHEN** The release build runs with one version input.
-- **THEN** The build produces one local image tagged with the given version for linux/amd64 and linux/arm64 from distroless static nonroot pinned by digest with no push.
+#### Scenario: Version is passed to the build
+- **WHEN** `IMAGE_VERSION` is `v0.1.0` and the build script runs.
+- **THEN** the script calls `docker build` with the build argument `VERSION=v0.1.0`.
 
-#### Scenario: Refuse wrong console hash
-- **WHEN** The console tarball SHA-256 does not match the pinned value.
-- **THEN** The build stops with no image.
+#### Scenario: Default version
+- **WHEN** `IMAGE_VERSION` is not set.
+- **THEN** `build-image-local.sh` passes `VERSION=dev` and `smoke-image.sh` passes `VERSION=smoke`, as on main.
 
-#### Scenario: Refuse bad version input
-- **WHEN** VERSION is empty or holds characters outside dots, digits, and dashes.
-- **THEN** The NEW script refuses the input with no image.
+#### Scenario: Bad version is refused before docker
+- **WHEN** `IMAGE_VERSION` is empty but set, holds a space, a quote, a dollar sign, a backtick, a semicolon, a newline, a leading dash or dot, or is longer than 64 characters.
+- **THEN** the script exits with a non-zero status, prints the allowed characters and calls `docker` zero times.
 
-#### Scenario: Refuse wrong console tag
-- **WHEN** The console tarball tag does not match the pinned tag for the version.
-- **THEN** The build stops with no image.
+### Requirement: the Dockerfile checks its inputs
 
-#### Scenario: Version stamp matches tag
-- **WHEN** The built image starts.
-- **THEN** The server --version output equals the image tag.
+When the Dockerfile builds, it SHALL refuse a VERSION outside the allowlist and the placeholder console pin, each with a message that names the input.
 
-### Requirement: pinned console content
+#### Scenario: Bad VERSION build argument
+- **WHEN** `docker build` runs with a VERSION that is outside the allowlist, with no script in front of it.
+- **THEN** the Go stage stops before `go build` and names the build argument VERSION.
 
-Where the image includes the console, the server image SHALL carry the console files in /console from the pinned console tarball tag and SHA-256.
+#### Scenario: Placeholder console pin
+- **WHEN** `CONSOLE_SHA256` is 64 zeros.
+- **THEN** the console stage stops before the download and says to pin the console tag and SHA-256 in the Dockerfile, or to pass `CONSOLE_URL` and `CONSOLE_SHA256`.
 
-#### Scenario: Console files present
-- **WHEN** The image starts.
-- **THEN** The image serves the console from /console built only from the pinned tarball with no Node step, and the file list equals the pinned tarball list.
+#### Scenario: Wrong console checksum
+- **WHEN** `CONSOLE_SHA256` is a valid hash that does not match the tarball.
+- **THEN** the build stops with no image. This is the behavior on main; the smoke test now proves it.
 
-### Requirement: nonroot data volume
+### Requirement: the image version equals its tag
 
-When the image runs, the server SHALL run as nonroot with a /data volume.
+When an image is built from a version, `opendustpan --version` in that image SHALL print that version.
 
-#### Scenario: Nonroot write to data
-- **WHEN** The image runs with a /data mount writable by nonroot.
-- **THEN** The server starts as nonroot and writes to /data.
+#### Scenario: Smoke test checks the version
+- **WHEN** `make image-smoke VERSION=v0.1.0` runs.
+- **THEN** the smoke test builds the image with `VERSION=v0.1.0` and the server binary in the container prints `v0.1.0` for `--version`.
 
-#### Scenario: Unwritable data mount fails fast
-- **WHEN** The /data mount is not writable by nonroot.
-- **THEN** The container stops and names the /data mount permission.
+#### Scenario: Tag workflow stamps the tag
+- **WHEN** the release workflow builds the image for the tag `v0.1.0`.
+- **THEN** the build command holds `--build-arg VERSION=` with the tag, and the console build arguments from the Dockerfile pin.
 
-### Requirement: artifact install run
+### Requirement: a server starts from a built archive
 
-When the artifact install test runs, the server image SHALL start and answer its health probe and console path.
+When the release archives of one version are built, the archive of the host platform SHALL match its line in `SHA256SUMS`, and its binary SHALL print the version and serve `GET /health/ready`.
 
-#### Scenario: Install from image
-- **WHEN** The artifact install test runs against the built image.
-- **THEN** The test starts the server from the built image and completes the operator path with health check and console reachability with no sign-in.
+#### Scenario: Install from the binary archive
+- **WHEN** the test builds the archives of a test version, checks the host archive against `SHA256SUMS`, unpacks it and starts `serve` on loopback.
+- **THEN** `--version` prints the test version and `GET /health/ready` answers 200.
 
-#### Scenario: Install from binary archive
-- **WHEN** The artifact install test runs against the built binary archive.
-- **THEN** The test unpacks the binary archive from part 1, checks its SHA256SUMS entry, and starts the server to the same health check.
+#### Scenario: Wrong checksum
+- **WHEN** the archive bytes differ from the `SHA256SUMS` line.
+- **THEN** the documented check command exits with a non-zero status and the test does not start the binary.
+
+#### Scenario: Hostile archive entry
+- **WHEN** an archive entry has an absolute path, a dot dot part, a link or a name outside the allowlist.
+- **THEN** the unpack step of the test refuses it and writes no file outside the target directory.
+
+### Requirement: install page for both artifacts
+
+The page `docs/guides/install.md` SHALL show the version check of the image and the install from a binary archive, and SHALL say that `SHA256SUMS` is no signature.
+
+#### Scenario: Archive commands run
+- **WHEN** the archive test runs.
+- **THEN** it runs the check block and the unpack block of the page as written, with the placeholders replaced, and both exit with status 0.
