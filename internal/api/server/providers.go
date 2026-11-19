@@ -16,6 +16,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -47,8 +48,8 @@ var (
 
 // providerResponse is one sign-in provider on the wire. Source is "api"
 // for a provider of the API and "static" for a provider of the
-// configuration of the server, which has no issuer, client ID, scopes,
-// version or times in the answer. ClientSecretSet is true when the
+// configuration of the server, which has no version or times in the answer.
+// Its issuer, client ID and scopes are the effective values of the settings. ClientSecretSet is true when the
 // provider has a client secret; no answer holds the secret.
 //
 // Contract: never remove or rename these fields.
@@ -489,11 +490,34 @@ func (c *providerClaimsChange) email() string {
 // configuration of the server.
 func staticProviderOf(p SignInProvider) providerResponse {
 	return providerResponse{
-		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
-		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: true, Mode: string(session.ModeOIDC), AuthorizationURL: "", TokenURL: "",
+		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: publicIssuer(p.Issuer),
+		DisplayName: p.DisplayName, ClientID: p.ClientID, Scopes: nonNilRanges(p.Scopes), Version: 0,
+		AutoCreate: p.AutoCreate,
+		Enabled:    true, ClientSecretSet: true, Mode: string(session.ModeOIDC), AuthorizationURL: "", TokenURL: "",
 		UserinfoURL: "", Claims: nil, LDAP: nil,
 	}
+}
+
+// publicIssuer returns issuer as the list of the providers shows it: the URL
+// with no user information, query or fragment. Defense in depth: the server
+// refuses an issuer with user information, and this function
+// stays so that a new way to set an issuer cannot put a credential in an
+// answer. An issuer that does not parse, has no host, or has a scheme other
+// than https or http shows as empty. The scheme check does not rely on the
+// check of the CLI (CheckURL) or on the check of the OAuth issuer
+// (validate). The path keeps its escaped form, so that an encoded CR or LF
+// stays encoded in the answer.
+func publicIssuer(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return ""
+	}
+
+	return u.Scheme + "://" + u.Host + u.EscapedPath()
 }
 
 // classifyProviders maps the sign-in provider errors to their status and

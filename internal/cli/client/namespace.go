@@ -67,6 +67,30 @@ type namespaceCreateResponse struct {
 	FailoverVersion     int64  `json:"failoverVersion"`
 }
 
+// errNamespaceName reports a namespace create run with no name or with more
+// than one argument. It matches ErrUsage, so a caller that tests for the usage
+// error keeps working, and it names the problem and the one command that
+// helps.
+var errNamespaceName = &usageError{
+	text: "namespace create needs one argument, the name of the namespace: " +
+		"run opendustpan namespace create --server <url> <name> again",
+}
+
+// usageError is a usage error with its own short text.
+type usageError struct {
+	text string
+}
+
+// Error returns the text.
+func (e *usageError) Error() string {
+	return e.text
+}
+
+// Is reports that the error is the usage error.
+func (e *usageError) Is(target error) bool {
+	return target == ErrUsage
+}
+
 // CreateNamespace runs `opendustpan namespace create --server <url> <name>`:
 // it creates a namespace through the installation API and prints it. It opens
 // no database and no store: only the server opens the data (ADR 39).
@@ -81,13 +105,9 @@ func CreateNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if fs.NArg() != 1 {
-		return ErrUsage
-	}
-
 	name := strings.TrimSpace(fs.Arg(0))
-	if name == "" {
-		return ErrUsage
+	if fs.NArg() != 1 || name == "" {
+		return errNamespaceName
 	}
 
 	server := strings.TrimSpace(f.server)

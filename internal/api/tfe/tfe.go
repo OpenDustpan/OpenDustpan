@@ -59,7 +59,23 @@ type WorkspaceService interface {
 	WorkspaceLocker
 	OverrideWriter
 	StateReader
+	StateLocator
 	StateWriter
+}
+
+// StateLocator is what the resolver of a state version route needs. It is
+// apart from StateReader because it must run before authorization: it reads
+// the version row only and opens no output.
+type StateLocator interface {
+	// StateVersionWorkspace returns the workspace of the finalized state
+	// version id, or workspace.ErrStateVersionNotFound. It opens no output,
+	// so the guard can authorize before any decryption.
+	//
+	// Defense in depth: an implementation must refuse a version that is not
+	// finalized, so that a resolver never authorizes a pending version and a
+	// new caller cannot skip the check. It does not rely on the later
+	// ReadState of the handler.
+	StateVersionWorkspace(ctx context.Context, id workspace.StateVersionID) (workspace.ID, error)
 }
 
 // WorkspaceDeleter is what the workspace delete route needs.

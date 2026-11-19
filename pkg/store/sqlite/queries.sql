@@ -2782,17 +2782,17 @@ SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix
 
 -- name: InsertDurableOperation :exec
 INSERT INTO durable_operations (
-    id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
     claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
-) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?);
 
 -- name: GetDurableOperation :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
     claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = ?;
 
 -- name: GetDurableOperationByKey :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
     claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = ?;
 
@@ -2805,7 +2805,7 @@ SELECT COUNT(*) FROM durable_operations WHERE kind = ? AND state IN ('pending', 
 -- name: UpdateDurableOperation :exec
 -- Writes every column that changes after the start of an operation.
 UPDATE durable_operations
-SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
+SET state = ?, attempt = ?, expiries = ?, deadline_releases = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
     claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
 WHERE id = ?;
 

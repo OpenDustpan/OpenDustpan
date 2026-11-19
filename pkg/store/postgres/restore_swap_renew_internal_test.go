@@ -130,7 +130,8 @@ func TestSlowRestoreSwapKeepsItsClaim(t *testing.T) {
 	}
 
 	runner, err := durable.NewRunner(durable.RunnerConfig{
-		Store: ops, Owner: "instance-b",
+		Store: ops,
+		Owner: "instance-b",
 		Kinds: []durable.KindSpec{
 			{
 				Kind:       backup.RestoreOperationKind,
@@ -139,9 +140,19 @@ func TestSlowRestoreSwapKeepsItsClaim(t *testing.T) {
 				Steps:      []durable.Step{{Name: backup.RestoreStepSwap, Run: swap}},
 			},
 		},
-		Lease: slowSwapLease, RenewEvery: slowSwapRenew, PollEvery: 0, MaxAttempts: 1, ExpiryLimit: 0,
-		Backoff: durable.Backoff{Base: 0, Max: 0}, ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout: 0, Deferred: nil, StopOnRenewalError: true, Logger: nil, Rand: nil,
+		Lease:                slowSwapLease,
+		RenewEvery:           slowSwapRenew,
+		PollEvery:            0,
+		MaxAttempts:          1,
+		ExpiryLimit:          0,
+		DeadlineReleaseLimit: 0,
+		Backoff:              durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff:         durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:         0,
+		Deferred:             nil,
+		StopOnRenewalError:   true,
+		Logger:               nil,
+		Rand:                 nil,
 	})
 	if err != nil {
 		t.Fatalf("new runner: %v", err)

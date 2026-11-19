@@ -1,0 +1,11 @@
+mtls.ambiguous-rule
+mtls.bundle-disabled
+mtls.expired
+mtls.no-client-certificate
+mtls.no-matching-rule
+mtls.not-yet-valid
+mtls.principal-disabled
+mtls.rate-limited
+mtls.revocation-unknown
+mtls.revoked
+mtls.unknown-issuer

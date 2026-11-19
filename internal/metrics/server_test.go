@@ -327,3 +327,29 @@ func TestServerSignInCounterErrors(t *testing.T) {
 		t.Errorf("output holds an unknown operation:\n%s", got)
 	}
 }
+
+// TestIncMtlsRefused checks that the refused mTLS calls count by reason, and
+// that an unknown reason counts as the rate limit.
+func TestIncMtlsRefused(t *testing.T) {
+	t.Parallel()
+
+	m := metrics.NewServerMetrics("1.2.3", time.Unix(0, 0))
+
+	if got := scrapeServer(t, m); !strings.Contains(got, `dustpan_mtls_exchange_refused_total{reason="body-size"} 0`) {
+		t.Fatalf("the reasons do not start at zero:\n%s", got)
+	}
+
+	m.IncMtlsRefused(metrics.MtlsRefusedBodySize)
+	m.IncMtlsRefused(metrics.MtlsRefusedRateLimit)
+	m.IncMtlsRefused("anything")
+
+	got := scrapeServer(t, m)
+	for _, want := range []string{
+		`dustpan_mtls_exchange_refused_total{reason="body-size"} 1`,
+		`dustpan_mtls_exchange_refused_total{reason="rate-limit"} 2`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output misses %q:\n%s", want, got)
+		}
+	}
+}

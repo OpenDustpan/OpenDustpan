@@ -11,7 +11,7 @@ Issue: #3485.
 The user path this change must make work:
 
 1. **API.** The operator reads GET /api/dustpan/v1/settings and sees the item `decisionRecords.retentionHours` with value `0`, source `default` and the doc text. `0` means keep forever.
-2. **Change.** The operator sends a merge patch with `If-Match`, for example `{"decisionRecords.retentionHours":"8760"}`. The server stores it and writes the audit entry of the settings change. A change to a shorter period than the one in force, or from keep-forever to a period, needs a fresh authentication, because the change deletes evidence sooner.
+2. **Change.** The operator sends a merge patch with `If-Match`, for example `{"decisionRecords.retentionHours":8760}`. The value is a JSON number. The server stores it and writes the audit entry of the settings change. A change to a shorter period than the one in force, or from keep-forever to a period, needs a fresh authentication, because the change deletes evidence sooner.
 3. **Docs page.** The operator reads docs/guides/decision-record-retention.md. It names the key, the default, the minimum, the PCI DSS v4.0.1 requirement 10.5.1 (at least 12 months) and the GDPR storage limitation principle (ADR 68 decision 4), and says that no job deletes records yet and that the setting never deletes an audit entry.
 4. **E2e.** A step reads the item, patches it, reads it again and checks the refusals.
 
@@ -73,6 +73,18 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 - Quote, decision 4: "The guides state the rules that apply to retention."
 - Effect: The change adds a retention setting with the default keep-forever and an audit entry for each change. It applies to decision records only. It does not delete an audit entry, so the part of decision 2 that waits for the later ADR stays open and the chain check is not touched. The name "decision record retention" keeps it apart from the audit entries.
 - Conflict: none. The owner words "Keep forever by default" hold for the new setting.
+
+**ADR 212: The planner role, SMTP settings, fresh MFA for weaker settings and approvals, trusted proxies, restore audit entries, the branding preset and one settings API** (decision 3 is current as changed by ADR 385 and ADR 227; ADR 385 is owner-tagged).
+
+- Decisions that apply: 3 (current, with the changes below).
+- Changed by: ADR 227 changes decision 3 (the window and the set to 0 item). ADR 385 changes decision 3 (a fresh step is opt-in; owner-tagged, 2026-11-15). ADR 385 also changes ADR 227 decision 3 and extends ADR 227 decision 2.
+- Current rule: ADR 212 decision 3 as changed by ADR 227 and ADR 385.
+- Quote, ADR 212 decision 3: "A change of an installation setting or of a namespace setting through the API needs a fresh MFA step when it makes the installation or the namespace less secure. When one key of a `PATCH` reduces security, the whole `PATCH` needs the step."
+- Quote, ADR 227 decision 3: "A window of 0 is the strictest value, so a change to 0 needs no fresh authentication. A change to a longer window needs one, as ADR 212 decision 3 says for a weaker setting."
+- Quote, ADR 385 decision 2 (owner, 2026-11-15): "When the setting is off, the server asks a person for no fresh authentication." The setting is `freshAuthEnabled`.
+- Quote, ADR 385 decision 3 (owner): "A fresh authentication is a built-in MFA step or a factor of ADR 301. ... An access token never gives one. The refusal is `403` with `mfa.fresh-step-required`."
+- Effect: "Shorter period needs a fresh authentication" means "needs the fresh step of the settings resource, when that step applies". The settings resource asks for the step when a declaration's `ReducesSecurity` is true. This change sets `ReducesSecurity` and adds no rule of its own. When the change that adds the setting `freshAuthEnabled` lands and the setting is off, the resource asks for no step. The e2e step that expects 403 `mfa.fresh-step-required` for an access token must then change in that change: with the setting off the token is accepted, with the setting on it is refused.
+- Conflict: none. The owner-tagged opt-in of ADR 385 is not weakened: this change reuses the step of the settings resource and decides nothing about when it applies.
 
 **ADR 229: Decision records, the simulate route and starter packs** (decision 5 is not owner-tagged).
 

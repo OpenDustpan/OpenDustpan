@@ -298,8 +298,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Providers: []apiserver.SignInProvider{
 			{
 				Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
-				DisplayName: "Corp",
-				AutoCreate:  opts.autoCreate, Stored: false,
+				DisplayName: "Corp", Issuer: "https://idp.example", ClientID: "dustpan", Scopes: []string{"profile"},
+				AutoCreate: opts.autoCreate, Stored: false,
 			},
 		},
 	}
@@ -1299,7 +1299,7 @@ func TestSignInProviderDown(t *testing.T) {
 			Providers: []apiserver.SignInProvider{
 				{
 					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
-					AutoCreate: true, Stored: false,
+					Issuer: "", ClientID: "", Scopes: nil, AutoCreate: true, Stored: false,
 				},
 			},
 		},

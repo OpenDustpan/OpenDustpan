@@ -37,6 +37,8 @@ type settingsItem struct {
 	Locked        bool   `json:"locked"`
 	DatabaseLayer bool   `json:"databaseLayer"`
 	Apply         string `json:"apply"`
+
+	MayReduceSecurity bool `json:"mayReduceSecurity"`
 }
 
 // startSettingsServer starts a server with the settings resource over a new

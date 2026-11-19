@@ -117,17 +117,15 @@ func storeCheckTargets() []string { return []string{"blobs", "backup"} }
 
 // StoreCheck runs `opendustpan store check --server <url> --target <name>`.
 func StoreCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	token, err := BackupToken()
-	if err != nil {
-		return err
-	}
-
-	return runStoreCheck(ctx, args, token, stdout, stderr)
+	return runStoreCheck(ctx, args, backupTokenFor, stdout, stderr)
 }
 
-// runStoreCheck is StoreCheck with the token given, so a test sets no
-// environment variable.
-func runStoreCheck(ctx context.Context, args []string, token string, stdout, stderr io.Writer) error {
+// runStoreCheck is StoreCheck with the token loader given, so a test sets no
+// environment variable. It loads the token after it parses the flags, so that
+// --help prints usage with no token set.
+func runStoreCheck(
+	ctx context.Context, args []string, tokenFor func(rerun string) (string, error), stdout, stderr io.Writer,
+) error {
 	var f storeCheckFlags
 
 	fs := flag.NewFlagSet("store check", flag.ContinueOnError)
@@ -162,7 +160,14 @@ func runStoreCheck(ctx context.Context, args []string, token string, stdout, std
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, fmt.Sprintf(storeCheckRerun, target), stderr)
+	rerun := fmt.Sprintf(storeCheckRerun, target)
+
+	token, err := tokenFor(rerun)
+	if err != nil {
+		return err
+	}
+
+	client, err := newBackupHTTPClient(f.caFile, rerun, stderr)
 	if err != nil {
 		return err
 	}
