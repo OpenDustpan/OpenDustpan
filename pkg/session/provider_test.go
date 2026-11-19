@@ -391,9 +391,9 @@ func TestBindProvidersStartsWithAnotherFormOfTheSameDirectory(t *testing.T) {
 func TestDirectoryChangedErrorHidesTheRecordedRow(t *testing.T) {
 	t.Parallel()
 
-	const user, password = "alice", "hunter2-fake"
+	const login, phrase = "alice", "hunter2-fake"
 
-	withUser := fakecred.URL("ldaps", user, password, "old.example.org", "")
+	withUser := fakecred.URL("ldaps", login, phrase, "old.example.org", "")
 
 	for name, row := range map[string]string{
 		"a row with user information":   "ldap:" + withUser,
@@ -414,7 +414,7 @@ func TestDirectoryChangedErrorHidesTheRecordedRow(t *testing.T) {
 				t.Fatalf("BindProviders = %v, want ErrIssuerChanged", err)
 			}
 
-			for _, secret := range []string{user, password, "secret-fake", "realm-fake", "/dc=x"} {
+			for _, secret := range []string{login, phrase, "secret-fake", "realm-fake", "/dc=x"} {
 				if strings.Contains(err.Error(), secret) {
 					t.Errorf("error %q holds %q", err, secret)
 				}
