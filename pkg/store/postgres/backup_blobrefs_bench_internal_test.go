@@ -3,14 +3,12 @@ package postgres
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"opendustpan.org/opendustpan/internal/membench"
 )
 
 // benchChunksEnv names the variable that sets the number of log chunks that
@@ -21,24 +19,27 @@ const benchChunksEnv = "DUSTPAN_BENCH_CHUNKS"
 // benchLogs is the number of logs that the seeded chunks belong to.
 const benchLogs = 100
 
-// BenchmarkBackupBlobRefs measures the blob references that the PostgreSQL
-// export reads for a database with many confirmed log chunks: the heap that
-// the references keep after the read, the heap peak during it, and the bytes
-// that it allocates in total.
-func BenchmarkBackupBlobRefs(b *testing.B) {
-	n := 20_000
+// benchChunkCount returns the number of chunks to seed.
+func benchChunkCount(tb testing.TB) int {
+	tb.Helper()
 
-	if raw := os.Getenv(benchChunksEnv); raw != "" {
-		v, err := strconv.Atoi(raw)
-		if err != nil || v <= 0 {
-			b.Fatalf("%s = %q, want a positive number", benchChunksEnv, raw)
-		}
-
-		n = v
+	raw := os.Getenv(benchChunksEnv)
+	if raw == "" {
+		return 20_000
 	}
 
-	s := benchStore(b)
-	ctx := b.Context()
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		tb.Fatalf("%s = %q, want a positive number", benchChunksEnv, raw)
+	}
+
+	return n
+}
+
+// seedChunks adds one namespace, benchLogs logs and n confirmed chunks that
+// each hold the size and the MD5 of their stored bytes.
+func seedChunks(tb testing.TB, s *Store, n int) {
+	tb.Helper()
 
 	stmts := []string{
 		`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
@@ -55,45 +56,29 @@ func BenchmarkBackupBlobRefs(b *testing.B) {
 	}
 
 	for _, stmt := range stmts {
-		if _, err := s.pool.Exec(ctx, stmt); err != nil {
-			b.Fatalf("seed: %v", err)
+		if _, err := s.pool.Exec(tb.Context(), stmt); err != nil {
+			tb.Fatalf("seed: %v", err)
 		}
 	}
+}
 
+// BenchmarkBackupBlobRefs measures the blob references that the PostgreSQL
+// export reads for a database with many confirmed log chunks: the heap that
+// the references keep after the read, the heap peak during it, and the bytes
+// that it allocates in total.
+func BenchmarkBackupBlobRefs(b *testing.B) {
+	n := benchChunkCount(b)
+	s := benchStore(b)
+	ctx := b.Context()
+
+	seedChunks(b, s, n)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		var (
-			attrs         pgAttrs
-			before, after runtime.MemStats
-			peak          atomic.Uint64
-			stop          = make(chan struct{})
-			wg            sync.WaitGroup
-		)
+		meter := membench.Start()
 
-		runtime.GC()
-		runtime.ReadMemStats(&before)
-
-		wg.Go(func() {
-			tick := time.NewTicker(5 * time.Millisecond)
-			defer tick.Stop()
-
-			var m runtime.MemStats
-
-			for {
-				select {
-				case <-stop:
-					return
-				case <-tick.C:
-					runtime.ReadMemStats(&m)
-
-					if m.HeapInuse > peak.Load() {
-						peak.Store(m.HeapInuse)
-					}
-				}
-			}
-		})
+		var attrs pgAttrs
 
 		err := s.inLongTx(ctx, backupBound(), s.snapshotOptions(), func(tx pgx.Tx) error {
 			var attrErr error
@@ -106,21 +91,10 @@ func BenchmarkBackupBlobRefs(b *testing.B) {
 			b.Fatalf("backup attrs: %v", err)
 		}
 
-		close(stop)
-		wg.Wait()
-		runtime.GC()
-		runtime.ReadMemStats(&after)
-
 		if len(attrs.blobs) != n {
 			b.Fatalf("references = %d, want %d", len(attrs.blobs), n)
 		}
 
-		runtime.KeepAlive(attrs)
-
-		const mib = 1 << 20
-
-		b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/mib, "live-MiB")
-		b.ReportMetric(float64(peak.Load())/mib, "peak-MiB")
-		b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/mib, "alloc-MiB")
+		meter.Stop(b, attrs)
 	}
 }

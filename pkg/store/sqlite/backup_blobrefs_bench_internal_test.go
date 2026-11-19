@@ -3,12 +3,10 @@ package sqlite
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
+
+	"opendustpan.org/opendustpan/internal/membench"
 )
 
 // benchChunksEnv names the variable that sets the number of log chunks that
@@ -36,56 +34,10 @@ func benchChunkCount(tb testing.TB) int {
 	return n
 }
 
-// peakSampler records the highest HeapInuse that it sees while it runs.
-type peakSampler struct {
-	peak atomic.Uint64
-	stop chan struct{}
-	done sync.WaitGroup
-}
-
-// startPeakSampler starts a sampler that reads the heap every 5 ms.
-func startPeakSampler() *peakSampler {
-	s := &peakSampler{stop: make(chan struct{})}
-
-	s.done.Go(func() {
-		tick := time.NewTicker(5 * time.Millisecond)
-		defer tick.Stop()
-
-		var m runtime.MemStats
-
-		for {
-			select {
-			case <-s.stop:
-				return
-			case <-tick.C:
-				runtime.ReadMemStats(&m)
-
-				if m.HeapInuse > s.peak.Load() {
-					s.peak.Store(m.HeapInuse)
-				}
-			}
-		}
-	})
-
-	return s
-}
-
-// finish stops the sampler and returns the highest HeapInuse.
-func (s *peakSampler) finish() uint64 {
-	close(s.stop)
-	s.done.Wait()
-
-	return s.peak.Load()
-}
-
-// BenchmarkBackupBlobRefs measures the blob references that the SQLite
-// export reads for a database with many confirmed log chunks: the heap that
-// the references keep after the read, the heap peak during it, and the bytes
-// that it allocates in total.
-func BenchmarkBackupBlobRefs(b *testing.B) {
-	n := benchChunkCount(b)
-	s := openInternalTemplated(b)
-	ctx := b.Context()
+// seedChunks adds one namespace, benchLogs logs and n confirmed chunks that
+// each hold the size and the MD5 of their stored bytes.
+func seedChunks(tb testing.TB, s *Store, n int) {
+	tb.Helper()
 
 	stmts := []string{
 		`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
@@ -101,43 +53,36 @@ func BenchmarkBackupBlobRefs(b *testing.B) {
 	}
 
 	for _, stmt := range stmts {
-		if _, err := s.conn.ExecContext(ctx, stmt); err != nil {
-			b.Fatalf("seed: %v", err)
+		if _, err := s.conn.ExecContext(tb.Context(), stmt); err != nil {
+			tb.Fatalf("seed: %v", err)
 		}
 	}
+}
 
+// BenchmarkBackupBlobRefs measures the blob references that the SQLite
+// export reads for a database with many confirmed log chunks: the heap that
+// the references keep after the read, the heap peak during it, and the bytes
+// that it allocates in total.
+func BenchmarkBackupBlobRefs(b *testing.B) {
+	n := benchChunkCount(b)
+	s := openInternalTemplated(b)
+
+	seedChunks(b, s, n)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		runtime.GC()
+		meter := membench.Start()
 
-		var before, after runtime.MemStats
-
-		runtime.ReadMemStats(&before)
-
-		sampler := startPeakSampler()
-
-		refs, err := blobRefs(ctx, s.conn)
+		refs, err := blobRefs(b.Context(), s.conn)
 		if err != nil {
 			b.Fatalf("blob refs: %v", err)
 		}
-
-		peak := sampler.finish()
-
-		runtime.GC()
-		runtime.ReadMemStats(&after)
 
 		if len(refs.Refs) != n {
 			b.Fatalf("references = %d, want %d", len(refs.Refs), n)
 		}
 
-		runtime.KeepAlive(refs)
-
-		const mib = 1 << 20
-
-		b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc)/mib, "live-MiB")
-		b.ReportMetric(float64(peak)/mib, "peak-MiB")
-		b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/mib, "alloc-MiB")
+		meter.Stop(b, refs)
 	}
 }

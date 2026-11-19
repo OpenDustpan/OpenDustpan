@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -1213,13 +1214,14 @@ func (s *Service) readKind(ctx context.Context) (installation.Kind, error) {
 	return kind, nil
 }
 
-// orderBlobs returns the references ordered by key, so copies and the
-// manifest follow a stable order whatever order the export returns.
+// orderBlobs orders the references by key in place and returns them, so
+// copies and the manifest follow a stable order whatever order the export
+// returns. It makes no copy of the list, which can hold a million references:
+// the caller does not use refs in its old order after the call.
 func orderBlobs(refs []BlobRef) []BlobRef {
-	ordered := slices.Clone(refs)
-	slices.SortFunc(ordered, func(a, b BlobRef) int { return strings.Compare(a.Key, b.Key) })
+	slices.SortFunc(refs, func(a, b BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
-	return ordered
+	return refs
 }
 
 // registryFileEntries returns the manifest entry of each blob key that the
@@ -1876,7 +1878,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		Dialect:              in.sum.Dialect,
 		PrimaryInstallations: in.sum.PrimaryInstallations,
 		WrapperIDs:           in.sum.WrapperIDs,
-		Blobs:                make([]ManifestBlob, 0, len(in.ordered)),
+		Blobs:                []ManifestBlob{},
 		Version:              s.version,
 		SQLSHA256:            hex.EncodeToString(in.sha[:]),
 		Format:               FormatVersion,
@@ -1892,20 +1894,116 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		RegistryFiles:    RegistryFilesOf(in.sum.RegistryFiles),
 	}
 
-	manifest.Blobs = append(manifest.Blobs, in.ordered...)
-
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		return fmt.Errorf("encode manifest of backup %s: %w", in.id, err)
-	}
-
 	key, err := in.prefix.manifestKey()
 	if err != nil {
 		return err
 	}
 
-	if err := s.target.Put(ctx, key, bytes.NewReader(data)); err != nil {
+	// The manifest goes to the target as a stream, so the blob list of a large
+	// backup is never one buffer of the size of the manifest.
+	if err := s.putManifest(ctx, key, manifest, in.ordered); err != nil {
 		return fmt.Errorf("write manifest of backup %s: %w", in.id, err)
+	}
+
+	return nil
+}
+
+// putManifest writes the manifest to key as a stream. The bytes are those of
+// json.Marshal of the manifest with blobs as its blob list: writeManifestJSON
+// encodes one blob entry at a time.
+func (s *Service) putManifest(ctx context.Context, key blob.Key, manifest Manifest, blobs []ManifestBlob) error {
+	reader, writer := io.Pipe()
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		// CloseWithError(nil) is a normal end of the stream.
+		if closeErr := writer.CloseWithError(writeManifestJSON(writer, manifest, blobs)); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	putErr := s.target.Put(ctx, key, reader)
+
+	// Closing the reader stops the encoder when Put returns before it read
+	// the whole stream, so the goroutine never waits for a reader that left.
+	if closeErr := reader.Close(); closeErr != nil {
+		_ = closeErr
+	}
+
+	<-done
+
+	return putErr
+}
+
+// manifestWriteBuffer is the size of the buffer of the manifest stream.
+const manifestWriteBuffer = 64 << 10
+
+// errManifestShape reports an encoded manifest in which the blob list is not
+// where writeManifestJSON expects it. It cannot happen with the Manifest type;
+// the check stops a manifest that would be written with a wrong shape.
+var errManifestShape = errors.New("the encoded manifest has no empty blob list")
+
+// blobsOpen is the text that json.Marshal writes for the start of a manifest
+// whose blob list is empty. writeManifestJSON splits the encoded manifest
+// after it.
+const blobsOpen = `"blobs":[`
+
+// writeManifestJSON writes the JSON of manifest to w with blobs as its blob
+// list, byte for byte as json.Marshal writes it, but with one blob entry in
+// memory at a time. The manifest holds no blob list when the call starts: the
+// text before the list and the text after it come from one encoding of the
+// manifest with an empty list.
+func writeManifestJSON(w io.Writer, manifest Manifest, blobs []ManifestBlob) error {
+	manifest.Blobs = []ManifestBlob{}
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("encode manifest: %w", err)
+	}
+
+	// The first match is the blob list: the keys before it are plain, and the
+	// strings in them have escaped quotes.
+	at := bytes.Index(data, []byte(blobsOpen+"]"))
+	if at < 0 {
+		return errManifestShape
+	}
+
+	head, tail := data[:at+len(blobsOpen)], data[at+len(blobsOpen):]
+
+	// The buffer joins the small writes of the entries, so a pipe or a network
+	// writer sees few large writes.
+	out := bufio.NewWriterSize(w, manifestWriteBuffer)
+
+	if _, err := out.Write(head); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+
+	for i := range blobs {
+		entry, err := json.Marshal(blobs[i])
+		if err != nil {
+			return fmt.Errorf("encode manifest blob %d: %w", i, err)
+		}
+
+		if i > 0 {
+			if err := out.WriteByte(','); err != nil {
+				return fmt.Errorf("write manifest: %w", err)
+			}
+		}
+
+		if _, err := out.Write(entry); err != nil {
+			return fmt.Errorf("write manifest: %w", err)
+		}
+	}
+
+	if _, err := out.Write(tail); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
+	}
+
+	if err := out.Flush(); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
 	}
 
 	return nil

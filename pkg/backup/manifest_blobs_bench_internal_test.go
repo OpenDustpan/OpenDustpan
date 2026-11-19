@@ -2,17 +2,16 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/membench"
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
@@ -25,16 +24,15 @@ const benchBlobsEnv = "DUSTPAN_BENCH_BLOBS"
 // nothing. Only Put is used.
 type discardTarget struct {
 	blob.Store
-
-	bytes int64
 }
 
 // Put reads r to the end and counts the bytes.
 func (d *discardTarget) Put(_ context.Context, _ blob.Key, r io.Reader) error {
-	n, err := io.Copy(io.Discard, r)
-	d.bytes = n
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return fmt.Errorf("discard the manifest: %w", err)
+	}
 
-	return err
+	return nil
 }
 
 // benchRefs returns n references in key order, as an export returns them.
@@ -43,8 +41,8 @@ func benchRefs(n int) []BlobRef {
 
 	for i := range refs {
 		refs[i] = BlobRef{
-			MD5: [16]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)},
-			Key: fmt.Sprintf("namespaces/ns-bench/job/job-bench/log/jlv-%020d/%08d-jla-x", i/10_000, i%10_000),
+			MD5:  [16]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)},
+			Key:  fmt.Sprintf("namespaces/ns-bench/job/job-bench/log/jlv-%020d/%08d-jla-x", i/10_000, i%10_000),
 			Size: 9, Sealed: false,
 		}
 	}
@@ -52,21 +50,42 @@ func benchRefs(n int) []BlobRef {
 	return refs
 }
 
+// benchBlobCount returns the number of references of the benchmark.
+func benchBlobCount(b *testing.B) int {
+	b.Helper()
+
+	raw := os.Getenv(benchBlobsEnv)
+	if raw == "" {
+		return 20_000
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		b.Fatalf("%s = %q, want a positive number", benchBlobsEnv, raw)
+	}
+
+	return n
+}
+
+// storedOf builds the manifest entry of each reference as the copy of a plain
+// blob builds it. The copy itself is not in the measure.
+func storedOf(ordered []BlobRef) []ManifestBlob {
+	stored := make([]ManifestBlob, 0, len(ordered))
+
+	for _, ref := range ordered {
+		stored = append(stored, ManifestBlob{
+			Key: ref.Key, Size: ref.Size, MD5: hex.EncodeToString(ref.MD5[:]), Sealed: ref.Sealed,
+		})
+	}
+
+	return stored
+}
+
 // BenchmarkManifestBlobs measures the stages of a backup that hold the blob
 // list: the ordering, the list of manifest entries that the copy returns and
-// the write of the manifest. The copy itself is not in the measure: each
-// entry is built from its reference as a copy of a plain blob builds it.
+// the write of the manifest.
 func BenchmarkManifestBlobs(b *testing.B) {
-	n := 20_000
-
-	if raw := os.Getenv(benchBlobsEnv); raw != "" {
-		v, err := strconv.Atoi(raw)
-		if err != nil || v <= 0 {
-			b.Fatalf("%s = %q, want a positive number", benchBlobsEnv, raw)
-		}
-
-		n = v
-	}
+	n := benchBlobCount(b)
 
 	id, err := ParseID("bkp-bench")
 	if err != nil {
@@ -82,66 +101,19 @@ func BenchmarkManifestBlobs(b *testing.B) {
 
 	for range b.N {
 		exported := benchRefs(n)
-		target := &discardTarget{Store: nil, bytes: 0}
-		svc := &Service{target: target, version: "bench"}
+		svc := serviceOver(&discardTarget{Store: nil})
+		meter := membench.Start()
 
-		runtime.GC()
-
-		var before, after runtime.MemStats
-
-		runtime.ReadMemStats(&before)
-
-		var (
-			peak atomic.Uint64
-			stop = make(chan struct{})
-			wg   sync.WaitGroup
-		)
-
-		wg.Go(func() {
-			tick := time.NewTicker(5 * time.Millisecond)
-			defer tick.Stop()
-
-			var m runtime.MemStats
-
-			for {
-				select {
-				case <-stop:
-					return
-				case <-tick.C:
-					runtime.ReadMemStats(&m)
-
-					if m.HeapInuse > peak.Load() {
-						peak.Store(m.HeapInuse)
-					}
-				}
-			}
-		})
-
-		ordered := orderBlobs(exported)
-		stored := make([]ManifestBlob, 0, len(ordered))
-
-		for _, ref := range ordered {
-			stored = append(stored, ManifestBlob{
-				Key: ref.Key, Size: ref.Size, MD5: hex.EncodeToString(ref.MD5[:]), Sealed: ref.Sealed,
-			})
+		stored := storedOf(orderBlobs(exported))
+		input := manifestInput{
+			startedAt: time.Time{}, kind: "", id: id, sum: emptySummary(), files: nil, ordered: stored,
+			damaged: nil, size: 0, sha: [sha256.Size]byte{}, prefix: prefix,
 		}
 
-		if err := svc.writeManifest(b.Context(), manifestInput{
-			id: id, prefix: prefix, ordered: stored, kind: "", sum: Summary{}, startedAt: time.Time{},
-		}); err != nil {
-			b.Fatalf("write manifest: %v", err)
+		if writeErr := svc.writeManifest(b.Context(), input); writeErr != nil {
+			b.Fatalf("write manifest: %v", writeErr)
 		}
 
-		close(stop)
-		wg.Wait()
-		runtime.ReadMemStats(&after)
-		runtime.KeepAlive(stored)
-		runtime.KeepAlive(exported)
-
-		const mib = 1 << 20
-
-		b.ReportMetric(float64(peak.Load())/mib, "peak-MiB")
-		b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/mib, "alloc-MiB")
-		b.ReportMetric(float64(target.bytes)/mib, "manifest-MiB")
+		meter.Stop(b, stored, exported)
 	}
 }
