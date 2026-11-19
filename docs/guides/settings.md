@@ -71,9 +71,19 @@ The answer is `200` with the new resource and the new `ETag`. The rules:
 
 A change that makes the scope less secure needs a fresh sign-in. The field
 `mayReduceSecurity` of a setting shows which settings can do this. An access
-token never gives a fresh sign-in. Make the change in the console, or with a
-console session that signed in a short time ago. When the installation has no
-console sign-in, the change needs no fresh sign-in.
+token never gives a fresh sign-in, also the bootstrap admin token. Make the
+change in the console, or with a console session that signed in a short time
+ago. When the installation has no console sign-in, the change needs no fresh
+sign-in.
+
+For the key `signIn.localPassword.enabled`, the server counts a change to
+`"true"`, or to empty, as a change that reduces security. A change to
+`"false"` is not. So the bootstrap admin token can set the key to `"false"`.
+The same token then gets 403 with `mfa.fresh-step-required` when it sets the
+key to `"true"` or to `null`. Only a console session with a recent sign-in
+can turn the password sign-in on again. If the password sign-in was the only
+sign-in, no person can start such a session, and no API route turns the
+setting on again.
 
 ## Refusals
 
