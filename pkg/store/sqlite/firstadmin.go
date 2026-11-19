@@ -309,7 +309,12 @@ func readRedeemSession(ctx context.Context, q *db.Queries, id string, facts *fir
 		return fmt.Errorf("select session policy: %w", err)
 	}
 
-	facts.SetSession(sessionOfRow(row), sessionPolicyOf(policy).Limits)
+	pol := sessionPolicyOf(policy)
+
+	// The stored policy limits the freshness window. The caller may give a
+	// smaller window, never a larger one.
+	facts.Window = min(facts.Window, pol.TokenFreshness)
+	facts.SetSession(sessionOfRow(row), pol.Limits)
 
 	return nil
 }

@@ -87,6 +87,11 @@ type Harness struct {
 	// IgnoreCodeDeletes makes each later delete in the code table match 0 rows,
 	// with no error, as a concurrent change of the row does.
 	IgnoreCodeDeletes func(ctx context.Context) error
+	// InsertMarkerBeforeRedeem makes each later insert in the grant table store
+	// the marker row too, as a concurrent redeem that won the race does. The
+	// check of the marker has passed by then, and only the key of the marker
+	// table can refuse the second marker.
+	InsertMarkerBeforeRedeem func(ctx context.Context) error
 	// InsertMarker inserts a row in the marker table with no validation of
 	// the service. The schema alone can refuse it.
 	InsertMarker func(ctx context.Context, r MarkerRow) error
@@ -115,6 +120,7 @@ const (
 	preGrantID   = "grt-pre"
 	sessionID    = "ses-alice"
 	window       = 5 * time.Minute
+	hugeWindow   = 1000 * time.Hour
 	offerAction  = "server:offer-first-administrator"
 	redeemAction = "caller:redeem-first-administrator"
 	otherAction  = "server:manage-grants"
@@ -142,6 +148,7 @@ func RunFirstAdministrator(t *testing.T, newHarness Factory) {
 		{name: "TestRedeemOneTransaction", test: testRedeemOneTransaction},
 		{name: "TestRedeemRollsBackOnAuditFailure", test: testRedeemRollsBackOnAuditFailure},
 		{name: "TestOfferRefusedAfterMarker", test: testOfferRefusedAfterMarker},
+		{name: "TestOfferUnknownPrincipal", test: testOfferUnknownPrincipal},
 		{name: "TestOfferReplacesCode", test: testOfferReplacesCode},
 		{name: "TestRedeemWrongPrincipal", test: testRedeemWrongPrincipal},
 		{name: "TestRedeemExpired", test: testRedeemExpired},
@@ -151,6 +158,7 @@ func RunFirstAdministrator(t *testing.T, newHarness Factory) {
 		{name: "TestRedeemEntryReasonFromCodeRow", test: testRedeemEntryReasonFromCodeRow},
 		{name: "TestRedeemConcurrent", test: testRedeemConcurrent},
 		{name: "TestRedeemDeleteMatchesNothing", test: testRedeemDeleteMatchesNothing},
+		{name: "TestRedeemMarkerKey", test: testRedeemMarkerKey},
 	}
 
 	for _, tc := range cases {
@@ -479,6 +487,25 @@ func testOfferRefusedAfterMarker(t *testing.T, h Harness) {
 	wantErr(t, "offer after the marker", err, firstadmin.ErrAlreadyMade)
 
 	if st := mustState(t, h, at(minuteRedeem)); st.Offer != nil {
+		t.Fatalf("offer = %+v after a refused offer, want none", *st.Offer)
+	}
+
+	if got := serverEntries(t, h); got != entries {
+		t.Fatalf("audit entries = %d, want %d: a refused offer wrote one", got, entries)
+	}
+}
+
+// testOfferUnknownPrincipal offers a code to a principal that does not exist.
+// The store refuses it and stores no code and no entry.
+func testOfferUnknownPrincipal(t *testing.T, h Harness) {
+	t.Helper()
+
+	entries := serverEntries(t, h)
+
+	_, err := h.Store.Offer(t.Context(), offerInput(alice, digestA()), entry(offerAction, principal.Ref(alice)))
+	wantErr(t, "offer to an unknown principal", err, firstadmin.ErrPrincipalNotLive)
+
+	if st := mustState(t, h, at(minuteOffer)); st.Offer != nil {
 		t.Fatalf("offer = %+v after a refused offer, want none", *st.Offer)
 	}
 
@@ -958,6 +985,27 @@ func testHostileSession(t *testing.T, newHarness Factory) {
 		})
 	}
 
+	t.Run("caller window larger than the policy", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		mustPrincipal(t, h, person(alice, aliceSubject))
+		mustOffer(t, h, alice, digestA())
+
+		entries := serverEntries(t, h)
+
+		// The sign-in is older than the window of the policy. The input gives a
+		// window that would accept it, and the store uses the smaller window.
+		in := redeemInput(alice, digestA(), aliceGrantID)
+		row := sessionRowOf(in)
+		row.AuthTimeMs = in.Now.Add(-window - time.Hour).UnixMilli()
+		in.Window = hugeWindow
+
+		_, err := redeemWithSession(t, h, in, row)
+		wantErr(t, "redeem with a window larger than the policy", err, firstadmin.ErrStaleSignIn)
+		wantUnchanged(t, h, alice, aliceGrantID, entries)
+	})
+
 	t.Run("sign-in time of the row, not of the input", func(t *testing.T) {
 		t.Parallel()
 
@@ -1076,6 +1124,27 @@ func testRedeemDeleteMatchesNothing(t *testing.T, h Harness) {
 
 	_, err := redeem(h, redeemInput(alice, digestA(), aliceGrantID))
 	wantErr(t, "redeem with a delete that matches no row", err, firstadmin.ErrCodeInvalid)
+	wantUnchanged(t, h, alice, aliceGrantID, entries)
+}
+
+// testRedeemMarkerKey makes a marker appear after the check of the marker. The
+// redeem must fail with ErrAlreadyMade at the insert of its own marker, and
+// store nothing: the grant, the marker and the entry roll back, and the code
+// row stays.
+func testRedeemMarkerKey(t *testing.T, h Harness) {
+	t.Helper()
+
+	mustPrincipal(t, h, person(alice, aliceSubject))
+	mustOffer(t, h, alice, digestA())
+
+	entries := serverEntries(t, h)
+
+	if err := h.InsertMarkerBeforeRedeem(t.Context()); err != nil {
+		t.Fatalf("insert marker before redeem: %v", err)
+	}
+
+	_, err := redeem(h, redeemInput(alice, digestA(), aliceGrantID))
+	wantErr(t, "redeem with a marker that appears after the check", err, firstadmin.ErrAlreadyMade)
 	wantUnchanged(t, h, alice, aliceGrantID, entries)
 }
 

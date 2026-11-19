@@ -231,8 +231,9 @@ type OfferResult struct {
 
 // RedeemInput is the input of Store.Redeem. PrincipalID and SessionID come
 // from the console session of the caller, never from the body. Digest is the
-// digest of the code in the body. Window is the freshness window of the
-// session policy. AuthTime is the sign-in time that the caller read. The
+// digest of the code in the body. Window is the freshness window that the
+// caller read from the session policy. The store reads the policy in its
+// transaction and uses the smaller of the two windows. AuthTime is the sign-in time that the caller read. The
 // store does not trust it: it reads the session row by SessionID in its
 // transaction, and it uses the sign-in time of that row. GrantID
 // is the ID the service made for the grant.

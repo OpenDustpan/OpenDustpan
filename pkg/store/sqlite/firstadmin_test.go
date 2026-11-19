@@ -32,7 +32,8 @@ func TestFirstAdministratorConformance(t *testing.T) {
 			PutSession: func(ctx context.Context, r firstadmintest.SessionRow) error {
 				return putFirstAdminSession(ctx, conn, r)
 			},
-			IgnoreCodeDeletes: func(ctx context.Context) error { return ignoreFirstAdminCodeDeletes(ctx, conn) },
+			IgnoreCodeDeletes:        func(ctx context.Context) error { return ignoreFirstAdminCodeDeletes(ctx, conn) },
+			InsertMarkerBeforeRedeem: func(ctx context.Context) error { return insertFirstAdminMarkerOnGrant(ctx, conn) },
 			InsertMarker: func(ctx context.Context, r firstadmintest.MarkerRow) error {
 				return insertFirstAdminMarker(ctx, conn, r)
 			},
@@ -111,6 +112,21 @@ ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, created_at_
 func ignoreFirstAdminCodeDeletes(ctx context.Context, conn *sql.DB) error {
 	_, err := conn.ExecContext(ctx, `CREATE TRIGGER ignore_code_deletes BEFORE DELETE ON first_administrator_codes
 BEGIN SELECT RAISE(IGNORE); END`)
+	if err != nil {
+		return fmt.Errorf("create the trigger: %w", err)
+	}
+
+	return nil
+}
+
+// insertFirstAdminMarkerOnGrant makes each later insert in the grant table store
+// the marker row too.
+func insertFirstAdminMarkerOnGrant(ctx context.Context, conn *sql.DB) error {
+	_, err := conn.ExecContext(ctx, `CREATE TRIGGER insert_marker_on_grant AFTER INSERT ON grants
+BEGIN
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, 'prn-race', 'grt-race', 'ses-race', 'host', 0);
+END`)
 	if err != nil {
 		return fmt.Errorf("create the trigger: %w", err)
 	}

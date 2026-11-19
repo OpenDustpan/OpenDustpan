@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // WithPrincipalForTest returns ctx carrying p, as enforce stores the caller
@@ -31,6 +32,25 @@ func ServeAccessLimitSaveForTest(
 
 	ctx := context.WithValue(r.Context(), sessionKey{}, caller)
 	h.fresh(identity.ActionNamespaceManageGates, h.writeAccessLimit)(w, r.WithContext(ctx), p, obj)
+}
+
+// ServeRedeemFirstAdministratorForTest calls the redeem of the first
+// administrator with p as the caller and a console session whose sign-in is now
+// and whose owner is the owner that the test names. The session
+// checker never gives such an owner for a real session, so a test reaches the
+// owner check of the handler only through this function.
+func ServeRedeemFirstAdministratorForTest(
+	h *Handler, w http.ResponseWriter, r *http.Request, p identity.Principal, owner session.Owner,
+) {
+	var caller sessionCaller
+
+	caller.Match.Session.ID = "ses-seam"
+	caller.Match.Session.AuthTime = h.signIn.sessions.Now()
+	caller.Match.Session.Provider = "corp"
+	caller.Match.Owner = owner
+
+	ctx := context.WithValue(r.Context(), sessionKey{}, caller)
+	h.redeemFirstAdministrator(w, r.WithContext(ctx), p, identity.ServerObject())
 }
 
 // ErrInvalidBodyForTest is the error of a request body that is not valid JSON.

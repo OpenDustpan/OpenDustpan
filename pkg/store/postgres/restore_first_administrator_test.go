@@ -19,6 +19,14 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
+// The fixed times of the restore tests: the offer, the sign-in and the redeem,
+// inside the 10-minute life of the code.
+func faRestoreNow() time.Time { return time.UnixMilli(1_700_000_000_000).UTC() }
+
+func faRestoreSignInAt() time.Time { return faRestoreNow().Add(time.Minute) }
+
+func faRestoreRedeemAt() time.Time { return faRestoreNow().Add(2 * time.Minute) }
+
 // faRestoreSink holds the bytes of each portable file in memory, by path.
 type faRestoreSink struct {
 	files map[string]*bytes.Buffer
@@ -75,7 +83,7 @@ func faRestoreMarker(t *testing.T, pool *pgxpool.Pool, principal string) {
 func faRestoreCode(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
-	now := time.Now().UnixMilli()
+	now := faRestoreNow().UnixMilli()
 	faRestoreExec(t, pool, `INSERT INTO first_administrator_codes
 (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms) VALUES (1, $1, $2, 'host', 'reason', $3, $4)`,
 		faRestoreLivePerson, faRestoreDigest(), now, now+firstadmin.LifetimeMs)
@@ -163,7 +171,7 @@ func faRestoreStore(t *testing.T) (*postgres.Store, *pgxpool.Pool) {
 func faCheckMarker(t *testing.T, s *postgres.Store, pool *pgxpool.Pool, want string) {
 	t.Helper()
 
-	st, err := s.State(context.Background(), time.Now())
+	st, err := s.State(context.Background(), faRestoreRedeemAt())
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -238,8 +246,13 @@ func TestRestoreFirstAdministratorEmptiesCode(t *testing.T) {
 			}
 
 			in := firstadmin.RedeemInput{
-				Now: time.Now(), AuthTime: time.Now(), PrincipalID: faRestoreLivePerson, SessionID: "ses-x",
-				Digest: faRestoreDigest(), GrantID: "grt-after", Window: time.Hour,
+				Now:         faRestoreRedeemAt(),
+				AuthTime:    faRestoreSignInAt(),
+				PrincipalID: faRestoreLivePerson,
+				SessionID:   "ses-x",
+				Digest:      faRestoreDigest(),
+				GrantID:     "grt-after",
+				Window:      time.Hour,
 			}
 
 			_, err := s.Redeem(t.Context(), in, faRestoreEntry())
@@ -254,10 +267,31 @@ func TestRestoreFirstAdministratorEmptiesCode(t *testing.T) {
 // writes anything.
 func faRestoreEntry() audit.Entry {
 	return audit.Entry{
-		FenceVersion: 0, At: time.Now(), Namespace: audit.ServerScope, Subject: "host", IDPSubject: "", TokenID: "",
-		Action: "caller:redeem-first-administrator", Object: "@server", Version: "", ValuePath: "", ValueCount: nil,
-		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, Reason: "",
-		PrincipalKind: "", JobID: "", Origin: nil,
+		FenceVersion:  0,
+		At:            faRestoreRedeemAt(),
+		Namespace:     audit.ServerScope,
+		Subject:       "host",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "caller:redeem-first-administrator",
+		Object:        "@server",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+		Origin:        nil,
 	}
 }

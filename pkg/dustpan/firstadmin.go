@@ -16,7 +16,8 @@ import (
 
 // firstAdministratorPolicyTimeout is the time that the read of the session
 // policy may take when the service asks for the freshness window. A read that
-// ends in time gives a window of 0, which refuses each sign-in.
+// fails or does not end in time gives a window of 0, which refuses each
+// sign-in.
 const firstAdministratorPolicyTimeout = 5 * time.Second
 
 // newFirstAdministrator builds the service of the first administrator on the

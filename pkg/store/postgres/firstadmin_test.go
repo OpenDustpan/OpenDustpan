@@ -39,7 +39,8 @@ func TestFirstAdministratorConformance(t *testing.T) {
 			PutSession: func(ctx context.Context, r firstadmintest.SessionRow) error {
 				return putFirstAdminSession(ctx, pool, r)
 			},
-			IgnoreCodeDeletes: func(ctx context.Context) error { return ignoreFirstAdminCodeDeletes(ctx, pool) },
+			IgnoreCodeDeletes:        func(ctx context.Context) error { return ignoreFirstAdminCodeDeletes(ctx, pool) },
+			InsertMarkerBeforeRedeem: func(ctx context.Context) error { return insertFirstAdminMarkerOnGrant(ctx, pool) },
 			InsertMarker: func(ctx context.Context, r firstadmintest.MarkerRow) error {
 				return insertFirstAdminMarker(ctx, pool, r)
 			},
@@ -129,6 +130,28 @@ $$ BEGIN RETURN NULL; END $$`)
 
 	_, err = pool.Exec(ctx, `CREATE TRIGGER ignore_code_deletes BEFORE DELETE ON first_administrator_codes
 FOR EACH ROW EXECUTE FUNCTION ignore_code_deletes()`)
+	if err != nil {
+		return fmt.Errorf("create the trigger: %w", err)
+	}
+
+	return nil
+}
+
+// insertFirstAdminMarkerOnGrant makes each later insert in the grant table store
+// the marker row too.
+func insertFirstAdminMarkerOnGrant(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `CREATE FUNCTION insert_marker_on_grant() RETURNS trigger LANGUAGE plpgsql AS
+$$ BEGIN
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, 'prn-race', 'grt-race', 'ses-race', 'host', 0);
+RETURN NULL;
+END $$`)
+	if err != nil {
+		return fmt.Errorf("create the function: %w", err)
+	}
+
+	_, err = pool.Exec(ctx, `CREATE TRIGGER insert_marker_on_grant AFTER INSERT ON grants
+FOR EACH ROW EXECUTE FUNCTION insert_marker_on_grant()`)
 	if err != nil {
 		return fmt.Errorf("create the trigger: %w", err)
 	}

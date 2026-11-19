@@ -2807,6 +2807,8 @@ WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id =
 -- name: GetSessionForShare :one
 -- The redeem of the first administrator reads the session row with a share
 -- lock, so a sign-out cannot end the session between the read and the commit.
+-- The audit lock of the installation serializes the redeems only. It does not
+-- serialize a sign-out, so this share lock is the guard against one.
 SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
   generation
 FROM sessions WHERE id = $1

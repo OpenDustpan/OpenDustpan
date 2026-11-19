@@ -78,6 +78,7 @@ func (faAuthenticator) AuthenticateToken(_ context.Context, token string) (ident
 // of the handler from the refusal of a lower layer.
 type faSpy struct {
 	inner   apiserver.FirstAdministratorService
+	fail    error
 	mu      sync.Mutex
 	offers  int
 	redeems int
@@ -96,7 +97,12 @@ func (s *faSpy) Offer(ctx context.Context, in firstadminsvc.OfferInput) (firstad
 func (s *faSpy) Redeem(ctx context.Context, in firstadminsvc.RedeemInput) (firstadmin.Result, error) {
 	s.mu.Lock()
 	s.redeems++
+	fail := s.fail
 	s.mu.Unlock()
+
+	if fail != nil {
+		return firstadmin.Result{}, fail
+	}
 
 	return s.inner.Redeem(ctx, in)
 }
@@ -244,7 +250,7 @@ func newFAFixture(t *testing.T) faFixture {
 		t.Fatalf("first administrator service: %v", err)
 	}
 
-	spy := &faSpy{inner: svc, mu: sync.Mutex{}, offers: 0, redeems: 0}
+	spy := &faSpy{inner: svc, fail: nil, mu: sync.Mutex{}, offers: 0, redeems: 0}
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
@@ -761,6 +767,113 @@ func TestHandlerHostileRows(t *testing.T) {
 
 			runFAHostileRow(t, &tc)
 		})
+	}
+
+	for _, tc := range faSeamRows() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runFASeamRow(t, &tc)
+		})
+	}
+}
+
+// faCause is text that only a cause of the service holds. No answer of the
+// route may hold it.
+const faCause = "cause-text-of-the-store-9f3a"
+
+// faSeamRow is a hostile row of the redeem that the real session checker
+// cannot send: the row sets the owner of the console session, or the error of
+// the service, with a test seam. Each row shows a guard of the handler.
+type faSeamRow struct {
+	name string
+	// ownerKind and ownerID are the owner of the console session.
+	ownerKind principal.Kind
+	ownerID   string
+	// serviceErr is the error that the service returns. A nil error means that
+	// the row must not reach the service.
+	serviceErr error
+	rule       string
+	calls      int
+}
+
+func faSeamRows() []faSeamRow {
+	return []faSeamRow{
+		{
+			name:       "redeem with a session of a service principal",
+			ownerKind:  principal.KindService,
+			ownerID:    "prn-alice",
+			serviceErr: nil,
+			rule:       faRuleNoSessionWire,
+			calls:      faNoCalls,
+		},
+		{
+			name: "redeem with a session that has no owner ID", ownerKind: principal.KindPerson, ownerID: "",
+			serviceErr: nil, rule: faRuleNoSessionWire, calls: faNoCalls,
+		},
+		{
+			name: "redeem with a session that the store refuses", ownerKind: principal.KindPerson, ownerID: faAlice,
+			serviceErr: fmt.Errorf("store %s: %w", faCause, firstadmin.ErrSessionInvalid), rule: faNoRule, calls: 1,
+		},
+		{
+			name: "redeem with a sign-in that the store refuses", ownerKind: principal.KindPerson, ownerID: faAlice,
+			serviceErr: fmt.Errorf("store %s: %w", faCause, firstadmin.ErrStaleSignIn), rule: faNoRule, calls: 1,
+		},
+	}
+}
+
+// faRuleNoSessionWire is the rule of the failure entry of a request with no
+// console session of a person.
+const faRuleNoSessionWire = "no-console-session"
+
+// runFASeamRow sends the redeem of one seam row. The answer is the 403 of a
+// missing fresh step, the failure budget stays as it was, the answer holds
+// nothing of the cause, and a row with no error of the service never reaches
+// the service.
+func runFASeamRow(t *testing.T, tc *faSeamRow) {
+	t.Helper()
+
+	f := newFAFixture(t)
+	f.spy.fail = tc.serviceErr
+
+	callsBefore := f.spy.calls()
+	budgetBefore := f.limiter.count()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, faRedeemPath,
+		strings.NewReader(faCodeBody(faWrongCode)))
+	req.Header.Set("Content-Type", "application/json")
+
+	// The principal of a console session: no administrator, no token ID.
+	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "alice", DisplayName: "alice",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+	}
+
+	owner := session.Owner{
+		ActiveAt: time.Time{}, DisabledAt: time.Time{}, ID: tc.ownerID, Subject: "", DisplayName: "",
+		Kind: tc.ownerKind, BreakGlass: false,
+	}
+	rec := httptest.NewRecorder()
+	apiserver.ServeRedeemFirstAdministratorForTest(f.handler.Handler, rec, req, caller, owner)
+
+	faWant(t, tc.name, rec, http.StatusForbidden, "mfa.fresh-step-required")
+
+	if got := f.spy.calls() - callsBefore; got != tc.calls {
+		t.Fatalf("%s: service calls = %d, want %d", tc.name, got, tc.calls)
+	}
+
+	if got := f.limiter.count() - budgetBefore; got != 0 {
+		t.Fatalf("%s: failure budget spent = %d, want 0", tc.name, got)
+	}
+
+	for _, leak := range []string{faCause, "first-administrator.", firstadmin.ErrSessionInvalid.Error()} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Fatalf("%s: the answer holds %q: %s", tc.name, leak, rec.Body.String())
+		}
+	}
+
+	if tc.rule != "" {
+		f.wantFailureRule(t, tc.name, faRedeemPath, tc.rule)
 	}
 }
 

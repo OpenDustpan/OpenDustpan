@@ -10174,6 +10174,8 @@ type GetSessionForShareRow struct {
 
 // The redeem of the first administrator reads the session row with a share
 // lock, so a sign-out cannot end the session between the read and the commit.
+// The audit lock of the installation serializes the redeems only. It does not
+// serialize a sign-out, so this share lock is the guard against one.
 func (q *Queries) GetSessionForShare(ctx context.Context, id string) (GetSessionForShareRow, error) {
 	row := q.db.QueryRow(ctx, getSessionForShare, id)
 	var i GetSessionForShareRow
