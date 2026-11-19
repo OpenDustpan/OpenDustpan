@@ -66,6 +66,27 @@ func (g *GitHostFake) PrivateKeyPEM() string { return g.fake.PrivateKeyPEM() }
 // Calls is the number of requests that the fake answered.
 func (g *GitHostFake) Calls() int { return g.fake.Calls() }
 
+// Events returns the fake as a sender of webhook deliveries: it signs the
+// events and sends them to a receiver. It holds the same app and installation as
+// the API of the fake.
+func (g *GitHostFake) Events() *githubfake.Fake { return g.fake }
+
+// DeliverWebhook sends d to path of the server of env, as GitHub does, with the
+// client of env, which trusts the certificate of the server. A status that is
+// not a success is a result, not an error.
+func (e *Env) DeliverWebhook(
+	ctx context.Context, tb testing.TB, fake *GitHostFake, path string, d githubfake.Delivery,
+) githubfake.Sent {
+	tb.Helper()
+
+	sent, err := fake.fake.SendVia(ctx, e.client, e.URL+path, d)
+	if err != nil {
+		tb.Fatalf("deliver %s: %v", path, err)
+	}
+
+	return sent
+}
+
 func (g *GitHostFake) certPool() *x509.CertPool { return g.fake.CertPool() }
 
 // gitHostFakes maps a test to its fake, so that the in-process server of that
