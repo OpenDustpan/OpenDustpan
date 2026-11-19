@@ -83,7 +83,7 @@ func benchUnitFilterShape(b *testing.B, units, changes int) {
 		RestrictStates: true, States: []inventory.State{inventory.StateLocked}, Limit: 100,
 	}
 
-	if os.Getenv("DUSTPAN_BENCH_EXPLAIN") != "" {
+	if os.Getenv("DUSTPAN_TEST_BENCH_EXPLAIN") != "" {
 		explainUnitFilters(b, s, q, name)
 	}
 
@@ -105,7 +105,7 @@ func benchUnitFilterShape(b *testing.B, units, changes int) {
 }
 
 // explainUnitFilters logs the plan of the locked filter. Set
-// DUSTPAN_BENCH_EXPLAIN to read it.
+// DUSTPAN_TEST_BENCH_EXPLAIN to read it.
 func explainUnitFilters(b *testing.B, s *Store, q inventory.UnitQuery, name string) {
 	b.Helper()
 
