@@ -227,7 +227,8 @@ func TestRunnersOpenSessionRace(t *testing.T) {
 	}
 
 	pool, err := r.CreatePool(ctx, runner.Pool{
-		ID: "", Namespace: "", Name: "prod", Purpose: runner.PurposeJobs, Lease: 0, Concurrency: 0, Isolation: nil,
+		ID: "", Namespace: fence.Namespace, Name: "prod", Purpose: runner.PurposeJobs, Lease: 0, Concurrency: 0,
+		Isolation:      nil,
 		GitCredentials: runner.GitCredentials{Mode: "", Helper: ""}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}, fence, entry())
 	if err != nil {
