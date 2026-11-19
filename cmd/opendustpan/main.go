@@ -658,8 +658,11 @@ func (f *serveFlags) beforeServe(
 ) func(context.Context) error {
 	return func(hookCtx context.Context) error {
 		// The clear leaves HTTP_PROXY, HTTPS_PROXY and ALL_PROXY set: they may
-		// carry a password, but the Go HTTP client reads them lazily, at the
-		// first outbound request, which is after this hook.
+		// carry a password, but the Go HTTP client reads them once, at its first
+		// outbound request. That request can come before this hook or after it,
+		// by configuration: with an S3 blob store, the probe writes of
+		// blobs3.Open come before it; without S3, the first request can come
+		// after it. The clear would then make each later request skip the proxy.
 		if clearErr := clearSensitiveEnv(os.Unsetenv); clearErr != nil {
 			return clearErr
 		}

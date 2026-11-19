@@ -204,6 +204,10 @@ func TestServeClearsSensitiveEnvironmentChild(t *testing.T) {
 	}
 
 	names := servedNames()
+	if len(names) == 0 {
+		t.Fatal("servedNames is empty: the test would check nothing")
+	}
+
 	for _, name := range names {
 		if _, set := os.LookupEnv(name); !set {
 			t.Fatalf("%s is not set before serve: the canary did not reach the child", name)

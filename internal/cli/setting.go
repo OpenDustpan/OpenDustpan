@@ -382,9 +382,11 @@ func SensitiveEnvs() []string {
 // the start has read them.
 //
 // HTTP_PROXY, HTTPS_PROXY and ALL_PROXY may carry a password, but they are not
-// in this list. The Go HTTP client reads them once, on the first request, so
-// the clear would make every later outbound request skip the proxy. The
-// operator must keep a proxy password out of the environment of serve.
+// in this list. The Go HTTP client reads them once, at its first outbound
+// request. That request can come before the clear (with an S3 blob store, the
+// probe writes come first) or after it (without S3). In the second case the
+// clear would make each later outbound request skip the proxy. The operator
+// must keep a proxy password out of the environment of serve.
 func ExternalSecretEnvs() []string {
 	return []string{
 		"AWS_ACCESS_KEY_ID",
