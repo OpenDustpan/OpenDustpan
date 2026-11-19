@@ -179,9 +179,9 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 
 // issueLocked writes tok and its audit entry. The caller holds the lock.
 func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audit.Entry) error {
-	namespaceID, current := m.namespaceOf(tok.Namespace, fence)
-	if !current {
-		return namespace.ErrFenced
+	namespaceID, err := m.namespaceOf(tok.Namespace, fence)
+	if err != nil {
+		return err
 	}
 
 	if !tok.ExpiresAt.After(e.At) {
@@ -255,16 +255,26 @@ func (m *memWorld) checkIssueNamespaces(tok jobtoken.Token, namespaceID string) 
 }
 
 // namespaceOf returns the stable ID of the namespace ns when the fence is
-// current. The second result is false when the fence is stale, names another
-// namespace, or names no namespace.
-func (m *memWorld) namespaceOf(ns namespace.Name, fence namespace.Fence) (string, bool) {
-	if fence.Namespace != ns || fence.FailoverVersion != m.fences[ns] {
-		return "", false
+// current. A fence whose namespace has no row returns
+// namespace.ErrNotFound, before the mismatch check, so that a missing
+// namespace wins over a fence of another namespace, as the fenced
+// transaction of the SQL stores does. It returns namespace.ErrFenced when
+// the fence is stale or names another namespace.
+func (m *memWorld) namespaceOf(ns namespace.Name, fence namespace.Fence) (string, error) {
+	id, ok := m.nsByName[fence.Namespace]
+	if !ok {
+		return "", namespace.ErrNotFound
 	}
 
-	id, ok := m.nsByName[ns]
+	if fence.Namespace != ns {
+		return "", namespace.ErrFenced
+	}
 
-	return id, ok
+	if fence.FailoverVersion != m.fences[ns] {
+		return "", namespace.ErrFenced
+	}
+
+	return id, nil
 }
 
 // checkEntry refuses an audit entry that fails validation or that names

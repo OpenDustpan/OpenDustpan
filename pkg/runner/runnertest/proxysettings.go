@@ -37,6 +37,7 @@ func RunPoolProxyStore(t *testing.T, newHarness ProxyFactory) {
 		{"a save with a stale fence changes nothing and appends nothing", testProxyStaleFence},
 		{"a save for a pool that does not exist is not found", testProxyMissingPool},
 		{"the settings go with the pool", testProxyDeletedWithPool},
+		{"a save never keeps a credential for another endpoint", testProxyCredentialEndpoint},
 	}
 
 	for _, tc := range cases {
@@ -231,5 +232,98 @@ func testProxyDeletedWithPool(t *testing.T, h ProxyHarness) {
 	_, err := h.Proxy.ProxySettings(t.Context(), f.pool.ID)
 	if !errors.Is(err, runner.ErrNotFound) {
 		t.Fatalf("ProxySettings of a deleted pool = %v, want %v", err, runner.ErrNotFound)
+	}
+}
+
+// testProxyCredentialEndpoint is the hostile table of the adapter layer. A
+// save that keeps the stored sealed credential for another endpoint is
+// refused with ErrInvalid, and it changes nothing and appends no entry. A save
+// that names another credential, or none, or keeps the endpoint, is stored.
+func testProxyCredentialEndpoint(t *testing.T, h ProxyHarness) {
+	t.Helper()
+
+	f := setUpProxy(t, h)
+	sealed := []byte{0x00, 0xff, 'c', 'r', 'e', 'd'}
+
+	if _, err := saveProxy(t, h, f.fence, f.pool.ID, proxyRecord(t, sealed)); err != nil {
+		t.Fatalf("SetProxySettings: %v", err)
+	}
+
+	moveTo := func(rawURL string, credential []byte) runner.ProxySettingsRecord {
+		s, err := runner.NewProxySettings([]string{proxyTestRange}, rawURL)
+		if err != nil {
+			t.Fatalf("NewProxySettings(%q): %v", rawURL, err)
+		}
+
+		return runner.ProxySettingsRecord{
+			Settings: s, Credential: credential, Version: 1, UpdatedBy: "alice", UpdatedAt: now,
+		}
+	}
+
+	refused := []string{
+		"https://other.example:3128",
+		"https://proxy.example.net:3128",
+		"https://a.proxy.example:3128",
+		"http" + "://proxy.example:3128",
+		"https://proxy.example:3129",
+		"https://proxy.example",
+		"https://proxy.example..:3128",
+		"https://evil.example/https://proxy.example:3128",
+		"https://pr\u043exy.example:3128",
+		"http" + "://10.0.0.1:3128",
+	}
+
+	before, err := h.Domain.AuditEntries(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("AuditEntries: %v", err)
+	}
+
+	for _, rawURL := range refused {
+		_, saveErr := saveProxy(t, h, f.fence, f.pool.ID, moveTo(rawURL, sealed))
+		wantErr(t, "SetProxySettings keeping the credential for "+rawURL, saveErr, runner.ErrInvalid)
+	}
+
+	read, err := h.Proxy.ProxySettings(t.Context(), f.pool.ID)
+	if err != nil || read.Version != 1 || read.Settings.UpstreamURL() != proxyTestURL ||
+		!bytes.Equal(read.Credential, sealed) {
+		t.Fatalf("ProxySettings after the refused saves = %+v, %v; want version 1 and the first row", read, err)
+	}
+
+	after, err := h.Domain.AuditEntries(t.Context(), "acme")
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("AuditEntries after the refused saves = %d entries, %v; want %d", len(after), err, len(before))
+	}
+
+	checkProxyCredentialMoves(t, h, f, sealed, moveTo)
+}
+
+// checkProxyCredentialMoves checks the saves that the store accepts after the
+// refused ones: the same endpoint keeps the credential, and a new credential
+// or none is stored for another endpoint.
+func checkProxyCredentialMoves(
+	t *testing.T, h ProxyHarness, f proxyFixture, sealed []byte,
+	moveTo func(rawURL string, credential []byte) runner.ProxySettingsRecord,
+) {
+	t.Helper()
+
+	same, err := saveProxy(t, h, f.fence, f.pool.ID, moveTo("HTTPS://PROXY.EXAMPLE:3128/other", sealed))
+	if err != nil || same.Version != 2 || !bytes.Equal(same.Credential, sealed) {
+		t.Fatalf("SetProxySettings at the same endpoint = %+v, %v; want version 2 with the credential", same, err)
+	}
+
+	fresh := []byte{0x01, 'n', 'e', 'w'}
+
+	renewed, err := saveProxy(t, h, f.fence, f.pool.ID, atVersion(moveTo("https://other.example:3128", fresh), 2))
+	if err != nil || renewed.Version != 3 || !bytes.Equal(renewed.Credential, fresh) {
+		t.Fatalf(
+			"SetProxySettings with a new credential = %+v, %v; want version 3 with the new credential",
+			renewed,
+			err,
+		)
+	}
+
+	cleared, err := saveProxy(t, h, f.fence, f.pool.ID, atVersion(moveTo("https://third.example:3128", nil), 3))
+	if err != nil || cleared.Version != 4 || len(cleared.Credential) != 0 {
+		t.Fatalf("SetProxySettings with no credential = %+v, %v; want version 4 and no credential", cleared, err)
 	}
 }

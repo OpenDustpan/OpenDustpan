@@ -127,10 +127,13 @@ func (i *Idempotency) Begin(
 		return idempotency.Result{}, err
 	}
 
-	// Defense in depth: the route decides Reducing, and the maintenance gate
-	// lets only the routes of the list through. This store does not check the
-	// route, so a caller that passes Reducing for another route writes its
-	// record in maintenance mode. The route tests catch that.
+	// Defense in depth: the route decides Reducing. The routes of
+	// maintenance.ReducingRoutes pass the runner maintenance gate
+	// (withRunnerMaintenance in pkg/dustpan), and the installation API has no
+	// maintenance gate. This store does not check the route, so a caller that
+	// passes Reducing for a route that is not on the list could write its
+	// record in maintenance mode. No test checks that every route that uses
+	// Reducing is on the list.
 	run := i.store.inTx
 	if slices.Contains(opts, idempotency.Reducing) {
 		run = i.store.inControlTx
