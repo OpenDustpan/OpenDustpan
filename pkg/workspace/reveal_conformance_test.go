@@ -223,6 +223,90 @@ func plainAt(state []byte, path string) (any, bool) {
 	return oracleLookup(attrs, parsed.rest)
 }
 
+// attributesAt returns the attributes of the instance that path names and the
+// tokens below them.
+func attributesAt(state []byte, path string) (any, []string, bool) {
+	parsed, ok := parseConformancePath(path)
+	if !ok {
+		return nil, nil, false
+	}
+	doc, ok := decodeConformanceDoc(state)
+	if !ok {
+		return nil, nil, false
+	}
+	list := conformanceResourceList(doc)
+	if parsed.resource < 0 || parsed.resource >= len(list) {
+		return nil, nil, false
+	}
+	obj, ok := list[parsed.resource].(map[string]any)
+	if !ok {
+		return nil, nil, false
+	}
+	instance, ok := conformanceInstanceAt(obj, parsed.position)
+	if !ok {
+		return nil, nil, false
+	}
+	attrs, present := instance["attributes"]
+	if !present {
+		attrs = map[string]any{}
+	}
+	return attrs, parsed.rest, true
+}
+
+// ambiguousWrapperPathAt is the independent oracle of the paths that the
+// reveal may refuse as ambiguous.
+func ambiguousWrapperPathAt(state, path string) bool {
+	attrs, rest, ok := attributesAt([]byte(state), path)
+	if !ok {
+		return false
+	}
+	return isAmbiguousWrapperPath(attrs, rest)
+}
+
+// isAmbiguousWrapperPath walks physical steps from attrs to the first object
+// that is exactly {value, type}. The path is ambiguous when the next token is
+// "value" or "type" and the rest resolves both physically under the wrapper
+// and under the value of the wrapper.
+func isAmbiguousWrapperPath(attrs any, tokens []string) bool {
+	node := attrs
+	for i := 0; i <= len(tokens); i++ {
+		if wrapper, ok := node.(map[string]any); ok && isExactWrapper(wrapper) {
+			return ambiguousBelow(wrapper, tokens[i:])
+		}
+		if i == len(tokens) {
+			return false
+		}
+		next, ok := oracleLookup(node, tokens[i:i+1])
+		if !ok {
+			return false
+		}
+		node = next
+	}
+	return false
+}
+
+// isExactWrapper reports whether obj is an object of exactly the members
+// value and type.
+func isExactWrapper(obj map[string]any) bool {
+	if len(obj) != 2 {
+		return false
+	}
+	_, hasValue := obj["value"]
+	_, hasType := obj["type"]
+	return hasValue && hasType
+}
+
+// ambiguousBelow reports whether rest starts with value or type and resolves
+// both under the wrapper and under its value.
+func ambiguousBelow(wrapper map[string]any, rest []string) bool {
+	if len(rest) == 0 || (rest[0] != "value" && rest[0] != "type") {
+		return false
+	}
+	_, physical := oracleLookup(wrapper, rest)
+	_, wrapped := oracleLookup(wrapper["value"], rest)
+	return physical && wrapped
+}
+
 // marshalExact marshals v for plain-value compare.
 func marshalExact(v any) (string, bool) {
 	raw, err := json.Marshal(v)
@@ -476,7 +560,7 @@ func agreementError(in agreementInput) string {
 	// is never a disagreement. A value that the reveal answers must still match
 	// the plain value, and the floor of revealed paths below stops a reveal that
 	// refuses every path.
-	if errors.Is(in.err, workspace.ErrResourceNotFound) {
+	if errors.Is(in.err, workspace.ErrResourceNotFound) && ambiguousWrapperPathAt(in.state, in.path) {
 		return ""
 	}
 	if in.err != nil {
@@ -546,11 +630,14 @@ func checkAgreement(
 ) agreementCount {
 	t.Helper()
 	masked, err := workspace.MaskedPaths([]byte(state), marks)
-	// A state whose attributes are an ambiguous dynamic wrapper is refused with
-	// ErrStateBound: the read answers no path and the reveal has nothing to
-	// agree with. This is the fail-closed answer, not a disagreement.
+	// Fail closed: a state with an ambiguous mark is refused with ErrStateBound
+	// of the mark cause. The reveal must refuse every candidate path too. A
+	// depth or size refusal is not skipped: the generator makes no such state.
 	if errors.Is(err, workspace.ErrStateBound) {
-		return agreementCount{checked: 0, revealed: 0}
+		if !workspace.IsMarkBoundForTest(err) {
+			t.Fatalf("%s: masked paths refused for depth or size: %v; state %s", label, err, state)
+		}
+		return checkRefusedAgreement(t, label, state, marks)
 	}
 	if err != nil {
 		t.Fatalf("%s: masked paths: %v; state %s", label, err, state)
@@ -570,6 +657,28 @@ func checkAgreement(
 		}
 	}
 	return out
+}
+
+// checkRefusedAgreement runs every candidate path of a state that the masked
+// read refuses, and fails for each reveal that succeeds.
+func checkRefusedAgreement(
+	t *testing.T, label, state string, marks workspace.SensitiveMarks,
+) agreementCount {
+	t.Helper()
+	candidates := candidatePaths([]byte(state), nil)
+	for _, path := range candidates {
+		got, _, err := workspace.RevealValue([]byte(state), marks, path)
+		if err == nil {
+			t.Errorf("%s: reveal of %q = %v succeeded, but the masked read refuses the state; state %s",
+				label, path, got, state)
+			continue
+		}
+		if !errors.Is(err, workspace.ErrStateBound) && !errors.Is(err, workspace.ErrResourceNotFound) {
+			t.Errorf("%s: reveal of %q error = %v, want ErrStateBound or not-found; state %s",
+				label, path, err, state)
+		}
+	}
+	return agreementCount{checked: len(candidates), revealed: 0}
 }
 
 // conformanceCase is one table row: a state with its marks.
@@ -1848,5 +1957,35 @@ func TestRevealConformanceDetectsDrift(t *testing.T) {
 	boom.err = errDriftBoom
 	if msg := agreementError(boom); msg == "" {
 		t.Error("masked path with error gave empty, want mismatch")
+	}
+}
+
+// TestIsAmbiguousWrapperPath checks the oracle of the paths that the reveal
+// may refuse: only a path that both readings of a wrapper resolve.
+func TestIsAmbiguousWrapperPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		attrs  string
+		tokens []string
+		want   bool
+	}{
+		{"both readings", `{"secret":{"value":{"type":"a"},"type":"b"}}`, []string{"secret", "type"}, true},
+		{"physical only", `{"w":{"value":"v","type":"b"}}`, []string{"w", "type"}, false},
+		{"not a wrapper", `{"w":{"value":"v","type":"b","x":1}}`, []string{"w", "type"}, false},
+		{"other member", `{"w":{"value":{"k":1},"type":"b"}}`, []string{"w", "k"}, false},
+		{"no wrapper", `{"a":{"b":1}}`, []string{"a", "b"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var attrs any
+			if err := json.Unmarshal([]byte(tt.attrs), &attrs); err != nil {
+				t.Fatal(err)
+			}
+			if got := isAmbiguousWrapperPath(attrs, tt.tokens); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

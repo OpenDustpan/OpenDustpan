@@ -272,3 +272,29 @@ func TestListStateResourcesDecoderLayerOnly(t *testing.T) {
 		t.Fatalf("err = %v, want ErrStateBound", err)
 	}
 }
+
+// TestIsMarkBoundForTest proves that the helper tells the mark cause of
+// ErrStateBound from a depth cause, so that the conformance test never skips a
+// state that is too deep.
+func TestIsMarkBoundForTest(t *testing.T) {
+	t.Parallel()
+
+	attributes, err := workspace.DecodeForTest(nestedObject(workspace.MaxStateDepth + 5))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	depthErr := workspace.InstanceWorkBound(map[string]any{"attributes": attributes}, 0, 0)
+	if !errors.Is(depthErr, workspace.ErrStateBound) || workspace.IsMarkBoundForTest(depthErr) {
+		t.Fatalf("depth cause: err = %v, want ErrStateBound that is not a mark cause", depthErr)
+	}
+
+	state := []byte(`{"version":4,"resources":[{"mode":"managed","type":"terraform_data","name":"x",` +
+		`"instances":[{"attributes":{"value":{"value":"S1","other":"S2"},"type":"x"}}]}]}`)
+	marks := workspace.SensitiveMarks{"terraform_data.x": {"/value"}}
+
+	_, markErr := workspace.MaskedPaths(state, marks)
+	if !errors.Is(markErr, workspace.ErrStateBound) || !workspace.IsMarkBoundForTest(markErr) {
+		t.Fatalf("mark cause: err = %v, want ErrStateBound of the mark cause", markErr)
+	}
+}

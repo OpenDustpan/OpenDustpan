@@ -428,6 +428,31 @@ func assertNoPointerInBoundText(t *testing.T, err error, pointer string) {
 	}
 }
 
+// refusalCandidates lists the paths whose reveal must not succeed: the mark,
+// and for a root wrapper also every member path of the wrapper.
+func refusalCandidates(attributes, mark string) []string {
+	candidates := []string{mark}
+	if strings.HasPrefix(attributes, `{"value":`) || strings.HasPrefix(attributes, `{"type":`) {
+		candidates = append(candidates, "/value", "/type", "/value/value", "/value/other", "/value/type")
+	}
+
+	return candidates
+}
+
+// requireRevealRefused fails when the reveal of path answers a value.
+func requireRevealRefused(t *testing.T, state []byte, marks workspace.SensitiveMarks, path string) {
+	t.Helper()
+
+	value, _, err := workspace.RevealValue(state, marks, path)
+	if !errors.Is(err, workspace.ErrResourceNotFound) && !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("reveal of %q: value = %v, err = %v, want a refusal", path, value, err)
+	}
+
+	if value != nil {
+		t.Fatalf("reveal of %q: value = %v, want none", path, value)
+	}
+}
+
 // TestRevealRefusesFallbackRoute proves that a pointer that falls back to its
 // wrapper never reveals the wrapper: the masked read masks the whole wrapper,
 // and the reveal answers not found, so the audit names one value only. The
@@ -443,6 +468,9 @@ func TestRevealRefusesFallbackRoute(t *testing.T) {
 		attributes string
 		mark       string
 	}{
+		{"root value member and a sibling", `{"value":{"value":"S1","other":"S2"},"type":"x"}`, "/value"},
+		{"root type key in the value", `{"value":{"type":"S1"},"type":"x"}`, "/type"},
+		{"root type member and a type key", `{"type":"S1","value":{"type":"S2"}}`, "/type"},
 		{"second wrapper", `{"in":{"value":{"value":{"k":"hunter2"},"type":"x"},"type":"x"}}`, "/in/k"},
 		{
 			"type member and a type key",
@@ -474,13 +502,10 @@ func TestRevealRefusesFallbackRoute(t *testing.T) {
 				`"instances":[{"attributes":` + tt.attributes + `}]}]}`)
 			marks := workspace.SensitiveMarks{"terraform_data.x": {tt.mark}}
 
-			value, _, err := workspace.RevealValue(state, marks, base+tt.mark)
-			if !errors.Is(err, workspace.ErrResourceNotFound) {
-				t.Fatalf("value = %v, err = %v, want ErrResourceNotFound", value, err)
-			}
-
-			if value != nil {
-				t.Fatalf("value = %v, want none", value)
+			// The masked read refuses a root wrapper with ErrStateBound, so
+			// the reveal of every candidate path must not succeed.
+			for _, candidate := range refusalCandidates(tt.attributes, tt.mark) {
+				requireRevealRefused(t, state, marks, base+candidate)
 			}
 		})
 	}

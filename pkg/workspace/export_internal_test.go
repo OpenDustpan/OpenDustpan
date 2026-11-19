@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -200,4 +201,13 @@ func ResolvePointerWithSpentForTest(node any, tokens []string, spent int) error 
 	_, err := routeTokens(work, node, tokens)
 
 	return err
+}
+
+// IsMarkBoundForTest reports whether err is a refusal of a sensitive mark that
+// the server cannot find with one rule, or of a mark longer than the depth
+// limit. A depth or size refusal is not.
+func IsMarkBoundForTest(err error) bool {
+	var bound *stateBoundError
+
+	return errors.As(err, &bound)
 }
