@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -300,7 +301,49 @@ func (s *Store) workCopy(ctx context.Context, plan swapPlan) (string, error) {
 		return "", fmt.Errorf("copy staged file for the swap: %w", backup.ErrExportRead)
 	}
 
+	if checkErr := checkWorkCopy(work); checkErr != nil {
+		removeSnapshot(work)
+
+		return "", checkErr
+	}
+
 	return work, nil
+}
+
+// workCopyMode is the mode of the work copy: only the owner reads or writes
+// it, whatever the umask of the process.
+const workCopyMode os.FileMode = 0o600
+
+// checkWorkCopy checks the file that VACUUM INTO made at path and sets its
+// mode. It refuses a file that is not a regular file, such as a symbolic link
+// that another process put at the name after the clear, and a file with more
+// than one hard link, so the data of the restore cannot reach a file that
+// another name holds. The swap renames the file over the live database, so it
+// must be the file that this swap made.
+//
+// Defense in depth: clearStaleWorkCopy refuses the same kinds of file before
+// VACUUM INTO. This check stays because another process can put a link at
+// the name between that clear and the copy. It does not rely on that clear.
+func checkWorkCopy(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("check work copy: %w", backup.ErrExportRead)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("work copy is not a regular file: %w", backup.ErrCorrupt)
+	}
+
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(stat.Nlink) != 1 { //nolint:unconvert // The type of Nlink differs between Linux and macOS.
+		return fmt.Errorf("work copy has more than one hard link: %w", backup.ErrCorrupt)
+	}
+
+	if chmodErr := os.Chmod(path, workCopyMode); chmodErr != nil {
+		return fmt.Errorf("set mode of work copy: %w", backup.ErrExportRead)
+	}
+
+	return nil
 }
 
 // keepLive keeps the live rows that plan names in the staged file: first the

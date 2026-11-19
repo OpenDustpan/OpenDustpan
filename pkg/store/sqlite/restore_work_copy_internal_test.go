@@ -171,3 +171,145 @@ func TestWorkCopyPathStaysInTheDirectory(t *testing.T) {
 		t.Error("work copy path of the root = nil error, want a refusal")
 	}
 }
+
+// TestCheckWorkCopyRefusesHostileFiles proves that the check after VACUUM INTO
+// refuses a file that is not the regular file of this swap: a symbolic link
+// that another process put at the name after the clear (to a file and to
+// nothing), a directory and a file with a second hard link. The file behind
+// each link stays as it is.
+func TestCheckWorkCopyRefusesHostileFiles(t *testing.T) {
+	t.Parallel()
+
+	victim := func(t *testing.T) string {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "victim")
+		if err := os.WriteFile(path, []byte("keep"), 0o644); err != nil { //nolint:gosec // The test needs a wide mode to show the check keeps it.
+			t.Fatalf("write victim: %v", err)
+		}
+
+		return path
+	}
+
+	for _, tc := range []struct {
+		name  string
+		place func(t *testing.T, work string) (victimPath string)
+	}{
+		{"a link to a file", func(t *testing.T, work string) string {
+			v := victim(t)
+			if err := os.Symlink(v, work); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+
+			return v
+		}},
+		{"a link to nothing", func(t *testing.T, work string) string {
+			if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), work); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+
+			return ""
+		}},
+		{"a directory", func(t *testing.T, work string) string {
+			if err := os.Mkdir(work, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+
+			return ""
+		}},
+		{"a second hard link", func(t *testing.T, work string) string {
+			v := victim(t)
+			if err := os.Link(v, work); err != nil {
+				t.Fatalf("link: %v", err)
+			}
+
+			return v
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			work := filepath.Join(t.TempDir(), "work")
+			behind := tc.place(t, work)
+
+			if err := checkWorkCopy(work); !errors.Is(err, backup.ErrCorrupt) {
+				t.Fatalf("checkWorkCopy error = %v, want ErrCorrupt", err)
+			}
+
+			if behind == "" {
+				return
+			}
+
+			info, err := os.Stat(behind)
+			if err != nil || info.Mode().Perm() != 0o644 {
+				t.Errorf("the file behind the name: %v, %v; want mode 0644 unchanged", info, err)
+			}
+		})
+	}
+}
+
+// TestCheckWorkCopySetsTheMode proves that the check sets mode 0600 on a
+// regular file with one link, whatever mode VACUUM INTO gave it.
+func TestCheckWorkCopySetsTheMode(t *testing.T) {
+	t.Parallel()
+
+	work := filepath.Join(t.TempDir(), "work")
+	if err := os.WriteFile(work, []byte("copy"), 0o644); err != nil { //nolint:gosec // The test needs a wide mode to show the check narrows it.
+		t.Fatalf("write work copy: %v", err)
+	}
+
+	if err := checkWorkCopy(work); err != nil {
+		t.Fatalf("checkWorkCopy: %v", err)
+	}
+
+	info, err := os.Stat(work)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("work copy mode = %v, %v; want 0600", info, err)
+	}
+}
+
+// TestWorkCopyHasMode0600 proves the mode of the copy that a swap makes.
+func TestWorkCopyHasMode0600(t *testing.T) {
+	t.Parallel()
+
+	s, _, staged := openWorkCopyStore(t)
+
+	work, err := s.workCopy(
+		t.Context(),
+		swapPlan{staged: staged, keepAccess: true, keepSettings: nil, before: nil, after: nil},
+	)
+	if err != nil {
+		t.Fatalf("work copy: %v", err)
+	}
+
+	info, err := os.Stat(work)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("work copy mode = %v, %v; want 0600", info, err)
+	}
+}
+
+// TestRemoveEndedAreasRemovesTheWorkCopyJournal proves that the cleanup
+// removes the rollback journal that a stopped swap left beside the work copy.
+func TestRemoveEndedAreasRemovesTheWorkCopyJournal(t *testing.T) {
+	t.Parallel()
+
+	s, area, staged := openWorkCopyStore(t)
+
+	work, err := workCopyPath(staged)
+	if err != nil {
+		t.Fatalf("work copy path: %v", err)
+	}
+
+	journal := work + "-journal"
+	if err = os.WriteFile(journal, []byte("left by a stopped swap"), 0o600); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	if _, err = s.removeEndedAreas(t.Context(), area.Restore); err != nil {
+		t.Fatalf("remove ended areas: %v", err)
+	}
+
+	if _, statErr := os.Lstat(journal); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("%s still exists after the cleanup: %v", filepath.Base(journal), statErr)
+	}
+}

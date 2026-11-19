@@ -1356,7 +1356,7 @@ func removeSnapshot(path string) {
 func removeSnapshotErr(path string) error {
 	var errs []error
 
-	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
 		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
