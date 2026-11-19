@@ -42,7 +42,7 @@ func DiscoveryGrantID(
 	// Defense in depth: the adapters write the ID to a response header, and
 	// the authorizer that names it is not trusted to give a valid ID. This
 	// check does not rely on the header writer or on the authorizer.
-	if id != "" && !validGrantID(id) {
+	if id != "" && !ValidGrantID(id) {
 		return "", true, fmt.Errorf("%w: the grant ID of a discovery answer is not a grant ID", ErrInvalid)
 	}
 

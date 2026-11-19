@@ -17,7 +17,7 @@ func TestGrantIDConstraintRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 
 	s := stagedGrantStore(t, nil)
 
-	for _, id := range accesstest.HostileGrantIDs {
+	for _, id := range accesstest.HostileGrantIDs() {
 		_, err := s.conn.ExecContext(t.Context(), `UPDATE grants SET id = ? WHERE id = 'grt-inside'`, id)
 		if err == nil {
 			t.Fatalf("the grants table stored the ID %.20q", id)
@@ -31,7 +31,7 @@ func TestGrantIDConstraintRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 func TestCheckStagedGrantIDs(t *testing.T) {
 	t.Parallel()
 
-	for _, id := range accesstest.HostileGrantIDs {
+	for _, id := range accesstest.HostileGrantIDs() {
 		s := stagedGrantStore(t, nil)
 
 		conn, err := s.conn.Conn(t.Context())

@@ -17,7 +17,7 @@ func TestGrantIDConstraintRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 
 	s := stagedGrantStore(t, nil)
 
-	for _, id := range accesstest.HostileGrantIDs {
+	for _, id := range accesstest.HostileGrantIDs() {
 		if strings.ContainsRune(id, 0) {
 			continue
 		}
@@ -42,7 +42,7 @@ func TestCheckStagedGrantIDs(t *testing.T) {
 		t.Fatalf("check of a valid ID = %v, want nil", err)
 	}
 
-	for _, id := range accesstest.HostileGrantIDs {
+	for _, id := range accesstest.HostileGrantIDs() {
 		if strings.ContainsRune(id, 0) {
 			continue
 		}

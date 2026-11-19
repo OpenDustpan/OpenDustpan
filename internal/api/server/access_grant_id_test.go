@@ -13,22 +13,51 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// grantServerEntries returns the entries of the installation scope.
+func grantServerEntries(t *testing.T, f accessFixture) []audit.Entry {
+	t.Helper()
+
+	listing, err := f.store.List(
+		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize},
+	)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+
+	return listing.Entries
+}
+
+// hasFailureEntry reports whether entries holds a failure entry of object.
+func hasFailureEntry(entries []audit.Entry, object string) bool {
+	for i := range entries {
+		if entries[i].Object == object && entries[i].Outcome == audit.OutcomeFailure {
+			return true
+		}
+	}
+
+	return false
+}
+
+// holdsText reports whether text holds id. A short id matches by chance in
+// any text, so only an ID of more than 8 bytes counts.
+func holdsText(text, id string) bool {
+	return len(id) > 8 && strings.Contains(text, id)
+}
+
 // TestRevokeGrantRefusesAnIDThatIsNotAGrantID sends hostile text as the grant
 // ID of each revoke route. Each answers 404 with a body that does not hold
-// the text, and writes one failure entry that names "grant:invalid", never
-// the text. A revoke of an unknown, valid ID writes an entry too.
+// the text. DELETE /api/server/grants/{id} writes one failure entry that
+// names "grant:invalid", never the text. The test fails when the check of the
+// resolver or of the handler is removed.
 func TestRevokeGrantRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 	t.Parallel()
 
-	paths := []string{"/api/server/grants/", "/api/server/namespaces/acme/grants/"}
-
-	for _, path := range paths {
-		for _, id := range accesstest.HostileGrantIDs {
+	for _, path := range []string{"/api/server/grants/", "/api/server/namespaces/acme/grants/"} {
+		for _, id := range accesstest.HostileGrantIDs() {
 			t.Run(path+id, func(t *testing.T) {
 				t.Parallel()
 
 				f := newAccessFixture(t)
-
 				req := httptest.NewRequestWithContext(
 					t.Context(), http.MethodDelete, path+url.PathEscape(id), http.NoBody,
 				)
@@ -37,41 +66,35 @@ func TestRevokeGrantRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 				rec := httptest.NewRecorder()
 				f.handler.ServeHTTP(rec, req)
 
-				if rec.Code != http.StatusNotFound && rec.Code != http.StatusMovedPermanently {
-					t.Fatalf("revoke %q answers %d, want 404 (%s)", id, rec.Code, rec.Body.String())
-				}
-
-				if len(id) > 8 && strings.Contains(rec.Body.String(), id) {
-					t.Fatalf("the body of the refusal holds the ID %q: %s", id, rec.Body.String())
-				}
-
 				if rec.Code != http.StatusNotFound {
-					return
+					t.Fatalf("revoke %.20q answers %d, want 404 (%s)", id, rec.Code, rec.Body.String())
 				}
 
-				listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
-				if err != nil {
-					t.Fatalf("list audit: %v", err)
+				if holdsText(rec.Body.String(), id) {
+					t.Fatalf("the body of the refusal holds the ID: %.80s", rec.Body.String())
 				}
 
-				found := false
-
-				for i := range listing.Entries {
-					e := listing.Entries[i]
-					if len(id) > 8 && strings.Contains(e.Object, id) {
-						t.Fatalf("an audit entry holds the ID %q: %q", id, e.Object)
-					}
-
-					if e.Object == "grant:invalid" && e.Outcome == audit.OutcomeFailure {
-						found = true
-					}
-				}
-
-				if !found && id != "" && strings.HasPrefix(path, "/api/server/grants/") {
-					t.Fatalf("no failure entry for grant:invalid after the revoke of %q", id)
-				}
+				checkRefusalEntries(t, f, path, id)
 			})
 		}
+	}
+}
+
+// checkRefusalEntries checks the audit entries after the refusal of the
+// revoke of id on path.
+func checkRefusalEntries(t *testing.T, f accessFixture, path, id string) {
+	t.Helper()
+
+	entries := grantServerEntries(t, f)
+
+	for i := range entries {
+		if holdsText(entries[i].Object, id) {
+			t.Fatalf("an audit entry holds the ID: %.80q", entries[i].Object)
+		}
+	}
+
+	if id != "" && path == "/api/server/grants/" && !hasFailureEntry(entries, "grant:invalid") {
+		t.Fatalf("no failure entry for grant:invalid after the revoke of %.20q", id)
 	}
 }
 
@@ -82,8 +105,9 @@ func TestRevokeUnknownGrantWritesAnEntry(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixture(t)
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/server/grants/grt-unknown-id", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodDelete, "/api/server/grants/grt-unknown-id", http.NoBody,
+	)
 	req.Header.Set("Authorization", "Bearer alice")
 
 	rec := httptest.NewRecorder()
@@ -93,18 +117,24 @@ func TestRevokeUnknownGrantWritesAnEntry(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
-	if err != nil {
-		t.Fatalf("list audit: %v", err)
+	if !hasFailureEntry(grantServerEntries(t, f), "grant:grt-unknown-id") {
+		t.Fatal("no failure entry for the unknown grant")
 	}
+}
 
-	for i := range listing.Entries {
-		if listing.Entries[i].Object == "grant:grt-unknown-id" && listing.Entries[i].Outcome == audit.OutcomeFailure {
-			return
+// revokeByIDServe returns the serve function of DELETE /api/server/grants/{id}.
+func revokeByIDServe(t *testing.T, f accessFixture) apiserver.RouteHandler {
+	t.Helper()
+
+	for _, route := range f.handler.Routes() {
+		if route.Method == http.MethodDelete && route.Path == "/api/server/grants/{id}" {
+			return route.Serve
 		}
 	}
 
-	t.Fatal("no failure entry for the unknown grant")
+	t.Fatal("no DELETE /api/server/grants/{id} route")
+
+	return nil
 }
 
 // TestRevokeByIDServeRefusesAnIDThatIsNotAGrantID calls the serve function of
@@ -115,49 +145,32 @@ func TestRevokeUnknownGrantWritesAnEntry(t *testing.T) {
 func TestRevokeByIDServeRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 	t.Parallel()
 
-	for _, id := range accesstest.HostileGrantIDs {
+	for _, id := range accesstest.HostileGrantIDs() {
 		f := newAccessFixture(t)
+		serve := revokeByIDServe(t, f)
 
-		var serve apiserver.RouteHandler
-
-		for _, route := range f.handler.Routes() {
-			if route.Method == http.MethodDelete && route.Path == "/api/server/grants/{id}" {
-				serve = route.Serve
-			}
+		p, err := subjectAuthenticator{}.AuthenticateToken(t.Context(), "admin")
+		if err != nil {
+			t.Fatalf("authenticate: %v", err)
 		}
 
-		if serve == nil {
-			t.Fatal("no DELETE /api/server/grants/{id} route")
-		}
-
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/server/grants/x", http.NoBody)
+		req := httptest.NewRequestWithContext(
+			t.Context(), http.MethodDelete, "/api/server/grants/x", http.NoBody,
+		)
 		req.SetPathValue("id", id)
 
 		rec := httptest.NewRecorder()
-		serve(rec, req, identity.Principal{Subject: "alice", Admin: true}, identity.ServerObject())
+		serve(rec, req, p, identity.ServerObject())
 
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("serve %.20q answers %d, want 404 (%s)", id, rec.Code, rec.Body.String())
 		}
 
-		if len(id) > 3 && strings.Contains(rec.Body.String(), id) {
+		if holdsText(rec.Body.String(), id) {
 			t.Fatalf("the body holds the ID: %.80s", rec.Body.String())
 		}
 
-		listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
-		if err != nil {
-			t.Fatalf("list audit: %v", err)
-		}
-
-		found := false
-
-		for i := range listing.Entries {
-			if listing.Entries[i].Object == "grant:invalid" && listing.Entries[i].Outcome == audit.OutcomeFailure {
-				found = true
-			}
-		}
-
-		if !found {
+		if !hasFailureEntry(grantServerEntries(t, f), "grant:invalid") {
 			t.Fatalf("no failure entry for grant:invalid after serve of %.20q", id)
 		}
 	}

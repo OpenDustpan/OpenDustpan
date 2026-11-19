@@ -17,11 +17,13 @@ func GrantID(seed string) string {
 	return access.GrantIDPrefix + hex.EncodeToString(sum[:16])
 }
 
-// HostileGrantIDs holds texts that are not a grant ID: each layer that takes
+// HostileGrantIDs returns texts that are not a grant ID: each layer that takes
 // a grant ID from outside the process must refuse every one of them.
-var HostileGrantIDs = []string{
-	"", "grt-", "grt", "g", "GRT-abc", "grp-abc", "prn-abc", " grt-abc", "grt-abc ", "grt-a b",
-	"grt-a\r\nX-Injected: 1", "grt-a\nb", "grt-a\x00b", "grt-a/b", "grt-a:b", "grt-a%00", "grt-a'b",
-	"grt-a;DROP TABLE grants", "../grt-abc", "grt-é", "grt-" + strings.Repeat("a", 61),
-	strings.Repeat("x", 4096),
+func HostileGrantIDs() []string {
+	return []string{
+		"", "grt-", "grt", "g", "GRT-abc", "grp-abc", "prn-abc", " grt-abc", "grt-abc ", "grt-a b",
+		"grt-a\r\nX-Injected: 1", "grt-a\nb", "grt-a\x00b", "grt-a/b", "grt-a:b", "grt-a%00", "grt-a'b",
+		"grt-a;DROP TABLE grants", "../grt-abc", "grt-é", "grt-" + strings.Repeat("a", 61),
+		strings.Repeat("x", 4096),
+	}
 }

@@ -9,7 +9,6 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -18,7 +17,7 @@ import (
 func TestValidGrantID(t *testing.T) {
 	t.Parallel()
 
-	for _, id := range accesstest.HostileGrantIDs {
+	for _, id := range accesstest.HostileGrantIDs() {
 		if access.ValidGrantID(id) {
 			t.Errorf("ValidGrantID(%.20q) = true, want false", id)
 		}
@@ -34,7 +33,8 @@ func TestValidGrantID(t *testing.T) {
 // readCountingStore counts the grant reads that reach the store.
 type readCountingStore struct {
 	access.Store
-	reads atomic.Int32
+
+	reads *atomic.Int32
 }
 
 func (s *readCountingStore) GetGrant(ctx context.Context, id string) (access.Grant, error) {
@@ -51,7 +51,7 @@ func TestServiceRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	counting := &readCountingStore{Store: f.store}
+	counting := &readCountingStore{Store: f.store, reads: new(atomic.Int32)}
 	svc := f.serviceOverGrantStore(t, counting)
 
 	calls := map[string]func(id string) error{
@@ -61,19 +61,19 @@ func TestServiceRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 			return err
 		},
 		"Revoke": func(id string) error {
-			_, err := svc.Revoke(t.Context(), audit.Entry{}, admin(), identity.ServerObject(), id)
+			_, err := svc.Revoke(t.Context(), testEntry(), admin(), identity.ServerObject(), id)
 
 			return err
 		},
 		"RevokeByID": func(id string) error {
-			_, err := svc.RevokeByID(t.Context(), audit.Entry{}, admin(), id)
+			_, err := svc.RevokeByID(t.Context(), testEntry(), admin(), id)
 
 			return err
 		},
 	}
 
 	for name, call := range calls {
-		for _, id := range accesstest.HostileGrantIDs {
+		for _, id := range accesstest.HostileGrantIDs() {
 			err := call(id)
 			if !errors.Is(err, access.ErrInvalid) {
 				t.Fatalf("%s(%.20q) = %v, want ErrInvalid", name, id, err)

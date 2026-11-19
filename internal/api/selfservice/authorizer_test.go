@@ -100,9 +100,13 @@ func (env *authorizerEnv) grantTo(t *testing.T, obj identity.Object) {
 	at := time.Date(2026, time.November, 7, 12, 0, 0, 0, time.UTC)
 
 	grt := access.Grant{
-		CreatedAt: at, Condition: nil, Object: obj, ID: accesstest.GrantID(access.RoleAccountAdministrator + "-" + obj.String()),
-		Role: access.RoleAccountAdministrator, CreatedBy: "admin",
-		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-ann"},
+		CreatedAt: at,
+		Condition: nil,
+		Object:    obj,
+		ID:        accesstest.GrantID(access.RoleAccountAdministrator + "-" + obj.String()),
+		Role:      access.RoleAccountAdministrator,
+		CreatedBy: "admin",
+		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-ann"},
 	}
 
 	fence, e := storetest.GrantWrite(t, env.store, obj, at, "grant:"+grt.ID)

@@ -406,7 +406,7 @@ func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
 	// shape of the ID too. This check stays so that a new caller of the
 	// service cannot read or end a grant by a text that is not a grant ID. It
 	// does not rely on the handler or on the store.
-	if !validGrantID(id) {
+	if !ValidGrantID(id) {
 		return Grant{}, errBadGrantID()
 	}
 
@@ -431,7 +431,7 @@ func (s *Service) Revoke(
 	// shape of the ID too. This check stays so that a new caller of the
 	// service cannot read or end a grant by a text that is not a grant ID. It
 	// does not rely on the handler or on the store.
-	if !validGrantID(id) {
+	if !ValidGrantID(id) {
 		return Grant{}, errBadGrantID()
 	}
 
@@ -462,7 +462,7 @@ func (s *Service) RevokeByID(ctx context.Context, e audit.Entry, caller identity
 	// shape of the ID too. This check stays so that a new caller of the
 	// service cannot read or end a grant by a text that is not a grant ID. It
 	// does not rely on the handler or on the store.
-	if !validGrantID(id) {
+	if !ValidGrantID(id) {
 		return Grant{}, errBadGrantID()
 	}
 
@@ -648,7 +648,7 @@ func GrantRef(g Grant) string {
 // read: "grant:<id>", or "grant:invalid" for a text that is not a grant ID,
 // so request text never reaches the audit log.
 func GrantIDRef(id string) string {
-	if validGrantID(id) {
+	if ValidGrantID(id) {
 		return "grant:" + id
 	}
 
@@ -662,22 +662,16 @@ const maxGrantIDLength = 64
 // after GrantIDPrefix. The bare prefix names no grant.
 const minGrantIDSuffixLength = 1
 
-// validGrantID reports whether id has the shape of a grant ID: the prefix, at
-// least minGrantIDSuffixLength bytes after it, and at most maxGrantIDLength
-// bytes in all, of valid identifier characters.
-func validGrantID(id string) bool {
+// ValidGrantID reports whether id has the shape of a grant ID: GrantIDPrefix,
+// at least minGrantIDSuffixLength bytes after it, and at most maxGrantIDLength
+// bytes in all, of valid identifier characters. Each layer that takes a grant
+// ID from outside the process checks it with this function before it reads or
+// ends the grant: the HTTP handler, the service, both store adapters and the
+// check of a restore.
+func ValidGrantID(id string) bool {
 	return strings.HasPrefix(id, grantIDPrefix) &&
 		len(id) >= len(grantIDPrefix)+minGrantIDSuffixLength &&
 		ident.Valid(id, maxGrantIDLength)
-}
-
-// ValidGrantID reports whether id has the shape of a grant ID: GrantIDPrefix,
-// at least one valid identifier byte after it, and at most 64 bytes in all.
-// Each layer that takes a grant ID from outside the process checks it with
-// this function before it reads or ends the grant: the HTTP handler, the
-// service, both store adapters and the check of a restore.
-func ValidGrantID(id string) bool {
-	return validGrantID(id)
 }
 
 // errBadGrantID reports a grant ID that has no grant ID shape. The text holds
