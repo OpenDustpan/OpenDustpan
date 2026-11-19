@@ -324,7 +324,7 @@ each entry and answers the stored result on a retry with the same key and the
 same body, so it does not lock or unlock that stack or workspace a second time.
 The exception is a result with a 5xx status or with 429: the server does not
 replay it, and a retry runs only those entries again. The answer has the header
-`Idempotent-Replayed: true` only when no entry ran again.
+`Idempotent-Replayed: true` only when at least one entry came from the store and no entry ran again. A retry checks `unit:lock` again before it answers a stored entry. A stored refusal that a retry answers writes no new denied audit entry.
 
 The server refuses the whole call, and changes nothing, in these cases:
 
