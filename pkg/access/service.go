@@ -402,6 +402,14 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 
 // GetGrant returns the current grant with the ID id, or ErrNotFound.
 func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
+	// Defense in depth: the HTTP handler and both store adapters check the
+	// shape of the ID too. This check stays so that a new caller of the
+	// service cannot read or end a grant by a text that is not a grant ID. It
+	// does not rely on the handler or on the store.
+	if !validGrantID(id) {
+		return Grant{}, errBadGrantID()
+	}
+
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("get grant %q: %w", id, err)
@@ -419,6 +427,14 @@ func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
 func (s *Service) Revoke(
 	ctx context.Context, e audit.Entry, caller identity.Principal, obj identity.Object, id string,
 ) (Grant, error) {
+	// Defense in depth: the HTTP handler and both store adapters check the
+	// shape of the ID too. This check stays so that a new caller of the
+	// service cannot read or end a grant by a text that is not a grant ID. It
+	// does not rely on the handler or on the store.
+	if !validGrantID(id) {
+		return Grant{}, errBadGrantID()
+	}
+
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
@@ -442,6 +458,14 @@ func (s *Service) Revoke(
 // ErrEscalation. The caller authorizes the manage-access action of the
 // grant's object before this call.
 func (s *Service) RevokeByID(ctx context.Context, e audit.Entry, caller identity.Principal, id string) (Grant, error) {
+	// Defense in depth: the HTTP handler and both store adapters check the
+	// shape of the ID too. This check stays so that a new caller of the
+	// service cannot read or end a grant by a text that is not a grant ID. It
+	// does not rely on the handler or on the store.
+	if !validGrantID(id) {
+		return Grant{}, errBadGrantID()
+	}
+
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
@@ -645,6 +669,22 @@ func validGrantID(id string) bool {
 	return strings.HasPrefix(id, grantIDPrefix) &&
 		len(id) >= len(grantIDPrefix)+minGrantIDSuffixLength &&
 		ident.Valid(id, maxGrantIDLength)
+}
+
+// ValidGrantID reports whether id has the shape of a grant ID: GrantIDPrefix,
+// at least one valid identifier byte after it, and at most 64 bytes in all.
+// Each layer that takes a grant ID from outside the process checks it with
+// this function before it reads or ends the grant: the HTTP handler, the
+// service, both store adapters and the check of a restore.
+func ValidGrantID(id string) bool {
+	return validGrantID(id)
+}
+
+// errBadGrantID reports a grant ID that has no grant ID shape. The text holds
+// no part of the ID, so request text never reaches an error, a log or an
+// audit entry. It wraps ErrInvalid.
+func errBadGrantID() error {
+	return fmt.Errorf("%w: the grant ID is not a grant ID", ErrInvalid)
 }
 
 // change completes the entry of the caller for one change of the record

@@ -185,6 +185,14 @@ func subjectFitsObject(ctx context.Context, q *db.Queries, g access.Grant) error
 
 // GetGrant implements access.GrantStore.
 func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
+	// Defense in depth: the service and the HTTP handler check the shape of the
+	// ID too. This check stays so that a new caller of the store cannot read
+	// or end a grant by a text that is not a grant ID. It does not rely on the
+	// service, the handler or the CHECK constraint of the grants table.
+	if !access.ValidGrantID(id) {
+		return access.Grant{}, fmt.Errorf("get grant: %w", access.ErrInvalid)
+	}
+
 	row, err := s.queries.GetGrant(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return access.Grant{}, access.ErrNotFound
@@ -208,6 +216,14 @@ func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
 func (s *Store) RevokeGrant(
 	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
 ) error {
+	// Defense in depth: the service and the HTTP handler check the shape of the
+	// ID too. This check stays so that a new caller of the store cannot read
+	// or end a grant by a text that is not a grant ID. It does not rely on the
+	// service, the handler or the CHECK constraint of the grants table.
+	if !access.ValidGrantID(id) {
+		return fmt.Errorf("revoke grant: %w", access.ErrInvalid)
+	}
+
 	rev := revocation{kind: maintenance.RevokedGrant, target: id, endReason: ""}
 
 	return s.inRevokingGrantTx(ctx, fence, e, rev, guardSiteAdministrator(ctx, func(q *db.Queries) error {

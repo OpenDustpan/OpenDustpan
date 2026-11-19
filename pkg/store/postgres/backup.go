@@ -1151,6 +1151,10 @@ func checkStaged(ctx context.Context, q db.DBTX, staging string, restoreAt time.
 		return ownedErr
 	}
 
+	if idErr := checkStagedGrantIDs(ctx, q, staging); idErr != nil {
+		return idErr
+	}
+
 	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {
 		return grantErr
 	}

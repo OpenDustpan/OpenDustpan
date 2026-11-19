@@ -10,6 +10,7 @@ import (
 	selfserviceapi "opendustpan.org/opendustpan/internal/api/selfservice"
 	"opendustpan.org/opendustpan/internal/selfservice"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -99,7 +100,7 @@ func (env *authorizerEnv) grantTo(t *testing.T, obj identity.Object) {
 	at := time.Date(2026, time.November, 7, 12, 0, 0, 0, time.UTC)
 
 	grt := access.Grant{
-		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-" + access.RoleAccountAdministrator + "-" + obj.String(),
+		CreatedAt: at, Condition: nil, Object: obj, ID: accesstest.GrantID(access.RoleAccountAdministrator + "-" + obj.String()),
 		Role: access.RoleAccountAdministrator, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-ann"},
 	}
