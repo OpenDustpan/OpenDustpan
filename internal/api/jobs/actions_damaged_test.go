@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -20,7 +22,7 @@ import (
 // service that records each cancel.
 func damagedCancelRig(
 	t *testing.T, ns namespace.Name, units coreinventory.Reader, holds ...string,
-) (testHandler, *fakeCanceler) {
+) (testHandler, *fakeCanceler, *recordingAudit) {
 	t.Helper()
 
 	svc := &fakeCanceler{Starter: nil, mu: sync.Mutex{}, calls: nil, job: runningJob(t, testJob), err: nil}
@@ -29,12 +31,13 @@ func damagedCancelRig(
 		testJob: {row: job.DamagedRow{ID: testJob, UnitID: testUnit, Reason: "the body is not JSON"}, ns: ns},
 	}
 
+	entries := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
 	h := newWorkerHandler(t, newAuthorizer(holds...), handlerDeps{
-		jobs: store, units: units, starter: svc, entries: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		jobs: store, units: units, starter: svc, entries: entries,
 		artifacts: nil, logs: nil, cursors: nil,
 	}, nil)
 
-	return h, svc
+	return h, svc, entries
 }
 
 func cancelDamaged(t *testing.T, h testHandler, path string) int {
@@ -64,22 +67,23 @@ func TestJobActionRoutesCancelADamagedJob(t *testing.T) {
 		path      string
 		wantCode  int
 		wantCalls int
+		wantDeny  bool
 	}{
-		{"an allowed cancel", "acme", unitsOf(testUnit), holds, path, http.StatusOK, 1},
+		{"an allowed cancel", "acme", unitsOf(testUnit), holds, path, http.StatusOK, 1, false},
 		{
 			"no cancel action", "acme", unitsOf(testUnit), readsUnits(testUnit),
-			path, http.StatusForbidden, 0,
+			path, http.StatusForbidden, 0, true,
 		},
-		{"the row is of another namespace", "other", unitsOf(testUnit), holds, path, http.StatusNotFound, 0},
-		{"the unit of the row is unknown", "acme", unitsOf(), holds, path, http.StatusNotFound, 0},
-		{"no inventory", "acme", nil, holds, path, http.StatusNotFound, 0},
+		{"the row is of another namespace", "other", unitsOf(testUnit), holds, path, http.StatusNotFound, 0, false},
+		{"the unit of the row is unknown", "acme", unitsOf(), holds, path, http.StatusNotFound, 0, false},
+		{"no inventory", "acme", nil, holds, path, http.StatusNotFound, 0, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			h, svc := damagedCancelRig(t, tc.ns, tc.units, tc.holds...)
+			h, svc, entries := damagedCancelRig(t, tc.ns, tc.units, tc.holds...)
 
 			if got := cancelDamaged(t, h, tc.path); got != tc.wantCode {
 				t.Errorf("status = %d, want %d", got, tc.wantCode)
@@ -87,6 +91,27 @@ func TestJobActionRoutesCancelADamagedJob(t *testing.T) {
 
 			if n := len(svc.called()); n != tc.wantCalls {
 				t.Errorf("the service got %d cancels, want %d", n, tc.wantCalls)
+			}
+
+			// A denied cancel of a damaged job writes one refusal entry that
+			// names job:cancel.
+			entries.mu.Lock()
+			defer entries.mu.Unlock()
+
+			denials := 0
+
+			for _, e := range entries.entries {
+				if e.Action == string(identity.ActionJobCancel) && e.Outcome == audit.OutcomeDenied {
+					denials++
+				}
+			}
+
+			if tc.wantDeny && denials != 1 {
+				t.Errorf("refusal entries for job:cancel = %d, want 1 (entries: %+v)", denials, entries.entries)
+			}
+
+			if !tc.wantDeny && denials != 0 {
+				t.Errorf("refusal entries for job:cancel = %d, want 0", denials)
 			}
 		})
 	}
@@ -98,7 +123,7 @@ func TestJobRoutesRefuseADamagedJobExceptCancel(t *testing.T) {
 	t.Parallel()
 
 	holds := append(readsUnits(testUnit), "job:cancel opentofu:acme/net-"+testUnit)
-	h, svc := damagedCancelRig(t, "acme", unitsOf(testUnit), holds...)
+	h, svc, _ := damagedCancelRig(t, "acme", unitsOf(testUnit), holds...)
 
 	rec := serve(t, h, request{
 		method: http.MethodGet, path: jobPath("acme", string(testJob)), token: testToken,
@@ -137,6 +162,7 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 
 	path := cancelURL(string(testJob))
 	repaired := fmt.Errorf("%w: the stored job was repaired; send the request again", job.ErrConflict)
+	repairedInStore := fmt.Errorf("%w: password=hunter2 now parses", job.ErrInvalid)
 
 	tests := []struct {
 		name     string
@@ -147,6 +173,7 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 	}{
 		{"the store has no such row", unitsOf(testUnit), job.ErrNotFound, nil, http.StatusNotFound},
 		{"the store fails on the row", unitsOf(testUnit), errInventoryDown, nil, http.StatusInternalServerError},
+		{"the row was repaired before the store read it", unitsOf(testUnit), repairedInStore, nil, http.StatusConflict},
 		{"the inventory fails", downUnits{unitsOf(testUnit)}, nil, nil, http.StatusInternalServerError},
 		{"the row was repaired before the service read it", unitsOf(testUnit), nil, repaired, http.StatusConflict},
 	}
@@ -171,11 +198,13 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 			}
 			store.getDamagedErr = tc.storeErr
 
-			h := newWorkerHandler(t, allowAll{nil}, handlerDeps{
+			var logBuf syncBuffer
+
+			h := newLoggedWorkerHandler(t, allowAll{nil}, handlerDeps{
 				jobs: store, units: tc.units, starter: svc,
 				entries:   &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
 				artifacts: nil, logs: nil, cursors: nil,
-			}, nil)
+			}, nil, slog.New(slog.NewTextHandler(&logBuf, nil)))
 
 			rec := serveCancel(t, h, path)
 			if rec.Code != tc.wantCode {
@@ -184,6 +213,10 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 
 			if strings.Contains(rec.Body.String(), "hunter2") {
 				t.Errorf("the answer leaks the text of the failure: %s", rec.Body.String())
+			}
+
+			if strings.Contains(logBuf.String(), "hunter2") {
+				t.Errorf("the log holds the text of the failure: %s", logBuf.String())
 			}
 
 			wantCalls := 0
@@ -196,6 +229,26 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// syncBuffer is a log buffer that many goroutines may write.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
 }
 
 func serveCancel(t *testing.T, h testHandler, path string) *httptest.ResponseRecorder {

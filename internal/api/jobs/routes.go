@@ -352,12 +352,27 @@ func (h *Handler) loadTarget(ctx context.Context, ns namespace.Namespace, id job
 	return target{ns: ns, job: j, obj: j.Spec.Unit}, nil
 }
 
+// errRepaired is the answer when the row of a job was repaired between the
+// read that reported it as damaged and the read of the row. It is a
+// job.ErrConflict. The text is fixed and holds no text of the store.
+var errRepaired = fmt.Errorf(
+	"%w: the stored job was repaired while it was canceled; send the request again",
+	job.ErrConflict,
+)
+
 // damagedTarget finds the unit of the damaged job id from the unit ID of its
 // row. The target holds the ID and the unit, and nothing else of the job.
 func (h *Handler) damagedTarget(ctx context.Context, ns namespace.Namespace, id job.ID) (target, error) {
 	row, rowNs, err := h.jobs.GetDamaged(ctx, id)
 	if errors.Is(err, job.ErrNotFound) {
 		return target{}, errNotFound
+	}
+
+	// The row was repaired between the read that reported it as damaged and
+	// this read. The answer is a conflict with fixed text, the same as the
+	// job service gives, and not a 400 that blames the request.
+	if errors.Is(err, job.ErrInvalid) {
+		return target{}, errRepaired
 	}
 
 	if err != nil {
@@ -379,9 +394,11 @@ func (h *Handler) damagedTarget(ctx context.Context, ns namespace.Namespace, id 
 		return target{}, errNotFound
 	case err != nil:
 		// A failure of the inventory is not "no such job". The log holds the
-		// job ID and the error, and no content of the row.
+		// job ID and a fixed message. It holds no text of the error, because
+		// the text of an adapter error can hold connection details, and no
+		// content of the row.
 		h.logger.ErrorContext(ctx, "find the unit of a damaged job failed",
-			slog.String("job", string(id)), slog.String("error", err.Error()))
+			slog.String("job", string(id)))
 
 		return target{}, fmt.Errorf("find unit of damaged job: %w", err)
 	}

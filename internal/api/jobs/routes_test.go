@@ -325,6 +325,16 @@ type handlerDeps struct {
 func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps, workers admit.Source) testHandler {
 	t.Helper()
 
+	return newLoggedWorkerHandler(t, authz, deps, workers, slog.New(slog.DiscardHandler))
+}
+
+// newLoggedWorkerHandler is newWorkerHandler with the logger of the handler,
+// so that a test reads what the handler logs.
+func newLoggedWorkerHandler(
+	t *testing.T, authz identity.Authorizer, deps handlerDeps, workers admit.Source, logger *slog.Logger,
+) testHandler {
+	t.Helper()
+
 	// The handler needs an audit store; a test that reads the entries passes its own.
 	entries := deps.entries
 	if entries == nil {
@@ -354,7 +364,7 @@ func newWorkerHandler(t *testing.T, authz identity.Authorizer, deps handlerDeps,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
-		Logger:         slog.New(slog.DiscardHandler),
+		Logger:         logger,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
