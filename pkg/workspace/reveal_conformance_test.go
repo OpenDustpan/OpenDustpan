@@ -471,6 +471,14 @@ func agreementError(in agreementInput) string {
 		}
 		return ""
 	}
+	// Fail closed: a path of a pointer that two readings of a dynamic wrapper
+	// both resolve is masked as a whole, and the reveal refuses it. A refusal
+	// is never a disagreement. A value that the reveal answers must still match
+	// the plain value, and the floor of revealed paths below stops a reveal that
+	// refuses every path.
+	if errors.Is(in.err, workspace.ErrResourceNotFound) {
+		return ""
+	}
 	if in.err != nil {
 		return fmt.Sprintf("%s: reveal of %q error = %v, want success; state %s",
 			in.label, in.path, in.err, in.state)
@@ -538,6 +546,12 @@ func checkAgreement(
 ) agreementCount {
 	t.Helper()
 	masked, err := workspace.MaskedPaths([]byte(state), marks)
+	// A state whose attributes are an ambiguous dynamic wrapper is refused with
+	// ErrStateBound: the read answers no path and the reveal has nothing to
+	// agree with. This is the fail-closed answer, not a disagreement.
+	if errors.Is(err, workspace.ErrStateBound) {
+		return agreementCount{checked: 0, revealed: 0}
+	}
 	if err != nil {
 		t.Fatalf("%s: masked paths: %v; state %s", label, err, state)
 	}
