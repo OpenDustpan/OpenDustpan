@@ -379,8 +379,12 @@ func TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 			t.Parallel()
 
 			id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: tc.id, err: nil}, alice, acme)
-			if !found || id != "" || !errors.Is(err, access.ErrInvalid) {
-				t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v; want no ID, true, ErrInvalid", tc.id, id, found, err)
+			if !found || id != "" || !errors.Is(err, access.ErrInvalid) ||
+				!errors.Is(err, access.ErrInvalidDiscoveryGrantID) {
+				t.Fatalf(
+					"DiscoveryGrantID(%q) = %q, %v, %v; want no ID, true, ErrInvalidDiscoveryGrantID",
+					tc.id, id, found, err,
+				)
 			}
 		})
 	}

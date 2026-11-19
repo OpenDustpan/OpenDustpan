@@ -162,11 +162,12 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		authz  identity.Authorizer
-		target string
-		seed   []string
-		want   int
+		name       string
+		authz      identity.Authorizer
+		target     string
+		seed       []string
+		want       int
+		wantDenied int
 	}{
 		{
 			"authorizer allowed, user",
@@ -174,6 +175,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user",
 			[]string{"acme", "beta"},
 			http.StatusOK,
+			0,
 		},
 		{
 			"authorizer allowed, default organization",
@@ -181,6 +183,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme"},
 			http.StatusOK,
+			0,
 		},
 		{
 			"no grant allows, user",
@@ -188,6 +191,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user",
 			[]string{"acme", "beta"},
 			http.StatusOK,
+			0,
 		},
 		{
 			"no grant allows, default organization",
@@ -195,6 +199,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme", "beta"},
 			http.StatusNotFound,
+			0,
 		},
 		{
 			"no grant anywhere, user",
@@ -202,6 +207,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user",
 			[]string{"acme", "beta"},
 			http.StatusOK,
+			0,
 		},
 		{
 			"no grant anywhere, default organization",
@@ -209,6 +215,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme", "beta"},
 			http.StatusNotFound,
+			0,
 		},
 		{
 			"grant read failed, user",
@@ -216,6 +223,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user",
 			[]string{"acme", "beta"},
 			http.StatusInternalServerError,
+			1,
 		},
 		{
 			"grant ID is a role name, default organization",
@@ -223,6 +231,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme", "beta"},
 			http.StatusNotFound,
+			1,
 		},
 		{
 			"grant ID has a header line break, default organization",
@@ -230,6 +239,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme", "beta"},
 			http.StatusNotFound,
+			1,
 		},
 		{
 			"grant ID has 65 bytes, user",
@@ -237,6 +247,15 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user",
 			[]string{"acme", "beta"},
 			http.StatusOK,
+			1,
+		},
+		{
+			"grant read failed with a generic invalid error, user",
+			headerGrantAuthorizer{id: "", err: fmt.Errorf("%w: another check failed", access.ErrInvalid)},
+			"/api/user",
+			[]string{"acme", "beta"},
+			http.StatusInternalServerError,
+			1,
 		},
 		{
 			"grant read failed, default organization",
@@ -244,6 +263,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme", "beta"},
 			http.StatusInternalServerError,
+			1,
 		},
 		{
 			"namespace-level scope only, default organization",
@@ -251,6 +271,7 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 			"/api/user/organizations/default",
 			[]string{"acme"},
 			http.StatusNotFound,
+			0,
 		},
 	}
 
@@ -276,16 +297,8 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 				t.Fatalf("%s = %q, want no grant header", access.HeaderDiscoveryGrant, got)
 			}
 
-			// A failed grant read fails closed and writes one denial entry
-			// for the namespace that failed. An invalid grant ID skips its
-			// namespace and writes one entry too. No other case writes one.
-			wantDenied := 0
-			if tc.want == http.StatusInternalServerError || strings.Contains(tc.name, "grant ID") {
-				wantDenied = 1
-			}
-
-			if got := len(deniedEntries(entries)); got != wantDenied {
-				t.Fatalf("%s writes %d denial entries, want %d", tc.target, got, wantDenied)
+			if got := len(deniedEntries(entries)); got != tc.wantDenied {
+				t.Fatalf("%s writes %d denial entries, want %d", tc.target, got, tc.wantDenied)
 			}
 		})
 	}
