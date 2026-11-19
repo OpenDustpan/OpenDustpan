@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -41,15 +42,38 @@ type memLocks struct {
 	// removeErr, when set, is the error of every removal. Tests set it to reach
 	// the answers of store errors that a fresh store does not give.
 	removeErr error
+	// putErr, when set, returns the error of the lock of the named target.
+	putErr func(target string) error
+	// records, when set, keeps the answer of an idempotency.Completion that the
+	// context carries, as the port of the store requires.
+	records idempotency.Store
+	// calls counts the calls of the store methods that the lock routes use.
+	calls int
 }
 
 func newMemLocks() *memLocks {
-	return &memLocks{mu: sync.Mutex{}, locks: map[string]manuallock.Lock{}, entries: nil, removeErr: nil}
+	return &memLocks{
+		mu:        sync.Mutex{},
+		locks:     map[string]manuallock.Lock{},
+		entries:   nil,
+		removeErr: nil,
+		putErr:    nil,
+		records:   nil,
+		calls:     0,
+	}
 }
 
-func (m *memLocks) PutLock(_ context.Context, l manuallock.Lock, _ namespace.Fence, e audit.Entry) error {
+func (m *memLocks) PutLock(ctx context.Context, l manuallock.Lock, _ namespace.Fence, e audit.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.calls++
+
+	if m.putErr != nil {
+		if err := m.putErr(l.Target.String()); err != nil {
+			return err
+		}
+	}
 
 	if !m.known(l.Target) {
 		return manuallock.ErrTargetNotFound
@@ -62,23 +86,23 @@ func (m *memLocks) PutLock(_ context.Context, l manuallock.Lock, _ namespace.Fen
 	m.locks[l.Target.String()] = l
 	m.entries = append(m.entries, e)
 
-	return nil
+	return m.finish(ctx, l)
 }
 
 func (m *memLocks) RemoveLock(
-	_ context.Context, t manuallock.Target, holder string, _ namespace.Fence, e audit.Entry,
+	ctx context.Context, t manuallock.Target, holder string, _ namespace.Fence, e audit.Entry,
 ) (manuallock.Lock, error) {
 	if holder == "" {
 		return manuallock.Lock{}, manuallock.ErrNotHolder
 	}
 
-	return m.remove(t, holder, e)
+	return m.remove(ctx, t, holder, e)
 }
 
 func (m *memLocks) ForceRemoveLock(
-	_ context.Context, t manuallock.Target, _ namespace.Fence, e audit.Entry,
+	ctx context.Context, t manuallock.Target, _ namespace.Fence, e audit.Entry,
 ) (manuallock.Lock, error) {
-	return m.remove(t, "", e)
+	return m.remove(ctx, t, "", e)
 }
 
 func (m *memLocks) GetLock(_ context.Context, t manuallock.Target) (manuallock.Lock, error) {
@@ -105,9 +129,29 @@ func (m *memLocks) CoveringLocks(_ context.Context, _ collection.UnitRef) ([]man
 	return nil, manuallock.ErrNotLocked
 }
 
-func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (manuallock.Lock, error) {
+// finish stores the answer of the Completion of ctx, if any, with the lock of
+// the write as its result.
+func (m *memLocks) finish(ctx context.Context, l manuallock.Lock) error {
+	c, ok := idempotency.CompletionFrom(ctx)
+	if !ok || m.records == nil {
+		return nil
+	}
+
+	return c.Finish(l, func(token string, a idempotency.Answer) error {
+		return m.records.Complete(ctx, c.Ref, token, a)
+	})
+}
+
+func (m *memLocks) remove(
+	ctx context.Context,
+	t manuallock.Target,
+	holder string,
+	e audit.Entry,
+) (manuallock.Lock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.calls++
 
 	if m.removeErr != nil {
 		return manuallock.Lock{}, m.removeErr
@@ -129,12 +173,18 @@ func (m *memLocks) remove(t manuallock.Target, holder string, e audit.Entry) (ma
 	delete(m.locks, t.String())
 	m.entries = append(m.entries, e)
 
+	if err := m.finish(ctx, held); err != nil {
+		return manuallock.Lock{}, err
+	}
+
 	return held, nil
 }
 
 // known reports whether the route tests have the object.
 func (m *memLocks) known(t manuallock.Target) bool {
-	return t.String() == lockUnitRef || t.String() == "collection acme/payments" || t.String() == "namespace acme"
+	return t.String() == lockUnitRef || strings.HasPrefix(t.String(), "pulumi:acme/web/bulk-") ||
+		t.String() == "collection acme/payments" ||
+		t.String() == "namespace acme"
 }
 
 // subjectAuthenticator maps the token "<subject>-token" to the subject.
@@ -244,6 +294,7 @@ func newLockFixture(t *testing.T, authz identity.Authorizer) lockFixture {
 		ReadScope:      fixedScope{err: nil, ids: nil, all: true},
 		Collections:    nil,
 		Locks:          locks,
+		Records:        nil,
 		Moves:          nil,
 		Authenticator:  subjectAuthenticator{},
 		Authorizer:     authz,

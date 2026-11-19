@@ -52,6 +52,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) testHand
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,

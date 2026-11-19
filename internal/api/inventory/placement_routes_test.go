@@ -193,6 +193,7 @@ func newPlacementRouteHandler(t *testing.T, authz identity.Authorizer) (testHand
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		OutputSharing: nil, Outputs: nil, Views: nil, Audit: log, OnAuditFailure: nil, Locks: nil,
 		PublicURL: "", Namespaces: nsSvc, Placements: svc, Collections: nil, Moves: nil,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},

@@ -83,6 +83,7 @@ func newTestHandler(t *testing.T) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
@@ -124,6 +125,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,

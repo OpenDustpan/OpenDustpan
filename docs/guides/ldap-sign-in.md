@@ -208,10 +208,11 @@ Use `ldaps://`, or `ldap://` with StartTLS. The server checks the
 certificate of the directory against the CA bundle and the host name of
 the URL. It uses TLS 1.2 or later.
 
-The server refuses a connection with no TLS, unless the host of the URL is
-a loopback IP address, for example `127.0.0.1` or `[::1]`, or the setting
-in [Plain connections](#plain-connections) is on. A host name, also
-`localhost`, is not enough, because its address can change.
+The server refuses a connection with no TLS, unless the setting in
+[Plain connections](#plain-connections) is on. A sign-in then answers 503
+with a text that names `ldaps://` and StartTLS. A loopback address does not
+change this: the server always refuses a connection to a loopback address
+(see [Network](#network)).
 
 ## Network
 
@@ -228,7 +229,7 @@ reach an address that these rules refuse.
 ## Plain connections
 
 The setting `egress.allowPlainConnections` allows a connection with no TLS
-to a host that is not a loopback IP address. It is off by default. The same
+to a directory. It is off by default. The same
 setting allows an SMTP connection with no TLS.
 
 Read the revision from the `ETag` header of `GET /api/dustpan/v1/settings`.
