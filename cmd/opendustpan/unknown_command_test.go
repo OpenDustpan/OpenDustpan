@@ -8,8 +8,8 @@ import (
 )
 
 // TestUnknownCommandNamesTheProblem proves that a command line that matches
-// no command gives a short error that names the word and the one command that
-// helps, and not the whole usage. The error still matches the usage error.
+// no command gives an error line that names the word and the one command that
+// helps, and then the usage. The error still matches the usage error.
 func TestUnknownCommandNamesTheProblem(t *testing.T) {
 	t.Parallel()
 
@@ -38,8 +38,9 @@ func TestUnknownCommandNamesTheProblem(t *testing.T) {
 				t.Fatalf("run(%v) = %q, want %q and the help command", tt.args, err, tt.want)
 			}
 
-			if strings.Contains(err.Error(), "Try out:") || strings.Contains(err.Error(), "\n") {
-				t.Fatalf("run(%v) = %q, want a short error with no usage text", tt.args, err)
+			first, _, _ := strings.Cut(err.Error(), "\n")
+			if !strings.Contains(first, tt.want) || !strings.Contains(err.Error(), "Try out:") {
+				t.Fatalf("run(%v) = %q, want the error line first and then the usage", tt.args, err)
 			}
 		})
 	}

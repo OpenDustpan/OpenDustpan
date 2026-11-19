@@ -97,9 +97,10 @@ type commandError struct {
 	text string
 }
 
-// Error returns the short text with the one command that helps.
+// Error returns the short text with the one command that helps, then the
+// usage groups.
 func (e *commandError) Error() string {
-	return e.text
+	return e.text + "\n" + errUsage.Error()
 }
 
 // Is reports that the error is the usage error.
