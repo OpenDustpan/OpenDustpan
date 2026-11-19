@@ -34,6 +34,10 @@ func listAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
 	return listing.Entries
 }
 
+// tagUpdateAction is the action of the audit entry of a tags update: the entry
+// that renameEntry builds, which the tests pass to UpdateStackTags.
+const tagUpdateAction = "unit:manage"
+
 // listTagAudit returns the audit entries of ns that a tags update writes, the
 // entries of the action unit:manage. The fixture puts its stack in a
 // collection, and that writes entries of its own, so the tests of a tags
@@ -43,9 +47,10 @@ func listTagAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
 
 	var entries []audit.Entry
 
-	for _, e := range listAudit(t, s, ns) {
-		if e.Action == renameEntry(ns, stack.Ref{}).Action {
-			entries = append(entries, e)
+	all := listAudit(t, s, ns)
+	for i := range all {
+		if all[i].Action == tagUpdateAction {
+			entries = append(entries, all[i])
 		}
 	}
 
