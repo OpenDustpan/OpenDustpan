@@ -347,9 +347,11 @@ func (h *Handler) bulkItem(
 	// unit:lock again before the stored result.
 	if err := h.guard.Authorize(r.Context(), r, p, identity.ActionUnitLock, unit.obj); err != nil {
 		out := h.bulkFailure(r, id, err)
-		if !storableFailure(out) {
-			run.ran = true
-		}
+
+		// The refusal is decided now and writes its own denied entry, so the
+		// retry evaluated this item again, whatever the status: the answer is
+		// not a replay of the first call.
+		run.ran = true
 
 		return out
 	}
@@ -445,7 +447,11 @@ func (h *Handler) bulkLockFailure(r *http.Request, p identity.Principal, unit bu
 		})
 	case errors.Is(err, manuallock.ErrAuthorizerFailed):
 		// The Authorizer failed inside the service after the check of the item
-		// passed. The item fails closed and writes one entry.
+		// passed. The item fails closed and writes one entry. An error of a
+		// canceled or expired context is in this case too. The check of the item
+		// in bulkItem treats it the same way: refusal.ReasonFor gives
+		// refusal.ReasonFailed for any error that is not identity.ErrDenied, and
+		// no classifier maps a context error, so both layers answer 500.
 		h.guard.Record(r.Context(), r, p, refusal.Denial{
 			Action:       identity.ActionUnitLock,
 			Object:       unit.obj,

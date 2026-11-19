@@ -2100,6 +2100,57 @@ func TestBulkLockReplayAfterLockRevoked(t *testing.T) {
 	}
 }
 
+// TestBulkLockReplayMixedWithFreshRefusal: item A answers its stored result and
+// item B is refused again by the unit:lock pre-check, because its grant was
+// revoked. The refusal is new work and writes a new denied entry, so the answer
+// is not a replay and has no Idempotent-Replayed header. The test fails when a
+// fresh pre-check refusal does not mark the call as evaluated.
+func TestBulkLockReplayMixedWithFreshRefusal(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range bulkCalls(2) {
+		unlock, path, body := c.unlock, c.path, c.body
+		authz := plainAuthz()
+		authz.deny = map[string]bool{}
+		f := newBulkFixture(t, authz, 2)
+
+		if unlock {
+			f.seedAliceLocks(t, 2)
+		}
+
+		first := bulkAnswerOf(t, f.keyedPost(t, path, body, "kmx"))
+		wantOK(t, &first.Results[0])
+		wantOK(t, &first.Results[1])
+
+		heldBefore, entriesBefore := f.held(), f.lockEntries()
+
+		authz.deny[grant(identity.ActionUnitLock, bulkUnitRef(1))] = true
+
+		rec := f.keyedPost(t, path, body, "kmx")
+		got := bulkAnswerOf(t, rec)
+
+		wantOK(t, &got.Results[0])
+
+		if got.Results[1].Error == nil || got.Results[1].Error.Code != http.StatusForbidden {
+			t.Fatalf("unlock=%v: result of item B = %+v, want 403", unlock, got.Results[1])
+		}
+
+		denied := f.audit.denied()
+		if len(denied) != 1 || denied[0].Action != string(identity.ActionUnitLock) ||
+			!strings.HasPrefix(denied[0].Reason, refusal.ReasonPolicy) {
+			t.Fatalf("unlock=%v: denied audit entries = %+v, want one new unit:lock entry", unlock, denied)
+		}
+
+		if f.held() != heldBefore || f.lockEntries() != entriesBefore {
+			t.Fatalf("unlock=%v: the retry changed the lock store", unlock)
+		}
+
+		if h := rec.Header().Get("Idempotent-Replayed"); h != "" {
+			t.Fatalf("unlock=%v: Idempotent-Replayed = %q, want none: item B was refused again", unlock, h)
+		}
+	}
+}
+
 // wantLockRefusedOnReplay sends the call again and checks the refusal: a 403
 // result with no stored lock, one denied unit:lock entry with the reason
 // refusal.ReasonPolicy, no header and an unchanged lock store.
