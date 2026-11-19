@@ -193,3 +193,30 @@ func TestBackupCheckOtherFormat(t *testing.T) {
 		t.Fatalf("backup check error = %q, want it to name manifest format 1", doc.Error)
 	}
 }
+
+// TestBackupCheckRunning proves the check of a backup that has not ended
+// answers complete false with a text that says the backup runs, not that the
+// data is corrupt.
+func TestBackupCheckRunning(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	gate := newGateExporter(stores.registry)
+	fix := newBackupFixture(t, stores, gate, nil)
+
+	id := startBackup(t, fix.handler)
+
+	waitGateEntered(t, gate)
+
+	status, doc := readBackupCheck(t, fix, id)
+	if status != http.StatusOK || doc.Complete || doc.ID != id {
+		t.Fatalf("GET backup %s check = %d %+v, want 200 with complete false", id, status, doc)
+	}
+
+	if !strings.Contains(doc.Error, "still running") || strings.Contains(doc.Error, "corrupt") ||
+		strings.Contains(doc.Error, "live pointer") {
+		t.Fatalf("backup check error = %q, want a text that says the backup is still running", doc.Error)
+	}
+
+	close(gate.release)
+}

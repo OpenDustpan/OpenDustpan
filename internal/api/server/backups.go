@@ -259,7 +259,27 @@ func (h *Handler) checkBackup(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	if _, err := h.backups.Get(ctx, id); err != nil {
+	record, err := h.backups.Get(ctx, id)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// A backup that runs or failed holds no live pointer. Say that, and do not
+	// report the backup as corrupt. The state is the state of the record that
+	// Get returned, so the check has one read.
+	if err := record.RequireSucceeded(); err != nil {
+		if errors.Is(err, backup.ErrStillRunning) || errors.Is(err, backup.ErrEndedFailed) {
+			h.writeJSON(ctx, w, http.StatusOK, checkBackupResponse{
+				ID:       id.String(),
+				Complete: false,
+				Error:    err.Error(),
+			})
+
+			return
+		}
+
 		h.writeError(ctx, w, err)
 
 		return
