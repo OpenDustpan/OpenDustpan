@@ -37,10 +37,30 @@ func docsPathsReadByGoTests() []string {
 	}
 }
 
+// docsPathsReadByE2ETests holds one path for each docs tree that a test of the
+// e2e package reads. The e2e job of CI runs only when the changes job sets
+// e2e=true, so each path must match a pattern of the filter that sets e2e=true.
+//
+//   - docs/guides, docs/reference, README.md: the check of the commands in the
+//     pages (docs_commands_test.go) and the page tests (*_docs_test.go).
+//   - docs/commands-checked-pages.txt, docs/commands-pending-pages.txt: the
+//     page lists of that check.
+func docsPathsReadByE2ETests() []string {
+	return []string{
+		"docs/guides/install.md",
+		"docs/guides/terragrunt.md",
+		"docs/reference/configuration.md",
+		"docs/commands-checked-pages.txt",
+		"docs/commands-pending-pages.txt",
+		"README.md",
+	}
+}
+
 const (
 	classifyCaseStart = `case "$f" in`
 	classifyCaseEnd   = "esac"
 	classifyCodeTrue  = "code=true"
+	classifyE2ETrue   = "e2e=true"
 )
 
 var classifyArm = regexp.MustCompile(`^\s*([^\s)][^)]*)\)\s*(.*?)\s*;;\s*$`)
@@ -51,9 +71,10 @@ type classifyRule struct {
 	body    string
 }
 
-// codeRules returns the arms of the case statement in the classify step of
-// the workflow that sets code=true, in the order of the file.
-func codeRules(t *testing.T, workflow string) []classifyRule {
+// rulesSetting returns the arms of the case statement in the classify step of
+// the workflow that sets the output, for example code=true, in the order of
+// the file.
+func rulesSetting(t *testing.T, workflow, output string) []classifyRule {
 	t.Helper()
 
 	var (
@@ -67,12 +88,13 @@ func codeRules(t *testing.T, workflow string) []classifyRule {
 		trimmed := strings.TrimSpace(line)
 
 		switch {
+		case strings.HasPrefix(trimmed, "#"):
 		case strings.HasPrefix(trimmed, classifyCaseStart):
 			inCase, current = true, nil
 		case inCase && trimmed == classifyCaseEnd:
 			inCase = false
 
-			if hasCodeArm(current) {
+			if hasArmSetting(current, output) {
 				rules, found = current, true
 			}
 		case inCase:
@@ -85,15 +107,15 @@ func codeRules(t *testing.T, workflow string) []classifyRule {
 
 	if !found {
 		t.Fatalf("no case statement sets %s in the workflow: follow the classify step",
-			classifyCodeTrue)
+			output)
 	}
 
 	return rules
 }
 
-func hasCodeArm(rules []classifyRule) bool {
+func hasArmSetting(rules []classifyRule, output string) bool {
 	for _, r := range rules {
-		if strings.Contains(r.body, classifyCodeTrue) {
+		if strings.Contains(r.body, output) {
 			return true
 		}
 	}
@@ -124,13 +146,13 @@ func globToRegexp(pattern string) *regexp.Regexp {
 	return regexp.MustCompile(b.String())
 }
 
-// setsCode reports whether the first arm that matches path sets code=true. A
+// sets reports whether the first arm that matches path sets the output. A
 // shell case statement runs the first arm that matches and no other.
-func setsCode(rules []classifyRule, path string) bool {
+func sets(rules []classifyRule, path, output string) bool {
 	for _, r := range rules {
 		for alt := range strings.SplitSeq(r.pattern, "|") {
 			if globToRegexp(strings.TrimSpace(alt)).MatchString(path) {
-				return strings.Contains(r.body, classifyCodeTrue)
+				return strings.Contains(r.body, output)
 			}
 		}
 	}
@@ -150,12 +172,33 @@ func TestCIFilterRunsGoTestsForDocsTheyRead(t *testing.T) {
 		t.Fatalf("read the CI workflow: %v", err)
 	}
 
-	rules := codeRules(t, string(raw))
+	rules := rulesSetting(t, string(raw), classifyCodeTrue)
 
 	for _, path := range docsPathsReadByGoTests() {
-		if !setsCode(rules, path) {
+		if !sets(rules, path, classifyCodeTrue) {
 			t.Errorf("ci.yml does not set code=true for %s, which a Go test reads: "+
 				"a docs-only change of it skips the go job", path)
+		}
+	}
+}
+
+// TestCIFilterRunsE2EForDocsTheyRead fails when a docs path that a test of the
+// e2e package reads is not e2e=true in the classify step of the CI workflow.
+// A change of such a path must run the e2e job for the same reason as above.
+func TestCIFilterRunsE2EForDocsTheyRead(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read the CI workflow: %v", err)
+	}
+
+	rules := rulesSetting(t, string(raw), classifyE2ETrue)
+
+	for _, path := range docsPathsReadByE2ETests() {
+		if !sets(rules, path, classifyE2ETrue) {
+			t.Errorf("ci.yml does not set e2e=true for %s, which an e2e test reads: "+
+				"a docs-only change of it skips the e2e job", path)
 		}
 	}
 }
@@ -178,7 +221,7 @@ func TestCIFilterRuleParser(t *testing.T) {
 		`            esac`,
 	}, "\n")
 
-	rules := codeRules(t, workflow)
+	rules := rulesSetting(t, workflow, classifyCodeTrue)
 
 	for _, tc := range []struct {
 		path string
@@ -192,8 +235,43 @@ func TestCIFilterRuleParser(t *testing.T) {
 		{"README.md", false},
 		{"Dockerfile", true},
 	} {
-		if got := setsCode(rules, tc.path); got != tc.want {
-			t.Errorf("setsCode(%q) = %v, want %v", tc.path, got, tc.want)
+		if got := sets(rules, tc.path, classifyCodeTrue); got != tc.want {
+			t.Errorf("sets(%q, code=true) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestCIFilterRuleParserE2E proves that the parser reads the arm of the e2e
+// output, skips a comment line inside the case statement and follows the
+// first matching arm.
+func TestCIFilterRuleParserE2E(t *testing.T) {
+	t.Parallel()
+
+	workflow := strings.Join([]string{
+		`            case "$f" in`,
+		`              docs/*) code=true ;;`,
+		`            esac`,
+		`            case "$f" in`,
+		`              e2e/*|cmd/opendustpan/*) e2e=true ;;`,
+		`              # A comment line with a pattern (like this one) ;;`,
+		`              docs/guides/*|README.md) e2e=true ;;`,
+		`            esac`,
+	}, "\n")
+
+	rules := rulesSetting(t, workflow, classifyE2ETrue)
+
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"e2e/a_test.go", true},
+		{"docs/guides/a.md", true},
+		{"README.md", true},
+		{"docs/adr/0001-x.md", false},
+		{"pkg/a/a.go", false},
+	} {
+		if got := sets(rules, tc.path, classifyE2ETrue); got != tc.want {
+			t.Errorf("sets(%q, e2e=true) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
 }
