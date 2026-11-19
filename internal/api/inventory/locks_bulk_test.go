@@ -1244,7 +1244,11 @@ func runBulkLatency(t *testing.T, s latencyStore, records idempotency.Store) {
 			name = "key"
 		}
 
-		times := timeBulkLocks(t, f, latencyCall{name: name, keyed: keyed, lockBody: lockBody, unlockBody: unlockBody})
+		times := timeBulkLocks(
+			t,
+			f,
+			latencyCall{name: name, keyed: keyed, lockBody: lockBody, unlockBody: unlockBody, now: time.Now},
+		)
 
 		slices.Sort(times)
 
@@ -1269,6 +1273,9 @@ type latencyCall struct {
 	name                 string
 	keyed                bool
 	lockBody, unlockBody string
+	// now is the clock of the measurement. The test passes the real clock: a
+	// latency test measures real time by definition.
+	now func() time.Time
 }
 
 // timeBulkLocks posts the bulk lock latencyRuns times and returns the time of
@@ -1286,11 +1293,9 @@ func timeBulkLocks(t *testing.T, f bulkFixture, c latencyCall) []time.Duration {
 			headers = []string{"Idempotency-Key", fmt.Sprintf("latency-%d", run)}
 		}
 
-		// A latency test measures the wall clock by definition: the clock is the
-		// quantity under test, not a source of flakes in an assertion on time.
-		start := time.Now() // nosemgrep: tests-no-wall-clock
+		start := c.now()
 		rec := f.post(t, "alice", bulkLockPath, lockBody, headers...)
-		took := time.Since(start) // nosemgrep: tests-no-wall-clock
+		took := c.now().Sub(start)
 
 		for i, r := range answerOf(t, rec).Results {
 			if r.Status != "ok" {
@@ -1401,7 +1406,8 @@ func latencyPostgresURL(t *testing.T, base string) string {
 			return fmt.Errorf("open store: %w", openErr)
 		}
 
-		s.Close() //nolint:contextcheck // Close takes no context, and the store has no other work.
+		closeStore := s.Close
+		closeStore()
 
 		return nil
 	}
