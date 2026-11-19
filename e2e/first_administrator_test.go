@@ -158,9 +158,8 @@ func runFirstAdministratorLocalUser(t *testing.T, env *e2e.Env) {
 func checkAccessTokenRedeem(t *testing.T, env *e2e.Env, c localClient, alice signedInPerson, code string) {
 	t.Helper()
 
-	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	made := c.send(t, http.MethodPost, "/api/dustpan/v1/me/tokens",
-		`{"name":"first-administrator","expiresAt":"`+expires+`"}`, asBrowser(alice.csrf))
+		`{"name":"first-administrator"}`, asBrowser(alice.csrf))
 	made.want(t, "make a personal token", http.StatusCreated, "")
 
 	var tok e2eToken
@@ -245,8 +244,7 @@ func runFirstAdministratorStaleSignIn(t *testing.T, env *e2e.Env) {
 
 	b.signIn(t)
 
-	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
-	person := b.ownToken(t, `{"name":"first-administrator","expiresAt":"`+expires+`"}`).PrincipalID
+	person := b.ownToken(t, `{"name":"first-administrator"}`).PrincipalID
 
 	// The same steps as the token freshness check: touch the session so it
 	// does not go idle, and pass the window.

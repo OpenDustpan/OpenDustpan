@@ -62,7 +62,7 @@ func (faAuthenticator) AuthenticateToken(_ context.Context, token string) (ident
 	case "temp-admin":
 		p.Admin = true
 		p.TemporaryAdministrator = true
-		p.TemporaryExpiresAt = time.Now().Add(time.Hour)
+		p.TemporaryExpiresAt = faNow().Add(time.Hour)
 	case "alice", "bob":
 		p.TokenID = "tok-" + token
 		p.Kind = identity.KindPerson
@@ -126,6 +126,14 @@ func (l *faLog) text() string {
 
 	return l.buf.String()
 }
+
+// faClock is the one clock of the fixtures of this file. The server under
+// test reads the same clock, so the sign-in ages and the policy times that a
+// test sets are relative to the time that the server sees.
+func faClock() func() time.Time { return time.Now }
+
+// faNow returns the time of faClock.
+func faNow() time.Time { return faClock()() }
 
 // faFixture is a handler over a real SQLite store with the first
 // administrator service, two persons (alice and bob) and no grant.
@@ -206,7 +214,7 @@ func newFAFixture(t *testing.T) faFixture {
 	}
 
 	svc, err := firstadminsvc.New(firstadminsvc.Config{
-		Store: st, Principals: principals, TempAdmins: st, Audit: audit.ServerStore(st), Now: time.Now,
+		Store: st, Principals: principals, TempAdmins: st, Audit: audit.ServerStore(st), Now: faClock(),
 		Random: rand.Reader, GrantID: func() string { return ident.NewID(access.GrantIDPrefix) },
 		Window: func(ctx context.Context) time.Duration {
 			p, policyErr := policies.Policy(ctx)
@@ -336,7 +344,7 @@ func (f faFixture) send(t *testing.T, method, target, body string, who faCaller)
 	case who.token != "":
 		req.Header.Set("Authorization", "Bearer "+who.token)
 	case who.session != "":
-		cookie, csrf := f.sessionOf(t, who.session, time.Now().Add(who.age))
+		cookie, csrf := f.sessionOf(t, who.session, faNow().Add(who.age))
 
 		req.AddCookie(cookie)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -443,9 +451,9 @@ func (f faFixture) setWindow(t *testing.T, window time.Duration) {
 	t.Helper()
 
 	_, err := f.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
-		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = window, false, time.Now()
+		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = window, false, faNow()
 
-		return old, policyChangeEntry(time.Now()), nil
+		return old, policyChangeEntry(faNow()), nil
 	})
 	if err != nil {
 		t.Fatalf("set the window to %s: %v", window, err)
@@ -1203,7 +1211,7 @@ func newRouteFirstAdmin(t *testing.T, st *sqlite.Store, principals *principal.Se
 	t.Helper()
 
 	svc, err := firstadminsvc.New(firstadminsvc.Config{
-		Store: st, Principals: principals, TempAdmins: st, Audit: audit.ServerStore(st), Now: time.Now,
+		Store: st, Principals: principals, TempAdmins: st, Audit: audit.ServerStore(st), Now: faClock(),
 		Random: rand.Reader, GrantID: func() string { return ident.NewID(access.GrantIDPrefix) },
 		Window: func(context.Context) time.Duration { return session.DefaultTokenFreshness },
 		Logger: slog.New(slog.DiscardHandler),
