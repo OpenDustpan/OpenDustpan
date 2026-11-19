@@ -105,11 +105,15 @@ func resolverAnswerOf(rec *httptest.ResponseRecorder) resolverAnswer {
 }
 
 // TestResolversAnswerADeniedCallerTheSame proves, for each route that
-// resolves an object from an ID, that a caller without any read action gets
+// the rows list and that resolves an object from an ID, that a caller without any read action gets
 // one answer (status, body and headers) for an existing object, an unknown
 // ID, an object of another namespace, an ID of the wrong kind and a
 // malformed ID: a 404 JSON:API document. A caller with the action still
 // reads the existing object, so the rows do not pass for lack of a route.
+// The rows leave out the route of one state resource by address (the stub
+// state holds no resource), the force-unlock route, the state list and
+// the capability upload routes. The state resource route uses the same
+// resolver as the covered resources list.
 func TestResolversAnswerADeniedCallerTheSame(t *testing.T) {
 	t.Parallel()
 
@@ -179,6 +183,87 @@ func TestResolversAnswerADeniedCallerTheSame(t *testing.T) {
 				"unknown version": "sv-missing.greeting", "other namespace": "sv-other123.greeting",
 				"workspace ID": "ws-test123.greeting", "no separator": "sv-test123",
 				"empty name": "sv-test123.", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "unlock", method: http.MethodPost,
+			pattern: "/api/v2/workspaces/%s/actions/unlock", body: `{"data":{}}`,
+			existing: "ws-test123",
+			variants: map[string]string{
+				"unknown": "ws-missing", "other namespace": "ws-other123",
+				"state version ID": "sv-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "current state version", method: http.MethodGet,
+			pattern: "/api/v2/workspaces/%s/current-state-version", body: ``,
+			existing: "ws-test123",
+			variants: map[string]string{
+				"unknown": "ws-missing", "other namespace": "ws-other123",
+				"state version ID": "sv-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "override switches read", method: http.MethodGet,
+			pattern: "/api/v2/workspaces/%s/override-switches", body: ``,
+			existing: "ws-test123",
+			variants: map[string]string{
+				"unknown": "ws-missing", "other namespace": "ws-other123",
+				"state version ID": "sv-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "override switches write", method: http.MethodPut,
+			pattern: "/api/v2/workspaces/%s/override-switches", body: `{}`,
+			existing: "ws-test123",
+			variants: map[string]string{
+				"unknown": "ws-missing", "other namespace": "ws-other123",
+				"state version ID": "sv-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "state at", method: http.MethodGet,
+			pattern: "/api/v2/workspaces/%s/state-at/2026-01-01T00:00:00Z", body: ``,
+			existing: "ws-test123",
+			variants: map[string]string{
+				"unknown": "ws-missing", "other namespace": "ws-other123",
+				"state version ID": "sv-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "workspace state versions create", method: http.MethodPost,
+			pattern: "/api/v2/workspaces/%s/state-versions", body: `{}`,
+			existing: "ws-test123",
+			variants: map[string]string{
+				"unknown": "ws-missing", "other namespace": "ws-other123",
+				"state version ID": "sv-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "state diff", method: http.MethodGet,
+			pattern: "/api/v2/state-versions/%s/diff?from=sv-test123", body: ``,
+			existing: "sv-test123",
+			variants: map[string]string{
+				"unknown": "sv-missing", "other namespace": "sv-other123",
+				"workspace ID": "ws-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "state restore", method: http.MethodPost,
+			pattern: "/api/v2/state-versions/%s/actions/restore", body: `{}`,
+			existing: "sv-test123",
+			variants: map[string]string{
+				"unknown": "sv-missing", "other namespace": "sv-other123",
+				"workspace ID": "ws-test123", "malformed": "%00..%2F..",
+			},
+		},
+		{
+			name: "state reveal", method: http.MethodPost,
+			pattern: "/api/v2/state-versions/%s/actions/reveal", body: `{}`,
+			existing: "sv-test123",
+			variants: map[string]string{
+				"unknown": "sv-missing", "other namespace": "sv-other123",
+				"workspace ID": "ws-test123", "malformed": "%00..%2F..",
 			},
 		},
 	}

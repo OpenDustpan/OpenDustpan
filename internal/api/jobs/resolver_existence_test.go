@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -41,8 +42,9 @@ func checkAnswerOf(t *testing.T, name string, got, want answerOf) {
 // TestJobResolverAnswersAlikeForMissingAndForbidden proves that a caller with
 // no read action on a job gets one answer (status, body and headers) for a job
 // that exists, an unknown job, a job of another namespace, an ID of the wrong
-// kind and a malformed ID, on every route that resolves a job. The answer does
-// not show which jobs exist.
+// kind and a malformed ID, on every route that resolves a job: the job, its
+// log, and the approvals, cancel, confirmations and log-redactions routes. The
+// answer does not show which jobs exist.
 func TestJobResolverAnswersAlikeForMissingAndForbidden(t *testing.T) {
 	t.Parallel()
 
@@ -54,18 +56,26 @@ func TestJobResolverAnswersAlikeForMissingAndForbidden(t *testing.T) {
 		"namespace read, no read": {string(identity.ActionNamespaceRead) + " acme"},
 	}
 
-	suffixes := []string{"", "/logs/plan"}
+	routes := []struct{ method, suffix string }{
+		{http.MethodGet, ""},
+		{http.MethodGet, "/logs/plan"},
+		{http.MethodPost, "/approvals"},
+		{http.MethodPost, "/cancel"},
+		{http.MethodPost, "/confirmations"},
+		{http.MethodPost, "/log-redactions"},
+	}
 
 	for callerName, holds := range callers {
-		for _, suffix := range suffixes {
-			t.Run(callerName+suffix, func(t *testing.T) {
+		for _, rt := range routes {
+			t.Run(callerName+" "+rt.method+rt.suffix, func(t *testing.T) {
 				t.Parallel()
 
-				h := newHandler(t, newAuthorizer(holds...), newFakeJobs(runningJob(t, testJob), foreign))
+				svc := &fakeCanceler{Starter: nil, mu: sync.Mutex{}, calls: nil, job: runningJob(t, testJob), err: nil}
+				h := newStartHandler(t, newAuthorizer(holds...), newFakeJobs(runningJob(t, testJob), foreign), svc, nil)
 
 				get := func(ns, id string) answerOf {
 					return answerFor(serve(t, h, request{
-						method: http.MethodGet, path: jobPath(ns, id) + suffix, token: testToken,
+						method: rt.method, path: jobPath(ns, id) + rt.suffix, token: testToken,
 					}))
 				}
 
