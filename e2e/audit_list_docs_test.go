@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/e2e"
 )
@@ -90,6 +91,31 @@ func auditListDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 
 	checkAuditListDocsErrors(ctx, t, env)
+	checkAuditListDocsBadToken(ctx, t, env, script)
+}
+
+// checkAuditListDocsBadToken runs the loop of the page with a token that the
+// server refuses. The loop must end by itself and show the error answer. A
+// loop that sends the next request with a token of "null" repeats until the
+// time limit.
+func checkAuditListDocsBadToken(ctx context.Context, t *testing.T, env *e2e.Env, script string) {
+	t.Helper()
+
+	limited, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(limited, "bash", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(), "DUSTPAN_ADMIN_TOKEN=not-a-token", "CURL_CA_BUNDLE="+env.CABundle())
+
+	out, runErr := cmd.CombinedOutput()
+	if limited.Err() != nil {
+		t.Fatalf("the loop did not end with a refused token: %v: %.500s", limited.Err(), out)
+	}
+
+	if runErr == nil && !strings.Contains(string(out), "errorCode") {
+		t.Fatalf("the loop ended without an error and without the answer of the server: %s", out)
+	}
 }
 
 // auditListDocsLoop returns the paging loop of the page: the shell block that

@@ -438,12 +438,12 @@ empty. This loop writes one entry for each line:
 ```sh
 token=""
 while :; do
-  page=$(curl -sS -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" --get \
+  page=$(curl -sS --fail-with-body -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" --get \
     --data-urlencode "organization=acme" --data-urlencode "pageSize=200" \
     --data-urlencode "pageToken=$token" \
-    "https://dustpan.example/api/audit/entries") || break
+    "https://dustpan.example/api/audit/entries") || { echo "$page" >&2; break; }
   echo "$page" | jq -c '.entries[]'
-  token=$(echo "$page" | jq -r '.nextPageToken')
+  token=$(echo "$page" | jq -r '.nextPageToken // empty')
   [ -n "$token" ] || break
 done
 ```
@@ -452,8 +452,8 @@ The server refuses a bad request with status 400 and one of these error codes:
 
 | Error code | Cause | What to do |
 | --- | --- | --- |
-| `request.page-size-invalid` | `pageSize` is not a number from 1 to 200, or it is sent twice | Send a number from 1 to 200, or send no `pageSize` for 50 |
-| `request.page-token-invalid` | `pageToken` does not decode, is longer than 4096 bytes, is sent twice, or is the token of another namespace or of `@server` | Send the request again without `pageToken` |
+| `request.page-size-invalid` | `pageSize` is not a number from 1 to 200, or the request sends it twice | Send a number from 1 to 200, or send no `pageSize` for 50 |
+| `request.page-token-invalid` | `pageToken` does not decode, is longer than 4096 bytes, the request sends it twice, or is the token of another namespace or of `@server` | Send the request again without `pageToken` |
 | `request.invalid-query` | `organization` is missing, or the request holds `page[number]` or `page[size]`, which the list no longer reads | Send `organization`, `pageSize` and `pageToken` |
 
 A token works only for the `organization` that made it. The server checks the
