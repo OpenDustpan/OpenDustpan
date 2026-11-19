@@ -83,10 +83,10 @@ func faRestoreMarker(t *testing.T, pool *pgxpool.Pool, principal string) {
 func faRestoreCode(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
-	now := faRestoreNow().UnixMilli()
+	nowMs := faRestoreNow().UnixMilli()
 	faRestoreExec(t, pool, `INSERT INTO first_administrator_codes
 (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms) VALUES (1, $1, $2, 'host', 'reason', $3, $4)`,
-		faRestoreLivePerson, faRestoreDigest(), now, now+firstadmin.LifetimeMs)
+		faRestoreLivePerson, faRestoreDigest(), nowMs, nowMs+firstadmin.LifetimeMs)
 }
 
 func faRestoreCount(t *testing.T, pool *pgxpool.Pool, table string) int {

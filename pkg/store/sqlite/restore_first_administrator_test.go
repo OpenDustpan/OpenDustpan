@@ -81,10 +81,10 @@ func faRestoreMarker(t *testing.T, conn *sql.DB, principal string) {
 func faRestoreCode(t *testing.T, conn *sql.DB) {
 	t.Helper()
 
-	now := faRestoreNow().UnixMilli()
+	nowMs := faRestoreNow().UnixMilli()
 	faRestoreExec(t, conn, `INSERT INTO first_administrator_codes
 (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms) VALUES (1, ?, ?, 'host', 'reason', ?, ?)`,
-		faRestoreLivePerson, faRestoreDigest(), now, now+firstadmin.LifetimeMs)
+		faRestoreLivePerson, faRestoreDigest(), nowMs, nowMs+firstadmin.LifetimeMs)
 }
 
 func faRestoreCount(t *testing.T, conn *sql.DB, table string) int {
