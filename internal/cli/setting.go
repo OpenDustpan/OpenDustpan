@@ -374,6 +374,27 @@ func SensitiveEnvs() []string {
 	return slices.Compact(envs)
 }
 
+// ExternalSecretEnvs answers the environment variables that can hold a secret
+// and that no Setting declares: a library or an adapter reads each of them
+// directly. The S3 adapter reads the first three when it opens a blob store.
+// The Postgres driver reads the last two when it parses the database URL.
+// The server clears each of them with the variables of SensitiveEnvs, after
+// the start has read them.
+//
+// HTTP_PROXY, HTTPS_PROXY and ALL_PROXY may carry a password, but they are not
+// in this list. The Go HTTP client reads them once, on the first request, so
+// the clear would make every later outbound request skip the proxy. The
+// operator must keep a proxy password out of the environment of serve.
+func ExternalSecretEnvs() []string {
+	return []string{
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"PGPASSWORD",
+		"PGSSLPASSWORD",
+	}
+}
+
 // SettingsFor answers the declarations of the flag names in order. It
 // panics when a flag has no declaration, as ByFlag does.
 func SettingsFor(flags ...string) []*Setting {

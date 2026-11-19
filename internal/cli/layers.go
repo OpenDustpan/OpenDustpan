@@ -402,10 +402,10 @@ func LogOverrides(ctx context.Context, logger *slog.Logger, resolved []Resolved)
 
 // SnapshotEnv answers a lookup over the values that lookup gives for keys
 // now, for the reloads of the configuration file: a variable changes only at
-// a restart (ADR 63 decision 5), and the server clears the sensitive variables
-// after the start reads them (see SensitiveEnvs). The snapshot keeps the value of a setting that is not
-// sensitive. For a sensitive setting it keeps only a token with the
-// fingerprint of the value, so the process never holds a secret for its
+// a restart, and the server clears the sensitive variables after the start
+// reads them (see SensitiveEnvs). The snapshot keeps the value of a setting
+// that is not sensitive. For a sensitive setting it keeps only a token with
+// the fingerprint of the value, so the process never holds a secret for its
 // whole life. The start resolves against the real variables; a reload
 // resolves against the snapshot and sees the same fingerprints.
 func SnapshotEnv(lookup LookupFunc, keys []string) LookupFunc {

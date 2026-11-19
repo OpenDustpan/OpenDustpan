@@ -657,6 +657,9 @@ func (f *serveFlags) beforeServe(
 	ctx context.Context, st store, logger *slog.Logger, reloads *reloadMetrics, started *startedReloader,
 ) func(context.Context) error {
 	return func(hookCtx context.Context) error {
+		// The clear leaves HTTP_PROXY, HTTPS_PROXY and ALL_PROXY set: they may
+		// carry a password, but the Go HTTP client reads them lazily, at the
+		// first outbound request, which is after this hook.
 		if clearErr := clearSensitiveEnv(os.Unsetenv); clearErr != nil {
 			return clearErr
 		}
