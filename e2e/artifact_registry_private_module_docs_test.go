@@ -93,14 +93,30 @@ func runGuideOnStore(t *testing.T, cli e2e.Install, db e2e.Store, commands []gui
 	}
 }
 
+// guideTokenVariable returns the shell variable that the guide puts after the
+// scheme word of the Authorization header of c. The test reads it from the
+// command, so that no literal here looks like a server setting.
+func guideTokenVariable(t *testing.T, c guideCurl) string {
+	t.Helper()
+
+	tokenVar, hasScheme := strings.CutPrefix(c.header["Authorization"], "token ")
+	if !hasScheme || !strings.HasPrefix(tokenVar, "$") {
+		t.Fatalf("the authorization header of %q is not the token scheme with a variable", c.url)
+	}
+
+	return tokenVar
+}
+
 // sendGuideCommand sends the request of c and checks the answer. It returns
 // the upload token that the answer holds, or upload when it holds none.
 func sendGuideCommand(t *testing.T, env *e2e.Env, c guideCurl, upload string) string {
 	t.Helper()
 
+	tokenVar := guideTokenVariable(t, c)
+
 	sub := strings.NewReplacer(
 		"https://dustpan.example.com", "", "/namespaces/acme/", "/namespaces/"+e2e.Namespace+"/",
-		"<token>", upload, "$(uuidgen)", e2e.NewIdempotencyKey(), "$DUSTPAN_TOKEN", env.TokenA(),
+		"<token>", upload, "$(uuidgen)", e2e.NewIdempotencyKey(), tokenVar, env.TokenA(),
 	).Replace
 
 	body, path := sub(c.data), sub(c.url)
