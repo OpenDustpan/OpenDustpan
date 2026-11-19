@@ -58,6 +58,9 @@ var (
 	// ErrInvalidTarget reports a target that names no unit, no collection and
 	// no namespace.
 	ErrInvalidTarget = errors.New("invalid manual lock: name a stack, workspace, collection or namespace")
+	// ErrAuthorizerFailed reports an Authorizer that failed with an error that
+	// is not a refusal. The service refuses the call.
+	ErrAuthorizerFailed = errors.New("authorizer failed")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -262,6 +265,13 @@ func (e *LockedError) Is(target error) bool {
 // fence and appends its audit entry in the same transaction, so a write that
 // cannot be audited is not made. Every adapter runs the conformance suite in
 // pkg/manuallock/manuallocktest.
+//
+// PutLock, RemoveLock and ForceRemoveLock look for an idempotency.Completion
+// in their context. When one is there, the store stores its answer in the same
+// transaction, after the audit entry and as the last step, and passes the lock
+// that the call wrote (PutLock) or removed (RemoveLock, ForceRemoveLock) as the
+// result. The write rolls back if the answer cannot be stored, and a write
+// that fails stores no answer.
 type Store interface {
 	// PutLock records l and appends e. It returns ErrAlreadyLocked when the
 	// object has a manual lock, ErrTargetNotFound when the unit, the
