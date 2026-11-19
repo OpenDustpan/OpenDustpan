@@ -73,9 +73,15 @@ func TestMarksReportsFailedReads(t *testing.T) {
 		wantPG   bool
 		wantSt   bool
 	}{
-		{"a running instance", blankMonitor(nil, []*serverProc{running}, 0), true, false, false},
-		{"an instance that does not run", blankMonitor(nil, []*serverProc{running, stopped}, 0), false, false, false},
-		{"no instance", blankMonitor(nil, nil, 0), false, false, false},
+		{"a running instance", blankMonitor(nil, nil, []*serverProc{running}, 0), true, false, false},
+		{
+			"an instance that does not run",
+			blankMonitor(nil, nil, []*serverProc{running, stopped}, 0),
+			false,
+			false,
+			false,
+		},
+		{"no instance", blankMonitor(nil, nil, nil, 0), false, false, false},
 		{
 			"a PID that is not ours",
 			monitorWithPIDs(running, 1<<30, 1<<30),
@@ -224,14 +230,18 @@ func TestMonitorEndBoundsHungSample(t *testing.T) {
 		t.Fatalf("the hung sample has a value, want none: %+v", got)
 	}
 
-	if got.DBTransactionsPerSec != nil {
-		t.Fatalf("the transaction rate has a value after the canceled sample, want none: %+v", got)
+	// The canceled sample closes the connection of the sampler only. The
+	// transaction read of end uses another connection and still works.
+	if got.DBTransactionsPerSec == nil {
+		t.Fatalf("the transaction rate is missing after the canceled sample: %+v", got)
 	}
 
-	for _, name := range []string{"dbConnections", "dbTransactionsPerSec"} {
-		if !slices.Contains(got.Unmeasured, name) {
-			t.Fatalf("Unmeasured = %v, want %q", got.Unmeasured, name)
-		}
+	if !slices.Contains(got.Unmeasured, "dbConnections") {
+		t.Fatalf("Unmeasured = %v, want %q", got.Unmeasured, "dbConnections")
+	}
+
+	if slices.Contains(got.Unmeasured, "dbTransactionsPerSec") {
+		t.Fatalf("Unmeasured = %v, do not want %q", got.Unmeasured, "dbTransactionsPerSec")
 	}
 }
 
@@ -585,7 +595,7 @@ func TestParseHarnessFlagsScale(t *testing.T) {
 // monitorWithPIDs answers a monitor over proc that reads the CPU of the
 // process pgRoot as PostgreSQL and of the process storePID as the store.
 func monitorWithPIDs(proc *serverProc, pgRoot, storePID int) *monitor {
-	mon := blankMonitor(nil, []*serverProc{proc}, storePID)
+	mon := blankMonitor(nil, nil, []*serverProc{proc}, storePID)
 	mon.pgRoot = pgRoot
 
 	return mon
