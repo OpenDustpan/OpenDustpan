@@ -156,7 +156,6 @@ func TestUpdateTagsRefusesHostileTags(t *testing.T) {
 			if rec.count() != 0 {
 				t.Fatalf("store updates = %d, want 0", rec.count())
 			}
-
 		})
 	}
 }

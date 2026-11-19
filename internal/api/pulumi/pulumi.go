@@ -761,8 +761,8 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if err := checkTagBoundary(req.Tags); err != nil {
-		h.writeTagRefusal(ctx, w, err)
+	if tagErr := checkTagBoundary(req.Tags); tagErr != nil {
+		h.writeTagRefusal(ctx, w, tagErr)
 
 		return
 	}
@@ -805,6 +805,9 @@ const (
 	maxTagValueBytes = 256
 )
 
+// errTagBoundary starts the message of a refused tag map: "tags: ...".
+var errTagBoundary = errors.New("tags")
+
 // checkTagBoundary refuses tags that break the limits above. The text of the
 // error never holds a rejected name or value.
 //
@@ -813,29 +816,49 @@ const (
 // cannot let a hostile tag past the HTTP boundary; it does not rely on them.
 func checkTagBoundary(tags map[string]string) error {
 	if len(tags) > maxTagCount {
-		return fmt.Errorf("tags: more than %d tags", maxTagCount)
+		return fmt.Errorf("%w: more than %d tags", errTagBoundary, maxTagCount)
 	}
 
 	for name, value := range tags {
-		if name == "" || len(name) > maxTagNameBytes {
-			return fmt.Errorf("tags: a tag name must have 1 to %d bytes", maxTagNameBytes)
-		}
-
-		for i := range len(name) {
-			c := name[i]
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
-				c != '-' && c != '_' && c != '.' && c != ':' {
-				return errors.New("tags: a tag name may hold letters, digits, hyphen, underscore, period or colon only")
-			}
+		if !validTagNameBytes(name) {
+			return fmt.Errorf("%w: a tag name must have 1 to %d bytes of letters, digits, hyphen, "+
+				"underscore, period or colon", errTagBoundary, maxTagNameBytes)
 		}
 
 		if len(value) > maxTagValueBytes || !utf8.ValidString(value) {
-			return fmt.Errorf("tags: the value of a tag must be valid UTF-8 text of at most %d bytes",
-				maxTagValueBytes)
+			return fmt.Errorf("%w: the value of a tag must be valid UTF-8 text of at most %d bytes",
+				errTagBoundary, maxTagValueBytes)
 		}
 	}
 
 	return nil
+}
+
+// validTagNameBytes reports whether name has 1 to maxTagNameBytes bytes of
+// letters, digits, "-", "_", "." and ":".
+func validTagNameBytes(name string) bool {
+	if name == "" || len(name) > maxTagNameBytes {
+		return false
+	}
+
+	for i := range len(name) {
+		if !tagNameByte(name[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// tagNameByte reports whether c is a letter, a digit or one of "-", "_", "."
+// and ":".
+func tagNameByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+
+	return c == '-' || c == '_' || c == '.' || c == ':'
 }
 
 // writeTagRefusal answers 400 with the message of err in the error shape of

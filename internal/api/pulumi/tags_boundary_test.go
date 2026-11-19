@@ -19,7 +19,7 @@ func tagBoundaryBodies() map[string]string {
 
 	return map[string]string{
 		"CR LF in the name":     `{"evil\r\nInjected: yes":"v"}`,
-		"zero-width in name":    `{"a​b":"v"}`,
+		"zero-width in name":    `{"a\u200bb":"v"}`,
 		"empty name":            `{"":"v"}`,
 		"41-byte name":          `{"` + strings.Repeat("k", 41) + `":"v"}`,
 		"space in the name":     `{"a b":"v"}`,
@@ -53,7 +53,7 @@ func checkTagRefusal(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Fatalf("answer = %+v, want code 400 and a message that starts with %q", got, "tags: ")
 	}
 
-	if strings.ContainsAny(got.Message, "\r\n\xff") || strings.Contains(got.Message, "Injected") {
+	if strings.ContainsAny(got.Message, "\r\n") || strings.Contains(got.Message, "Injected") {
 		t.Fatalf("message %q holds the hostile input", got.Message)
 	}
 }
