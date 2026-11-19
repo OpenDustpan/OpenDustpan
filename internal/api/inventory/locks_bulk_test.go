@@ -2,25 +2,40 @@ package inventory_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 const (
@@ -520,6 +535,11 @@ func TestBulkUnlockNotHolder(t *testing.T) {
 		t.Fatalf("lock of bob = %+v, %v; it must stay", l, err)
 	}
 
+	// The refusal of the holder check writes one denied audit entry.
+	if n := len(f.audit.denied()); n != 1 {
+		t.Fatalf("denied audit entries = %d, want 1", n)
+	}
+
 	if strings.Contains(got.Results[1].Error.Message, "\"b\"") {
 		t.Fatalf("not-holder message leaks the reason: %s", got.Results[1].Error.Message)
 	}
@@ -868,4 +888,517 @@ func TestBulkLockIDCheckBeforeLookup(t *testing.T) {
 	if len(log.ids) != 0 {
 		t.Fatalf("the unit lookup saw %q: an invalid ID must stop before it", log.ids)
 	}
+}
+
+// keyedPost sends a bulk call with the Idempotency-Key key.
+func (f bulkFixture) keyedPost(t *testing.T, path, body, key string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return f.post(t, "alice", path, body, "Idempotency-Key", key)
+}
+
+// TestBulkLockAuditKeyed: with an Idempotency-Key, a repeated ID is two items
+// with two records. The second result is lock.already-locked, as without a key.
+// The test fails when the key of an item holds the ID only: the second item then
+// answers the stored result of the first.
+func TestBulkLockAuditKeyed(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 3)
+
+	ids := []string{bulkUnitID(0), bulkUnitID(1), bulkUnitID(0)}
+	got := answerOf(t, f.keyedPost(t, bulkLockPath, bulkLockBody(bulkReason, ids...), "kd1"))
+
+	wantOK(t, &got.Results[0])
+	wantOK(t, &got.Results[1])
+	wantError(t, &got.Results[2], http.StatusConflict, "lock.already-locked")
+
+	if n := f.lockEntries(); n != 2 {
+		t.Fatalf("lock audit entries = %d, want 2", n)
+	}
+
+	// The retry gives the same three results and writes nothing.
+	again := answerOf(t, f.keyedPost(t, bulkLockPath, bulkLockBody(bulkReason, ids...), "kd1"))
+
+	wantOK(t, &again.Results[0])
+	wantOK(t, &again.Results[1])
+	wantError(t, &again.Results[2], http.StatusConflict, "lock.already-locked")
+
+	if n := f.lockEntries(); n != 2 {
+		t.Fatalf("lock audit entries after the retry = %d, want 2", n)
+	}
+}
+
+// TestBulkUnlockHolderKeyed: the keyed bulk unlock of a repeated ID gives
+// lock.not-locked on the second result.
+func TestBulkUnlockHolderKeyed(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 3)
+	answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, idsUpTo(3)...)))
+
+	got := answerOf(t, f.keyedPost(t, bulkUnlockPath,
+		bulkUnlockBody(bulkUnitID(0), bulkUnitID(1), bulkUnitID(0)), "kd2"))
+
+	wantOK(t, &got.Results[0])
+	wantOK(t, &got.Results[1])
+	wantError(t, &got.Results[2], http.StatusNotFound, "lock.not-locked")
+
+	if f.held() != 1 {
+		t.Fatalf("locks = %d, want 1", f.held())
+	}
+
+	if n := f.lockEntries(); n != 3+2 {
+		t.Fatalf("audit entries = %d, want 5", n)
+	}
+}
+
+// TestBulkLockReplayKeepsRefusals: the record of an item keeps a refusal with a
+// status below 500. After the conflicting lock is gone, a retry with the same
+// key still answers 409 for that item and writes no lock.
+func TestBulkLockReplayKeepsRefusals(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 3)
+	answerOf(t, f.post(t, "bob", bulkLockPath, bulkLockBody("b", bulkUnitID(1))))
+
+	body := bulkLockBody(bulkReason, idsUpTo(2)...)
+
+	first := f.keyedPost(t, bulkLockPath, body, "kr1")
+	got := answerOf(t, first)
+
+	wantOK(t, &got.Results[0])
+	wantError(t, &got.Results[1], http.StatusConflict, "lock.already-locked")
+
+	if h := first.Header().Get("Idempotent-Replayed"); h != "" {
+		t.Fatalf("first call: Idempotent-Replayed = %q, want none", h)
+	}
+
+	answerOf(t, f.post(t, "bob", bulkUnlockPath, bulkUnlockBody(bulkUnitID(1))))
+
+	retry := f.keyedPost(t, bulkLockPath, body, "kr1")
+	again := answerOf(t, retry)
+
+	wantOK(t, &again.Results[0])
+	wantError(t, &again.Results[1], http.StatusConflict, "lock.already-locked")
+
+	if f.held() != 1 {
+		t.Fatalf("locks = %d, want 1: the retry must not lock the unit that the 409 item named", f.held())
+	}
+
+	if h := retry.Header().Get("Idempotent-Replayed"); h != "true" {
+		t.Fatalf("full replay: Idempotent-Replayed = %q, want true", h)
+	}
+}
+
+// TestBulkLockReplayedHeader: the header is on the answer only when no item ran
+// again. An item with a 5xx result runs again and clears the header.
+func TestBulkLockReplayedHeader(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 3)
+
+	f.store.putErr = func(target string) error {
+		if target == bulkUnitRef(1) {
+			return errStoreDown
+		}
+
+		return nil
+	}
+
+	body := bulkLockBody(bulkReason, idsUpTo(3)...)
+
+	first := f.keyedPost(t, bulkLockPath, body, "kh1")
+	answerOf(t, first)
+
+	if h := first.Header().Get("Idempotent-Replayed"); h != "" {
+		t.Fatalf("first call: header = %q, want none", h)
+	}
+
+	f.store.putErr = nil
+
+	partial := f.keyedPost(t, bulkLockPath, body, "kh1")
+	answerOf(t, partial)
+
+	if h := partial.Header().Get("Idempotent-Replayed"); h != "" {
+		t.Fatalf("retry that ran an item again: header = %q, want none", h)
+	}
+
+	full := f.keyedPost(t, bulkLockPath, body, "kh1")
+	answerOf(t, full)
+
+	if h := full.Header().Get("Idempotent-Replayed"); h != "true" {
+		t.Fatalf("retry that ran no item: header = %q, want true", h)
+	}
+}
+
+// TestBulkLockReadDeniedAudit: a refused unit:read gives the not-found result
+// and one denied audit entry, and no lock is written.
+func TestBulkLockReadDeniedAudit(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{bulkLockPath, bulkUnlockPath} {
+		authz := bulkAuthz{
+			deny: map[string]bool{grant(identity.ActionUnitRead, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
+		}
+		f := newBulkFixture(t, authz, 3)
+
+		body := bulkLockBody(bulkReason, idsUpTo(3)...)
+		if path == bulkUnlockPath {
+			body = bulkUnlockBody(idsUpTo(3)...)
+		}
+
+		got := answerOf(t, f.post(t, "alice", path, body))
+		wantError(t, &got.Results[1], http.StatusNotFound, "lock.target-not-found")
+
+		if n := len(f.audit.denied()); n != 1 {
+			t.Fatalf("%s: denied audit entries = %d, want 1", path, n)
+		}
+	}
+}
+
+// TestBulkUnlockDeniedAudit: a refused unit:lock on a bulk unlock gives the 403
+// result and a denied audit entry, and the lock stays.
+func TestBulkUnlockDeniedAudit(t *testing.T) {
+	t.Parallel()
+
+	authz := bulkAuthz{
+		deny: map[string]bool{grant(identity.ActionUnitLock, bulkUnitRef(1)): true}, onLock: nil, n: &atomic.Int64{},
+	}
+	f := newBulkFixture(t, authz, 3)
+
+	// The lock on unit 1 is the lock of the caller, put there with no check.
+	if err := f.store.PutLock(t.Context(), manuallock.Lock{
+		Target: mustUnit(t, 1), Holder: "alice", Reason: "r",
+	}, namespace.Fence{}, audit.Entry{}); err != nil {
+		t.Fatalf("seed lock: %v", err)
+	}
+
+	got := answerOf(t, f.post(t, "alice", bulkUnlockPath, bulkUnlockBody(bulkUnitID(1))))
+	wantError(t, &got.Results[0], http.StatusForbidden, got.Results[0].Error.ErrorCode)
+
+	if n := len(f.audit.denied()); n != 1 {
+		t.Fatalf("denied audit entries = %d, want 1", n)
+	}
+
+	if f.held() != 1 {
+		t.Fatalf("locks = %d, want 1: a denied unlock must keep the lock", f.held())
+	}
+}
+
+// TestBulkLockItemReused: an item whose record holds another request gives the
+// 422 result, and the unit stays unlocked. The test writes the record of the
+// item by hand with another material, as if a bug or a collision had.
+func TestBulkLockItemReused(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixture(t, plainAuthz(), 2)
+
+	sum := sha256.New()
+	sum.Write([]byte("kru"))
+	sum.Write([]byte{0})
+	sum.Write([]byte("0"))
+	sum.Write([]byte{0})
+	sum.Write([]byte(bulkUnitID(0)))
+
+	itemKey, err := idempotency.ParseKey("item-" + hex.EncodeToString(sum.Sum(nil)))
+	if err != nil {
+		t.Fatalf("item key: %v", err)
+	}
+
+	ref := idempotency.Ref{Principal: "alice", Method: http.MethodPost, Path: bulkLockPath, Key: itemKey}
+
+	if _, err = f.records.Begin(t.Context(), ref, []byte(`{"another":"request"}`), time.Time{}); err != nil {
+		t.Fatalf("seed record: %v", err)
+	}
+
+	got := answerOf(t, f.keyedPost(t, bulkLockPath, bulkLockBody(bulkReason, bulkUnitID(0)), "kru"))
+	wantError(t, &got.Results[0], http.StatusUnprocessableEntity, "request.idempotency-key-reused")
+
+	if f.held() != 0 {
+		t.Fatalf("locks = %d, want none", f.held())
+	}
+}
+
+// wrongIDReader answers every lookup of from with the entry of to.
+type wrongIDReader struct {
+	coreinventory.Reader
+
+	from, to string
+}
+
+func (w wrongIDReader) GetUnit(ctx context.Context, id string) (coreinventory.Entry, error) {
+	if id == w.from {
+		return w.Reader.GetUnit(ctx, w.to)
+	}
+
+	return w.Reader.GetUnit(ctx, id)
+}
+
+// TestBulkLockUnitIDMustMatch: a reader that answers the entry of another unit
+// gives the not-found result, and no lock is written on the other unit. The
+// check of the entry ID is its own layer: the reader is the other layer.
+func TestBulkLockUnitIDMustMatch(t *testing.T) {
+	t.Parallel()
+
+	f := newBulkFixtureWith(t, plainAuthz(), 2, bulkOptions{noRecords: false, wrap: func(r coreinventory.Reader) coreinventory.Reader {
+		return wrongIDReader{Reader: r, from: bulkUnitID(0), to: bulkUnitID(1)}
+	}})
+
+	got := answerOf(t, f.post(t, "alice", bulkLockPath, bulkLockBody(bulkReason, bulkUnitID(0))))
+	wantError(t, &got.Results[0], http.StatusNotFound, "lock.target-not-found")
+
+	if f.held() != 0 {
+		t.Fatalf("locks = %d, want none", f.held())
+	}
+}
+
+// Latency test of the bulk lock route against the real stores.
+const (
+	// latencyUnits is the number of units that one bulk call locks.
+	latencyUnits = 100
+	// latencyRuns is the number of timed calls for each variant.
+	latencyRuns = 10
+	// latencyP95Limit is the p95 limit of one bulk call of latencyUnits units.
+	latencyP95Limit = 2000 * time.Millisecond
+	// latencyPostgresEnv names the environment variable with the PostgreSQL URL.
+	latencyPostgresEnv = "DUSTPAN_TEST_POSTGRES_URL"
+)
+
+// latencyStore is what the latency test needs from a real store.
+type latencyStore interface {
+	manuallock.Store
+	namespace.Store
+	workspace.Store
+	audit.Store
+	coreinventory.Reader
+}
+
+// TestBulkLockLatency measures bulk-lock of 100 unlocked units, with and
+// without an Idempotency-Key header, on SQLite and on PostgreSQL. The p95 of
+// the calls must stay at or below latencyP95Limit.
+func TestBulkLockLatency(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sqlite", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open sqlite store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close sqlite store: %v", err)
+			}
+		})
+
+		records := s.Idempotency(idempotencytest.TestWrapper(t, 1))
+
+		runBulkLatency(t, s, records)
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		t.Parallel()
+
+		base := os.Getenv(latencyPostgresEnv)
+		if base == "" {
+			t.Skipf("set %s to run the PostgreSQL latency test", latencyPostgresEnv)
+		}
+
+		s, err := postgres.Open(t.Context(), latencyPostgresURL(t, base))
+		if err != nil {
+			t.Fatalf("open postgres store: %v", err)
+		}
+
+		t.Cleanup(s.Close)
+
+		records := s.Idempotency(idempotencytest.TestWrapper(t, 1))
+
+		runBulkLatency(t, s, records)
+	})
+}
+
+// runBulkLatency seeds latencyUnits workspaces in acme in s, then times
+// latencyRuns bulk locks without a key and latencyRuns with a key. It unlocks
+// the units between the runs, outside the timing.
+func runBulkLatency(t *testing.T, s latencyStore, records idempotency.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: changeTime(), Name: "acme", PrimaryInstallation: "test-region",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(ctx, ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	for i := range latencyUnits {
+		w := workspace.Workspace{
+			NamespaceID: "", CreatedAt: changeTime(), UpdatedAt: changeTime(),
+			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease: workspace.NoRelease(), ID: workspace.ID(ident.NewID("ws-")),
+			Ref:      workspace.Ref{Namespace: ns.Name, Name: workspace.Name(fmt.Sprintf("bulk-%03d", i))},
+			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+			Origin: identity.StateOrigin{Job: "", Commit: ""},
+		}
+		if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
+			t.Fatalf("create workspace %d: %v", i, err)
+		}
+	}
+
+	entries, err := s.ListUnits(ctx, ns.Name)
+	if err != nil {
+		t.Fatalf("list units: %v", err)
+	}
+
+	if len(entries) != latencyUnits {
+		t.Fatalf("seeded %d units, want %d", len(entries), latencyUnits)
+	}
+
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.UnitID)
+	}
+
+	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Installation: "test-region"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	authz := plainAuthz()
+
+	locks, err := manuallock.NewService(
+		manuallock.Config{Store: s, Namespaces: s, Authorizer: authz, Now: nil, Phases: nil},
+	)
+	if err != nil {
+		t.Fatalf("manual lock service: %v", err)
+	}
+
+	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Placements: nil, OutputSharing: nil, Outputs: nil, Views: nil, Namespaces: nsSvc,
+		Units: s, Deleted: &memDeleted{entries: nil}, History: nil, Lifecycles: testLifecycles(),
+		ReadScope: fixedScope{err: nil, ids: nil, all: true}, Collections: nil, Locks: locks,
+		Records: records, Moves: nil, Authenticator: subjectAuthenticator{}, Authorizer: authz,
+		Audit: orTestAudit(nil), OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil, PublicURL: "",
+		Logger: slog.New(slog.DiscardHandler), Now: nil, StateGuard: stategate.Off("the test keeps no gates"),
+	})
+	if err != nil {
+		t.Fatalf("inventory handler: %v", err)
+	}
+
+	f := bulkFixture{handler: handler, store: nil, audit: nil, records: nil}
+	lockBody := bulkLockBody(bulkReason, ids...)
+	unlockBody := bulkUnlockBody(ids...)
+
+	for _, keyed := range []bool{false, true} {
+		name := "no key"
+		if keyed {
+			name = "key"
+		}
+
+		times := make([]time.Duration, 0, latencyRuns)
+
+		for run := range latencyRuns {
+			var headers []string
+			if keyed {
+				headers = []string{"Idempotency-Key", fmt.Sprintf("latency-%d", run)}
+			}
+
+			start := time.Now()
+			rec := f.post(t, "alice", bulkLockPath, lockBody, headers...)
+			took := time.Since(start)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s run %d: bulk lock status %d, body %s", name, run, rec.Code, rec.Body.String())
+			}
+
+			for i, r := range answerOf(t, rec).Results {
+				if r.Status != "ok" {
+					t.Fatalf("%s run %d item %d: status %q, want ok", name, run, i, r.Status)
+				}
+			}
+
+			times = append(times, took)
+
+			// Unlock outside the timing, so that the next run locks 100 unlocked units.
+			if un := f.post(t, "alice", bulkUnlockPath, unlockBody); un.Code != http.StatusOK {
+				t.Fatalf("%s run %d: bulk unlock status %d, body %s", name, run, un.Code, un.Body.String())
+			}
+		}
+
+		slices.Sort(times)
+
+		p50 := times[(len(times)-1)/2]
+		p95 := times[(len(times)*95+99)/100-1]
+		maxTime := times[len(times)-1]
+
+		t.Logf("bulk-lock of %d units, %s, %d runs: p50 %v, p95 %v, max %v",
+			latencyUnits, name, len(times), p50, p95, maxTime)
+
+		if p95 > latencyP95Limit {
+			t.Errorf("%s: p95 %v is above the limit %v", name, p95, latencyP95Limit)
+		}
+	}
+}
+
+// latencyPostgresURL makes a database for one test on the server of base: it
+// migrates a template database that it drops with the test, and returns the
+// URL of a clone of the template. This package has no TestMain that makes a
+// shared template.
+func latencyPostgresURL(t *testing.T, base string) string {
+	t.Helper()
+
+	ctx := t.Context()
+
+	template, err := pgtest.CloneName("dustpan_test_latency")
+	if err != nil {
+		t.Fatalf("template name: %v", err)
+	}
+
+	migrate := func(ctx context.Context, dbURL string) error {
+		s, openErr := postgres.Open(ctx, dbURL)
+		if openErr != nil {
+			return fmt.Errorf("open store: %w", openErr)
+		}
+
+		s.Close()
+
+		return nil
+	}
+
+	if buildErr := pgtest.BuildTemplate(ctx, base, template, migrate); buildErr != nil {
+		t.Fatalf("make the template database: %v", buildErr)
+	}
+
+	// The cleanup is registered before the clone, so it runs after the clone drop.
+	t.Cleanup(func() {
+		dropCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		conn, connErr := pgx.Connect(dropCtx, base)
+		if connErr != nil {
+			t.Logf("connect to drop the template %s: %v", template, connErr)
+
+			return
+		}
+
+		defer func() {
+			if closeErr := conn.Close(dropCtx); closeErr != nil {
+				t.Logf("close: %v", closeErr)
+			}
+		}()
+
+		drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{template}.Sanitize() + " WITH (FORCE)"
+		if _, execErr := conn.Exec(dropCtx, drop); execErr != nil {
+			t.Logf("drop the template %s: %v", template, execErr)
+		}
+	})
+
+	return pgtest.MigratedURLWithTimeout(t, base, template, time.Minute)
 }

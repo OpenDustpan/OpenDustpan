@@ -1402,6 +1402,22 @@ func TestBulkPathServiceHostile(t *testing.T) {
 			want: manuallock.ErrReasonRequired,
 		},
 		{
+			name: "lock with a reason of 501 characters", authz: allowAll(), who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				_, err := s.Lock(t.Context(), p, unit, strings.Repeat("a", 501), entry())
+				return err
+			},
+			want: audit.ErrInvalidReason,
+		},
+		{
+			name: "lock with a control character in the reason", authz: allowAll(), who: person("alice"),
+			run: func(s *manuallock.Service, p identity.Principal) error {
+				_, err := s.Lock(t.Context(), p, unit, "a\nb", entry())
+				return err
+			},
+			want: audit.ErrInvalidReason,
+		},
+		{
 			name: "lock of a target that names nothing", authz: allowAll(), who: person("alice"),
 			run: func(s *manuallock.Service, p identity.Principal) error {
 				_, err := s.Lock(t.Context(), p, zeroTarget(), "r", entry())

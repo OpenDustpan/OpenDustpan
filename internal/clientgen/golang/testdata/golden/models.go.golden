@@ -201,6 +201,7 @@ const (
 	ErrorCodeLocalUserSignInFailed                 ErrorCode = "local-user.sign-in-failed"
 	ErrorCodeLocalUserUnavailable                  ErrorCode = "local-user.unavailable"
 	ErrorCodeLockAlreadyLocked                     ErrorCode = "lock.already-locked"
+	ErrorCodeLockBulkSize                          ErrorCode = "lock.bulk-size"
 	ErrorCodeLockChanged                           ErrorCode = "lock.changed"
 	ErrorCodeLockInvalidTarget                     ErrorCode = "lock.invalid-target"
 	ErrorCodeLockLocked                            ErrorCode = "lock.locked"

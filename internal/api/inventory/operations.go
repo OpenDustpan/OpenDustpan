@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -195,7 +196,8 @@ var (
 	bulkUnlockRequestBody = apidesc.Typed[bulkUnlockBody]("BulkUnlockUnitsRequest",
 		apidesc.Named[bulkItem]("BulkLockUnit"))
 	bulkLockResultBody = apidesc.Typed[bulkResponse]("BulkLockUnitsResult",
-		apidesc.Named[bulkResult]("BulkLockUnitsItem"), apidesc.Named[bulkError]("BulkLockUnitsError"),
+		apidesc.Named[bulkResult]("BulkLockUnitsItem"), apidesc.Named[problem.Body]("BulkLockUnitsError"),
+		apidesc.Named[problem.Unit]("BulkLockUnitsErrorUnit"),
 		apidesc.Named[lockEntryDocument]("ManualLock"))
 	viewBody = apidesc.Typed[viewDocument]("View", viewNames...)
 	// outputSharingBody is the output sharing setting of a namespace.

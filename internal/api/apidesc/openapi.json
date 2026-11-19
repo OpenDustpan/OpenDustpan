@@ -680,12 +680,39 @@
           },
           "message": {
             "type": "string"
+          },
+          "reauthenticate": {
+            "type": "string"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/BulkLockUnitsErrorUnit"
+            },
+            "type": "array"
           }
         },
         "required": [
           "code",
-          "errorCode",
           "message"
+        ],
+        "type": "object"
+      },
+      "BulkLockUnitsErrorUnit": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tool"
         ],
         "type": "object"
       },

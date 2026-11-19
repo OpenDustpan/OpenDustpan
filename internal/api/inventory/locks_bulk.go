@@ -88,15 +88,6 @@ type bulkUnlockBody struct {
 	Units []bulkItem `dustpan:"required" json:"units"`
 }
 
-// bulkError is the error of one item, in the shape of the error answer of a
-// call on that unit alone.
-type bulkError struct {
-	Code      int            `json:"code"`
-	ErrorCode string         `json:"errorCode"`
-	ErrorArgs map[string]any `json:"errorArgs,omitempty"`
-	Message   string         `json:"message"`
-}
-
 // bulkResult is the result of one item. Status is ok or error. A result holds
 // a lock or an error, never both: the constructors below are the only way to
 // make one.
@@ -104,7 +95,7 @@ type bulkResult struct {
 	ID     string             `json:"id"`
 	Status string             `json:"status"`
 	Lock   *lockEntryDocument `json:"lock,omitempty"`
-	Error  *bulkError         `json:"error,omitempty"`
+	Error  *problem.Body      `json:"error,omitempty"`
 }
 
 // bulkResponse holds one result for each unit of the request, in its order.
@@ -134,6 +125,11 @@ type bulkRun struct {
 	unlock bool
 	// call is nil for a call with no Idempotency-Key header.
 	call *bulkCall
+	// ran is true when an item ran again in this request: its store call ran, or
+	// it failed with a 5xx or 429 status. replayed is true when an item answered
+	// its stored result. The two decide the Idempotent-Replayed header.
+	ran      bool
+	replayed bool
 }
 
 // bulkCall is the replay record of a whole call. It holds the fingerprint of
@@ -186,7 +182,7 @@ func (h *Handler) bulkLock(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
-	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: *body.Reason, unlock: false, call: nil})
+	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: *body.Reason, unlock: false, call: nil, ran: false, replayed: false})
 }
 
 // bulkUnlock serves POST .../unit-locks/bulk-unlock. It removes the lock that
@@ -209,7 +205,7 @@ func (h *Handler) bulkUnlock(w http.ResponseWriter, r *http.Request, p identity.
 		return
 	}
 
-	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: "", unlock: true, call: nil})
+	h.runBulk(w, r, p, obj, &bulkRun{raw: raw, units: body.Units, reason: "", unlock: true, call: nil, ran: false, replayed: false})
 }
 
 // checkLockReason refuses a reason that a lock refuses.
@@ -266,15 +262,11 @@ func (h *Handler) runBulk(
 		run.call = call
 
 		defer call.end(ctx, h)
-
-		if !call.started {
-			w.Header().Set(idempotent.ReplayedHeader, "true")
-		}
 	}
 
 	out := bulkResponse{Results: make([]bulkResult, 0, len(units))}
 
-	for _, item := range units {
+	for pos, item := range units {
 		// Fail closed: a request that ended runs no further item. An item that
 		// did not run has no lock and no audit entry, and a retry with the same
 		// key does it. The call record stays unfinished, so the key is freed.
@@ -282,10 +274,17 @@ func (h *Handler) runBulk(
 			return
 		}
 
-		out.Results = append(out.Results, h.bulkItem(r, p, obj, run, item.ID))
+		out.Results = append(out.Results, h.bulkItem(r, p, obj, run, pos, item.ID))
 	}
 
 	run.call.finish()
+
+	// The answer is a replay only when no item ran again. A first call runs
+	// every item, so it is never a replay.
+	if run.call != nil && !run.ran && (run.replayed || !run.call.started) {
+		w.Header().Set(idempotent.ReplayedHeader, "true")
+	}
+
 	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
@@ -294,18 +293,27 @@ func (h *Handler) runBulk(
 type bulkTarget struct {
 	id  string
 	obj identity.Object
+	// pos is the position of the item in the request. The key of the item
+	// holds it, so a repeated ID is two items with two records.
+	pos int
 }
 
 // bulkItem runs one item.
 func (h *Handler) bulkItem(
-	r *http.Request, p identity.Principal, ns identity.Object, run *bulkRun, id string,
+	r *http.Request, p identity.Principal, ns identity.Object, run *bulkRun, pos int, id string,
 ) bulkResult {
 	obj, err := h.bulkUnit(r, p, ns, id)
 	if err != nil {
-		return h.bulkFailure(r, id, err)
+		out := h.bulkFailure(r, id, err)
+		if out.Error != nil && !storableFailure(out) {
+			// A 5xx or 429 result is not kept: the item ran again.
+			run.ran = true
+		}
+
+		return out
 	}
 
-	unit := bulkTarget{id: id, obj: obj}
+	unit := bulkTarget{id: id, obj: obj, pos: pos}
 
 	if run.call == nil {
 		return h.bulkApply(r, p, unit, run)
@@ -319,8 +327,9 @@ func (h *Handler) bulkItem(
 // read give errBulkNotFound.
 //
 // Defense in depth: the route checked namespace:read, and Service.Lock checks
-// unit:lock again. The ID check, the namespace check and the unit:read check
-// each stay on their own, so none relies on the others.
+// unit:lock again. The ID check, the namespace check, the check that the unit
+// has the ID that the item named (e.UnitID != id) and the unit:read check each
+// stay on their own, so none relies on the others.
 func (h *Handler) bulkUnit(
 	r *http.Request, p identity.Principal, ns identity.Object, id string,
 ) (identity.Object, error) {
@@ -405,7 +414,10 @@ func (h *Handler) bulkFailure(r *http.Request, id string, err error) bulkResult 
 
 	// The code is the internal error code until the code of the problem is
 	// proved to be a code of the catalog with its arguments.
-	failure := bulkError{Code: pr.Status, ErrorCode: errcode.ServerInternal, ErrorArgs: nil, Message: pr.Message}
+	failure := problem.Body{
+		Message: pr.Message, Code: pr.Status, ErrorCode: errcode.ServerInternal, ErrorArgs: nil,
+		Reauthenticate: "", Units: nil,
+	}
 
 	if made, mErr := errcode.New(pr.Code, pr.Values...); mErr == nil {
 		failure.ErrorCode = pr.Code
@@ -539,14 +551,15 @@ type itemMaterial struct {
 }
 
 // bulkItemKeyed runs one item of a call with a key. The checks of the item run
-// before its record, so a replay checks the actions of the caller on the unit
-// again. An item that the store wrote answers its stored result on a retry. An
-// item that failed leaves no record, so a retry does it again.
+// before its record, so a replay checks unit:read of the caller on the unit
+// again. The record of an item holds its result, except a result with a 5xx or
+// 429 status: a retry answers the stored result and does the other items
+// again. The key of an item holds its position in the call.
 func (h *Handler) bulkItemKeyed(r *http.Request, p identity.Principal, unit bulkTarget, run *bulkRun) bulkResult {
 	ctx := r.Context()
 	id := unit.id
 
-	itemKey, err := digestKey("item-", run.call.key, id)
+	itemKey, err := digestKey("item-", run.call.key, strconv.Itoa(unit.pos), id)
 	if err != nil {
 		return h.bulkFailure(r, id, err)
 	}
@@ -565,6 +578,8 @@ func (h *Handler) bulkItemKeyed(r *http.Request, p identity.Principal, unit bulk
 
 	switch res.Outcome {
 	case idempotency.Replayed:
+		run.replayed = true
+
 		return h.replayedBulkItem(r, id, &res.Answer)
 	case idempotency.Reused:
 		// Defense in depth: the record of the whole call refuses a changed
@@ -578,6 +593,8 @@ func (h *Handler) bulkItemKeyed(r *http.Request, p identity.Principal, unit bulk
 		return h.bulkFailure(r, id, keyRefusal(http.StatusConflict,
 			errcode.RequestIdempotencyKeyInProgress, "the first request for this unit has not ended: retry later"))
 	case idempotency.Started:
+		run.ran = true
+
 		return h.writeBulkItem(r, p, unit, run, &pendingBulkItem{ref: ref, token: res.Token})
 	default:
 		return h.bulkFailure(r, id, fmt.Errorf("%w: unknown outcome %d", idempotency.ErrInvalid, res.Outcome))
@@ -599,13 +616,28 @@ func bulkItemAnswer(id string, run *bulkRun) func(result any) (idempotency.Answe
 			out = unlockedResult(id)
 		}
 
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(out); err != nil {
-			return idempotency.Answer{}, fmt.Errorf("encode item answer: %w", err)
-		}
-
-		return idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: buf.Bytes()}, nil
+		return encodeBulkResult(out)
 	}
+}
+
+// encodeBulkResult makes the answer that the record of an item keeps.
+func encodeBulkResult(out bulkResult) (idempotency.Answer, error) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(out); err != nil {
+		return idempotency.Answer{}, fmt.Errorf("encode item answer: %w", err)
+	}
+
+	return idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: buf.Bytes()}, nil
+}
+
+// storableFailure reports whether the record of an item keeps this result. A
+// result with a 5xx or 429 status is not kept, so a retry does the item again.
+func storableFailure(out bulkResult) bool {
+	if out.Status != bulkStatusError || out.Error == nil {
+		return false
+	}
+
+	return out.Error.Code < http.StatusInternalServerError && out.Error.Code != http.StatusTooManyRequests
 }
 
 // pendingBulkItem names the pending record that an item started.
@@ -625,6 +657,12 @@ func (h *Handler) writeBulkItem(
 
 	out := h.bulkApply(keyed, p, unit, run)
 
+	if storableFailure(out) {
+		h.keepBulkFailure(r.Context(), pending, out)
+
+		return out
+	}
+
 	if out.Status != bulkStatusOK || !completion.Stored() {
 		if out.Status == bulkStatusOK {
 			// The write passed and the store kept no answer: free the key, so
@@ -637,6 +675,27 @@ func (h *Handler) writeBulkItem(
 	}
 
 	return out
+}
+
+// keepBulkFailure stores the result of an item that the lock service refused
+// with a status below 500. The refusal wrote no lock, so the store call kept no
+// answer. A record that cannot be stored is freed, so a retry does the item
+// again.
+func (h *Handler) keepBulkFailure(ctx context.Context, pending *pendingBulkItem, out bulkResult) {
+	endCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bulkEndTimeout)
+	defer cancel()
+
+	answer, err := encodeBulkResult(out)
+	if err == nil {
+		err = h.records.Complete(endCtx, pending.ref, pending.token, answer)
+	}
+
+	if err == nil || errors.Is(err, idempotency.ErrLost) {
+		return
+	}
+
+	faultlog.LogFault(ctx, h.logger, "store the record of a bulk item failed", faultlog.Cause(err), "bulk.item")
+	h.abandon(endCtx, pending.ref, pending.token)
 }
 
 // replayedBulkItem answers the stored result of an item.

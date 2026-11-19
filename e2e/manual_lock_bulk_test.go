@@ -184,8 +184,8 @@ func runManualLockBulkOnStore(t *testing.T, fetcher *e2e.Fetcher, store e2e.Stor
 	env.Step(ctx, t, step("tofu plan after the bulk unlock", nil, "plan", "-input=false", "-no-color"))
 }
 
-// bulkUnitIDs reads the unit list and returns the IDs of the workspace, the
-// stack and a third unit, and the reference of the third unit. The lab has the
+// bulkUnitIDs reads the unit list and returns the IDs of the stack, the
+// workspace and a third unit, and the reference of the third unit. The lab has the
 // workspace, the stack and a second stack.
 func bulkUnitIDs(t *testing.T, env *e2e.Env) ([]string, string) {
 	t.Helper()
@@ -221,7 +221,7 @@ func bulkUnitIDs(t *testing.T, env *e2e.Env) ([]string, string) {
 		t.Fatalf("the unit list lacks a unit: workspace %q, stack %q, other %q", workspaceID, stackID, otherID)
 	}
 
-	return []string{workspaceID, stackID, otherID}, otherRef
+	return []string{stackID, workspaceID, otherID}, otherRef
 }
 
 // checkBulkLocked checks the answer of the bulk lock: the first two units have
