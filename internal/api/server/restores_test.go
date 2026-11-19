@@ -112,9 +112,9 @@ func newRestoreFixtureWorkers(
 	// attempt with no manifest, so the restore starts and then fails fast.
 	key := blob.Key("backups/" + unreadableBackupID + "/live.json")
 
-	err := stores.target.Put(t.Context(), key, strings.NewReader(`{"attempt":"1"}`))
-	if err != nil && !errors.Is(err, blob.ErrExists) {
-		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, err)
+	putErr := stores.target.Put(t.Context(), key, strings.NewReader(`{"attempt":"1"}`))
+	if putErr != nil && !errors.Is(putErr, blob.ErrExists) {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, putErr)
 	}
 
 	workers, authz := opts.workers, opts.authz
@@ -997,6 +997,12 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	t.Helper()
 
 	stores := openBackupDeps(t)
+
+	// The backup has no row, so the target must name it with a live pointer.
+	pointer := blob.Key("backups/" + unreadableBackupID + "/live.json")
+	if putErr := stores.target.Put(t.Context(), pointer, strings.NewReader(`{"attempt":"1"}`)); putErr != nil {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, putErr)
+	}
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,

@@ -516,14 +516,14 @@ func (s *RestoreService) admitStart(
 		}
 	}
 
-	if err := s.requireRestorable(ctx, req.BackupID); err != nil {
-		return nil, fmt.Errorf("begin restore %s: %w", id, err)
-	}
-
 	// A restore that runs refuses the start before it reads the target. The
 	// insert of StartRestore checks it again in its transaction: two starts
 	// at the same time pass this read, and only one insert commits.
 	if err := s.refuseWhileRunning(ctx); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
+	if err := s.requireRestorable(ctx, req.BackupID); err != nil {
 		return nil, fmt.Errorf("begin restore %s: %w", id, err)
 	}
 
