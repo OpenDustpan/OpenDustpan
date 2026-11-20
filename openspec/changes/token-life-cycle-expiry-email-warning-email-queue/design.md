@@ -1,79 +1,106 @@
 ## Context
 
-A background sender reads due token warnings from a durable queue and sends through resolved installation SMTP settings.
+Main has a notification model in `pkg/notify`: an outbox, deliveries with leases and retries, and a port for the personal contacts of a person. It has no emitter for the expiry of a token, and the delivery to a person has gaps (see the proposal). This change adds the emitter. It adds no queue.
 
 ## Decisions
 
-1. **Durable queue with one retry and fixed times.** One row per token and warning time holds the stable token ID, the warning time, the due time, a state of queued, sending, retry, sent or failed, a try count and a reason. Poll interval is 60 seconds. One sender holds a lease of 300 seconds per row. A 4xx failure moves the row to retry with a 15 minute backoff, then to failed after 1 retry. A 5xx failure moves to failed at once.
-2. **Stable token ID with send-time recheck.** The token ID is the stable reference. The warning windows are the main values ExpiryWarningSoon (ExpiringWithin) and ExpiryWarningImminent (3 days) in pkg/accesstoken/accesstoken.go:370-374. The sender reads the token by its stable ID at send time, with no extra window, and reads the owner email then. It rechecks that the token exists, is enabled and still expires after the warning time. A stale row is marked failed with the reason and no send. A token made after a warning time queues that warning as due now. A row not sent before expiry is marked failed with reason expired. Limits: at most 2 tries per row, at most 1 token record and 1 principal record read per try, at most 100 due rows per poll, each poll every 60 seconds, for each installation. The reason field holds at most 200 characters. The token name in the body holds at most 128 characters.
-3. **No plain-text fallback.** SMTP dial uses resolved installation settings and the TLS rule of ADR 292. A refused plain connection marks the row failed with reason refused. Certificate checks stay on. Delivery is at-least-once after accept.
+1. **Reuse the outbox.** The warning is a `notify.Notification` of the NEW type `token.expiry-warning`. Retry, state and audit of the delivery stay in `pkg/notify`. A second queue would be a second place for the same facts.
+2. **One job, once for all instances.** A durable schedule kind of the service runs each hour. The interval is a constant of the package. A run that fails is run again by the schedule, and the dedupe key makes the repeat safe.
+3. **Dedupe by token, level and expiry.** The key is `<token ID>:<level>:<expiry in Unix milliseconds>`. A rotation that moves the expiry makes a new key. A token that is revoked, disabled or expired between two runs is not listed, so it gets no warning.
+4. **Personal tokens only.** The service lists tokens with `Kind == KindPersonal`. Other kinds are parked.
+5. **No secret in the notification.** The attributes hold the token ID, the name, the expiry time (RFC 3339) and the level. The notification never holds the secret, the digest or a prefix.
+6. **Fit before append.** The service calls `Notification.Fit` before `Append`, so a long token name never fails the job.
+7. **The owner must be enabled.** The service skips a token whose owner is disabled or deleted, and counts it. The dispatcher also reads the contacts again before each attempt, so a person who lost access gets nothing (the port returns no contact for a disabled principal).
+
+## Contract
+
+```go
+// Package notify (all NEW).
+const TokenExpiryWarning Type = "token.expiry-warning"
+
+// Package tokenwarnsvc (NEW), path internal/tokenwarnsvc.
+type Service struct{ /* unexported */ }
+
+// Config holds the ports of the Service.
+type Config struct {
+	Tokens  TokenLister
+	Owners  OwnerReader
+	Outbox  notify.Outbox
+	Now     func() time.Time
+	Logger  *slog.Logger
+}
+
+// Run appends the warnings that are due at the time of Now. It returns the number appended.
+func (s *Service) Run(ctx context.Context) (int, error)
+
+// Attributes of the notification: "token.id", "token.name", "token.expires-at", "level" ("soon" or "imminent").
+```
 
 ## Structure
 
-Unexported type warningQueue with constructor newWarningQueue that checks poll interval 60 seconds, lease 300 seconds and retry limit 1; only the constructor makes a sender, and rows move only through queued, sending, retry, sent and failed.
+The service has unexported fields and a constructor that checks that each port is set. The service imports `pkg/accesstoken` and `pkg/notify`, never an adapter.
 
 ## Risks
 
-- Duplicate email on sender restart after SMTP accept.
-- Password leak into queue row or log.
-- Plain SMTP to a non-loopback host.
-- Late warning sent after token expiry.
+- A person with no verified email gets no warning. The delivery record says "no contact".
+- A large installation lists many tokens each hour. The list pages by (created time, ID) with a page size, and the filter keeps only the tokens that expire within 14 days.
+
+## Layers (defense in depth)
+
+The change handles token metadata and sends it to a person. It is security code in the sense of the project rules (tokens, notices).
+
+| Layer | Guard | Hostile case | Test |
+| --- | --- | --- | --- |
+| port adapter (outbox) | The dedupe key skips a repeat | The same warning appended twice, and from two instances | One notification is stored |
+| service | Only personal tokens | A service token, a jwt-exchange token and an mtls-exchange token that expire soon | No notification |
+| service | Only active tokens | An expired, a revoked and a disabled token | No notification |
+| service | A disabled owner gets nothing | A token of a disabled principal | No notification |
+| service | The notification holds no secret | A token name with CR, LF and a long text | The text is cut by `Fit`, and no field holds the digest or a secret form |
+| service | A failed outbox write fails the run, not the token list | The outbox double returns an error | `Run` returns the error and appends nothing else |
+| job | One run for all instances | Two instances run the tick | One set of notifications |
+
+## Diagrams
+
+```mermaid
+sequenceDiagram
+participant J as Hourly job
+participant T as Token service
+participant O as Outbox
+participant D as Dispatcher
+participant E as Email sender
+J->>T: list personal tokens that expire within 14 days
+J->>O: Append(token.expiry-warning, Recipient owner, dedupe key)
+O-->>D: notification
+D->>E: delivery to the verified address
+```
 
 ## Quality attributes
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| Warning send latency after due time | 60 | seconds | warning sender poll, one installation |
-| Retry delay after a temporary failure | 15 | minutes | each queue row, 1 retry |
+| Time from a due warning to its notification | 1 | hour at most | the interval of the job |
 
 ## Threat model
 
-Data flow and trust boundaries:
-
 ```mermaid
 flowchart LR
- subgraph Server[Server process]
- Q[Warning queue] --> S[SMTP sender]
- DB[(Database)] --> Q
- end
- subgraph Relay[SMTP relay]
- R[Relay]
- end
- subgraph Operator[Operator input]
- SET[Settings and env]
- end
- SET --> S
- S -->|TLS| R
+subgraph Server
+J[Job] --> S[Service] --> O[Outbox]
+end
+O --> D[Dispatcher] --> M[SMTP relay]
 ```
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| Server process to SMTP relay | I | Plain SMTP sends the warning text and exposes the password or address. | boundary check | The adapter checks that the relay is not empty and the sender holds no CR or LF. | TestPlainRefused sends a sender with CR LF and an empty relay and expects a refusal with no network call. |
-| Server process to SMTP relay | I | Plain SMTP sends the warning text and exposes the password or address. | encode or contain | The adapter dials with the resolved relay address only and checks the resolved IP at connect. | TestPlainRefused uses a relay name that resolves to a non-loopback address with plain and expects a refusal. |
-| Server process to SMTP relay | I | Plain SMTP sends the warning text and exposes the password or address. | limit | Certificate checks stay on for TLS and a dial timeout of 30 seconds applies. | TestPlainRefused presents a bad certificate and a silent relay and expects a refusal. |
-| Server process to SMTP relay | I | Plain SMTP sends the warning text and exposes the password or address. | authorize at point of use | The sender reads the opt-in at send time for the installation, never from the row. | TestPlainRefused turns the opt-in off after queueing and expects a refusal. |
-| Server process to SMTP relay | I | Plain SMTP sends the warning text and exposes the password or address. | fail closed | The dialer refuses non-loopback plain SMTP unless the opt-in is on; a missing or not valid value is off. | TestPlainRefused uses a missing and a not valid opt-in value and expects a refusal. |
-| Operator input to server process | T | A header injection in the sender value or token name adds a recipient. | boundary check | The adapter allows only a valid address format for the sender. | TestWarningEmailContent sends a sender with CR LF and expects a refusal. |
-| Operator input to server process | T | A header injection in the sender value or token name adds a recipient. | encode or contain | The message builder removes CR and LF and never takes a header from a token name. | TestWarningEmailContent uses a token name with CR LF and expects no extra header. |
-| Operator input to server process | T | A header injection in the sender value or token name adds a recipient. | limit | The token name in the body is cut at 128 characters. | TestWarningEmailContent uses a 10000 character name and expects a short body. |
-| Operator input to server process | T | A header injection in the sender value or token name adds a recipient. | authorize at point of use | The recipient is the owner address read at send time, never a value from the row. | TestWarningEmailContent changes the row owner field and expects the real owner address. |
-| Operator input to server process | T | A header injection in the sender value or token name adds a recipient. | fail closed | A message that fails the checks is not sent and the row moves to failed. | TestWarningEmailContent expects failed with no network call. |
-| Server process to database | I | The SMTP password or a token secret reaches a queue row, log or audit entry. | boundary check | The row type has no field for a secret. | TestWarningAudit checks the row type has only the ID, times, state and reason. |
-| Server process to database | I | The SMTP password or a token secret reaches a queue row, log or audit entry. | encode or contain | The error text of the relay is cut and the password is removed before it is stored. | TestWarningAudit uses a relay error that holds the password and expects it absent. |
-| Server process to database | I | The SMTP password or a token secret reaches a queue row, log or audit entry. | limit | The reason field holds at most 200 characters. | TestWarningAudit uses a long reason and expects it cut. |
-| Server process to database | I | The SMTP password or a token secret reaches a queue row, log or audit entry. | authorize at point of use | Only the sender reads the password, from env or file at send time. | TestWarningAudit reads rows, logs and entries and expects no password. |
-| Server process to database | I | The SMTP password or a token secret reaches a queue row, log or audit entry. | fail closed | A reason that holds the password marks the row with a fixed reason. | TestWarningAudit expects the fixed reason. |
-| Server process to database | E | A replica sends a row for a token that the owner revoked. | boundary check | The row references the token by stable ID, and the sender checks it exists. | TestQueueWarningAtWarningTime deletes the token and expects failed with token-not-usable. |
-| Server process to database | E | A replica sends a row for a token that the owner revoked. | encode or contain | The lease update uses placeholders and one transaction. | TestQueueWarningAtWarningTime runs two senders and expects one send. |
-| Server process to database | E | A replica sends a row for a token that the owner revoked. | limit | A row has at most 2 tries. | TestQueueWarningAtWarningTime fails twice and expects no third try. |
-| Server process to database | E | A replica sends a row for a token that the owner revoked. | authorize at point of use | The sender rechecks the token and owner at send time under the lease. | TestQueueWarningAtWarningTime revokes a token before the send and expects failed with token-not-usable. |
-| Server process to database | E | A replica sends a row for a token that the owner revoked. | fail closed | An unreadable token record fails the row with no send. | TestQueueWarningAtWarningTime injects a store error and expects no send. |
+| Service to outbox | I | The notification leaks a secret | encode or contain | Fixed attribute list, `Fit` | Name with hostile text |
+| Service to outbox | S | A warning goes to the wrong person | authorize at point of use | The recipient is the owner of the token row | Token of person A gives a recipient A only |
+| Service to outbox | D | A repeat floods the outbox | limit | The dedupe key | Run the job many times |
+| Job | R | A sent warning leaves no record | fail closed | The delivery record of `pkg/notify` | Covered by the dispatcher change |
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Take the row lease | The sender ends while it holds the lease | Another sender takes the row after the 300 second lease ends | sending, then queued for the next holder |
-| SMTP send | Temporary 4xx error or relay unreachable | One retry after 15 minutes | retry, then failed with the reason after the second failure |
-| SMTP send | Permanent 5xx error | none | failed with the reason |
-| Mark row sent | The process ends after SMTP accept | The row can resend after the lease ends | sending, then sent after the resend |
+| list tokens | Store error | The next tick | No notification |
+| append | Store or fence error | The next tick | Nothing partial: one transaction |
+| delivery | SMTP error | By `pkg/notify` | Delivery record |
