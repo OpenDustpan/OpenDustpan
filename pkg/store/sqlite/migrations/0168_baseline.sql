@@ -473,6 +473,7 @@ CREATE TABLE durable_operations (
     claim_token         INTEGER NOT NULL,
     claim_expires_at_ms INTEGER,
     cancel_requested    INTEGER NOT NULL,
+    cancel_requested_at_ms INTEGER NOT NULL DEFAULT 0,
     not_before_ms       INTEGER NOT NULL,
     created_at_ms       INTEGER NOT NULL,
     updated_at_ms       INTEGER NOT NULL

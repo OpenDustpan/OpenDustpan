@@ -241,6 +241,60 @@ func TestCheckRunnerRenew(t *testing.T) {
 	}
 }
 
+func TestCheckSessionRenew(t *testing.T) {
+	t.Parallel()
+
+	canceled := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		canceled bool
+		at       time.Time
+		now      time.Time
+		want     error
+	}{
+		{"no cancel", false, time.Time{}, canceled.Add(24 * time.Hour), nil},
+		{"no cancel, a stale time", false, canceled, canceled.Add(24 * time.Hour), nil},
+		{"right after the cancel", true, canceled, canceled.Add(time.Second), nil},
+		{"at the bound", true, canceled, canceled.Add(runner.SessionCancelBound), nil},
+		{
+			"after the bound", true, canceled,
+			canceled.Add(runner.SessionCancelBound + time.Millisecond), runner.ErrClaimLost,
+		},
+		{"a day after the cancel", true, canceled, canceled.Add(24 * time.Hour), runner.ErrClaimLost},
+		{"a cancel later than now, within the skew", true, canceled, canceled.Add(-runner.SessionCancelSkew), nil},
+		{
+			"a cancel later than now, over the skew", true, canceled,
+			canceled.Add(-runner.SessionCancelSkew - time.Millisecond), runner.ErrClaimLost,
+		},
+		{"a cancel far in the future", true, canceled.Add(24 * 365 * time.Hour), canceled, runner.ErrClaimLost},
+		{"a cancel with no time", true, time.Time{}, canceled, runner.ErrClaimLost},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cancel := runner.SessionCancel{Requested: tc.canceled, At: tc.at}
+
+			if err := runner.CheckSessionRenew(cancel, tc.now); !errors.Is(err, tc.want) {
+				t.Fatalf("CheckSessionRenew = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	const maxSkew = 5 * time.Minute
+
+	if runner.SessionCancelSkew <= 0 || runner.SessionCancelSkew > maxSkew {
+		t.Fatalf("SessionCancelSkew = %v, want more than 0 and at most %v", runner.SessionCancelSkew, maxSkew)
+	}
+
+	if runner.SessionCancelBound != runner.GraceChanges+runner.ReportTime {
+		t.Fatalf("SessionCancelBound = %v, want the longest grace period plus the report time (%v)",
+			runner.SessionCancelBound, runner.GraceChanges+runner.ReportTime)
+	}
+}
+
 // work returns the work of a phase with the service account sa.
 func work(sa string) runner.Work {
 	return runner.Work{

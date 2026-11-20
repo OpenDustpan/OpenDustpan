@@ -213,24 +213,25 @@ type DurableHeartbeat struct {
 }
 
 type DurableOperation struct {
-	ID               string
-	StartKey         string
-	Kind             string
-	Input            []byte
-	Version          int64
-	State            string
-	Attempt          int64
-	Expiries         int64
-	DeadlineReleases int64
-	Failures         int64
-	LastError        string
-	ClaimOwner       pgtype.Text
-	ClaimToken       int64
-	ClaimExpiresAtMs pgtype.Int8
-	CancelRequested  bool
-	NotBeforeMs      int64
-	CreatedAtMs      int64
-	UpdatedAtMs      int64
+	ID                  string
+	StartKey            string
+	Kind                string
+	Input               []byte
+	Version             int64
+	State               string
+	Attempt             int64
+	Expiries            int64
+	DeadlineReleases    int64
+	Failures            int64
+	LastError           string
+	ClaimOwner          pgtype.Text
+	ClaimToken          int64
+	ClaimExpiresAtMs    pgtype.Int8
+	CancelRequested     bool
+	CancelRequestedAtMs int64
+	NotBeforeMs         int64
+	CreatedAtMs         int64
+	UpdatedAtMs         int64
 }
 
 type DurableSchedule struct {

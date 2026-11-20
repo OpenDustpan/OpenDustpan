@@ -718,21 +718,24 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 const cancelDurableOperation = `-- name: CancelDurableOperation :exec
 UPDATE durable_operations
 SET state = $1::text, cancel_requested = $2::boolean,
-  updated_at_ms = $3::bigint
-WHERE id = $4::text
+  cancel_requested_at_ms = $3::bigint,
+  updated_at_ms = $4::bigint
+WHERE id = $5::text
 `
 
 type CancelDurableOperationParams struct {
-	State           string
-	CancelRequested bool
-	NowMs           int64
-	ID              string
+	State               string
+	CancelRequested     bool
+	CancelRequestedAtMs int64
+	NowMs               int64
+	ID                  string
 }
 
 func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableOperationParams) error {
 	_, err := q.db.Exec(ctx, cancelDurableOperation,
 		arg.State,
 		arg.CancelRequested,
+		arg.CancelRequestedAtMs,
 		arg.NowMs,
 		arg.ID,
 	)
@@ -790,7 +793,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
 FROM c, pick
 WHERE o.id = pick.id
 RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.deadline_releases, o.failures, o.last_error, o.claim_owner, o.claim_token,
-  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
+  o.claim_expires_at_ms, o.cancel_requested, o.cancel_requested_at_ms, o.not_before_ms, o.created_at_ms, o.updated_at_ms
 `
 
 type ClaimDurableOperationParams struct {
@@ -833,6 +836,7 @@ func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOpe
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -1024,7 +1028,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
 FROM c
 WHERE o.id = $3::text AND o.state = 'pending'
 RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.deadline_releases, o.failures, o.last_error, o.claim_owner, o.claim_token,
-  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
+  o.claim_expires_at_ms, o.cancel_requested, o.cancel_requested_at_ms, o.not_before_ms, o.created_at_ms, o.updated_at_ms
 `
 
 type ClaimStartedDurableOperationParams struct {
@@ -1055,6 +1059,7 @@ func (q *Queries) ClaimStartedDurableOperation(ctx context.Context, arg ClaimSta
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -6879,7 +6884,7 @@ func (q *Queries) GetDriftResult(ctx context.Context, arg GetDriftResultParams) 
 
 const getDurableOperation = `-- name: GetDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 `
 
@@ -6902,6 +6907,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -6911,7 +6917,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 
 const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1
 `
 
@@ -6934,6 +6940,7 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -11819,14 +11826,14 @@ const insertDurableOperation = `-- name: InsertDurableOperation :one
 
 INSERT INTO durable_operations (
   id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 )
 SELECT $1::text, $2::text, $3::text, $4::bytea,
-  $5::bigint, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+  $5::bigint, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, FALSE, 0, c.now_ms, c.now_ms, c.now_ms
 FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
 ON CONFLICT (start_key) DO NOTHING
 RETURNING id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 `
 
 type InsertDurableOperationParams struct {
@@ -11867,6 +11874,7 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -15179,7 +15187,7 @@ func (q *Queries) ListDueNotificationDeliveryScopes(ctx context.Context, nowMs i
 
 const listDurableOperations = `-- name: ListDurableOperations :many
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations
 WHERE ($1::text = '' OR kind = $1::text)
   AND (cardinality($2::text[]) = 0 OR state = ANY($2::text[]))
@@ -15220,6 +15228,7 @@ func (q *Queries) ListDurableOperations(ctx context.Context, arg ListDurableOper
 			&i.ClaimToken,
 			&i.ClaimExpiresAtMs,
 			&i.CancelRequested,
+			&i.CancelRequestedAtMs,
 			&i.NotBeforeMs,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
@@ -20640,7 +20649,7 @@ func (q *Queries) LockBlobDeleteLeaseShared(ctx context.Context, class int32) er
 
 const lockDurableOperation = `-- name: LockDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
-  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+  cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 FOR UPDATE
 `
@@ -20666,6 +20675,7 @@ func (q *Queries) LockDurableOperation(ctx context.Context, id string) (DurableO
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,

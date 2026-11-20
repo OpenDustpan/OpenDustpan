@@ -499,7 +499,8 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 	}
 
 	params := db.CancelDurableOperationParams{
-		State: row.State, CancelRequested: row.CancelRequested, NowMs: 0, ID: row.ID,
+		State: row.State, CancelRequested: row.CancelRequested,
+		CancelRequestedAtMs: row.CancelRequestedAtMs, NowMs: 0, ID: row.ID,
 	}
 
 	switch durable.State(row.State) {
@@ -518,6 +519,10 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 	params.NowMs, err = q.DatabaseNowMs(ctx)
 	if err != nil {
 		return fmt.Errorf("read the database clock: %w", err)
+	}
+
+	if params.CancelRequested && !row.CancelRequested {
+		params.CancelRequestedAtMs = params.NowMs
 	}
 
 	if err := q.CancelDurableOperation(ctx, params); err != nil {

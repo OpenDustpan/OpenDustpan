@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -57,6 +58,38 @@ func (s *Store) AgeSupersededMarks(ctx context.Context, stackID stack.ID, at tim
 // checkSequence returns and before the mark.
 func SetAfterSequenceCheck(s *Store, hook func(stackID string)) {
 	s.afterSequenceCheck = hook
+}
+
+// AgeCancel sets the time of the cancel of the operation id to age before the
+// clock of the database, with a direct SQL update. The cases of the renewal of
+// a job session need a cancel older than the bound without a wait.
+func (s *Store) AgeCancel(ctx context.Context, id durable.ID, age time.Duration) error {
+	now, err := s.DatabaseNow(ctx)
+	if err != nil {
+		return fmt.Errorf("age cancel: %w", err)
+	}
+
+	at := now.Add(-age)
+
+	const stmt = `UPDATE durable_operations SET cancel_requested_at_ms = $1 WHERE id = $2`
+
+	if _, err = s.pool.Exec(ctx, stmt, at.UnixMilli(), string(id)); err != nil {
+		return fmt.Errorf("age cancel: %w", err)
+	}
+
+	return nil
+}
+
+// ClearCancelTime sets the time of the cancel of the operation id to 0, as a row
+// that a server of another version wrote has it, with a direct SQL update.
+func (s *Store) ClearCancelTime(ctx context.Context, id durable.ID) error {
+	const stmt = `UPDATE durable_operations SET cancel_requested_at_ms = 0 WHERE id = $1`
+
+	if _, err := s.pool.Exec(ctx, stmt, string(id)); err != nil {
+		return fmt.Errorf("clear cancel time: %w", err)
+	}
+
+	return nil
 }
 
 // SettingWrite is the input of WriteSettingInTx.

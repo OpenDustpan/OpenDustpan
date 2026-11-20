@@ -194,6 +194,12 @@ also works during a cancel, and then it answers `canceled: true`. The launcher
 stops its step with the grace period of the step, and still sends its last log
 chunks and its finish. During a cancel, the request for a new step gets `canceled`.
 
+A renewal works during a cancel for 12 minutes after the server records the cancel:
+the longest grace period of a step (10 minutes) and the time for the last log chunks
+and the finish (2 minutes). After that, a renewal gets `claim-lost` and does not
+move the expiry. The claim then expires, and the job ends as canceled. A launcher
+that ignores a cancel cannot keep its claim longer than this.
+
 A log chunk has a number from 0. If the launcher sends a chunk again with the same
 number and the same body, the server stores it once. A known number with another body
 gets `conflict`. The header `Dustpan-Content-SHA256` has the SHA-256 of the body

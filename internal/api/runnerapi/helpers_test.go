@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -152,7 +154,10 @@ type stores struct {
 	jobtokens  jobtoken.Store
 	units      unitStore
 	runners    runnerStores
-	audit      interface {
+	// ageCancel sets the time of the cancel of an operation to age before the
+	// clock of the database, with a direct SQL update on its own connection.
+	ageCancel func(ctx context.Context, operation string, age time.Duration) error
+	audit     interface {
 		List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
 	}
 }
@@ -191,7 +196,9 @@ func wiringBackends() []backend {
 func openSQLite(t *testing.T) stores {
 	t.Helper()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -204,7 +211,41 @@ func openSQLite(t *testing.T) stores {
 
 	return stores{
 		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), jobtokens: s.JobTokens(), units: s,
-		runners: s.Runners(), audit: s,
+		runners: s.Runners(), audit: s, ageCancel: ageCancelSQLite(path),
+	}
+}
+
+// operationID is the allowlist of the operation id that ageCancel takes.
+var errOperationID = errors.New("operation id is not valid")
+
+var operationID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// ageCancelSQLite returns the ageCancel of the SQLite store in the file path.
+func ageCancelSQLite(path string) func(context.Context, string, time.Duration) error {
+	return func(ctx context.Context, operation string, age time.Duration) error {
+		if !operationID.MatchString(operation) {
+			return fmt.Errorf("%w: %q", errOperationID, operation)
+		}
+
+		conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+		if err != nil {
+			return fmt.Errorf("open: %w", err)
+		}
+
+		const stmt = `UPDATE durable_operations SET cancel_requested_at_ms =
+			CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) - ?
+			WHERE id = ?`
+
+		_, execErr := conn.ExecContext(ctx, stmt, age.Milliseconds(), operation)
+		if closeErr := conn.Close(); closeErr != nil {
+			return errors.Join(execErr, fmt.Errorf("close: %w", closeErr))
+		}
+
+		if execErr != nil {
+			return fmt.Errorf("age cancel: %w", execErr)
+		}
+
+		return nil
 	}
 }
 

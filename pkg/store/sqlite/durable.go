@@ -58,7 +58,7 @@ var errUnknownDurableState = errors.New("durable operation row has an unknown st
 // durableColumns selects every column of durable_operations, in the order of
 // db.DurableOperation.
 const durableColumns = `SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, ` +
-	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, ` +
+	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, ` +
 	`updated_at_ms`
 
 // ErrStepTransactionBound reports a step transaction that stayed open past
@@ -646,6 +646,12 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 	case durable.StatePending:
 		row.State = string(durable.StateCanceled)
 	case durable.StateRunning:
+		// The time of the cancel is the time of the first request. A repeated
+		// cancel keeps it, so it cannot move the bound of a renewal.
+		if !row.CancelRequested {
+			row.CancelRequestedAtMs = now
+		}
+
 		row.CancelRequested = true
 	case durable.StateSucceeded, durable.StateFailed:
 		return durable.ErrFinished
@@ -931,19 +937,20 @@ func storeNow(ctx context.Context, q *db.Queries) (int64, error) {
 // writeDurable writes the columns of row that change after the start.
 func writeDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) error {
 	err := q.UpdateDurableOperation(ctx, db.UpdateDurableOperationParams{
-		State:            row.State,
-		Attempt:          row.Attempt,
-		Expiries:         row.Expiries,
-		DeadlineReleases: row.DeadlineReleases,
-		Failures:         row.Failures,
-		LastError:        row.LastError,
-		ClaimOwner:       row.ClaimOwner,
-		ClaimToken:       row.ClaimToken,
-		ClaimExpiresAtMs: row.ClaimExpiresAtMs,
-		CancelRequested:  row.CancelRequested,
-		NotBeforeMs:      row.NotBeforeMs,
-		UpdatedAtMs:      row.UpdatedAtMs,
-		ID:               row.ID,
+		State:               row.State,
+		Attempt:             row.Attempt,
+		Expiries:            row.Expiries,
+		DeadlineReleases:    row.DeadlineReleases,
+		Failures:            row.Failures,
+		LastError:           row.LastError,
+		ClaimOwner:          row.ClaimOwner,
+		ClaimToken:          row.ClaimToken,
+		ClaimExpiresAtMs:    row.ClaimExpiresAtMs,
+		CancelRequested:     row.CancelRequested,
+		CancelRequestedAtMs: row.CancelRequestedAtMs,
+		NotBeforeMs:         row.NotBeforeMs,
+		UpdatedAtMs:         row.UpdatedAtMs,
+		ID:                  row.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("write durable operation: %w", err)
@@ -1062,7 +1069,7 @@ func queryDurableRows(ctx context.Context, tx *sql.Tx, query string, args []any)
 			&row.ClaimOwner,
 			&row.ClaimToken,
 			&row.ClaimExpiresAtMs,
-			&row.CancelRequested,
+			&row.CancelRequested, &row.CancelRequestedAtMs,
 			&row.NotBeforeMs,
 			&row.CreatedAtMs,
 			&row.UpdatedAtMs,
