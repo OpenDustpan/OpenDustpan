@@ -86,6 +86,8 @@ type accessFixture struct {
 	// passwords is the password budget of the handler: it counts each
 	// failure of a password or code check.
 	passwords *fakeLimiter
+	// tokens is the token service of the handler.
+	tokens *accesstoken.Service
 }
 
 // newAccessFixture builds a handler whose authorizer and access service
@@ -155,6 +157,10 @@ type accessFixtureParts struct {
 	// afterRevoke, when not nil, runs after each commit of the revoke of a
 	// grant, in the goroutine of the request.
 	afterRevoke func()
+	// tokenList, when not nil, runs at the start of each list of the access
+	// tokens, and its error is the error of the list. A test blocks the list
+	// until the context ends.
+	tokenList func(ctx context.Context) error
 }
 
 // newAccessFixturePorts is newAccessFixture with the collection port and the
@@ -165,7 +171,7 @@ func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
 
@@ -181,7 +187,7 @@ func newAccessFixtureSignIn(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
 
@@ -204,7 +210,7 @@ func newAccessFixtureLinks(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
 
@@ -219,7 +225,7 @@ func newAccessFixtureClock(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
-		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
 
@@ -302,7 +308,8 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     grants,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
+		Store:      hookedTokenStore{Store: st, onList: parts.tokenList},
+		Principals: st, Freshness: nil, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
@@ -394,7 +401,9 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		t.Fatalf("handler: %v", err)
 	}
 
-	f := accessFixture{store: st, path: path, sessions: sessions, handler: handler, passwords: passwords}
+	f := accessFixture{
+		store: st, path: path, sessions: sessions, handler: handler, passwords: passwords, tokens: tokens,
+	}
 
 	f.seed(t, "alice", access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.seed(t, "olga", access.RoleInstallationOperator, identity.ServerObject())
@@ -1226,4 +1235,28 @@ func (s readFailStore) GetGrant(ctx context.Context, id string) (access.Grant, e
 	}
 
 	return s.Store.GetGrant(ctx, id)
+}
+
+// hookedTokenStore is the token store of the token service of the fixture. A
+// non-nil onList runs at the start of each list of the tokens, and its error
+// is the error of the list.
+type hookedTokenStore struct {
+	*sqlite.Store
+
+	onList func(ctx context.Context) error
+}
+
+func (s hookedTokenStore) ListTokens(ctx context.Context, q accesstoken.Query) ([]accesstoken.Token, int64, error) {
+	if s.onList != nil {
+		if err := s.onList(ctx); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	rows, total, err := s.Store.ListTokens(ctx, q)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list the access tokens in the store: %w", err)
+	}
+
+	return rows, total, nil
 }

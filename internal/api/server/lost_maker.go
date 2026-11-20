@@ -16,7 +16,9 @@ import (
 // writes one transaction for each revoked token, and a large installation may
 // hold thousands of tokens. A limit of one minute covers that work with a wide
 // margin, and it still ends a revoke that waits on a stuck store, so that no
-// request holds a goroutine without end. When the limit passes, the revoke
+// request holds a goroutine without end. A request, or a graceful shutdown
+// that waits for the request, can wait up to this time after the commit of the
+// change. When the limit passes, the revoke
 // writes one log line, and the check at the use of each remaining token
 // refuses it.
 const lostMakerRevokeTimeout = time.Minute
@@ -39,8 +41,9 @@ const lostMakerRevokeTimeout = time.Minute
 //
 // Rule of the paths with no sweep: a path that changes the act-as path of a
 // maker with no call of this function does not leave the token active. These
-// paths are the disable of a principal at sign-in, the revoke of the demo
-// grant, a restore and a change on another instance. The check at the use of
+// paths are the disable of a principal at sign-in, the group claims of the
+// identity provider at sign-in (they can remove or suspend a membership), the
+// revoke of the demo grant, a restore and a change on another instance. The check at the use of
 // each service token (accesstoken.Service.checkMakerAtUse) refuses the token
 // and revokes it, with the reason of the use. The test
 // TestTokenIsRefusedAfterAPathWithNoSweep in pkg/accesstoken covers each path.
@@ -51,7 +54,7 @@ func (h *Handler) revokeLostMakers(r *http.Request, p identity.Principal, action
 
 	cause := accesstoken.Cause{Subject: p.Subject, Action: string(action), Object: object}
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), lostMakerRevokeTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), h.lostMakerTimeout)
 	defer cancel()
 
 	if _, err := h.tokens.RevokeLostMakers(ctx, cause); err != nil {
