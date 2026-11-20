@@ -251,9 +251,11 @@ func TestListScanLimitCountsDamagedRows(t *testing.T) {
 		damaged := make([]job.DamagedRow, 0, jobsapi.ScanBatch)
 		for i := range jobsapi.ScanBatch {
 			damaged = append(damaged, job.DamagedRow{
-				ID:     job.ID(fmt.Sprintf("job-d%019d", (calls-1)*jobsapi.ScanBatch+i)),
-				UnitID: "unt-a",
-				Reason: "the body is not JSON",
+				ID:      job.ID(fmt.Sprintf("job-d%019d", (calls-1)*jobsapi.ScanBatch+i)),
+				UnitID:  "unt-a",
+				Reason:  "the body is not JSON",
+				State:   "",
+				Version: 0,
 			})
 		}
 

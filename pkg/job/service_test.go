@@ -174,13 +174,17 @@ func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, 
 	return nil, nil, nil
 }
 
-func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry) error {
+func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.damagedCancels = append(s.damagedCancels, damagedCancel{id: id, fence: f, entries: e})
 
-	return s.cancelDamagedErr
+	if s.cancelDamagedErr != nil {
+		return 0, s.cancelDamagedErr
+	}
+
+	return s.damaged[id].row.Version + 1, nil
 }
 
 func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
@@ -188,12 +192,12 @@ func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, nam
 	defer s.mu.Unlock()
 
 	if s.getDamagedErr != nil {
-		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", s.getDamagedErr
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", s.getDamagedErr
 	}
 
 	d, ok := s.damaged[id]
 	if !ok {
-		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", job.ErrNotFound
 	}
 
 	return d.row, d.ns, nil

@@ -87,9 +87,9 @@ func (s *service) Cancel(ctx context.Context, a Actor, id ID, reason string) (Jo
 // is ErrNotFound, and no caller learns more. The store ends no durable
 // operation for such a row: the job stays stopped and holds no body to read.
 // It returns a Job that holds only what the row proves: the ID, the unit, the
-// state canceled.
+// state canceled and the version that the store wrote.
 func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason string) (Job, error) {
-	damage, unit, err := s.damagedUnit(ctx, id)
+	row, unit, err := s.damagedUnit(ctx, id)
 	if err != nil {
 		return Job{}, err
 	}
@@ -119,14 +119,17 @@ func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason stri
 
 	var j Job
 
-	j.ID, j.Spec.Unit = id, unit
+	// The row has no body that decodes, so the job holds only what the
+	// columns of the row give: the state that the cancel finds, which is the
+	// old value of the audit entry.
+	j.ID, j.Spec.Unit, j.State = id, unit, row.State
 
 	entry := s.cancelEntry(&j, a, reason)
 	entry.Changes = append(entry.Changes, audit.Change{
-		Key: "damaged", Old: nil, New: damage, Layer: "", TakesEffect: "",
+		Key: "damaged", Old: nil, New: row.Reason, Layer: "", TakesEffect: "",
 	})
 
-	err = s.store.CancelDamaged(ctx, id, fence, []audit.Entry{entry})
+	version, err := s.store.CancelDamaged(ctx, id, fence, []audit.Entry{entry})
 	if errors.Is(err, ErrInvalid) {
 		return Job{}, errRepaired
 	}
@@ -135,7 +138,7 @@ func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason stri
 		return Job{}, fmt.Errorf("cancel damaged job: %w", err)
 	}
 
-	j.State, j.Wait = StateCanceled, WaitNone
+	j.State, j.Wait, j.Version = StateCanceled, WaitNone, version
 
 	return j, nil
 }
@@ -236,24 +239,24 @@ func (s *service) changeEntry(
 }
 
 // damagedUnit reads the damaged row id and finds the unit that the row names.
-// It returns the reason that the row is damaged and the unit.
+// It returns the damaged row and the unit.
 // It checks that the unit is the one that the row names, in the namespace of
 // the row.
-func (s *service) damagedUnit(ctx context.Context, id ID) (string, identity.Object, error) {
+func (s *service) damagedUnit(ctx context.Context, id ID) (DamagedRow, identity.Object, error) {
 	row, ns, err := s.store.GetDamaged(ctx, id)
 
 	switch {
 	case errors.Is(err, ErrInvalid):
 		// The row was repaired after Get reported it as damaged. The caller
 		// sends the request again and cancels the job through its body.
-		return "", identity.Object{}, errRepaired
+		return DamagedRow{}, identity.Object{}, errRepaired
 	case err != nil:
-		return "", identity.Object{}, fmt.Errorf("get damaged job: %w", err)
+		return DamagedRow{}, identity.Object{}, fmt.Errorf("get damaged job: %w", err)
 	}
 
 	unit, err := s.units.UnitByID(ctx, ns, row.UnitID)
 	if err != nil {
-		return "", identity.Object{}, fmt.Errorf("get unit of damaged job: %w", err)
+		return DamagedRow{}, identity.Object{}, fmt.Errorf("get unit of damaged job: %w", err)
 	}
 
 	// Defense in depth: the resolver looks the unit up by its ID, and the
@@ -263,10 +266,10 @@ func (s *service) damagedUnit(ctx context.Context, id ID) (string, identity.Obje
 	// does not rely on the checks of the resolver, of the store or of the
 	// route of the API.
 	if unit.Namespace() != ns || unit.UnitID() == "" || unit.UnitID() != row.UnitID {
-		return "", identity.Object{}, ErrNotFound
+		return DamagedRow{}, identity.Object{}, ErrNotFound
 	}
 
-	return row.Reason, unit, nil
+	return row, unit, nil
 }
 
 // errRepaired is the answer when the row of a job was repaired between the

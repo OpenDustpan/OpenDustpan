@@ -40,8 +40,11 @@ func damagedRig(t *testing.T, mod func(*rig)) *rig {
 	r := cancelRig(t)
 	r.store.damaged = map[job.ID]damagedRow{
 		damagedID: {
-			row: job.DamagedRow{ID: damagedID, UnitID: r.unit.UnitID(), Reason: "the body is not JSON"},
-			ns:  r.unit.Namespace(),
+			row: job.DamagedRow{
+				ID: damagedID, UnitID: r.unit.UnitID(), Reason: "the body is not JSON",
+				State: job.StateRunning, Version: 7,
+			},
+			ns: r.unit.Namespace(),
 		},
 	}
 
@@ -65,6 +68,11 @@ func TestServiceCancelsADamagedJob(t *testing.T) {
 	if got.ID != damagedID || got.State != job.StateCanceled || got.Spec.Unit.String() != r.unit.String() {
 		t.Errorf("Cancel = %s in state %s on %s, want %s canceled on the unit", got.ID, got.State, got.Spec.Unit,
 			damagedID)
+	}
+
+	// The answer names the version that the store wrote, not version 0.
+	if got.Version != 8 {
+		t.Errorf("Cancel answers version %d, want 8: the version after the stored row", got.Version)
 	}
 
 	if len(r.store.damagedCancels) != 1 {
@@ -91,6 +99,20 @@ func checkDamagedCancel(t *testing.T, r *rig) {
 	if e.Action != string(job.ActionJobCancel) || e.Subject != "carol" || e.Reason != "the row is damaged" ||
 		e.Outcome != audit.OutcomeSuccess || e.Object != r.unit.String() {
 		t.Errorf("entry = %+v, want %s by carol on the unit with the reason", e, job.ActionJobCancel)
+	}
+
+	checkEventOld(t, e.Changes, job.StateRunning)
+}
+
+// checkEventOld checks that the event change of a cancel entry has the stored
+// state as its old value, and not an empty text.
+func checkEventOld(t *testing.T, changes []audit.Change, want job.State) {
+	t.Helper()
+
+	for _, c := range changes {
+		if c.Key == "event" && (c.Old == nil || *c.Old != string(want)) {
+			t.Errorf("the event change has old value %v, want %q: the stored state", c.Old, want)
+		}
 	}
 }
 
@@ -338,8 +360,14 @@ func hostileRig(t *testing.T, opt func(*job.ServiceConfig, *rig), store func(*sv
 
 		rr.store.damaged = map[job.ID]damagedRow{
 			damagedID: {
-				row: job.DamagedRow{ID: damagedID, UnitID: rr.unit.UnitID(), Reason: "the body is not JSON"},
-				ns:  rr.unit.Namespace(),
+				row: job.DamagedRow{
+					ID:      damagedID,
+					UnitID:  rr.unit.UnitID(),
+					Reason:  "the body is not JSON",
+					State:   "",
+					Version: 0,
+				},
+				ns: rr.unit.Namespace(),
 			},
 		}
 

@@ -60,9 +60,22 @@ func testDamagedList(t *testing.T, h Harness) {
 		t.Fatalf("the damaged row has unit %q, want %q", page.Damaged[0].UnitID, f.unit.UnitID())
 	}
 
+	if page.Damaged[0].State != job.StateQueued || page.Damaged[0].Version != bad.Version {
+		t.Fatalf("the damaged row has state %q at version %d, want %q at version %d",
+			page.Damaged[0].State, page.Damaged[0].Version, job.StateQueued, bad.Version)
+	}
+
 	cancel := entry(f.unit, job.ActionJobCancel)
-	if err := h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel}); err != nil {
+
+	version, err := h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel})
+	if err != nil {
 		t.Fatalf("CancelDamaged = %v", err)
+	}
+
+	// The cancel answers the version that it stored: the row version after
+	// the one that the reader saw.
+	if version != bad.Version+1 {
+		t.Fatalf("CancelDamaged stored version %d, want %d", version, bad.Version+1)
 	}
 
 	// The row stays where it is, in canceled state.
@@ -76,7 +89,7 @@ func testDamagedList(t *testing.T, h Harness) {
 	}
 
 	// A second cancel of the canceled row is refused.
-	if err := h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel}); !errors.Is(err,
+	if _, err = h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel}); !errors.Is(err,
 		job.ErrFinished,
 	) {
 		t.Fatalf("a second CancelDamaged = %v, want ErrFinished", err)
@@ -97,6 +110,11 @@ func testGetDamaged(t *testing.T, h Harness) {
 	row, ns, err := h.Jobs.GetDamaged(t.Context(), bad.ID)
 	if err != nil {
 		t.Fatalf("GetDamaged = %v", err)
+	}
+
+	if row.State != job.StateQueued || row.Version != bad.Version {
+		t.Fatalf("GetDamaged = state %q at version %d, want %q at version %d", row.State, row.Version,
+			job.StateQueued, bad.Version)
 	}
 
 	if row.ID != bad.ID || row.UnitID != f.unit.UnitID() || row.Reason == "" || ns != f.fence.Namespace {
@@ -133,7 +151,7 @@ func testDamagedCancelValid(t *testing.T, h Harness) {
 		t.Fatalf("AuditEntries = %v", err)
 	}
 
-	err = h.Jobs.CancelDamaged(t.Context(), j.ID, f.fence, []audit.Entry{entry(f.unit, job.ActionJobCancel)})
+	_, err = h.Jobs.CancelDamaged(t.Context(), j.ID, f.fence, []audit.Entry{entry(f.unit, job.ActionJobCancel)})
 	if !errors.Is(err, job.ErrInvalid) {
 		t.Fatalf("CancelDamaged of a job that is not damaged = %v, want ErrInvalid", err)
 	}
