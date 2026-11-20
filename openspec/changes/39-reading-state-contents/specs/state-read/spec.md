@@ -72,13 +72,17 @@ If a caller causes repeated refusals on the read route, then the server SHALL co
 - **WHEN** version is above 5 MB
 - **THEN** server refuses with 413 and no content
 
-### Requirement: bounded work for one read
+### Requirement: bounded depth for one read
 
-The server SHALL limit the work of one read by the shape of the state, not only by its size, with the one bound that the masked reads of the tool share: a nesting depth of at most 100 levels, and one work budget of 128 MiB for the whole read. The scan charges each value the length of its value path plus a fixed cost for its marker. A state above a bound SHALL be refused with 413 and the code `stack.state-too-complex` (Pulumi) or `state-version.too-complex` (OpenTofu) before the server builds the path of any marker, and the refusal goes to the denial limiter. The server SHALL build paths only after the bound passes. The server SHALL NOT add a second bound for the count of markers or the bytes of paths: a state inside the budget is read in pages.
+The server SHALL refuse a state that nests deeper than 100 levels with 413 and the code `stack.state-too-complex` (Pulumi) or `state-version.too-complex` (OpenTofu), before it builds the path of any marker. The refusal goes to the denial limiter.
 
 #### Scenario: deep nesting under the size limit
 - **WHEN** a version of less than 5 MB has a nesting depth above 100
 - **THEN** server refuses with 413 and the code of the tool, and builds no path
+
+### Requirement: bounded work budget for one read
+
+The server SHALL charge each value of the state the length of its value path plus a fixed cost for its marker, against one budget of 128 MiB for the whole read, before it builds any path. A state over the budget SHALL be refused with 413 and the code of the tool. The server SHALL NOT add a second bound for the count of markers or the bytes of paths: a state inside the budget is read in pages.
 
 #### Scenario: value paths over the work budget
 - **WHEN** a version of less than 5 MB holds values whose paths need more than the work budget, for example a key of 1 MiB above 200 values
