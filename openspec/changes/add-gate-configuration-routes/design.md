@@ -2,7 +2,7 @@
 
 Gate configuration is security code. A write needs an action check, a scope check, a fresh authentication, limits, a version check and an audit entry. Main has all of these for gates and access limits at three scopes, and for approval rules and approval defaults at the namespace scope. The store already holds every object kind at the installation scope. This change adds the missing routes and the missing scope checks. It adds no new check for a write that main serves already.
 
-Two parts of the first plan wait for the owner. The carry-over setting waits because an owner decision deletes it (owner question 2). The write routes of the installation wait because no decision says who holds the action (owner question 1). The tasks of those parts are marked PARKED.
+The owner decided two points on 20 November 2026. The action `installation:manage-gates` is in the operator family (Q1), so this change builds the write routes of the installation. This change builds no route for the signature carry-over setting, because ADR 299 decision 12 replaces it (Q2). Task 3.4 records Q2 in ADR 230 and ADR 299.
 
 ## Decisions
 
@@ -11,7 +11,10 @@ Two parts of the first plan wait for the owner. The carry-over setting waits bec
 3. **Versions as on main.** A PUT without If-Match replaces the stored object or creates it. A stale If-Match gives 409 gate.version-conflict. The first draft said 428 for a missing If-Match. Main does not do this, no decision asks for it, and the reference page says the opposite. This change keeps main.
 4. **Fresh authentication as on main.** Each PUT and each DELETE of the new rows runs behind `h.fresh`. It fails closed with 403 mfa.fresh-step-required for an access token and for an old sign-in. The first draft limited this to enforce and final gates. Main requires it for every write.
 5. **Final gates and rule IDs as on main.** The service gives `gate.ErrFinal` for a save over a final object of a wider scope. The new scopes reuse this.
-6. **The installation scope in the service, read first.** `gate.ConfigService` accepts the installation scope for the reads of gates, access limits and approval rules. It reads no namespace, and the audit entry of a later write has the scope `@server`. The service still refuses a write at the installation (`gate.ErrInvalid`) and still refuses an approval default at the installation. A write at the installation becomes possible only when owner question 1 is answered (tasks 4.1 to 4.3).
+6. **The installation scope in the service.** `gate.ConfigService` accepts the installation scope for the reads and the writes of gates, access limits and approval rules. It reads no namespace, takes the zero fence, and writes the audit entry with the scope `@server`. The service still refuses an approval default at the installation, because the installation holds none (`Scope.HoldsApprovalDefault`, `pkg/gate/scope.go:293`), and it still refuses a blueprint, a profile and the empty scope.
+8. **`installation:manage-gates` is an operator action (owner, 2026-11-20).** It is in `FamilyOperator`. The installation operator and the site administrator hold it, and the account administrator does not (`pkg/access/access_test.go:668-676`). The reason is the rule of ADR 216 decision 2: an installation gate acts on every namespace. A namespace administrator holds `namespace:manage-gates` only and gets 403 on an installation route.
+9. **Audit action names of the installation writes.** The names follow the form of main, `<level>:<verb>-<kind>` (`pkg/gate/config_objects.go:15-18`, `pkg/gate/config.go:114-117`), with the level `installation`: `installation:set-gate`, `installation:delete-gate`, `installation:set-access-limit`, `installation:delete-access-limit`, `installation:set-approval-rule` and `installation:delete-approval-rule`. The service picks the constant from the level of the scope, in one table, so a write at a level has no name of another level. The object of the entry is the scope key `installation` plus the path of the object, as for the other scopes (the key of the scope, then the kind and the ID, as `pkg/gate/config.go:280` builds it for an approval rule). There is no entry for a read.
+10. **No carry-over route (owner, 2026-11-20).** The binding level replaces the setting (ADR 299 decision 12). The store port keeps its methods until the pull request that ADR 299 names deletes them.
 7. **The installation read routes** declare `installation:read-gates` with the object `@server` (`resolveServer`). A holder of `namespace:read-gates` only gets 403. The list shows the installation objects only.
 
 ## Structure
@@ -40,16 +43,29 @@ The bodies are the bodies of main. A body names no scope. A request with a field
 
 The port `serverapi.GateConfig` does not change. `gate.ConfigService` keeps its method set. These sentinels change behavior:
 
-- `gate.ErrInvalid`: a write of any kind at the installation, an approval default at the installation, and a scope of a blueprint, a profile or the empty scope.
+- `gate.ErrInvalid`: an approval default at the installation, and a scope of a blueprint, a profile or the empty scope.
 - `gate.ErrNotFound`, `gate.ErrUnitNotFound`, `gate.ErrConflict`, `gate.ErrFinal`, `gate.ErrLimit`: as on main for each new scope.
 
-PARKED (owner question 1). When the owner decides who holds `installation:manage-gates`, the rows are PUT and DELETE of `/api/dustpan/v1/gates/{id}`, `/access-limits/{id}` and `/approval-rules/{id}`, with the operation IDs `setInstallationGate`, `deleteInstallationGate`, `setInstallationAccessLimit`, `deleteInstallationAccessLimit`, `setInstallationApprovalRule` and `deleteInstallationApprovalRule`, a fresh authentication, the zero fence, and an audit entry with the scope `@server`. The audit action names of these entries are part of that decision: no ADR gives them for the installation.
+Installation write rows (owner, 2026-11-20). The scope is `/api/dustpan/v1`.
+
+| Method and path | Operation ID | Action (object) | Request and answer | Errors |
+| --- | --- | --- | --- | --- |
+| PUT `/api/dustpan/v1/gates/{id}` | setInstallationGate | installation:manage-gates (`@server`), fresh | gate body, If-Match optional / body, ETag | 409 gate.version-conflict, 409 gate.final, 422 gate.invalid, 422 gate.limit, 403 mfa.fresh-step-required |
+| DELETE `/api/dustpan/v1/gates/{id}` | deleteInstallationGate | installation:manage-gates, fresh | If-Match optional / 204 | 404 gate.not-found, 409 gate.version-conflict |
+| PUT `/api/dustpan/v1/access-limits/{id}` | setInstallationAccessLimit | installation:manage-gates, fresh | access limit body / body, ETag | as the gate PUT |
+| DELETE `/api/dustpan/v1/access-limits/{id}` | deleteInstallationAccessLimit | installation:manage-gates, fresh | If-Match optional / 204 | as the gate DELETE |
+| PUT `/api/dustpan/v1/approval-rules/{id}` | setInstallationApprovalRule | installation:manage-gates, fresh | approval rule body / body, ETag | as the gate PUT |
+| DELETE `/api/dustpan/v1/approval-rules/{id}` | deleteInstallationApprovalRule | installation:manage-gates, fresh | If-Match optional / 204 | as the gate DELETE |
+
+There is no route for an approval default at the installation, and no route for the carry-over setting.
 
 ## Risks
 
 - A rename races with a write to the same unit. The store reads the stable unit ID in the write transaction. The new tests cover this for approval rules.
 - Two managers write one row with the same version. One gets 409.
 - A read of the installation list shows rules that a namespace administrator may not see. The route declares `installation:read-gates` on `@server`, and a namespace grant gives no action on `@server`.
+- An installation write changes the gates of every namespace at once. The route declares `installation:manage-gates`, which only the operator family holds, and it needs a fresh authentication. A final gate of the installation stays final for each namespace (`gate.ErrFinal`).
+- A new action that no family names is held by the administrator only. `installation:manage-gates` is in the operator family on the day it exists, and the test `TestActionsWithoutRoutesAreUnclassified` (`pkg/access/access_test.go:553`) fails for an action that has no route and no family.
 - An approval rule at a collection with the ID of a final namespace rule. The service refuses it with `gate.ErrFinal`. The route test shows it for both new scopes.
 
 ## Layers (defense in depth)
@@ -68,6 +84,11 @@ One table for each layer. Each guard has a test that fails when the guard is rem
 | port adapter | The store uses placeholders, compares the version and checks the fence and the audit entry in one transaction. | SQL text in a collection name or an ID is stored as text and matches no other row. Two writes with one version give one success and one 409. A failing audit write leaves the row unchanged. |
 | port adapter | The store reads the stable unit ID in the transaction. | A rename between the route lookup and the write keeps the rule with the unit. A new unit with the name of a deleted unit has no rule. |
 | port adapter | The store refuses a scope that holds no configuration, and a fence of another scope. | A fence of `acme` with a scope of `other` gives `gate.ErrInvalid`. |
+| HTTP handler | The installation write rows declare `installation:manage-gates` on `@server`, and `h.fresh` wraps them. | A holder of `installation:read-gates` only, a holder of `namespace:manage-gates` only and an account administrator write `/api/dustpan/v1/gates/{id}` and get 403. An access token of a site administrator gets 403 mfa.fresh-step-required. |
+| service | `requireScope(scope, use)` allows the installation for gates, access limits and approval rules, and refuses an approval default there. | A save of an approval default at the installation gives `gate.ErrInvalid`. A save of each of the three kinds at the installation reads no namespace and calls the store with the zero fence. |
+| service | The audit action comes from the level of the scope, in one table. | A write at the installation writes `installation:set-gate`, never `namespace:set-gate`, and the entry has the scope `@server`. A write at a namespace never writes an `installation:` name. |
+| port adapter | The store takes the zero fence for the installation and refuses any other fence. | A write at the installation with the fence of `acme` gives `gate.ErrInvalid` and stores nothing. A namespace write with the zero fence gives `gate.ErrInvalid`. |
+| port adapter | The write and its audit entry are one transaction at the installation too. | A failing audit write at the installation leaves the row unchanged. |
 
 ## Quality attributes
 
@@ -100,6 +121,11 @@ flowchart LR
 | Client to server | E | Same. | limit | The body reader caps the body, and the service caps the counts. | A body above the cap is refused before a write. The 65th rule gets 422 gate.limit. |
 | Client to server | E | Same. | authorize at point of use | The route declares the action and the object, and the policy check runs first. | A read-only principal writes and gets 403. A namespace holder reads the installation list and gets 403. |
 | Client to server | E | Same. | fail closed | An unknown scope, or an error in the grant lookup, denies. | A failing grant lookup gives an error status and no store call. |
+| Client to server | E | A namespace administrator or a reader writes a gate of the installation, which acts on every namespace. | boundary check | The installation write routes name `installation:manage-gates` on `@server`, and the ID segment is checked against an allowlist. | A holder of `namespace:manage-gates` and a holder of `installation:read-gates` write `/api/dustpan/v1/gates/{id}` and get 403. An ID with a capital letter gets 400 or 422 and no store call. |
+| Client to server | E | Same. | encode or contain | The path object is the scope key `installation` and the checked ID. | An ID with a slash or SQL text reaches no other object. |
+| Client to server | E | Same. | limit | The service caps the count of objects at the installation as at each scope. | The 65th approval rule at the installation gets 422 gate.limit. |
+| Client to server | E | Same. | authorize at point of use | The policy check runs on `@server` before the handler, and `h.fresh` wraps the write. | An access token of a site administrator gets mfa.fresh-step-required and no row changes. |
+| Client to server | E | Same. | fail closed | A failing grant lookup denies, and the denial is written to the audit log. | A failing grant lookup gives an error status and no store call. |
 | Client to server | S | An access token passes as a fresh authentication. | boundary check | The handler reads the kind of credential from the authenticated principal. | A request with an access token and a forged header gets mfa.fresh-step-required. |
 | Client to server | S | Same. | encode or contain | The time of the sign-in comes from the sealed session, never from the request. | A session cookie with an edited time fails to open and the request gets 401. |
 | Client to server | S | Same. | limit | The window of the fresh step is fixed. | A session just outside the window gets mfa.fresh-step-required. |

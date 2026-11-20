@@ -96,18 +96,66 @@ The server SHALL serve list and get of gates, access limits and approval rules a
 - **WHEN** a holder of the installation read action reads an ID that is not stored at the installation
 - **THEN** the server answers 404 with code gate.not-found
 
-### Requirement: Installation writes stay refused
+### Requirement: Installation write routes
 
-Until a decision names the holders of an installation manage action, the service SHALL refuse a write of any gate configuration kind at the installation scope, and an approval default at the installation scope, with `gate.ErrInvalid`. The service SHALL refuse a blueprint scope, a profile scope and the empty scope for every use.
+The server SHALL serve PUT and DELETE of one gate, one access limit and one approval rule at the installation scope under `/api/dustpan/v1`. The routes SHALL declare the action `installation:manage-gates` on the object `@server`, and SHALL need a fresh authentication.
 
-#### Scenario: Installation write
-- **WHEN** a caller of the service saves an approval rule at the installation scope
-- **THEN** the service returns `gate.ErrInvalid` and calls no store method
+#### Scenario: Installation operator saves a gate
+- **WHEN** an installation operator with a fresh sign-in saves a gate at the installation
+- **THEN** the server stores the gate and writes an audit entry with the action `installation:set-gate` and the scope `@server`
+
+#### Scenario: Namespace administrator
+- **WHEN** a holder of only `namespace:manage-gates` saves a gate at the installation
+- **THEN** the server answers 403 with code access.denied and stores nothing
+
+#### Scenario: Reader
+- **WHEN** a holder of only `installation:read-gates` deletes an approval rule at the installation
+- **THEN** the server answers 403 with code access.denied and the rule stays
+
+#### Scenario: Access token write
+- **WHEN** a site administrator with an access token saves an access limit at the installation
+- **THEN** the server answers 403 with code mfa.fresh-step-required and the stored access limit does not change
+
+#### Scenario: Stale version
+- **WHEN** an operator saves an approval rule at the installation with an If-Match that is not the stored version
+- **THEN** the server answers 409 with code gate.version-conflict and the rule does not change
+
+### Requirement: Audit and fence of an installation write
+
+The service SHALL write each installation change with the zero fence and an audit entry with the scope `@server`. The audit action SHALL be `installation:set-gate`, `installation:delete-gate`, `installation:set-access-limit`, `installation:delete-access-limit`, `installation:set-approval-rule` or `installation:delete-approval-rule`.
+
+#### Scenario: Audit action of a namespace
+- **WHEN** a namespace administrator saves a gate at a namespace
+- **THEN** the audit entry has the action `namespace:set-gate`, and no `installation:` action
+
+### Requirement: Scopes that the service refuses
+
+The service SHALL refuse an approval default at the installation, a blueprint scope, a profile scope and the empty scope with `gate.ErrInvalid`. The store SHALL refuse a write at the installation with the fence of a namespace.
 
 #### Scenario: Installation approval default
 - **WHEN** a caller of the service sets an approval default at the installation scope
-- **THEN** the service returns `gate.ErrInvalid`
+- **THEN** the service returns `gate.ErrInvalid` and calls no store method
+
+#### Scenario: Wrong fence
+- **WHEN** a caller of the store writes at the installation scope with the fence of a namespace
+- **THEN** the store returns `gate.ErrInvalid` and stores nothing
 
 #### Scenario: Empty scope
 - **WHEN** a caller of the service reads with the empty scope
 - **THEN** the service returns `gate.ErrInvalid`
+
+### Requirement: Operator action for installation gates
+
+The action `installation:manage-gates` SHALL be in the operator family (`pkg/access`). No built-in role outside the operator family and the site administrator SHALL hold it. The catalog of actions SHALL list it, and the sensitive-action table of the principals guide SHALL name it.
+
+#### Scenario: Role family
+- **WHEN** the built-in roles are listed with their actions
+- **THEN** `installation-operator` and `site-administrator` hold `installation:manage-gates`, and `account-administrator` and the namespace roles do not
+
+### Requirement: No signature carry-over route
+
+The server SHALL NOT serve a route for the signature carry-over setting. The binding level replaces the setting.
+
+#### Scenario: No route
+- **WHEN** the route table is listed
+- **THEN** it has no path with the segment `signature-carry-over`
