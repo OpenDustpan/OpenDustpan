@@ -1899,10 +1899,17 @@ func readKeyFile(path string) ([]byte, error) {
 // "\n", and writes a backslash as two, so a reader can tell an escaped line
 // feed from a backslash and an "n".
 //
-// The one exception is the usage text of the program: it is fixed program
-// text, so it keeps its line breaks. When err is the usage error itself
-// (see usageOf), writeErrorLine escapes only its message and then writes
-// the usage text as it is. A wrapped usage error is escaped in full.
+// Two kinds of error keep line breaks that the program makes:
+//
+//   - The usage error (see usageOf): writeErrorLine escapes only its
+//     message and then writes the usage text, which is fixed program text,
+//     as it is.
+//   - An errors.Join result (see joinParts): writeErrorLine writes each part
+//     on its own line, and escapes each part. It does this for nested joins
+//     too, to a depth of maxJoinDepth.
+//
+// Any other error, a wrapped usage error or a wrapped join included, is one
+// escaped line. A part of a join that is the usage error is escaped too.
 //
 // Defense in depth: each call site quotes its values with %q too; this
 // escape stays so that one call site that does not quote is not enough to
@@ -1911,7 +1918,7 @@ func readKeyFile(path string) ([]byte, error) {
 // A failed write of the line is not reported: nothing is left to report it
 // to.
 func writeErrorLine(w io.Writer, prefix string, err error) {
-	text := logguard.EscapeLine(err.Error())
+	text := strings.Join(errorLines(err, 0), "\n")
 
 	if message, ok := usageOf(err); ok {
 		text = errUsage.Error()
@@ -1923,6 +1930,62 @@ func writeErrorLine(w io.Writer, prefix string, err error) {
 	if _, werr := fmt.Fprintln(w, prefix+":", text); werr != nil {
 		return
 	}
+}
+
+// maxJoinDepth bounds the nested joins that writeErrorLine writes as lines.
+// A deeper join is one escaped line.
+const maxJoinDepth = 8
+
+// errorLines answers the lines of err: one escaped line for each part of a
+// join (see joinParts), else one escaped line for all of err.
+func errorLines(err error, depth int) []string {
+	if depth < maxJoinDepth {
+		if parts, ok := joinParts(err); ok {
+			lines := make([]string, 0, len(parts))
+
+			for _, part := range parts {
+				lines = append(lines, errorLines(part, depth+1)...)
+			}
+
+			return lines
+		}
+	}
+
+	return []string{logguard.EscapeLine(err.Error())}
+}
+
+// joinError is the error that errors.Join makes: it has the parts.
+type joinError interface {
+	error
+	Unwrap() []error
+}
+
+// joinParts answers the parts of err when err is a join of errors that no
+// other error wraps: the text of err must be the texts of its parts with a
+// line feed between each two. A wrapped join adds text that can hold a
+// value from outside, so it answers false for it, and for any other error.
+func joinParts(err error) ([]error, bool) {
+	join, found := errors.AsType[joinError](err)
+	if !found {
+		return nil, false
+	}
+
+	parts := join.Unwrap()
+	texts := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		if part == nil {
+			return nil, false
+		}
+
+		texts = append(texts, part.Error())
+	}
+
+	if len(parts) == 0 || strings.Join(texts, "\n") != err.Error() {
+		return nil, false
+	}
+
+	return parts, true
 }
 
 // blobStoreKind returns the kind of the --blob-store value for a log record:

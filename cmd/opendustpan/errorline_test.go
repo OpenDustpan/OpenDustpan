@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/logguard"
 )
 
 // lineError is an error whose text is the test value.
@@ -213,4 +215,95 @@ func TestWriteErrorLineEscapesOtherUsageText(t *testing.T) {
 			t.Errorf("%s: output holds hidden rune %U", name, r)
 		}
 	}
+}
+
+// TestWriteErrorLineWritesJoinPartsOnLines is the stderr layer for a join of
+// errors: each part is on its own line and each part is escaped, so a
+// hostile part cannot add a line.
+func TestWriteErrorLineWritesJoinPartsOnLines(t *testing.T) {
+	t.Parallel()
+
+	hostile := lineError("open a\r\nlevel=ERROR msg=forged\u0085\u202eb")
+
+	for name, tc := range map[string]struct {
+		err  error
+		want []string
+	}{
+		"three parts": {
+			err:  errors.Join(lineError("first"), lineError("second"), lineError("third")),
+			want: []string{"opendustpan: first", "second", "third"},
+		},
+		"hostile part": {
+			err:  errors.Join(lineError("first"), hostile),
+			want: []string{"opendustpan: first", `open a\r\nlevel=ERROR msg=forged\x85\u202eb`},
+		},
+		"nested join": {
+			err:  errors.Join(lineError("a"), errors.Join(lineError("b"), hostile), lineError("c")),
+			want: []string{"opendustpan: a", "b", `open a\r\nlevel=ERROR msg=forged\x85\u202eb`, "c"},
+		},
+		"usage part": {
+			err:  errors.Join(lineError("a"), errUsage),
+			want: []string{"opendustpan: a", logguard.EscapeLine(errUsage.Error())},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var b strings.Builder
+
+			writeErrorLine(&b, "opendustpan", tc.err)
+
+			got := strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n")
+			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+				t.Fatalf("lines =\n%q\nwant\n%q", got, tc.want)
+			}
+
+			for _, line := range got {
+				if r, hidden := ident.FirstHidden(line); hidden {
+					t.Errorf("line holds hidden rune %U: %q", r, line)
+				}
+
+				if strings.HasPrefix(line, "level=ERROR") {
+					t.Errorf("the forged line is its own line: %q", line)
+				}
+			}
+		})
+	}
+}
+
+// TestWriteErrorLineEscapesWrappedJoins checks that only a join that no
+// other error wraps is split: a wrapped join is one escaped line.
+func TestWriteErrorLineEscapesWrappedJoins(t *testing.T) {
+	t.Parallel()
+
+	for name, err := range map[string]error{
+		"wrapped join":   fmt.Errorf("x: %w", errors.Join(lineError("a"), lineError("b\nlevel=ERROR msg=forged"))),
+		"two wraps":      fmt.Errorf("%w; %w", lineError("a"), lineError("b\nc")),
+		"deep join":      deepJoin(maxJoinDepth + 2),
+		"wrap in a join": errors.Join(fmt.Errorf("x: %w", errors.Join(lineError("a"), lineError("b")))),
+	} {
+		var b strings.Builder
+
+		writeErrorLine(&b, "opendustpan", err)
+
+		out := strings.TrimSuffix(b.String(), "\n")
+		if strings.Contains(out, "\n") {
+			t.Errorf("%s: output is more than one line:\n%s", name, out)
+		}
+
+		if r, hidden := ident.FirstHidden(out); hidden {
+			t.Errorf("%s: output holds hidden rune %U", name, r)
+		}
+	}
+}
+
+// deepJoin answers a join of one part, nested depth times, around a part
+// with a line feed.
+func deepJoin(depth int) error {
+	err := errors.Join(lineError("a\nb"), lineError("c"))
+	for range depth {
+		err = errors.Join(err)
+	}
+
+	return err
 }
