@@ -1,97 +1,113 @@
 ## ADDED Requirements
 
-### Requirement: StartRotation with staged key
+### Requirement: Start a rotation
 
-When the operator starts a rotation, the server SHALL store a rotation in state started with the new wrapper ID derived from the staged key.
+When a rotation starts, the server SHALL store one rotation in state started with the old and the new wrapper ID, and SHALL write one audit entry of kind change in the scope `@server`.
 
-#### Scenario: Start with staged new key
-- **WHEN** The operator stages the new 32-byte base64 key in the key file or variable and starts a rotation.
-- **THEN** The server stores a rotation in state started with the derived new wrapper ID and writes one audit entry with the new wrapper ID.
+#### Scenario: Start with two held keys
+- **WHEN** The caller starts a rotation with a wrapper for the old key and a wrapper for the new key, and each opens one record of each non-empty family.
+- **THEN** The store holds one rotation in state started, and the audit scope `@server` holds one entry with the actor, the time and both wrapper IDs, and no key bytes.
 
-#### Scenario: Reject key bytes in body
-- **WHEN** The rotation request carries key bytes in its body.
-- **THEN** The server rejects the request with no rewrap and no audit entry.
+#### Scenario: Refuse a second active rotation
+- **WHEN** A rotation is active and the caller starts another.
+- **THEN** The start fails with NEW `ErrRotationActive` and the store holds one active rotation.
 
-#### Scenario: Reject second start
-- **WHEN** The operator starts a rotation while one rotation is active.
-- **THEN** The server answers 409 with the NEW error code `installation.rotation-active`.
-
-#### Scenario: Deny without grant
-- **WHEN** A caller without the NEW action `installation:rotate-key` calls start, show, resume, abort, or finish.
-- **THEN** The server answers 403.
-
-### Requirement: RewrapNextBatch without downtime
-
-While a rotation is active, the server SHALL open directly wrapped records that wrap under the old wrapper ID or the new wrapper ID.
-
-#### Scenario: Read during rotation
-- **WHEN** A tool reads a secret while a rotation is active.
-- **THEN** The read returns plain text with no error.
-
-#### Scenario: New writes use new wrap
-- **WHEN** A write lands while a rotation is active.
-- **THEN** The new record wraps under the new wrapper ID and the cursor skips it.
-
-### Requirement: Rewrap scope and resume
-
-When the server stops during a rewrap, the server SHALL resume the rotation from the stored cursor after restart.
-
-#### Scenario: Resume rotation
-- **WHEN** The server stops mid-batch and the operator resumes the rotation with both keys staged.
-- **THEN** The rotation completes with every directly wrapped record under the new wrapper ID.
-
-#### Scenario: Retry failed batch
-- **WHEN** One rewrap batch fails on a poison record.
-- **THEN** The next resume retries the same stored cursor with no skipped record, and the operator may abort after repeated failure.
-
-### Requirement: Show and abort rotation
-
-While a rotation is active, the server SHALL report its state and counts on show and abort it on abort.
-
-#### Scenario: Show progress
-- **WHEN** The operator shows the active rotation.
-- **THEN** The server returns state started or resuming with counts of rewrapped and pending directly wrapped records.
-
-#### Scenario: Abort leaked key
-- **WHEN** The operator aborts an unfinished rotation.
-- **THEN** The server marks the rotation aborted, keeps the old wrapper ID active, and writes one audit entry.
-
-### Requirement: FinishRotation refuses old key
-
-If a rotation finished, then the server SHALL refuse a key with the old wrapper ID.
-
-#### Scenario: Start with old key
-- **WHEN** The operator starts the server with the old key alone after the rotation finished.
-- **THEN** The server refuses to start and names the key variable.
-
-#### Scenario: Reject incomplete finish
-- **WHEN** The operator finishes while some directly wrapped record still wraps under the old wrapper ID.
-- **THEN** The server answers 409 with the NEW error code `installation.rotation-incomplete` and keeps state started.
-
-#### Scenario: Start mid-rotation needs both keys
-- **WHEN** The operator restarts mid-rotation with only one of `DUSTPAN_KEY_ENCRYPTION_KEY` and the NEW variable `DUSTPAN_KEY_ENCRYPTION_KEY_PREVIOUS` staged.
-- **THEN** The server refuses to start and names the missing key variable.
-
-### Requirement: Audit rotation start and finish
-
-When a rotation starts or finishes, the server SHALL write one audit entry of kind change with the actor and both wrapper IDs.
-
-#### Scenario: List rotation entries
-- **WHEN** The operator lists audit entries for the rotation.
-- **THEN** The list holds one entry for start and one entry for finish with actor, time, and wrapper IDs.
+#### Scenario: Refuse equal or unusable keys
+- **WHEN** The two wrapper IDs are equal, a wrapper is nil, or the old wrapper opens no record of a non-empty family.
+- **THEN** The start fails, no row is written and no audit entry is written.
 
 #### Scenario: Fail closed on audit write
-- **WHEN** The audit write for start or finish fails.
-- **THEN** The start or finish fails with no state change.
+- **WHEN** The audit write of the start fails.
+- **THEN** The start fails and the store holds no new rotation.
 
-### Requirement: Restore rule across rotation
+### Requirement: Reads and writes during a rotation
 
-When the operator restores a backup made before a rotation finished, the server SHALL require the key that wraps that backup and fail closed without it.
+While a rotation is active, the server SHALL open each directly wrapped record under the old key or the new key, and SHALL wrap each new record under the new key.
 
-#### Scenario: Restore old backup
-- **WHEN** The operator restores a backup made before the rotation finished with the key that wraps it staged.
-- **THEN** The restore opens the backup and rewraps its directly wrapped records under the active wrapper ID.
+#### Scenario: Read during rotation
+- **WHEN** A tool reads a secret, an item or the idempotency key while a rotation is active.
+- **THEN** The read returns the plain value with no error, whether the record holds the old or the new wrapper ID.
 
-#### Scenario: Reject restore mid-rotation
-- **WHEN** The operator restores while a rotation is active.
-- **THEN** The server rejects the restore with the NEW error code `installation.rotation-active`.
+#### Scenario: Write during rotation
+- **WHEN** A write creates a data key or an item key while a rotation is active.
+- **THEN** The new record holds the new wrapper ID and the rewrap skips it.
+
+#### Scenario: Refuse a third key
+- **WHEN** A record holds a wrapper ID that is neither the old nor the new ID.
+- **THEN** The read fails with a decrypt error and the rewrap stops on that record with its scope.
+
+### Requirement: Rewrap and resume
+
+When the operation runs, the server SHALL wrap each data key, installation data key, item key and the idempotency server key again under the new key, in batches, and SHALL change no key value and no content.
+
+#### Scenario: Rewrap all families
+- **WHEN** The operation runs to its end.
+- **THEN** No record of the four families holds the old wrapper ID, each record keeps its scope or stable ID, and each ciphertext of user data still opens to the same plain value.
+
+#### Scenario: Resume after a stop
+- **WHEN** The process stops after some batches and a new claim runs the operation.
+- **THEN** The operation completes, and each record holds the new wrapper ID once.
+
+#### Scenario: Replay a batch
+- **WHEN** A batch runs again over records that already hold the new ID.
+- **THEN** The batch changes no record.
+
+#### Scenario: Item key shredded during rewrap
+- **WHEN** A shred of an item key commits between the read and the write of its rewrap.
+- **THEN** The rewrap deletes the new blob and the record stays shredded.
+
+#### Scenario: Keep replay records
+- **WHEN** The rewrap replaces the idempotency server key.
+- **THEN** The existing replay records stay valid.
+
+### Requirement: Finish and abort
+
+When the caller finishes a rotation, the server SHALL change its state to finished only when no record holds the old wrapper ID, and SHALL write one audit entry.
+
+#### Scenario: Finish with a full count
+- **WHEN** No record holds the old wrapper ID and the caller finishes.
+- **THEN** The rotation is finished and one audit entry holds the actor, the time, both wrapper IDs and the counts.
+
+#### Scenario: Refuse an incomplete finish
+- **WHEN** At least one record in any family still holds the old wrapper ID.
+- **THEN** The finish fails with NEW `ErrRotationIncomplete`, the state stays started and no audit entry is written.
+
+#### Scenario: Abort
+- **WHEN** The caller aborts an active rotation.
+- **THEN** The state is aborted, one audit entry is written, and records that hold the new ID keep it and still open while both keys are held.
+
+### Requirement: Start-up with a rotation
+
+When the server starts, the server SHALL refuse a process whose keys do not open every stored wrapper ID.
+
+#### Scenario: One key while active
+- **WHEN** A rotation is active and the process holds one key.
+- **THEN** The server refuses to start with NEW `ErrRotationActive`, and the text names the state and both wrapper IDs.
+
+#### Scenario: Old key after finish
+- **WHEN** The rotation is finished and the process holds the old key alone.
+- **THEN** The server refuses to start with `ErrWrapperMismatch` and names the key variable.
+
+#### Scenario: Count all families
+- **WHEN** An item key or the idempotency server key holds a wrapper ID that the process key does not hold.
+- **THEN** The server refuses to start, as it does for a data key.
+
+### Requirement: Restore across a rotation
+
+When the operator restores a backup, the server SHALL need the key that wraps that backup, and SHALL refuse a restore while a rotation is active.
+
+#### Scenario: Restore of an old backup
+- **WHEN** The operator restores a backup made under the old key, and the process holds a key with a wrapper ID of the manifest.
+- **THEN** The restore opens the backup. It does not rewrap by itself.
+
+#### Scenario: Restore while active
+- **WHEN** A rotation is active and the operator starts a restore.
+- **THEN** The restore is refused with NEW `ErrRotationActive`.
+
+### Requirement: Parked surface
+
+The routes, the authorization action, the source of the second key, the docs page and the e2e step SHALL NOT be built by this change until the owner decides the questions of the proposal.
+
+#### Scenario: Engine without a route
+- **WHEN** This change lands without the parked tasks.
+- **THEN** No route, no action and no setting for the rotation exists, and the engine is reached by tests only.

@@ -196,6 +196,31 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error
 // never tells that the job exists.
 var errNotFound = errors.New("not found")
 
+// errDamaged is the answer to a request for a job whose stored row cannot be
+// read, from a caller that may read the unit of the job. The text is fixed:
+// it holds no content of the row and no text of the store.
+var errDamaged = errors.New("stored job is damaged")
+
+// damagedText is the text of the 409 for a damaged job.
+const damagedText = "The stored job is damaged. The server cannot read it. " +
+	"Cancel the job with POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel."
+
+// refuseDamaged answers 409 for a damaged job and reports true. A handler of
+// a route that does not cancel calls it first.
+//
+// Defense in depth: the wrapper of the route answers the same 409 before the
+// handler runs. This check stays so that a new route or a changed wrapper
+// never serves the stub of a damaged job. It does not rely on the wrapper.
+func (h *Handler) refuseDamaged(ctx context.Context, w http.ResponseWriter, t *target) bool {
+	if !t.damaged {
+		return false
+	}
+
+	h.writeError(ctx, w, errDamaged)
+
+	return true
+}
+
 // writeError answers err in the error shape of the tool-neutral APIs. The
 // classifier of this API answers the errors of a job, and package problem
 // answers the rest.
@@ -211,6 +236,8 @@ func classify(err error) (problem.Problem, bool) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound), errors.Is(err, job.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.JobNotFound, errNotFound.Error()), true
+	case errors.Is(err, errDamaged):
+		return problem.New(http.StatusConflict, errcode.JobDamaged, damagedText), true
 	case errors.Is(err, errTooManyStreams):
 		return problem.New(http.StatusTooManyRequests, errcode.JobLimit, errTooManyStreams.Error()), true
 	case errors.Is(err, errLogNotAvailable):

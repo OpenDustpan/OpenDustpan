@@ -1203,7 +1203,7 @@ const confirmGitHostRotation = `-- name: ConfirmGitHostRotation :execrows
 UPDATE git_host_app_registrations
 SET old_event_secret_ends_at_ms = NULL, old_event_secret_set_id = NULL, old_sealed_event_secret = NULL,
     version = version + 1, updated_at_ms = GREATEST($1, git_host_app_registrations.created_at_ms)
-WHERE kind = $2 AND old_event_secret_ends_at_ms IS NOT NULL AND ($3::bigint = 0 OR version = $3::bigint)
+WHERE kind = $2 AND old_event_secret_ends_at_ms > $1 AND ($3::bigint = 0 OR version = $3::bigint)
 `
 
 type ConfirmGitHostRotationParams struct {
@@ -1212,7 +1212,8 @@ type ConfirmGitHostRotationParams struct {
 	IfVersion   int64
 }
 
-// Ends the window of the old event secret. It writes only while a window is open.
+// Ends the window of the old event secret. It writes only while a window is open:
+// the window ends after the time of the write, which is the updated_at_ms argument.
 func (q *Queries) ConfirmGitHostRotation(ctx context.Context, arg ConfirmGitHostRotationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, confirmGitHostRotation, arg.UpdatedAtMs, arg.Kind, arg.IfVersion)
 	if err != nil {

@@ -570,7 +570,7 @@ func TestServeTLSAndPublicURLFlags(t *testing.T) {
 		{
 			name: "bad public URL",
 			args: []string{database, path, "--public-url", "not a url", "--listen", "127.0.0.1:0"},
-			want: "public URL",
+			want: "--public-url",
 		},
 	}
 

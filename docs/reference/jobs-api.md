@@ -238,6 +238,7 @@ The answer is the job document with status 201 and the header `ETag`.
 | 409 | `job.plan-changed` | The plan binding is not the binding of the stored plan |
 | 409 | `job.plan-stale` | The stored plan is too old, the server redacted it, or no plan exists |
 | 409 | `job.conflict` | The job changed while the request ran: read the job again |
+| 409 | `job.damaged` | The stored job cannot be read. Only the cancel route serves it |
 | 413 | `request.body-too-large` | The body has more than 16 KiB |
 | 422 | `job.invalid` | The verdict is not `approve` or `reject`, the comment is not valid, or a text of `planBinding` is too long |
 
@@ -320,6 +321,7 @@ of a chunk that failed its check.
 | 429 | `job.limit` | The principal has 8 open log streams, or the server has 256 |
 | 404 | `job.not-found` | The namespace or the job does not exist in the path, the phase is not `plan`, `apply` or `deliver`, or the caller cannot read the job |
 | 404 | `job.log-not-available` | The phase did not start, so it has no log yet |
+| 409 | `job.damaged` | The stored job cannot be read. Only the cancel route serves it |
 
 ## What the server does with a job on its own
 

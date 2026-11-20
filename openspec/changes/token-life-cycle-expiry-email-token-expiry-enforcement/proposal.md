@@ -1,98 +1,115 @@
 ---
-version: 9
+version: 10
 ---
 
 Roadmap: `docs/roadmap.md:171` (Enforce token expiry, lifetime, and inactivity disable.).
 
 ## Why
 
-**Persona: developer.** A Developer runs the Pulumi CLI and OpenTofu against the server with an access token and needs an expired, revoked or idle token to stop with a 401, so a stale token never keeps access. The answer must not tell an attacker whether a token existed. The Developer then finds the cause in the list of ended tokens.
+**Persona: developer.** A Developer runs the Pulumi CLI and OpenTofu against the server with an access token. An expired, revoked or disabled token must stop with a 401, and the 401 must not tell an attacker whether the token existed. The Developer then finds the cause in the list of ended tokens, and the administrator finds it in the audit log.
+
+Main already refuses an ended token. What main lacks is small:
+
+- The refusal has no type. The reason of each refusal is only in the text of a wrapped error, and no audit entry exists for a refused access token on the request path.
+- The own token list, `GET /api/dustpan/v1/me/tokens`, has no `status` filter, so a Developer cannot list the ended tokens. The guide says so on purpose today.
+- The token policy shows the maximum lifetime and the inactivity period, but not the rotation overlap.
 
 The user path this change must make work:
 
-1. **API.** Developer creates an access token through the API with a picked expiry date
-2. **CLI.** Developer runs pulumi up and tofu apply with the token
-3. **API.** Developer lists the ended tokens with GET /api/dustpan/v1/me/tokens?status=ended to see the cause of a 401
-4. **Docs page.** Developer reads the access tokens guide for expiry, lifetime, inactivity disable, rotation and the status filter
-5. **API.** Developer rotates the token through the API before expiry and retries the CLI
+1. **API.** Developer creates an access token through the API with a picked expiry date.
+2. **CLI.** Developer runs pulumi up and tofu apply with the token.
+3. **API.** After the token ends, the CLI gets a 401. Developer lists the ended tokens with `GET /api/dustpan/v1/me/tokens?status=ended` to see which token ended.
+4. **Docs page.** Developer reads the access tokens guide for expiry, lifetime, inactivity disable, rotation overlap and the status filter.
+5. **API.** Developer rotates the token before expiry and retries the CLI.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Developer runs pulumi up or tofu apply with an expired, revoked or disabled token | 401 unauthenticated, with no detail about the token. The bytes and headers equal those for an unknown token. The audit entry holds the real reason and the token ID. | `GET /api/dustpan/v1/me/tokens?status=ended` |
-| Developer requests a token with an expiry past the maximum lifetime | The server refuses the create with error code token.invalid and a message that names the maximum lifetime. | `GET /api/dustpan/v1/settings` |
-
-Evidence for the claims above:
-
-- The roadmap assigns expiry, lifetime, inactivity disable, rotation and re-enable enforcement to this part of the split. Proof: docs/roadmap.md:171 and the split scope text in the context pack.
-- The pack lists a test of the token lifetime in main. Proof: TestLifetime at pkg/accesstoken/accesstoken_test.go:311.
-- Main runs the inactivity disable on a schedule tick. Proof: TestJobSchedulesRunInactivityDisableOncePerTick at pkg/dustpan/schedules_internal_test.go:341.
-- Main refuses a disabled principal in the token check. Proof: TestCheckActiveRefusesADisabledPrincipal at pkg/accesstoken/accesstoken_test.go:554.
-- The own token list does not take a status filter on main: `ownTokenPageRequest` at internal/api/server/tokens.go:819 accepts only `pageSize` and `pageToken` and answers 400 for any other name, and docs/guides/access-tokens.md:60 says so. The administrator lists parse `status` with accesstoken.ParseFilter at internal/api/server/tokens.go:900, and accesstoken.FilterEnded keeps revoked and expired tokens (pkg/accesstoken/accesstoken.go:175). A Developer has no administrator right, so the step 3 path needs the filter on the own list. The PM decided: the change adds it (benchmark: the guide of the administrator lists already names the three values).
-- Main looks a token up by the hash of the secret and compares the digest in constant time before the ended check. Proof: Review finding PM.tim: pkg/accesstoken/service.go:637-642 (Service.AuthenticateToken: digestOfRaw, then GetTokenByDigest) and pkg/accesstoken/accesstoken.go:301 (Digest.Equal with the constant-time compare of the standard library); StatusAt runs after that lookup.
-- Main audits every refused sign-in on the request path. Proof: Review finding PM.tim: internal/signinsvc/refuse.go:41, Service.refuse writes an entry for each refusal.
+| Developer runs pulumi up or tofu apply with an expired, revoked or disabled token | 401 `auth.unauthenticated` with the text "unauthenticated". The bytes and headers equal those for an unknown token. The audit entry holds the real reason and the token ID. | `GET /api/dustpan/v1/me/tokens?status=ended` |
+| Developer sends `status=gone` to the own list | 400 `request.invalid-query`. The text names active, expiring and ended. | `GET /api/dustpan/v1/me/tokens?status=ended` |
 
 ## What Changes
 
-- Add a test that the authenticator refuses an idle-disabled token
-- Add one new shared refusal function that every 401 case of token authentication uses, so unknown, expired, revoked and disabled tokens give the same bytes and headers
-- Keep the lookup by digest and the constant-time compare before the ended check
-- Write an audit entry on the request path for each refusal, with the real reason and the token ID, and with the reason unknown token and no token ID for an unknown token
-- Show the token limits in the settings resource with their source: maximum lifetime, inactivity period and rotation overlap
-- Keep the rotation overlap at the value of main
-- Add the query name `status` (active, expiring or ended; every token when absent) to GET /api/dustpan/v1/me/tokens, with the same values and the same parser as the administrator lists. The route keeps `pageSize` and `pageToken`, and still answers 400 for `cursor`, `limit` and `principal`
-- Document the status filter in the own-list table of docs/guides/access-tokens.md and drop `status` from the sentence that lists the refused names
+- Add a typed refusal in `pkg/accesstoken`. Every refusal of `Service.AuthenticateToken` returns it. It wraps `identity.ErrUnauthenticated`, carries a reason from a fixed list and the token ID (empty for an unknown token), and has one fixed `Error()` text. One unexported function builds it, so a new refusal case cannot skip it.
+- Write an audit entry on the request path for each refusal of a value that has the form of an access token secret: the real reason and the token ID, or the reason "unknown token" and no token ID. A decorator in `pkg/dustpan` writes it, outside the failure gate of the access token lookups, so the miss budget of the gate bounds the number of entries.
+- Add the query name `status` (active, expiring or ended; every token when absent) to `GET /api/dustpan/v1/me/tokens`, with the parser of the administrator lists. The route keeps `pageSize` and `pageToken`, and still answers 400 for `cursor`, `limit` and `principal`.
+- Show `rotationOverlapSeconds` in the answer of `GET /api/server/token-policy`, read only. A `PATCH` that names it answers 400, as for any unknown field.
+- Add guard tests for behavior that main has and no test covers: an idle-disabled token, the digest compare after the lookup, the same bytes and headers for each refusal on the three route families.
+- Document the status filter, the audit entry of a refusal and the rotation overlap in `docs/guides/access-tokens.md` and `docs/guides/audit-log.md`.
 
 Out of scope:
 
-- Warning field in token API responses and CLI warnings
-- Expiry warning email through the SMTP queue
-- Console banner for tokens that expire soon
-- SCIM revocation setting and workload token exchange lifetime
-- A change of the rotation overlap value
-- A refusal text that names the ended token
-- Tests that measure wall-clock time
+- A refusal text that names the ended token (the owner decided against it: see the ADR check).
+- The warning fields, the email and the console banner (the two sibling changes).
+- A change of the rotation overlap value, or a setting for it. A setting changes token policy defaults, and that needs the owner.
+- A settings resource for the token limits. `GET /api/server/token-policy` already is that resource.
+- SCIM revocation and the workload token exchange lifetime.
+- Tests that measure wall-clock time.
 
 ## Usability
 
-Where the path still costs the person time or surprises them:
-
-- A Developer with an ended token sees a plain 401 and lists ended tokens with status=ended to find the cause, which costs one extra call that the guide now documents.
+- A Developer with an ended token sees a plain 401 and needs one more call, `status=ended`, to find the cause. The guide documents the call. The 401 text stays the same for a Developer and for an attacker, by decision of the owner.
+- An administrator reads the real reason of each refusal in the audit log.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main tests the token lifetime. (`pkg/accesstoken/accesstoken_test.go:311`)
-- Main refuses a disabled principal in the token check. (`pkg/accesstoken/accesstoken_test.go:554`)
-- Main runs the inactivity disable on a schedule tick. (`pkg/dustpan/schedules_internal_test.go:341`)
-- Main looks a token up by digest, then compares it in constant time. (`pkg/accesstoken/service.go:637`)
+- `Service.AuthenticateToken` refuses a value that is not a secret, an unknown digest, a stored token of an unknown kind, a digest that differs from the lookup, an expired, revoked or disabled token, a disabled owner, the namespace service principal, an inactive token and an inactive account, each with `identity.ErrUnauthenticated`, in this order. A failed store read answers its own error. (`pkg/accesstoken/service.go:632-695`, function `AuthenticateToken`; `checkPolicyActive` at `:751`)
+- The lookup by digest runs before every status check, and the compare of the stored digest uses the constant-time compare of the standard library. (`pkg/accesstoken/service.go:637-659`; `Digest.Equal` at `pkg/accesstoken/accesstoken.go:347`)
+- `Token.StatusAt` answers revoked, then disabled, then expired, else active. (`pkg/accesstoken/accesstoken.go:163`)
+- A test covers a revoked token, an expired token and a deleted owner. No test covers a token that the inactivity sweep disabled, and none compares the refusals. (`pkg/accesstoken/accesstoken_test.go:486`, `TestAuthenticateRefusesEndedTokens`)
+- A test covers the rotation: the old token works before its end time and gets a refusal after it. (`pkg/accesstoken/accesstoken_test.go:637-653`)
+- The rotation end time defaults to `DefaultRotationOverlap` (24 hours), bounded by the old expiry. (`pkg/accesstoken/service.go:27-30`, `rotationEnd` at `:479`)
+- The inactivity disable runs on a schedule tick, once for all instances. (`pkg/dustpan/schedules_internal_test.go:345`, `TestJobSchedulesRunInactivityDisableOncePerTick`)
+- The chain of the server asks the bootstrap authenticator first. Then a gate of the access tokens counts the failures of a source, charges only values with the form of a secret, and answers `identity.ErrRateLimited` when the budget is spent. (`pkg/dustpan/area_signin.go:119-172`, `newAccessTokenGates` and `chainOf`; `internal/authgate/authgate.go:491`)
+- The three route families map `identity.ErrUnauthenticated` to one fixed 401 text, whatever the wrap text says: Pulumi `internal/api/pulumi/pulumi.go:1189`, TFE-compatible `internal/api/tfe/errors.go:443`, tool-neutral `internal/api/problem/problem.go:454`.
+- `Service.CheckActive` re-checks a token during a running update and wraps its own text for a revoked, expired, disabled or orphaned token. (`pkg/accesstoken/service.go:275-288`; the caller at `pkg/stack/updates.go:1196`)
+- The refused sign-in writes an audit entry with the reason. A refused access token writes none. (`internal/signinsvc/refuse.go:41-90`)
+- The own list takes `pageSize` and `pageToken` only, and answers 400 for any other name, `status` included. (`internal/api/server/tokens.go:817-826`, `ownTokenPageRequest`; the 400 text at `:70`; the route description at `internal/api/server/operations_caller.go:57-60`; the guide at `docs/guides/access-tokens.md:60`; the test at `internal/api/server/caller_routes_test.go:157`)
+- The administrator lists parse `status` with `accesstoken.ParseFilter`. The filter `ended` keeps the revoked, the disabled and the expired tokens in the SQL. The comment of `FilterEnded` names only revoked and expired. (`internal/api/server/tokens.go:900`; `pkg/accesstoken/accesstoken.go:197`; `pkg/store/sqlite/queries.sql:2031`)
+- `GET /api/server/token-policy` answers the maximum lifetime, the inactivity period, the two disable switches and the exchange lifetime. The change body is decoded strictly. (`internal/api/server/tokenpolicy.go:36-45`, `:80-110`; the guide table at `docs/guides/access-tokens.md:256`)
+- The audit `Entry` has the fields `TokenID`, `Reason`, `SourceIP` and `RequestID`, and `AppendServer` writes in the server scope. (`pkg/audit/audit.go:412-439`, `:815`; `requestOf` at `pkg/dustpan/dustpan.go:1073`)
+- The e2e suite drives the Pulumi CLI and the API through the expiry warnings. It has no step for a refused ended token. (`e2e/tokenexpiry_test.go:27`)
+
+Audit corrections against the earlier draft of this change: the earlier text said that the test of a disabled token fails on main (it passes), that a settings resource shows token limits (the token policy does, and it lacks only the overlap), that the sign-in audit covers every refusal (it covers sign-ins only), and it cited stale lines. The path `GET /api/server/caller/tokens` in the decision of the owner is an old name: main serves the own list at `/api/dustpan/v1/me/tokens`, and the old path answers 404 (`internal/api/server/caller_routes_test.go:134`).
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+Each quote is copied from the file in `docs/adr/`. The chains come from `docs/adr/INDEX.md`.
 
-**ADR 53: Access token life cycle, inactivity disable and expiry warnings** (not owner-tagged).
+**ADR 373: The job actions in the built-in roles, the answer to an ended token, and the break-glass pass** (owner-tagged: "Decided by the project owner").
 
-- Decisions that apply: 1 (current), 2 (extended), 8 (current), 13 (current).
-- Changed by: ADR 69 extends decisions 2 and 11; ADR 70 changes decisions 5, 6 and 10; ADR 70 extends; ADR 212 extends decision 11; ADR 237 changes decision 9; ADR 354 extends. Chain to the end: ADR 69, ADR 70, ADR 212, ADR 237, ADR 354, ADR 297, ADR 142, ADR 210, ADR 216, ADR 222, ADR 227, ADR 245, ADR 306, ADR 320, ADR 321, ADR 332, ADR 369, ADR 232, ADR 235, ADR 301, ADR 365, ADR 252, ADR 285, ADR 324, ADR 333, ADR 149, ADR 247, ADR 286, ADR 273, ADR 335, ADR 351, ADR 339, ADR 295, ADR 370, ADR 288, ADR 253, ADR 312.
-- Current rule: this ADR, with ADR 69, 70, 212, 237, 354.
-- Quote: "Last-used time and expiry. Each access token records the time of its last use. Each access token has an expiry."
-- Quote: "A maximum lifetime. An administrator sets the maximum lifetime of an access token. The server refuses a token with a longer lifetime."
-- Quote: "Rotation. A rotation call issues a new access token and sets an end time for the old one. A principal can use the old token until that end time."
-- Quote: "API and audit. Every token operation has a REST API and an action (ADR 17). Each operation writes an audit entry (ADR 41)."
-- Effect: The change keeps the checks of main, adds audit entries with the real reason, and shows the limits. The rotation end time keeps the value of main.
+- Decision that applies: 2 (owner, 2026-11-14).
+- Changed by: none in the index.
+- Quote: "An expired, revoked or disabled token gets the same 401 as an unknown token. The answer does not name the token. The audit entry holds the real reason and the ID of the token."
+- Quote: "So an ended token and an unknown token take the same path and the same work before the 401: the lookup by the hash of the secret, the compare in constant time, then the check of the end. An unknown token also writes an audit entry, with the reason "unknown token" and no token ID. A test checks the structure, not the time: one refusal function for each 401, the same bytes and headers for each case, and the compare in constant time."
+- Effect: this decision fixes the answer, the audit entry and the kind of test. The change follows it and decides nothing new on the refusal text.
+- Conflict: none. One note: the decision names the route `GET /api/server/caller/tokens?status=ended`. Main serves the own list at `/api/dustpan/v1/me/tokens`, so this change adds the filter there. The path in the decision is a name that no longer exists, not a different decision.
+
+**ADR 53: Access token life cycle, inactivity disable and expiry warnings** (not owner-tagged; its context records answers of the owner).
+
+- Decisions that apply: 1, 2, 8 and 13.
+- Changed by: ADR 69 extends decisions 2 and 11; ADR 70 changes decisions 5, 6 and 10; ADR 70 extends; ADR 212 extends decision 11; ADR 237 changes decision 9; ADR 354 extends; ADR 373 extends. Current rule: this ADR, with ADR 69, 70, 212, 237, 354, 373.
+- Quote (decision 1): "Each access token records the time of its last use. Each access token has an expiry."
+- Quote (decision 2): "An administrator sets the maximum lifetime of an access token. The server refuses a token with a longer lifetime."
+- Quote (decision 8): "A rotation call issues a new access token and sets an end time for the old one. A principal can use the old token until that end time."
+- Quote (decision 13): "Every token operation has a REST API and an action (ADR 17). Each operation writes an audit entry (ADR 41)."
+- Effect: the refusal audit entry is the audit entry of decision 13 for the use of a token. The overlap value stays as main: decision 8 gives no value.
 - Conflict: none.
 
 **ADR 69: Token lifetime and session defaults** (not owner-tagged).
 
-- Decisions that apply: 2 (current).
-- Changed by: ADR 297 changes decision 4. Chain to the end: ADR 297, ADR 301, ADR 333.
-- Current rule: this ADR, with ADR 297.
+- Decision that applies: 2. Changed by: ADR 297 changes decision 4 only.
 - Quote: "The maximum lifetime is 365 days by default. It applies to personal tokens and to service tokens."
-- Effect: The effective maximum shows in the settings resource with its source.
+- Effect: none. The maximum lifetime is already in the token policy.
 - Conflict: none.
+
+**ADR 250: Defense in depth for security code** (not owner-tagged).
+
+- Quote: "Every security-relevant path has at least two independent layers. Each layer must stop the attack alone, without help from the others."
+- Effect: the design has one hostile-case table for each layer and the tasks have one test for each guard step.
 
 ## Open questions
 
@@ -100,10 +117,6 @@ none
 
 Questions considered and answered:
 
-- Does the authenticator need new expiry code? No. Main already refuses ended tokens. Only the shared refusal, the idle-disabled test, the audit reason and the settings view are missing.
-- What is the rotation overlap? The value of main. ADR 53 decision 8 sets an end time and gives no value.
-- Warning fields and email? Not here. ADR 53 decision 11 belongs to the warning display part and the email queue part.
-- Does the answer to an ended token name it, or stay the plain 401? The owner decided on 14 Nov 2026: the plain 401 of main, with an audit entry that holds the real reason and the token ID. The person finds ended tokens with the status=ended list.
-- Can an attacker tell an ended token from an unknown token by timing? The owner asked for no timing leak. Main does one lookup by digest and one constant-time compare for both cases, and the ended check runs after. The refusal is one shared function, and the audit write happens on the request path for both cases.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+- Does the refusal of an ended token name the token? No. ADR 373 decision 2 (owner, 2026-11-14) answers: the plain 401, with an audit entry that holds the real reason and the token ID. The item of that question in `decisions/pending/QUEUE.md` still reads as open. That is a record to close, not a question of this change.
+- Is an audit entry for an unknown token a flood vector? ADR 373 decision 2 requires the entry. The decorator sits outside the failure gate, so only a refusal that the gate lets through writes an entry. The gate waits a request over the budget of its source for a penalty period before the lookup, and it answers the rate-limit error to a request when too many requests of that source already wait (`internal/authgate/authgate.go:167-171`, `:525-550`). So the gate bounds the entries that one source can cause, and a rate-limit answer writes none.
+- What is the rotation overlap? The value of main, 24 hours. The change shows it and does not make it a setting.
