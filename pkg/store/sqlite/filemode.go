@@ -140,7 +140,7 @@ func inspectFiles(policy widePolicy, names ...string) ([]WideFile, error) {
 		}
 
 		return nil, fmt.Errorf(
-			"%w: group or other users can access %q (mode %04o): run chmod 600 %s, "+
+			"%w: group or other users can access %q (mode %04o): run chmod 600 %q, "+
 				"or change the mount permissions of the volume (Docker or Kubernetes) so that only the owner can access the file",
 			ErrFileMode, name, perm, name,
 		)

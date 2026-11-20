@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -88,7 +89,7 @@ func TestOpenWithoutAllowWideFileModeRefusesAndNamesTheFix(t *testing.T) {
 		t.Fatalf("Open = %v, want ErrFileMode", err)
 	}
 
-	for _, want := range []string{db, "0644", "run chmod 600 " + db, "mount permissions", "Docker or Kubernetes"} {
+	for _, want := range []string{db, "0644", "run chmod 600 " + strconv.Quote(db), "mount permissions", "Docker or Kubernetes"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want it to hold %q", err, want)
 		}

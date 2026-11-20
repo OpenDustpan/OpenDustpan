@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -49,7 +50,7 @@ func TestServeRefusesWideDatabaseFileAndNamesTheFix(t *testing.T) {
 		t.Fatal("serve started on a database file with mode 0644, want a refusal")
 	}
 
-	requireHolds(t, err.Error(), path, "0644", "run chmod 600 "+path, "mount permissions")
+	requireHolds(t, err.Error(), path, "0644", "run chmod 600 "+strconv.Quote(path), "mount permissions")
 }
 
 func TestServeAllowsWideDatabaseFileWithTheFlag(t *testing.T) {

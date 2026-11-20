@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -144,7 +145,7 @@ func TestCheckFileMode(t *testing.T) {
 		t.Fatalf("wide file = %v, want ErrFileMode", err)
 	}
 
-	if want := "run chmod 600 " + wide; !strings.Contains(err.Error(), want) {
+	if want := "run chmod 600 " + strconv.Quote(wide); !strings.Contains(err.Error(), want) {
 		t.Fatalf("wide file error = %q, want it to hold %q", err, want)
 	}
 
@@ -185,5 +186,30 @@ func TestCheckFileModeNotRegular(t *testing.T) {
 	if !strings.Contains(err.Error(), "is not a regular file: replace it with the database file or remove it") ||
 		strings.Contains(err.Error(), "chmod") {
 		t.Fatalf("directory error = %q", err)
+	}
+}
+
+// TestCheckFileModeQuotesTheHostilePath proves the chmod hint holds the path as
+// a quoted string. A path with a space, CR and LF then breaks no command line
+// and forges no log line.
+func TestCheckFileModeQuotesTheHostilePath(t *testing.T) {
+	t.Parallel()
+
+	name := "a b" + string(rune(13)) + string(rune(10)) + "forged: log line.db"
+	hostile := filepath.Join(t.TempDir(), name)
+	chmodFile(t, hostile, 0o644)
+
+	err := sqlite.CheckFileMode(hostile)
+	if err == nil || !errors.Is(err, sqlite.ErrFileMode) {
+		t.Fatalf("CheckFileMode = %v, want ErrFileMode", err)
+	}
+
+	text := err.Error()
+	if strings.ContainsAny(text, "\r\n") {
+		t.Fatalf("error holds a raw CR or LF: %q", text)
+	}
+
+	if want := "run chmod 600 " + strconv.Quote(hostile); !strings.Contains(text, want) {
+		t.Fatalf("error = %q, want it to hold %q", text, want)
 	}
 }
