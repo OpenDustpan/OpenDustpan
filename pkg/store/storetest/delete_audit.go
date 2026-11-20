@@ -247,7 +247,16 @@ func testTombstoneNameFindsNothing(t *testing.T, f fixture) {
 		t.Fatalf("rename by the stored name: err = %v, want ErrNotFound", err)
 	}
 
-	err = f.s.UpdateStackTags(ctx, tomb, map[string]string{"k": "v"}, deletedAt(), f.fence)
+	err = f.s.UpdateStackTags(
+		ctx,
+		tomb,
+		stack.TagUpdate{
+			Tags:      map[string]string{"k": "v"},
+			UpdatedAt: deletedAt(),
+			Entry:     renameEntry(tomb.Namespace, tomb),
+		},
+		f.fence,
+	)
 	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("update tags by the stored name: err = %v, want ErrNotFound", err)
 	}
@@ -286,7 +295,16 @@ func testPortableDeleteKeepsChildren(t *testing.T, newStore PortableFactory) {
 	s := newStore(t)
 	seed := seedBackupStore(t, s)
 
-	err := s.UpdateStackTags(t.Context(), seed.prod.Ref, map[string]string{"team": "core"}, now(), seed.acme.Fence())
+	err := s.UpdateStackTags(
+		t.Context(),
+		seed.prod.Ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"team": "core"},
+			UpdatedAt: now(),
+			Entry:     renameEntry(seed.prod.Ref.Namespace, seed.prod.Ref),
+		},
+		seed.acme.Fence(),
+	)
 	if err != nil {
 		t.Fatalf("tag stack: %v", err)
 	}

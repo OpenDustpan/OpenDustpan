@@ -1438,14 +1438,15 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 }
 
 // backupChanges answers changes whose text JSON escapes: <, & and > (which
-// encoding/json writes as \u003c, \u0026 and \u003e), U+2028, quotes and a
-// backslash, so the round trip proves the changes column keeps the exact
+// encoding/json writes as \u003c, \u0026 and \u003e), a line break and a
+// tab (which it writes as \n and \t), quotes and a backslash, so the round
+// trip proves the changes column keeps the exact
 // text that the hash covers.
 func backupChanges() []audit.Change {
 	old := `say "hi" <&> \ end`
 
 	return []audit.Change{
-		{Key: "region", Old: &old, New: "line\u2028sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
+		{Key: "region", Old: &old, New: "line\nsep\t<tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
 		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
 	}
 }
