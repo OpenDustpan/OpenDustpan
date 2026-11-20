@@ -1856,7 +1856,10 @@ func readKeyFile(path string) ([]byte, error) {
 // Defense in depth: each call site quotes its values with %q too; this
 // escape stays so that one call site that does not quote is not enough to
 // forge a line.
+// A failed write of the line is not reported: nothing is left to report it
+// to.
 func writeErrorLine(w io.Writer, prefix string, err error) {
-	//nolint:errcheck // Nothing is left to report a failed write of stderr to.
-	fmt.Fprintln(w, prefix+":", logguard.Escape(err.Error()))
+	if _, werr := fmt.Fprintln(w, prefix+":", logguard.Escape(err.Error())); werr != nil {
+		return
+	}
 }

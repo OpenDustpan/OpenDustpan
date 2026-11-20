@@ -27,7 +27,8 @@ func TestAppLogEscapesHiddenRunesBeforeEachHandler(t *testing.T) {
 
 			var stderr bytes.Buffer
 
-			path := filepath.Join(t.TempDir(), "app.jsonl")
+			dir := t.TempDir()
+			path := filepath.Join(dir, sinkFileName)
 
 			app, err := newAppLog(
 				[]string{
@@ -50,7 +51,7 @@ func TestAppLogEscapesHiddenRunesBeforeEachHandler(t *testing.T) {
 			}
 
 			checkStreamEscape(t, format, stderr.Bytes())
-			checkSinkEscape(t, path)
+			checkSinkEscape(t, dir)
 		})
 	}
 }
@@ -81,12 +82,27 @@ func checkStreamEscape(t *testing.T, format string, out []byte) {
 	}
 }
 
-// checkSinkEscape fails when the record of the file sink does not hold the
-// escape of the guard.
-func checkSinkEscape(t *testing.T, path string) {
+// sinkFileName is the name of the file sink in the temp directory of a test.
+const sinkFileName = "app.jsonl"
+
+// checkSinkEscape fails when the record of the file sink in dir does not
+// hold the escape of the guard. It reads the file through an os.Root, so
+// the read stays in dir.
+func checkSinkEscape(t *testing.T, dir string) {
 	t.Helper()
 
-	data, err := os.ReadFile(path) //nolint:gosec // The path is a test temp file.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open sink directory: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := root.Close(); closeErr != nil {
+			t.Errorf("close sink directory: %v", closeErr)
+		}
+	})
+
+	data, err := root.ReadFile(sinkFileName)
 	if err != nil {
 		t.Fatalf("read sink file: %v", err)
 	}
