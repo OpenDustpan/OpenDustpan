@@ -648,8 +648,8 @@ type PasswordChange struct {
 // Each write that stores a password hash for a person reads the break-glass
 // flag of the principal in its own transaction, and returns ErrBreakGlass for
 // a break-glass person. The service checks this too. The reverse holds in
-// the principal store: a write that sets the break-glass flag on a person
-// with a password returns principal.ErrBreakGlassPassword.
+// a restore, the one write that can set the break-glass flag on a person with
+// a password: it returns principal.ErrBreakGlassPassword.
 type Store interface {
 	// CreateUser stores u, with no password, and appends e, in one
 	// transaction. A first password comes only from a set-up code

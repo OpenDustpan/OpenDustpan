@@ -18,21 +18,45 @@ func breakGlassPerson(t *testing.T, s principal.Store, id, subject string) {
 	mustCreatePrincipal(t, s, p)
 }
 
-// testBreakGlassPasswordRefused states that a write that sets the
-// break-glass flag on a person with a local password fails with
-// principal.ErrBreakGlassPassword under the row lock of the principal. It
-// skips while no write sets the break-glass flag on a person that exists:
-// only the create of a principal sets it, so no person can hold a password
-// and get the flag.
-func testBreakGlassPasswordRefused(t *testing.T, s principal.Store) {
+// testUpdateKeepsBreakGlassFlag proves the premise of the break-glass
+// password rule in the ports: an update neither sets nor clears the
+// break-glass flag. Only the create of a principal sets it, and a new person
+// has no password. So only a restore can put the flag on a person with a
+// password, and the restore refuses it with principal.ErrBreakGlassPassword.
+func testUpdateKeepsBreakGlassFlag(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	if s == nil {
-		t.Fatal("the case needs a store")
-	}
+	ctx := t.Context()
 
-	t.Skip("no port sets the break-glass flag on an existing person, so no break-glass person " +
-		"holds a password; the local user store checks the flag in each write that would")
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	breakGlassPerson(t, s, "prn-2", "glass")
+
+	for _, tc := range []struct {
+		id   string
+		flag bool
+	}{{"prn-1", true}, {"prn-2", false}} {
+		p, err := s.GetPrincipal(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("get principal %q: %v", tc.id, err)
+		}
+
+		p.BreakGlass = tc.flag
+		p.DisplayName = "renamed"
+
+		if updateErr := s.UpdatePrincipal(ctx, p, entry()); updateErr != nil {
+			t.Fatalf("update principal %q: %v", tc.id, updateErr)
+		}
+
+		got, err := s.GetPrincipal(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("get principal %q after the update: %v", tc.id, err)
+		}
+
+		if got.BreakGlass == tc.flag || got.DisplayName != "renamed" {
+			t.Fatalf("principal %q after the update = %+v, want the new name and the flag %t",
+				tc.id, got, !tc.flag)
+		}
+	}
 }
 
 // wantEnabled fails the test unless the principal id exists and is enabled.

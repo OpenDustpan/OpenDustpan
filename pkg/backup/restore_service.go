@@ -847,6 +847,7 @@ var storedRestoreSentinels = []error{
 	ErrRestoreRunning,
 	ErrRestoreAccessMismatch,
 	principal.ErrNoWorkingBreakGlass,
+	principal.ErrBreakGlassPassword,
 	ErrProtectedKey,
 	ErrConflictingBlob,
 	ErrCorrupt,

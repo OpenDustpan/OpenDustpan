@@ -176,7 +176,7 @@ func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); ok {
+		if res, err := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); err == nil {
 			h.writePrincipalResult(w, r, res, readResult)
 		}
 	}
@@ -184,19 +184,21 @@ func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 
 // serveAccessChange adapts a change to a route handler. The Service writes
 // the success entry in the transaction of the change. A refused change
-// writes one failure entry here, as well as possible.
+// writes one failure entry here, as well as possible, with the reason of the
+// refusal.
 func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
+		res, err := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
+		if err == nil {
+			h.writePrincipalResult(w, r, res, committedWrite)
 
-		if !ok && res.object != "" && h.access != nil {
-			h.appendObjectChange(r, p, obj, serverChange{
-				at: h.access.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			return
 		}
 
-		if ok {
-			h.writePrincipalResult(w, r, res, committedWrite)
+		if res.object != "" && h.access != nil {
+			h.appendObjectChangeReason(r, p, obj, serverChange{
+				at: h.access.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
+			}, refusalReason(err))
 		}
 	}
 }
@@ -215,15 +217,15 @@ type call struct {
 	e   audit.Entry
 }
 
-// runAccessOp runs op and writes its error. It reports whether op
-// succeeded, with the result in both cases.
-func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, op accessOp) (principalResult, bool) {
+// runAccessOp runs op and writes its error. It answers the result in both
+// cases, and the error of op, or nil when op succeeded.
+func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, op accessOp) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.access == nil {
 		h.writeError(ctx, w, errNoAccessStore)
 
-		return failed(""), false
+		return failed(""), errNoAccessStore
 	}
 
 	res, err := op(w, r, h.access, c)
@@ -234,10 +236,10 @@ func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, o
 		h.recordEscalation(ctx, r, c.p, refused, err)
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // reasonEscalation is the reason of the entry of a grant that gives more than
@@ -855,10 +857,10 @@ func (h *Handler) serveRevokeGrantByID(
 			Action: actions.manage, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
 		}, err)
 		h.writeError(ctx, w, err)
-		h.appendObjectChange(r, p, obj, serverChange{
+		h.appendObjectChangeReason(r, p, obj, serverChange{
 			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),
 			outcome: audit.OutcomeFailure,
-		})
+		}, refusalReason(err))
 
 		return
 	}
@@ -873,6 +875,10 @@ func (h *Handler) serveRevokeGrantByID(
 // collection during the request 409, and a store with no access or review port 501.
 func classifyAccess(err error) (failure, bool) {
 	switch {
+	case errors.Is(err, access.ErrLastSiteAdministrator):
+		// The first case, so that an error that also wraps another error of
+		// this list keeps the answer and the code of this refusal.
+		return failCoded(http.StatusConflict, err.Error(), errcode.AccessLastSiteAdministrator), true
 	case errors.Is(err, errCallerQuery), errors.Is(err, errCallerObjectsQuery):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, errCallerPageSize):
@@ -889,7 +895,7 @@ func classifyAccess(err error) (failure, bool) {
 	case errors.Is(err, access.ErrNotFound):
 		return fail(http.StatusNotFound, err.Error()), true
 	case errors.Is(err, access.ErrAlreadyExists), errors.Is(err, access.ErrBuiltIn), errors.Is(err, access.ErrInUse),
-		errors.Is(err, access.ErrUnitMoved), errors.Is(err, access.ErrLastSiteAdministrator):
+		errors.Is(err, access.ErrUnitMoved):
 		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, errNoAccessStore), errors.Is(err, access.ErrNoReview),
 		errors.Is(err, access.ErrCollectionReview):

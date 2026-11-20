@@ -130,7 +130,8 @@ suffix" for each reason that gets this text.
   `access.last-site-administrator` and changes nothing. The store counts the
   administrators in the same transaction as the change. The store does not
   refuse a change when the count is already 0 before the change. The refusal
-  writes an audit entry with the outcome `failure` and no reason
+  writes an audit entry with the outcome `failure` and the reason
+  `access.last-site-administrator`
   ([Delete a principal](../guides/principals-and-groups.md#delete-a-principal)).
   Three paths differ:
   - A sign-in through an identity provider that reports the last
@@ -267,12 +268,24 @@ suffix" for each reason that gets this text.
   a principal of another kind fails validation. The rule is in
   `Principal.Validate`, which the service calls on a create and on an update,
   and in the store create of each dialect. The service never sets the flag.
+  A response that carries this error answers 400 with the code
+  `principal.break-glass-kind`.
+<!-- code-rule: principal.ErrBreakGlassPassword -->
+- A break-glass account has no local password. No request sets the
+  break-glass flag on a person that exists, and the store of each dialect
+  refuses a password, a set-up code and a reset code for a break-glass
+  account. A restore is the one write that can bring both, so the restore
+  refuses data that holds a break-glass account with a local password. It
+  stops with the code `principal.break-glass-password` and changes nothing
+  ([Other paths](../guides/break-glass-accounts.md#other-paths)). A response
+  that carries this error answers 409 with the same code.
 <!-- code-rule: breakglass.ErrSelfReview -->
 - A person who took part in a break-glass use cannot record the verdict of its
   review. The rule compares the reviewer, without case, with the subject of
   the use, with each person of the use, and with each `ActAs` entry of the
   reviewer and of the verdict. The review store refuses the verdict with
-  `ErrSelfReview`. Limit: no production code fills `ActAs` yet. The server
+  `ErrSelfReview`. A response that carries this error answers 403 with the
+  code `break-glass.self-review`. Limit: no production code fills `ActAs` yet. The server
   fills only the people of a use, and only for a temporary administrator. The
   rule does not yet cover a principal that could act as the person.
 

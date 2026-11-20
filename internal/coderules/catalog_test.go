@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,11 +24,16 @@ const (
 var catalogMarker = regexp.MustCompile(`<!-- code-rule: ([A-Za-z0-9_]+\.[A-Za-z0-9_]+) -->`)
 
 // markedSentinels returns "package.Name" for each package-level declaration
-// under pkg/ and internal/ whose comment holds codeRuleMark.
+// under pkg/ and internal/ whose comment holds codeRuleMark. The catalog names
+// a sentinel by the name of its package, so it fails the test when two
+// directories with the same package name mark the same name: one catalog
+// entry would match both, and a missing entry of the other would not show.
 func markedSentinels(t *testing.T) []string {
 	t.Helper()
 
 	var out []string
+
+	dirOf := map[string]string{}
 
 	fset := token.NewFileSet()
 
@@ -55,6 +61,8 @@ func markedSentinels(t *testing.T) []string {
 			}
 
 			names, err := markedInFile(repoFS, fset, path)
+			checkOneDir(t, dirOf, names, filepath.Dir(path))
+
 			out = append(out, names...)
 
 			return err
@@ -67,6 +75,20 @@ func markedSentinels(t *testing.T) []string {
 	slices.Sort(out)
 
 	return out
+}
+
+// checkOneDir fails the test for a name of names that dirOf holds with a
+// directory other than dir, and records dir for each name.
+func checkOneDir(t *testing.T, dirOf map[string]string, names []string, dir string) {
+	t.Helper()
+
+	for _, name := range names {
+		if other, seen := dirOf[name]; seen && other != dir {
+			t.Errorf("%s is marked in %s and in %s: the catalog cannot tell them apart; rename one", name, other, dir)
+		}
+
+		dirOf[name] = dir
+	}
 }
 
 // markedInFile returns the marked declarations of one Go file.
@@ -100,7 +122,7 @@ func marked(file *ast.File) []string {
 
 		for _, spec := range gen.Specs {
 			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || vs.Doc == nil || !strings.Contains(vs.Doc.Text(), codeRuleMark) {
+			if !ok || !strings.Contains(specDoc(gen, vs).Text(), codeRuleMark) {
 				continue
 			}
 
@@ -111,6 +133,22 @@ func marked(file *ast.File) []string {
 	}
 
 	return out
+}
+
+// specDoc returns the comment of one value declaration. The parser puts the
+// comment of a declaration with no parentheses, for example a one-line
+// `var X = ...`, on the GenDecl and not on its ValueSpec. The comment of a
+// block stays out: it is not the comment of each value in the block.
+func specDoc(gen *ast.GenDecl, vs *ast.ValueSpec) *ast.CommentGroup {
+	if vs.Doc != nil {
+		return vs.Doc
+	}
+
+	if !gen.Lparen.IsValid() {
+		return gen.Doc
+	}
+
+	return nil
 }
 
 func catalogEntries(t *testing.T) []string {
@@ -154,5 +192,46 @@ func TestCatalogMatchesCode(t *testing.T) {
 		if !slices.Contains(code, name) {
 			t.Errorf("docs/reference/code-rules.md lists %s but no sentinel carries the mark %q", name, codeRuleMark)
 		}
+	}
+}
+
+// TestMarkedFindsEachForm proves that the scan finds a marked sentinel in a
+// var block and in a one-line var declaration, and does not give the comment
+// of a block to each value in it.
+func TestMarkedFindsEachForm(t *testing.T) {
+	t.Parallel()
+
+	const src = `package demo
+
+import "errors"
+
+// ErrOneLine is a sentinel.
+//
+// Code rule: the catalog lists it.
+var ErrOneLine = errors.New("one line")
+
+var (
+	// ErrInBlock is a sentinel.
+	//
+	// Code rule: the catalog lists it.
+	ErrInBlock = errors.New("in block")
+)
+
+// Code rule: this comment is on the block, not on a value.
+var (
+	ErrUnmarked = errors.New("unmarked")
+)
+`
+
+	file, err := parser.ParseFile(token.NewFileSet(), "demo.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	got := marked(file)
+	want := []string{"demo.ErrOneLine", "demo.ErrInBlock"}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("marked = %v, want %v", got, want)
 	}
 }

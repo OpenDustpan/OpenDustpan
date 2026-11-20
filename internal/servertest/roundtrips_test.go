@@ -1553,7 +1553,7 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedStackTagCheckTrips + stagedTriggerClockTrips +
 			unitStateTrips +
-			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
+			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips - eventReceiptTrips + firstAdministratorTrips,
 		perTable:     7 + claimReadTrips,
@@ -1675,6 +1675,12 @@ const stagedTriggerClockTrips = 1
 // once for each restore. The count is fixed: it does not grow with the units
 // or the tables.
 const breakGlassFloorTrips = 3
+
+// breakGlassPasswordTrips is the number of round trips of the check for
+// break-glass accounts with a local password in the swap step: the query
+// CountBreakGlassWithPassword runs once for each restore, after the swap. The
+// count is fixed: it does not grow with the units or the tables.
+const breakGlassPasswordTrips = 1
 
 // droppedRunnerCredentialTrips is the number of round trips of the read of
 // the runner credentials that the swap drops: one read of the handoff tokens

@@ -73,7 +73,13 @@ var (
 	ErrBreakGlassUnavailable = errors.New("break-glass account count unavailable")
 	// ErrBreakGlassPassword reports a write that sets the break-glass flag on
 	// a person who has a local password. A break-glass account signs in with
-	// a passkey or a hardware key only, so the password goes first.
+	// a passkey or a hardware key only, so the password goes first. No port
+	// sets the flag on a person that exists. A restore writes the rows of a
+	// backup, so the restore of each store refuses data that holds a
+	// break-glass account with a local password, in the transaction of the
+	// swap.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrBreakGlassPassword = errors.New("break-glass account must have no local password: remove the password first")
 	// ErrDisabled reports a principal that is disabled.
 	ErrDisabled = errors.New("principal is disabled")

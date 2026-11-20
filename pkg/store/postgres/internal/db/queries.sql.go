@@ -1347,6 +1347,22 @@ func (q *Queries) CountBlobPurges(ctx context.Context) (CountBlobPurgesRow, erro
 	return i, err
 }
 
+const countBreakGlassWithPassword = `-- name: CountBreakGlassWithPassword :one
+SELECT COUNT(*) FROM principals p
+JOIN local_users u ON u.principal_id = p.id
+WHERE p.break_glass AND u.password_hash <> ''
+`
+
+// The break-glass accounts that have a local password. A break-glass account
+// signs in with a passkey or a hardware key only, so a restore refuses data
+// that holds one.
+func (q *Queries) CountBreakGlassWithPassword(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countBreakGlassWithPassword)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countCallerGrants = `-- name: CountCallerGrants :one
 WITH holders (kind, id) AS (
   SELECT 'principal'::text, $1::text

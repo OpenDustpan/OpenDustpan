@@ -37,6 +37,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -474,7 +475,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 		if res.object != "" && h.principals != nil {
 			h.appendServerChangeReason(r, p, serverChange{
 				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			}, reachReason(err))
+			}, refusalReason(err))
 		}
 	}
 }
@@ -1131,22 +1132,48 @@ func removeMember(
 	return ok(http.StatusNoContent, nil, object), nil
 }
 
-// classifyPrincipal maps the principal and group errors to their status and
-// message: a bad body, subject, name or kind answers 400, a taken subject,
-// name or membership 409, an unknown principal, group or membership 404, and
-// a store with no principal port 501. A membership change of a group that a
-// directory keeps answers 409, and the message names the directory. The domain wraps each sentinel with
-// the ID or the name it acted on, never with driver text.
+// classifyPrincipal maps the principal and group errors of a bad request and
+// of the break-glass rules to their status and message: a bad body, subject,
+// name or kind answers 400, and a break-glass rule 400, 403 or 409. It runs
+// before classifyIdentity, so a role or token error that also wraps one of
+// these errors keeps this answer. The errors of the state of a principal
+// map in classifyPrincipalState, after classifyIdentity. The domain wraps
+// each sentinel with the ID or the name it acted on, never with driver text.
 func classifyPrincipal(err error) (failure, bool) {
 	if f, ok := classifyPrincipalRequest(err); ok {
 		return f, true
 	}
 
-	if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
+	return classifyBreakGlass(err)
+}
+
+// breakGlassPasswordMessage is the answer of a write that would give a
+// break-glass account a local password.
+const breakGlassPasswordMessage = "A break-glass account must have no local password. " +
+	"Remove the password first. See the break-glass accounts guide."
+
+// classifyBreakGlass maps the errors of the break-glass rules: a change that
+// leaves too few working break-glass accounts and a break-glass account with
+// a local password answer 409, a break-glass account that is not a person
+// 400, and a verdict of a person of the break-glass use on its own review
+// 403.
+func classifyBreakGlass(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, principal.ErrNoWorkingBreakGlass):
 		return failCoded(http.StatusConflict, noWorkingBreakGlassMessage, errcode.PrincipalNoWorkingBreakGlass), true
+	case errors.Is(err, principal.ErrBreakGlassPassword):
+		return failCoded(http.StatusConflict, breakGlassPasswordMessage, errcode.PrincipalBreakGlassPassword), true
+	case errors.Is(err, principal.ErrBreakGlassKind):
+		return failCoded(
+			http.StatusBadRequest,
+			principal.ErrBreakGlassKind.Error(),
+			errcode.PrincipalBreakGlassKind,
+		), true
+	case errors.Is(err, breakglass.ErrSelfReview):
+		return failCoded(http.StatusForbidden, breakglass.ErrSelfReview.Error(), errcode.BreakGlassSelfReview), true
 	}
 
-	return classifyPrincipalState(err)
+	return fail(0, ""), false
 }
 
 // classifyPrincipalRequest maps the errors of a bad body, subject, page or
@@ -1169,7 +1196,12 @@ func classifyPrincipalRequest(err error) (failure, bool) {
 }
 
 // classifyPrincipalState maps the errors of a taken, disabled, kept or unknown
-// principal, and of a store with no principal port.
+// principal, and of a store with no principal port: a taken subject, name or
+// membership answers 409, an unknown principal, group or membership 404, and
+// a store with no principal port 501. A membership change of a group that a
+// directory keeps answers 409, and the message names the directory. It runs
+// after classifyIdentity: the end of the last site administrator maps there,
+// in classifyAccess.
 func classifyPrincipalState(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, principal.ErrAlreadyExists):
@@ -1180,8 +1212,6 @@ func classifyPrincipalState(err error) (failure, bool) {
 		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalNotDisabled), true
 	case errors.Is(err, principal.ErrDisabled):
 		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalDisabled), true
-	case errors.Is(err, access.ErrLastSiteAdministrator):
-		return failCoded(http.StatusConflict, err.Error(), errcode.AccessLastSiteAdministrator), true
 	case errors.Is(err, principal.ErrNotFound):
 		return failCoded(http.StatusNotFound, err.Error(), errcode.PrincipalNotFound), true
 	case errors.Is(err, errNoPrincipalStore):

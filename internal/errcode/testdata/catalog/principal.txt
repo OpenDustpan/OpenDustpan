@@ -1,4 +1,6 @@
 principal.already-exists
+principal.break-glass-kind
+principal.break-glass-password
 principal.disabled
 principal.invalid
 principal.managed-by-directory
