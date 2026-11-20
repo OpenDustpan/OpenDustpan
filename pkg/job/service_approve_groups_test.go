@@ -451,3 +451,53 @@ func TestApproveSeveralGatesOnePersonFillsOneSlot(t *testing.T) {
 		t.Fatalf("event after carol and dave = %s, want %s", got, job.EventApproved)
 	}
 }
+
+// TestApproveSeveralGatesStarterFillsOnlyGatesThatAllowIt proves that the
+// starter, who holds the groups of two gates, can fill only the gate that
+// allows the starter, and gets ErrSelfApproval when it holds only the gate that
+// does not.
+func TestApproveSeveralGatesStarterFillsOnlyGatesThatAllowIt(t *testing.T) {
+	t.Parallel()
+
+	allowPlatform := func(j *job.Job) {
+		severalGates(false)(j)
+		j.Phases[1].Gates[0].AllowSelf = true
+	}
+
+	tests := []struct {
+		name    string
+		members map[string][]string
+		want    error
+		wantFor []string
+	}{
+		{"the starter holds both gates", map[string][]string{"alice": {"grp-a", "grp-b"}}, nil, []string{"platform"}},
+		{"the starter holds only the gate that refuses it", map[string][]string{"alice": {"grp-b"}}, job.ErrSelfApproval, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader := &fakeGroups{members: tc.members, suspended: nil, removed: nil, err: nil, asked: nil}
+			r := approveRigWithGroups(t, openPolicy(), reader)
+			r.seed(allowPlatform)
+
+			_, err := r.svc.Approve(t.Context(), actorOf("alice"), approveID, job.VerdictApprove, r.binding(), "")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Approve = %v, want %v", err, tc.want)
+			}
+
+			if tc.want != nil {
+				if len(r.store.applies) != 0 {
+					t.Fatalf("changes = %d, want none", len(r.store.applies))
+				}
+
+				return
+			}
+
+			if got := r.store.applies[0].Approval.For; !slices.Equal(got, tc.wantFor) {
+				t.Fatalf("For = %v, want %v", got, tc.wantFor)
+			}
+		})
+	}
+}
