@@ -1,45 +1,21 @@
 ## ADDED Requirements
 
-### Requirement: Warning field in token reads
+### Requirement: own-list-feeds-the-console-banner
 
-When a caller reads an access token, the server SHALL include the expiry time, the seconds left from the server clock and the warning level in the response.
+The own token list SHALL answer the tokens that expire within the warning window when the caller sends `status=expiring`, each with `expiresInDays` and `expiryWarning` from the server clock, so that the console can show a banner from that one route.
 
-#### Scenario: Inside window
-- **WHEN** a caller reads a token that expires within the first threshold
-- **THEN** the response holds the expiry, the seconds left and the level early or urgent
+#### Scenario: expiring tokens
+- **WHEN** a person has one token that expires in 10 days and one that expires in 60 days, and reads the own list with `status=expiring`
+- **THEN** the answer holds the first token with `expiryWarning` soon and not the second
 
-#### Scenario: Expired
-- **WHEN** a caller reads a token whose expiry passed
-- **THEN** the response holds level expired and zero seconds left
+#### Scenario: no total
+- **WHEN** the own list has a next page
+- **THEN** the answer holds `nextPageToken` and the console shows "at least" with the count of the page
 
-#### Scenario: No expiry
-- **WHEN** a caller reads a token with no expiry
-- **THEN** the response holds a null expiry and level none
+### Requirement: console-banner-fails-closed
 
-### Requirement: Threshold rule
+The console SHALL show the banner only from a response that passes its runtime check, and SHALL show the error state when the load fails.
 
-When the server computes the warning level with newWarningState, the server SHALL apply inclusive boundaries, give urgent precedence and treat a threshold of 0 as a disabled window.
-
-#### Scenario: Exact boundary
-- **WHEN** a token expires exactly at the second threshold
-- **THEN** the level is urgent
-
-#### Scenario: Zero threshold
-- **WHEN** an administrator sets a threshold to 0
-- **THEN** that window never matches
-
-### Requirement: Read authorization
-
-If a caller lacks the token read action on the token, then the server SHALL refuse the read with 403.
-
-#### Scenario: Refused read
-- **WHEN** a caller without the grant reads a token
-- **THEN** the server answers 403 and returns no warning field
-
-### Requirement: Console banner data
-
-When the console reads the current token inside the warning window, the server SHALL answer the same level and seconds left that the banner shows.
-
-#### Scenario: Banner data
-- **WHEN** the console reads the current token inside the window
-- **THEN** the answer holds the level and the seconds left
+#### Scenario: failed load
+- **WHEN** the own list answers 400 or a body that fails the check
+- **THEN** the page shows the error state and no banner

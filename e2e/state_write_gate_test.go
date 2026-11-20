@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -346,6 +347,17 @@ func (g *gateRun) approvalGate() {
 			"needs approval by rule review-e2e. A write from a CLI cannot wait for approval, so the server refuses the write to "+tofuUnitRef(),
 		),
 	)
+
+	// The person reads the gate list with an access token, to find the gate
+	// whose rule the write needs.
+	listPath := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units/by-name/opentofu/" +
+		url.PathEscape(e2e.Workspace) + "/gates"
+
+	status, body, err := g.env.ServerAPIStatus(g.t.Context(), http.MethodGet, listPath, "")
+	if err != nil || status != http.StatusOK || !strings.Contains(body, `"review-gate-e2e"`) {
+		g.t.Fatalf("GET %s = %d, %v (%s); want 200 with the gate review-gate-e2e", listPath, status, err, body)
+	}
+
 	g.remove("review-gate-e2e")
 	must(g.t, g.env.DeleteApprovalRule(g.t.Context(), g.t, rule.Scope, rule.ID))
 }

@@ -318,8 +318,11 @@ type Updates struct {
 // TokenChecker answers whether an access token still works. It is the port of
 // the lease check. accesstoken.Service implements it.
 type TokenChecker interface {
-	// CheckActive returns nil when the token with the ID id is active and its
-	// principal exists. Otherwise it wraps identity.ErrUnauthenticated.
+	// CheckActive returns nil when the token with the ID id is active, its
+	// principal exists and, for a service token, its maker still has the
+	// act-as path. A token that does not work wraps
+	// identity.ErrUnauthenticated. An error of a store, or of a check that
+	// cannot decide, does not wrap it: the token is refused and kept.
 	CheckActive(ctx context.Context, id string) error
 }
 
@@ -556,7 +559,7 @@ func (s *Updates) StartBy(
 
 // Renew extends the update's lease to d from now.
 func (s *Updates) Renew(ctx context.Context, ref Ref, id UpdateID, tok token.Token, d time.Duration) (Update, error) {
-	return s.leaseTransition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
+	return s.leaseTransition(ctx, ref, id, tok, func(u Update, now time.Time) (Update, error) {
 		return u.renew(tok, now, d)
 	})
 }
@@ -1193,9 +1196,17 @@ func (s *Updates) updateItem(ctx context.Context, ref Ref, id UpdateID) (secret.
 }
 
 // leaseGet reads one update for a lease request. A token-started update must
-// still pass the access token check (ADR 53). The check uses the token ID of
-// this read, so a lease request costs one read of the update.
-func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
+// still pass the access token check. The lease token tok is checked against
+// the digest of the update first: the access token check can revoke a service
+// token and writes an audit entry, so only a caller that holds the lease may
+// start it, and a caller with a wrong lease learns nothing of the maker.
+//
+// Defense in depth: the callers check tok again, with the expiry and the
+// status, after this read. Those checks stay so that a new caller of
+// leaseGet never skips the lease check, and this check does not rely on them.
+// The check uses the token ID of this read, so a lease request costs one read
+// of the update.
+func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID, tok token.Token) (Update, error) {
 	u, err := s.Get(ctx, ref, id)
 	if err != nil {
 		return Update{}, err
@@ -1203,6 +1214,10 @@ func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID) (Update, e
 
 	if u.TokenID == "" {
 		return u, nil
+	}
+
+	if !u.Lease.Digest.Matches(tok) {
+		return Update{}, fmt.Errorf("update %s of %s: %w", id, ref, ErrLeaseInvalid)
 	}
 
 	if s.tokens == nil {
@@ -1779,9 +1794,13 @@ func (s *Updates) transition(
 // leaseTransition is transition for a lease request: the update it changes
 // must still pass the access token check of leaseGet.
 func (s *Updates) leaseTransition(
-	ctx context.Context, ref Ref, id UpdateID, change func(Update, time.Time) (Update, error),
+	ctx context.Context, ref Ref, id UpdateID, tok token.Token, change func(Update, time.Time) (Update, error),
 ) (Update, error) {
-	return s.transitionFrom(ctx, ref, id, transitionOp{read: s.leaseGet, change: change})
+	read := func(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
+		return s.leaseGet(ctx, ref, id, tok)
+	}
+
+	return s.transitionFrom(ctx, ref, id, transitionOp{read: read, change: change})
 }
 
 func (s *Updates) transitionFrom(ctx context.Context, ref Ref, id UpdateID, op transitionOp) (Update, error) {
@@ -1848,7 +1867,7 @@ func (s *Updates) authorizedIn(
 		return Update{}, namespace.Namespace{}, err
 	}
 
-	u, err := s.leaseGet(ctx, ref, id)
+	u, err := s.leaseGet(ctx, ref, id, tok)
 	if err != nil {
 		return Update{}, namespace.Namespace{}, err
 	}
@@ -2001,7 +2020,7 @@ func (s *Updates) completeJournaled(
 		return Update{}, err
 	}
 
-	u, err := s.leaseGet(ctx, ref, id)
+	u, err := s.leaseGet(ctx, ref, id, tok)
 	if err != nil {
 		return Update{}, err
 	}
@@ -2020,7 +2039,7 @@ func (s *Updates) completeJournaled(
 		return Update{}, err
 	}
 
-	return s.leaseTransition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
+	return s.leaseTransition(ctx, ref, id, tok, func(u Update, now time.Time) (Update, error) {
 		return u.complete(tok, now, status)
 	})
 }
