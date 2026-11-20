@@ -281,8 +281,29 @@ tells a sender why a delivery was dropped, and a sender that guesses hook IDs
 learns nothing. A request with another method than `POST`, or to another path
 under `/webhooks/`, gets the same answer for every hook ID. A body of more than
 2 MiB is not read further and counts as refused. During maintenance mode the
-server answers 503 with `Retry-After`, and writes nothing, so GitHub can send
-the delivery again.
+server answers 503 with `Retry-After`, and writes nothing. GitHub does not send
+a failed delivery again on its own. A person sends it again.
+
+### Find a lost delivery
+
+The answer 204 shows as a success in the delivery list of GitHub, also when the
+server did not keep the delivery. This is true for the reasons `other` (for
+example, a store that does not answer) and `receipts-full`, and for each other
+reason in the table below. The 503 of maintenance mode is the only failure that
+GitHub shows. To find the deliveries that the server lost:
+
+1. Read the metric `dustpan_git_host_event_rejected_total` and the audit
+   entries `git-host-event:receive` with the outcome denied. Note the time of
+   each entry with the reason `other` or `receipts-full`, and the time of each
+   503 in the maintenance window.
+2. In the GitHub App, open "Advanced" and then "Recent Deliveries". Find the
+   deliveries from the same times.
+3. Select each delivery and select "Redeliver". The server accepts it again,
+   because a refused delivery leaves no receipt. A delivery that the server
+   accepted is a `duplicate` for 24 hours and the server drops it.
+
+GitHub keeps the recent deliveries for a limited time. Do step 2 and step 3
+soon after the fault ends.
 
 The operator reads the reason in two places:
 
@@ -304,7 +325,7 @@ The reasons are:
 | `too-large` | The body is more than 2 MiB | Not a delivery of GitHub |
 | `malformed` | The body is not valid, or has no installation, repository, pull request number or sender | Open the delivery in GitHub and read the body |
 | `unsupported` | The event or its action is not one that the server uses. The server uses `ping` and the pull request actions `opened`, `reopened`, `synchronize` and `closed` | Subscribe to "Pull requests" only |
-| `duplicate` | The delivery ID, or the body, came in the last 24 hours | None: GitHub sent a retry, or someone sent the same body again |
+| `duplicate` | The delivery ID, or the body, came in the last 24 hours | None: a person redelivered it from GitHub, or someone sent the same body again |
 | `not-assigned` | No installation of the map owns the installation of the event | `PUT /api/dustpan/v1/git-host-installations/{installation_id}` |
 | `not-primary` | The namespace of the installation has its primary installation in another member of the federation | `GET /api/dustpan/v1/components` |
 | `secret-not-opened` | The server cannot open the stored event secret, for example after a change of the address | Register the app again (Step 1) |
@@ -317,8 +338,8 @@ For each accepted delivery the server keeps a receipt for 24 hours: the delivery
 ID, a digest of the body, the installation, the event kind, the repository and
 the pull request number. A later feature reads the receipt as a hint and reads
 the object from GitHub before it changes a record. The receipt is not state: a
-restore leaves the table empty. A retry of GitHub keeps its delivery ID, so the
-server drops it. A body that is sent again with a new delivery ID is dropped for
+restore leaves the table empty. A redelivery from GitHub keeps its delivery ID, so
+the server drops it. A body that is sent again with a new delivery ID is dropped for
 the same 24 hours, because the delivery ID is not under the signature.
 
 The check for a repeat covers 24 hours only. GitHub signs no timestamp. A person
