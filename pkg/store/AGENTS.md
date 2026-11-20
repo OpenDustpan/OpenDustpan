@@ -1,6 +1,8 @@
 # SQL store: instructions for AI coding agents
 
 These rules add to the rules in the root `AGENTS.md`. They do not replace them.
+When the adapters move to `internal/store/`, move this file and its
+`CLAUDE.md` link with them.
 
 ## Queries
 
@@ -26,3 +28,5 @@ These rules add to the rules in the root `AGENTS.md`. They do not replace them.
   comment changes the SHA-256 too. For dev, run `opendustpan dev reset`
   (ADR 324).
 - Timestamps are Unix milliseconds in `BIGINT`.
+- When you run a store package directly, pass `-timeout 60m`. One run takes
+  more than the default 10 minutes.

@@ -21,4 +21,6 @@ CLIs. Until 1.0, everything else can break (ADR 73).
   each action. Make every change pass the policy check. A route without an
   action fails the route test. Put routes that need no sign-in on the explicit
   public list in that test.
-- Until the first server tag, do not change `info.version` in the API description or `internal/api/apidesc/openapi.pin`. The release sets both. `make pin-frozen` checks this.
+- Until the first server tag, do not change `info.version` in the API
+  description or `internal/api/apidesc/openapi.pin`. The release sets both.
+  `make pin-frozen` checks this.
