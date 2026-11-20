@@ -130,8 +130,9 @@ func (h *Handler) buildRoutes() []Route {
 			Writes:         nil,
 			IdempotencyKey: false,
 			ETag:           true,
-			ServesDamaged:  false, Resolve: h.resolveJob,
-			Serve: h.getJob,
+			ServesDamaged:  false,
+			Resolve:        h.resolveJob,
+			Serve:          h.getJob,
 		},
 		{
 			// The handler checks job:read on the unit of each job of the page.

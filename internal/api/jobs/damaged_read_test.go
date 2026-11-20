@@ -168,6 +168,7 @@ func hostileDamagedRows() []hostileDamaged {
 	return []hostileDamaged{
 		callerRow("caller without job:read on the unit", readsNamespace()),
 		callerRow("caller without any right", []string{"nothing"}),
+		callerRow("caller with job:read on another unit", readsUnits("unt-other")),
 		resolverRow("row of another namespace", "other", testUnit, unitsOf(testUnit)),
 		resolverRow("unit that does not exist", "acme", testUnit, unitsOf()),
 		resolverRow("no inventory", "acme", testUnit, nil),
