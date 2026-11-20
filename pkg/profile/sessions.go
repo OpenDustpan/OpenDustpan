@@ -303,7 +303,10 @@ type Sessions interface {
 	// namespace.ErrNotFound for an unknown namespace, audit.ErrInvalidEntry
 	// for an entry that fails validation or names another namespace, and
 	// ErrInvalid for an empty slice of entries. It changes nothing on an
-	// error, and writes no entry for a session that it does not find.
+	// error, and writes no entry for a session that it does not find. When
+	// the context carries an idempotency.Completion, Delete passes nil to it as
+	// the result: no route that takes an Idempotency-Key deletes a session, so
+	// its answer holds nothing from the delete.
 	Delete(ctx context.Context, id string, owner SessionOwner, fence namespace.Fence, e []audit.Entry) error
 	// Sweep deletes at most limit sessions that ended at or before now, in
 	// any namespace, and returns how many it deleted. ErrInvalid for a
