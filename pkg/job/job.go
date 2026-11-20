@@ -100,6 +100,10 @@ var (
 	//
 	// Code rule: docs/reference/code-rules.md lists it.
 	ErrSelfApproval = errors.New("the principal that started the job cannot approve it")
+	// ErrNoRequirement reports an approval by a principal that no requirement
+	// of the phase holds: it is a member of no group of any gate. It is always
+	// wrapped in a *DeniedError, so it is also identity.ErrDenied.
+	ErrNoRequirement = errors.New("no requirement of the phase holds the approver")
 	// ErrAlreadyApproved reports an approval by a subject that approved the
 	// current phase already. An approval counts once, and a repeat adds
 	// nothing but a record, so the service refuses it.

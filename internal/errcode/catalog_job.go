@@ -17,6 +17,8 @@ const (
 	JobGateEnforced = "job.gate-enforced"
 	// JobInvalid means that the request to start the job is not valid.
 	JobInvalid = "job.invalid"
+	// JobNoRequirement means that no requirement of the phase holds the approver.
+	JobNoRequirement = "job.no-requirement"
 	// JobNotAwaitingApproval means that the job waits for no approval.
 	JobNotAwaitingApproval = "job.not-awaiting-approval"
 	// JobNotFound means that the job does not exist, or that the caller cannot
@@ -51,6 +53,7 @@ func jobSpecs() []Spec {
 		{JobInvalid, "the request to start the job is not valid"},
 		{JobLimit, "the job is over a limit of the job service"},
 		{JobNotFound, "the job does not exist in the namespace, or the caller cannot read it"},
+		{JobNoRequirement, "no requirement of the phase holds the approver"},
 		{JobNotAwaitingApproval, "the job waits for no approval"},
 		{JobPlanChanged, "the plan of the approval is not the stored plan"},
 		{JobPlanStale, "the stored plan is too old, or was redacted"},

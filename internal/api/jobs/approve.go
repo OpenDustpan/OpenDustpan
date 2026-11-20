@@ -59,6 +59,7 @@ type bindingBody struct {
 // Reasons of the audit entries of the refusals of an approval. The entry never
 // holds the text of the error.
 const (
+	reasonNoRequirement   = "no requirement of the phase holds the approver"
 	reasonSelfApproval    = "the person who started the job cannot approve it"
 	reasonAuthStale       = "the approval of a destroy needs a fresh MFA step"
 	reasonAlreadyApproved = "the approver approved this phase already"
@@ -246,6 +247,9 @@ func (h *Handler) recordApprovalRefusal(r *http.Request, p identity.Principal, t
 // false for an error that is not a refusal of security.
 func approvalRefusalReason(err error) (string, bool) {
 	switch {
+	case errors.Is(err, job.ErrNoRequirement):
+		// Before identity.ErrDenied: the error wraps both.
+		return reasonNoRequirement, true
 	case errors.Is(err, identity.ErrDenied):
 		return refusal.ReasonPolicy, true
 	case errors.Is(err, job.ErrAgentDenied):

@@ -312,7 +312,11 @@ func (s *service) checkGroups(ctx context.Context, j *Job, subject string, gates
 	}
 
 	if len(holding) == 0 {
-		return nil, denied("the subject is not a member of a group of any requirement: "+requirementNames(gates), nil)
+		return nil, &DeniedError{
+			Action: ActionJobApprove, Object: j.Spec.Unit,
+			Err: fmt.Errorf("%w: %w: the subject is not a member of a group of any requirement: %s",
+				identity.ErrDenied, ErrNoRequirement, requirementNames(gates)),
+		}
 	}
 
 	return holding, nil
