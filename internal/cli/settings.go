@@ -141,8 +141,24 @@ var Settings = []*Setting{
 		"DUSTPAN_DATABASE",
 		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
-		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
+		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)."+
+			" With `sqlite:<path>`, the server makes the database file with mode 0600. It refuses to start when "+
+			"the group or others can access the database file, `<path>-wal` or `<path>-shm`. The error names the "+
+			"file. Run `chmod 600` on each of the three files. You can also change the mount permissions of the "+
+			"volume (Docker or Kubernetes), so that only the owner can access the files. `serve` with "+
+			"`--database-allow-wide-file-mode` starts anyway. The host command has no such flag.",
 	).WithFile("database").WithStaticCredentialHost().WithSensitive().WithNoPasswordInFile(),
+	boolSetting(
+		"database-allow-wide-file-mode", "DUSTPAN_DATABASE_ALLOW_WIDE_FILE_MODE",
+		"start on a SQLite database file that the group or others can access (DUSTPAN_DATABASE_ALLOW_WIDE_FILE_MODE)",
+		"(none: off). Set `true` only when you accepted the risk and cannot change the mode, for example on a "+
+			"volume with fixed permissions. The server then starts on a database file, `<path>-wal` or "+
+			"`<path>-shm` that the group or others can access. It writes one warning with the path and the mode "+
+			"of each such file at each start. Every other file check stays. The server still makes a new file "+
+			"with mode 0600. It still refuses a file that is not a regular file. It still refuses a link in "+
+			"place of the `-wal` or `-shm` file. It still refuses a staged restore file with a wider mode. It "+
+			"has no effect with a PostgreSQL database",
+	).WithFile("database-allow-wide-file-mode"),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
 		"name of this installation, the primary installation of the namespaces it creates (DUSTPAN_INSTALLATION)",

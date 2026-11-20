@@ -235,6 +235,7 @@ The container user must be able to write to that directory.
 `dev` makes the data directory with mode 0700.
 At each start, `dev` refuses to start when the group or others can access the directory, or when another user owns it.
 It does the same for the key file, the token file, the token file of `--admin-token-file` and the files of the certificate.
+It also does the same for the database file and for its `-wal` and `-shm` files.
 The error names the path and the one command that helps.
 `dev` checks the owner and the mode on Linux and on the other Unix systems.
 It does not check them on Windows yet.
