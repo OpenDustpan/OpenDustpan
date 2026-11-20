@@ -580,7 +580,7 @@ func writeGrowWALRow(ctx context.Context, t *testing.T, row growWALRow) stack.Re
 		NamespaceID: "",
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		Tags:        map[string]string{"batch": strconv.Itoa(row.batch), "pad": row.pad},
+		Tags:        padTags(map[string]string{"batch": strconv.Itoa(row.batch)}, row.pad),
 		Ref:         ref,
 		ID:          stack.ID(ident.NewID("stk-")),
 		Version:     0,
@@ -1534,7 +1534,7 @@ func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob
 			NamespaceID: "",
 			CreatedAt:   now,
 			UpdatedAt:   now,
-			Tags:        map[string]string{"run": job.prefix, "pad": pad},
+			Tags:        padTags(map[string]string{"run": job.prefix}, pad),
 			Ref:         ref,
 			ID:          stack.ID(ident.NewID("stk-")),
 			Version:     0,
@@ -1679,4 +1679,19 @@ func (r *walLogRecorder) busyWarnings() []walLogRecord {
 	}
 
 	return out
+}
+
+// padTags adds pad to tags as tags "pad0", "pad1" and so on, with at most 256
+// bytes each: the store refuses a tag value over that size, and a test that
+// needs bulky rows spreads its filler over several tags.
+func padTags(tags map[string]string, pad string) map[string]string {
+	const maxValue = 256
+
+	for i := 0; pad != ""; i++ {
+		n := min(len(pad), maxValue)
+		tags["pad"+strconv.Itoa(i)] = pad[:n]
+		pad = pad[n:]
+	}
+
+	return tags
 }

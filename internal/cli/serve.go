@@ -23,6 +23,7 @@ func ServeFlags() []*Setting {
 		"tls-cert",
 		"tls-key",
 		"public-url",
+		AllowPlainHTTPFlag,
 		"issuer-base-url",
 		"trusted-proxies",
 		"trusted-proxy-header",

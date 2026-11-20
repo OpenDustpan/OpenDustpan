@@ -203,7 +203,7 @@ func (*fakeStacks) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, 
 }
 
 func (*fakeStacks) UpdateStackTags(
-	context.Context, stack.Ref, map[string]string, time.Time, namespace.Fence,
+	context.Context, stack.Ref, stack.TagUpdate, namespace.Fence,
 ) error {
 	return stack.ErrNotFound
 }

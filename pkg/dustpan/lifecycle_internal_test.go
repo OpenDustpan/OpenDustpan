@@ -205,6 +205,70 @@ func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	}
 }
 
+// leftOutScope is an Authorizer whose scope is fixed. It allows nothing: the
+// deleted read scope reads the list only.
+type leftOutScope struct{ scope identity.Scope }
+
+func (leftOutScope) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return identity.ErrDenied
+}
+
+func (l leftOutScope) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return l.scope, nil
+}
+
+// TestDeletedReadScopeLeavesOut sends a scope that covers every object and
+// leaves out namespaces directly to the deleted read scope, as the IP
+// allowlist gate gives it to an administrator outside the list of a
+// namespace: the left-out namespace gives no deleted unit, and another
+// namespace gives each one.
+func TestDeletedReadScopeLeavesOut(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	withUnit := identity.Every("acme")
+	withUnit.Units = []identity.Object{unit.WithUnitID("stk-acme")}
+	withUnit.Collections = []identity.Object{identity.CollectionObject("acme", "web")}
+
+	cases := []struct {
+		name    string
+		scope   identity.Scope
+		ns      namespace.Name
+		wantAll bool
+	}{
+		{name: "the left-out namespace", scope: identity.Every("acme"), ns: "acme", wantAll: false},
+		{name: "one of two left-out namespaces", scope: identity.Every("acme", "beta"), ns: "beta", wantAll: false},
+		{name: "a namespace that shares a prefix", scope: identity.Every("acme"), ns: "acme-dev", wantAll: true},
+		{name: "another namespace", scope: identity.Every("acme"), ns: "beta", wantAll: true},
+		{name: "a unit of the left-out namespace in the sets", scope: withUnit, ns: "acme", wantAll: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			scope := deletedReadScope{authz: leftOutScope{scope: tc.scope}, units: nil}
+			p := identity.Principal{
+				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "ops-admin", DisplayName: "",
+				Admin: true, TokenID: "", TokenExpiresAt: time.Time{}, Kind: "", Credential: "", JobID: "",
+			}
+
+			all, ids, err := scope.ReadableUnits(t.Context(), p, tc.ns)
+			if err != nil {
+				t.Fatalf("readable units: %v", err)
+			}
+
+			if all != tc.wantAll || (!all && len(ids) != 0) {
+				t.Fatalf("readable units = %v %v, want all %v", all, ids, tc.wantAll)
+			}
+		})
+	}
+}
+
 // TestBlobPurgerOutlivesTheRequest proves that the blob deletes of a purge
 // run on a context that the request cannot cancel, with a deadline, and that
 // a failed delete does not fail the purge: the record stays for the sweep.

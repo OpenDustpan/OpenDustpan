@@ -37,37 +37,45 @@ func (s *Store) NamespaceList(ctx context.Context, ns namespace.Name) (ipallow.L
 	return l, nil
 }
 
-// NamespacesWithList implements ipallow.Store. It returns the names of the
-// namespaces with a list, in name order. It refuses a stored name that is not
-// a valid namespace name. It reads at most ipallow.MaxNamespacesWithList
-// rows plus one, and returns ipallow.ErrTooManyLists when a further namespace
-// has a list.
-func (s *Store) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
+// NamespacesWithList implements ipallow.Store. It returns each namespace
+// with a list, with its list, in name order. It refuses a stored name that is
+// not a valid namespace name and a stored list that does not decode. It reads
+// at most ipallow.MaxNamespacesWithList rows plus one, and returns
+// ipallow.ErrTooManyLists when a further namespace has a list.
+func (s *Store) NamespacesWithList(ctx context.Context) ([]ipallow.NamedList, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	names, err := s.queries.NamespacesWithList(ctx, ipallow.MaxNamespacesWithList+1)
+	rows, err := s.queries.NamespacesWithList(ctx, ipallow.MaxNamespacesWithList+1)
 	if err != nil {
 		return nil, fmt.Errorf("select namespaces with an IP allowlist: %w", err)
 	}
 
 	// The query reads at most Max+1 rows, so that the read stays bounded. A row
 	// past Max means that more namespaces have a list: refuse.
-	if len(names) > ipallow.MaxNamespacesWithList {
+	if len(rows) > ipallow.MaxNamespacesWithList {
 		return nil, fmt.Errorf("%w: more than %d", ipallow.ErrTooManyLists, ipallow.MaxNamespacesWithList)
 	}
 
-	out := make([]namespace.Name, 0, len(names))
-	for i, name := range names {
+	out := make([]ipallow.NamedList, 0, len(rows))
+	for i, row := range rows {
 		// Defense in depth: the namespace create path validates each name too;
 		// this check stays so that a row from a restored backup or another
 		// version of the schema cannot reach the scope as a namespace name.
-		parsed, parseErr := namespace.ParseName(name)
+		parsed, parseErr := namespace.ParseName(row.Name)
 		if parseErr != nil {
 			return nil, fmt.Errorf("row %d of the namespaces with an IP allowlist: %w", i+1, parseErr)
 		}
 
-		out = append(out, parsed)
+		// Defense in depth: the set path parses each list too; this check
+		// stays so that a list from a restored backup or another version of
+		// the schema cannot reach the gate without a parse.
+		list, decodeErr := ipallow.DecodeList(row.IpAllowlist)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("row %d of the namespaces with an IP allowlist: %w", i+1, decodeErr)
+		}
+
+		out = append(out, ipallow.NamedList{Namespace: parsed, List: list})
 	}
 
 	return out, nil

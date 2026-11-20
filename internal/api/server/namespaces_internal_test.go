@@ -11,12 +11,12 @@ import (
 func TestNamespaceListFingerprint(t *testing.T) {
 	t.Parallel()
 
-	all := namespace.Filter{All: true, Names: nil}
-	two := namespace.Filter{All: false, Names: []namespace.Name{"bravo", "alpha"}}
-	twoOtherOrder := namespace.Filter{All: false, Names: []namespace.Name{"alpha", "bravo"}}
-	one := namespace.Filter{All: false, Names: []namespace.Name{"alpha"}}
+	all := namespace.EveryNamespace()
+	two := namespace.NamedNamespaces("bravo", "alpha")
+	twoOtherOrder := namespace.NamedNamespaces("alpha", "bravo")
+	one := namespace.NamedNamespaces("alpha")
 
-	if namespaceListFingerprint(all) != namespaceListFingerprint(namespace.Filter{All: true, Names: nil}) {
+	if namespaceListFingerprint(all) != namespaceListFingerprint(namespace.EveryNamespace()) {
 		t.Fatal("one filter of all namespaces gives two fingerprints")
 	}
 
@@ -32,7 +32,11 @@ func TestNamespaceListFingerprint(t *testing.T) {
 		t.Fatal("the filter of all namespaces and a named filter give one fingerprint")
 	}
 
-	onlyAll := namespace.Filter{All: false, Names: []namespace.Name{"all"}}
+	if namespaceListFingerprint(all) == namespaceListFingerprint(namespace.EveryNamespace("alpha")) {
+		t.Fatal("the filter of all namespaces and the filter of all but one give one fingerprint")
+	}
+
+	onlyAll := namespace.NamedNamespaces("all")
 	if namespaceListFingerprint(all) == namespaceListFingerprint(onlyAll) {
 		t.Fatal("the filter of all namespaces and the filter of the namespace all give one fingerprint")
 	}

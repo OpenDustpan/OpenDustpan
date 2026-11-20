@@ -8,3 +8,6 @@ keyEncryptionKey:
 adminToken:
   existingSecret:
     name: opendustpan-admin-token
+# An ingress or a load balancer in front ends TLS.
+server:
+  publicURL: https://dustpan.example

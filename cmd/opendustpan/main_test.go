@@ -309,7 +309,7 @@ func serveWithIO(ctx context.Context, args []string, stderr io.Writer, terminal 
 func serveDatabase(t *testing.T, path string) error {
 	t.Helper()
 
-	return serve(t.Context(), []string{"--database", "sqlite:" + path}, io.Discard)
+	return serve(t.Context(), []string{"--database", "sqlite:" + path, "--listen", "127.0.0.1:0"}, io.Discard)
 }
 
 // startServer runs serve with args until it logs "listening", then ends it. A
@@ -569,7 +569,7 @@ func TestServeTLSAndPublicURLFlags(t *testing.T) {
 		},
 		{
 			name: "bad public URL",
-			args: []string{database, path, "--public-url", "not a url"},
+			args: []string{database, path, "--public-url", "not a url", "--listen", "127.0.0.1:0"},
 			want: "public URL",
 		},
 	}
@@ -797,7 +797,7 @@ func TestServeRefusesBinaryBelowMinimum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 
-	err := serve(ctx, []string{"--database", "sqlite:" + path}, io.Discard)
+	err := serve(ctx, []string{"--database", "sqlite:" + path, "--listen", "127.0.0.1:0"}, io.Discard)
 	if err == nil || !errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		t.Fatalf("serve below the schema minimum: err = %v, want ErrBinaryBelowMinimum", err)
 	}
@@ -815,7 +815,7 @@ func TestServeDevBuildWarnsOnSchemaMinimum(t *testing.T) {
 
 	path := newerSchemaDatabase(t, "v9.0.0")
 
-	logs, err := startServerLogs(t, "--database", "sqlite:"+path)
+	logs, err := startServerLogs(t, "--database", "sqlite:"+path, "--listen", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("serve a dev build on a newer schema: %v", err)
 	}
@@ -1317,7 +1317,11 @@ func TestServeBlobStoreBadValue(t *testing.T) {
 
 	path := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
 
-	err := serve(t.Context(), []string{"--database", path, "--blob-store", "bogus"}, io.Discard)
+	err := serve(
+		t.Context(),
+		[]string{"--database", path, "--blob-store", "bogus", "--listen", "127.0.0.1:0"},
+		io.Discard,
+	)
 	if err == nil || !errors.Is(err, errBlobStore) {
 		t.Fatalf("serve with a bad blob store: err = %v, want errBlobStore", err)
 	}

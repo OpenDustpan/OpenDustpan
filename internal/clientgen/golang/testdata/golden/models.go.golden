@@ -399,6 +399,7 @@ const (
 	ErrorCodeStackAlreadyExists                    ErrorCode = "stack.already-exists"
 	ErrorCodeStackHasResources                     ErrorCode = "stack.has-resources"
 	ErrorCodeStackInvalidName                      ErrorCode = "stack.invalid-name"
+	ErrorCodeStackInvalidTags                      ErrorCode = "stack.invalid-tags"
 	ErrorCodeStackNoState                          ErrorCode = "stack.no-state"
 	ErrorCodeStackNoStateAtTime                    ErrorCode = "stack.no-state-at-time"
 	ErrorCodeStackNotFound                         ErrorCode = "stack.not-found"

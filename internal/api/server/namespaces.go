@@ -33,7 +33,6 @@ import (
 	"io"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/pagetoken"
@@ -262,21 +261,12 @@ func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request, p ident
 // namespaceListFingerprint returns a short digest of the filter of a
 // namespace list, so a cursor works only with the query that made it. The
 // page size is not part of it: a caller may change the limit between pages.
-// Each kind of filter has its own prefix, so a filter of the one namespace
-// "all" never gives the fingerprint of the filter of all namespaces.
+// The key of the filter gives each kind of filter its own prefix and holds
+// the left-out names, so a filter of the one namespace "all" never gives the
+// fingerprint of the filter of all namespaces, and a cursor made before a
+// namespace was left out does not page the new filter.
 func namespaceListFingerprint(filter namespace.Filter) string {
-	if filter.All {
-		return pagetoken.Fingerprint("all:")
-	}
-
-	names := make([]string, 0, len(filter.Names))
-	for i := range filter.Names {
-		names = append(names, filter.Names[i].String())
-	}
-
-	slices.Sort(names)
-
-	return pagetoken.Fingerprint("names:" + strings.Join(names, "\n"))
+	return pagetoken.Fingerprint(filter.Key())
 }
 
 // parseNamespaceList reads the limit and the cursor of a list request: the
@@ -440,21 +430,18 @@ func (h *Handler) openNamespaceCursor(
 // visibleNamespaces answers the filter of the namespaces where p holds
 // namespace:read, as the authorizer of the routes lists them, so the IP
 // allowlist of each namespace applies. A caller whose scope holds every
-// namespace, such as an administrator, is not filtered by the allowlists
-// yet. Empty is true when no namespace can qualify, so the caller answers
-// the empty page without calling the store. With no access service only an
-// administrator sees every namespace. The filter runs in the SQL query,
-// never after paging.
+// namespace, such as an administrator, gets every namespace except the
+// namespaces that the scope leaves out, for example a namespace whose IP
+// allowlist refuses the client address. Empty is true when no namespace can
+// qualify, so the caller answers the empty page without calling the store.
+// With no access service only an administrator lists, through the same
+// authorizer. The filter runs in the SQL query, never after paging.
 func (h *Handler) visibleNamespaces(
 	ctx context.Context, p identity.Principal,
 ) (namespace.Filter, bool, error) {
-	none := namespace.Filter{All: false, Names: nil}
+	none := namespace.NamedNamespaces()
 
-	if h.access == nil {
-		if p.Admin {
-			return namespace.Filter{All: true, Names: nil}, false, nil
-		}
-
+	if h.access == nil && !p.Admin {
 		return none, true, nil
 	}
 
@@ -463,8 +450,8 @@ func (h *Handler) visibleNamespaces(
 		return none, false, err
 	}
 
-	if scope.CoversEveryObject() {
-		return namespace.Filter{All: true, Names: nil}, false, nil
+	if leftOut, every := scope.EveryObjectExcept(); every {
+		return namespace.EveryNamespace(leftOut...), false, nil
 	}
 
 	names := make([]namespace.Name, 0, len(scope.Namespaces))
@@ -479,7 +466,7 @@ func (h *Handler) visibleNamespaces(
 		return none, true, nil
 	}
 
-	return namespace.Filter{All: false, Names: names}, false, nil
+	return namespace.NamedNamespaces(names...), false, nil
 }
 
 // emptyNamespacePage answers the page of a caller that sees no namespace:

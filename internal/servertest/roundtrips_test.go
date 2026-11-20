@@ -1522,6 +1522,9 @@ const attemptClaimTrips = 23
 // The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
 // the grants and the memberships of principals of a namespace.
 //
+// The fixed part also holds stagedStackTagCheckTrips: the staged check of the
+// tag values of the stacks.
+//
 // The fixed part also holds stagedTriggerClockTrips: the staged check of the
 // trigger rows reads the clock of the store in one statement, once for each
 // restore.
@@ -1548,7 +1551,8 @@ const attemptClaimTrips = 23
 func restoreModel() costModel {
 	return costModel{
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
-			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedTriggerClockTrips + unitStateTrips +
+			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedStackTagCheckTrips + stagedTriggerClockTrips +
+			unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips - eventReceiptTrips + firstAdministratorTrips,
@@ -1652,6 +1656,12 @@ const stagedPrincipalCheckTrips = 2
 // one query, once for each restore. The count is fixed: it does not grow with
 // the units or the tables.
 const stagedGrantIDCheckTrips = 1
+
+// stagedStackTagCheckTrips is the number of round trips of the staged check of
+// the tag values of the stacks: checkStagedStackTags reads the stack_tags rows
+// of the staging schema in one query, once for each restore, and not once for
+// each row. The count is fixed: it does not grow with the units or the tables.
+const stagedStackTagCheckTrips = 1
 
 // stagedTriggerClockTrips is the number of round trips that the staged check of
 // the trigger rows adds for the clock: it reads the clock of the store in one

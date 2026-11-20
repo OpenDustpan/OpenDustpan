@@ -37,7 +37,8 @@ No line shows a key, a token or a database URL.
 | The database is set. | `fail` |
 | You set a bootstrap admin token (`DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`), and each token has at least 32 bytes. With no admin token, `serve` exits with `no admin token is set`, so the check fails. To make a token, run `openssl rand -hex 32`. | `fail` |
 | A backup target is set. | `warn` |
-| The listen address is not loopback, and you set no TLS, and `--public-url` is not an `https` address of a proxy. | `warn` |
+| The listen address is not loopback, and you set no TLS, and `--public-url` is not an `https` address of a proxy, and you did not set `--allow-plain-http`. `serve` refuses to start in this case, with the same text. | `fail` |
+| The listen address is not loopback and uses plain HTTP, because you set `--allow-plain-http` (`DUSTPAN_ALLOW_PLAIN_HTTP`). | `warn` |
 | With `--public-url`, you also set `--trusted-proxies`. | `warn` |
 
 ## The checks of a running server

@@ -1904,11 +1904,17 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 
 	next := map[string]string{"team": "e2e"}
-	if err := s.UpdateStackTags(ctx, ref, next, now, ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		ctx,
+		ref,
+		stack.TagUpdate{Tags: next, UpdatedAt: now, Entry: renameTestEntry(ref.Namespace, ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
+	if err = s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

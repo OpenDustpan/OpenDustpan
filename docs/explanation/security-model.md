@@ -340,8 +340,17 @@ Encryption of a whole backup is not decided.
 ## Transport
 
 - **TLS.** `--tls-cert` and `--tls-key` turn on HTTPS, with TLS 1.2 or later.
-  On plain HTTP on an address that is not loopback, the server logs a warning
-  and serves anyway. OpenTofu needs HTTPS.
+  OpenTofu needs HTTPS.
+- **Plain HTTP.** `serve` refuses to start with plain HTTP on an address that
+  is not loopback. It starts there in three cases. The server has its own
+  TLS. Or `--public-url` is an `https` URL, which says that a proxy in front
+  ends TLS. Or the operator set `--allow-plain-http`
+  (`DUSTPAN_ALLOW_PLAIN_HTTP`). With `--allow-plain-http`, `serve` logs a
+  warning at each start. `serve` checks the settings before it opens the
+  database, and checks the address that the listener holds again, so a name
+  that resolves to another address does not pass. `dev` logs a warning and
+  serves. `doctor` fails its listen address check in the case that `serve`
+  refuses.
 - **Behind a reverse proxy.** By default the server reads no forwarding
   header. Set `--public-url` to the external URL, and `--trusted-proxies`
   when the proxy adds one. The next section says how the server reads it.
