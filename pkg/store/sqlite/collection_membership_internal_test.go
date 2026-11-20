@@ -40,16 +40,17 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	id := workspace.ID(ident.NewID("ws-"))
 
 	w := workspace.Workspace{
-		NamespaceID: "",
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(),
-		ID:          id,
-		Ref:         ref,
-		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Origin:      identity.StateOrigin{Job: "", Commit: ""},
+		NamespaceID:  "",
+		CreatedAt:    at,
+		UpdatedAt:    at,
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		ID:           id,
+		Ref:          ref,
+		Revision:     1,
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if createErr := s.CreateWorkspace(ctx, w, ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)
@@ -236,4 +237,82 @@ func membershipCollection(t *testing.T, s string) collection.Name {
 	}
 
 	return n
+}
+
+// TestWorkspaceReadIgnoresMembershipOfAnotherNamespace proves that a
+// membership row of the namespace other does not make a workspace of acme read
+// as in a collection. The schema allows the row state: the row names one
+// namespace, and the stable ID of the unit belongs to another.
+func TestWorkspaceReadIgnoresMembershipOfAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	s, ns, id := membershipSetup(t)
+	ctx := t.Context()
+	at := time.UnixMilli(1_700_000_000_000).UTC()
+
+	other := namespace.Namespace{
+		ID:        namespace.NewID(),
+		CreatedAt: at, Name: "other", PrimaryInstallation: "eu-west", FailoverVersion: 1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(ctx, other); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	svc, err := collection.NewService(collection.Config{Store: s, Namespaces: s, Now: nil})
+	if err != nil {
+		t.Fatalf("collection service: %v", err)
+	}
+
+	ref := collection.Ref{Namespace: other.Name, Name: membershipCollection(t, "elsewhere")}
+	if _, err = svc.Create(ctx, ref, membershipEntry(at, other.Name, "collection:create")); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+
+	read := func(step string, want bool) {
+		t.Helper()
+
+		byName, nameErr := s.GetWorkspace(ctx, membershipRef(ns))
+		if nameErr != nil || byName.InCollection != want {
+			t.Fatalf("%s: by name = %v, %v, want InCollection %v", step, byName.InCollection, nameErr, want)
+		}
+
+		byID, idErr := s.GetWorkspaceByID(ctx, id)
+		if idErr != nil || byID.InCollection != want {
+			t.Fatalf("%s: by ID = %v, %v, want InCollection %v", step, byID.InCollection, idErr, want)
+		}
+	}
+
+	read("member of its own namespace", true)
+
+	move := "UPDATE collection_members SET namespace = 'other', " +
+		"collection_key = (SELECT name_key FROM collections WHERE namespace = 'other') WHERE unit_id = ?"
+	if _, err = s.conn.ExecContext(ctx, move, string(id)); err != nil {
+		t.Fatalf("move membership: %v", err)
+	}
+
+	read("member row of another namespace", false)
+}
+
+// TestWorkspaceReadIgnoresDeletedMembership proves that a workspace with no
+// membership row reads as in no collection, by name and by ID.
+func TestWorkspaceReadIgnoresDeletedMembership(t *testing.T) {
+	t.Parallel()
+
+	s, ns, id := membershipSetup(t)
+	ctx := t.Context()
+
+	if _, err := s.conn.ExecContext(ctx, "DELETE FROM collection_members WHERE unit_id = ?", string(id)); err != nil {
+		t.Fatalf("delete membership: %v", err)
+	}
+
+	byName, err := s.GetWorkspace(ctx, membershipRef(ns))
+	if err != nil || byName.InCollection {
+		t.Fatalf("by name = %v, %v, want InCollection false", byName.InCollection, err)
+	}
+
+	byID, err := s.GetWorkspaceByID(ctx, id)
+	if err != nil || byID.InCollection {
+		t.Fatalf("by ID = %v, %v, want InCollection false", byID.InCollection, err)
+	}
 }

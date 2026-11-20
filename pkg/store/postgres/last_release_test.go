@@ -33,7 +33,8 @@ func createReleaseWorkspace(t *testing.T, s *postgres.Store) workspace.Workspace
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, fence); err != nil {

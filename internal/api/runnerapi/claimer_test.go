@@ -30,16 +30,17 @@ func unitOf(t *testing.T, s stores, fence namespace.Fence, name string) identity
 	now := time.UnixMilli(1_700_000_000_000).UTC()
 
 	w := workspace.Workspace{
-		NamespaceID: "",
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(ident.NewID("ws-")),
-		Ref:         workspace.Ref{Namespace: fence.Namespace, Name: ref},
-		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Origin:      identity.StateOrigin{Job: "", Commit: ""},
+		NamespaceID:  "",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		ID:           workspace.ID(ident.NewID("ws-")),
+		Ref:          workspace.Ref{Namespace: fence.Namespace, Name: ref},
+		Revision:     1,
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err = s.units.CreateWorkspace(t.Context(), w, fence); err != nil {
 		t.Fatalf("create workspace: %v", err)

@@ -29,7 +29,8 @@ func newOpenTofuWorkspace(t *testing.T, ns namespace.Name, name string) workspac
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 
@@ -63,8 +64,43 @@ func testCreateWorkspacePlaced(t *testing.T, s Store) {
 		t.Errorf("collection of the placed workspace = %v, %v; want %v", got, err, c.Ref)
 	}
 
-	if _, getErr := s.GetWorkspace(t.Context(), w.Ref); getErr != nil {
-		t.Errorf("GetWorkspace of the placed workspace: %v", getErr)
+	byName, getErr := s.GetWorkspace(t.Context(), w.Ref)
+	if getErr != nil {
+		t.Fatalf("GetWorkspace of the placed workspace: %v", getErr)
+	}
+
+	byID, idErr := s.GetWorkspaceByID(t.Context(), w.ID)
+	if idErr != nil {
+		t.Fatalf("GetWorkspaceByID of the placed workspace: %v", idErr)
+	}
+
+	if !byName.InCollection || !byID.InCollection {
+		t.Errorf("InCollection of the placed workspace = %v by name, %v by ID, want true",
+			byName.InCollection, byID.InCollection)
+	}
+
+	checkNoCollectionRead(t, s, ns)
+}
+
+// checkNoCollectionRead checks that the read of a workspace made with no
+// placement says that no collection holds it.
+func checkNoCollectionRead(t *testing.T, s Store, ns namespace.Namespace) {
+	t.Helper()
+
+	bare := newOpenTofuWorkspace(t, ns.Name, "bare")
+	if err := s.CreateWorkspace(t.Context(), bare, ns.Fence()); err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	for label, read := range map[string]func() (workspace.Workspace, error){
+		"by name": func() (workspace.Workspace, error) { return s.GetWorkspace(t.Context(), bare.Ref) },
+		"by ID":   func() (workspace.Workspace, error) { return s.GetWorkspaceByID(t.Context(), bare.ID) },
+	} {
+		got, readErr := read()
+		if readErr != nil || got.InCollection {
+			t.Errorf("workspace in no collection read %s: InCollection = %v, err = %v, want false",
+				label, got.InCollection, readErr)
+		}
 	}
 }
 

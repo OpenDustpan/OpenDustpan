@@ -112,10 +112,16 @@ type WorkspaceReader interface {
 
 // WorkspaceLocker is what the lock routes need.
 type WorkspaceLocker interface {
-	// LockForJob locks the workspace for holder, the subject of the calling
-	// principal. jobID is the job whose job token made the request, or empty:
-	// a job whose phase started before a manual lock passes that lock.
-	LockForJob(ctx context.Context, id workspace.ID, holder, reason, jobID string) (workspace.Workspace, error)
+	// LockForJobInCollection locks the workspace for holder, the subject of the
+	// calling principal. jobID is the job whose job token made the request, or
+	// empty: a job whose phase started before a manual lock passes that lock.
+	// A workspace that no collection holds takes no lock: the error matches
+	// collection.ErrNoCollection.
+	LockForJobInCollection(
+		ctx context.Context,
+		id workspace.ID,
+		holder, reason, jobID string,
+	) (workspace.Workspace, error)
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
 	// ForceUnlockLock releases the lock whoever holds it, when it matches
@@ -184,9 +190,12 @@ type StateReader interface {
 // itself and its JSON rendering through separate single-use capabilities
 // minted at creation.
 type StateWriter interface {
-	// BeginState declares a new state version for the workspace. The caller
-	// must hold the lock; holder is the subject of the calling principal.
-	BeginState(
+	// BeginStateInCollection declares a new state version for the workspace.
+	// The caller must hold the lock; holder is the subject of the calling
+	// principal. It returns an error that matches collection.ErrNoCollection
+	// when no collection holds the workspace. The interface has no unchecked
+	// declare, so a handler cannot skip the collection check.
+	BeginStateInCollection(
 		ctx context.Context,
 		id workspace.ID,
 		holder string,
