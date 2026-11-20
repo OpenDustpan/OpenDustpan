@@ -68,55 +68,8 @@ cmd/clientgen/         the client generator: reads openapi.json and writes a cli
 cmd/subtestcheck/      the check for a parallel subtest (make subtestcheck); its logic is in internal/subtestcheck
 cmd/s3bench/           the S3 latency benchmark: blob writes behind Toxiproxy on MinIO and Garage (make bench-s3)
 pkg/                   the public SDK: dustpan, the port packages and the conformance suites (ADR 35, ADR 272)
-  dustpan/             the SDK entry point: NewServer + options, routes, probes
-  namespace/           domain: namespaces, primary installation, failover-version fencing
-  inventory/           domain: cross-tool inventory projection of units
-  stack/               domain (Pulumi CLI): projects, stacks; the update cycle (Updates: leases, checkpoints, events)
-  secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
-  workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
-  identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
-  principal/           domain: the principals and the groups of an installation
-  access/              domain: roles, grants and the decision of what a principal can do on an object
-  accesstoken/         domain: the access tokens that the server issues to principals
-  session/             domain: the console sessions that the server issues after a sign-in
-  localuser/           domain: local users, their passwords, reset codes and the demo user of a dev installation
-  mfa/                 domain: the built-in factors of a person: passkeys, recovery codes, pending sign-ins, the MFA policy
-  tempadmin/           domain: temporary administrators of an installation
-  ipallow/             domain: per-namespace IP allowlists
-  audit/               domain: the tool-neutral audit log, with a hash chain for each namespace
-  collection/          domain: collections, named sets of units in one namespace
-  maintenance/         domain: the installation state (normal operation or maintenance mode for a restore)
-  installation/        domain: the installation kind, the marker of the command that made the data
-  durable/             domain: durable operations, units of background work that survive the stop of an instance
-  idempotency/         domain: the replay records of the Idempotency-Key header
-  manuallock/          domain: manual locks that a person puts on a unit, a collection or a namespace
-  profile/             domain: profiles, named sets of config, secrets and credentials with numbered revisions
-  breakglass/          domain: the review after use of each break-glass
-  notify/              domain: the notification model; notify/chat, notify/sinks and notify/webhook are the built-in senders
-  logsink/             port: structured log records; logsink/file, objectstore, slogsink, syslog and webhook are the built-in sinks
-  egress/              domain: the rules for outbound requests to an address that a principal gives
-  blob/                port: object storage; blob/fs, blob/s3 and blob/cache adapters; blob/blobtest suite
-  backup/              domain: backup ports (export, import, registry) and the table list
-  history/             domain: unit history, redaction, item keys of history items, tombstones, retention
-  job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
-  runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
-  launcher/            domain: the launcher contract (Command, Parse, BuildEnv, the credential file rules); the runner module imports it
-  objectcontext/       domain: context on every object and the context read API
-  graph/               domain: the unit graph, blast radius and focus view
-  drift/               domain: drift checks, the drift result and status, the drift schedule setting (RFC 25)
-  trigger/             domain: run triggers that start a plan (review request push, schedule, follows unit), the cycle rule (RFC 24)
-  outputshare/         domain: sharing rules, the output sharing setting of a namespace and the read check of outputs (RFC 15)
-  savedview/           domain: saved views, a named query of the unit list (RFC 100)
-  unitsettings/        domain: the settings of each unit: code location, executor, pool, write-back options, steps; the unit defaults of a namespace
-  preferences/         domain: the preferences of a person (theme, language, formats, time zone), the merge patch and its checks
-  registry/            domain: the private registry: the address, the release and the store port; registry/pgpverify checks signatures
-  gate/                domain: gates, access limits, approval rules, facts and decision records
-  gate/cedargo/        adapter: the linked Cedar engine (cedar-go) of the gate engine port; gate/gatetest holds its suite
-  gate/jobgate/        adapter: the job.Decider that turns approval defaults into the approval gates of a job
-  source/              domain: the source filter of a namespace: the filter, its port, URL patterns, the one parser of repository URLs; source/sourcetest holds its suite
-  forge/               domain: the Forge port, forge connections and their errors; forge/forgetest holds the conformance suite
-  forge/github/        adapter: the forge for GitHub
-  store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite (the adapters move to internal/store/)
+  <domain>/            one package for each domain or port. `go doc ./pkg/<domain>` gives its purpose
+  store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite. A planned step moves them to internal/store/ (ADR 363)
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
@@ -191,12 +144,9 @@ The platform must be observable and intuitive. A user must be able to see and ex
 
 ## Backend rules (Go)
 
-- Domain packages (the `pkg/` packages that the `domain` rule of `.golangci.yml` lists, for example
-  `namespace`, `stack`, `secret`, `workspace`, `identity`, `backup`, `history`, `job`, `runner`,
-  `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `unitsettings`, `registry`, `preferences`,
-  `gate`, `forge`, and the ones in `internal/` that the rule lists, for example `agent`, `dependency`,
-  `launcher`, `source`, `stepup`, `unmanaged`, `unitimport`) never import
-  `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
+- Domain packages (the packages that the `domain` rule of `.golangci.yml` lists, in
+  `pkg/` and `internal/`) never import `net/http`, `database/sql`, drivers,
+  `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define each port in the `pkg/` package of its domain. Put the service that
   uses the port in `internal/<domain>svc`. Keep ports small, and document them
   with the errors they return.
@@ -207,57 +157,26 @@ The platform must be observable and intuitive. A user must be able to see and ex
   conflicts) into domain sentinels. Never return driver errors to callers.
 - Writes inside a namespace carry a `namespace.Fence` and the store checks it in
   the same transaction. Never add a write path that skips the fence.
-- SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
-  and generate them with sqlc. Put a new query block in its place in the name
-  order of `queries.sql`, never at the end of the file: next to the queries of
-  its area, in the name order of those queries. Do not sort the existing
-  blocks. Dynamic queries are hand-written in the adapter.
-  Until the first tag, each dialect has one migration file, the baseline in
-  `pkg/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
-  baseline of each dialect in place. Put a new object in its place in the
-  name order of the baseline, not at the end, so that parallel changes edit
-  different lines. An edit of a comment changes the SHA-256 too, and forces
-  a `dev reset`. Do not add a numbered migration. Do not
-  write migration, upgrade, alias or data-conversion code for a shape that no
-  tag shipped. The store records the SHA-256 of each migration and refuses a
-  database of another version of the baseline with `ErrSchemaDiverged`. For
-  dev, run `opendustpan dev reset` (ADR 324). Timestamps are Unix
-  milliseconds in `BIGINT`.
+- SQL and the schema: the rules are in `pkg/store/AGENTS.md`. Read them before
+  you change a query or the schema.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
   table-driven where it helps. Use `t.Context()`.
 - Security code: write one table of hostile cases for each layer. The layers are the port adapter, the service and the HTTP handler. For each guard, show a test that fails when you remove the guard.
-- The backend protocols implemented so far are not published, versioned specs
-  we can implement from. Any endpoint change must be checked against the real
-  CLI with `make e2e`.
 
-## The tool-compatible APIs are contracts
+## APIs
 
-The real CLIs depend on the tool-compatible APIs, and we cannot change the
-CLIs. Until 1.0, everything else can break (ADR 73).
-
-- The Pulumi Cloud-compatible API, the TFE-compatible API and the OpenTofu
-  HTTP backend must match what each supported version of the real CLI sends
-  and expects. Never break them. Check each change with `make e2e`.
-- Each API keeps the shapes its tool expects. The Pulumi Cloud-compatible API:
-  camelCase JSON, errors `{"code": <status>, "message": "..."}`. The
-  TFE-compatible API: JSON:API documents and errors.
-- Before 1.0, the console and the tool-neutral APIs can change and break.
-  Do not deprecate first. When a change breaks an API that the console uses,
-  merge the console change before the next server tag. Between the two
-  merges, `main` of either repository can be broken.
+- The real CLIs depend on the tool-compatible APIs, and we cannot change the
+  CLIs. Never break these APIs. Until 1.0, everything else can break (ADR 73).
+  The rules are in `internal/api/AGENTS.md`. Read them before you change an
+  endpoint.
 - Do not write compatibility code, aliases or data conversions for a shape
   that no tag shipped. A shape that a tag shipped keeps its upgrade path
   (ADR 72).
 - Give every feature a REST API (ADR 17). The console, the CLI and all other
   clients use only that API. Do not add a feature that only the console, a CLI
   or a configuration file can use.
-- Make every endpoint declare its authorization actions and the object of
-  each action. Make every change pass the policy check. A route without an
-  action fails the route test. Put routes that need no sign-in on the explicit
-  public list in that test.
-- Until the first server tag, do not change `info.version` in the API description or `internal/api/apidesc/openapi.pin`. The release sets both. `make pin-frozen` checks this.
 
 ## Security code: defense in depth (ADR 250)
 
@@ -287,7 +206,7 @@ If a check looks redundant, keep it, and give it a comment. The comment says tha
 
 A security change is not done without a test for each step and a comment on each redundant check.
 
-Never print, echo, log or copy the environment or a secret. Do not use `env`, `printenv`, `set` or `cat /proc/*/environ`. Do not use a command that writes a secret to the output. Do not write a secret to a file in the repository, a commit, a pull request, an issue or a message. Read a variable by its name only, for example to check that it is set. To get a test database, start your own local PostgreSQL. If a secret is printed by mistake, stop and report it to the PM, so that the owner can rotate it.
+Never print, echo, log or copy the environment or a secret. Do not use `env`, `printenv`, `set` or `cat /proc/*/environ`. Do not use a command that writes a secret to the output. Do not write a secret to a file in the repository, a commit, a pull request, an issue or a message. Read a variable by its name only, for example to check that the variable has a value. To get a test database, start your own local PostgreSQL. If a command prints a secret by mistake, stop and report it to the PM, so that the owner can rotate it.
 
 ## Voice (UI text, errors, docs)
 
@@ -298,20 +217,17 @@ Write English in ASD-STE100 Simplified Technical English with the `asd-ste100`
 skill (ADR 14):
 
 - Strict mode: error messages, log messages, API error text, CLI output, and
-  instructions for agents that we write (`CLAUDE.md`, our own skills, prompts).
+  instructions for agents that we write (`AGENTS.md`, our own skills, prompts).
 - STE-flavored mode: README, ADRs, `GLOSSARY.md`, pull request descriptions,
   commit messages and code comments.
-- Spell English in US spelling (ADR 16): "color", "license", "behavior",
-  "organization", "canceled", "catalog". golangci-lint's `misspell` checks Go
-  comments with the US locale. Wire values and other projects' names keep
-  their own spelling, for example the Pulumi CLI's `"cancelled"`.
+- Use US spelling (ADR 16), for example "color", "canceled". Wire values and
+  other projects' names keep their own spelling, for example the Pulumi CLI's
+  `"cancelled"`.
 - Keep every hedge. "May", "might" and "could" carry the author's confidence.
   Never turn a hedge into a fact to make a sentence shorter.
-- `make docs-lint` checks README, `CLAUDE.md`, `GLOSSARY.md` and ADRs from 14
-  on. ADRs accepted before ADR 14 are exempt, because ADR 1 forbids edits.
 - Do not use words that claim quality without proof. Give the measurement or
-  the fact. Do not use emoji. `scripts/docs-banned-words.py` holds the list of
-  banned words, and `make docs-lint` runs it on the same files.
+  the fact. `make docs-lint` checks the docs and the words in
+  `scripts/docs-banned-words.py`. It does not check ADRs before ADR 14.
 - Do not put internal project references in code or in user documentation
   (ADR 66). An internal reference cites an ADR, an RFC, an issue or pull
   request number, a milestone or a research note. Code includes comments,
@@ -336,7 +252,7 @@ skill (ADR 14):
 - An agent pastes the output of its checks into the description of each pull
   request that it opens (ADR 76).
 - Keep changes small and reviewable, with one concern per change.
-- Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
+- Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. We accept fixes to generic build bugs on other platforms.
 - If you are unsure of the intent, ask rather than guess.
 - Agent work on a new or changed capability starts only from an OpenSpec change
   in `openspec/changes`. The proposal of the change says "Open questions:
@@ -344,10 +260,8 @@ skill (ADR 14):
   for a change are in `openspec/project.md`. A bug fix, a flaky test, a test
   fake or fixture, tooling, CI, lint and a refactor with no change of behavior
   need no change. Put the evidence in the pull request body instead.
-- Each proposal and each design checks the existing ADRs. It lists the ADRs
-  that it touches, quotes their decision lines, follows the "Changed by" chain
-  and marks the owner-tagged decisions. A conflict with an owner-tagged ADR
-  stops the change until the owner decides.
+- Each proposal and each design has an ADR check (`openspec/project.md`). A
+  conflict with an owner-tagged ADR stops the change until the owner decides.
 - Prefer a code structure that makes a class of bug impossible over an added
   check or an added tool.
 - Prefer unexported fields with a constructor that checks the invariants. Put
@@ -367,20 +281,26 @@ skill (ADR 14):
 - Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
 - Before you push, run `make test-changed`. It builds the module, runs the fast checks, and lints and tests the changed packages and the packages that import them. It is a quick check. It does not replace `make check` or CI.
 
+## Token use
+
+Each tool result stays in the conversation. The model reads it again with
+each later request.
+
+- Keep replies short. Give the result, the failure and the next step.
+- Run the smallest check first: `go test -run <Test> ./pkg/<name>/`, then
+  `make test-changed`. Run `make check` one time, at the end.
+- When you know the line range, read only that range.
+- Do not cut a failure from the output. Keep the error, the test name and the
+  summary line. If a check fails, read its full output one time. Do not run
+  the check again to see more.
+
 ## Agent skills
 
-### Issue tracker
-
-Issues for this repo live in GitHub Issues. The skills use the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five canonical triage roles map to same-named labels: `needs-triage`, `needs-info`, `ready-for-agent`,
-`ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+- Issues: GitHub Issues, through the `gh` CLI (`docs/agents/issue-tracker.md`).
+- Triage labels: `needs-triage`, `needs-info`, `ready-for-agent`,
+  `ready-for-human`, `wontfix` (`docs/agents/triage-labels.md`).
+- Domain docs: one `GLOSSARY.md` and `docs/adr/` at the root
+  (`docs/agents/domain.md`).
 
 <!-- rtk-instructions v2 -->
 
@@ -396,41 +316,21 @@ output was clearly expected, contradicting its exit code, or garbled.
 
 ## Decisions
 
-For a question about a decision, for example "what did we decide" or "which rule applies
-now", do these steps before you use other tools:
-
-1. Read `docs/adr/INDEX.md`. Find the ADR and the ADRs in its "Current rule" column.
-2. Run `rg` over `docs/adr` and `docs/rfc` for the subject of the question.
-3. Read each ADR in the "Current rule" column. A later ADR can change an earlier ADR.
-
-Do not use Repowise as the source for a decision.
-
-When a new ADR changes an earlier ADR, write the item in the "Changes:" list of the new ADR
-and the reverse item in the "Changed by:" list of the earlier ADR. Then run
-`make adr-index`. ADR 296 gives the form of the items.
+For a question about a decision, or before you write an ADR or an RFC, use the
+`adr` skill (`.agents/skills/adr/SKILL.md`). Do not use Repowise as the source
+for a decision.
 
 ## Repowise
 
-The Repowise MCP server gives indexed documentation, symbols, history and code health for
-this workspace. Use it for the structure of the code, for symbols and for history. The index
-has no checkout. It shows pushed commits only. The checkout is the truth.
+The Repowise MCP server indexes pushed commits only. The checkout is the truth.
 
-- Call `list_repos` first. Pass `repo` (`opendustpan-opendustpan` or `opendustpan-console`)
-  to limit a call to one repository. `get_symbol` always needs `repo`.
-- Call `get_answer` for a question about how or where the code does a thing. Call
-  `search_codebase` to find a symbol, a file or a concept. Call `get_context` for a summary
-  of files.
-- `get_symbol` returns a signature, a location and graph edges. It does not return source.
-  Read the file at the returned line range.
-- Call `get_risk` before you edit a hotspot. Call `get_why` for the history of the code
-  before you refactor. For the decision that applies to the code, do the steps in
-  "Decisions".
-- `get_change_risk` scores one pushed commit by its sha. It does not score a range or
+- The repository aliases are `opendustpan-opendustpan` and `opendustpan-console`.
+- Use `get_answer` for how or where the code does a thing, and `search_codebase`
+  to find a symbol, a file or a concept.
+- Call `get_risk` before you edit a hotspot, and `get_why` before you refactor.
+- `get_change_risk` scores one pushed commit. It does not score a range or
   uncommitted work.
-- Read the file again when `_meta.stale_warning` is present, when `confidence` is `low`, or
-  when a hit has `search_method: bm25`.
+- Read the file again when `_meta.stale_warning` is present, when `confidence`
+  is `low`, or when a hit has `search_method: bm25`.
 - Use `rg` to find every call site for a rename.
-
-The skills `codebase-exploration`, `pre-modification-check`, `change-review`, `code-health`,
-`dead-code-cleanup` and `architectural-decisions` in `.agents/skills/` use these tools. For a
-question about a decision, do the steps in "Decisions" before you use these skills.
+- For a decision, use the `adr` skill, also before you use a Repowise skill.
