@@ -136,5 +136,5 @@ entry for each window. The answer of a refusal keeps its own status.
   server checks the time after it parses the state, inside the masking and
   after it walks the state, so a read never answers 200 after the deadline.
 - The read uses the stable ID of the unit that the grant names, not its name.
-  A unit that is deleted and made again with the same name, while the read
-  runs, has a new ID. The read refuses it and answers 404.
+  If a person deletes a unit and makes it again with the same name while the
+  read runs, the new unit has a new ID. The read refuses it and answers 404.
