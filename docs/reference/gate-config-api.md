@@ -109,9 +109,11 @@ of versions, IDs, bodies and fresh sign-in on this page hold for these routes to
 ## Sign in for a change
 
 A change needs a console session. This example uses a local user with a password
-([Local users with a password](local-users.md)). The person needs a role that holds
-the action of the route, for example `admin` on the namespace or
-`site-administrator`. `SERVER` is the public URL of the server:
+([Local users with a password](../guides/local-users.md)). The person needs a role
+that holds the action of the route, for example `admin` on the namespace or
+`site-administrator`. A new installation has no person with a role: see
+[Make the first administrator](../guides/first-administrator.md). `SERVER` is the
+public URL of the server:
 
 ```sh
 SERVER=https://dustpan.example
@@ -164,7 +166,8 @@ curl -b session.txt -X PUT -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
   "$SCOPE/access-limits/no-writes"
 ```
 
-An approval rule. The group `platform` must exist:
+An approval rule. The group `platform` must exist, with at least one member (see
+[Principals and groups](../guides/principals-and-groups.md)):
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" "$SCOPE/approval-rules"
@@ -321,17 +324,17 @@ mode, as the change `gate/<id>.mode`.
 
 Each answer holds the field `errorCode`.
 
-| Status | `errorCode` | Cause |
-| --- | --- | --- |
-| 400 | `request.body-invalid` | The body is not one JSON object, has a field that is not in the list, or names an `id` |
-| 400 | `request.invalid-object` | The collection name, the tool or the unit name in the path is not valid |
-| 400 | `request.if-match-invalid` | The `If-Match` header is not one version in quotes |
-| 403 | `access.denied` | The caller lacks the action |
-| 403 | `mfa.fresh-step-required` | The change has no recent sign-in, or the caller uses an access token |
-| 404 | `gate.not-found` | The object does not exist at the scope |
-| 404 | `unit.not-found` | A `PUT` names a stack or a workspace that does not exist now, or a deleted one |
-| 409 | `gate.version-conflict` | The stored version is not the version of `If-Match` |
-| 409 | `gate.final` | A final gate forbids the change, or the change needs a reason. For an approval rule: a wider scope holds a rule with the same ID. |
-| 422 | `gate.invalid` | A field is not valid, an ID is not valid, or the engine refuses the policy. The message names the first problem. |
-| 422 | `gate.limit` | A condition, an `unless` clause or a policy is over 4 KiB, or the scope holds the most objects of the kind. For approval rules the most is 64. |
-| 503 | `gate.unavailable` | The server has no policy engine, or the engine does not answer. The server stores nothing. |
+| Status | `errorCode` | Cause | The command that helps |
+| --- | --- | --- | --- |
+| 400 | `request.body-invalid` | The body is not one JSON object, has a field that is not in the list, or names an `id` or a scope | Send the body of [the gate document](#the-gate-document) or of [the access limit document](#the-access-limit-document), with no `id` and no `scope` |
+| 400 | `request.invalid-object` | The collection name, the tool or the unit name in the path is not valid | Check the name with `curl -H "Authorization: Bearer $TOKEN" "$SERVER/api/dustpan/v1/namespaces/acme/collections"` |
+| 400 | `request.if-match-invalid` | The `If-Match` header is not one version in quotes | Send `-H 'If-Match: "1"'` |
+| 403 | `access.denied` | The caller lacks the action. A holder of a namespace action only gets this answer on a route of the installation. | List the grants of the caller with `curl -H "Authorization: Bearer $TOKEN" "$SERVER/api/dustpan/v1/me/grants"` |
+| 403 | `mfa.fresh-step-required` | The change has no recent sign-in, or the caller uses an access token | Sign in again, then repeat the call with the session (see [Sign in for a change](#sign-in-for-a-change)) |
+| 404 | `gate.not-found` | The object does not exist at the scope, or another scope holds it | List the scope with `curl -H "Authorization: Bearer $TOKEN" "$SCOPE/approval-rules"` |
+| 404 | `unit.not-found` | A `PUT` names a stack or a workspace that does not exist now, or a deleted one | Make the stack or the workspace first, then repeat the call |
+| 409 | `gate.version-conflict` | The stored version is not the version of `If-Match` | Read the version with `curl -i -H "Authorization: Bearer $TOKEN" "$SCOPE/approval-default"`, then repeat the change with `If-Match` |
+| 409 | `gate.final` | A final gate forbids the change, or the change needs a reason. For an approval rule: a wider scope holds a rule with the same ID. | List the rules of the wider scope with `curl -H "Authorization: Bearer $TOKEN" "$SERVER/api/dustpan/v1/namespaces/acme/approval-rules"`, then choose another ID |
+| 422 | `gate.invalid` | A field is not valid, an ID is not valid, or the engine refuses the policy. The message names the first problem. | Fix the field that the message names, then repeat the call |
+| 422 | `gate.limit` | A condition, an `unless` clause or a policy is over 4 KiB, or the scope holds the most objects of the kind. For approval rules the most is 64. | List the scope with `curl -H "Authorization: Bearer $TOKEN" "$SCOPE/approval-rules"`, then delete an object that you do not need |
+| 503 | `gate.unavailable` | The server has no policy engine, or the engine does not answer. The server stores nothing. | Check the server with `curl "$SERVER/health/ready"`, then repeat the call |
