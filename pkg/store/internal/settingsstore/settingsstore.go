@@ -205,6 +205,12 @@ func previous(unit identity.Object, row *Row) *unitsettings.Settings {
 func Write(
 	ctx context.Context, tx RecordTx, s *unitsettings.Settings, expected int64, e audit.Entry,
 ) (unitsettings.Settings, *audit.Entry, error) {
+	// Defense in depth: the service writes the stored form already. This step
+	// stays so that the compare with the old record, the audit entry and the
+	// answer see one form of the root for each caller of the port.
+	canonical := s.Canonical()
+	s = &canonical
+
 	if err := s.Validate(); err != nil {
 		return zero(), nil, err
 	}

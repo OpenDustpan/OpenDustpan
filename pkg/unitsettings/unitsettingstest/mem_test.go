@@ -63,6 +63,9 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 func (m *memStore) Put(
 	ctx context.Context, s *unitsettings.Settings, expected int64, fence namespace.Fence, e audit.Entry,
 ) (unitsettings.PutResult, error) {
+	canonical := s.Canonical()
+	s = &canonical
+
 	if err := s.Validate(); err != nil {
 		return unitsettings.PutResult{}, err
 	}
