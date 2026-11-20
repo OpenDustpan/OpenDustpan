@@ -9,24 +9,20 @@ The server SHALL ship with the IP allowlist feature off. A scope that did not op
 - **THEN** requests pass with no allowlist check
 
 #### Scenario: Scope that did not opt in
-- **WHEN** the feature is on and a namespace or an access token has no list
+- **WHEN** the feature is on and a namespace has no list
 - **THEN** that scope adds no check
 
 ### Requirement: Deny when any list denies
 
-When the client address sits outside any opted-in installation, namespace or access token list, the server SHALL answer 403 with the refusing scope. The answer SHALL NOT name a namespace or a token.
+When the client address sits outside any opted-in installation or namespace list, the server SHALL answer 403 with the refusing scope. The answer SHALL NOT name a namespace.
 
 #### Scenario: Address misses one list
 - **WHEN** the address matches one opted-in list but not another
 - **THEN** the server answers 403 with error code access.ip-not-allowed and the scope
 
-#### Scenario: Token list
-- **WHEN** a valid access token that has a list is used from an address outside that list
-- **THEN** the server answers 403 with error code access.ip-not-allowed and the scope `token`
-
 ### Requirement: Invalid entry
 
-When a write of a list holds an invalid CIDR or address, more than 64 entries, or an empty list for a namespace or a token, the server SHALL answer 400 with error code ip-allowlist.invalid-cidr and store no change. A write that is longer than the stored value can hold SHALL answer 400 and name the limit.
+When a write of a list holds an invalid CIDR or address, more than 64 entries, or an empty list for a namespace, the server SHALL answer 400 with error code ip-allowlist.invalid-cidr and store no change. A write that is longer than 4096 bytes SHALL answer 400 and name the limit.
 
 #### Scenario: Bad CIDR
 - **WHEN** a write holds 999.999.0.0/16
@@ -38,7 +34,7 @@ When a write of a list holds an invalid CIDR or address, more than 64 entries, o
 
 ### Requirement: Check order
 
-When the client address sits outside the opted-in installation list, the server SHALL answer 403 before credential validation. The token list and the namespace list SHALL be checked after authentication.
+When the client address sits outside the opted-in installation list, the server SHALL answer 403 before credential validation. The namespace list SHALL be checked after authentication.
 
 #### Scenario: Denied network
 - **WHEN** the address is outside the installation list
@@ -78,7 +74,7 @@ When a request arrives from outside an opted-in list, the server SHALL write an 
 
 ### Requirement: Empty list of the installation
 
-When the feature is on and the installation list is empty, the server SHALL deny each address for the installation scope. A namespace or an access token with no list SHALL have no check.
+When the feature is on and the installation list is empty, the server SHALL deny each address for the installation scope. A namespace with no list SHALL have no check.
 
 #### Scenario: Empty installation list
 - **WHEN** the feature is on and the installation list is empty
@@ -88,17 +84,17 @@ When the feature is on and the installation list is empty, the server SHALL deny
 - **WHEN** the list of a namespace is removed
 - **THEN** the namespace adds no check
 
-### Requirement: List of an access token
+### Requirement: One switch
 
-The server SHALL store a list on an access token, read it in the lookup of the token, and apply it on each request that uses the token. A change of the list SHALL apply to the next request on each instance. Who may set the list, and the fresh step it needs, are set by open question 1 of the proposal.
+The setting `ipAllowlist.enabled` alone SHALL turn the namespace lists on. The static option `--ip-allowlists` SHALL stay as a lock of that switch.
 
-#### Scenario: Token list applies at once
-- **WHEN** the list of a token changes
-- **THEN** the next request with that token uses the new list
+#### Scenario: Setting on, option not set
+- **WHEN** the setting `ipAllowlist.enabled` is `true` and the option `--ip-allowlists` does not lock the switch
+- **THEN** the lists of the namespaces apply
 
-#### Scenario: Stored list does not decode
-- **WHEN** the stored list of a token does not decode
-- **THEN** the server answers 403 for that token and writes a denial entry
+#### Scenario: Lock
+- **WHEN** the option `--ip-allowlists` locks the switch off
+- **THEN** no namespace list applies and a change of the setting does not turn it on
 
 ### Requirement: List of a namespace
 
@@ -111,3 +107,15 @@ The server SHALL hold the list of a namespace as the setting `ipAllowlist.namesp
 #### Scenario: Widen
 - **WHEN** a session without a fresh step widens the list
 - **THEN** the server answers 403 with error code mfa.fresh-step-required and stores no change
+
+### Requirement: Actions and limit of the namespace list
+
+The settings actions and the action `namespace:manage-ip-allowlist` SHALL govern a read and a change of the namespace list. The list SHALL hold at most 4096 bytes.
+
+#### Scenario: Action of the list
+- **WHEN** a caller has `namespace:read-settings` but not `namespace:manage-ip-allowlist`
+- **THEN** the server answers 403 for the read of the list
+
+#### Scenario: List over the limit
+- **WHEN** a write holds a list of more than 4096 bytes
+- **THEN** the server answers 400, names the limit and stores no change
