@@ -25,7 +25,7 @@ type sweepReasonCase struct {
 func sweepReasons(t *testing.T, f *fixture, object string) []string {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list @server entries: %v", err)
 	}

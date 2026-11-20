@@ -25,7 +25,7 @@ func (s checkStore) Append(context.Context, namespace.Fence, audit.Entry) (audit
 }
 
 func (s checkStore) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{}, errCheckRead //nolint:exhaustruct // Not used.
+	return audit.Listing{Entries: nil, More: false}, errCheckRead
 }
 
 func (s checkStore) Check(_ context.Context, ns namespace.Name) (audit.CheckResult, error) {

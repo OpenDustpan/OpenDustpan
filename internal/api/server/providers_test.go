@@ -144,6 +144,17 @@ func newProviderEnv(t *testing.T) providerEnv {
 func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) providerEnv {
 	t.Helper()
 
+	return newProviderEnvStore(t, passwords, nil)
+}
+
+// newProviderEnvStore builds the env of newProviderEnvWith. When wrap is not
+// nil, the provider admin reads and writes through wrap(store), so a test can
+// show a stored row that the store would refuse to write.
+func newProviderEnvStore(
+	t *testing.T, passwords []apiserver.PasswordProvider, wrap func(*sqlite.Store) session.ProviderConfigStore,
+) providerEnv {
+	t.Helper()
+
 	static := make([]string, 0, 1+len(passwords))
 	static = append(static, "corp")
 
@@ -184,8 +195,13 @@ func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) pr
 				t.Fatalf("installation secrets: %v", err)
 			}
 
+			var configs session.ProviderConfigStore = st
+			if wrap != nil {
+				configs = wrap(st)
+			}
+
 			admin, err := session.NewProviderAdmin(session.ProviderAdminConfig{
-				Store: st, Binder: st, Secrets: secrets, Now: clock.Now, Static: static,
+				Store: configs, Binder: st, Secrets: secrets, Now: clock.Now, Static: static,
 			})
 			if err != nil {
 				t.Fatalf("provider admin: %v", err)
@@ -233,6 +249,7 @@ type providerDoc struct {
 	Version         int64      `json:"version"`
 	Enabled         bool       `json:"enabled"`
 	ClientSecretSet bool       `json:"clientSecretSet"`
+	IssuerRefused   bool       `json:"issuerRefused"`
 	Mode            string     `json:"mode"`
 	UserinfoURL     string     `json:"userinfoURL"`
 	Claims          *claimsDoc `json:"claims"`

@@ -230,7 +230,7 @@ func TestPlacementRuleUnknownCollectionIsAudited(t *testing.T) {
 			}
 			code, body := placementCall(t, h, method, target, ruleBody("web", "*", "missing"))
 			expectError(t, code, body, http.StatusNotFound, errcode.CollectionNotFound)
-			list, err := store.denials.List(t.Context(), "acme", audit.Page{Number: 0, Size: 0})
+			list, err := store.denials.List(t.Context(), "acme", audit.Page{Size: 0, Before: 0})
 			if err != nil || len(list.Entries) != 1 {
 				t.Fatalf("refusal audit has %d entries, %v, want 1", len(list.Entries), err)
 			}

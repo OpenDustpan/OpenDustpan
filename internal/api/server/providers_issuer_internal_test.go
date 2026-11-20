@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -45,5 +46,39 @@ func TestPublicIssuerHostile(t *testing.T) {
 				t.Fatalf("publicIssuer(%q) = %q, want no secret", tc.issuer, got)
 			}
 		})
+	}
+}
+
+// TestStaticProviderOfHidesIssuerSecrets sends a static provider with a hostile
+// issuer directly to the wire form of the list, as if the check of the issuer
+// at start did not stop it. The answer must hold no user information, query or
+// fragment. Defense in depth: the check at start refuses such an issuer, and
+// this test does not rely on it.
+func TestStaticProviderOfHidesIssuerSecrets(t *testing.T) {
+	t.Parallel()
+
+	hostile := fakecred.URL("https", "user", "pw-secret", "idp.example", "") + "/r?token=tok-secret#frag-secret"
+
+	got := staticProviderOf(SignInProvider{
+		Method:      nil,
+		ID:          "corp",
+		DisplayName: "",
+		Issuer:      hostile,
+		ClientID:    "",
+		Scopes:      nil,
+		AutoCreate:  false,
+		Stored:      false,
+	})
+	if got.Issuer != "https://idp.example/r" {
+		t.Fatalf("issuer = %q, want %q", got.Issuer, "https://idp.example/r")
+	}
+
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if strings.Contains(string(body), "secret") {
+		t.Fatalf("the answer holds a secret: %s", body)
 	}
 }

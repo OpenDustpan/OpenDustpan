@@ -230,7 +230,7 @@ func (m *memAudit) Append(_ context.Context, fence namespace.Fence, e audit.Entr
 }
 
 func (m *memAudit) List(_ context.Context, _ namespace.Name, _ audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil, More: false}, nil
 }
 
 func (m *memAudit) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {

@@ -774,7 +774,7 @@ var Settings = []*Setting{
 	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
-		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
+		"Required when you set no key file. The base64 text of 32 random bytes. `serve` stops before it opens the database when it has no key.",
 	).WithSensitive(),
 	envSetting(
 		DevDataDirEnv,

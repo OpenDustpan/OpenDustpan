@@ -1954,7 +1954,7 @@ func TestSetPolicyRecordsChanges(t *testing.T) {
 func policyEntryChanges(t *testing.T, f *fixture) []audit.Change {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list @server entries: %v", err)
 	}

@@ -15,6 +15,7 @@ docs/guides/deleted-units.md
 docs/guides/dev-server.md
 docs/guides/doctor.md
 docs/guides/faults.md
+docs/guides/first-administrator.md
 docs/guides/host-recovery.md
 docs/guides/import.md
 docs/guides/install.md
@@ -35,6 +36,7 @@ docs/guides/principals-and-groups.md
 docs/guides/private-registry.md
 docs/guides/publish-a-blueprint.md
 docs/guides/quickstart.md
+docs/guides/restore-access-setting.md
 docs/guides/roles-and-grants.md
 docs/guides/runner-pools.md
 docs/guides/s3-blobs.md

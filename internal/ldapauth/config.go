@@ -358,6 +358,15 @@ func checkSubject(cfg Config) error {
 		if !validAttributeType(cfg.Subject.Attribute) {
 			return configError("the subject attribute is not a valid attribute type")
 		}
+
+		// Defense in depth: the flag parser and NewServer check the name too.
+		// This check stays so that a caller of NewMethod cannot take a name,
+		// an email or a DN as the subject. It does not rely on those checks.
+		taken := []string{cfg.UserNameAttribute, cfg.EmailAttribute, cfg.NameAttribute}
+
+		if err := CheckSubjectAttribute(cfg.Subject.Attribute, taken...); err != nil {
+			return configError(err.Error())
+		}
 	default:
 		return configError("the subject kind is not known")
 	}
@@ -437,4 +446,51 @@ func plainHostAllowed(host string) bool {
 // is already escaped.
 func groupFilter(g Groups, escapedMember string) string {
 	return "(&" + g.Filter + "(" + g.MemberAttribute + "=" + escapedMember + "))"
+}
+
+// ErrSubjectAttribute reports a subject attribute that is not on the list of
+// attributes that hold a stable directory ID, or that is also set as a user
+// name, an email or a display name attribute.
+var ErrSubjectAttribute = errors.New("the subject attribute must be an attribute that holds a stable directory ID")
+
+// stableSubjectAttribute reports whether name is on the list of the stable
+// directory ID attributes: the attributes that hold an ID that the directory
+// sets once and never changes. The list has names only: an OID is not a name
+// on the list. It compares with no regard to case and with the exact text of
+// name.
+func stableSubjectAttribute(name string) bool {
+	switch strings.ToLower(name) {
+	case "entryuuid", "objectguid", "nsuniqueid", "ipauniqueid", "guid", "orclguid", "ibm-entryuuid":
+		return true
+	default:
+		return false
+	}
+}
+
+// CheckSubjectAttribute returns an error that matches ErrSubjectAttribute
+// when name is not an attribute name, is not on the list of the stable
+// directory ID attributes (entryUUID, objectGUID, nsUniqueId, ipaUniqueID,
+// GUID, orclGUID, ibm-entryUUID), or is one of the attributes in taken that
+// the server reads as a user name, an email or a display name. It compares
+// with no regard to case. It does not change name to make it valid: a name
+// with a space is refused.
+func CheckSubjectAttribute(name string, taken ...string) error {
+	if !validAttributeType(name) {
+		return fmt.Errorf("%w: the name is not an attribute name, so use entryUUID, objectGUID, nsUniqueId, "+
+			"ipaUniqueID, GUID, orclGUID or ibm-entryUUID", ErrSubjectAttribute)
+	}
+
+	if !stableSubjectAttribute(name) {
+		return fmt.Errorf("%w: %q is not on the list, so use entryUUID, objectGUID, nsUniqueId, ipaUniqueID, GUID, "+
+			"orclGUID or ibm-entryUUID", ErrSubjectAttribute, name)
+	}
+
+	for _, t := range taken {
+		if t != "" && strings.EqualFold(t, name) {
+			return fmt.Errorf("%w: %q is also set as a user name, an email or a display name attribute",
+				ErrSubjectAttribute, name)
+		}
+	}
+
+	return nil
 }

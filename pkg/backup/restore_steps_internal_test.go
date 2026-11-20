@@ -58,6 +58,7 @@ func cancelLogService(recorder *cancelLogRecorder) *RestoreService {
 		target: nil,
 		key:    nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
 		lockWait: 0, now: nil, logger: slog.New(recorder), runner: nil,
+		accessSetting: nil, accessSettingStatic: nil, decide: nil,
 	}
 }
 
@@ -166,6 +167,7 @@ func TestRestoreWriterCheckLogsTheAttempt(t *testing.T) {
 		installation: "",
 		afterApply:   nil, admit: nil, allowDev: false, devHint: "", lease: 0, lockWait: 0, now: nil,
 		logger: slog.New(recorder), runner: nil,
+		accessSetting: nil, accessSettingStatic: nil, decide: nil,
 	}
 
 	unit := "pulumi:acme/web/prod"

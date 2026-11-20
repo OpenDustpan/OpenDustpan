@@ -1,0 +1,5 @@
+first-administrator.already-made
+first-administrator.code-invalid
+first-administrator.grant-exists
+first-administrator.principal-invalid
+first-administrator.reason-invalid

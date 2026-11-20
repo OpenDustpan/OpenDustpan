@@ -40,13 +40,19 @@ type storedBody struct {
 
 // Marshal returns the stored document of s: every field except the unit, the
 // version and the time. It validates the fields first and returns an error
-// that wraps ErrInvalid for settings that fail.
+// that wraps ErrInvalid for settings that fail. The document holds the stored
+// form of s (see Canonical).
 func Marshal(s *Settings) ([]byte, error) {
 	if err := s.validateFields(); err != nil {
 		return nil, err
 	}
 
-	b := storedBody{Settings: *s, Steps: encodeSteps(s.Steps)}
+	// Defense in depth: the service and the store write the stored form
+	// already. This step stays so that a new caller cannot store a second
+	// form of the root.
+	c := s.Canonical()
+
+	b := storedBody{Settings: c, Steps: encodeSteps(c.Steps)}
 
 	doc, err := json.Marshal(b)
 	if err != nil {
@@ -76,6 +82,10 @@ func Parse(doc []byte) (Settings, error) {
 
 	s := b.Settings
 	s.Steps = nil
+
+	// Defense in depth: Marshal never stores RootDirectory. A row of another
+	// version or of a restore can hold it, and a reader gets the stored form.
+	s.CodeLocation.Directory = CanonicalDirectory(s.CodeLocation.Directory)
 
 	for i := range b.Steps {
 		st := &b.Steps[i]

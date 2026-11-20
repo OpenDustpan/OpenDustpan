@@ -1337,21 +1337,38 @@ func (s *fakeBackupStore) List(
 	defer s.mu.RUnlock()
 
 	if s.closed {
-		return audit.Listing{}, errFakeClosed
+		return audit.Listing{Entries: nil, More: false}, errFakeClosed
 	}
 
-	p := page.Normalized()
+	p, err := page.Normalized()
+	if err != nil {
+		return audit.Listing{Entries: nil, More: false}, err
+	}
+
 	chain := s.data.audit[ns.String()]
 
-	entries := make([]audit.Entry, 0, min(int64(len(chain)), int64(p.Size)))
+	entries := make([]audit.Entry, 0, min(len(chain), p.Size))
+	more := false
 
-	for i := len(chain) - 1; i >= 0 && len(entries) < p.Size; i-- {
-		if int64(len(chain)-1-i) >= p.Offset() {
-			entries = append(entries, chain[i])
-		}
+	if len(chain) == 0 {
+		return audit.Listing{Entries: entries, More: more}, nil
 	}
 
-	return audit.Listing{Entries: entries, Total: int64(len(chain))}, nil
+	for i := range slices.Backward(chain) {
+		if p.Before != 0 && chain[i].Sequence >= p.Before {
+			continue
+		}
+
+		if len(entries) == p.Size {
+			more = true
+
+			break
+		}
+
+		entries = append(entries, chain[i])
+	}
+
+	return audit.Listing{Entries: entries, More: more}, nil
 }
 
 // Check implements audit.Store: it walks the chain oldest first.

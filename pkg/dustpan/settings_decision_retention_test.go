@@ -23,7 +23,7 @@ func getAuditEntries(t *testing.T, base string) (int, string) {
 	t.Helper()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		base+"/api/audit/entries?organization=@server&page[size]=100", http.NoBody)
+		base+"/api/audit/entries?organization=@server&pageSize=100", http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

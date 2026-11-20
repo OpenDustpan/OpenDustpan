@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -124,12 +125,9 @@ func mustSetIPAllowlist(
 func auditTotal(t *testing.T, s IPAllowlistStore, ns namespace.Name) int64 {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: 1})
-	if err != nil {
-		t.Fatalf("list audit entries: %v", err)
-	}
+	entries := audittest.All(t, s, ns)
 
-	return listing.Total
+	return int64(len(entries))
 }
 
 // testIPAllowlistNewNamespaceEmpty checks a new namespace holds the zero List.
@@ -460,7 +458,7 @@ func testIPAllowlistAuditEntry(t *testing.T, s IPAllowlistStore) {
 	want := ipAllowlistEntry(ns.Name)
 	mustSetIPAllowlist(t, s, ns, []string{"10.0.0.0/8"}, want)
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

@@ -76,8 +76,6 @@ func TestBeforeServeErrorStopsTheStart(t *testing.T) {
 	t.Parallel()
 
 	ln := openTestListener(t)
-	addr := ln.Addr().String()
-
 	hook := dustpan.WithBeforeServe(func(context.Context) error { return errHook })
 	srv := newServerWithOptions(t, "127.0.0.1:0", dustpan.WithListener(ln), hook)
 
@@ -86,14 +84,29 @@ func TestBeforeServeErrorStopsTheStart(t *testing.T) {
 		t.Fatalf("run = %v, want %v", err, errHook)
 	}
 
-	//nolint:exhaustruct_v5 // The probe dials with defaults only.
-	conn, dialErr := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
-	if dialErr == nil {
+	// Ask the listener itself. A dial to the address is not reliable: after
+	// the close, a parallel test can bind the same free port and answer.
+	tcp, ok := ln.(*net.TCPListener)
+	if !ok {
+		t.Fatalf("listener is %T, want *net.TCPListener", ln)
+	}
+
+	// A listener that is still open answers or times out; it never blocks.
+	if err := tcp.SetDeadline(time.Now().Add(time.Second)); err != nil && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("set deadline: %v", err)
+	}
+
+	conn, acceptErr := ln.Accept()
+	if acceptErr == nil {
 		if closeErr := conn.Close(); closeErr != nil {
 			t.Errorf("close: %v", closeErr)
 		}
 
 		t.Fatal("the listener still accepts after a failed function")
+	}
+
+	if !errors.Is(acceptErr, net.ErrClosed) {
+		t.Fatalf("accept = %v, want %v", acceptErr, net.ErrClosed)
 	}
 }
 

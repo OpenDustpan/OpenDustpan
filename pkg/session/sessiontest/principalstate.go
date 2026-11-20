@@ -112,7 +112,7 @@ func stateOf(t *testing.T, s StateStore, id string) session.PrincipalState {
 func bumpEntries(t *testing.T, s StateStore) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

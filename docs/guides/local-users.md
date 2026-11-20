@@ -97,6 +97,16 @@ Give the set-up code to the person on another channel. The code works once.
 It ends after the reset lifetime, 1 hour by default. The server keeps only a
 SHA-256 digest of the code.
 
+## The first administrator
+
+A new installation has no person who holds a role, and the bootstrap admin
+token cannot give one. Make the local user, let the person set a password,
+and then ask for the one-time code of the first administrator with the
+bootstrap admin token. The person signs in with the password and sends the
+code in that console session. The password sign-in is a fresh sign-in, so
+the redeem accepts it. [Make the first administrator](first-administrator.md)
+has the commands, the answers and the errors.
+
 ## Set the password
 
 The person sends the code and the new password:

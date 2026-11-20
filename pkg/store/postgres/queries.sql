@@ -1478,21 +1478,17 @@ INSERT INTO audit_entries (
     fence_version, reason, principal_kind, job_id
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32);
 
--- name: ListAuditEntries :many
--- One page of the entries of a namespace, newest first. Ties on time break
--- by sequence, as the port comment promises.
+-- name: ListAuditEntriesBefore :many
+-- One page of the entries of a namespace below a sequence, newest first. It
+-- reads the primary key (namespace, sequence) backwards, so a page costs the
+-- same at any depth.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
-WHERE namespace = $1
+WHERE namespace = $1 AND sequence < $2
 ORDER BY sequence DESC
-LIMIT $2 OFFSET $3;
-
--- name: CountAuditEntries :one
-SELECT COUNT(*)
-FROM audit_entries
-WHERE namespace = $1;
+LIMIT $3;
 
 -- name: ListAuditChainPage :many
 -- One bounded page of the chain of a namespace oldest first, for the chain
@@ -2810,6 +2806,16 @@ LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
+
+-- name: GetSessionForShare :one
+-- The redeem of the first administrator reads the session row with a share
+-- lock, so a sign-out cannot end the session between the read and the commit.
+-- The audit lock of the installation serializes the redeems only. It does not
+-- serialize a sign-out, so this share lock is the guard against one.
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
+FROM sessions WHERE id = $1
+FOR SHARE;
 
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
@@ -4916,6 +4922,30 @@ WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::big
 -- name: DeleteGitHostInstallation :execrows
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: DeleteFirstAdministratorCode :execrows
+-- The delete is a check: it matches the code row only when the digest, the
+-- principal and the open time are those that the redeem checked.
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = sqlc.arg(digest) AND principal_id = sqlc.arg(principal_id) AND expires_at_ms > sqlc.arg(now_ms);
+
+-- name: GetFirstAdministratorCode :one
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+FOR UPDATE;
+
+-- name: GetFirstAdministratorMarker :one
+SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1;
+
+-- name: InsertFirstAdministratorMarker :exec
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(grant_id), sqlc.arg(session_id), sqlc.arg(created_by), sqlc.arg(made_at_ms));
+
+-- name: ReplaceFirstAdministratorCode :exec
+INSERT INTO first_administrator_codes (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(digest), sqlc.arg(created_by), sqlc.arg(reason), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms))
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = excluded.digest,
+  created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
+  expires_at_ms = excluded.expires_at_ms;
 
 -- name: LockGitHostEventReceipts :exec
 -- Makes the writers of receipts take turns, so the bound is exact. Readers do not wait.
