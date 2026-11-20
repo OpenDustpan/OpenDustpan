@@ -163,6 +163,69 @@ reserved. The body must not hold an `id`.
 
 A namespace holds at most 64 approval rules. The 65th answers 422.
 
+## Set an approval at a collection, a unit or the installation
+
+The routes of the namespace have the same form at a collection and at a unit.
+Put the scope in front of `approval-default` or `approval-rules`:
+
+| Scope | Path prefix |
+| --- | --- |
+| A namespace | `/api/dustpan/v1/namespaces/<namespace>` |
+| A collection | `/api/dustpan/v1/namespaces/<namespace>/collections/<collection>` |
+| A stack or a workspace | `/api/dustpan/v1/namespaces/<namespace>/units/by-name/<tool>/<name>` |
+| The installation | `/api/dustpan/v1` |
+
+`<tool>` is `pulumi` or `opentofu`. Write the name of the unit with
+percent-encoding: the stack `web/prod` is `web%2Fprod`. The default and the
+rules of a unit stay with the unit, also after a rename. A new unit that has the
+name of a removed unit starts with none.
+
+The routes need the same actions, the same body, the same `If-Match` rules and
+the same sign-in as the routes of the namespace. The installation has approval
+rules and no approval default. Its routes need `installation:read-gates` and
+`installation:manage-gates` (see [Roles and actions](#roles-and-actions)).
+
+A list shows the rules that are stored at its own scope. The list of a collection
+does not show the rules of its namespace, and the list of the installation
+does not show the rules of a namespace. A read of the ID of a rule that another
+scope holds answers 404. A narrower scope cannot take the ID of a rule of a wider
+scope: the server answers 409 with the code `gate.final`.
+
+Set `SCOPE` to one of the prefixes, with the server URL in front. Sign in as the
+page [Gate configuration API](../reference/gate-config-api.md#sign-in-for-a-change)
+shows, so that `session.txt`, `CSRF` and `SERVER` are set. These calls set a rule
+and a default at a collection, and read them:
+
+```sh
+SCOPE=$SERVER/api/dustpan/v1/namespaces/acme/collections/payments
+
+curl -b session.txt -X PUT -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+  -H "Content-Type: application/json" \
+  -d '{"count":1,"approvers":{"groups":["platform"]}}' \
+  "$SCOPE/approval-rules/platform-review"
+
+curl -b session.txt -X PUT -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+  -H "Content-Type: application/json" \
+  -d '{"count":2,"approvers":{"groups":["platform"]}}' \
+  "$SCOPE/approval-default"
+
+curl -H "Authorization: Bearer $TOKEN" "$SCOPE/approval-rules"
+curl -i -H "Authorization: Bearer $TOKEN" "$SCOPE/approval-default"
+```
+
+A `DELETE` of `$SCOPE/approval-default` resets the scope to no default. It answers
+204 also when the scope sets none. The [reference page](../reference/gate-config-api.md#calls-to-copy)
+has one call for each scope and each kind of object.
+
+When a change answers 409 with the code `gate.version-conflict`, another request
+changed the object. Read the object again, as the last call above does for the
+default. The header `ETag` holds the current version. Repeat the change with
+`If-Match: "<version>"`.
+
+An access token never gives the recent sign-in that a change needs. A change with
+a token answers 403 with the code `mfa.fresh-step-required`. Sign in to the console
+again, and repeat the call with the session.
+
 ## Approve or reject a job that waits
 
 A job that an approval default covers waits in the state `awaiting-approval`.
@@ -239,6 +302,13 @@ approval, limit or gate check.
 | --- | --- | --- | --- |
 | Read a default or a rule | `namespace:read-gates` | The namespace | `viewer`, `secret-viewer`, `auditor`, `planner`, `writer`, `maintainer`, `admin`, `account-administrator`, `site-administrator` |
 | Set or remove a default or a rule | `namespace:manage-gates` | The namespace | `admin`, `account-administrator`, `site-administrator` |
+| Read a rule of the installation | `installation:read-gates` | The installation | `installation-operator`, `site-administrator` |
+| Set or remove a rule of the installation | `installation:manage-gates` | The installation | `installation-operator`, `site-administrator` |
+
+The actions of a namespace apply to the namespace of the path, also for a
+collection or a unit of it. They give nothing on the installation: a holder of
+`namespace:manage-gates` only gets 403 on a route of the installation, because a
+rule of the installation acts on every namespace.
 
 Only the `admin` role among the namespace roles can set or remove. A person
 whom a rule gates can read that rule. A grant on another namespace gives nothing
@@ -258,7 +328,7 @@ audit log. A read works with an access token.
 | 400 | The body is not one JSON object, holds an unknown field, or is larger than 64 KiB. The error code is `request.body-invalid`. |
 | 400 | The `If-Match` value is not one version in quotes, for example `abc` or `"0"`. The error code is `request.if-match-invalid`. |
 | 401 | The request has no valid credential, or a console session must sign in again. |
-| 403 | The caller lacks the action on this namespace, or a change came with an access token. |
+| 403 | The caller lacks the action on this namespace or on the installation, or a change came with an access token. |
 | 404 | The namespace, the default or the rule does not exist. |
 | 409 | The stored version changed, or (rule PUT) a wider scope holds a rule with this ID. |
 | 422 | A field is outside its bounds, the ID is not valid, or a stored gate names the rule. The approvers cannot be met, for example a group that does not exist or a count above the people who can approve. |
