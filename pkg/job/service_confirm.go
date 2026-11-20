@@ -63,7 +63,7 @@ func (s *service) Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan P
 
 	now := s.now().UTC()
 	ap := Approval{
-		Gate: GateConfirmation, Subject: a.Principal.Subject, Agent: "", Verdict: v, Comment: "",
+		Gate: GateConfirmation, For: nil, Subject: a.Principal.Subject, Agent: "", Verdict: v, Comment: "",
 		Plan: nil, At: now, Auth: "", AuthAt: time.Time{},
 	}
 

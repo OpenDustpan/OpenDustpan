@@ -361,7 +361,8 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.P
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: true,
 	}, nil
 }
 
@@ -387,7 +388,7 @@ func (stubWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (workspa
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (stubWorkspaces) LockForJob(
+func (stubWorkspaces) LockForJobInCollection(
 	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
 	ws, err := stubWorkspaceByID(id)
@@ -435,7 +436,7 @@ func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.Sta
 // BeginState declares a pending version with a fresh capability. The stub
 // ignores the lock and echoes the declared values: route tests prove
 // authorization, not the state rules.
-func (stubWorkspaces) BeginState(
+func (stubWorkspaces) BeginStateInCollection(
 	_ context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	upload, err := token.New()
@@ -967,7 +968,8 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: true,
 	}, nil
 }
 
@@ -1843,7 +1845,7 @@ func (errorWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (worksp
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (errorWorkspaces) LockForJob(
+func (errorWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
@@ -1872,7 +1874,7 @@ func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.Sta
 	return workspace.StateVersion{}, errTestInternal
 }
 
-func (errorWorkspaces) BeginState(
+func (errorWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, errTestInternal

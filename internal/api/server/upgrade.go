@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // upgradeCheckPath is the path of the upgrade check route of the

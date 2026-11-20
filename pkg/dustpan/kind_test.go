@@ -13,10 +13,10 @@ import (
 
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/devsignin"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // devPublicURL is the public URL of the servers that the tests give a dev

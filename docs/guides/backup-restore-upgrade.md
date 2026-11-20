@@ -297,7 +297,7 @@ with the same key-encryption key, then restore through the API. The
 bootstrap admin token can restore into the empty installation. The new
 database may be the other kind.
 
-A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens, preferences of people and sign-in providers. It also keeps the registration of the GitHub App and the map of GitHub installations to namespaces. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
+A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, temporary administrators, roles, grants, tokens, preferences of people and sign-in providers. It also keeps the registration of the GitHub App and the map of GitHub installations to namespaces. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
 A restore needs the key-encryption key that encrypted every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
 
@@ -605,8 +605,8 @@ git. Run for the tag, for example `v0.1.0`:
 ./scripts/copy-tag-migrations.sh v0.1.0
 ```
 
-The script copies `pkg/store/sqlite/migrations/*.sql` and
-`pkg/store/postgres/migrations/*.sql` of the tag, with their `.sql.sha256`
+The script copies `internal/store/sqlite/migrations/*.sql` and
+`internal/store/postgres/migrations/*.sql` of the tag, with their `.sql.sha256`
 hash files, into `testdata/tag-migrations/<tag>/` of each store adapter. The
 frozen test checks each copy against its hash file, so no hash is recorded by
 hand. Commit the copies in the same change. Then run the schema upgrade tests

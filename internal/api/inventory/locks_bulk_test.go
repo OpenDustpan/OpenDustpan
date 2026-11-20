@@ -28,6 +28,8 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -36,8 +38,6 @@ import (
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -1935,7 +1935,8 @@ func newLatencyFixture(t *testing.T, s latencyStore, records idempotency.Store) 
 			LastRelease: workspace.NoRelease(), ID: workspace.ID(ident.NewID("ws-")),
 			Ref:      workspace.Ref{Namespace: ns.Name, Name: workspace.Name(fmt.Sprintf("bulk-%03d", i))},
 			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-			Origin: identity.StateOrigin{Job: "", Commit: ""},
+			Origin:       identity.StateOrigin{Job: "", Commit: ""},
+			InCollection: false,
 		}
 		if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
 			t.Fatalf("create workspace %d: %v", i, err)

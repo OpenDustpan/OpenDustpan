@@ -191,15 +191,26 @@ func (h *Handler) createStateVersion(
 
 	id := workspace.ID(r.PathValue("id"))
 
-	// A workspace that no collection holds takes no state.
-	if err = h.placer.Require(ctx, obj); err != nil {
+	// A workspace that no collection holds takes no state. The check uses the
+	// workspace that the allowance reads, so it adds no round trip.
+	//
+	// Defense in depth: BeginStateInCollection checks the membership too; this
+	// check stays so that a service that lets the declare through still gets
+	// the 409 of this layer.
+	if err = h.placer.RequireEnabled(obj); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	allow, err := h.allowance(ctx, p, id, obj)
+	allow, ws, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if err = h.requireMember(obj, ws); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -217,7 +228,7 @@ func (h *Handler) createStateVersion(
 
 	// The job of a job token is the origin of the declared version, which the
 	// finalize of that version reads. Any other token passes no job.
-	pending, err := h.workspaces.BeginState(workspace.WithJob(ctx, p.JobTokenID()), id, p.Subject, in, auth)
+	pending, err := h.workspaces.BeginStateInCollection(workspace.WithJob(ctx, p.JobTokenID()), id, p.Subject, in, auth)
 	if err != nil {
 		h.rules().RecordOverrideRefusal(ctx, r, p, obj, err)
 		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))

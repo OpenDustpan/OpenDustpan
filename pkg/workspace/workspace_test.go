@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/placementtest"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
@@ -33,7 +34,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
@@ -348,6 +348,8 @@ func (m *memStore) GetWorkspaceByID(_ context.Context, id workspace.ID) (workspa
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
 
+	_, w.InCollection = m.placements[id]
+
 	return w, nil
 }
 
@@ -637,6 +639,27 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 
 	sv, ok := m.versions[id]
 	if !ok {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	return sv, nil
+}
+
+// GetWorkspaceStateVersion implements workspace.StateStore: the version must
+// belong to the workspace, and the workspace to the namespace.
+func (m *memStore) GetWorkspaceStateVersion(
+	_ context.Context, ns namespace.Name, ws workspace.ID, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sv, ok := m.versions[id]
+	if !ok || sv.Workspace != ws {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	w, ok := m.workspaces[ws]
+	if !ok || w.Ref.Namespace != ns {
 		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 	}
 

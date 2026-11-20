@@ -16,9 +16,9 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/devsignin"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // chainTestToken is the token that the recording authenticator accepts.

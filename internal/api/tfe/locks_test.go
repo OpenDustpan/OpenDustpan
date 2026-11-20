@@ -27,7 +27,7 @@ type conflictWorkspaces struct {
 	stubWorkspaces
 }
 
-func (conflictWorkspaces) LockForJob(
+func (conflictWorkspaces) LockForJobInCollection(
 	_ context.Context, id workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
@@ -93,7 +93,8 @@ func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: true,
 	}, nil
 }
 
@@ -288,7 +289,7 @@ type raceWorkspaces struct {
 	holder string
 }
 
-func (r *raceWorkspaces) LockForJob(
+func (r *raceWorkspaces) LockForJobInCollection(
 	_ context.Context, id workspace.ID, holder, _, _ string,
 ) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
@@ -345,7 +346,8 @@ func (r *raceWorkspaces) lockedWorkspace(holder string) workspace.Workspace {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: true,
 	}
 }
 

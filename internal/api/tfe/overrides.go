@@ -70,16 +70,23 @@ func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 // allowance returns the overrides that the caller may use on the workspace
 // id for one request: the switch of the namespace, narrowed by the switch of
 // the workspace, and each override action that the caller holds. It refuses
-// nothing: the domain refuses an override that the result does not allow.
+// nothing: the domain refuses an override that the result does not allow. It
+// also returns the workspace that it read, so that a caller can check the
+// membership of the workspace with no second read.
 func (h *Handler) allowance(
 	ctx context.Context, p identity.Principal, id workspace.ID, obj identity.Object,
-) (namespace.Overrides, error) {
+) (namespace.Overrides, workspace.Workspace, error) {
 	w, err := h.workspaces.GetByID(ctx, id)
 	if err != nil {
-		return namespace.Overrides{}, err
+		return namespace.Overrides{}, workspace.Workspace{}, err
 	}
 
-	return h.rules().Allowance(ctx, p, w, obj)
+	allow, err := h.rules().Allowance(ctx, p, w, obj)
+	if err != nil {
+		return namespace.Overrides{}, workspace.Workspace{}, err
+	}
+
+	return allow, w, nil
 }
 
 // appendOverrideAudit writes the audit entry of one allowed override: the

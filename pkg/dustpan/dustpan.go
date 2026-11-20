@@ -32,6 +32,7 @@ package dustpan
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -53,6 +54,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/api/state"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/authgate"
@@ -1356,6 +1358,8 @@ type neutralHandlers struct {
 	trustRules http.Handler
 	// selfService is nil when no blueprint store is set.
 	selfService http.Handler
+	// state is the masked read of the state of a unit.
+	state http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1375,7 +1379,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	contexts, err := newContextHandler(svc, cfg, onFailure)
+	reads, err := newUnitReadHandlers(svc, cfg, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1413,7 +1417,7 @@ func newNeutralHandlers(
 	return neutralHandlers{
 		inventory:       units,
 		audit:           entries,
-		context:         contexts,
+		context:         reads.context,
 		decisionRecords: late.decisionRecords,
 		runners:         runners.protocol,
 		runnerPools:     runners.pools,
@@ -1429,7 +1433,68 @@ func newNeutralHandlers(
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
 		selfService:  settingAPIs.selfService,
+		state:        reads.state,
 	}, nil
+}
+
+// unitReadHandlers holds the context API and the masked read of the state of
+// a unit.
+type unitReadHandlers struct {
+	context http.Handler
+	state   http.Handler
+}
+
+// newUnitReadHandlers builds the context API and the masked read of the state
+// of a unit.
+func newUnitReadHandlers(svc services, cfg *settings, onFailure func()) (unitReadHandlers, error) {
+	contexts, err := newContextHandler(svc, cfg, onFailure)
+	if err != nil {
+		return unitReadHandlers{context: nil, state: nil}, err
+	}
+
+	states, err := newStateHandler(svc, cfg, onFailure)
+	if err != nil {
+		return unitReadHandlers{context: nil, state: nil}, err
+	}
+
+	return unitReadHandlers{context: contexts, state: states}, nil
+}
+
+// newStateHandler builds the masked read of the state of a unit. The cursors
+// of its pages are signed with a key that the process makes at start, so a
+// cursor is valid only on the instance that made it, and at most for ten
+// minutes.
+func newStateHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	key := make([]byte, state.MinCursorKeyBytes)
+	// crypto/rand.Read never returns an error: it ends the process when the
+	// system has no random source.
+	_, _ = rand.Read(key)
+
+	handler, err := state.NewHandler(state.Config{
+		Namespaces:     svc.namespaces,
+		Stacks:         svc.stacks,
+		StackStates:    svc.updates,
+		Workspaces:     svc.workspaces,
+		Authenticator:  cfg.authenticator,
+		Authorizer:     cfg.authorizer,
+		Audit:          neutralAudit,
+		OnAuditFailure: onFailure,
+		DenialLimiter:  cfg.denialLimiter,
+		Sessions:       cfg.sessionCookies,
+		CursorKey:      key,
+		Logger:         cfg.logger,
+		Timeout:        state.ReadTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("state api: %w", err)
+	}
+
+	return handler, nil
 }
 
 // profileAPIs holds the profiles API, the issuer API and the sinks API.
@@ -3893,7 +3958,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	for _, h := range []http.Handler{
 		a.inventory, a.context, a.decisionRecords, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers,
-		a.unitSettings, a.drift, a.sourceFilter, a.trustRules, a.selfService,
+		a.unitSettings, a.drift, a.sourceFilter, a.trustRules, a.selfService, a.state,
 	} {
 		mountV1(mux, h, wrapV1)
 	}

@@ -42,6 +42,8 @@ func receiptCases() []suiteCase {
 		{"a receipt older than 24 hours is purged by the next receipt", testReceiptPurge},
 		{"the table is bounded and the bound counts after the purge", testReceiptBound},
 		{"receipts at the same time never pass the bound", testReceiptConcurrentBound},
+		{"concurrent receipts below the bound all store", testReceiptConcurrentBelowBound},
+		{"concurrent receipts that purge the same rows keep the count exact", testReceiptConcurrentPurge},
 		{"a receipt that fails its checks is invalid and stores nothing", testReceiptInvalid},
 	}
 }
@@ -391,5 +393,94 @@ func testReceiptConcurrentBound(t *testing.T, h Harness) {
 
 	if wins != free || full != writers-free || len(oops) != 0 {
 		t.Fatalf("%d stored, %d full, other %v; want %d stored and %d full", wins, full, oops, free, writers-free)
+	}
+}
+
+// receiptTally counts the results of receipts that a case records at the same time.
+type receiptTally struct {
+	stored, full int
+	other        []error
+}
+
+// runConcurrentReceipts records writers receipts at the same time, all at
+// time at, and counts how many stored and how many the store refused as full.
+func runConcurrentReceipts(t *testing.T, h Harness, prefix string, writers int, at time.Time) receiptTally {
+	t.Helper()
+
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		tally receiptTally
+	)
+
+	for i := range writers {
+		wg.Go(func() {
+			stored, err := h.Store.RecordEventReceipt(t.Context(), newReceipt(prefix+strconv.Itoa(i), at))
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil && stored:
+				tally.stored++
+			case errors.Is(err, forge.ErrReceiptsFull):
+				tally.full++
+			default:
+				tally.other = append(tally.other, err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	return tally
+}
+
+func testReceiptConcurrentBelowBound(t *testing.T, h Harness) {
+	t.Helper()
+
+	const writers = 16
+
+	got := runConcurrentReceipts(t, h, "below-", writers, receiptTime())
+	if got.stored != writers || got.full != 0 || len(got.other) != 0 {
+		t.Fatalf("%d stored, %d full, other %v; want %d stored", got.stored, got.full, got.other, writers)
+	}
+}
+
+func testReceiptConcurrentPurge(t *testing.T, h Harness) {
+	t.Helper()
+
+	if h.SeedReceipts == nil {
+		t.Skip("the harness has no SeedReceipts, so the bound cannot be reached")
+	}
+
+	const (
+		expired = 1000
+		writers = 8
+	)
+
+	old := receiptTime()
+	later := old.Add(receiptMemory + time.Millisecond)
+
+	// The table is full. The oldest rows expire, and each writer purges the
+	// same rows: the count must go down once for each row, not once for each writer.
+	h.SeedReceipts(t, expired, old)
+	h.SeedReceipts(t, receiptBound-expired, later)
+
+	got := runConcurrentReceipts(t, h, "purge-", writers, later)
+	if got.stored != writers || got.full != 0 || len(got.other) != 0 {
+		t.Fatalf("%d stored, %d full, other %v; want %d stored", got.stored, got.full, got.other, writers)
+	}
+
+	// The count is writers now: the table holds room for the rest of the bound.
+	h.SeedReceipts(t, expired-writers-1, later.Add(time.Millisecond))
+
+	if !record(t, h, newReceipt("last-slot", later)) {
+		t.Fatal("receipt in the last free slot = false, want true: the count after the purge is exact")
+	}
+
+	_, err := h.Store.RecordEventReceipt(t.Context(), newReceipt("no-slot", later))
+	if !errors.Is(err, forge.ErrReceiptsFull) {
+		t.Fatalf("receipt over the bound = %v, want ErrReceiptsFull", err)
 	}
 }

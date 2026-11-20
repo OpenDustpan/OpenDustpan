@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // postgresURLEnv names the variable with a PostgreSQL URL for the tests that

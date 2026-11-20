@@ -9,10 +9,11 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // postgresEnv names the variable with the URL of a PostgreSQL server for the
@@ -80,7 +81,7 @@ func openPostgresAt(t *testing.T, schemaURL string) stores {
 
 	return stores{
 		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), jobtokens: s.JobTokens(), units: s,
-		runners: s.Runners(), audit: s,
+		runners: s.Runners(), audit: s, ageCancel: ageCancelPostgres(schemaURL),
 	}
 }
 
@@ -100,4 +101,33 @@ func execSQL(ctx context.Context, dbURL, statement string) error {
 	}
 
 	return execErr
+}
+
+// ageCancelPostgres returns the ageCancel of the PostgreSQL store at schemaURL.
+func ageCancelPostgres(schemaURL string) func(context.Context, string, time.Duration) error {
+	return func(ctx context.Context, operation string, age time.Duration) error {
+		if !operationID.MatchString(operation) {
+			return fmt.Errorf("%w: %q", errOperationID, operation)
+		}
+
+		conn, err := pgx.Connect(ctx, schemaURL)
+		if err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+
+		const stmt = `UPDATE durable_operations
+			SET cancel_requested_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint - $1
+			WHERE id = $2`
+
+		_, execErr := conn.Exec(ctx, stmt, age.Milliseconds(), operation)
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			return errors.Join(execErr, fmt.Errorf("close: %w", closeErr))
+		}
+
+		if execErr != nil {
+			return fmt.Errorf("age cancel: %w", execErr)
+		}
+
+		return nil
+	}
 }

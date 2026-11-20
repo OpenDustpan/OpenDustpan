@@ -42,6 +42,8 @@ type op struct {
 	phase     int
 	// canceled is true after Cancel. The claim stays live.
 	canceled bool
+	// canceledAt is the time of the cancel.
+	canceledAt time.Time
 }
 
 // nonceKey is a nonce of one subject.
@@ -131,7 +133,7 @@ func (m *mem) ClaimLease(
 	expires := time.Now().Add(lease)
 	m.ops[id] = op{
 		kind: kind, owner: owner, token: 1, expires: expires, claimedAt: time.Time{}, recorded: false, job: "",
-		phase: 0, canceled: false,
+		phase: 0, canceled: false, canceledAt: time.Time{},
 	}
 
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: expires}, nil
@@ -169,6 +171,7 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: o.expires}, nil
 }
 
+// Cancel keeps the time of the first cancel: a repeated cancel does not move it.
 func (m *mem) Cancel(_ context.Context, c durable.Claim) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -178,7 +181,40 @@ func (m *mem) Cancel(_ context.Context, c durable.Claim) error {
 	}
 
 	o := m.ops[c.Operation]
-	o.canceled = true
+	if !o.canceled {
+		o.canceled = true
+		o.canceledAt = time.Now()
+		m.ops[c.Operation] = o
+	}
+
+	return nil
+}
+
+func (m *mem) CancelUntimed(ctx context.Context, c durable.Claim) error {
+	if err := m.Cancel(ctx, c); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	o := m.ops[c.Operation]
+	o.canceledAt = time.Time{}
+	m.ops[c.Operation] = o
+
+	return nil
+}
+
+func (m *mem) CancelAged(ctx context.Context, c durable.Claim, age time.Duration) error {
+	if err := m.Cancel(ctx, c); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	o := m.ops[c.Operation]
+	o.canceledAt = time.Now().Add(-age)
 	m.ops[c.Operation] = o
 
 	return nil
@@ -954,9 +990,17 @@ func (m *mem) SessionRenew(
 		return durable.Claim{}, runner.ErrClaimLost
 	}
 
-	// A cancel does not stop the renewal: the launcher still writes its log
-	// and its finish.
+	// A cancel does not stop the renewal at once: the launcher still writes
+	// its log and its finish, until the bound.
 	o := m.ops[c.Operation]
+	if o.canceled {
+		cancel := runner.SessionCancel{Requested: true, At: o.canceledAt}
+
+		if err := runner.CheckSessionRenew(cancel, time.Now()); err != nil {
+			return durable.Claim{}, err
+		}
+	}
+
 	o.expires = time.Now().Add(d)
 	m.ops[c.Operation] = o
 	c.ExpiresAt = o.expires

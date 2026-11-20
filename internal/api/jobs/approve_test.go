@@ -493,6 +493,50 @@ func TestApproveMapsTheErrorsOfTheService(t *testing.T) {
 	}
 }
 
+// noRequirement returns the refusal of the service for an approver that no
+// requirement of the phase holds, in the form that the service gives it.
+func noRequirement() error {
+	return &job.DeniedError{
+		Action: identity.ActionJobApprove,
+		Object: identity.NamespaceObject("acme"),
+		Err: fmt.Errorf(
+			"%w: %w: the subject is not a member of a group of any requirement: default, default/namespace/acme",
+			identity.ErrDenied,
+			job.ErrNoRequirement,
+		),
+	}
+}
+
+// TestApproveNamesTheRequirementsOfTheRefusal proves that an approver that no
+// requirement holds gets 403 with the code job.no-requirement and the names of
+// the requirements, and that a plain denial names none.
+func TestApproveNamesTheRequirementsOfTheRefusal(t *testing.T) {
+	t.Parallel()
+
+	r := newApproveRig(t, holdsApprove()...)
+	r.svc.err = noRequirement()
+
+	rec := r.send(t, testJob, goodApprove)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, rec.Code, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.JobNoRequirement, Args: nil, RequestBody: nil})
+
+	if !strings.Contains(rec.Body.String(), "default, default/namespace/acme") {
+		t.Errorf("body = %s, want the names of the requirements", rec.Body.String())
+	}
+
+	plain := newApproveRig(t, holdsApprove()...)
+	plain.svc.err = fmt.Errorf("%w: unit", identity.ErrDenied)
+
+	rec = plain.send(t, testJob, goodApprove)
+	if strings.Contains(rec.Body.String(), "requirement") || rec.Code != http.StatusForbidden {
+		t.Errorf("plain denial = %d %s, want 403 with no requirement name", rec.Code, rec.Body.String())
+	}
+}
+
 // TestApproveRefusalWritesOneAuditEntry proves each refusal of security by the
 // service writes one entry that names job:approve on the unit of the job, and
 // that a refusal of another kind writes none.
@@ -515,6 +559,7 @@ func TestApproveRefusalWritesOneAuditEntry(t *testing.T) {
 		{"other plan", fmt.Errorf("%w: plan", job.ErrPlanChanged), "the plan of the approval is not the stored plan"},
 		{"stale plan", fmt.Errorf("%w: old", job.ErrPlanStale), "the stored plan is too old or was redacted"},
 		{"repeat approval", fmt.Errorf("%w: wait", job.ErrAlreadyApproved), "the approver approved this phase already"},
+		{"no requirement holds the approver", noRequirement(), "no requirement of the phase holds the approver"},
 	}
 
 	for _, tc := range tests {

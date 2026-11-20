@@ -84,6 +84,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 			Stopping:     cfg.streamStop.isStopping,
 		},
 		Cursors:        cfg.secretWrapper,
+		Approvers:      jobApprovers(cfg),
 		Starter:        starter,
 		Workers:        cfg.watch,
 		Pools:          pools,

@@ -262,7 +262,7 @@ GO_TEST_TIMEOUT := 20m
 # packages. A target that runs one named test keeps the go test default. The
 # first three targets run the store packages together with all other
 # packages. In a session container with 4 CPUs and 15 GB, pkg/dustpan took
-# 1371 s, pkg/store/sqlite 1721 s and pkg/store/postgres 1405 s, each one
+# 1371 s, internal/store/sqlite 1721 s and internal/store/postgres 1405 s, each one
 # alone, so 20m failed every run. The CI targets keep GO_TEST_TIMEOUT and
 # STORE_TEST_TIMEOUT. Set TEST_TIMEOUT to change the limit.
 TEST_TIMEOUT ?= 45m
@@ -272,7 +272,7 @@ TEST_TIMEOUT ?= 45m
 # arithmetic, these checks took about 30% of the CPU of the SQLite store
 # tests. RACE_TEST_FLAGS turns checkptr off for modernc.org/... only: the race
 # detector stays on for all code, and checkptr stays on for our own code. On
-# 4 cores, the dev data suite of pkg/store/sqlite used 904 s of user CPU with
+# 4 cores, the dev data suite of internal/store/sqlite used 904 s of user CPU with
 # the checks and 647 s without them. The cost: checkptr does not find unsafe
 # pointer misuse inside those modules, which we do not maintain. -gcflags can
 # repeat with other patterns; for a package that matches more than one, the
@@ -293,11 +293,11 @@ test-nocache: ## Go tests as in test, but every package runs again. CI does the 
 # that they do not share the 4 cores of a runner with each other or with the
 # other packages. GO_TEST_COUNT=-count=1 runs every package again, as the
 # schedule of CI does.
-STORE_TEST_PKGS := opendustpan.org/opendustpan/pkg/store/sqlite opendustpan.org/opendustpan/pkg/store/postgres
+STORE_TEST_PKGS := opendustpan.org/opendustpan/internal/store/sqlite opendustpan.org/opendustpan/internal/store/postgres
 GO_TEST_COUNT ?=
 
 # STORE_TEST_TIMEOUT is the limit of test-ci-store only, sized for one store
-# package on a CI runner: pkg/store/postgres alone took more than 20 minutes
+# package on a CI runner: internal/store/postgres alone took more than 20 minutes
 # there. It is not a fix of that time, and GO_TEST_TIMEOUT stays the limit of
 # test-ci-other.
 STORE_TEST_TIMEOUT := 30m
@@ -305,7 +305,7 @@ STORE_TEST_TIMEOUT := 30m
 # STORE_TEST_PARALLEL is the -parallel of test-ci-store. Many cases of the store
 # suites wait, for example 20 s for the lease of a restore to run out, and hold
 # one of the GOMAXPROCS slots of the default while they wait. 16 lets the other
-# cases run in that time: pkg/store/sqlite under -race on 4 cores took 447 s at
+# cases run in that time: internal/store/sqlite under -race on 4 cores took 447 s at
 # 16 and 552 s at 4. The PostgreSQL job raises max_connections for it.
 STORE_TEST_PARALLEL := 16
 
@@ -328,14 +328,14 @@ cover: ## Fast coverage pass for the packages of test-ci-other, without -race: w
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
-	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -parallel $(STORE_TEST_PARALLEL) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
+	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -parallel $(STORE_TEST_PARALLEL) -timeout $(STORE_TEST_TIMEOUT) ./internal/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
-	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./pkg/store/postgres/...
+	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./internal/store/postgres/...
 
 bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
-	go test -run '^$$' -bench . -benchtime 1x -timeout $(TEST_TIMEOUT) ./pkg/stack/ ./pkg/store/sqlite/
+	go test -run '^$$' -bench . -benchtime 1x -timeout $(TEST_TIMEOUT) ./pkg/stack/ ./internal/store/sqlite/
 
 load: ## Run the load harness against a self-started server and write load-report.json (SQLite default; set DUSTPAN_TEST_POSTGRES_URL for PostgreSQL). Not part of check.
 	go run ./load -out load-report.json
