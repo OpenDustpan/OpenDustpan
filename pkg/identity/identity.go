@@ -1190,8 +1190,10 @@ func HasExactScope(a Authorizer) bool {
 }
 
 // Scope is the set of objects of one kind where a principal may perform one
-// action. A scope covers every object through Every. A consumer reads that
-// case only through CoversEveryObject or Contains. Otherwise a
+// action. A scope covers every object through Every, which can leave out the
+// objects of named namespaces. A consumer reads that case only through
+// CoversEveryObject, EveryObjectExcept or Contains, so that no consumer can
+// see the every-object case without its left-out namespaces. Otherwise a
 // unit is in the scope when it, its collection or its namespace is in a
 // set. A principal object is in the scope when it is in Principals.
 type Scope struct {
@@ -1229,6 +1231,70 @@ func Every(except ...namespace.Name) Scope {
 // consumer uses the explicit sets and fails closed.
 func (s Scope) CoversEveryObject() bool {
 	return s.every.set && len(s.every.except) == 0
+}
+
+// EveryObjectExcept reports whether s covers every object, and returns a copy
+// of the namespaces that it leaves out, in sorted order. The objects of a
+// left-out namespace are not in s. A consumer that filters in its own query,
+// for example a SQL list, uses this method and leaves out each returned
+// namespace. It returns nil and false when s does not cover every object.
+func (s Scope) EveryObjectExcept() ([]namespace.Name, bool) {
+	if !s.every.set {
+		return nil, false
+	}
+
+	return slices.Clone(s.every.except), true
+}
+
+// LeaveOut returns s without the objects of the named namespaces. In the
+// every-object case it adds the names to the left-out namespaces, each name
+// once, in sorted order. It drops from the explicit sets each namespace,
+// collection and unit object of a named namespace. A principal object has no
+// namespace and stays. An empty name is ignored: it names no namespace.
+func (s Scope) LeaveOut(names ...namespace.Name) Scope {
+	drop := make([]namespace.Name, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			drop = append(drop, name)
+		}
+	}
+
+	if len(drop) == 0 {
+		return s
+	}
+
+	out := Scope{
+		Namespaces:  withoutNamespaces(s.Namespaces, drop),
+		Collections: withoutNamespaces(s.Collections, drop),
+		Units:       withoutNamespaces(s.Units, drop),
+		Principals:  slices.Clone(s.Principals),
+		every:       everyObject{set: s.every.set, except: nil},
+	}
+
+	if s.every.set {
+		except := slices.Concat(s.every.except, drop)
+		slices.Sort(except)
+		out.every.except = slices.Compact(except)
+	}
+
+	return out
+}
+
+// withoutNamespaces returns the objects of objs whose namespace is not in
+// drop. It builds a new slice, so objs is not modified.
+func withoutNamespaces(objs []Object, drop []namespace.Name) []Object {
+	if objs == nil {
+		return nil
+	}
+
+	out := make([]Object, 0, len(objs))
+	for i := range objs {
+		if !slices.Contains(drop, objs[i].Namespace()) {
+			out = append(out, objs[i])
+		}
+	}
+
+	return out
 }
 
 // Contains reports whether s holds o. In the every-object case it reports

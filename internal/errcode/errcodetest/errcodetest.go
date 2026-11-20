@@ -39,6 +39,11 @@ func (r rules) NamespaceList(context.Context, namespace.Name) (ipallow.List, err
 	return r.list, nil
 }
 
+// NamespacesWithList answers no namespace: the causes use CheckAddress only.
+func (rules) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
+	return []ipallow.NamedList{}, nil
+}
+
 // Causes returns the causes of a 403, in the order of errcode.Forbidden. The
 // allowlist error comes from the real gate, not from a stand-in.
 func Causes(tb testing.TB) []Cause {

@@ -1346,10 +1346,12 @@ func (q *Queries) CountLocalUserName(ctx context.Context, arg CountLocalUserName
 const countNamespaces = `-- name: CountNamespaces :one
 SELECT COUNT(*)
 FROM namespaces
+WHERE name NOT IN (SELECT value FROM json_each(?1))
 `
 
-func (q *Queries) CountNamespaces(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countNamespaces)
+// Counts every namespace except the left-out ones.
+func (q *Queries) CountNamespaces(ctx context.Context, leftOut interface{}) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespaces, leftOut)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -20312,27 +20314,32 @@ func (q *Queries) MoveTriggerNextSlot(ctx context.Context, arg MoveTriggerNextSl
 }
 
 const namespacesWithList = `-- name: NamespacesWithList :many
-SELECT name
+SELECT name, ip_allowlist
 FROM namespaces
 WHERE ip_allowlist <> ''
 ORDER BY name
 LIMIT ?1
 `
 
-// Lists the namespaces that have an IP allowlist, at most lim of them.
-func (q *Queries) NamespacesWithList(ctx context.Context, lim int64) ([]string, error) {
+type NamespacesWithListRow struct {
+	Name        string
+	IpAllowlist string
+}
+
+// Lists the namespaces that have an IP allowlist, with the list, at most lim of them.
+func (q *Queries) NamespacesWithList(ctx context.Context, lim int64) ([]NamespacesWithListRow, error) {
 	rows, err := q.db.QueryContext(ctx, namespacesWithList, lim)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []NamespacesWithListRow
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var i NamespacesWithListRow
+		if err := rows.Scan(&i.Name, &i.IpAllowlist); err != nil {
 			return nil, err
 		}
-		items = append(items, name)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -20430,14 +20437,15 @@ func (q *Queries) NextUnmanagedScanSeq(ctx context.Context, namespaceID string) 
 const pageNamespaces = `-- name: PageNamespaces :many
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
-WHERE name > ?1
+WHERE name > ?1 AND name NOT IN (SELECT value FROM json_each(?2))
 ORDER BY name
-LIMIT ?2
+LIMIT ?3
 `
 
 type PageNamespacesParams struct {
-	After string
-	Lim   int64
+	After   string
+	LeftOut interface{}
+	Lim     int64
 }
 
 type PageNamespacesRow struct {
@@ -20450,8 +20458,9 @@ type PageNamespacesRow struct {
 	ID                  string
 }
 
+// Pages every namespace except the left-out ones.
 func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
-	rows, err := q.db.QueryContext(ctx, pageNamespaces, arg.After, arg.Lim)
+	rows, err := q.db.QueryContext(ctx, pageNamespaces, arg.After, arg.LeftOut, arg.Lim)
 	if err != nil {
 		return nil, err
 	}

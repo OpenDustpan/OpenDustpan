@@ -4483,6 +4483,9 @@
           "all": {
             "type": "boolean"
           },
+          "excluded": {
+            "$ref": "#/components/schemas/OwnAccessExcluded"
+          },
           "nextPageToken": {
             "type": "string"
           },
@@ -4503,6 +4506,7 @@
         "required": [
           "action",
           "all",
+          "excluded",
           "nextPageToken",
           "objects",
           "total",
@@ -5701,6 +5705,20 @@
           "grants",
           "missingActions",
           "object"
+        ],
+        "type": "object"
+      },
+      "OwnAccessExcluded": {
+        "properties": {
+          "namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespaces"
         ],
         "type": "object"
       },

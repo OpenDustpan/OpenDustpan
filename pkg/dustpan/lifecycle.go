@@ -234,7 +234,8 @@ type deletedReadScope struct {
 var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil, units: nil}
 
 // ReadableUnits implements inventoryapi.DeletedReadScope. A grant of
-// unit:read on the installation or on ns covers every deleted unit of ns. A
+// unit:read on the installation or on ns covers every deleted unit of ns,
+// unless the scope leaves ns out. A
 // grant on a unit covers that unit while it exists, so it gives nothing on a
 // deleted unit here: ListObjects leaves out the units that do not exist.
 // A grant on a collection of ns covers each deleted unit whose last
@@ -249,27 +250,35 @@ func (s deletedReadScope) ReadableUnits(
 		return false, nil, fmt.Errorf("list readable units: %w", err)
 	}
 
-	if scope.CoversEveryObject() {
+	// Contains answers both the explicit namespace grants and a scope that
+	// covers every object: a namespace that such a scope leaves out, for
+	// example because its IP allowlist refuses the client address, is not
+	// held, so the read falls to the unit and collection grants below, which
+	// the authorizer filtered the same way.
+	if scope.Contains(identity.NamespaceObject(ns)) {
 		return true, nil, nil
-	}
-
-	for i := range scope.Namespaces {
-		obj := scope.Namespaces[i]
-		if obj.Namespace() == ns {
-			return true, nil, nil
-		}
 	}
 
 	ids := []string{}
 
+	// Defense in depth: the authorizer drops the explicit objects of a
+	// left-out namespace too. The Contains checks stay so that a scope that
+	// still names such an object in its sets cannot give its deleted units.
 	for i := range scope.Units {
 		obj := scope.Units[i]
-		if obj.Namespace() == ns && obj.UnitID() != "" {
+		if obj.Namespace() == ns && obj.UnitID() != "" && scope.Contains(obj) {
 			ids = append(ids, obj.UnitID())
 		}
 	}
 
-	ids, err = s.collectionUnits(ctx, scope.Collections, ns, ids)
+	cols := make([]identity.Object, 0, len(scope.Collections))
+	for i := range scope.Collections {
+		if scope.Contains(scope.Collections[i]) {
+			cols = append(cols, scope.Collections[i])
+		}
+	}
+
+	ids, err = s.collectionUnits(ctx, cols, ns, ids)
 	if err != nil {
 		return false, nil, err
 	}

@@ -191,6 +191,10 @@ _Avoid_: Scrub, sanitize, clean
 A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
 _Avoid_: Whitelist
 
+**Excluded namespace**:
+A namespace that a scope of every object leaves out, for example because its IP allowlist refuses the client address. A list of every object does not show the objects of an excluded namespace. The caller-access API names each one in `excluded.namespaces` next to `all` (ADR 361).
+_Avoid_: Hidden namespace, blocked namespace
+
 **Setting**:
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value

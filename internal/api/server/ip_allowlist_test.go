@@ -531,7 +531,7 @@ func (s refusalStore) SetNamespaceList(
 }
 
 // NamespacesWithList implements ipallow.Store.
-func (s refusalStore) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+func (s refusalStore) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
 	s.t.Errorf("denied request reached the store")
 
 	return nil, namespace.ErrNotFound
@@ -682,7 +682,7 @@ func (s failWriteStore) SetNamespaceList(
 }
 
 // NamespacesWithList implements ipallow.Store.
-func (s failWriteStore) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
+func (s failWriteStore) NamespacesWithList(ctx context.Context) ([]ipallow.NamedList, error) {
 	return s.inner.NamespacesWithList(ctx)
 }
 
