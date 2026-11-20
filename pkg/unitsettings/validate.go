@@ -61,7 +61,7 @@ func (s *Settings) validateFields() error {
 		return err
 	}
 
-	if err := s.WriteBack.validate(s.CodeLocation.Directory); err != nil {
+	if err := s.WriteBack.validate(CanonicalDirectory(s.CodeLocation.Directory)); err != nil {
 		return err
 	}
 
@@ -101,11 +101,11 @@ func (l CodeLocation) validate() error {
 		return err
 	}
 
-	// The directory "." is refused: an empty directory is the root, so the
-	// root has one spelling.
+	// The directory RootDirectory is the root, as empty is: the check uses
+	// the stored form. Every other directory must be clean and relative.
 	loc := job.Location{
 		Connection: "", Repository: orDefault(l.Repository, placeholderRepository),
-		Ref: orDefault(l.Ref, placeholderRef), Directory: l.Directory, Revision: "",
+		Ref: orDefault(l.Ref, placeholderRef), Directory: CanonicalDirectory(l.Directory), Revision: "",
 	}
 	if err := loc.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)

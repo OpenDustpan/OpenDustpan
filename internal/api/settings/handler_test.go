@@ -266,6 +266,16 @@ func TestPutRefusesBadBodies(t *testing.T) {
 		{"empty", "", http.StatusBadRequest, errcode.RequestBodyInvalid},
 		{"unknown field", `{"unit":"x"}`, http.StatusBadRequest, errcode.RequestBodyInvalid},
 		{"two documents", `{} {}`, http.StatusBadRequest, errcode.RequestBodyInvalid},
+		{"null", `null`, http.StatusBadRequest, errcode.RequestBodyInvalid},
+		{"an array", `[]`, http.StatusBadRequest, errcode.RequestBodyInvalid},
+		{
+			"a repeated key", `{"executor":"runner","executor":"write-back"}`, http.StatusBadRequest,
+			errcode.RequestBodyInvalid,
+		},
+		{
+			"a repeated key in an inner object", `{"codeLocation":{"ref":"main","ref":"release"}}`,
+			http.StatusBadRequest, errcode.RequestBodyInvalid,
+		},
 		{"invalid UTF-8", "{\"pool\":\"\xff\"}", http.StatusBadRequest, errcode.RequestBodyInvalid},
 		{
 			"too large", `{"pool":"` + strings.Repeat("a", 300<<10) + `"}`, http.StatusRequestEntityTooLarge,

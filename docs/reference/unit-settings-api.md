@@ -119,7 +119,7 @@ The answer has the header `ETag` with the version in quotes, for example `"3"`.
 | `codeLocation.connection` | The ID of the Git host connection | The default connection of the namespace, else none |
 | `codeLocation.repository` | The repository, as `owner/name`, or an `https` URL with no user name | None |
 | `codeLocation.ref` | The branch that the unit deploys from | None |
-| `codeLocation.directory` | The working directory: a clean relative path in the repository | `.` |
+| `codeLocation.directory` | The working directory: a clean relative path in the repository. `.` is the root: a write stores it as an empty directory. The record then shows `""`, and the effective value is `.` from the built-in default. | `.` |
 | `writeBack.delivery` | `review-request` or `direct-push` | `review-request` |
 | `writeBack.files` | The config files of the unit that a write-back can edit, at most 16 | The default file of the tool: `Pulumi.<stack>.yaml` for a stack, `<workspace>.auto.tfvars.json` for a workspace |
 | `reviewRequests.enabled` | `true` to turn pull request automation on | `false` |
@@ -158,7 +158,10 @@ value.
 `PUT .../settings` replaces the whole record. The body is one JSON object of at
 most 256 KiB with the fields `executor`, `pool`, `codeLocation`, `writeBack`,
 `reviewRequests` and `steps`. A field that is not in the list fails the request
-with 400. A body cannot set the unit, the version or the time.
+with 400. A body of `null`, a body that is not one object, and an object that
+names a key two times also fail with 400 and the code `request.body-invalid`.
+The same rule applies to the body of the unit defaults and of the bulk call.
+A body cannot set the unit, the version or the time.
 
 The request must have the header `If-Match` with the version that the caller
 read, in quotes. Use `"0"` for a unit with no record.
