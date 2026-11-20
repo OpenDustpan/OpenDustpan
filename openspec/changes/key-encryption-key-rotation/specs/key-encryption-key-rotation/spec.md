@@ -104,10 +104,66 @@ When the operator restores a backup, the server SHALL need the key that wraps th
 - **WHEN** A rotation is active and the operator starts a restore.
 - **THEN** The restore is refused with NEW `ErrRotationActive`.
 
-### Requirement: Parked surface
+### Requirement: Authorize a rotation
 
-The routes, the authorization action, the source of the second key, the docs page and the e2e step SHALL NOT be built by this change until the owner decides the questions of the proposal.
+The server SHALL need the action `installation:rotate-key-encryption-key` on `@server` for each route of the rotation, SHALL give the action to the site administrator only, and SHALL need a fresh authentication step for start, finish and abort (owner, 2026-11-20).
 
-#### Scenario: Engine without a route
-- **WHEN** This change lands without the parked tasks.
-- **THEN** No route, no action and no setting for the rotation exists, and the engine is reached by tests only.
+#### Scenario: Site administrator with a fresh step
+- **WHEN** The site administrator starts a rotation from a console session with a recent sign-in.
+- **THEN** The server accepts the request and writes one audit entry.
+
+#### Scenario: Other roles
+- **WHEN** An account administrator or an operator calls any route of the rotation.
+- **THEN** The server answers 403 and writes a denial entry.
+
+#### Scenario: Access token on a change
+- **WHEN** A request with an access token starts, finishes or aborts a rotation.
+- **THEN** The server answers 403 with the code `mfa.fresh-step-required` and changes nothing.
+
+### Requirement: Stage the old key
+
+The server SHALL read the old key from `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` or from the file that `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE` names, SHALL wrap only under the new key, SHALL use the old key to read only, and SHALL clear the variable after the read (owner, 2026-11-20).
+
+#### Scenario: Both keys staged
+- **WHEN** A process starts with the new key and the old key.
+- **THEN** It opens a record under either key, wraps each new record under the new key, and the environment holds no old key variable after the read.
+
+#### Scenario: Refuse an unsafe file or an equal key
+- **WHEN** The old key file is readable by group or others, the value is not 32 bytes of base64, or the old key equals the new key.
+- **THEN** The process refuses to start with a text that names the variable.
+
+#### Scenario: Start with no old key
+- **WHEN** A caller starts a rotation and the process holds no old key.
+- **THEN** The start fails with the code `key-rotation.old-key-missing` and writes no row.
+
+### Requirement: Rotation API and command
+
+The server SHALL give a REST API under `/api/dustpan/v1/key-rotations` to start, list, show, resume, finish and abort a rotation, with the action and the object declared on each route, and the server SHALL give the command group `opendustpan key-rotation` as a client of that API (owner, 2026-11-20).
+
+#### Scenario: Watch the progress
+- **WHEN** The site administrator runs `opendustpan key-rotation status`.
+- **THEN** The command sends GET requests and prints the state, both wrapper IDs and the count of records for each family under each ID.
+
+#### Scenario: Resume
+- **WHEN** A rotation stopped and the site administrator runs `opendustpan key-rotation resume`.
+- **THEN** The server claims the durable operation again and writes one audit entry.
+
+#### Scenario: Commands that need a fresh step
+- **WHEN** The site administrator runs `opendustpan key-rotation start`, `finish` or `abort`.
+- **THEN** The command sends no request and prints the console path and the route.
+
+#### Scenario: Body with a key
+- **WHEN** A start request has a body field with key bytes.
+- **THEN** The server refuses the request with 400 and holds no key from it.
+
+#### Scenario: Real tools after a rotation
+- **WHEN** A rotation finished and the process holds the new key alone.
+- **THEN** The Pulumi CLI reads a stack secret and OpenTofu reads a workspace state, both as before the rotation.
+
+### Requirement: Keep blobs in targets
+
+The server SHALL delete an old item key blob in the live store only, and SHALL NOT delete it in a backup target (owner, 2026-11-20).
+
+#### Scenario: Target keeps old blobs
+- **WHEN** The rewrap finishes an item key and a backup target holds the old blob.
+- **THEN** The target still holds the old blob, and a restore of that backup with the old key opens it.
