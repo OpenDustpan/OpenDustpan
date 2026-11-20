@@ -60,7 +60,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 	maps.Copy(scenarios, ownTokenScenarios())
 	maps.Copy(scenarios, proxyRuleScenarios())
 
-	_, h := newGateHandler(t, adminGates())
+	_, h := newGateHandler(t, adminGatesAndInstallation())
 
 	checkHeaderFlags(t, h.env.handler.Operations(), scenarios)
 }
@@ -203,36 +203,59 @@ func preferenceScenarios() map[string]headertest.Scenario {
 	}
 }
 
-// gateObjectScenarios returns the scenarios of the gate and access limit
-// operations of the three scope levels.
+// gateObjectScenarios returns the scenarios of the gate, access limit,
+// approval rule and approval default operations of the four scope levels. The
+// operations of the approval rules and the approval default of the namespace
+// have their own scenarios in approvalScenarios.
 func gateObjectScenarios() map[string]headertest.Scenario {
 	const (
 		gateDoc = `{"decisionPoint":"state.write","condition":"context.operation.kind == \"write\"",` +
 			`"outcome":"deny","message":"Writes are frozen","mode":"enforce"}`
 		limitDoc = `{"policy":"forbid (principal, action == OpenDustpan::Action::\"unit:write\", resource);"}`
+		ruleDoc  = `{"count":1,"approvers":{"groups":["ops"]}}`
 	)
 
-	scopes := []struct{ infix, base string }{
-		{"", gateBase + "acme"},
-		{"Collection", gateBase + "acme/collections/payments"},
-		{"Unit", gateBase + "acme/units/by-name/opentofu/net"},
+	scopes := []struct {
+		infix, base string
+		hasDefault  bool
+	}{
+		{"", gateBase + "acme", true},
+		{"Collection", gateBase + "acme/collections/payments", true},
+		{"Unit", gateBase + "acme/units/by-name/opentofu/net", true},
+		{"Installation", installationBase, false},
+	}
+
+	resources := []struct {
+		plural, singular, segment, doc string
+		single                         bool
+	}{
+		{"Gates", "Gate", "gates", gateDoc, false},
+		{"AccessLimits", "AccessLimit", "access-limits", limitDoc, false},
+		{"ApprovalRules", "ApprovalRule", "approval-rules", ruleDoc, false},
+		{"", "ApprovalDefault", "approval-default", platformDefault, true},
 	}
 
 	out := map[string]headertest.Scenario{}
 
 	for _, sc := range scopes {
-		for _, res := range []struct{ plural, singular, segment, doc string }{
-			{"Gates", "Gate", "gates", gateDoc},
-			{"AccessLimits", "AccessLimit", "access-limits", limitDoc},
-		} {
+		for _, res := range resources {
+			namespaceApproval := sc.infix == "" && (res.segment == "approval-rules" || res.single)
+			if namespaceApproval || (res.single && !sc.hasDefault) {
+				continue
+			}
+
 			list := sc.base + "/" + res.segment
 			item := list + "/seed"
+
+			if res.single {
+				item = list
+			}
 
 			scenario := func(method, target, body string) headertest.Scenario {
 				return func(t *testing.T) headertest.Probe {
 					t.Helper()
 
-					_, h := newGateHandler(t, adminGates())
+					_, h := newGateHandler(t, adminGatesAndInstallation())
 
 					put := serveGate(t, h, gateCall{http.MethodPut, item, res.doc, ""})
 					wantStatus(t, put, http.StatusOK)
@@ -249,7 +272,10 @@ func gateObjectScenarios() map[string]headertest.Scenario {
 				}
 			}
 
-			out["list"+sc.infix+res.plural] = scenario(http.MethodGet, list, "")
+			if !res.single {
+				out["list"+sc.infix+res.plural] = scenario(http.MethodGet, list, "")
+			}
+
 			out["get"+sc.infix+res.singular] = scenario(http.MethodGet, item, "")
 			out["set"+sc.infix+res.singular] = scenario(http.MethodPut, item, res.doc)
 			out["delete"+sc.infix+res.singular] = scenario(http.MethodDelete, item, "")

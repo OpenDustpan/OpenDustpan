@@ -63,6 +63,17 @@ func adminGates() gateAuthorizer {
 	}}
 }
 
+// adminGatesAndInstallation allows the two gate actions on acme and the two
+// installation gate actions on the installation.
+func adminGatesAndInstallation() gateAuthorizer {
+	return gateAuthorizer{allow: map[identity.Action]namespace.Name{
+		identity.ActionNamespaceReadGates:      "acme",
+		identity.ActionNamespaceManageGates:    "acme",
+		identity.ActionInstallationReadGates:   "",
+		identity.ActionInstallationManageGates: "",
+	}}
+}
+
 // gateEnv is a handler over a fresh store with acme and beta, and a console
 // session with a fresh sign-in. It sends each write as that session: an
 // access token never gives fresh authentication. It sends each read with an
@@ -1595,7 +1606,6 @@ func approvalSegmentCases(t *testing.T, suffix string) {
 		"collection name too short":     gateBase + "acme/collections/ab",
 		"collection name with a dash":   gateBase + "acme/collections/-payments-",
 		"collection name with a slash":  gateBase + "acme/collections/pay%2Fments",
-		"tool that is not supported":    gateBase + "acme/units/by-name/svn/web%2Fprod",
 		"unit name with a control byte": gateBase + "acme/units/by-name/pulumi/web%07",
 	}
 

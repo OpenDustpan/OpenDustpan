@@ -1332,15 +1332,16 @@ func TestApprovalRulesFollowTheUnit(t *testing.T) {
 	})
 }
 
-// installationEntries returns the audit entries of the installation whose
-// action starts with prefix.
+// installationEntries returns the audit entries of a change that succeeded at
+// the installation, whose action starts with prefix. A refused request leaves
+// an entry of the outcome denied or failure, which is not a change.
 func installationEntries(t *testing.T, st *sqlite.Store, prefix string) []audit.Entry {
 	t.Helper()
 
 	var out []audit.Entry
 
 	for _, e := range listNamespaceEntries(t, st, audit.ServerScope) {
-		if strings.HasPrefix(e.Action, prefix) {
+		if strings.HasPrefix(e.Action, prefix) && e.Outcome == audit.OutcomeSuccess {
 			out = append(out, e)
 		}
 	}
