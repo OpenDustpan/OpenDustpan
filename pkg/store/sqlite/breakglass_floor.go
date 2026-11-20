@@ -35,7 +35,8 @@ func checkWorkingBreakGlassFloor(before, after int64) error {
 
 // replayStagedRevocations applies the journaled revocations to the staged
 // file and refuses a swap that lowers the working break-glass count below the
-// floor. It reads the clock of the store once for both counts.
+// floor, or that puts in a break-glass account with a local password. It
+// reads the clock of the store once for both counts.
 func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 	nowMs, nowErr := storeNow(ctx, db.New(tx))
 	if nowErr != nil {
@@ -58,7 +59,31 @@ func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 		return afterErr
 	}
 
+	if err := checkBreakGlassPasswords(ctx, db.New(tx)); err != nil {
+		return err
+	}
+
 	return checkWorkingBreakGlassFloor(before, after)
+}
+
+// checkBreakGlassPasswords refuses data that holds a break-glass account with
+// a local password. A restore writes the break-glass flag and the passwords
+// from the backup, so it is a write that can put the flag on a person with a
+// password. In the connection of a restore, q reads the staged file. It fails
+// closed when the count cannot run.
+func checkBreakGlassPasswords(ctx context.Context, q *db.Queries) error {
+	n, err := q.CountBreakGlassWithPassword(ctx)
+	if err != nil {
+		return fmt.Errorf("count break-glass accounts with a password: %w: %w",
+			principal.ErrBreakGlassUnavailable, err)
+	}
+
+	if n > 0 {
+		return fmt.Errorf("restore holds %d break-glass accounts with a local password: %w",
+			n, principal.ErrBreakGlassPassword)
+	}
+
+	return nil
 }
 
 // breakGlassSchema names a schema of the connection. Outside a restore, main

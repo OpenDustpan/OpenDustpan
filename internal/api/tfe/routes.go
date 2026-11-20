@@ -508,16 +508,14 @@ func resolveWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 // resolveWorkspaceID returns the unit for the workspace ID in the id path
 // value. It reads the body once with http.MaxBytesReader and restores r.Body
 // before returning, so the handler can read it again. An unknown ID fails
-// with absence, which the wrapper answers as 403 for a caller without rights
-// and 404 otherwise.
+// with absence, which the wrapper answers as 404 for every caller.
 func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	return restoreBody(h.workspaceIn("id"))(w, r)
 }
 
 // workspaceIn returns the resolver of the unit of the workspace whose ID is
 // the path value named value. It reads no body. An unknown ID fails with
-// absence, which the wrapper answers as 403 for a caller without rights and
-// 404 otherwise.
+// absence, which the wrapper answers as 404 for every caller.
 func (h *Handler) workspaceIn(value string) ObjectResolver {
 	return func(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 		ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue(value)))

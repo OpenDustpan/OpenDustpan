@@ -161,15 +161,16 @@ func (stubStackStore) RenameStack(
 }
 
 func (stubStackStore) UpdateStackTags(
-	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.TagUpdate, _ namespace.Fence,
 ) error {
 	return nil
 }
 
 // taggedStack is one UpdateStackTags call: the stack and its new tags.
 type taggedStack struct {
-	tags map[string]string
-	ref  stack.Ref
+	tags  map[string]string
+	ref   stack.Ref
+	entry audit.Entry
 }
 
 // renamedStack records one rename call: the old reference, the new name and
@@ -229,9 +230,9 @@ func (s *recordingStackStore) RenameStack(
 }
 
 func (s *recordingStackStore) UpdateStackTags(
-	_ context.Context, ref stack.Ref, tags map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, ref stack.Ref, u stack.TagUpdate, _ namespace.Fence,
 ) error {
-	s.tags = append(s.tags, taggedStack{ref: ref, tags: tags})
+	s.tags = append(s.tags, taggedStack{ref: ref, tags: u.Tags, entry: u.Entry})
 
 	return nil
 }
@@ -463,7 +464,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -1130,6 +1131,54 @@ func TestUpdateStackTagsThroughWrapper(t *testing.T) {
 	if len(got.tags) != 1 || got.tags["team"] != "e2e" {
 		t.Fatalf("updated tags %v, want map[team:e2e]", got.tags)
 	}
+
+	checkStackChangeEntry(t, got.entry)
+}
+
+// TestUpdateStackTagsThroughWrapperHostileKey proves a tag name that is not
+// allowed answers 400 and updates nothing, so no audit entry is built.
+func TestUpdateStackTagsThroughWrapperHostileKey(t *testing.T) {
+	t.Parallel()
+
+	bodies := []string{
+		`{"evil\r\nInjected: yes":"v"}`,
+		`{"a\u200bb":"v"}`,
+		`{"bad\ufffdutf":"v"}`,
+		`{"` + strings.Repeat("k", 100000) + `":"v"}`,
+		`{"team":"` + strings.Repeat("v", 257) + `"}`,
+	}
+
+	for _, body := range bodies {
+		handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+		req := httptest.NewRequestWithContext(
+			t.Context(), http.MethodPatch, "/api/stacks/acme/web/prod/tags", strings.NewReader(body),
+		)
+		req.Header.Set("Authorization", "token test-token")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("hostile tags answer %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+
+		if len(stores.tags) != 0 {
+			t.Fatalf("updated tags %d times, want 0", len(stores.tags))
+		}
+	}
+}
+
+// checkStackChangeEntry fails the test unless e is a timed change entry of
+// unit:manage by the test caller on the stack acme/web/prod.
+func checkStackChangeEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Kind != audit.KindChange || e.Action != string(identity.ActionUnitManage) ||
+		e.Object != "pulumi:acme/web/prod" || e.Namespace != "acme" ||
+		e.Subject != "tester" || e.Outcome != audit.OutcomeSuccess || e.At.IsZero() {
+		t.Fatalf("audit entry = %+v, want a timed change by unit:manage on pulumi:acme/web/prod", e)
+	}
 }
 
 // TestUpdateStackTagsThroughWrapperInvalidBody proves an invalid tag body
@@ -1765,6 +1814,7 @@ func newDeleteHandlerWithAudit(
 	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -1788,7 +1838,7 @@ func newDeleteHandlerWithAudit(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Placer:                  nil,
+		Placer:                  newFake().placer(),
 		StateGuard:              stategate.Off("the test keeps no gates"),
 		SessionPolicy:           nil,
 		DisablePulumiJournaling: false,
@@ -2139,6 +2189,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	stores := unusedUpdateStores{UpdateStore: nil, CheckpointStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,
@@ -2234,6 +2285,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 	stores := emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,

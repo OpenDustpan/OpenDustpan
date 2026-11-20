@@ -21,6 +21,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/logguard"
 )
 
 // Settings and wire values of the seed run.
@@ -170,8 +172,18 @@ func main() {
 	ctx := context.Background()
 
 	if err := runMain(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "demo-seed:", err)
+		writeSeedError(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// writeSeedError writes "demo-seed: <error text>" to w. The error text can
+// hold a value from outside, so each hidden rune is escaped and a
+// backslash is written as two: the line cannot forge a second line. A
+// failed write is not reported: nothing is left to report it to.
+func writeSeedError(w io.Writer, err error) {
+	if _, werr := fmt.Fprintln(w, "demo-seed:", logguard.EscapeLine(err.Error())); werr != nil {
+		return
 	}
 }
 

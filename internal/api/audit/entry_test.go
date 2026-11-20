@@ -130,7 +130,7 @@ func TestReadOneServerEntry(t *testing.T) {
 func TestReadOneEntryWithoutReader(t *testing.T) {
 	t.Parallel()
 
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Installation: "test-region"},
@@ -207,7 +207,7 @@ func TestReadOneEntryOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	t.Parallel()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0}
 	seedEntry(t, entries, "ghost", "alice")
 
 	namespaces, err := namespace.NewService(
@@ -252,7 +252,7 @@ func newReaderHandler(t *testing.T, reader audit.EntryReader) http.Handler {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		OnAuditFailure: nil,
 		Namespaces:     namespaces,
-		Entries:        &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil},
+		Entries:        &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0},
 		EntryReader:    reader,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     &recordingAuthorizer{calls: nil},

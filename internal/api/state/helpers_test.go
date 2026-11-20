@@ -149,7 +149,7 @@ func (a *memAudit) List(context.Context, namespace.Name, audit.Page) (audit.List
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return audit.Listing{Entries: slices.Clone(a.entries), Total: int64(len(a.entries))}, nil
+	return audit.Listing{Entries: slices.Clone(a.entries), More: false}, nil
 }
 
 func (a *memAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {

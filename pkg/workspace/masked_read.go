@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -51,26 +50,6 @@ const maskedCursorTTL = 10 * time.Minute
 
 // maskedHMACBytes is the size of the signature of a cursor.
 const maskedHMACBytes = sha256.Size
-
-// maskedMaxDepth is the deepest nesting of a JSON document that a masked read
-// accepts. A document that nests deeper is refused before it is decoded.
-const maskedMaxDepth = 100
-
-// maskedMaxMarkers is the most markers that one version may hold for a masked
-// read. A version with more markers is refused before the server builds the
-// path of any marker.
-const maskedMaxMarkers = 10000
-
-// maskedMaxPathBytes is the most bytes that the value paths of one version may
-// need in all. It is the bound on the memory that the paths can use: a path
-// holds its whole prefix, so a long key above many values would multiply.
-const maskedMaxPathBytes = 32 << 20
-
-// maskedMaxDuplicateWork is the most comparisons of one instance for the
-// duplicate pass of a masked read: its nodes times its propagable secrets.
-// The pass compares each node with each secret, so a state inside the other
-// bounds could still need minutes of CPU without this bound.
-const maskedMaxDuplicateWork = 50_000_000
 
 var (
 	// ErrBadPath is the refusal of a version, a value path or a cursor of a
@@ -263,11 +242,13 @@ func (s *Service) maskedWorkspace(ctx context.Context, args ReadMaskedArgs) (Wor
 // any other error has no reason and is returned as it is.
 func maskedFailure(ctx context.Context, err error) (string, error) {
 	switch {
-	case errors.Is(err, ErrTooLarge):
+	case errors.Is(err, ErrTooLarge), errors.Is(err, ErrStateBound):
 		return RefusalTooLarge, err
 	case errors.Is(err, ErrBadPath):
 		return RefusalBadPath, err
-	case errors.Is(err, ErrReadDeadline):
+	case errors.Is(err, ErrReadDeadline), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		// The masking of main ends with the error of the context. The boundary
+		// of the read answers it as the one deadline refusal, with no bytes.
 		return RefusalDeadline, ErrReadDeadline
 	case ctx.Err() != nil:
 		return RefusalDeadline, ErrReadDeadline
@@ -459,12 +440,12 @@ func readMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
 }
 
 // maskedStatePaths returns the sorted, unique JSON Pointer value paths of the
-// secrets of state: the masked resource values of MaskedPaths, and each
-// sensitive output. An error carries no bytes of the state. The work is
-// bounded by the shape of the state: a nesting depth above maskedMaxDepth or
-// more than maskedMaxMarkers markers is refused with ErrTooLarge before the
-// server builds the path of any marker. The deadline is checked after the
-// parse and after the walk.
+// secrets of state: the masked resource values of maskedResourcePaths, and each
+// sensitive output. An error carries no bytes of the state. The work is bounded
+// by the one budget of the read: a state that nests deeper than MaxStateDepth,
+// or whose values would cost more than the budget, is refused with
+// ErrStateBound before the server builds the path of any marker. The deadline
+// is checked after the parse and after the walk.
 func maskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
 	paths, err := maskedResourcePaths(ctx, state, marks)
 	if err != nil {
@@ -482,13 +463,6 @@ func maskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) (
 
 	paths = slices.Compact(paths)
 
-	// Defense in depth: the walk and maskedResourcePaths bound the markers of the
-	// resources; this check bounds the markers with the sensitive outputs added,
-	// so it does not rely on those checks.
-	if len(paths) > maskedMaxMarkers {
-		return nil, fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, len(paths), maskedMaxMarkers)
-	}
-
 	if ctx.Err() != nil {
 		return nil, ErrReadDeadline
 	}
@@ -498,22 +472,28 @@ func maskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) (
 
 // maskedResourcePaths returns the masked set of state: the value path of each
 // marker of every resource instance, masked with marks. With no kept marks
-// for the version, every attribute value is a marker. It refuses a state that
-// it cannot read with ErrUnreadableState, and a state over the bounds of the
-// work with ErrTooLarge, before it builds a path.
+// for the version, every attribute value is a marker, except below a path of
+// sensitive_attributes. It refuses a state that it cannot read with
+// ErrUnreadableState, and a state over the bounds of the work with
+// ErrStateBound, before it builds a path. One work object covers the whole
+// read: the scan of every instance and the masking of every instance spend
+// from one budget, and the scan ends before the masking builds the first
+// marker.
 func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
-	if err := maskedCheckDepth(state); err != nil {
-		return nil, err
-	}
-
 	encrypted, err := IsClientEncrypted(state)
 	if err != nil || encrypted {
 		return nil, fmt.Errorf("%w: the state is encrypted by the client or not an object", ErrUnreadableState)
 	}
 
-	doc, err := decodeState(state)
+	doc, err := decodeBoundedState(state)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, ErrStateBound) {
+			return nil, err
+		}
+
+		// The text of a decode error can quote the state, so the answer carries
+		// a fixed text.
+		return nil, fmt.Errorf("%w: the state is not valid JSON", ErrUnreadableState)
 	}
 
 	if ctx.Err() != nil {
@@ -525,215 +505,36 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 		return nil, fmt.Errorf("%w: resources has an entry that the server cannot read", ErrUnreadableState)
 	}
 
-	if err := maskedCheckWork(entries, marks); err != nil {
-		return nil, err
+	work := newMaskWork(nil)
+
+	for _, entry := range entries {
+		if shapeErr := checkTofuInstanceShapes(entry.obj, marks); shapeErr != nil {
+			return nil, shapeErr
+		}
+
+		for i, instance := range tofuInstances(entry.obj) {
+			if scanErr := checkInstanceWork(ctx, work, instance, entry.index, i); scanErr != nil {
+				return nil, scanErr
+			}
+		}
 	}
 
 	masked := []string{}
-	ticker := newCtxTicker(ctx)
 
 	for _, entry := range entries {
 		for i, instance := range tofuInstances(entry.obj) {
-			_, paths, err := maskTofuInstance(
-				ticker,
-				instance,
-				instanceSlot{resource: entry.index, position: i},
-				tofuInstanceAddress(entry.obj, instance),
-				marks,
-			)
-			if err != nil {
-				return nil, err
+			site := instanceSite{resource: entry.index, position: i, address: tofuInstanceAddress(entry.obj, instance)}
+
+			_, paths, maskErr := maskTofuInstance(ctx, work, instance, site, marks)
+			if maskErr != nil {
+				return nil, maskErr
 			}
 
 			masked = append(masked, paths...)
 		}
 	}
 
-	// The copies of a masked secret add markers that the pointers did not
-	// count, so the count is checked after the masking too.
-	if len(masked) > maskedMaxMarkers {
-		return nil, fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, len(masked), maskedMaxMarkers)
-	}
-
 	return masked, nil
-}
-
-// maskedCheckDepth refuses a document that nests deeper than maskedMaxDepth.
-// It scans the bytes and allocates nothing, so a deep document never reaches
-// the decoder.
-func maskedCheckDepth(state []byte) error {
-	depth := 0
-	inString := false
-
-	for i := 0; i < len(state); i++ {
-		c := state[i]
-
-		if inString {
-			switch c {
-			case '\\':
-				i++
-			case '"':
-				inString = false
-			default:
-			}
-
-			continue
-		}
-
-		switch c {
-		case '"':
-			inString = true
-		case '{', '[':
-			depth++
-
-			if depth > maskedMaxDepth {
-				return fmt.Errorf("%w: nesting deeper than %d", ErrTooLarge, maskedMaxDepth)
-			}
-		case '}', ']':
-			depth--
-		default:
-		}
-	}
-
-	return nil
-}
-
-// maskedWork is the count of the work of one masked read, made before any path
-// is built: the leaf values, the kept marks and the bytes that the paths of
-// all values need. With countLeaves set, each leaf counts as a marker.
-type maskedWork struct {
-	markers     int
-	pathBytes   int
-	nodes       int
-	countLeaves bool
-}
-
-// maskedCheckWork refuses a state whose instances it cannot read, and a state
-// whose markers or paths are over the bounds.
-// It builds no path: it carries the length of the path of each value as a
-// number. With no kept marks every leaf is a marker; with marks the markers
-// come from the pointers that the instance names.
-func maskedCheckWork(entries []tofuResourceEntry, marks SensitiveMarks) error {
-	work := maskedWork{markers: 0, pathBytes: 0, nodes: 0, countLeaves: len(marks) == 0}
-
-	for _, entry := range entries {
-		if err := checkTofuInstanceShapes(entry.obj, marks); err != nil {
-			return err
-		}
-
-		for i, instance := range tofuInstances(entry.obj) {
-			base := len("/resources/") + len(strconv.Itoa(entry.index)) +
-				len("/instances/") + len(strconv.Itoa(i)) + len("/attributes")
-
-			if err := work.addInstance(instance, base, tofuInstanceAddress(entry.obj, instance), marks); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// addInstance adds one instance to the work and checks the duplicate pass of
-// the instance: its values times its propagable secrets. base is the length
-// of the path of its attributes.
-func (w *maskedWork) addInstance(
-	instance map[string]any, base int, address string, marks SensitiveMarks,
-) error {
-	attributes := instance["attributes"]
-	if attributes == nil {
-		// The masking replaces missing attributes with an empty object.
-		attributes = map[string]any{}
-	}
-
-	secrets := 0
-
-	if len(marks) > 0 {
-		pointers := tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks)
-		w.markers += len(pointers)
-
-		if w.markers > maskedMaxMarkers {
-			return fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, w.markers, maskedMaxMarkers)
-		}
-
-		for _, relative := range pointers {
-			if value, found := lookupPointer(attributes, relative); found && propagableSecret(value) {
-				secrets++
-			}
-		}
-	}
-
-	w.nodes = 0
-
-	if err := w.walk(attributes, base); err != nil {
-		return err
-	}
-
-	// The duplicate pass compares each node with each secret.
-	if secrets > 0 && w.nodes > maskedMaxDuplicateWork/secrets {
-		return fmt.Errorf("%w: %d values and %d secrets need more than %d comparisons",
-			ErrTooLarge, w.nodes, secrets, maskedMaxDuplicateWork)
-	}
-
-	return nil
-}
-
-// walk adds the values under v to the work. pathLen is the length of the path
-// of v.
-func (w *maskedWork) walk(v any, pathLen int) error {
-	w.pathBytes += pathLen
-	w.nodes++
-
-	if w.pathBytes > maskedMaxPathBytes {
-		return fmt.Errorf("%w: the value paths need more than %d bytes", ErrTooLarge, maskedMaxPathBytes)
-	}
-
-	var err error
-
-	switch typed := v.(type) {
-	case map[string]any:
-		err = w.walkObject(typed, pathLen)
-	case []any:
-		err = w.walkArray(typed, pathLen)
-	default:
-		if w.countLeaves {
-			w.markers++
-		}
-	}
-
-	if err != nil {
-		return err
-	}
-
-	if w.markers > maskedMaxMarkers {
-		return fmt.Errorf("%w: %d markers, more than %d", ErrTooLarge, w.markers, maskedMaxMarkers)
-	}
-
-	return nil
-}
-
-// walkObject adds the values of an object. The path of a value holds the
-// escaped key: "~" and "/" each take one more byte.
-func (w *maskedWork) walkObject(obj map[string]any, pathLen int) error {
-	for key, elem := range obj {
-		escaped := len(key) + strings.Count(key, "~") + strings.Count(key, "/")
-		if err := w.walk(elem, pathLen+1+escaped); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// walkArray adds the values of an array.
-func (w *maskedWork) walkArray(list []any, pathLen int) error {
-	for i, elem := range list {
-		if err := w.walk(elem, pathLen+1+len(strconv.Itoa(i))); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // maskedOutputPaths returns the value path of each sensitive output of state.

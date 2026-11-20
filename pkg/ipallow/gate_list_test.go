@@ -291,3 +291,277 @@ func TestGateExactScopeWithinAuthorize(t *testing.T) {
 		)
 	}
 }
+
+// everyRules returns the rules of the every-object tests: acme allows
+// 198.51.100.0/24, beta allows 203.0.113.0/24, and gamma has no rule.
+func everyRules(t *testing.T) *fakeRules {
+	t.Helper()
+
+	return &fakeRules{
+		calls: 0,
+		lists: map[namespace.Name]ipallow.List{
+			"acme":  mustList(t, []string{"198.51.100.0/24"}),
+			"beta":  mustList(t, []string{"203.0.113.0/24"}),
+			"gamma": {},
+		},
+		errs: map[namespace.Name]error{},
+	}
+}
+
+// TestGateListObjectsEveryObjectLeavesOutRefused proves that a scope that
+// covers every object, as an administrator that is not the bootstrap
+// administrator gets it, leaves out each namespace whose list refuses the
+// client address, and keeps every other object.
+func TestGateListObjectsEveryObjectLeavesOutRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		addr     netip.Addr
+		next     identity.Scope
+		wantLeft []namespace.Name
+	}{
+		{
+			name: "an address outside both lists", addr: netip.MustParseAddr("192.0.2.10"),
+			next: identity.Every(), wantLeft: []namespace.Name{"acme", "beta"},
+		},
+		{
+			name: "an address inside the list of acme", addr: netip.MustParseAddr("198.51.100.7"),
+			next: identity.Every(), wantLeft: []namespace.Name{"beta"},
+		},
+		{
+			name: "an IPv6 address outside both lists", addr: netip.MustParseAddr("2001:db8::1"),
+			next: identity.Every(), wantLeft: []namespace.Name{"acme", "beta"},
+		},
+		{
+			name: "no client address", addr: netip.Addr{},
+			next: identity.Every(), wantLeft: []namespace.Name{"acme", "beta"},
+		},
+		{
+			name: "a namespace that Next leaves out stays out", addr: netip.MustParseAddr("198.51.100.7"),
+			next: identity.Every("delta"), wantLeft: []namespace.Name{"beta", "delta"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gate := ipallow.Gate{
+				Next: scopeNext{scope: tc.next}, Rules: everyRules(t), Enabled: true, IncludeBootstrap: false,
+			}
+
+			got, err := gate.ListObjects(
+				ctxWithAddr(tc.addr),
+				adminPrincipal("ops-admin"),
+				identity.ActionNamespaceRead,
+			)
+			if err != nil {
+				t.Fatalf("list objects: %v", err)
+			}
+
+			checkLeftOut(t, got, tc.wantLeft)
+		})
+	}
+}
+
+// checkLeftOut fails the test unless got covers every object except the
+// namespaces in want, and still holds gamma, which has no rule, and a
+// principal.
+func checkLeftOut(t *testing.T, got identity.Scope, want []namespace.Name) {
+	t.Helper()
+
+	left, every := got.EveryObjectExcept()
+	if !every || !slices.Equal(left, want) {
+		t.Fatalf("left-out namespaces = %v (every %t), want %v", left, every, want)
+	}
+
+	if got.CoversEveryObject() {
+		t.Fatal("a scope that leaves out a namespace covers every object")
+	}
+
+	for _, ns := range want {
+		if got.Contains(identity.NamespaceObject(ns)) {
+			t.Fatalf("scope holds the left-out namespace %s", ns)
+		}
+	}
+
+	if !got.Contains(identity.NamespaceObject("gamma")) || !got.Contains(identity.PrincipalObject("prn-bot")) {
+		t.Fatal("scope drops a namespace with no rule or a principal")
+	}
+}
+
+// TestGateListObjectsEveryObjectInsideEveryList proves that a scope that
+// covers every object stays whole for an address inside each list.
+func TestGateListObjectsEveryObjectInsideEveryList(t *testing.T) {
+	t.Parallel()
+
+	rules := everyRules(t)
+	rules.lists["beta"] = mustList(t, []string{"198.51.100.0/24"})
+	gate := ipallow.Gate{Next: scopeNext{scope: identity.Every()}, Rules: rules, Enabled: true, IncludeBootstrap: false}
+
+	got, err := gate.ListObjects(ctxWithAddr(netip.MustParseAddr("198.51.100.7")), adminPrincipal("ops-admin"),
+		identity.ActionNamespaceRead)
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	if !got.CoversEveryObject() {
+		t.Fatalf("scope = %+v, want every object", got)
+	}
+}
+
+// TestGateListObjectsEveryObjectExempt proves that the bootstrap
+// administrator and a gate that is off keep a scope that covers every object,
+// and read no list.
+func TestGateListObjectsEveryObjectExempt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		p       identity.Principal
+		enabled bool
+	}{
+		{name: "the bootstrap administrator", p: adminPrincipal("admin"), enabled: true},
+		{name: "a gate that is off", p: adminPrincipal("ops-admin"), enabled: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rules := everyRules(t)
+			gate := ipallow.Gate{
+				Next: scopeNext{scope: identity.Every()}, Rules: rules, Enabled: tc.enabled, IncludeBootstrap: false,
+			}
+
+			got, err := gate.ListObjects(ctxWithAddr(netip.MustParseAddr("192.0.2.10")), tc.p,
+				identity.ActionNamespaceRead)
+			if err != nil {
+				t.Fatalf("list objects: %v", err)
+			}
+
+			if !got.CoversEveryObject() || rules.calls != 0 {
+				t.Fatalf("scope = %+v after %d reads, want every object and no read", got, rules.calls)
+			}
+		})
+	}
+}
+
+// TestGateListObjectsEveryObjectFailsClosed sends hostile answers of the
+// Rules port directly to the gate: a store error, too many lists, and names
+// that no create path accepts. Each one fails the whole list, so the caller
+// never gets a scope that covers every object.
+func TestGateListObjectsEveryObjectFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		prepare func(r *fakeRules)
+		want    error
+	}{
+		{
+			name:    "a store error",
+			prepare: func(r *fakeRules) { r.errs[everyListKey] = errStoreDown },
+			want:    errStoreDown,
+		},
+		{
+			name:    "too many lists",
+			prepare: func(r *fakeRules) { r.errs[everyListKey] = ipallow.ErrTooManyLists },
+			want:    ipallow.ErrTooManyLists,
+		},
+		{
+			name:    "an empty name",
+			prepare: func(r *fakeRules) { r.lists[""] = r.lists["acme"] },
+			want:    namespace.ErrInvalidName,
+		},
+		{
+			name:    "a name with a space",
+			prepare: func(r *fakeRules) { r.lists["bad name"] = r.lists["acme"] },
+			want:    namespace.ErrInvalidName,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rules := everyRules(t)
+			tc.prepare(rules)
+			gate := ipallow.Gate{
+				Next: scopeNext{scope: identity.Every()}, Rules: rules, Enabled: true, IncludeBootstrap: false,
+			}
+
+			got, err := gate.ListObjects(ctxWithAddr(netip.MustParseAddr("198.51.100.7")), adminPrincipal("ops-admin"),
+				identity.ActionNamespaceRead)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("list objects = %v, want %v", err, tc.want)
+			}
+
+			if _, every := got.EveryObjectExcept(); every || !got.IsEmpty() {
+				t.Fatalf("scope = %+v, want the empty scope", got)
+			}
+		})
+	}
+}
+
+// TestGateListObjectsEveryObjectFiltersExplicitSets proves that a scope that
+// covers every object and also names explicit objects, as a grant on the
+// installation and a grant on a namespace give it, drops the explicit objects
+// of a refused namespace too.
+func TestGateListObjectsEveryObjectFiltersExplicitSets(t *testing.T) {
+	t.Parallel()
+
+	next := identity.Every()
+	next.Namespaces = []identity.Object{identity.NamespaceObject("acme"), identity.NamespaceObject("gamma")}
+	gate := ipallow.Gate{Next: scopeNext{scope: next}, Rules: everyRules(t), Enabled: true, IncludeBootstrap: false}
+
+	got, err := gate.ListObjects(ctxWithAddr(netip.MustParseAddr("192.0.2.10")), userPrincipal("alice"),
+		identity.ActionNamespaceRead)
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	if !slices.Equal(objectNames(got.Namespaces), []string{"gamma"}) {
+		t.Fatalf("namespaces = %v, want [gamma]", objectNames(got.Namespaces))
+	}
+}
+
+// TestGateEveryObjectListWithinAuthorize runs the conformance check that a
+// list is never wider than Authorize against the gate, for a Next whose scope
+// covers every object and a client address outside the list of beta.
+func TestGateEveryObjectListWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	unitIn := func(ns namespace.Name) identity.Object {
+		obj, err := identity.UnitObject("pulumi", ns, "web/prod")
+		if err != nil {
+			t.Fatalf("unit object: %v", err)
+		}
+
+		return obj
+	}
+
+	gate := ipallow.Gate{
+		Next: exactAll{
+			scopeNext{scope: identity.Every()},
+		},
+		Rules:            everyRules(t),
+		Enabled:          true,
+		IncludeBootstrap: false,
+	}
+	every := []identity.Object{
+		identity.NamespaceObject("acme"), identity.NamespaceObject("beta"), identity.NamespaceObject("gamma"),
+		unitIn("acme"), unitIn("beta"), unitIn("gamma"), identity.CollectionObject("beta", "web"),
+	}
+
+	for _, action := range []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead} {
+		identitytest.CheckListWithinAuthorize(
+			ctxWithAddr(netip.MustParseAddr("198.51.100.7")),
+			t,
+			identitytest.ListCheck{
+				Authorizer: gate, Principal: adminPrincipal("ops-admin"), Action: action, Every: every,
+			},
+		)
+	}
+}

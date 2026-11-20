@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/logsink"
+	"opendustpan.org/opendustpan/pkg/logsink/logsinktest"
 	"opendustpan.org/opendustpan/pkg/logsink/otlp"
 )
 
@@ -204,5 +205,39 @@ func TestErrorsHoldNoSecret(t *testing.T) {
 	err = s2.Write(t.Context(), []logsink.Record{rec("m")})
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("dial error = %v", err)
+	}
+}
+
+// TestHiddenRunesAreEscapedInTheBody is the encoder layer: the body that the
+// collector gets holds no hidden rune, whatever the logger did before.
+func TestHiddenRunesAreEscapedInTheBody(t *testing.T) {
+	t.Parallel()
+
+	for name, v := range logsinktest.HostileText() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newReceiver(t, nil)
+			s := newSink(t, r, nil)
+
+			raw, err := json.Marshal([]string{v})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			rec := recWith(v, logsink.String("k"+v, v), logsink.RawJSON("raw", raw))
+			if err := s.Write(t.Context(), []logsink.Record{rec}); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			r.mu.Lock()
+			defer r.mu.Unlock()
+
+			if len(r.bodies) != 1 {
+				t.Fatalf("got %d bodies, want 1", len(r.bodies))
+			}
+
+			logsinktest.CheckNoHiddenRune(t, "OTLP body", r.bodies[0])
+		})
 	}
 }

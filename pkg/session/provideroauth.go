@@ -142,7 +142,7 @@ func validEndpoint(raw string) bool {
 		return false
 	}
 
-	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
+	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && LoopbackHost(u.Hostname()))
 }
 
 // NormalizeEndpoint returns the endpoint raw with a lowercase scheme and

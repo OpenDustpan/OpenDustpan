@@ -14,9 +14,10 @@ FROM namespaces
 ORDER BY name;
 
 -- name: PageNamespaces :many
+-- Pages every namespace except the left-out ones.
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
-WHERE name > sqlc.arg('after')
+WHERE name > sqlc.arg('after') AND name <> ALL(sqlc.arg('left_out')::text[])
 ORDER BY name
 LIMIT sqlc.arg('lim');
 
@@ -28,8 +29,10 @@ ORDER BY name
 LIMIT sqlc.arg('lim');
 
 -- name: CountNamespaces :one
+-- Counts every namespace except the left-out ones.
 SELECT COUNT(*)
-FROM namespaces;
+FROM namespaces
+WHERE name <> ALL(sqlc.arg('left_out')::text[]);
 
 -- name: CountNamespacesByNames :one
 SELECT COUNT(*)
@@ -48,11 +51,12 @@ FROM namespaces
 WHERE name = $1;
 
 -- name: NamespacesWithList :many
--- Lists the namespaces that have an IP allowlist.
-SELECT name
+-- Lists the namespaces that have an IP allowlist, with the list, at most lim of them.
+SELECT name, ip_allowlist
 FROM namespaces
 WHERE ip_allowlist <> ''
-ORDER BY name;
+ORDER BY name
+LIMIT sqlc.arg('lim');
 
 -- name: SetNamespaceIPAllowlist :execrows
 -- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
@@ -213,6 +217,14 @@ SELECT id
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
+-- name: GetPlacedStack :one
+-- The stack ID with whether a collection holds the stack, read in one
+-- statement. The writes of a running update use it, so that a stack in no
+-- collection is refused in the same transaction as the write.
+SELECT id, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
+FROM stacks
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL;
+
 -- name: StackRefByID :one
 SELECT namespace, project, name
 FROM stacks
@@ -221,9 +233,9 @@ WHERE id = $1;
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
-SELECT id, version
+SELECT id, version, EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = stacks.id) AS placed
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
+WHERE stacks.namespace = $1 AND stacks.project = $2 AND stacks.name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE;
 
 -- name: CreateUpdate :exec
@@ -1473,21 +1485,17 @@ INSERT INTO audit_entries (
     fence_version, reason, principal_kind, job_id
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32);
 
--- name: ListAuditEntries :many
--- One page of the entries of a namespace, newest first. Ties on time break
--- by sequence, as the port comment promises.
+-- name: ListAuditEntriesBefore :many
+-- One page of the entries of a namespace below a sequence, newest first. It
+-- reads the primary key (namespace, sequence) backwards, so a page costs the
+-- same at any depth.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
-WHERE namespace = $1
+WHERE namespace = $1 AND sequence < $2
 ORDER BY sequence DESC
-LIMIT $2 OFFSET $3;
-
--- name: CountAuditEntries :one
-SELECT COUNT(*)
-FROM audit_entries
-WHERE namespace = $1;
+LIMIT $3;
 
 -- name: ListAuditChainPage :many
 -- One bounded page of the chain of a namespace oldest first, for the chain
@@ -1707,6 +1715,14 @@ WHERE principals.id = $2 AND principals.namespace = $3 AND num_nulls(principals.
     WHERE o.id <> principals.id AND o.break_glass AND o.kind = 'person' AND o.namespace = ''
       AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
   ));
+
+-- name: CountBreakGlassWithPassword :one
+-- The break-glass accounts that have a local password. A break-glass account
+-- signs in with a passkey or a hardware key only, so a restore refuses data
+-- that holds one.
+SELECT COUNT(*) FROM principals p
+JOIN local_users u ON u.principal_id = p.id
+WHERE p.break_glass AND u.password_hash <> '';
 
 -- name: CountEnabledBreakGlassPrincipal :one
 -- 1 when the principal is an enabled break-glass account of the
@@ -2806,6 +2822,16 @@ CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
 
+-- name: GetSessionForShare :one
+-- The redeem of the first administrator reads the session row with a share
+-- lock, so a sign-out cannot end the session between the read and the commit.
+-- The audit lock of the installation serializes the redeems only. It does not
+-- serialize a sign-out, so this share lock is the guard against one.
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
+FROM sessions WHERE id = $1
+FOR SHARE;
+
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
 -- created_after_ms are the bounds of an active session at at_ms.
@@ -3112,23 +3138,23 @@ SELECT COUNT(*) FROM principals WHERE starts_with(subject, sqlc.arg('prefix'));
 -- Creates a pending operation that can run at once. It inserts nothing when
 -- the start key names an operation, and then returns no row.
 INSERT INTO durable_operations (
-  id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 )
 SELECT sqlc.arg('id')::text, sqlc.arg('start_key')::text, sqlc.arg('kind')::text, sqlc.arg('input')::bytea,
-  sqlc.arg('version')::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+  sqlc.arg('version')::bigint, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
 FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
 ON CONFLICT (start_key) DO NOTHING
-RETURNING id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms;
 
 -- name: GetDurableOperation :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1;
 
 -- name: GetDurableOperationByKey :one
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1;
 
@@ -3142,7 +3168,7 @@ SELECT COUNT(*) FROM durable_operations WHERE kind = $1 AND state IN ('pending',
 -- name: LockDurableOperation :one
 -- Holds the row of one operation until the transaction ends, so the checks
 -- and the write of a holder see one state.
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 FOR UPDATE;
@@ -3150,7 +3176,7 @@ FOR UPDATE;
 -- name: ListDurableOperations :many
 -- An empty kind or state list matches every operation. A limit of 0 means
 -- no limit.
-SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations
 WHERE (sqlc.arg('kind')::text = '' OR kind = sqlc.arg('kind')::text)
@@ -3212,7 +3238,7 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
   updated_at_ms = c.now_ms
 FROM c, pick
 WHERE o.id = pick.id
-RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.deadline_releases, o.failures, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
 -- name: ClaimStartedDurableOperation :one
@@ -3228,10 +3254,12 @@ SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
   updated_at_ms = c.now_ms
 FROM c
 WHERE o.id = sqlc.arg('id')::text AND o.state = 'pending'
-RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.deadline_releases, o.failures, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
 -- name: ExtendDurableClaim :exec
+-- Moves the expiry. It leaves the count of deadline releases in a row as it
+-- is: a renewal whose reply came too late shows nothing about the holder.
 UPDATE durable_operations
 SET claim_expires_at_ms = sqlc.arg('expires_at_ms')::bigint, updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
@@ -3250,12 +3278,13 @@ FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')::text;
 UPDATE durable_operations SET updated_at_ms = sqlc.arg('now_ms')::bigint WHERE id = sqlc.arg('id')::text;
 
 -- name: EndDurableClaim :exec
--- Ends the claim of an operation with its next state, and adds add_failures
--- to its failures. The claim token stays, so the next claim gets a larger
--- one.
+-- Ends the claim of an operation with its next state, adds add_failures to
+-- its failures, and sets its deadline releases in a row to deadline_releases.
+-- The claim token stays, so the next claim gets a larger one.
 UPDATE durable_operations
 SET state = sqlc.arg('state')::text, last_error = sqlc.arg('last_error')::text,
   failures = failures + sqlc.arg('add_failures')::bigint,
+  deadline_releases = sqlc.arg('deadline_releases')::bigint,
   not_before_ms = sqlc.arg('not_before_ms')::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
   updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
@@ -4832,20 +4861,23 @@ WHERE git_host_connections.namespace_id = (SELECT n.id FROM namespaces AS n WHER
 
 -- name: GetGitHostRegistration :one
 SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 FROM git_host_app_registrations
 WHERE kind = sqlc.arg(kind);
 
 -- name: InsertGitHostRegistration :execrows
 INSERT INTO git_host_app_registrations (
     kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, sealed_event_secret,
-    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms
+    event_secret_set_id, event_secret_created_at_ms, address_digest, version, created_at_ms, updated_at_ms,
+    old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret
 )
 VALUES (
     sqlc.arg(kind), sqlc.arg(app_id), sqlc.arg(base_url), sqlc.arg(hook_id), sqlc.arg(sealed_key),
     sqlc.arg(key_set_id), sqlc.arg(key_created_at_ms), sqlc.arg(sealed_event_secret),
     sqlc.arg(event_secret_set_id), sqlc.arg(event_secret_created_at_ms), sqlc.arg(address_digest), 1,
-    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+    sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms),
+    sqlc.narg(old_event_secret_ends_at_ms), sqlc.narg(old_event_secret_set_id), sqlc.narg(old_sealed_event_secret)
 )
 ON CONFLICT (kind) DO NOTHING;
 
@@ -4856,8 +4888,19 @@ SET app_id = sqlc.arg(app_id), base_url = sqlc.arg(base_url), sealed_key = sqlc.
     key_set_id = sqlc.arg(key_set_id), key_created_at_ms = sqlc.arg(key_created_at_ms),
     sealed_event_secret = sqlc.arg(sealed_event_secret), event_secret_set_id = sqlc.arg(event_secret_set_id),
     event_secret_created_at_ms = sqlc.arg(event_secret_created_at_ms), address_digest = sqlc.arg(address_digest),
+    old_event_secret_ends_at_ms = sqlc.narg(old_event_secret_ends_at_ms),
+    old_event_secret_set_id = sqlc.narg(old_event_secret_set_id),
+    old_sealed_event_secret = sqlc.narg(old_sealed_event_secret),
     version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_app_registrations.created_at_ms)
 WHERE kind = sqlc.arg(kind) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: ConfirmGitHostRotation :execrows
+-- Ends the window of the old event secret. It writes only while a window is open:
+-- the window ends after the time of the write, which is the updated_at_ms argument.
+UPDATE git_host_app_registrations
+SET old_event_secret_ends_at_ms = NULL, old_event_secret_set_id = NULL, old_sealed_event_secret = NULL,
+    version = version + 1, updated_at_ms = GREATEST(sqlc.arg(updated_at_ms), git_host_app_registrations.created_at_ms)
+WHERE kind = sqlc.arg(kind) AND old_event_secret_ends_at_ms > sqlc.arg(updated_at_ms) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
 
 -- name: DeleteGitHostRegistration :execrows
 DELETE FROM git_host_app_registrations
@@ -4895,6 +4938,51 @@ WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::big
 -- name: DeleteGitHostInstallation :execrows
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: DeleteFirstAdministratorCode :execrows
+-- The delete is a check: it matches the code row only when the digest, the
+-- principal and the open time are those that the redeem checked.
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = sqlc.arg(digest) AND principal_id = sqlc.arg(principal_id) AND expires_at_ms > sqlc.arg(now_ms);
+
+-- name: GetFirstAdministratorCode :one
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+FOR UPDATE;
+
+-- name: GetFirstAdministratorMarker :one
+SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1;
+
+-- name: InsertFirstAdministratorMarker :exec
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(grant_id), sqlc.arg(session_id), sqlc.arg(created_by), sqlc.arg(made_at_ms));
+
+-- name: ReplaceFirstAdministratorCode :exec
+INSERT INTO first_administrator_codes (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(digest), sqlc.arg(created_by), sqlc.arg(reason), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms))
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = excluded.digest,
+  created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
+  expires_at_ms = excluded.expires_at_ms;
+
+-- name: LockGitHostEventReceipts :exec
+-- Makes the writers of receipts take turns, so the bound is exact. Readers do not wait.
+LOCK TABLE git_host_event_receipts IN SHARE ROW EXCLUSIVE MODE;
+
+-- name: PurgeGitHostEventReceipts :execrows
+DELETE FROM git_host_event_receipts WHERE received_at_ms < sqlc.arg(before_ms)::bigint;
+
+-- name: CountGitHostEventReceipts :one
+SELECT COUNT(*) FROM git_host_event_receipts;
+
+-- name: InsertGitHostEventReceipt :execrows
+-- A receipt that hits the key of the delivery ID or the key of the body digest writes nothing.
+INSERT INTO git_host_event_receipts (
+    kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms
+)
+VALUES (
+    sqlc.arg(kind), sqlc.arg(delivery_id), sqlc.arg(body_digest), sqlc.arg(installation_id), sqlc.arg(event_kind),
+    sqlc.arg(repo), sqlc.arg(review_id), sqlc.arg(received_at_ms)
+)
+ON CONFLICT DO NOTHING;
 
 -- name: CountOpenForgeLinkRequests :one
 SELECT COUNT(*) AS open_requests FROM forge_link_requests
@@ -5214,14 +5302,16 @@ RETURNING id, scope, notification_id, subscription_id, sink_id, contact, princip
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
--- stored claim, and a lease that has not passed at now_ms.
+-- stored claim, and a lease that has not passed at now_ms. A stopped state
+-- needs a delivered time above zero: the wait of a redeliver starts there.
 UPDATE notification_deliveries
 SET state = sqlc.arg(state), attempts = sqlc.arg(attempts), next_at_ms = sqlc.arg(next_at_ms),
     last_error = sqlc.arg(last_error), delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '',
     lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
   AND notification_deliveries.owner = sqlc.arg(owner) AND notification_deliveries.version = sqlc.arg(version)
-  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
+  AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms)
+  AND (CAST(sqlc.arg(state) AS TEXT) = 'pending' OR CAST(sqlc.arg(delivered_at_ms) AS BIGINT) > 0);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
 -- The number of deliveries of the subscription at or before the cursor
@@ -5538,13 +5628,17 @@ FROM job_tokens AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 -- Defense in depth: the service checks the unit ID too. Resolve only a live
 -- unit row so that a restored token cannot reach a removed unit by name.
-JOIN (
-    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
-    FROM stacks WHERE deleted_at_ms IS NULL
+-- The lateral join gives each branch the unit ID and the tool of the token, so
+-- each branch reads one row by its unit ID index and no branch scans a table.
+JOIN LATERAL (
+    SELECT s.id, s.namespace, s.project || '/' || s.name AS name
+    FROM stacks AS s
+    WHERE s.id = t.unit_id AND t.unit_tool = 'pulumi' AND s.deleted_at_ms IS NULL
     UNION ALL
-    SELECT id, 'opentofu' AS tool, namespace, name
-    FROM workspaces WHERE deleted_at_ms IS NULL
-) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+    SELECT w.id, w.namespace, w.name
+    FROM workspaces AS w
+    WHERE w.id = t.unit_id AND t.unit_tool = 'opentofu' AND w.deleted_at_ms IS NULL
+) AS u ON true
 JOIN durable_operations AS o ON o.id = t.claim_operation
 JOIN jobs AS j ON j.id = t.job_id
 JOIN namespaces AS jn ON jn.id = j.namespace_id

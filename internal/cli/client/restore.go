@@ -98,6 +98,11 @@ const restoreMissingHelp = "run opendustpan store check --server %s --target blo
 // accounts than the live data, and fewer than 2.
 const restoreBreakGlassHelp = "restore a backup that holds at least 2 working break-glass accounts"
 
+// restoreBreakGlassPasswordHelp names the one action that helps after a
+// restore that stopped because the restored data holds a break-glass account
+// with a local password.
+const restoreBreakGlassPasswordHelp = "restore a backup that holds no break-glass account with a local password"
+
 // restoreFlags holds the settings of the restore subcommand.
 type restoreFlags struct {
 	server    string
@@ -597,8 +602,8 @@ func restoreFailureText(doc RestoreStatusResponse) string {
 // --force command. A restore that damaged or missing live blobs stopped gets
 // the repair or the check of the blob store first. A restore of a backup with
 // corrupt data gets the backup check command. A restore that would leave too
-// few working break-glass accounts gets the request to restore another
-// backup. Every other failure gets the same restore command again.
+// few working break-glass accounts, or with a break-glass account that has a
+// local password, gets the request to restore another backup. Every other failure gets the same restore command again.
 func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id string) string {
 	if !f.force && strings.HasPrefix(strings.TrimSpace(doc.Error), restoreActiveWorkText) {
 		return fmt.Sprintf(restoreForceHelp, server, id)
@@ -617,6 +622,8 @@ func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id st
 		return fmt.Sprintf(restoreRerunHelp, server, id)
 	case backup.CodeNoWorkingBreakGlass:
 		return restoreBreakGlassHelp
+	case backup.CodeBreakGlassPassword:
+		return restoreBreakGlassPasswordHelp
 	}
 
 	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {

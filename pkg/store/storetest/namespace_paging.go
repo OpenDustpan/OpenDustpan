@@ -33,6 +33,9 @@ func RunNamespacePaging(t *testing.T, newStore PagingFactory) {
 		{name: "a subset page starts after the cursor", test: testPagingSubsetAfter},
 		{name: "a limit larger than the set reads the set", test: testPagingLargeLimit},
 		{name: "counts follow the same rule as pages", test: testPagingCounts},
+		{name: "every namespace leaves out the left-out names", test: testPagingLeavesOut},
+		{name: "a left-out name is exact, not a prefix", test: testPagingLeftOutExact},
+		{name: "a cursor on a left-out name pages past it", test: testPagingLeftOutCursor},
 	}
 
 	for _, tc := range cases {
@@ -200,7 +203,7 @@ func testPagingAllInOrder(t *testing.T, s PagingStore) {
 
 	want := seedPagingNamespaces(t, s)
 
-	got := collectAll(t, s, namespace.PageQuery{After: "", Limit: 2, Filter: namespace.Filter{All: true, Names: nil}})
+	got := collectAll(t, s, namespace.PageQuery{After: "", Limit: 2, Filter: namespace.EveryNamespace()})
 	if !slices.Equal(got, want) {
 		t.Fatalf("paged namespaces = %v, want %v", got, want)
 	}
@@ -228,7 +231,7 @@ func testPagingAllPastEnd(t *testing.T, s PagingStore) {
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  after,
 		Limit:  10,
-		Filter: namespace.Filter{All: true, Names: nil},
+		Filter: namespace.EveryNamespace(),
 	})
 	if err != nil {
 		t.Fatalf("page namespaces past the end: %v", err)
@@ -255,7 +258,7 @@ func testPagingSubset(t *testing.T, s PagingStore) {
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
 		Limit:  100,
-		Filter: namespace.Filter{All: false, Names: names},
+		Filter: namespace.NamedNamespaces(names...),
 	})
 	if err != nil {
 		t.Fatalf("page a subset: %v", err)
@@ -265,7 +268,7 @@ func testPagingSubset(t *testing.T, s PagingStore) {
 		t.Fatalf("subset page = %v, want %v", got, filtered)
 	}
 
-	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: false, Names: names})
+	total, err := s.CountNamespaces(t.Context(), namespace.NamedNamespaces(names...))
 	if err != nil {
 		t.Fatalf("count a subset: %v", err)
 	}
@@ -288,7 +291,7 @@ func testPagingEmptyNames(t *testing.T, s PagingStore) {
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
 		Limit:  10,
-		Filter: namespace.Filter{All: false, Names: nil},
+		Filter: namespace.NamedNamespaces(),
 	})
 	if err != nil {
 		t.Fatalf("page an empty set: %v", err)
@@ -298,7 +301,7 @@ func testPagingEmptyNames(t *testing.T, s PagingStore) {
 		t.Fatalf("empty set page = %v, want none", pageNames(page))
 	}
 
-	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: false, Names: nil})
+	total, err := s.CountNamespaces(t.Context(), namespace.NamedNamespaces())
 	if err != nil {
 		t.Fatalf("count an empty set: %v", err)
 	}
@@ -324,7 +327,7 @@ func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  set[0],
 		Limit:  10,
-		Filter: namespace.Filter{All: false, Names: set},
+		Filter: namespace.NamedNamespaces(set...),
 	})
 	if err != nil {
 		t.Fatalf("page a subset after a member: %v", err)
@@ -342,7 +345,7 @@ func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 	page, err = s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  set[2],
 		Limit:  10,
-		Filter: namespace.Filter{All: false, Names: set},
+		Filter: namespace.NamedNamespaces(set...),
 	})
 	if err != nil {
 		t.Fatalf("page a subset after its last member: %v", err)
@@ -369,7 +372,7 @@ func testPagingLargeLimit(t *testing.T, s PagingStore) {
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
 		Limit:  100,
-		Filter: namespace.Filter{All: false, Names: set},
+		Filter: namespace.NamedNamespaces(set...),
 	})
 	if err != nil {
 		t.Fatalf("page a subset with a large limit: %v", err)
@@ -391,7 +394,7 @@ func testPagingCounts(t *testing.T, s PagingStore) {
 
 	want := seedPagingNamespaces(t, s)
 
-	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: true, Names: nil})
+	total, err := s.CountNamespaces(t.Context(), namespace.EveryNamespace())
 	if err != nil {
 		t.Fatalf("count all namespaces: %v", err)
 	}
@@ -402,7 +405,7 @@ func testPagingCounts(t *testing.T, s PagingStore) {
 
 	total, err = s.CountNamespaces(
 		t.Context(),
-		namespace.Filter{All: false, Names: []namespace.Name{want[0], want[1], "ghost"}},
+		namespace.NamedNamespaces(want[0], want[1], "ghost"),
 	)
 	if err != nil {
 		t.Fatalf("count a subset: %v", err)
@@ -410,5 +413,93 @@ func testPagingCounts(t *testing.T, s PagingStore) {
 
 	if total != 2 {
 		t.Fatalf("subset count = %d, want 2", total)
+	}
+}
+
+// testPagingLeavesOut pages and counts every namespace with three left-out
+// names, one of them unknown: the walk and the count hold every other
+// namespace, in the order of ListNamespaces.
+func testPagingLeavesOut(t *testing.T, s PagingStore) {
+	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
+	order := seedPagingNamespaces(t, s)
+	leftOut := []namespace.Name{"a0", "Z-1", "ghost"}
+	want := slices.DeleteFunc(slices.Clone(order), func(n namespace.Name) bool { return slices.Contains(leftOut, n) })
+	filter := namespace.EveryNamespace(leftOut...)
+
+	got := collectAll(t, s, namespace.PageQuery{After: "", Limit: 2, Filter: filter})
+	if !slices.Equal(got, want) {
+		t.Fatalf("paged namespaces = %v, want %v", got, want)
+	}
+
+	total, err := s.CountNamespaces(t.Context(), filter)
+	if err != nil {
+		t.Fatalf("count namespaces: %v", err)
+	}
+
+	if total != int64(len(order)-2) {
+		t.Fatalf("count = %d, want %d", total, len(order)-2)
+	}
+}
+
+// testPagingLeftOutExact checks that a left-out name leaves out that one
+// namespace: the names that it is a prefix of, and the name that is a prefix
+// of it, stay in the page and the count.
+func testPagingLeftOutExact(t *testing.T, s PagingStore) {
+	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
+	order := seedPagingNamespaces(t, s)
+	filter := namespace.EveryNamespace("acme1")
+	want := slices.DeleteFunc(slices.Clone(order), func(n namespace.Name) bool { return n == "acme1" })
+
+	got := collectAll(t, s, namespace.PageQuery{After: "", Limit: 100, Filter: filter})
+	if !slices.Equal(got, want) {
+		t.Fatalf("paged namespaces = %v, want %v", got, want)
+	}
+
+	for _, kept := range []namespace.Name{"acme", "acme10"} {
+		if !slices.Contains(got, kept) {
+			t.Fatalf("paged namespaces = %v, want %s in them", got, kept)
+		}
+	}
+
+	total, err := s.CountNamespaces(t.Context(), filter)
+	if err != nil {
+		t.Fatalf("count namespaces: %v", err)
+	}
+
+	if total != int64(len(order)-1) {
+		t.Fatalf("count = %d, want %d", total, len(order)-1)
+	}
+}
+
+// testPagingLeftOutCursor pages every namespace from a cursor that is a
+// left-out name: the page starts after the cursor and holds no left-out
+// name.
+func testPagingLeftOutCursor(t *testing.T, s PagingStore) {
+	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
+	order := seedPagingNamespaces(t, s)
+	after := namespace.Name("acme")
+	leftOut := []namespace.Name{after, "omega"}
+	want := slices.DeleteFunc(afterOrder(t, order, after), func(n namespace.Name) bool {
+		return slices.Contains(leftOut, n)
+	})
+
+	got := collectAll(t, s, namespace.PageQuery{After: after, Limit: 3, Filter: namespace.EveryNamespace(leftOut...)})
+	if !slices.Equal(got, want) {
+		t.Fatalf("paged namespaces = %v, want %v", got, want)
 	}
 }

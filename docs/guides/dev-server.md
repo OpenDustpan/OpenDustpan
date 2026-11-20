@@ -105,6 +105,12 @@ Give the role to a second person first, or start `dev` without `--demo`.
 It reads the namespaces and works in them, but it cannot change an installation setting.
 The server refuses each change of its password, its user name and its factors with the error code `local-user.demo-fixed`.
 
+`dev` has no passkey routes, because its public URL is an IP address and a passkey needs a host name.
+The log of `dev` has the line `passkeys are off: the public URL gives no relying party`.
+The routes `/me/passkeys/...` and `/sign-in/passkey/...` answer 404.
+So the demo person has no passkey, and the error code `local-user.demo-fixed` of a passkey route does not occur in `dev`.
+See [Passkeys and dev](passkeys.md#passkeys-and-dev).
+
 Only `dev` takes `--demo`.
 `serve` has no flag, variable or key for it.
 The seed and the server refuse a database that is not of the kind `dev`.
@@ -229,6 +235,7 @@ The container user must be able to write to that directory.
 `dev` makes the data directory with mode 0700.
 At each start, `dev` refuses to start when the group or others can access the directory, or when another user owns it.
 It does the same for the key file, the token file, the token file of `--admin-token-file` and the files of the certificate.
+It also does the same for the database file and for its `-wal` and `-shm` files.
 The error names the path and the one command that helps.
 `dev` checks the owner and the mode on Linux and on the other Unix systems.
 It does not check them on Windows yet.

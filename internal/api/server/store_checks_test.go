@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -36,9 +37,19 @@ var errStoreCheckMaintenance = errors.New("installation is in maintenance mode")
 func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...identity.Action) storeCheckFixture {
 	t.Helper()
 
+	return newStoreCheckFixtureWithTarget(t, workers, openRouteTestBlobs(t), deny...)
+}
+
+// newStoreCheckFixtureWithTarget is newStoreCheckFixture with the backup
+// target given. A nil target means that the server has no backup target.
+func newStoreCheckFixtureWithTarget(
+	t *testing.T, workers apiserver.WorkerSource, target blob.Store, deny ...identity.Action,
+) storeCheckFixture {
+	t.Helper()
+
 	st := openEpochStore(t)
 	live := openRouteTestBlobs(t)
-	target := openRouteTestBlobs(t)
+
 	clock := time.Date(2026, time.October, 30, 12, 0, 0, 0, time.UTC)
 	var refuse error
 
@@ -58,47 +69,48 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          workers,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		TempAdmins:       nil,
-		Now:              nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: denied},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       newTestNamespaces(t),
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Tokens:           nil,
-		Access:           nil,
-		Audit:            st,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		CheckpointEpochs: nil,
-		OnAuditFailure:   nil,
-		AuditChain:       nil,
-		DeletedUnits:     nil,
-		AuditSinks:       nil,
-		SignIn:           nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      svc,
-		Settings:         nil,
-		GitHostLinks:     nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            workers,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:         nil,
+		Now:                nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         selectiveAuthorizer{deny: denied},
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         newTestNamespaces(t),
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Tokens:             nil,
+		Access:             nil,
+		Audit:              st,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		CheckpointEpochs:   nil,
+		OnAuditFailure:     nil,
+		AuditChain:         nil,
+		DeletedUnits:       nil,
+		AuditSinks:         nil,
+		SignIn:             nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        svc,
+		Settings:           nil,
+		GitHostLinks:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -276,6 +288,21 @@ func TestStartStoreCheckAnswers409ForARunningCheckAndTheCooldown(t *testing.T) {
 
 	if denied != 2 {
 		t.Fatalf("%d denial entries, want 2", denied)
+	}
+}
+
+func TestStartStoreCheckAnswers409ForATargetThatTheServerHasNotSet(t *testing.T) {
+	t.Parallel()
+
+	f := newStoreCheckFixtureWithTarget(t, nil, nil)
+
+	status, body := f.post(t, `{"target":"backup"}`)
+	if status != http.StatusConflict || errorCodeOf(t, body) != errcode.StoreCheckNoTarget {
+		t.Fatalf("POST = %d %s, want 409 storecheck.no-target", status, body)
+	}
+
+	if !strings.Contains(body, "--backup-target") {
+		t.Fatalf("body = %s, want text that names --backup-target", body)
 	}
 }
 

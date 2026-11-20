@@ -45,6 +45,7 @@ func TestTemplateGolden(t *testing.T) {
 		{name: "tls-dir-backup", values: "ci/tls-dir-backup-values.yaml"},
 		{name: "numeric-secret-key", values: "ci/numeric-secret-key-values.yaml"},
 		{name: "ha", values: "ci/ha.yaml"},
+		{name: "plain-http", values: "ci/plain-http-values.yaml"},
 	}
 
 	for _, tc := range tests {
@@ -115,10 +116,12 @@ func TestTemplateRefused(t *testing.T) {
 
 	helm := requireHelm(t)
 
-	// A valid base: the two required Secret names.
+	// A valid base: the three required Secret names and an https public URL.
 	base := []string{
 		"--set", "database.existingSecret.name=db",
 		"--set", "keyEncryptionKey.existingSecret.name=kek",
+		"--set", "adminToken.existingSecret.name=admin-token-secret",
+		"--set", "server.publicURL=https://dustpan.example",
 	}
 
 	tests := []struct {
@@ -136,6 +139,21 @@ func TestTemplateRefused(t *testing.T) {
 				// earlier versions write it with dots.
 				{"/database/existingSecret/name", "database.existingSecret.name:"},
 				{"/keyEncryptionKey/existingSecret/name", "keyEncryptionKey.existingSecret.name:"},
+				{"/adminToken/existingSecret/name", "adminToken.existingSecret.name:"},
+			},
+		},
+		{
+			// Defense in depth: the template refuses an empty name when the
+			// schema check is off.
+			name:    "no admin token Secret without the schema check",
+			useBase: true,
+			set: []string{
+				"--set", "adminToken.existingSecret.name=",
+				"--skip-schema-validation",
+			},
+			wantText: [][]string{
+				{"adminToken.existingSecret.name is empty"},
+				{"kubectl create secret generic opendustpan-admin-token"},
 			},
 		},
 		{
@@ -242,6 +260,50 @@ func TestTemplateRefused(t *testing.T) {
 				"--set", "podDisruptionBudget.minAvailable=2",
 			),
 			wantText: [][]string{{"podDisruptionBudget.minAvailable (2) must be less than replicas (2)"}},
+		},
+		{
+			name:     "plain HTTP with no TLS, no https public URL and no opt-in",
+			useBase:  true,
+			set:      []string{"--set", "server.publicURL="},
+			wantText: [][]string{{"serve refuses plain HTTP there"}, {"server.allowPlainHTTP"}},
+		},
+		{
+			name:     "plain HTTP with an http public URL",
+			useBase:  true,
+			set:      []string{"--set", "server.publicURL=http://dustpan.example"},
+			wantText: [][]string{{"Set server.publicURL to the https URL"}},
+		},
+		{
+			name:    "an opt-in that is not a boolean",
+			useBase: true,
+			set: []string{
+				"--set", "server.publicURL=",
+				"--set-string", "server.allowPlainHTTP=yes",
+			},
+			wantText: [][]string{{"/server/allowPlainHTTP", "server.allowPlainHTTP:"}},
+		},
+		{
+			// Defense in depth: the template refuses an opt-in that is not
+			// the boolean true when the schema check is off.
+			name:    "an opt-in that is not a boolean without the schema check",
+			useBase: true,
+			set: []string{
+				"--set", "server.publicURL=",
+				"--set-string", "server.allowPlainHTTP=yes",
+				"--skip-schema-validation",
+			},
+			wantText: [][]string{{"serve refuses plain HTTP there"}},
+		},
+		{
+			// Defense in depth: the template refuses an http public URL when
+			// the schema check is off.
+			name:    "an https text inside an http public URL without the schema check",
+			useBase: true,
+			set: []string{
+				"--set", "server.publicURL=http://dustpan.example/https://x",
+				"--skip-schema-validation",
+			},
+			wantText: [][]string{{"serve refuses plain HTTP there"}},
 		},
 		{
 			name:     "worker with the fs blob store",

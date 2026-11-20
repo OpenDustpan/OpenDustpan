@@ -1,8 +1,10 @@
 package server_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -369,6 +371,16 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 func newListNoAccessHandler(t *testing.T, names []string, cursors secret.Wrapper) testHandler {
 	t.Helper()
 
+	return newListHandlerWith(t, names, cursors, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+}
+
+// newListHandlerWith builds the handler of newListNoAccessHandler with the
+// authorizer authz.
+func newListHandlerWith(
+	t *testing.T, names []string, cursors secret.Wrapper, authz identity.Authorizer,
+) testHandler {
+	t.Helper()
+
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -388,47 +400,48 @@ func newListNoAccessHandler(t *testing.T, names []string, cursors secret.Wrapper
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          cursors,
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    subjectAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            newTestAudit(),
-		OnAuditFailure:   nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		SignIn:           nil,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            cursors,
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      subjectAuthenticator{},
+		Authorizer:         authz,
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              newTestAudit(),
+		OnAuditFailure:     nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		SignIn:             nil,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -749,47 +762,48 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    subjectAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       newNoPagerNamespaces(t),
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            newTestAudit(),
-		OnAuditFailure:   nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		SignIn:           nil,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      subjectAuthenticator{},
+		Authorizer:         selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         newNoPagerNamespaces(t),
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              newTestAudit(),
+		OnAuditFailure:     nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		SignIn:             nil,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -829,4 +843,129 @@ func newNoPagerNamespaces(t *testing.T) *namespace.Service {
 	}
 
 	return svc
+}
+
+// fixedScopeAuthorizer allows every action and lists scope, or fails the list
+// with err.
+type fixedScopeAuthorizer struct {
+	err   error
+	scope identity.Scope
+}
+
+func (fixedScopeAuthorizer) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return nil
+}
+
+func (a fixedScopeAuthorizer) ListObjects(
+	context.Context, identity.Principal, identity.Action,
+) (identity.Scope, error) {
+	return a.scope, a.err
+}
+
+// errScopeDown is the error of a failed list of the scope.
+var errScopeDown = errors.New("scope down")
+
+// TestNamespaceListLeavesOutNamespaces sends a scope that covers every object
+// and leaves out namespaces directly to the list handler, as the IP allowlist
+// gate gives it to an administrator outside the list of a namespace: the page
+// and its total leave out each named namespace, and nothing else. A name that
+// only shares a prefix with a namespace leaves out nothing, and a failed list
+// of the scope answers 500 with no namespace.
+func TestNamespaceListLeavesOutNamespaces(t *testing.T) {
+	t.Parallel()
+
+	names := []string{"acme", "acme-dev", "bravo"}
+
+	cases := []struct {
+		name  string
+		authz fixedScopeAuthorizer
+		want  []string
+	}{
+		{name: "every namespace", authz: fixedScopeAuthorizer{err: nil, scope: identity.Every()}, want: names},
+		{
+			name: "one left out", authz: fixedScopeAuthorizer{err: nil, scope: identity.Every("acme")},
+			want: []string{"acme-dev", "bravo"},
+		},
+		{
+			name: "two left out", authz: fixedScopeAuthorizer{err: nil, scope: identity.Every("acme", "bravo")},
+			want: []string{"acme-dev"},
+		},
+		{
+			name:  "every namespace left out",
+			authz: fixedScopeAuthorizer{err: nil, scope: identity.Every("acme", "acme-dev", "bravo")},
+			want:  []string{},
+		},
+		{
+			name: "a prefix leaves out nothing", authz: fixedScopeAuthorizer{err: nil, scope: identity.Every("acm")},
+			want: names,
+		},
+		{
+			name:  "an unknown name leaves out nothing",
+			authz: fixedScopeAuthorizer{err: nil, scope: identity.Every("ghost")},
+			want:  names,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := newListHandlerWith(t, names, testCursors(t), tc.authz)
+
+			code, body := serveListAs(t, handler, "admin", "/api/server/namespaces")
+			if code != http.StatusOK {
+				t.Fatalf("list answers %d, want %d (%s)", code, http.StatusOK, body)
+			}
+
+			doc := decodeListBody(t, body)
+			if !slices.Equal(listNames(doc), tc.want) || doc.Total == nil || *doc.Total != int64(len(tc.want)) {
+				t.Fatalf("page = %v of %v, want %v of %d", listNames(doc), doc.Total, tc.want, len(tc.want))
+			}
+		})
+	}
+
+	t.Run("a failed list of the scope", func(t *testing.T) {
+		t.Parallel()
+
+		handler := newListHandlerWith(
+			t,
+			names,
+			testCursors(t),
+			fixedScopeAuthorizer{err: errScopeDown, scope: identity.Every()},
+		)
+
+		code, body := serveListAs(t, handler, "admin", "/api/server/namespaces")
+		if code != http.StatusInternalServerError || strings.Contains(body, "acme") {
+			t.Fatalf("list answers %d (%s), want 500 with no namespace", code, body)
+		}
+	})
+}
+
+// TestNamespaceListCursorFollowsLeftOut proves that a cursor of a list of
+// every namespace does not page a list that leaves out a namespace: the
+// left-out names are part of the filter that the cursor carries.
+func TestNamespaceListCursorFollowsLeftOut(t *testing.T) {
+	t.Parallel()
+
+	names := []string{"acme", "bravo", "charlie"}
+	cursors := testCursors(t)
+
+	every := newListHandlerWith(t, names, cursors, fixedScopeAuthorizer{err: nil, scope: identity.Every()})
+
+	code, body := serveListAs(t, every, "admin", "/api/server/namespaces?limit=1")
+	if code != http.StatusOK {
+		t.Fatalf("first page answers %d (%s)", code, body)
+	}
+
+	next := decodeListBody(t, body).NextCursor
+	if next == "" {
+		t.Fatal("first page has no next cursor")
+	}
+
+	leftOut := newListHandlerWith(t, names, cursors, fixedScopeAuthorizer{err: nil, scope: identity.Every("bravo")})
+
+	code, body = serveListAs(t, leftOut, "admin", "/api/server/namespaces?limit=1&cursor="+next)
+	if code != http.StatusBadRequest {
+		t.Fatalf("cursor of another filter answers %d (%s), want 400", code, body)
+	}
 }

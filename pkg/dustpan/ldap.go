@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
@@ -60,8 +61,11 @@ type LDAPProvider struct {
 	GroupNameAttribute     string
 	DisabledValues         []string
 	DisabledMask           uint64
-	StartTLS               bool
-	AutoCreate             bool
+	// CAFile is the path of the file that RootCAs came from. It is for the
+	// list of the sign-in providers only: the server reads no file from it.
+	CAFile     string
+	StartTLS   bool
+	AutoCreate bool
 	// SubjectFailureLimit is the limit of the count of the subject from
 	// every source: 1 to 100. Zero uses the default of 5. The count of the
 	// person from one source locks the person after 10 failures. The count
@@ -108,6 +112,10 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 			}
 		}
 
+		if subErr := checkLDAPSubject(p); subErr != nil {
+			return nil, subErr
+		}
+
 		limit, source, limitErr := subjectFailureLimitOf(p)
 		if limitErr != nil {
 			return nil, limitErr
@@ -140,6 +148,9 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 				GroupMemberAttribute:   p.GroupMemberAttribute,
 				GroupMemberOfAttribute: p.GroupMemberOfAttribute,
 				GroupNameAttribute:     p.GroupNameAttribute,
+				CAFile:                 p.CAFile,
+				DisabledMask:           maskText(p.DisabledMask),
+				DisabledValues:         slices.Clone(p.DisabledValues),
 				StartTLS:               p.StartTLS,
 				SubjectFailureLimit:    limit,
 				SubjectFailureLimitSource: string(
@@ -150,6 +161,30 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 	}
 
 	return out, nil
+}
+
+// checkLDAPSubject refuses a subject attribute that holds a DN, a user name
+// or an email.
+func checkLDAPSubject(p *LDAPProvider) error {
+	// Defense in depth: the flag parser and ldapauth.NewMethod check the
+	// subject attribute too. This check stays so that an embedder cannot
+	// take a DN, a user name or an email as the subject. It does not rely on
+	// those checks.
+	sub := subjectOr(p.Subject)
+
+	// Refuse a space around the name. Do not trim it: the allowlist check
+	// runs on the exact value.
+	if sub != strings.TrimSpace(sub) {
+		return fmt.Errorf("%w: provider %q: %w: the subject has a space at its start or its end",
+			errLDAPSetup, p.ID, ldapauth.ErrSubjectAttribute)
+	}
+
+	taken := []string{p.UserNameAttribute, p.EmailAttribute, p.NameAttribute}
+	if err := ldapauth.CheckSubjectAttribute(sub, taken...); err != nil {
+		return fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, err)
+	}
+
+	return nil
 }
 
 // subjectFailureLimitOf returns the effective limit of the failed sign-ins of
@@ -223,7 +258,7 @@ func ldapConfig(cfg *settings, p *LDAPProvider, settingsSvc *setting.Service) ld
 
 // subjectOr returns the subject setting s, or entryUUID when it is empty.
 func subjectOr(s string) string {
-	if strings.TrimSpace(s) == "" {
+	if s == "" {
 		return string(ldapauth.SubjectEntryUUID)
 	}
 
@@ -266,4 +301,14 @@ func rangeTexts(ranges []netip.Prefix) []string {
 	}
 
 	return out
+}
+
+// maskText returns the decimal text of mask for the list of the sign-in
+// providers, and an empty text for zero, which means no mask.
+func maskText(mask uint64) string {
+	if mask == 0 {
+		return ""
+	}
+
+	return strconv.FormatUint(mask, 10)
 }

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -661,6 +662,21 @@ const (
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.
 	ActionRegistryManageKeys Action = "registry:manage-keys"
+	// ActionServerOfferFirstAdministrator allows asking for the one-time code
+	// that makes the first administrator of the installation. No family
+	// classifies it, so only a principal with Admin passes the authorizer. The
+	// route also needs the static bootstrap principal. Its object is the
+	// installation.
+	ActionServerOfferFirstAdministrator Action = "server:offer-first-administrator"
+	// ActionServerReadFirstAdministrator allows reading the marker "first
+	// administrator made" and the open offer, never the code. Its object is
+	// the installation.
+	ActionServerReadFirstAdministrator Action = "server:read-first-administrator"
+	// ActionCallerRedeemFirstAdministrator allows a signed-in person to send
+	// the one-time code of the first administrator. The code, the principal
+	// of the session and the marker decide the result. Its object is the
+	// installation.
+	ActionCallerRedeemFirstAdministrator Action = "caller:redeem-first-administrator"
 )
 
 // Actions returns every action that the core knows, sorted. The catalog
@@ -710,7 +726,8 @@ func Actions() []Action {
 		ActionNamespaceReadGitHostConnections, ActionNamespaceManageGitHostConnections,
 		ActionNamespaceUseGitHostConnection, ActionServerReadGitHost, ActionServerManageGitHost,
 		ActionRegistryRead, ActionRegistryPublish, ActionNamespaceManageIssuer,
-		ActionRegistryManageKeys,
+		ActionRegistryManageKeys, ActionServerOfferFirstAdministrator,
+		ActionServerReadFirstAdministrator, ActionCallerRedeemFirstAdministrator,
 	}
 	slices.Sort(catalog)
 
@@ -1008,9 +1025,21 @@ func parseUnitObject(s string) (Object, error) {
 	}, nil
 }
 
-// validUnitName reports whether name is a usable opaque unit name.
+// validUnitName reports whether name is a usable opaque unit name. A name
+// that is not valid UTF-8, or that holds a hidden rune (a control character,
+// a format character such as U+202E, or a line or paragraph separator), is
+// not usable: its text can look different from its bytes when an error, a
+// log or the console shows it.
 func validUnitName(name string) bool {
 	if name == "" || len(name) > MaxUnitLength {
+		return false
+	}
+
+	// Defense in depth: the tool adapters accept only ASCII letters, digits
+	// and a few punctuation characters in a stack or workspace name, so no
+	// stored unit has such a name. This check stays so that a reference from
+	// another caller cannot hold a hidden rune and does not rely on them.
+	if !utf8.ValidString(name) || ident.HasHidden(name) {
 		return false
 	}
 
@@ -1190,8 +1219,10 @@ func HasExactScope(a Authorizer) bool {
 }
 
 // Scope is the set of objects of one kind where a principal may perform one
-// action. A scope covers every object through Every. A consumer reads that
-// case only through CoversEveryObject or Contains. Otherwise a
+// action. A scope covers every object through Every, which can leave out the
+// objects of named namespaces. A consumer reads that case only through
+// CoversEveryObject, EveryObjectExcept or Contains, so that no consumer can
+// see the every-object case without its left-out namespaces. Otherwise a
 // unit is in the scope when it, its collection or its namespace is in a
 // set. A principal object is in the scope when it is in Principals.
 type Scope struct {
@@ -1229,6 +1260,70 @@ func Every(except ...namespace.Name) Scope {
 // consumer uses the explicit sets and fails closed.
 func (s Scope) CoversEveryObject() bool {
 	return s.every.set && len(s.every.except) == 0
+}
+
+// EveryObjectExcept reports whether s covers every object, and returns a copy
+// of the namespaces that it leaves out, in sorted order. The objects of a
+// left-out namespace are not in s. A consumer that filters in its own query,
+// for example a SQL list, uses this method and leaves out each returned
+// namespace. It returns nil and false when s does not cover every object.
+func (s Scope) EveryObjectExcept() ([]namespace.Name, bool) {
+	if !s.every.set {
+		return nil, false
+	}
+
+	return slices.Clone(s.every.except), true
+}
+
+// LeaveOut returns s without the objects of the named namespaces. In the
+// every-object case it adds the names to the left-out namespaces, each name
+// once, in sorted order. It drops from the explicit sets each namespace,
+// collection and unit object of a named namespace. A principal object has no
+// namespace and stays. An empty name is ignored: it names no namespace.
+func (s Scope) LeaveOut(names ...namespace.Name) Scope {
+	drop := make([]namespace.Name, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			drop = append(drop, name)
+		}
+	}
+
+	if len(drop) == 0 {
+		return s
+	}
+
+	out := Scope{
+		Namespaces:  withoutNamespaces(s.Namespaces, drop),
+		Collections: withoutNamespaces(s.Collections, drop),
+		Units:       withoutNamespaces(s.Units, drop),
+		Principals:  slices.Clone(s.Principals),
+		every:       everyObject{set: s.every.set, except: nil},
+	}
+
+	if s.every.set {
+		except := slices.Concat(s.every.except, drop)
+		slices.Sort(except)
+		out.every.except = slices.Compact(except)
+	}
+
+	return out
+}
+
+// withoutNamespaces returns the objects of objs whose namespace is not in
+// drop. It builds a new slice, so objs is not modified.
+func withoutNamespaces(objs []Object, drop []namespace.Name) []Object {
+	if objs == nil {
+		return nil
+	}
+
+	out := make([]Object, 0, len(objs))
+	for i := range objs {
+		if !slices.Contains(drop, objs[i].Namespace()) {
+			out = append(out, objs[i])
+		}
+	}
+
+	return out
 }
 
 // Contains reports whether s holds o. In the every-object case it reports
@@ -1311,7 +1406,11 @@ var _ Authenticator = (*StaticToken)(nil)
 // NewStaticToken returns an authenticator accepting token for an admin named subject.
 func NewStaticToken(subject, token string) (*StaticToken, error) {
 	if len(token) < minTokenLength {
-		return nil, fmt.Errorf("%w: need at least %d bytes", ErrWeakToken, minTokenLength)
+		return nil, fmt.Errorf(
+			"%w: need at least %d bytes: make one with: openssl rand -hex 32",
+			ErrWeakToken,
+			minTokenLength,
+		)
 	}
 
 	return &StaticToken{
@@ -1373,7 +1472,8 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 	for i, raw := range tokens {
 		token := strings.TrimSpace(raw)
 		if len(token) < minTokenLength {
-			return nil, fmt.Errorf("%w: token %d needs at least %d bytes", ErrWeakToken, i+1, minTokenLength)
+			return nil, fmt.Errorf("%w: token %d needs at least %d bytes: make one with: openssl rand -hex 32",
+				ErrWeakToken, i+1, minTokenLength)
 		}
 
 		sum := sha256.Sum256([]byte(token))

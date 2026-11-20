@@ -128,6 +128,9 @@ var (
 	_ inventory.SweepLocker = (*Store)(nil)
 )
 
+// Unwrap implements storetest.Unwrapper: it returns the store that s wraps.
+func (s *Store) Unwrap() any { return s.inner }
+
 // New returns a Store over inner that applies faults in order.
 func New(inner Inner, faults ...Fault) (*Store, error) {
 	if inner == nil {
@@ -279,13 +282,13 @@ func (s *Store) ForceDeleteStack(
 // UpdateStackTags replaces the tags of the stack identified by ref, unless a
 // fault fires first.
 func (s *Store) UpdateStackTags(
-	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
+	ctx context.Context, ref stack.Ref, u stack.TagUpdate, fence namespace.Fence,
 ) error {
 	if err := s.before(ctx, "UpdateStackTags"); err != nil {
 		return err
 	}
 
-	return s.inner.UpdateStackTags(ctx, ref, tags, updatedAt, fence)
+	return s.inner.UpdateStackTags(ctx, ref, u, fence)
 }
 
 // RenameStack changes the stack name of oldRef, unless a fault fires first.

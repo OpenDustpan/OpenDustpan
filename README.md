@@ -36,7 +36,7 @@ export DUSTPAN_DATABASE=sqlite:dustpan.db
 The administrator signs in with the admin token. The key-encryption key
 protects secret values and OpenTofu state. Keep both values outside the server's data directory.
 The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
-`:8080`.
+`:8080` unless you set `--listen`.
 
 `serve` needs a key-encryption key and a database that you set. It has no
 default for either, and it makes no key. Without a key, or without a
@@ -51,17 +51,27 @@ OpenTofu state that the key encrypts, and nobody can recover them.
 
 ### Pulumi CLI
 
-Start the server:
+Start the server on loopback:
 
 ```sh
-./bin/opendustpan serve
+./bin/opendustpan serve --listen 127.0.0.1:8080
 ```
 
+`serve` refuses plain HTTP on an address that is not loopback. For such an
+address, set `--tls-cert` and `--tls-key`, or set `--public-url` to the
+`https` URL of the proxy that ends TLS, or set `--allow-plain-http`
+(`DUSTPAN_ALLOW_PLAIN_HTTP`). `dev` warns and does not refuse.
+
 A new installation has no namespace. In a second shell with the same
-`DUSTPAN_ADMIN_TOKEN`, create one. Then log in and run the first update:
+`DUSTPAN_ADMIN_TOKEN`, create one. The server refuses a new stack that no
+placement rule matches, so make a collection and a rule first. Then log in and
+run the first update:
 
 ```sh
 ./bin/opendustpan namespace create --server http://localhost:8080 acme
+./bin/opendustpan collection create --server http://localhost:8080 acme/everything
+./bin/opendustpan placement add --server http://localhost:8080 \
+  --tool pulumi --project '*' --stack '*' --collection everything acme
 mkdir demo && cd demo
 export PULUMI_ACCESS_TOKEN=$DUSTPAN_ADMIN_TOKEN
 pulumi login http://localhost:8080
@@ -92,11 +102,18 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
 ```
 
 A new installation has no namespace. In a second shell with the same
-`DUSTPAN_ADMIN_TOKEN`, create one:
+`DUSTPAN_ADMIN_TOKEN`, create one. The server refuses a new workspace that no
+placement rule matches, so make a collection and a rule first:
 
 ```sh
 ./bin/opendustpan namespace create --server https://localhost:8080 --ca-file cert.pem acme
+./bin/opendustpan collection create --server https://localhost:8080 --ca-file cert.pem acme/everything
+./bin/opendustpan placement add --server https://localhost:8080 --ca-file cert.pem \
+  --tool opentofu --project '*' --stack '*' --collection everything acme
 ```
+
+The [quickstart guide](docs/guides/quickstart.md) explains collections and
+placement rules.
 
 In a directory of its own, a `main.tf` with a `cloud` block names the server,
 the namespace and the workspace:
@@ -214,8 +231,9 @@ address of the local server.
 1. **The key-encryption key.** A lost key means lost secrets and lost
    OpenTofu state. The server refuses to start without a key, and with a key
    that does not open the wrapped keys in the database. Keep a copy of the
-   key in a different place from the backups. The default key file sits next
-   to the SQLite database, so a copy of that directory also copies the key.
+   key in a different place from the backups. `serve` has no default key file.
+   A key file in the directory of the SQLite database or of the blobs makes
+   `serve` log a warning, because a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
    and the blobs to a backup target. A backup holds OpenTofu state that the server encrypted, so protect the target.
 
@@ -267,15 +285,18 @@ logging with `--log-level` and `--log-format`. Check readiness at
   one database and one object store (see
   [High availability](docs/guides/high-availability.md)). It has no
   replication between installations and no active-active across sites.
-- **You need users, teams or roles.** Every token signs in as an
-  administrator. Single sign-on and scoped tokens do not exist yet.
+- **You need bootstrap tokens with less than full rights.** Each bootstrap
+  admin token signs in as an administrator. Console sign-in with OpenID
+  Connect or LDAP, roles, grants and scoped access tokens exist (see
+  [Roles and grants](docs/guides/roles-and-grants.md)).
 - **You need remote runs.** OpenDustpan stores state. It does not run
   `pulumi up` or `tofu apply` for you.
-- **You need a full audit log, policy checks or drift detection.** The
-  audit log records secret reads and overrides only, and can send a copy
-  of each entry to a file, syslog, a webhook or object storage.
-  Planned: every change and an export. Policy checks and drift
-  detection do not exist yet.
+- **You need a full audit log of every change.** The audit log records
+  secret reads, denials, security events, settings changes and more (see
+  the [audit log guide](docs/guides/audit-log.md)), has an export API, and
+  can send a copy of each entry to a file, syslog, a webhook or object
+  storage. Policy checks (see [Approval rules](docs/guides/approval-rules.md))
+  and drift checks (see [Drift checks](docs/guides/drift-checks.md)) exist.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
   parts. OpenDustpan adds a server, a database and a key to look after.
 
@@ -351,6 +372,8 @@ How-to guides:
   tokens, rotation, inactivity, expiry warnings and the token policy.
 - [Collections and placement rules](docs/guides/collections-and-placement.md): make
   a collection, move a unit into it, and write the rules that place new stacks.
+- [Restore access setting](docs/guides/restore-access-setting.md): let each holder of
+  `server:restore` replace the access tables in a restore.
 - [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
   namespace, read the effective state, and recover from a lock-out.
 - [Runner pools](docs/guides/runner-pools.md): make a pool and a join token, list
@@ -373,12 +396,12 @@ How-to guides:
   connect a Slack incoming webhook to a namespace and send a test message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
-- [Install from the container image](docs/guides/install.md): pull the
-  v0.1.0 image by tag or by digest, make the two Secrets, and install the
-  chart.
+- [Install from the container image](docs/guides/install.md): build the
+  image from a checkout, make the two Secrets, and install the chart. No
+  release exists yet.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
 - [Run several instances](docs/guides/several-instances.md): the settings
-  that each instance shares, for the target design.
+  that each instance shares.
 - [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
   provider.
 - [Sign-in with an LDAP directory](docs/guides/ldap-sign-in.md): the
@@ -483,12 +506,20 @@ Run it for production. Mount a data directory and pass the two secrets. The cont
 must be able to write to the data directory. Start the server first, then
 create a namespace through the API before the first login, as above.
 
+In the container, the server listens on `:8080`, which is not a loopback
+address, so `serve` refuses plain HTTP. The command below publishes the port
+on the loopback address of the host only, and sets
+`DUSTPAN_ALLOW_PLAIN_HTTP=true`. Before you open the port to other hosts,
+set `DUSTPAN_TLS_CERT` and `DUSTPAN_TLS_KEY`, or put a proxy that ends TLS in
+front and set `DUSTPAN_PUBLIC_URL` to its `https` URL. Then do not set
+`DUSTPAN_ALLOW_PLAIN_HTTP`.
+
 ```sh
 mkdir -p data
 export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
-  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY opendustpan:dev
+  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY -e DUSTPAN_ALLOW_PLAIN_HTTP=true opendustpan:dev
 docker exec -e DUSTPAN_ADMIN_TOKEN dustpan /opendustpan namespace create --server http://localhost:8080 acme
 ```
 
@@ -500,7 +531,7 @@ flag to point at it:
 docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
   -v ./dustpan.key:/run/secrets/dustpan.key:ro \
   -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY_FILE=/run/secrets/dustpan.key \
-  opendustpan:dev
+  -e DUSTPAN_ALLOW_PLAIN_HTTP=true opendustpan:dev
 ```
 
 A key file next to the data does not protect a backup of that data. A backup

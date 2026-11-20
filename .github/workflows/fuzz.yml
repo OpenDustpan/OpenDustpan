@@ -1,0 +1,174 @@
+# Fuzzing of the parsers that read untrusted input. CI runs only the seed
+# corpus of each target (go test). This workflow runs each target with the
+# fuzzing engine for a fixed time each week. On a failure it uploads the
+# failing input as an artifact, and the report job opens an issue for the
+# target, or comments on the open issue of the target.
+#
+# The fuzz jobs run the code of the repository with a read-only token. Only
+# the report job can write, and it runs no code of the repository.
+# Actions are pinned to commit SHAs; the comment names the release.
+name: fuzz
+
+on:
+  # Each week on Sunday.
+  schedule:
+    - cron: "37 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Fuzzing time of each target, for example 5m or 30s"
+        required: false
+        default: "5m"
+
+permissions: {}
+
+# One run at a time. A new run waits for the run in progress.
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { package: ./internal/clientip, target: FuzzParseHeader }
+          - { package: ./internal/clientip, target: FuzzParseList }
+          - { package: ./internal/clientip, target: FuzzResolve }
+          - { package: ./pkg/blob/s3, target: FuzzSignCanonical }
+          - { package: ./pkg/blob/s3, target: FuzzSignerURL }
+          - { package: ./pkg/source, target: FuzzSplitHTTPS }
+          - { package: ./pkg/source, target: FuzzURLPattern }
+          - { package: ./pkg/source, target: FuzzDecodeFilter }
+          - { package: ./pkg/source, target: FuzzValidBranchName }
+          - { package: ./internal/source, target: FuzzResolveURL }
+          - { package: ./internal/source, target: FuzzLFSEndpoint }
+          - { package: ./internal/source, target: FuzzParsePointer }
+          - { package: ./internal/source, target: FuzzLargeFileKey }
+          - { package: ./pkg/runner, target: FuzzGitCredentialsValidate }
+          - { package: ./pkg/launcher, target: FuzzGitConfig }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The fuzzing time comes from the dispatch form, so the step checks it
+      # against an allowlist before go test reads it.
+      - name: Fuzz
+        shell: bash
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGET: ${{ matrix.target }}
+          FUZZ_TIME: ${{ inputs.fuzztime || '5m' }}
+        run: |
+          if ! [[ "$FUZZ_TIME" =~ ^[1-9][0-9]{0,3}[sm]$ ]]; then
+            echo "fuzz time $FUZZ_TIME is not valid: use 1 to 9999 seconds or minutes, for example 5m" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/fuzz"
+          printf '%s\n' "$FUZZ_PACKAGE" > "$RUNNER_TEMP/fuzz/package"
+          go test -run='^$' -fuzz="^${FUZZ_TARGET}\$" -fuzztime="$FUZZ_TIME" "$FUZZ_PACKAGE" 2>&1 | tee "$RUNNER_TEMP/fuzz/log.txt"
+      # go test writes the failing input to testdata/fuzz/<target>/ of the
+      # package. The artifact holds it, the package and the log.
+      - name: Collect the failing input
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/fuzz/input"
+          if [ -d "$FUZZ_PACKAGE/testdata/fuzz/$FUZZ_TARGET" ]; then
+            cp -R "$FUZZ_PACKAGE/testdata/fuzz/$FUZZ_TARGET/." "$RUNNER_TEMP/fuzz/input/"
+          fi
+      - name: Upload the failing input
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: ${{ runner.temp }}/fuzz
+          retention-days: 90
+
+  # Opens an issue for each target that failed, or comments on the open issue
+  # of the target. It reads only the artifacts of this run and writes only
+  # issues.
+  report:
+    needs: fuzz
+    if: ${{ failure() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    # The download of an artifact of the same run needs no permission.
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fuzz-*
+          path: ${{ runner.temp }}/fuzz
+      - name: Open or update an issue for each failed target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          shopt -s nullglob
+          found=0
+          for dir in "$RUNNER_TEMP"/fuzz/fuzz-*; do
+            target="${dir##*/fuzz-}"
+            # The names come from the artifacts, so each one must match an
+            # allowlist before it goes into the issue.
+            if ! [[ "$target" =~ ^Fuzz[A-Za-z0-9]{1,64}$ ]]; then
+              echo "artifact $dir has no valid target name" >&2
+              exit 1
+            fi
+            package="$(head -n 1 "$dir/package" 2>/dev/null || true)"
+            if ! [[ "$package" =~ ^\./[a-z0-9/]{1,128}$ ]]; then
+              package="(unknown)"
+            fi
+            inputs=""
+            for f in "$dir"/input/*; do
+              name="${f##*/}"
+              if [[ "$name" =~ ^[0-9a-f]{1,64}$ ]]; then
+                inputs="$inputs $name"
+              fi
+            done
+            found=1
+            title="Fuzz target $target fails"
+            {
+              echo "The weekly fuzz run found a failure in \`$target\` of \`$package\`."
+              echo
+              echo "- Run: $RUN_URL"
+              echo "- Artifact: \`fuzz-$target\` (the failing input, the package and the log)"
+              if [ -n "$inputs" ]; then
+                echo "- Failing input:$inputs"
+                echo
+                echo "To reproduce, copy the files of \`input/\` of the artifact to \`$package/testdata/fuzz/$target/\` and run:"
+                echo
+                echo "\`\`\`sh"
+                echo "go test -run='^$target\$' $package"
+                echo "\`\`\`"
+              else
+                echo "- No failing input: the job failed before or outside the fuzzing. Read the log of the run."
+              fi
+            } > "$RUNNER_TEMP/body.md"
+            number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+              --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+            if [ -n "$number" ]; then
+              gh issue comment "$number" --body-file "$RUNNER_TEMP/body.md"
+            else
+              gh issue create --title "$title" --label bug --label needs-triage --body-file "$RUNNER_TEMP/body.md"
+            fi
+          done
+          if [ "$found" = 0 ]; then
+            echo "a fuzz job failed and uploaded no artifact: read the log of $RUN_URL" >&2
+            exit 1
+          fi

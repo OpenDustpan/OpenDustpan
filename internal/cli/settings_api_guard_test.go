@@ -31,6 +31,7 @@ func TestOnlyKnownSettingsTakeDatabaseValues(t *testing.T) {
 		"principal.removalAlertCount",
 		"principal.removalAlertPercent",
 		"principal.removalAlertWindow",
+		"restore.replace-access-tables",
 		"session.breakGlassMaxLength",
 		"signIn.localPassword.enabled",
 		"tempadmin.session-limit",

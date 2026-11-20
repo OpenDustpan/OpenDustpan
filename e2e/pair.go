@@ -148,10 +148,11 @@ func (p *Pair) MergeTofuPair(tb testing.TB) {
 	p.Src.certBundle = bundle
 	p.Dst.certBundle = bundle
 
+	install := providerInstallation(providerMirrorDir(tb))
 	merged := fmt.Sprintf(tofuCLIConfig, p.Src.Host(), p.Src.token) +
-		fmt.Sprintf(tofuCLIConfig, p.Dst.Host(), p.Dst.token)
+		fmt.Sprintf(tofuCLIConfig, p.Dst.Host(), p.Dst.token) + install
 	mergedB := fmt.Sprintf(tofuCLIConfig, p.Src.Host(), p.Src.tokenB) +
-		fmt.Sprintf(tofuCLIConfig, p.Dst.Host(), p.Dst.tokenB)
+		fmt.Sprintf(tofuCLIConfig, p.Dst.Host(), p.Dst.tokenB) + install
 
 	for _, home := range []string{p.Src.home, p.Dst.home} {
 		writePairFile(tb, filepath.Join(home, "tofurc"), merged)

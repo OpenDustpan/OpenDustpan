@@ -58,12 +58,11 @@ type RecordStore interface {
 	ListPrincipals(ctx context.Context, q Query, kind Kind) ([]Principal, int64, error)
 	// UpdatePrincipal replaces the display name and the update time of the
 	// principal with the ID p.ID. The subject, the kind, the break-glass flag
-	// and the creation time do not change. Today no write sets the
-	// break-glass flag on an existing person. The rule below guards a later
-	// write that does: it locks the row of the principal and returns
-	// ErrBreakGlassPassword when the person has a local password, in the same
-	// transaction. It returns ErrNotFound when no such principal
-	// exists.
+	// and the creation time do not change. So no port sets the break-glass
+	// flag on a person that exists, and a person with a local password never
+	// gets it here. A restore is the one write that can: it returns
+	// ErrBreakGlassPassword for such data. It returns ErrNotFound when no
+	// such principal exists.
 	UpdatePrincipal(ctx context.Context, p Principal, e audit.Entry) error
 	// DeletePrincipal ends the principal with the ID id and each membership
 	// of it, at e.At. The rows stay for the history. It returns ErrNotFound

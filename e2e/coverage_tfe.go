@@ -172,6 +172,12 @@ func (coverageWorkspaces) ReadState(
 	return none, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) StateVersionWorkspace(
+	_ context.Context, _ workspace.StateVersionID,
+) (workspace.ID, error) {
+	return "", workspace.ErrStateVersionNotFound
+}
+
 func (coverageWorkspaces) ReadResources(
 	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
 ) (workspace.StatePage, error) {

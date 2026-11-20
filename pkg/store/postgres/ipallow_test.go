@@ -71,6 +71,68 @@ func checkNamespacesWithListRefusesAnInvalidName(t *testing.T, s *postgres.Store
 	}
 }
 
+// TestNamespacesWithListRefusesAnInvalidList checks the read refuses a stored
+// list that the set path never writes, and returns no partial list.
+func TestNamespacesWithListRefusesAnInvalidList(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	cases := []struct {
+		name    string
+		hostile string
+	}{
+		{name: "an entry that is not an address", hostile: "not-an-address"},
+		{name: "an empty entry", hostile: "192.0.2.0/24,"},
+		{name: "a prefix length out of range", hostile: "192.0.2.0/33"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkNamespacesWithListRefusesAnInvalidList(t, open(t, base), tc.hostile)
+		})
+	}
+}
+
+// checkNamespacesWithListRefusesAnInvalidList runs one hostile list against a
+// fresh store.
+func checkNamespacesWithListRefusesAnInvalidList(t *testing.T, s *postgres.Store, hostile string) {
+	t.Helper()
+
+	ns := namespace.Name("acme")
+	fence := ensureNamespace(t, s, ns)
+
+	list, err := ipallow.ParseList([]string{"192.0.2.0/24"})
+	if err != nil {
+		t.Fatalf("parse list: %v", err)
+	}
+
+	if setErr := s.SetNamespaceList(t.Context(), ns, list, fence, namespacesWithListEntry(ns)); setErr != nil {
+		t.Fatalf("set IP allowlist: %v", setErr)
+	}
+
+	plantErr := s.ExecForTest(
+		t.Context(), `UPDATE namespaces SET ip_allowlist = $1 WHERE name = $2`, hostile, ns.String(),
+	)
+	if plantErr != nil {
+		t.Fatalf("plant hostile list: %v", plantErr)
+	}
+
+	got, err := s.NamespacesWithList(t.Context())
+	if !errors.Is(err, ipallow.ErrInvalidList) {
+		t.Fatalf("NamespacesWithList error = %v, want ErrInvalidList", err)
+	}
+
+	if got != nil {
+		t.Fatalf("NamespacesWithList = %v, want nil", got)
+	}
+}
+
 // namespacesWithListEntry returns a valid audit entry for a list change in ns.
 func namespacesWithListEntry(ns namespace.Name) audit.Entry {
 	return audit.Entry{

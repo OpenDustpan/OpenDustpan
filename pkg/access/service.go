@@ -402,9 +402,17 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 
 // GetGrant returns the current grant with the ID id, or ErrNotFound.
 func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
+	// Defense in depth: the HTTP handler and both store adapters check the
+	// shape of the ID too. This check stays so that a new caller of the
+	// service cannot read or end a grant by a text that is not a grant ID. It
+	// does not rely on the handler or on the store.
+	if !ValidGrantID(id) {
+		return Grant{}, errBadGrantID()
+	}
+
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
-		return Grant{}, fmt.Errorf("get grant %q: %w", id, err)
+		return Grant{}, fmt.Errorf("get grant: %w", err)
 	}
 
 	return g, nil
@@ -419,9 +427,17 @@ func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
 func (s *Service) Revoke(
 	ctx context.Context, e audit.Entry, caller identity.Principal, obj identity.Object, id string,
 ) (Grant, error) {
+	// Defense in depth: the HTTP handler and both store adapters check the
+	// shape of the ID too. This check stays so that a new caller of the
+	// service cannot read or end a grant by a text that is not a grant ID. It
+	// does not rely on the handler or on the store.
+	if !ValidGrantID(id) {
+		return Grant{}, errBadGrantID()
+	}
+
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	if obj, err = s.existingObject(ctx, obj); err != nil {
@@ -429,7 +445,7 @@ func (s *Service) Revoke(
 	}
 
 	if !sameTarget(g.Object, obj) {
-		return Grant{}, fmt.Errorf("revoke grant %q on %q: %w", id, obj.String(), ErrNotFound)
+		return Grant{}, revokeReadError(ErrNotFound)
 	}
 
 	return s.revokeStored(ctx, e, caller, g, id)
@@ -442,9 +458,17 @@ func (s *Service) Revoke(
 // ErrEscalation. The caller authorizes the manage-access action of the
 // grant's object before this call.
 func (s *Service) RevokeByID(ctx context.Context, e audit.Entry, caller identity.Principal, id string) (Grant, error) {
+	// Defense in depth: the HTTP handler and both store adapters check the
+	// shape of the ID too. This check stays so that a new caller of the
+	// service cannot read or end a grant by a text that is not a grant ID. It
+	// does not rely on the handler or on the store.
+	if !ValidGrantID(id) {
+		return Grant{}, errBadGrantID()
+	}
+
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	return s.revokeStored(ctx, e, caller, g, id)
@@ -624,7 +648,7 @@ func GrantRef(g Grant) string {
 // read: "grant:<id>", or "grant:invalid" for a text that is not a grant ID,
 // so request text never reaches the audit log.
 func GrantIDRef(id string) string {
-	if strings.HasPrefix(id, grantIDPrefix) && ident.Valid(id, maxGrantIDLength) {
+	if ValidGrantID(id) {
 		return "grant:" + id
 	}
 
@@ -633,6 +657,37 @@ func GrantIDRef(id string) string {
 
 // maxGrantIDLength bounds a grant ID, in bytes.
 const maxGrantIDLength = 64
+
+// minGrantIDSuffixLength is the least number of bytes that a grant ID holds
+// after GrantIDPrefix. The bare prefix names no grant.
+const minGrantIDSuffixLength = 1
+
+// ValidGrantID reports whether id has the shape of a grant ID: GrantIDPrefix,
+// at least minGrantIDSuffixLength bytes after it, and at most maxGrantIDLength
+// bytes in all, of valid identifier characters. Each layer that takes a grant
+// ID from outside the process checks it with this function before it reads or
+// ends the grant: the HTTP handler, the service, both store adapters and the
+// check of a restore.
+func ValidGrantID(id string) bool {
+	return strings.HasPrefix(id, grantIDPrefix) &&
+		len(id) >= len(grantIDPrefix)+minGrantIDSuffixLength &&
+		ident.Valid(id, maxGrantIDLength)
+}
+
+// errBadGrantID reports a grant ID that has no grant ID shape. The text holds
+// no part of the ID, so request text never reaches an error, a log or an
+// audit entry. It wraps ErrInvalid.
+func errBadGrantID() error {
+	return fmt.Errorf("%w: the grant ID is not a grant ID", ErrInvalid)
+}
+
+// revokeReadError wraps the error of the read of the grant to revoke. The
+// text holds no part of the ID and no object, so every unknown grant, and a
+// grant on another object, answers with the same text, and a caller cannot
+// tell them apart. It keeps the sentinel of err.
+func revokeReadError(err error) error {
+	return fmt.Errorf("revoke grant: %w", err)
+}
 
 // change completes the entry of the caller for one change of the record
 // object at the time at.
@@ -962,7 +1017,7 @@ func (s *Service) revokeStored(
 ) (Grant, error) {
 	fence, err := s.fenceOf(ctx, g.Object)
 	if err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	chain, err := s.authz.chain(ctx, g.Object)
@@ -976,7 +1031,7 @@ func (s *Service) revokeStored(
 	check := s.revokeCheck(caller, g, chain)
 
 	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g)), check); err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	return g, nil

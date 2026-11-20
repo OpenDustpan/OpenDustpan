@@ -62,6 +62,8 @@ var (
 	// ErrInvalid reports a role or a grant that fails validation.
 	ErrInvalid = errors.New("invalid role or grant")
 	// ErrBuiltIn reports a change of a built-in role.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrBuiltIn = errors.New("built-in role")
 	// ErrInUse reports a delete of a custom role that a grant holds.
 	ErrInUse = errors.New("role in use")
@@ -69,11 +71,15 @@ var (
 	// installation with no site administrator: the delete or the disable of
 	// the last one, or the end of the last grant, membership or group that
 	// gives the role.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrLastSiteAdministrator = errors.New(
 		"cannot remove the last site administrator: give the site-administrator role to a second person first",
 	)
 	// ErrEscalation reports a grant that gives more than the granter holds
 	// on its object.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrEscalation = errors.New("grant gives more than the granter holds")
 	// ErrUnitMoved reports a grant or a revoke on a unit that moved to
 	// another collection after the Service read the collection of the unit.
@@ -137,6 +143,9 @@ var families = map[identity.Action]Family{
 	// operator registers the app and assigns each installation to a namespace.
 	identity.ActionServerReadGitHost:   FamilyOperator,
 	identity.ActionServerManageGitHost: FamilyOperator,
+	// The marker of the first administrator and the open offer. The offer
+	// action has no family on purpose: only Admin passes the authorizer.
+	identity.ActionServerReadFirstAdministrator: FamilyOperator,
 
 	identity.ActionServerReadPrincipals:    FamilyAdministration,
 	identity.ActionServerManagePrincipals:  FamilyAdministration,
@@ -212,6 +221,9 @@ var families = map[identity.Action]Family{
 	identity.ActionJobReadPlans:                      FamilyData,
 	identity.ActionJobCancel:                         FamilyData,
 	identity.ActionJobApprove:                        FamilyData,
+	identity.ActionNamespaceReadRunners:              FamilyData,
+	identity.ActionNamespaceManageRunners:            FamilyData,
+	identity.ActionUnitDefineSteps:                   FamilyData,
 	identity.ActionProfileRead:                       FamilyData,
 	identity.ActionProfileWrite:                      FamilyData,
 	identity.ActionProfileOpen:                       FamilyData,
@@ -231,6 +243,9 @@ var families = map[identity.Action]Family{
 	identity.ActionCallerManagePreferences:  FamilySelf,
 	identity.ActionCallerManageSignIn:       FamilySelf,
 	identity.ActionCallerManageGitHostLinks: FamilySelf,
+	// Each signed-in principal reaches the redeem; the code and the store
+	// transaction decide.
+	identity.ActionCallerRedeemFirstAdministrator: FamilySelf,
 }
 
 // FamilyOf returns the family of action, and false when the core does not
@@ -317,6 +332,7 @@ func readOnlyServer(action identity.Action) bool {
 		identity.ActionServerReadSettings,
 		identity.ActionServerReadInstances,
 		identity.ActionServerReadGitHost,
+		identity.ActionServerReadFirstAdministrator,
 	}, action)
 }
 

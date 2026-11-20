@@ -1,8 +1,8 @@
 package stack_test
 
-// Hostile tests for the bounds of the masked read: the nesting depth, the
-// number of markers, the bytes of the marker paths, the deadline, the shape
-// of the version, and the stack that a name maps to. Each guard has a test
+// Hostile tests for the bounds of the masked read: the nesting depth, the work
+// budget of the read, the deadline, the shape of the version, and the stack
+// that a name maps to. Each guard has a test
 // that fails when the guard is removed.
 
 import (
@@ -108,25 +108,6 @@ func deepDoc(depth int) []byte {
 	return []byte(`{"resources":[],"d":` + strings.Repeat("[", depth-1) + strings.Repeat("]", depth-1) + `}`)
 }
 
-// manySecretsDoc returns a deployment with n secret values in one array.
-func manySecretsDoc(n int) []byte {
-	var sb strings.Builder
-
-	sb.WriteString(`{"resources":[],"s":[`)
-
-	for i := range n {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-
-		sb.WriteString(secretJSON("p"))
-	}
-
-	sb.WriteString(`]}`)
-
-	return []byte(sb.String())
-}
-
 // longKeyDoc returns a deployment with m secret values below one key of keyLen
 // bytes, so each marker path holds that key.
 func longKeyDoc(keyLen, m int) []byte {
@@ -164,8 +145,8 @@ func (c *countingSink) wantRefused(t *testing.T, page stack.MaskedPage, err, wan
 }
 
 // TestMaskedReadBoundedWork proves each bound of the work of one read: the
-// refusal comes with ErrTooLarge and one refusal for the sink, and the
-// document just inside the bound still answers.
+// refusal comes with ErrStateBound and one refusal for the sink, and the
+// document inside the bound still answers.
 func TestMaskedReadBoundedWork(t *testing.T) {
 	t.Parallel()
 
@@ -174,9 +155,8 @@ func TestMaskedReadBoundedWork(t *testing.T) {
 		allowed []byte
 		refused []byte
 	}{
-		{"nesting depth above 100", deepDoc(100), deepDoc(101)},
-		{"more than 10000 markers", manySecretsDoc(10000), manySecretsDoc(10001)},
-		{"more than 8 MiB of marker path bytes", longKeyDoc(4_000_000, 2), longKeyDoc(4_000_000, 3)},
+		{"nesting depth above the limit", deepDoc(stack.MaxStateDepth + 1), deepDoc(stack.MaxStateDepth + 2)},
+		{"value paths over the work budget", longKeyDoc(4_000_000, 2), longKeyDoc(4_000_000, 40)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -195,23 +175,8 @@ func TestMaskedReadBoundedWork(t *testing.T) {
 			sink := newSink()
 
 			page, err := r.read(t, sink.refusal, "")
-			sink.wantRefused(t, page, err, stack.ErrTooLarge, stack.RefusalTooLarge)
+			sink.wantRefused(t, page, err, stack.ErrStateBound, stack.RefusalTooLarge)
 		})
-	}
-}
-
-// TestMaskedReadNestingScanIgnoresStrings proves a bracket inside a string,
-// also behind an escaped quote, does not count as nesting.
-func TestMaskedReadNestingScanIgnoresStrings(t *testing.T) {
-	t.Parallel()
-
-	raw := `{"resources":[],"a":"` + strings.Repeat("[", 500) + `","b":"x\"` +
-		strings.Repeat("[", 500) + `","c":"back\\"}`
-
-	r, _ := plantedReader(t, []byte(raw), -1)
-
-	if _, err := r.read(t, nil, ""); err != nil {
-		t.Fatalf("brackets inside strings: err = %v, want nil", err)
 	}
 }
 
@@ -259,7 +224,7 @@ func chainSecretsDoc(depth, n int) []byte {
 
 	sb.WriteString(`{"resources":[],`)
 
-	key := strings.Repeat("a", 40)
+	key := strings.Repeat("a", 400)
 	for range depth - 2 {
 		sb.WriteString(`"` + key + `":{`)
 	}
@@ -282,16 +247,16 @@ func chainSecretsDoc(depth, n int) []byte {
 }
 
 // TestMaskedReadRefusedWorkAllocatesLittle proves a refused read builds no
-// path: the deep document and the document with too many markers allocate
-// less than the paths would take. It runs alone, because the counter of
+// path: the deep document and the document that is over the work budget
+// allocate less than the paths would take. It runs alone, because the counter of
 // allocations holds the whole process.
 func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
 	// The counter holds the allocations of the whole process, so no other test
 	// may run at the same time. t.Setenv forbids t.Parallel, so the test runs alone.
 	t.Setenv("DUSTPAN_TEST_ALLOC", "1")
 
-	// The decode of the document alone allocates about 11 MB. A build of the
-	// paths adds more than 30 MB, so the bound sits between the two.
+	// The decode of the document alone allocates a few MB. A build of the paths
+	// would add more than 130 MB, so the bound sits between the two.
 	const bound = 16 << 20
 
 	for _, tc := range []struct {
@@ -299,7 +264,7 @@ func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
 		doc  []byte
 	}{
 		{"depth 8000 with 5000 secret objects", deepSecretsDoc(8000, 5000)},
-		{"10001 markers at depth 90", chainSecretsDoc(90, 10001)},
+		{"4500 markers below keys of 400 bytes at depth 90", chainSecretsDoc(90, 4500)},
 	} {
 		if len(tc.doc) >= fiveMB {
 			t.Fatalf("hostile document has %d bytes, want less than 5 MB", len(tc.doc))
@@ -311,8 +276,8 @@ func TestMaskedReadRefusedWorkAllocatesLittle(t *testing.T) {
 
 		got := allocDuring(func() { _, err = r.read(t, nil, "") })
 
-		if !errors.Is(err, stack.ErrTooLarge) {
-			t.Fatalf("err = %v, want the size error of the read", err)
+		if !errors.Is(err, stack.ErrStateBound) {
+			t.Fatalf("err = %v, want ErrStateBound", err)
 		}
 
 		if got > bound {
@@ -349,13 +314,14 @@ func (c shotContext) Err() error {
 // minErrCalls is the number of calls of Err that one uninterrupted read of
 // the document of the sweep makes at least: the check at the start of the
 // read, the checks of the stores that it calls, and the checks after the
-// decode and after the walk. Without one of the last two the count is lower.
-const minErrCalls = 4
+// decode, after the work scan and after the walk. Without one of the last
+// three the count is lower.
+const minErrCalls = 5
 
 // TestMaskedReadDeadlineSweep proves a deadline that ends the context at any
-// one call of Err never lets the read answer a page. The last two calls are
-// the checks after the decode and after the walk: they refuse with the
-// deadline error and report it to the sink.
+// one call of Err never lets the read answer a page. The last three calls are
+// the checks after the decode, after the work scan and after the walk: they
+// refuse with the deadline error and report it to the sink.
 func TestMaskedReadDeadlineSweep(t *testing.T) {
 	t.Parallel()
 
@@ -390,7 +356,7 @@ func TestMaskedReadDeadlineSweep(t *testing.T) {
 			t.Fatalf("deadline at call %d of %d: page %+v, err %v, want a refusal", k, total, page, err)
 		}
 
-		if k >= total-1 {
+		if k >= total-2 {
 			sink.wantRefused(t, page, err, stack.ErrReadDeadline, stack.RefusalDeadline)
 		}
 	}

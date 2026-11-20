@@ -357,6 +357,7 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 	})
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
@@ -680,7 +681,7 @@ func runNameLockPruneStep(t *testing.T, srv *Server) {
 func pruneEntries(t *testing.T, store *sqlite.Store) int {
 	t.Helper()
 
-	page, err := store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 50})
+	page, err := store.List(t.Context(), audit.ServerScope, audit.Page{Size: 50, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

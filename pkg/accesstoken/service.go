@@ -73,6 +73,13 @@ type Config struct {
 	// the principal with the reach of the caller. A zero or incomplete
 	// config refuses each such change: the check never skips.
 	Reach access.ReachConfig
+	// Makers decides whether the maker of a service token still has an
+	// act-as path to the principal of the token. With it, the Service
+	// refuses and revokes a service token at its use when the path is gone,
+	// and RevokeLostMakers revokes such tokens after a change. Nil keeps
+	// each service token until its expiry or a revoke: the server wires the
+	// access service, so only a setup with no grants passes nil.
+	Makers MakerChecker
 	// TempAdmins reads the temporary administrator records for the
 	// break-glass exemption of the inactivity checks. Nil turns the
 	// exemption off: an inactive token is refused even for a temporary
@@ -100,6 +107,7 @@ type Service struct {
 	freshness  Freshness
 	authz      identity.Authorizer
 	reach      access.ReachConfig
+	makers     MakerChecker
 	tempAdmins tempadmin.Reader
 	logger     *slog.Logger
 	now        func() time.Time
@@ -133,8 +141,16 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
-		authz: cfg.Authorizer, reach: cfg.Reach, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
+		store:      cfg.Store,
+		principals: cfg.Principals,
+		freshness:  cfg.Freshness,
+		authz:      cfg.Authorizer,
+		reach:      cfg.Reach,
+		makers:     cfg.Makers,
+		tempAdmins: cfg.TempAdmins,
+		logger:     logger,
+		now:        now,
+		newID:      newID,
 	}, nil
 }
 
@@ -258,9 +274,13 @@ func (s *Service) Get(ctx context.Context, id string) (Token, error) {
 }
 
 // CheckActive answers nil when the access token with the ID id is active now
-// and its principal still exists and is not disabled. Otherwise it answers an error that wraps
-// identity.ErrUnauthenticated, or the store error. It records no use of the
-// token: an update checks its token on each lease request (ADR 53).
+// and its principal still exists and is not disabled. For a service token it
+// also checks that the maker still has the act-as path to the principal, as
+// the check at the use of the token does, with the same revocation and audit
+// entry. A token that does not work answers an error that wraps
+// identity.ErrUnauthenticated. An error of a store, or of a maker check that
+// cannot decide, does not wrap it: the token is refused and kept. It records no use of the
+// token: an update checks its token on each lease request.
 func (s *Service) CheckActive(ctx context.Context, id string) error {
 	t, err := s.store.GetToken(ctx, id)
 	if errors.Is(err, ErrNotFound) {
@@ -288,7 +308,12 @@ func (s *Service) CheckActive(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: the principal of the access token is disabled", identity.ErrUnauthenticated)
 	}
 
-	return nil
+	// Defense in depth: the check at the use of the token runs when an update
+	// starts, and a change of a grant runs RevokeLostMakers. This check stays
+	// so that a path that ends with no such run, during an update that the
+	// token started, never lets the update keep its lease. It does not rely
+	// on those checks or on the lease check of the update service.
+	return s.checkMakerOfLease(ctx, t)
 }
 
 // List returns one page of tokens, newest first.
@@ -313,7 +338,23 @@ func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 func (s *Service) Revoke(ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, id string) error {
 	t, err := s.store.GetToken(ctx, id)
 	if err != nil {
-		return fmt.Errorf("revoke access token %q: %w", id, err)
+		return fmt.Errorf("revoke access token %q: %w", id, s.ownerFirst(ctx, caller, scope, err))
+	}
+
+	// The owner check runs before any answer about the kind, so an own route
+	// tells a person nothing about the row of another person, an unknown
+	// kind included. authorizeRevoke checks the owner again.
+	if scope == ScopeOwn {
+		if ownerErr := s.checkOwner(ctx, caller, t.PrincipalID); ownerErr != nil {
+			return fmt.Errorf("revoke access token %q: %w", id, ownerErr)
+		}
+	}
+
+	// Defense in depth: the store decode and the store revoke refuse an
+	// unknown kind too. This check stays so that a store adapter that skips
+	// them never lets a revoke act on a row of an unknown kind.
+	if !t.Kind.Valid() {
+		return fmt.Errorf("revoke access token %q: %w: %q", id, ErrUnknownKind, string(t.Kind))
 	}
 
 	if err := s.authorizeRevoke(ctx, caller, scope, t); err != nil {
@@ -423,7 +464,11 @@ func (s *Service) Rotate(
 
 	old, err := s.store.GetToken(ctx, id)
 	if err != nil {
-		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, err)
+		return Rotation{}, Secret{}, fmt.Errorf(
+			"rotate access token %q: %w",
+			id,
+			s.ownerFirst(ctx, caller, in.Scope, err),
+		)
 	}
 
 	if authErr := s.authorizeRotate(ctx, caller, in.Scope, old); authErr != nil {
@@ -683,6 +728,10 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}
 
 	if err := s.checkPolicyActive(ctx, m, now); err != nil {
+		return identity.Principal{}, err
+	}
+
+	if err := s.checkMakerAtUse(ctx, m.Token); err != nil {
 		return identity.Principal{}, err
 	}
 

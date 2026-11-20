@@ -560,7 +560,7 @@ func (stubWorkspaces) ReadState(
 	_ context.Context, id workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	switch id.String() {
-	case "sv-test123", "sv-second123", "sv-nomarks123", "sv-skipped123", "sv-encrypted123":
+	case "sv-test123", "sv-second123", "sv-nomarks123", "sv-skipped123", "sv-encrypted123", "sv-deep123", "sv-tiny123":
 		sv := stubStateVersion()
 		sv.ID = id
 
@@ -639,6 +639,21 @@ func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.Sensitive
 		return []byte(stubSecondState()), stubResourceMarks(), nil
 	case "sv-nomarks123":
 		return []byte(stubResourceState()), nil, nil
+	case "sv-deep123":
+		return []byte(stubHostileState(strings.Repeat(`{"a":`, 150) + `1` + strings.Repeat(`}`, 150))), nil, nil
+	case "sv-tiny123":
+		tiny := strings.Repeat(
+			`[`,
+			90,
+		) + strings.TrimSuffix(
+			strings.Repeat(`0,`, 400000),
+			",",
+		) + strings.Repeat(
+			`]`,
+			90,
+		)
+
+		return []byte(stubHostileState(`{"a":` + tiny + `}`)), nil, nil
 	case "sv-skipped123":
 		return []byte(stubSkippedState()), stubResourceMarks(), nil
 	case "sv-encrypted123":
@@ -646,6 +661,13 @@ func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.Sensitive
 	default:
 		return nil, nil, workspace.ErrStateVersionNotFound
 	}
+}
+
+// stubHostileState is a state of one resource whose attributes are the JSON
+// text attributes.
+func stubHostileState(attributes string) string {
+	return `{"version":4,"resources":[{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"instances":[{"attributes":` + attributes + `}]}]}`
 }
 
 // stubSecondState is the state of the second stub version: the sensitive

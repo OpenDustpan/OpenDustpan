@@ -44,6 +44,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
+		Membership:         coverageMembership{},
 		Tokens:             nil,
 		Checkpoints:        coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Events:             coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
@@ -166,7 +167,7 @@ func (coverageStackStore) RenameStack(
 }
 
 func (coverageStackStore) UpdateStackTags(
-	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.TagUpdate, _ namespace.Fence,
 ) error {
 	return nil
 }
@@ -350,4 +351,12 @@ func stateAllowEntries() []AllowEntry {
 				"resource and a changed secret, and checks that no secret value appears.",
 		},
 	}
+}
+
+// coverageMembership holds no stack in a collection. The coverage run only
+// reads the active update, which never asks it.
+type coverageMembership struct{}
+
+func (coverageMembership) CollectionOf(context.Context, stack.Ref) (string, bool, error) {
+	return "", false, nil
 }

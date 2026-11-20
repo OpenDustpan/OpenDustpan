@@ -3,6 +3,7 @@ package postgres //nolint:testpackage // The unexported write path of the settin
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -197,4 +198,20 @@ func JobWrite(ctx context.Context, s *Store, fence namespace.Fence, fn func(jobs
 // JobRead runs fn in one read transaction of the job stores of s.
 func JobRead(ctx context.Context, s *Store, fn func(jobstore.Tx) error) error {
 	return jobRunner{s: s}.Read(ctx, fn)
+}
+
+// MarkBreakGlassForTest sets the break-glass flag of the principal
+// principalID with direct SQL, as a restored row of a backup can hold it. No
+// port sets the flag on a principal that exists.
+func (s *Store) MarkBreakGlassForTest(t *testing.T, principalID string) {
+	t.Helper()
+
+	tag, err := s.pool.Exec(t.Context(), `UPDATE principals SET break_glass = true WHERE id = $1`, principalID)
+	if err != nil {
+		t.Fatalf("mark %s as a break-glass account: %v", principalID, err)
+	}
+
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("mark %s as a break-glass account: %d rows, want 1 row", principalID, tag.RowsAffected())
+	}
 }

@@ -124,15 +124,11 @@ app.kubernetes.io/part-of: opendustpan
     secretKeyRef:
       name: {{ .Values.keyEncryptionKey.existingSecret.name | quote }}
       key: {{ .Values.keyEncryptionKey.existingSecret.key | quote }}
-{{- with .Values.adminToken.existingSecret }}
-{{- if .name }}
 - name: DUSTPAN_ADMIN_TOKEN
   valueFrom:
     secretKeyRef:
-      name: {{ .name | quote }}
-      key: {{ .key | quote }}
-{{- end }}
-{{- end }}
+      name: {{ .Values.adminToken.existingSecret.name | quote }}
+      key: {{ .Values.adminToken.existingSecret.key | quote }}
 {{- with .Values.s3.credentials.existingSecret }}
 {{- if .name }}
 - name: AWS_ACCESS_KEY_ID
@@ -153,6 +149,10 @@ app.kubernetes.io/part-of: opendustpan
 - name: DUSTPAN_TLS_KEY
   value: /tls/tls.key
 {{- end }}
+{{- if eq (toString .Values.server.allowPlainHTTP) "true" }}
+- name: DUSTPAN_ALLOW_PLAIN_HTTP
+  value: "true"
+{{- end }}
 {{- with .Values.server.extraEnv }}
 {{- toYaml . | nindent 0 }}
 {{- end }}
@@ -167,6 +167,9 @@ and key, and values that the release needs.
 {{- $kek := .Values.keyEncryptionKey.existingSecret -}}
 {{- if or (not $db.name) (not $kek.name) -}}
 {{- fail "database.existingSecret.name and keyEncryptionKey.existingSecret.name are required: make the two Secrets and set both names" -}}
+{{- end -}}
+{{- if not .Values.adminToken.existingSecret.name -}}
+{{- fail "adminToken.existingSecret.name is empty. The server does not start without an admin token. Set adminToken.existingSecret.name to opendustpan-admin-token, then make the Secret with this command: kubectl create secret generic opendustpan-admin-token --from-literal=admin-token=$(openssl rand -hex 32)" -}}
 {{- end -}}
 {{- if and (eq $db.name $kek.name) (eq $db.key $kek.key) -}}
 {{- fail "database.existingSecret and keyEncryptionKey.existingSecret name the same Secret and key: use two different Secrets or keys" -}}
@@ -226,5 +229,8 @@ and key, and values that the release needs.
 {{- end -}}
 {{- if and .Values.metrics.serviceMonitor.enabled (not .Values.metrics.serviceMonitor.tokenSecret.name) -}}
 {{- fail "metrics.serviceMonitor.tokenSecret.name is required when metrics.serviceMonitor.enabled is true" -}}
+{{- end -}}
+{{- if not (or .Values.server.tls.existingSecret (hasPrefix "https://" (toString (default "" .Values.server.publicURL))) (eq (toString .Values.server.allowPlainHTTP) "true")) -}}
+{{- fail "the server listens on the pod address with no TLS, and serve refuses plain HTTP there. Set server.publicURL to the https URL of the ingress or load balancer that ends TLS, or set server.tls.existingSecret, or set server.allowPlainHTTP to true" -}}
 {{- end -}}
 {{- end -}}

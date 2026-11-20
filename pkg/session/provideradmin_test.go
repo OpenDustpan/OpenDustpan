@@ -326,7 +326,7 @@ func TestProviderAdminUpdate(t *testing.T) {
 		t.Fatalf("update of version 1 = %v, want ErrProviderChanged", err)
 	}
 
-	same, moved := "HTTPS://IdP.example", "https://other.example"
+	same, moved := "https://IdP.example", "https://other.example"
 
 	for _, tc := range []struct {
 		issuer *string

@@ -137,6 +137,7 @@ func newOutputsFixture(t *testing.T, authz identity.Authorizer) outputsFixture {
 	}, err: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Records:    nil,
 		Placements: nil,
 		Outputs:    reader, OutputSharing: nil, Views: nil, Namespaces: nsSvc, Units: reads,
 		Deleted: &memDeleted{entries: nil}, History: nil, Lifecycles: testLifecycles(),

@@ -137,7 +137,15 @@ type restoreDoc struct {
 func startRestore(t *testing.T, c *servertest.Cluster, backupID string) string {
 	t.Helper()
 
-	status, body := c.Do(t, 0, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+backupID+`"}`)
+	return startRestoreBody(t, c, `{"backupID":"`+backupID+`"}`)
+}
+
+// startRestoreBody starts a restore on server 0 with the request body and
+// returns its ID.
+func startRestoreBody(t *testing.T, c *servertest.Cluster, reqBody string) string {
+	t.Helper()
+
+	status, body := c.Do(t, 0, http.MethodPost, "/api/dustpan/v1/restores", reqBody)
 	if status != http.StatusAccepted {
 		t.Fatalf("start restore: status %d, body %s", status, body)
 	}
@@ -154,7 +162,13 @@ func startRestore(t *testing.T, c *servertest.Cluster, backupID string) string {
 func runRestore(t *testing.T, c *servertest.Cluster, backupID string) restoreDoc {
 	t.Helper()
 
-	id := startRestore(t, c, backupID)
+	return waitRestoreEnd(t, c, startRestore(t, c, backupID))
+}
+
+// waitRestoreEnd waits for the restore id on server 0 to end and returns it.
+func waitRestoreEnd(t *testing.T, c *servertest.Cluster, id string) restoreDoc {
+	t.Helper()
+
 	deadline := time.Now().Add(restoreLimit)
 
 	for time.Now().Before(deadline) {

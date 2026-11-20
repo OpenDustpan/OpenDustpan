@@ -32,6 +32,7 @@ type storeConfig struct {
 	installationKind    installation.Kind
 	installationKindSet bool
 	withoutMigrate      bool
+	allowWideFileMode   bool
 }
 
 // defaultStoreConfig returns the store options before any StoreOption.
@@ -40,7 +41,8 @@ func defaultStoreConfig() storeConfig {
 		logger: nil, loggerSet: false,
 		binaryVersion: "", binaryVersionSet: false,
 		installationKind: "", installationKindSet: false,
-		withoutMigrate: false,
+		withoutMigrate:    false,
+		allowWideFileMode: false,
 	}
 }
 
@@ -87,6 +89,16 @@ func WithStoreInstallationKind(kind installation.Kind) StoreOption {
 // refuse a database with a pending migration.
 func WithoutStoreMigrate() StoreOption {
 	return func(c *storeConfig) { c.withoutMigrate = true }
+}
+
+// WithStoreAllowWideFileMode lets a built-in SQLite store start on a database
+// file, a -wal file or a -shm file that group or other users can access, for
+// an operator who accepted that mode. The store logs a warning for each such
+// file. It does not relax the mode of a new file, the refusal of a file that
+// is not regular or a link, or the check of a staged restore file. It has no
+// effect on a PostgreSQL store.
+func WithStoreAllowWideFileMode() StoreOption {
+	return func(c *storeConfig) { c.allowWideFileMode = true }
 }
 
 // withServerDefaults answers config with the server values for each store
@@ -181,9 +193,15 @@ func WithPostgreSQL(dsn string, opts ...StoreOption) Option {
 }
 
 // WithBuiltinStore sets every store option of the server from b, which the
-// caller opened with OpenStore. The caller closes b. The store options apply
+// caller opened with OpenStore. The caller closes b: Close of the server
+// leaves b open, in any order of the two Close calls. The store options apply
 // after all other options, so they replace a With...Store option for the same
 // port. A nil b fails NewServer.
+//
+// Open b with the version of the binary and the installation kind of the
+// command (WithStoreBinaryVersion and WithStoreInstallationKind), because
+// NewServer does not check them again: WithBuiltinStore does not run the
+// schema check or set the kind marker, and the Open of the adapter does both.
 func WithBuiltinStore(b *BuiltinStore) Option {
 	return func(o *settings) {
 		builtin := newBuiltinStoreSettings(builtinStoreHandle, nil)
@@ -302,6 +320,10 @@ func (c storeConfig) sqliteOptions() []sqlite.Option {
 	}
 	if c.withoutMigrate {
 		opts = append(opts, sqlite.WithoutMigrate())
+	}
+
+	if c.allowWideFileMode {
+		opts = append(opts, sqlite.WithAllowWideFileMode())
 	}
 
 	return opts

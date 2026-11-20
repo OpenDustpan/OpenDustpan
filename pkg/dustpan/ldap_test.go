@@ -145,6 +145,7 @@ func TestNewServerLDAPSetup(t *testing.T) {
 func ldapProvider() dustpan.LDAPProvider {
 	return dustpan.LDAPProvider{
 		RootCAs:                   nil,
+		CAFile:                    "",
 		AllowedRanges:             nil,
 		ID:                        "corp-ldap",
 		DisplayName:               "Corp",

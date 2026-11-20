@@ -141,8 +141,24 @@ var Settings = []*Setting{
 		"DUSTPAN_DATABASE",
 		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
-		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
+		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)."+
+			" With `sqlite:<path>`, the server makes the database file with mode 0600. It refuses to start when "+
+			"the group or others can access the database file, `<path>-wal` or `<path>-shm`. The error names the "+
+			"file. Run `chmod 600` on each of the three files. You can also change the mount permissions of the "+
+			"volume (Docker or Kubernetes), so that only the owner can access the files. `serve` with "+
+			"`--database-allow-wide-file-mode` starts anyway. The host command has no such flag.",
 	).WithFile("database").WithStaticCredentialHost().WithSensitive().WithNoPasswordInFile(),
+	boolSetting(
+		"database-allow-wide-file-mode", "DUSTPAN_DATABASE_ALLOW_WIDE_FILE_MODE",
+		"start on a SQLite database file that the group or others can access (DUSTPAN_DATABASE_ALLOW_WIDE_FILE_MODE)",
+		"(none: off). Set `true` only when you accepted the risk and cannot change the mode, for example on a "+
+			"volume with fixed permissions. The server then starts on a database file, `<path>-wal` or "+
+			"`<path>-shm` that the group or others can access. It writes one warning with the path and the mode "+
+			"of each such file at each start. Every other file check stays. The server still makes a new file "+
+			"with mode 0600. It still refuses a file that is not a regular file. It still refuses a link in "+
+			"place of the `-wal` or `-shm` file. It still refuses a staged restore file with a wider mode. It "+
+			"has no effect with a PostgreSQL database",
+	).WithFile("database-allow-wide-file-mode"),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
 		"name of this installation, the primary installation of the namespaces it creates (DUSTPAN_INSTALLATION)",
@@ -220,6 +236,15 @@ var Settings = []*Setting{
 		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
 		referenceNone,
 	).WithFile("public-url").WithURL(),
+	boolSetting(
+		AllowPlainHTTPFlag, "DUSTPAN_ALLOW_PLAIN_HTTP",
+		"serve plain HTTP on an address that is not loopback, with no TLS and no https --public-url "+
+			"(DUSTPAN_ALLOW_PLAIN_HTTP)",
+		"(none: off). Without it, `serve` refuses to start when `--listen` is not a loopback address, "+
+			"`--tls-cert` is not set and `--public-url` is not an `https` URL. Set `true` only in a trusted "+
+			"network: tokens and state then go over the network with no encryption. The server writes a warning "+
+			"to the log at each start with it. `dev` does not read it",
+	).WithFile(AllowPlainHTTPFlag),
 	stringSetting(
 		"issuer-base-url", "DUSTPAN_ISSUER_BASE_URL", "",
 		"host of the OIDC issuer URL of each namespace, for example https://issuer.example.com; "+
@@ -457,7 +482,8 @@ var Settings = []*Setting{
 			"also set a new --oidc-provider (DUSTPAN_OIDC_ISSUER)",
 		"(none: no console sign-in). The identity of a person does not hold the issuer. To use another "+
 			"issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a "+
-			"person of the old issuer with the same `sub`.",
+			"person of the old issuer with the same `sub`. The issuer has no user name or password, no query and no "+
+			"fragment.",
 	).WithFile("oidc-issuer").WithStaticCredentialHost().WithURL().WithSensitive(),
 	stringSetting(
 		"oidc-provider", "DUSTPAN_OIDC_PROVIDER", "",
@@ -466,7 +492,8 @@ var Settings = []*Setting{
 			"the first sign-in, and never use it for another issuer (DUSTPAN_OIDC_PROVIDER)",
 		"(none). The ID is part of the identity of each person who signs in: the subject "+
 			"`<provider ID>:<sub>`. A principal with that subject, a local one too, is the principal of that "+
-			"person. Never change the ID after the first sign-in. A new issuer needs a new ID.",
+			"person. Never change the ID after the first sign-in. A new issuer needs a new ID. The IDs `dev` and "+
+			"`local` are reserved: the server refuses them at start.",
 	).WithFile("oidc-provider"),
 	stringSetting(
 		"oidc-display-name", "DUSTPAN_OIDC_DISPLAY_NAME", "",
@@ -494,14 +521,14 @@ var Settings = []*Setting{
 		"DUSTPAN_LDAP_URL",
 		"",
 		"address of the LDAP directory of the sign-in: ldaps://host[:port], or ldap://host[:port] with --ldap-start-tls; no path, query or user information. The sign-in also needs --ldap-provider, --ldap-bind-dn, --ldap-base-dn and --ldap-user-filter (DUSTPAN_LDAP_URL)",
-		"(none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, except to a loopback IP address or with `egress.allowPlainConnections`.",
+		"(none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, also to a loopback IP address: use ldaps:// or StartTLS. With `egress.allowPlainConnections` on, a connection with no TLS to a host that the egress rules allow is accepted.",
 	).WithFile("ldap.url").WithStaticCredentialHost().WithURL(),
 	stringSetting(
 		"ldap-provider",
 		"DUSTPAN_LDAP_PROVIDER",
 		"",
 		"ID of the LDAP provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the identity of each person who signs in: the subject <provider ID>:<subject>. Never change the ID after the first sign-in (DUSTPAN_LDAP_PROVIDER)",
-		"(none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID.",
+		"(none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID. The IDs `dev` and `local` are reserved: the server refuses them at start.",
 	).WithFile("ldap.provider"),
 	stringSetting(
 		"ldap-display-name", "DUSTPAN_LDAP_DISPLAY_NAME", "",
@@ -699,45 +726,58 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET",
 		"The client secret of the server at the OpenID Connect provider. Required when you set "+
-			"`--oidc-issuer` and no secret file. The server removes leading and trailing white space, "+
-			"and refuses a secret with a control character in it. "+
+			"`--oidc-issuer` and no secret file. A space at the start or at the end is part of the secret. "+
+			"The server uses the value exactly as it is. It refuses a value with a control character or a hidden character such as a byte order mark in it. "+
+			"A value of white space only counts as not set, and the server then reads the file variable. "+
 			"When you set both, this variable wins over `DUSTPAN_OIDC_CLIENT_SECRET_FILE`.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_LDAP_BIND_PASSWORD",
 		"The password of the service account of the LDAP sign-in. Required when you set `--ldap-url` and "+
-			"no password file. No flag and no configuration file key sets it.",
+			"no password file. No flag and no configuration file key sets it. A space at the start or at the end "+
+			"is part of the password. The server uses the value exactly as it is. It refuses a value with a control character or a hidden character such as a byte order mark in it. "+
+			"A value of white space only counts as not set, and the server then reads the file variable.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_LDAP_BIND_PASSWORD_FILE",
 		"A file that holds the password of the service account of the LDAP sign-in. Only its owner can "+
-			"read it. When you set both, `DUSTPAN_LDAP_BIND_PASSWORD` wins.",
+			"read it. A space at the start or at the end is part of the password. The server ignores one final "+
+			"line ending (LF or CR LF) of the file. It refuses a password with a control character or a hidden character such as a byte order mark in it. "+
+			"When you set both, `DUSTPAN_LDAP_BIND_PASSWORD` wins.",
 	),
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
 		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
-			"The server removes leading and trailing white space, such as a final line break, "+
-			"and refuses a secret with a control character in it. "+
+			"A space at the start or at the end is part of the secret. The server ignores one final line "+
+			"ending (LF or CR LF) of the file. It refuses a secret with a control character or a hidden character such as a byte order mark in it. "+
 			"When you set both, `DUSTPAN_OIDC_CLIENT_SECRET` wins.",
 	),
 	envSetting(
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET",
 		"The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. "+
-			"Required when `--audit-sink` names a webhook and you set no secret file.",
+			"Required when `--audit-sink` names a webhook and you set no secret file. A space at the start or at the end "+
+			"is part of the secret. The server uses the value exactly as it is. It refuses a value with a control character or a hidden character such as a byte order mark in it. "+
+			"A value of white space only counts as not set, and the server then reads the file variable.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE",
 		"A file that holds the webhook secret. Only its owner can read it. "+
+			"A space at the start or at the end is part of the secret. The server ignores one final line "+
+			"ending (LF or CR LF) of the file. It refuses a secret with a control character or a hidden character such as a byte order mark in it. "+
 			"When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins.",
 	),
 	envSetting(
 		"DUSTPAN_LOG_WEBHOOK_SECRET",
 		"The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. "+
-			"Required when `--log-sink` names a webhook and you set no secret file.",
+			"Required when `--log-sink` names a webhook and you set no secret file. A space at the start or at the end "+
+			"is part of the secret. The server uses the value exactly as it is. It refuses a value with a control character or a hidden character such as a byte order mark in it. "+
+			"A value of white space only counts as not set, and the server then reads the file variable.",
 	).WithSensitive(),
 	envSetting(
 		"DUSTPAN_LOG_WEBHOOK_SECRET_FILE",
 		"A file that holds the log webhook secret. Only its owner can read it. "+
+			"A space at the start or at the end is part of the secret. The server ignores one final line "+
+			"ending (LF or CR LF) of the file. It refuses a secret with a control character or a hidden character such as a byte order mark in it. "+
 			"When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins.",
 	),
 	envSetting(
@@ -761,7 +801,7 @@ var Settings = []*Setting{
 	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
-		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
+		"Required when you set no key file. The base64 text of 32 random bytes. `serve` stops before it opens the database when it has no key.",
 	).WithSensitive(),
 	envSetting(
 		DevDataDirEnv,

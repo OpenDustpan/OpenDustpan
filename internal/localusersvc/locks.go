@@ -281,14 +281,15 @@ func (s *Service) Locks(ctx context.Context, a Actor, principalID string) ([]Loc
 // Unlock ends every count and lock of the name of the local user of the
 // person principalID, in both scopes, and writes the audit entry with the
 // reason. It returns how many counts it cleared, localuser.ErrReasonRequired
-// for no reason, localuser.ErrNotFound for a person with no local user, and
+// for no reason, audit.ErrInvalidReason for a reason that the audit log
+// refuses, localuser.ErrNotFound for a person with no local user, and
 // localuser.ErrOutsideReach when the reach of a does not cover the reach of
 // the person: an unlock lets more guesses reach the password of the person.
 func (s *Service) Unlock(ctx context.Context, a Actor, principalID, reason string) (int64, error) {
 	object := principal.Ref(principalID)
 
 	if err := validReason(reason); err != nil {
-		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), "no reason", err)
+		return 0, s.refuse(ctx, a.Entry, on(ActionNameUnlocked, object), reasonCause(err), err)
 	}
 
 	u, err := s.store.UserByPrincipal(ctx, principalID)
@@ -351,9 +352,9 @@ func (s *Service) checkCallerReach(ctx context.Context, a Actor, target string) 
 	return s.checkReach(ctx, id, target)
 }
 
-// The audit entry of each run of the prune of the name counts.
+// The audit entry of each batch of the prune of the name counts.
 const (
-	// ActionNameLocksPruned is the action of the entry of each run of the
+	// ActionNameLocksPruned is the action of the entry of each batch of the
 	// prune.
 	ActionNameLocksPruned = "sign-in.name-locks-pruned"
 	// NameLocksObject is the object of the entry of a prune: the counts of
@@ -366,14 +367,20 @@ const (
 
 // PruneSettings is the effective schedule of the prune of the name counts:
 // the time between two runs, the age past the last failure of a count that
-// can go, and the most counts that one run deletes.
+// can go, the most counts that one batch deletes, the longest time that one
+// run starts new batches, and the pause between two batches.
 type PruneSettings struct {
 	Interval time.Duration
 	Age      time.Duration
-	MaxRows  int
+	// MaxRows is the most counts that one batch deletes.
+	MaxRows int
 	// MaxEnded is the most counts with an ended lock, that no attempt saw,
-	// that one run deletes. Each one gets an entry of the end of its lock.
+	// that one batch deletes. Each one gets an entry of the end of its lock.
 	MaxEnded int
+	// MaxRun is the longest time that one run starts new batches.
+	MaxRun time.Duration
+	// BatchPause is the time between two batches of one run.
+	BatchPause time.Duration
 }
 
 // Prune returns the effective schedule of the prune of the name counts, as
@@ -381,7 +388,63 @@ type PruneSettings struct {
 func Prune() PruneSettings {
 	return PruneSettings{
 		Interval: authgate.NamePruneInterval, Age: authgate.NamePruneAge, MaxRows: authgate.MaxNamePruneRows,
-		MaxEnded: authgate.MaxNamePruneEnded,
+		MaxEnded: authgate.MaxNamePruneEnded, MaxRun: authgate.NamePruneMaxRun,
+		BatchPause: authgate.NamePruneBatchPause,
+	}
+}
+
+// The reasons that a run of the prune stopped. A run that stops for
+// PruneStopShortBatch or PruneStopTimeBound returns no error. A run that stops
+// for PruneStopContext, PruneStopPauseEnded or PruneStopError returns an
+// error.
+const (
+	// PruneStopShortBatch: a batch deleted less than its limit, so no old
+	// count is left.
+	PruneStopShortBatch = "short batch"
+	// PruneStopTimeBound: the run reached the longest time of a run. The
+	// next run continues.
+	PruneStopTimeBound = "time bound"
+	// PruneStopContext: the context of the run ended between two batches. The
+	// run returns the error of the context.
+	PruneStopContext = "context ended"
+	// PruneStopPauseEnded: the pause between two batches ended before its
+	// time while the context was still live. The run returns
+	// ErrPrunePauseEnded.
+	PruneStopPauseEnded = "pause ended early"
+	// PruneStopError: a batch returned an error.
+	PruneStopError = "batch error"
+)
+
+// ErrPrunePauseEnded is the error of a run that stopped because the pause
+// between two batches ended before its time and the context of the run was
+// still live. It is not the error of a context.
+var ErrPrunePauseEnded = errors.New("localusersvc: the pause between two prune batches ended before its time")
+
+// PruneClock is the time source of a run of the prune: the clock that sets
+// the time bound, and the pause between two batches. A test injects a fake.
+type PruneClock struct {
+	// Now returns the current time.
+	Now func() time.Time
+	// Pause waits for d. It returns false when ctx ends first.
+	Pause func(ctx context.Context, d time.Duration) bool
+}
+
+// NewPruneClock returns the clock of a run with the given source of time and
+// a pause that uses a timer and ends with its context.
+func NewPruneClock(now func() time.Time) PruneClock {
+	return PruneClock{Now: now, Pause: pauseWithTimer}
+}
+
+// pauseWithTimer waits for d. It returns false when ctx ends first.
+func pauseWithTimer(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 
@@ -393,26 +456,57 @@ type PruneResult struct {
 	// AgeSeconds is the age of the run: a count goes only when its last
 	// failure is this old or older.
 	AgeSeconds int64 `json:"ageSeconds"`
-	// MaxRows is the most counts that the run could delete.
+	// MaxRows is the most counts that one batch could delete.
 	MaxRows int `json:"maxRows"`
+	// Batches is the count of batches that the run did.
+	Batches int `json:"batches"`
+	// StopReason is why the run stopped: one of the PruneStop values.
+	StopReason string `json:"stopReason"`
 }
 
-// PruneLocks runs one prune of the name counts of locks at the time at: it
-// deletes at most the MaxRows of Prune counts whose last failure is the Age
-// of Prune or older, whose lock ended and whose level is past its reset
-// time. The store appends the audit entry of the run, with the server as the
-// subject, the reason and the count that it deleted, in the transaction of
-// the delete. So each run has its entry, also a run that deletes nothing.
-func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Time) (PruneResult, error) {
+// PruneLocks runs the prune of the name counts of locks. A batch deletes at
+// most the MaxRows of Prune counts whose last failure is the Age of Prune or
+// older, whose lock ended and whose level is past its reset time. While a
+// batch deletes its full MaxRows, more old counts may wait, so the run waits
+// the BatchPause of Prune and starts another batch. So a spray of attempts
+// that adds counts faster than one batch deletes them cannot grow the table
+// without bound. The run stops at the first batch that deletes less
+// (PruneStopShortBatch), when the MaxRun of Prune has passed since the start
+// (PruneStopTimeBound). These two stops return no error: the next run
+// continues. Each batch gets ctx itself, so a batch never ends in the middle
+// because of the time bound. When ctx ends between two batches, the run
+// stops with PruneStopContext and returns the error of ctx, wrapped. So the
+// runner sees the same interruption as when ctx ends inside a batch. When the
+// pause ends before its time and ctx is live, the run stops with
+// PruneStopPauseEnded and returns ErrPrunePauseEnded, wrapped: it does not
+// report a context that did not end. A batch that fails stops the run with
+// the error and PruneStopError. The store appends the audit entry of each batch, with
+// the server as the subject, the reason and the count that it deleted, in
+// the transaction of the delete. So each batch has its entry, also a batch
+// that deletes nothing. Deleted in the result is the sum of all batches,
+// also when an error stops the run.
+func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, clock PruneClock) (PruneResult, error) {
 	p := Prune()
-	res := PruneResult{Deleted: 0, AgeSeconds: int64(p.Age / time.Second), MaxRows: p.MaxRows}
+	res := PruneResult{
+		Deleted:    0,
+		AgeSeconds: int64(p.Age / time.Second),
+		MaxRows:    p.MaxRows,
+		Batches:    0,
+		StopReason: "",
+	}
 
 	if locks == nil {
 		return res, fmt.Errorf("%w: name locks", ErrMissingDependency)
 	}
 
+	if clock.Now == nil || clock.Pause == nil {
+		return res, fmt.Errorf("%w: prune clock", ErrMissingDependency)
+	}
+
+	start := clock.Now()
+
 	e := audit.Entry{
-		At: at.UTC(), Namespace: audit.ServerScope, Subject: history.ServerSubject, IDPSubject: "", TokenID: "",
+		At: start.UTC(), Namespace: audit.ServerScope, Subject: history.ServerSubject, IDPSubject: "", TokenID: "",
 		Action: ActionNameLocksPruned, Object: NameLocksObject, Version: "", ValuePath: "", ValueCount: nil,
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelFrom(ctx), Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
@@ -420,12 +514,63 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Tim
 		Origin: nil,
 	}
 
-	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, p.MaxEnded, e)
-	if err != nil {
-		return res, fmt.Errorf("prune the name counts: %w", err)
+	deadline := start.Add(p.MaxRun)
+
+	for {
+		// The batch gets ctx, not a context with the time bound: a deadline
+		// inside a batch would roll the batch back and fail the run.
+		n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, p.MaxEnded, e)
+		if err != nil {
+			res.StopReason = PruneStopError
+
+			return res, fmt.Errorf("prune the name counts: %w", err)
+		}
+
+		res.Batches++
+		res.Deleted += n
+
+		// A batch that deletes less than its limit left no old count.
+		if n < int64(p.MaxRows) {
+			res.StopReason = PruneStopShortBatch
+
+			return res, nil
+		}
+
+		if err := pauseBetweenBatches(ctx, clock, p.BatchPause); err != nil {
+			res.StopReason = PruneStopContext
+			if errors.Is(err, ErrPrunePauseEnded) {
+				res.StopReason = PruneStopPauseEnded
+			}
+
+			return res, err
+		}
+
+		if !clock.Now().Before(deadline) {
+			res.StopReason = PruneStopTimeBound
+
+			return res, nil
+		}
+	}
+}
+
+// pauseBetweenBatches waits the pause of the clock between two batches. It
+// returns an error that wraps the error of ctx when ctx ended. It returns an
+// error that wraps ErrPrunePauseEnded when the pause ended early and ctx is
+// live.
+func pauseBetweenBatches(ctx context.Context, clock PruneClock, d time.Duration) error {
+	paused := clock.Pause(ctx, d)
+
+	// Defense in depth: a pause that ends early reports the end of ctx too.
+	// This check stays so that a clock whose pause ignores ctx cannot keep
+	// the run going after ctx ended.
+	ctxErr := ctx.Err()
+	if ctxErr == nil && paused {
+		return nil
 	}
 
-	res.Deleted = n
+	if ctxErr == nil {
+		return fmt.Errorf("prune the name counts: stopped between batches: %w", ErrPrunePauseEnded)
+	}
 
-	return res, nil
+	return fmt.Errorf("prune the name counts: stopped between batches: %w", ctxErr)
 }

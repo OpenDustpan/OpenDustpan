@@ -2,10 +2,12 @@ package storetest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -43,6 +45,10 @@ func RunIPAllowlist(t *testing.T, newStore IPAllowlistFactory) {
 		{name: "two namespaces with a list and one without", test: testIPAllowlistNamespacesWithListOrder},
 		{name: "a removed list leaves no namespace", test: testIPAllowlistNamespacesWithListRemoved},
 		{name: "a namespace without a list sorts first", test: testIPAllowlistNamespacesWithListSkipsEmpty},
+		{name: "each namespace comes with its own list", test: testIPAllowlistNamespacesWithListCarriesList},
+		{name: "a replaced list comes back as the new list", test: testIPAllowlistNamespacesWithListReplaced},
+		{name: "the limit of namespaces with a list is read whole", test: testIPAllowlistNamespacesWithListAtLimit},
+		{name: "one past the limit is ErrTooManyLists", test: testIPAllowlistNamespacesWithListPastLimit},
 		{name: "an unknown namespace is ErrNotFound", test: testIPAllowlistUnknownNamespace},
 		{name: "a stale fence is ErrFenced and writes nothing", test: testIPAllowlistStaleFence},
 		{name: "the audit entry joins the chain of the namespace", test: testIPAllowlistAuditEntry},
@@ -119,12 +125,9 @@ func mustSetIPAllowlist(
 func auditTotal(t *testing.T, s IPAllowlistStore, ns namespace.Name) int64 {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: 1})
-	if err != nil {
-		t.Fatalf("list audit entries: %v", err)
-	}
+	entries := audittest.All(t, s, ns)
 
-	return listing.Total
+	return int64(len(entries))
 }
 
 // testIPAllowlistNewNamespaceEmpty checks a new namespace holds the zero List.
@@ -237,8 +240,8 @@ func testIPAllowlistNamespacesWithListOrder(t *testing.T, s IPAllowlistStore) {
 	}
 
 	want := []namespace.Name{"acme", "beta"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("namespaces with a list = %v, want %v", got, want)
+	if names := namedListNames(got); !slices.Equal(names, want) {
+		t.Fatalf("namespaces with a list = %v, want %v", names, want)
 	}
 }
 
@@ -285,8 +288,113 @@ func testIPAllowlistNamespacesWithListSkipsEmpty(t *testing.T, s IPAllowlistStor
 	}
 
 	want := []namespace.Name{"beta"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("namespaces with a list = %v, want %v", got, want)
+	if names := namedListNames(got); !slices.Equal(names, want) {
+		t.Fatalf("namespaces with a list = %v, want %v", names, want)
+	}
+}
+
+// namedListNames returns the namespace names of lists, in their order.
+func namedListNames(lists []ipallow.NamedList) []namespace.Name {
+	out := make([]namespace.Name, 0, len(lists))
+	for i := range lists {
+		out = append(out, lists[i].Namespace)
+	}
+
+	return out
+}
+
+// testIPAllowlistNamespacesWithListCarriesList checks that each namespace in
+// the result comes with the list that was set for it, IPv4 and IPv6 entries
+// included, and never with the list of another namespace.
+func testIPAllowlistNamespacesWithListCarriesList(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	acme := newNamespace(t, s, "acme")
+	beta := newNamespace(t, s, "beta")
+
+	wantAcme := mustSetIPAllowlist(t, s, acme, []string{"10.0.0.0/8", "2001:db8::/32"}, ipAllowlistEntry(acme.Name))
+	wantBeta := mustSetIPAllowlist(t, s, beta, []string{"192.0.2.0/24"}, ipAllowlistEntry(beta.Name))
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("namespaces with a list = %v, want acme and beta", namedListNames(got))
+	}
+
+	want := []ipallow.NamedList{{Namespace: acme.Name, List: wantAcme}, {Namespace: beta.Name, List: wantBeta}}
+	for i := range want {
+		if got[i].Namespace != want[i].Namespace || got[i].List.Encode() != want[i].List.Encode() {
+			t.Fatalf("namespace %d = %s with %q, want %s with %q",
+				i, got[i].Namespace, got[i].List.Encode(), want[i].Namespace, want[i].List.Encode())
+		}
+	}
+}
+
+// testIPAllowlistNamespacesWithListReplaced checks that the result carries
+// the current list of a namespace after a replace, not the first one.
+func testIPAllowlistNamespacesWithListReplaced(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	acme := newNamespace(t, s, "acme")
+	mustSetIPAllowlist(t, s, acme, []string{"10.0.0.0/8"}, ipAllowlistEntry(acme.Name))
+	want := mustSetIPAllowlist(t, s, acme, []string{"198.51.100.0/24"}, ipAllowlistEntry(acme.Name))
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list: %v", err)
+	}
+
+	if len(got) != 1 || got[0].Namespace != acme.Name || got[0].List.Encode() != want.Encode() {
+		t.Fatalf("namespaces with a list = %+v, want acme with %q", got, want.Encode())
+	}
+}
+
+// setManyLists makes n namespaces that each have a list.
+func setManyLists(t *testing.T, s IPAllowlistStore, n int) {
+	t.Helper()
+
+	for i := range n {
+		ns := newNamespace(t, s, fmt.Sprintf("ns-%04d", i))
+		mustSetIPAllowlist(t, s, ns, []string{"10.0.0.0/8"}, ipAllowlistEntry(ns.Name))
+	}
+}
+
+// testIPAllowlistNamespacesWithListAtLimit checks that a store with exactly
+// ipallow.MaxNamespacesWithList lists returns each name, in name order.
+func testIPAllowlistNamespacesWithListAtLimit(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	setManyLists(t, s, ipallow.MaxNamespacesWithList)
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list at the limit: %v", err)
+	}
+
+	names := namedListNames(got)
+	if len(names) != ipallow.MaxNamespacesWithList || !slices.IsSorted(names) {
+		t.Fatalf("namespaces with a list = %d names (sorted: %t), want %d in name order",
+			len(names), slices.IsSorted(names), ipallow.MaxNamespacesWithList)
+	}
+}
+
+// testIPAllowlistNamespacesWithListPastLimit checks that one list past
+// ipallow.MaxNamespacesWithList gives ErrTooManyLists and no names.
+func testIPAllowlistNamespacesWithListPastLimit(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	setManyLists(t, s, ipallow.MaxNamespacesWithList+1)
+
+	got, err := s.NamespacesWithList(t.Context())
+	if !errors.Is(err, ipallow.ErrTooManyLists) {
+		t.Fatalf("list namespaces with a list past the limit: err = %v, want ErrTooManyLists", err)
+	}
+
+	if got != nil {
+		t.Fatalf("namespaces with a list past the limit = %d names, want none", len(got))
 	}
 }
 
@@ -350,7 +458,7 @@ func testIPAllowlistAuditEntry(t *testing.T, s IPAllowlistStore) {
 	want := ipAllowlistEntry(ns.Name)
 	mustSetIPAllowlist(t, s, ns, []string{"10.0.0.0/8"}, want)
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

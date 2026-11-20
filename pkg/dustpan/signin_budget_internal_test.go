@@ -36,6 +36,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,

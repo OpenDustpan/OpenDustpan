@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-19. The project owner decided it. Applies ADR 250 to the restore of a backup from a dev installation. Extends ADR 252 decision 7.
 
+Changed by:
+
+- ADR 389 changes decision 6: on the path with `KeepAccessTables`, the swap keeps the live `temp_admins` rows. The test row 2g changes with it.
+
 ## Context
 
 `opendustpan dev` signs in through the stored person `dev:admin`, which holds the site-administrator role (ADR 252). A backup leaves the installation table out. A restore keeps the live installation kind. So an operator can restore a backup of a dev installation into a production installation. The restore then brings `dev:admin`, its grant, and maybe its sessions and tokens.

@@ -2,6 +2,8 @@ package forge
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -52,18 +54,44 @@ type RegistrationView struct {
 	BaseURL     string
 	HookID      string
 	Version     int64
+	// OldEventSecretEndsAt is the effective end of the window of the old event
+	// secret. It is the zero time when no window is open or the end passed.
+	OldEventSecretEndsAt time.Time
 }
 
-// View returns r without its sealed key and its sealed event secret.
-func (r *Registration) View() RegistrationView {
-	return registrationView(r)
+// ViewAt returns r without its sealed key and its sealed event secret.
+// The window of the old event secret shows as open when its end is after now.
+func (r *Registration) ViewAt(now time.Time) RegistrationView {
+	return registrationView(r, now)
 }
 
-func registrationView(r *Registration) RegistrationView {
+// oldSecretOpen reports whether the old event secret of r is usable at now:
+// all three old fields are set and now is before the end.
+func (r *Registration) oldSecretOpen(now time.Time) bool {
+	// Defense in depth: ReceiveEvent and the store check a registration with
+	// Validate too. This check stays so that the view and the window never
+	// trust a partial set of old fields, whichever caller got the row.
+	return r.validateOldEventSecret() == nil && !r.OldEventSecretEndsAt.IsZero() &&
+		now.Before(r.OldEventSecretEndsAt)
+}
+
+func registrationView(r *Registration, now time.Time) RegistrationView {
+	var ends time.Time
+	if r.oldSecretOpen(now) {
+		ends = r.OldEventSecretEndsAt
+	}
+
 	return RegistrationView{
-		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, Key: SetView{ID: r.KeySetID, CreatedAt: r.KeyCreatedAt},
-		EventSecret: SetView{ID: r.EventSecretSetID, CreatedAt: r.EventSecretCreatedAt}, Kind: r.Kind,
-		AppID: r.AppID, BaseURL: r.BaseURL, HookID: r.HookID, Version: r.Version,
+		OldEventSecretEndsAt: ends,
+		CreatedAt:            r.CreatedAt,
+		UpdatedAt:            r.UpdatedAt,
+		Key:                  SetView{ID: r.KeySetID, CreatedAt: r.KeyCreatedAt},
+		EventSecret:          SetView{ID: r.EventSecretSetID, CreatedAt: r.EventSecretCreatedAt},
+		Kind:                 r.Kind,
+		AppID:                r.AppID,
+		BaseURL:              r.BaseURL,
+		HookID:               r.HookID,
+		Version:              r.Version,
 	}
 }
 
@@ -119,6 +147,7 @@ func (s *Service) PutRegistration(
 		// existing registration when it replaces the row, and returns the stored row.
 		BaseURL: baseURL, HookID: NewHookID(), KeySetID: NewSetID(), EventSecretSetID: NewSetID(),
 		AddressDigest: digest, SealedKey: sealedKey, SealedEventSecret: sealedEvent,
+		OldEventSecretSetID: "", OldSealedEventSecret: nil, OldEventSecretEndsAt: time.Time{},
 		Version: 1,
 	}
 
@@ -129,12 +158,131 @@ func (s *Service) PutRegistration(
 		change("privateKey", "set"), change("eventSecret", "set"),
 	)
 
-	stored, err := s.store.PutRegistration(ctx, reg, ifVersion, entry)
+	rotation, writeVersion, err := s.rotate(ctx, &reg, in.EventSecret, ifVersion)
+	if err != nil {
+		return RegistrationView{}, err
+	}
+
+	entry.Changes = append(entry.Changes, change("eventSecretRotation", rotation))
+
+	stored, err := s.store.PutRegistration(ctx, reg, writeVersion, entry)
 	if err != nil {
 		return RegistrationView{}, fmt.Errorf("put registration: %w", err)
 	}
 
-	return registrationView(&stored), nil
+	return registrationView(&stored, at), nil
+}
+
+// OldEventSecretWindow is how long the old event secret stays valid after a
+// rotation. An operator confirms the rotation earlier with ConfirmRotation.
+const OldEventSecretWindow = 7 * 24 * time.Hour
+
+// The values that the entry of a put records for the rotation of the event
+// secret.
+const (
+	rotationNone      = "none"
+	rotationStarted   = "started: the former secret stays valid for 7 days"
+	rotationKept      = "kept: the same secret, the window is as it was"
+	rotationEnded     = "ended: the window had passed"
+	rotationAddress   = "ended: the address changed"
+	rotationNotOpened = "ended: the former secret did not open"
+)
+
+// rotate sets the old event secret fields of reg, which holds the new
+// registration, from the stored registration of its kind. The time of the
+// rotation is reg.CreatedAt. It returns what the
+// entry records and the ifVersion that the write needs. When it computed the
+// old fields from a read, the write carries the version of that read, so a
+// concurrent put returns ErrVersionConflict and no secret is lost. A caller
+// version other than the one that was read is a conflict at once.
+func (s *Service) rotate(
+	ctx context.Context, reg *Registration, secret []byte, ifVersion int64,
+) (string, int64, error) {
+	kind, at := reg.Kind, reg.CreatedAt
+	stored, err := s.store.GetRegistration(ctx, kind)
+
+	switch {
+	case errors.Is(err, ErrNoRegistration):
+		// Nothing to rotate. The store answers a version above 0 with
+		// ErrNoRegistration.
+		return rotationNone, ifVersion, nil
+	case err != nil:
+		return "", 0, fmt.Errorf("get registration: %w", err)
+	case ifVersion > 0 && stored.Version != ifVersion:
+		return "", 0, fmt.Errorf("put registration: %w", ErrVersionConflict)
+	}
+
+	if stored.AddressDigest != reg.AddressDigest || stored.Digest() != reg.AddressDigest {
+		// The old secret is sealed for the old address and opens for no other.
+		return rotationAddress, stored.Version, nil
+	}
+
+	// A secret that does not open cannot be compared or kept: the window ends.
+	current, ok := s.openSealed(ctx, kind, stored.AddressDigest, stored.SealedEventSecret)
+	if !ok {
+		return rotationNotOpened, stored.Version, nil
+	}
+
+	if subtle.ConstantTimeCompare(current, secret) == 1 {
+		if !stored.oldSecretOpen(at) {
+			return rotationEnded, stored.Version, nil
+		}
+
+		reg.OldEventSecretSetID = stored.OldEventSecretSetID
+		reg.OldSealedEventSecret = slices.Clone(stored.OldSealedEventSecret)
+		reg.OldEventSecretEndsAt = stored.OldEventSecretEndsAt
+
+		return rotationKept, stored.Version, nil
+	}
+
+	// A different secret: the secret that was current becomes the old one. A
+	// third secret replaces the old one, because two columns hold two secrets.
+	reg.OldEventSecretSetID = stored.EventSecretSetID
+	reg.OldSealedEventSecret = slices.Clone(stored.SealedEventSecret)
+	reg.OldEventSecretEndsAt = at.Add(OldEventSecretWindow)
+
+	return rotationStarted, stored.Version, nil
+}
+
+// openSealed opens the sealed event secret of kind that is bound to digest.
+// ok is false for a value that does not open.
+func (s *Service) openSealed(ctx context.Context, kind Kind, digest string, sealed []byte) ([]byte, bool) {
+	plain, err := s.secrets.OpenBound(ctx, EventSecretScope(kind), []byte(digest), sealed)
+
+	return plain, err == nil
+}
+
+// ConfirmRotation ends the old event secret at once. It returns
+// ErrNoRegistration, ErrVersionConflict and ErrNoRotation when the
+// registration holds no old event secret, or when its window ended at or
+// before the time of the entry. e is the entry of the caller: the
+// service completes it.
+func (s *Service) ConfirmRotation(
+	ctx context.Context,
+	e audit.Entry,
+	kind Kind,
+	ifVersion int64,
+) (RegistrationView, error) {
+	if _, ok := s.openers[kind]; !ok || kind != KindGitHub {
+		return RegistrationView{}, fmt.Errorf("%w: the kind %q is not supported", ErrInvalid, kind)
+	}
+
+	at := s.now().UTC()
+	entry := serverEntry(e, at, "git-host-app:confirm-rotation", string(kind))
+
+	stored, err := s.store.ConfirmRotation(ctx, kind, ifVersion, entry)
+	if err != nil {
+		return RegistrationView{}, fmt.Errorf("confirm rotation: %w", err)
+	}
+
+	return registrationView(&stored, at), nil
+}
+
+// ViewOf returns reg without its sealed key and its sealed event secret. The
+// window of the old event secret shows as open when its end is after the time
+// of the clock of s, so that no caller reads the clock of the process.
+func (s *Service) ViewOf(reg *Registration) RegistrationView {
+	return registrationView(reg, s.now())
 }
 
 // GetRegistration returns the registration of kind without its secrets, or
@@ -145,7 +293,7 @@ func (s *Service) GetRegistration(ctx context.Context, kind Kind) (RegistrationV
 		return RegistrationView{}, fmt.Errorf("get registration: %w", err)
 	}
 
-	return registrationView(&reg), nil
+	return registrationView(&reg, s.now()), nil
 }
 
 // DeleteRegistration removes the registration of kind. It returns

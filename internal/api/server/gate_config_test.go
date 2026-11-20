@@ -99,16 +99,17 @@ func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gate
 	t.Helper()
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate:     true,
-		idempotency:    false,
-		noPolicyRoutes: false,
-		noGateEngine:   noEngine,
-		stored:         nil,
-		authz:          authz,
-		hostile:        nil,
-		passwords:      nil,
-		namespaces:     []namespace.Name{"acme", "beta"},
-		failPolicyRead: nil,
+		autoCreate:        true,
+		idempotency:       false,
+		failTempAdminRead: false,
+		noPolicyRoutes:    false,
+		noGateEngine:      noEngine,
+		stored:            nil,
+		authz:             authz,
+		hostile:           nil,
+		passwords:         nil,
+		namespaces:        []namespace.Name{"acme", "beta"},
+		failPolicyRead:    nil,
 	})
 	sess := e.freshSignIn(t)
 
@@ -221,47 +222,48 @@ func gateHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       nss,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           st,
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            st,
-		OnAuditFailure:   nil,
-		IPAllowlists:     nil,
-		Gates:            port,
-		SessionPolicy:    nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		SignIn:           nil,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         authz,
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         nss,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             st,
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              st,
+		OnAuditFailure:     nil,
+		IPAllowlists:       nil,
+		Gates:              port,
+		SessionPolicy:      nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		SignIn:             nil,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1349,4 +1351,48 @@ func (testApprovers) GroupByID(_ context.Context, id string) (gate.GroupRef, gat
 //nolint:ireturn // The service takes the engine port.
 func testGateEngine() gate.Engine {
 	return cedargo.New(cedargo.WithAccessActions("unit:write"))
+}
+
+// TestGateConfigUnknownNamespace proves that each route of the approval
+// configuration answers 404 with the namespace error for a namespace that
+// does not exist, also a read and a delete that find nothing to change.
+func TestGateConfigUnknownNamespace(t *testing.T) {
+	t.Parallel()
+
+	_, h := newGateHandler(t, gateAuthorizer{allow: map[identity.Action]namespace.Name{
+		identity.ActionNamespaceReadGates:   "ghost",
+		identity.ActionNamespaceManageGates: "ghost",
+	}})
+
+	def := gateBase + "ghost" + gateDefault
+	rules := gateBase + "ghost" + gateRulesURL
+	rule := rules + "/ops"
+	ruleBody := `{"count":1,"approvers":{"users":["bo"]}}`
+
+	tests := []struct {
+		name string
+		call gateCall
+	}{
+		{"list the rules", gateCall{http.MethodGet, rules, "", ""}},
+		{"read a rule", gateCall{http.MethodGet, rule, "", ""}},
+		{"read the default", gateCall{http.MethodGet, def, "", ""}},
+		{"delete the default", gateCall{http.MethodDelete, def, "", ""}},
+		{"delete the default at a version", gateCall{http.MethodDelete, def, "", `"1"`}},
+		{"delete a rule", gateCall{http.MethodDelete, rule, "", ""}},
+		{"put the default", gateCall{http.MethodPut, def, platformDefault, ""}},
+		{"put a rule", gateCall{http.MethodPut, rule, ruleBody, ""}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := serveGate(t, h, tt.call)
+			wantStatus(t, rec, http.StatusNotFound)
+
+			if !strings.Contains(rec.Body.String(), "namespace not found") {
+				t.Fatalf("%s body = %s, want the namespace error", tt.name, rec.Body.String())
+			}
+		})
+	}
 }

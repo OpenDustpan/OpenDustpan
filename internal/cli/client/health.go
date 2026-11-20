@@ -94,13 +94,16 @@ func RunHealth(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 
 	if status < 200 || status > 299 {
-		const hint = "check the server log and run opendustpan health again"
+		text := answerText(status, fmt.Sprintf("GET %s answered %d %s", url, status, body),
+			"check the server log and run opendustpan health again")
 
-		return fmt.Errorf(
-			"%w: %s",
-			ErrHealthNotReady,
-			answerText(status, fmt.Sprintf("GET %s answered %d %s", url, status, body), hint),
-		)
+		// A 4xx answer has no hint in answerText. This answer has one fix,
+		// so the text names it.
+		if status == http.StatusBadRequest && strings.Contains(body, "HTTP request to an HTTPS server") {
+			text += ": the server uses TLS: set --tls-cert (DUSTPAN_TLS_CERT) and run opendustpan health again"
+		}
+
+		return fmt.Errorf("%w: %s", ErrHealthNotReady, text)
 	}
 
 	if _, err := fmt.Fprintln(stdout, "ready"); err != nil {

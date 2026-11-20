@@ -312,7 +312,7 @@
       ],
       "properties": {
         "existingSecret": {
-          "$ref": "#/definitions/optionalSecretRef"
+          "$ref": "#/definitions/requiredSecretRef"
         }
       }
     },
@@ -610,6 +610,9 @@
           "type": "string",
           "pattern": "^$|^https?://[^/]+(/.*)?$"
         },
+        "allowPlainHTTP": {
+          "type": "boolean"
+        },
         "trustedProxies": {
           "type": "array",
           "items": {
@@ -691,6 +694,7 @@
                         "DUSTPAN_TLS_CERT",
                         "DUSTPAN_TLS_KEY",
                         "DUSTPAN_PUBLIC_URL",
+                        "DUSTPAN_ALLOW_PLAIN_HTTP",
                         "DUSTPAN_TRUSTED_PROXIES",
                         "DUSTPAN_TRUSTED_PROXY_HEADER",
                         "DUSTPAN_INSTALLATION",
@@ -780,6 +784,7 @@
       },
       "required": [
         "publicURL",
+        "allowPlainHTTP",
         "trustedProxies",
         "trustedProxyHeader",
         "installation",

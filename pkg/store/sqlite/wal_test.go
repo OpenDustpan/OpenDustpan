@@ -385,6 +385,13 @@ type walBackupSource struct {
 // hold a reader open; the tamper helpers in inspect_test.go and sqlite_test.go
 // use it too, so keep the timeout in sync with the store default.
 func openRawDB(path string) (*sql.DB, error) {
+	// A new file gets mode 0600, as the store makes it: Open refuses a wider mode.
+	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+		if writeErr := os.WriteFile(path, nil, 0o600); writeErr != nil {
+			return nil, fmt.Errorf("make raw database file: %w", writeErr)
+		}
+	}
+
 	query := url.Values{}
 	query.Add("_pragma", "busy_timeout(10000)")
 
@@ -573,7 +580,7 @@ func writeGrowWALRow(ctx context.Context, t *testing.T, row growWALRow) stack.Re
 		NamespaceID: "",
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		Tags:        map[string]string{"batch": strconv.Itoa(row.batch), "pad": row.pad},
+		Tags:        padTags(map[string]string{"batch": strconv.Itoa(row.batch)}, row.pad),
 		Ref:         ref,
 		ID:          stack.ID(ident.NewID("stk-")),
 		Version:     0,
@@ -1527,7 +1534,7 @@ func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob
 			NamespaceID: "",
 			CreatedAt:   now,
 			UpdatedAt:   now,
-			Tags:        map[string]string{"run": job.prefix, "pad": pad},
+			Tags:        padTags(map[string]string{"run": job.prefix}, pad),
 			Ref:         ref,
 			ID:          stack.ID(ident.NewID("stk-")),
 			Version:     0,
@@ -1672,4 +1679,19 @@ func (r *walLogRecorder) busyWarnings() []walLogRecord {
 	}
 
 	return out
+}
+
+// padTags adds pad to tags as tags "pad0", "pad1" and so on, with at most 256
+// bytes each: the store refuses a tag value over that size, and a test that
+// needs bulky rows spreads its filler over several tags.
+func padTags(tags map[string]string, pad string) map[string]string {
+	const maxValue = 256
+
+	for i := 0; pad != ""; i++ {
+		n := min(len(pad), maxValue)
+		tags["pad"+strconv.Itoa(i)] = pad[:n]
+		pad = pad[n:]
+	}
+
+	return tags
 }

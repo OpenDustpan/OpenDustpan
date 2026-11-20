@@ -8,15 +8,29 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
 
 ## Sign-in
 
-- **Administrator tokens are the only sign-in.** The server reads them from
-  `DUSTPAN_ADMIN_TOKEN` (comma-separated) or from the file in
+- **These kinds of sign-in exist.** An administrator token that the operator
+  sets at start (the bootstrap administrator token), a console sign-in of a
+  person, an access token that the server issued, and the short-lived
+  capabilities below. A console sign-in uses an OpenID Connect or OAuth 2.0
+  provider ([Console sign-in](../guides/console-sign-in.md)), an LDAP
+  directory ([LDAP sign-in](../guides/ldap-sign-in.md)), a CAS server
+  ([CAS sign-in](../guides/cas-sign-in.md)), a header that a trusted proxy
+  sets ([Trusted-header sign-in](../guides/trusted-header-sign-in.md)), a
+  local user name and password ([Local users](../guides/local-users.md)), or a
+  passkey ([Passkeys](../guides/passkeys.md)). A break-glass account signs in
+  with a passkey and a reason ([Break-glass accounts](../guides/break-glass-accounts.md)).
+- **The bootstrap administrator token is the operator's token.** The server
+  reads it from `DUSTPAN_ADMIN_TOKEN` (comma-separated) or from the file in
   `DUSTPAN_ADMIN_TOKEN_FILE`. No flag takes a token, because flags show in
   process lists. The server deletes `DUSTPAN_ADMIN_TOKEN` from its
-  environment after it reads it.
-- **Each token is at least 32 bytes.** The server refuses an empty or a
-  duplicate token, and a token file that the group or others can read.
-- **The server keeps no token in its database.** It holds a SHA-256 hash of
-  each token in memory and compares in constant time.
+  environment after it reads it. Each such token is a full administrator.
+  It cannot make or rotate an access token, and it cannot make a change that
+  needs a fresh sign-in: those routes answer 403 with the error code
+  `mfa.fresh-step-required`.
+- **Each bootstrap token is at least 32 bytes.** The server refuses an empty
+  or a duplicate token, and a token file that the group or others can read.
+- **The server keeps no bootstrap token in its database.** It holds a SHA-256
+  hash of each token in memory and compares in constant time.
 - **Each tool sends the token in its own header:** the Pulumi CLI as
   `Authorization: token <token>`, OpenTofu as `Authorization: Bearer <token>`.
 - **Two short-lived capabilities need no token.** A Pulumi update uses an
@@ -34,13 +48,18 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
   the `X-Dustpan-CSRF` header. The sign-in cookie stays `SameSite=Lax`, so
   the return from the identity provider works.
 
-Planned: users, teams and roles, scoped access tokens, and
-single sign-on with directory sync.
+Planned: directory sync of persons and groups from an identity provider.
 
 ## Authorization
 
-- **Every token signs in as an administrator,** and an administrator can do
-  every action. No other kind of principal exists today.
+- **A bootstrap administrator token signs in as an administrator,** and an
+  administrator can do every action. Every other caller is a principal: a
+  person, or a service principal. A principal can do only what its grants
+  allow. A grant gives a role to a principal or a group on an object, and a
+  person can list, audit and revoke each grant. `GET /api/server/roles` lists
+  the built-in and the custom roles. See
+  [Roles and grants](../guides/roles-and-grants.md) and
+  [Principals and groups](../guides/principals-and-groups.md).
 - **Every route declares its actions.** Before a handler runs, the server
   signs in the caller, finds the object of each action, and checks each
   action. A test in each API fails when a route has no action and is not on
@@ -50,8 +69,8 @@ single sign-on with directory sync.
   `GET /health/ready`, and the files of the web console when you set
   `--console-dir`.
 
-The actions already split, for example, reading a unit from reading its
-secrets. With only administrators, that split has no effect yet.
+The actions split, for example, reading a unit from reading its secrets.
+The built-in roles use that split, for example `viewer` and `auditor`.
 
 ## Access tokens
 
@@ -61,8 +80,9 @@ persons and services.
 - **The server stores only a SHA-256 digest of each secret.** It shows the
   secret once, at create or rotation.
 - **An access token cannot make or rotate a token.** Only a caller without
-  a stored token can: today the bootstrap admin token, later a
-  sign-in. A token that could make tokens would outlive its
+  a stored token can: a person in a console session with a recent sign-in.
+  The bootstrap administrator token cannot either: the routes answer 403 with
+  the error code `mfa.fresh-step-required`. A token that could make tokens would outlive its
   maximum lifetime and a revoke of the token that made it.
 - **Each person makes only its own personal tokens.** A token acts as its
   principal, so a personal token for another person would be a grant by
@@ -320,8 +340,17 @@ Encryption of a whole backup is not decided.
 ## Transport
 
 - **TLS.** `--tls-cert` and `--tls-key` turn on HTTPS, with TLS 1.2 or later.
-  On plain HTTP on an address that is not loopback, the server logs a warning
-  and serves anyway. OpenTofu needs HTTPS.
+  OpenTofu needs HTTPS.
+- **Plain HTTP.** `serve` refuses to start with plain HTTP on an address that
+  is not loopback. It starts there in three cases. The server has its own
+  TLS. Or `--public-url` is an `https` URL, which says that a proxy in front
+  ends TLS. Or the operator set `--allow-plain-http`
+  (`DUSTPAN_ALLOW_PLAIN_HTTP`). With `--allow-plain-http`, `serve` logs a
+  warning at each start. `serve` checks the settings before it opens the
+  database, and checks the address that the listener holds again, so a name
+  that resolves to another address does not pass. `dev` logs a warning and
+  serves. `doctor` fails its listen address check in the case that `serve`
+  refuses.
 - **Behind a reverse proxy.** By default the server reads no forwarding
   header. Set `--public-url` to the external URL, and `--trusted-proxies`
   when the proxy adds one. The next section says how the server reads it.

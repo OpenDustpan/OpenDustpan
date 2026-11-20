@@ -37,6 +37,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -80,7 +81,9 @@ const noWorkingBreakGlassMessage = "The change leaves too few working break-glas
 // /api/server/principals/{id}/enable clears it.
 // TemporaryAdministrator is true for a temporary administrator that still
 // works, with its fixed expiry in TemporaryExpiresAt, so the console shows
-// a banner for it. Both stay empty for every other principal.
+// a banner for it. A true flag with a null expiry means that the server could
+// not read the temporary administrator records after a committed write, and
+// marked each person to be safe. Both stay empty for every other principal.
 //
 // Contract: never remove or rename these fields. The console and the
 // clients read only this API, and they update on their own schedule.
@@ -98,8 +101,10 @@ type principalResponse struct {
 	Namespace  string `json:"namespace"`
 	GroupCount int64  `json:"groupCount"`
 	// TemporaryAdministrator and TemporaryExpiresAt name a working
-	// temporary administrator and its fixed expiry. A null expiry means
-	// the principal is no temporary administrator.
+	// temporary administrator and its fixed expiry. A true flag with a null
+	// expiry means that the server could not read the records and marked the
+	// person to be safe. A false flag means the principal is no temporary
+	// administrator.
 	TemporaryAdministrator bool    `json:"temporaryAdministrator"`
 	TemporaryExpiresAt     *string `json:"temporaryExpiresAt"`
 }
@@ -216,7 +221,7 @@ func principalOf(p principal.Principal) principalResponse {
 // per principal. Only persons are marked: only a person holds a record. A
 // failed read returns the error, so the handler answers 500.
 func (h *Handler) markTempAdmin(ctx context.Context, body any) (any, error) {
-	if h.tempAdmins == nil {
+	if h.tempAdmins == nil || !holdsPrincipals(body) {
 		return body, nil
 	}
 
@@ -244,6 +249,17 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) (any, error) {
 		return markTempAdminMembers(v, mark), nil
 	default:
 		return body, nil
+	}
+}
+
+// holdsPrincipals reports whether body is a body that carries principals, so
+// that the read of the records is for a body that needs it.
+func holdsPrincipals(body any) bool {
+	switch body.(type) {
+	case principalResponse, principalListResponse, memberResponse, memberListResponse:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -428,7 +444,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 			return
 		}
 
-		h.writePrincipalResult(w, r, res)
+		h.writePrincipalResult(w, r, res, readResult)
 	}
 }
 
@@ -442,7 +458,8 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 		if err == nil {
-			h.writePrincipalResult(w, r, res)
+			h.revokeLostMakers(r, p, action, res.object)
+			h.writePrincipalResult(w, r, res, committedWrite)
 
 			return
 		}
@@ -459,7 +476,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 		if res.object != "" && h.principals != nil {
 			h.appendServerChangeReason(r, p, serverChange{
 				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			}, reachReason(err))
+			}, refusalReason(err))
 		}
 	}
 }
@@ -476,10 +493,23 @@ func (h *Handler) runPrincipalOp(
 	return op(w, r, h.principals, c.e, c.p)
 }
 
+// resultKind says whether a result follows a read or a committed write.
+type resultKind int
+
+const (
+	// readResult follows a read: nothing was stored.
+	readResult resultKind = iota
+	// committedWrite follows a write that the store has committed.
+	committedWrite
+)
+
 // writePrincipalResult writes the status and the body of a success. A body
 // that holds principals carries the banner flag of each working temporary
-// administrator. A failed flag read answers 500 with the usual error body.
-func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult) {
+// administrator. kind says whether the result follows a committed write.
+// A failed flag read answers 500 with the usual error body
+// for a read. After a committed write it answers the stored principal, each
+// person marked (fail closed), and logs a warning.
+func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult, kind resultKind) {
 	if res.body == nil {
 		w.WriteHeader(res.status)
 
@@ -488,12 +518,53 @@ func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, r
 
 	marked, err := h.markTempAdmin(r.Context(), res.body)
 	if err != nil {
-		h.writeError(r.Context(), w, err)
+		// A read cannot have stored anything: it answers the error. The
+		// caller says whether the result follows a committed write.
+		if kind == readResult {
+			h.writeError(r.Context(), w, err)
 
-		return
+			return
+		}
+
+		// The write is stored, so the answer must match the stored state.
+		// Fail closed: each person of the body is marked as a temporary
+		// administrator, the safe direction for a banner. The log holds the
+		// error type only: the text of a store error can hold driver text.
+		h.logger.WarnContext(r.Context(), "the temporary administrator read failed after a principal write",
+			slog.String("principal", res.object), slog.String("cause", causeType(err)))
+
+		marked = markAllTempAdmin(res.body)
 	}
 
 	h.writeJSON(r.Context(), w, res.status, marked)
+}
+
+// markAllTempAdmin sets the banner flag on each person of a body that holds
+// principals, with no expiry time. It is the fail-closed answer when the read
+// of the records failed: it never hides a temporary administrator.
+func markAllTempAdmin(body any) any {
+	mark := func(res principalResponse) principalResponse {
+		if res.Kind == string(principal.KindPerson) {
+			res.TemporaryAdministrator = true
+		}
+
+		return res
+	}
+
+	switch v := body.(type) {
+	case principalResponse:
+		return mark(v)
+	case principalListResponse:
+		return markTempAdminPage(v, mark)
+	case memberResponse:
+		v.Principal = mark(v.Principal)
+
+		return v
+	case memberListResponse:
+		return markTempAdminMembers(v, mark)
+	default:
+		return body
+	}
 }
 
 // ok returns the result of a success.
@@ -1062,22 +1133,48 @@ func removeMember(
 	return ok(http.StatusNoContent, nil, object), nil
 }
 
-// classifyPrincipal maps the principal and group errors to their status and
-// message: a bad body, subject, name or kind answers 400, a taken subject,
-// name or membership 409, an unknown principal, group or membership 404, and
-// a store with no principal port 501. A membership change of a group that a
-// directory keeps answers 409, and the message names the directory. The domain wraps each sentinel with
-// the ID or the name it acted on, never with driver text.
+// classifyPrincipal maps the principal and group errors of a bad request and
+// of the break-glass rules to their status and message: a bad body, subject,
+// name or kind answers 400, and a break-glass rule 400, 403 or 409. It runs
+// before classifyIdentity, so a role or token error that also wraps one of
+// these errors keeps this answer. The errors of the state of a principal
+// map in classifyPrincipalState, after classifyIdentity. The domain wraps
+// each sentinel with the ID or the name it acted on, never with driver text.
 func classifyPrincipal(err error) (failure, bool) {
 	if f, ok := classifyPrincipalRequest(err); ok {
 		return f, true
 	}
 
-	if errors.Is(err, principal.ErrNoWorkingBreakGlass) {
+	return classifyBreakGlass(err)
+}
+
+// breakGlassPasswordMessage is the answer of a write that would give a
+// break-glass account a local password.
+const breakGlassPasswordMessage = "A break-glass account must have no local password. " +
+	"Remove the password first. See the break-glass accounts guide."
+
+// classifyBreakGlass maps the errors of the break-glass rules: a change that
+// leaves too few working break-glass accounts and a break-glass account with
+// a local password answer 409, a break-glass account that is not a person
+// 400, and a verdict of a person of the break-glass use on its own review
+// 403.
+func classifyBreakGlass(err error) (failure, bool) {
+	switch {
+	case errors.Is(err, principal.ErrNoWorkingBreakGlass):
 		return failCoded(http.StatusConflict, noWorkingBreakGlassMessage, errcode.PrincipalNoWorkingBreakGlass), true
+	case errors.Is(err, principal.ErrBreakGlassPassword):
+		return failCoded(http.StatusConflict, breakGlassPasswordMessage, errcode.PrincipalBreakGlassPassword), true
+	case errors.Is(err, principal.ErrBreakGlassKind):
+		return failCoded(
+			http.StatusBadRequest,
+			principal.ErrBreakGlassKind.Error(),
+			errcode.PrincipalBreakGlassKind,
+		), true
+	case errors.Is(err, breakglass.ErrSelfReview):
+		return failCoded(http.StatusForbidden, breakglass.ErrSelfReview.Error(), errcode.BreakGlassSelfReview), true
 	}
 
-	return classifyPrincipalState(err)
+	return fail(0, ""), false
 }
 
 // classifyPrincipalRequest maps the errors of a bad body, subject, page or
@@ -1100,7 +1197,12 @@ func classifyPrincipalRequest(err error) (failure, bool) {
 }
 
 // classifyPrincipalState maps the errors of a taken, disabled, kept or unknown
-// principal, and of a store with no principal port.
+// principal, and of a store with no principal port: a taken subject, name or
+// membership answers 409, an unknown principal, group or membership 404, and
+// a store with no principal port 501. A membership change of a group that a
+// directory keeps answers 409, and the message names the directory. It runs
+// after classifyIdentity: the end of the last site administrator maps there,
+// in classifyAccess.
 func classifyPrincipalState(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, principal.ErrAlreadyExists):
@@ -1111,8 +1213,6 @@ func classifyPrincipalState(err error) (failure, bool) {
 		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalNotDisabled), true
 	case errors.Is(err, principal.ErrDisabled):
 		return failCoded(http.StatusConflict, err.Error(), errcode.PrincipalDisabled), true
-	case errors.Is(err, access.ErrLastSiteAdministrator):
-		return failCoded(http.StatusConflict, err.Error(), errcode.AccessLastSiteAdministrator), true
 	case errors.Is(err, principal.ErrNotFound):
 		return failCoded(http.StatusNotFound, err.Error(), errcode.PrincipalNotFound), true
 	case errors.Is(err, errNoPrincipalStore):

@@ -30,6 +30,7 @@ const (
 func damagedCases() []suiteCase {
 	return []suiteCase{
 		{"a damaged row is reported by List and can be canceled by its ID", testDamagedList},
+		{"GetDamaged reads the row and the namespace of a damaged job only", testGetDamaged},
 		{"CancelDamaged refuses a job that is not damaged", testDamagedCancelValid},
 		{"a damaged row does not stop the reconcile from dispatching the good jobs", testDamagedDispatch},
 		{"a damaged row does not stop the reconcile from expiring the good jobs", testDamagedExpire},
@@ -79,6 +80,36 @@ func testDamagedList(t *testing.T, h Harness) {
 		job.ErrFinished,
 	) {
 		t.Fatalf("a second CancelDamaged = %v, want ErrFinished", err)
+	}
+}
+
+// testGetDamaged proves that GetDamaged names the unit and the namespace of a
+// damaged row, and refuses a job that decodes and a job that does not exist.
+func testGetDamaged(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	good := create(t, h, f, newJob(f.unit, job.OperationPlan, ""), nil)
+	bad := create(t, h, f, newJob(f.unit, job.OperationPlan, ""), nil)
+
+	damage(t, h, bad.ID)
+
+	row, ns, err := h.Jobs.GetDamaged(t.Context(), bad.ID)
+	if err != nil {
+		t.Fatalf("GetDamaged = %v", err)
+	}
+
+	if row.ID != bad.ID || row.UnitID != f.unit.UnitID() || row.Reason == "" || ns != f.fence.Namespace {
+		t.Fatalf("GetDamaged = %+v in %q, want the row of %s on unit %q in %q", row, ns, bad.ID, f.unit.UnitID(),
+			f.fence.Namespace)
+	}
+
+	if _, _, err = h.Jobs.GetDamaged(t.Context(), good.ID); !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("GetDamaged of a job that decodes = %v, want ErrInvalid", err)
+	}
+
+	if _, _, err = h.Jobs.GetDamaged(t.Context(), "job-missing"); !errors.Is(err, job.ErrNotFound) {
+		t.Fatalf("GetDamaged of an unknown job = %v, want ErrNotFound", err)
 	}
 }
 

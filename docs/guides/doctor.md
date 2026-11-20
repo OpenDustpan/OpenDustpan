@@ -22,7 +22,7 @@ Each line starts with `pass`, `warn` or `fail`, then the name of the check:
 pass  key: the key file /etc/opendustpan/dustpan.key has mode 0600 and the size of a key
 pass  key place: the key file is not next to the data
 pass  database: the database is set
-pass  admin token: no bootstrap admin token is set
+pass  admin token: each admin token has at least 32 bytes
 warn  backup target: no backup target is set: set --backup-target (DUSTPAN_BACKUP_TARGET), for example dir:/var/backups/dustpan
 ```
 
@@ -35,9 +35,10 @@ No line shows a key, a token or a database URL.
 | The key-encryption key is set. A key file exists, has mode 0600 or stricter, the owner can read it, and has the size of a base64 key of 32 bytes. A file with mode 0000 fails, because `serve` cannot read it. | `fail` |
 | The key file is not in the directory of the SQLite file or of the blobs. `doctor` resolves symbolic links first. | `warn` |
 | The database is set. | `fail` |
-| Each bootstrap admin token has at least 32 bytes. With no admin token, the line says so and passes. | `fail` |
+| You set a bootstrap admin token (`DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`), and each token has at least 32 bytes. With no admin token, `serve` exits with `no admin token is set`, so the check fails. To make a token, run `openssl rand -hex 32`. | `fail` |
 | A backup target is set. | `warn` |
-| The listen address is not loopback, and you set no TLS, and `--public-url` is not an `https` address of a proxy. | `warn` |
+| The listen address is not loopback, and you set no TLS, and `--public-url` is not an `https` address of a proxy, and you did not set `--allow-plain-http`. `serve` refuses to start in this case, with the same text. | `fail` |
+| The listen address is not loopback and uses plain HTTP, because you set `--allow-plain-http` (`DUSTPAN_ALLOW_PLAIN_HTTP`). | `warn` |
 | With `--public-url`, you also set `--trusted-proxies`. | `warn` |
 
 ## The checks of a running server

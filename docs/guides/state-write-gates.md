@@ -8,6 +8,101 @@ the server records.
 A gate or an access limit that nothing matches changes nothing. A server with no
 gate and no access limit lets every write go on, as before.
 
+## What you need
+
+A change of a gate, an approval rule or an access limit needs a console
+session with a recent sign-in. An access token never gives one. A `PUT` or a
+`DELETE` with an access token answers `403` with the error code
+`mfa.fresh-step-required`. A read works with an access token.
+
+- The bootstrap admin token, in `$TOKEN` in the commands below.
+- The URL of the server. In the commands below it is `http://127.0.0.1:8080`,
+  the address of `opendustpan dev` ([Run a trial server](dev-server.md)). For a
+  production server, use its HTTPS URL.
+- A person who holds the role site administrator and who signs in with a
+  password. If the installation has none, make the first administrator with
+  [Make the first administrator](first-administrator.md). It has the
+  commands for the local user and the one-time code.
+
+Sign in with the password. The command keeps the session cookie in a file:
+
+```sh
+curl -c session.txt -X POST -H "Content-Type: application/json" \
+  -d '{"userName":"alice","password":"<password>"}' \
+  http://127.0.0.1:8080/api/dustpan/v1/sign-in/password
+```
+
+Read the session. The field `csrfToken` is the CSRF value, and the field
+`subject` is the subject of the person:
+
+```sh
+curl -b session.txt http://127.0.0.1:8080/api/server/session
+```
+
+Each change sends the cookie, the CSRF value in the header `X-Dustpan-Csrf`
+and an `Origin` header that equals the URL of the server:
+
+```sh
+curl -b session.txt -X PUT \
+  -H "Origin: http://127.0.0.1:8080" \
+  -H "X-Dustpan-Csrf: <csrfToken>" \
+  -H "Content-Type: application/json" \
+  -d '<body>' \
+  http://127.0.0.1:8080/api/dustpan/v1/namespaces/dev/<path>
+```
+
+The commands in this guide call this form with the method and the body that
+each step names.
+
+## Try a gate
+
+These steps use the namespace `dev` of `opendustpan dev` and a Pulumi stack
+`web/prod`.
+
+1. Make the stack with the token. A write of the Pulumi Cloud-compatible API
+   takes the scheme `token`:
+
+   ```sh
+   curl -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+     -d '{"stackName":"prod"}' http://127.0.0.1:8080/api/stacks/dev/web
+   ```
+
+2. Make an approval rule that names the person. Send a `PUT` to
+   `/api/dustpan/v1/namespaces/dev/approval-rules/review` with the body
+   `{"count":1,"approvers":{"users":["<subject>"]}}`.
+
+3. Make a gate that needs the rule for each delete. Send a `PUT` to
+   `/api/dustpan/v1/namespaces/dev/gates/review-delete` with this body:
+
+   ```json
+   {
+     "decisionPoint": "state.write",
+     "condition": "context.operation.kind == \"delete\"",
+     "outcome": "approval:review",
+     "message": "Deletes need review",
+     "mode": "enforce"
+   }
+   ```
+
+4. Delete the stack. The server refuses the write with `403`, the code
+   `gate.denied`, the rule and the ID of the decision record:
+
+   ```sh
+   curl -X DELETE -H "Authorization: token $TOKEN" \
+     http://127.0.0.1:8080/api/stacks/dev/web/prod
+   ```
+
+5. List the gates with the token, to find the gate that refused the write:
+
+   ```sh
+   curl -H "Authorization: Bearer $TOKEN" \
+     http://127.0.0.1:8080/api/dustpan/v1/namespaces/dev/gates
+   ```
+
+6. Delete the gate with a `DELETE` to
+   `/api/dustpan/v1/namespaces/dev/gates/review-delete`. Then delete the stack
+   again. The write goes on.
+
 ## What the server checks
 
 The server checks a write at the point `state.write`. It runs the check before
@@ -409,6 +504,10 @@ still in the audit log. Retry the write after the server recovers.
 - The [gate configuration API](../reference/gate-config-api.md) stores gates and
   access limits for a namespace, a collection and a unit. It has no route for
   ownership rules or path sets yet.
-- No route reads decision records yet.
-- A break-glass for a gate in error is not available.
+- A route reads one decision record by its ID (see
+  [Read a decision record](decision-records.md)). The answer is `404` with the
+  code `gate.not-found` for an ID that you cannot read.
+- A break-glass for a gate in error is not reachable yet. No route issues a
+  pass, so the write stays refused. Read the gate with
+  `GET /api/dustpan/v1/namespaces/{namespace}/gates/{id}` and save it again.
 - An approval default does not apply at `state.write`.

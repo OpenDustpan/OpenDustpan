@@ -56,6 +56,15 @@ const (
 	// principals by a foreign key, so they move with the principals table.
 	TableForgeAccountLinks = "forge_account_links"
 	TableForgeLinkRequests = "forge_link_requests"
+	// TableFirstAdministrator holds the marker "first administrator made".
+	// The marker is a fact about the grants, so it moves with them: a restore
+	// that took the grants of a backup and kept a marker of this installation,
+	// or the reverse, could leave a route that is open beside an administrator
+	// or closed with no administrator. It names the principal and the grant by
+	// stable ID with no foreign key, because it is history that stays when the
+	// person or the grant ends. A restore without server:restore-access keeps
+	// the current marker.
+	TableFirstAdministrator = "first_administrator"
 	// TableLocalUsers holds the user name and the password hash of each
 	// local user. A row names a principal by a foreign key and is a
 	// credential of that principal, so the table moves with the principals
@@ -112,6 +121,7 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TablePersonPreferences,
 	TableForgeAccountLinks,
 	TableForgeLinkRequests,
+	TableFirstAdministrator,
 	TableLocalUsers,
 	TableSessionGenerations,
 	TablePasskeys,

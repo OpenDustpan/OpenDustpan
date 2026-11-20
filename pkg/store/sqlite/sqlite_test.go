@@ -1131,6 +1131,10 @@ type sqlUpdatesStore struct {
 	path string
 }
 
+// Unwrap implements storetest.Unwrapper: the embedded interface hides the
+// collection methods that the suites use to put a stack in a collection.
+func (s *sqlUpdatesStore) Unwrap() any { return s.UpdatesStore }
+
 var (
 	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
 	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
@@ -1210,12 +1214,12 @@ func (s *sqlUpdatesStore) Inner() any {
 func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
-		return audit.Listing{}, errNoAuditList
+		return audit.Listing{Entries: nil, More: false}, errNoAuditList
 	}
 
 	listing, err := lister.List(ctx, ns, page)
 	if err != nil {
-		return audit.Listing{}, fmt.Errorf("list audit entries: %w", err)
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("list audit entries: %w", err)
 	}
 
 	return listing, nil
@@ -1352,11 +1356,17 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 
 	next := map[string]string{"team": "e2e"}
-	if err := s.UpdateStackTags(ctx, ref, next, now, ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		ctx,
+		ref,
+		stack.TagUpdate{Tags: next, UpdatedAt: now, Entry: renameTestEntry(ref.Namespace, ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
+	if err = s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

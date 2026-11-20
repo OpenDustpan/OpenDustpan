@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -353,9 +354,10 @@ func (a namingAuthorizer) DiscoveryGrantID(
 }
 
 // TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID proves that the wrapper
-// that every adapter calls refuses an ID that is not a grant ID, so the ID
-// never reaches a response header. The authorizer here is not the one of the
-// package: the check must hold without help from it.
+// that every adapter calls, and the audit reference, refuse an ID that is not
+// a grant ID, so the ID never reaches a response header or the audit log. The
+// authorizer here is not the one of the package: the check must hold without
+// help from it.
 func TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 	t.Parallel()
 
@@ -363,32 +365,87 @@ func TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 	alice := newFixture(t).person(t, "alice")
 
 	cases := []struct {
-		name string
-		id   string
+		name  string
+		id    string
+		valid bool
 	}{
-		{"a role name", "admins"},
-		{"a header line break", "grt-a\r\nX-A: 1"},
-		{"a line feed", "grt-a\nb"},
-		{"a space", "grt-a b"},
-		{"65 bytes", "grt-" + strings.Repeat("a", 61)},
-		{"the prefix of another kind", "tok-abc"},
+		{"a role name", "admins", false},
+		{"the prefix of another kind", "tok-abc", false},
+		{"the prefix in the middle", "x-grt-abc", false},
+		{"an uppercase prefix", "GRT-abc", false},
+		{"a mixed case prefix", "Grt-abc", false},
+		{"a header line break", "grt-a\r\nX-A: 1", false},
+		{"a line feed", "grt-a\nb", false},
+		{"a NUL byte", "grt-a\x00", false},
+		{"a space", "grt-a b", false},
+		{"a non-ASCII letter", "grt-\u00e9", false},
+		{"a Cyrillic look-alike", "grt-\u0430bc", false},
+		{"a path climb", "grt-../x", false},
+		{"a slash", "grt-a/b", false},
+		{"two dots", "grt-..", true},
+		{"a quote and a comment", "grt-a';--", false},
+		{"an encoded dot", "grt-%2e", false},
+		{"a dot first", "grt-.", true},
+		{"a hyphen first", "grt--", true},
+		{"an underscore first", "grt-_", true},
+		{"an underscore inside", "grt-a_b", true},
+		{"a dot inside", "grt-a.b", true},
+		{"an uppercase letter first", "grt-A", true},
+		{"an uppercase letter inside", "grt-aB", true},
+		{"the bare prefix", access.GrantIDPrefix, false},
+		{"65 bytes", access.GrantIDPrefix + strings.Repeat("a", 61), false},
+		{"one byte after the prefix", access.GrantIDPrefix + "a", true},
+		{"a digit first", access.GrantIDPrefix + "0a", true},
+		{"a hyphen inside", access.GrantIDPrefix + "a-b", true},
+		{"64 bytes", access.GrantIDPrefix + strings.Repeat("a", 60), true},
+		{"an ID of the server", ident.NewID(access.GrantIDPrefix), true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: tc.id, err: nil}, alice, acme)
-			if !found || id != "" || !errors.Is(err, access.ErrInvalid) {
-				t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v; want no ID, true, ErrInvalid", tc.id, id, found, err)
+			if tc.valid {
+				checkGrantIDAccepted(t, tc.id, alice, acme)
+			} else {
+				checkGrantIDRefused(t, tc.id, alice, acme)
 			}
 		})
 	}
 
-	for _, ok := range []string{"", "grt-a", "grt-" + strings.Repeat("a", 60)} {
-		id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: ok, err: nil}, alice, acme)
-		if !found || id != ok || err != nil {
-			t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v; want the same ID, true, nil", ok, id, found, err)
-		}
+	// An empty ID means that no grant allows the read. It is not an error.
+	id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: "", err: nil}, alice, acme)
+	if !found || id != "" || err != nil {
+		t.Fatalf("DiscoveryGrantID(\"\") = %q, %v, %v; want no ID, true, nil", id, found, err)
+	}
+}
+
+// checkGrantIDRefused checks that DiscoveryGrantID and GrantIDRef both refuse id.
+func checkGrantIDRefused(t *testing.T, want string, p identity.Principal, ns namespace.Name) {
+	t.Helper()
+
+	id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: want, err: nil}, p, ns)
+	ref := access.GrantIDRef(want)
+
+	if !found || id != "" || !errors.Is(err, access.ErrInvalid) ||
+		!errors.Is(err, access.ErrInvalidDiscoveryGrantID) || ref != "grant:invalid" {
+		t.Fatalf(
+			"DiscoveryGrantID(%q) = %q, %v, %v and GrantIDRef = %q; "+
+				"want no ID, true, ErrInvalidDiscoveryGrantID, grant:invalid",
+			want, id, found, err, ref,
+		)
+	}
+}
+
+// checkGrantIDAccepted checks that DiscoveryGrantID and GrantIDRef both accept id.
+func checkGrantIDAccepted(t *testing.T, want string, p identity.Principal, ns namespace.Name) {
+	t.Helper()
+
+	id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: want, err: nil}, p, ns)
+	ref := access.GrantIDRef(want)
+
+	if !found || id != want || err != nil || ref != "grant:"+want {
+		t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v and GrantIDRef = %q; want the same ID, true, nil, grant:%s",
+			want, id, found, err, ref, want)
 	}
 }

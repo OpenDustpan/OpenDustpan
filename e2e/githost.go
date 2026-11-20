@@ -12,8 +12,6 @@ import (
 	"opendustpan.org/opendustpan/e2e/githubfake"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/forge"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (
@@ -66,6 +64,27 @@ func (g *GitHostFake) PrivateKeyPEM() string { return g.fake.PrivateKeyPEM() }
 // Calls is the number of requests that the fake answered.
 func (g *GitHostFake) Calls() int { return g.fake.Calls() }
 
+// Events returns the fake as a sender of webhook deliveries: it signs the
+// events and sends them to a receiver. It holds the same app and installation as
+// the API of the fake.
+func (g *GitHostFake) Events() *githubfake.Fake { return g.fake }
+
+// DeliverWebhook sends d to path of the server of env, as GitHub does, with the
+// client of env, which trusts the certificate of the server. A status that is
+// not a success is a result, not an error.
+func (e *Env) DeliverWebhook(
+	ctx context.Context, tb testing.TB, fake *GitHostFake, path string, d githubfake.Delivery,
+) githubfake.Sent {
+	tb.Helper()
+
+	sent, err := fake.fake.SendVia(ctx, e.client, e.URL+path, d)
+	if err != nil {
+		tb.Fatalf("deliver %s: %v", path, err)
+	}
+
+	return sent
+}
+
 func (g *GitHostFake) certPool() *x509.CertPool { return g.fake.CertPool() }
 
 // gitHostFakes maps a test to its fake, so that the in-process server of that
@@ -96,21 +115,12 @@ func NewEnvWithGitHost(ctx context.Context, tb testing.TB, store Store, fake *Gi
 	return NewEnvWithRealTimeSignIn(ctx, tb, NoCLI(), store)
 }
 
-// gitHostOptions returns the options that give the in-process server of tb the
-// Git host store of st, and the fake of tb when it has one.
-func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
+// gitHostOptions returns the options that make the Git host store of the
+// in-process server of tb use the fake of tb, or nil when tb has no fake.
+func gitHostOptions(tb testing.TB) []dustpan.Option {
 	tb.Helper()
 
 	var opts []dustpan.Option
-
-	switch s := st.(type) {
-	case *sqlite.Store:
-		opts = append(opts, dustpan.WithGitHostStore(s.GitHost()))
-	case *postgres.Store:
-		opts = append(opts, dustpan.WithGitHostStore(s.GitHost()))
-	default:
-		return nil
-	}
 
 	v, found := gitHostFakes.Load(tb)
 	if !found {

@@ -25,6 +25,9 @@ const (
 	StateVersionRevealPathTooLong = "state-version.reveal-path-too-long"
 	// StateVersionStaleSerial means that the serial of the state is not newer than the serial of the current state.
 	StateVersionStaleSerial = "state-version.stale-serial"
+	// StateVersionTooComplex means that the server refuses the state for a masked read: too deep, too large,
+	// or a sensitive mark that it cannot find with one rule.
+	StateVersionTooComplex = "state-version.too-complex"
 	// StateVersionUploadDenied means that the upload capability of the state version is not valid, has expired, or the
 	// state version takes no upload.
 	StateVersionUploadDenied = "state-version.upload-denied"
@@ -77,6 +80,11 @@ func stateVersionSpecs() []Spec {
 			Code:    StateVersionRevealPathTooLong,
 			Meaning: "the value path of the reveal is longer than maxBytes bytes",
 			Args:    []Arg{{Name: argMaxBytes, Kind: KindQuantity}},
+		},
+		{
+			Code:    StateVersionTooComplex,
+			Meaning: "the server refuses the state of the state version for a masked read: too deep, too large, or a sensitive mark that it cannot find with one rule",
+			Args:    nil,
 		},
 		{
 			Code:    StateVersionStaleSerial,

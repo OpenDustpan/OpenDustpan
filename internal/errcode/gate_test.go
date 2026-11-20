@@ -90,8 +90,10 @@ func notBodies() map[string]map[string]string {
 			"maintenanceTFEDocument": "the JSON:API document around maintenanceTFEError, which is gated",
 		},
 		"server": {
-			"devCodeRequest":     "the request body of the dev sign-in; code is the sign-in code",
-			"restoreWarningJSON": "a warning in the report of a restore that succeeded; it is no error answer",
+			"devCodeRequest":                  "the request body of the dev sign-in; code is the sign-in code",
+			"offerFirstAdministratorResponse": "the 201 answer of the offer; code is the one-time code, not an error code",
+			"redeemFirstAdministratorRequest": "the request body of the redeem; code is the one-time code, not an error code",
+			"restoreWarningJSON":              "a warning in the report of a restore that succeeded; it is no error answer",
 			"getRestoreResponse": "the 200 row of a restore; errorCode repeats the catalog code that the restore " +
 				"stored when it ended, and a test checks that each such code is in the catalog",
 			"restoreSummaryJSON": "a 200 row of the list of restores; errorCode repeats the stored catalog code " +
@@ -151,6 +153,7 @@ func ungated() map[string]string {
 		"apidesc":       "the API description; it writes no error answer",
 		"auditrequired": "a helper of the adapters; it writes no error answer",
 		"faultlog":      "a helper of the adapters; it writes the log line of a failure and no error answer",
+		"githubwebhook": "the intake of the Git host events; it answers 204 with no body for every request, so it has no error answer",
 		"idempotent":    "a helper of the adapters; its errors reach the error writer of each adapter",
 		"refusal":       "a helper of the adapters; its errors reach the classify functions of each adapter",
 		"tofuhttp":      "the OpenTofu HTTP backend; OpenTofu fixes its error shapes, which have no code field",

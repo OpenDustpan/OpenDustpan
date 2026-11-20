@@ -514,16 +514,43 @@ func validCode(code string) bool {
 	return true
 }
 
-// validReason checks the reason of an administrator change: 1 to
-// MaxReasonLength bytes of valid text with no control character.
+// validReason checks the reason of an administrator change. It returns
+// localuser.ErrReasonRequired for a reason that is empty, only space or holds
+// a control character, and an error that wraps audit.ErrInvalidReason for a
+// reason that the audit log refuses: more than audit.MaxReasonLen code
+// points, bytes that are not valid UTF-8, or a hidden character.
 func validReason(reason string) error {
-	trimmed := strings.TrimSpace(reason)
-	if trimmed == "" || len(reason) > localuser.MaxReasonLength ||
+	if strings.TrimSpace(reason) == "" ||
 		strings.ContainsFunc(reason, func(r rune) bool { return r < 0x20 || (r >= 0x7f && r <= 0x9f) }) {
 		return localuser.ErrReasonRequired
 	}
 
+	// The audit log refuses the same reason when the change appends its
+	// entry. This check refuses it before the change starts, so the answer
+	// names the limit and not an internal error.
+	if err := audit.ValidateReason(reason); err != nil {
+		return fmt.Errorf("the reason of the change: %w", err)
+	}
+
+	// Defense in depth: the audit check above limits the code points, and
+	// the reset record checks its bytes too. This check stays so that a
+	// change of the audit limit cannot let a longer reason reach the store.
+	if len(reason) > localuser.MaxReasonLength {
+		return fmt.Errorf("%w: the reason is longer than %d bytes", audit.ErrInvalidReason, localuser.MaxReasonLength)
+	}
+
 	return nil
+}
+
+// reasonCause is the cause in the audit entry of a change that validReason
+// refused: "no reason" for a missing reason, and "reason not valid" for a
+// reason that the audit log refuses.
+func reasonCause(err error) string {
+	if errors.Is(err, audit.ErrInvalidReason) {
+		return "reason not valid"
+	}
+
+	return "no reason"
 }
 
 // contextWords returns the words of the person that no password can hold:

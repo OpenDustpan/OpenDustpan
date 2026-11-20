@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -227,9 +229,23 @@ func checkHostToken(ctx context.Context, t *testing.T, st *sqlite.Store, token, 
 	t.Helper()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -298,7 +314,7 @@ func countHostActions(entries []audit.Entry) map[string]int {
 func hostServerEntries(ctx context.Context, t *testing.T, st *sqlite.Store) []audit.Entry {
 	t.Helper()
 
-	listing, err := st.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := st.List(ctx, audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -343,9 +359,23 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		st.close()
@@ -379,6 +409,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	checkSt := openHostStore(ctx, t, db)
 
 	checkTokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
 		Reach: access.ReachConfig{
 			Grants:      nil,
 			Roles:       nil,
@@ -492,9 +523,23 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 	defer st.close()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -749,9 +794,23 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -814,7 +873,9 @@ func TestHostOffOpensNoStore(t *testing.T) { //nolint:paralleltest // It swaps t
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger, openMode, installation.Kind) (store, error) {
+	openStore = func(
+		context.Context, string, *slog.Logger, openMode, installation.Kind, ...dustpan.StoreOption,
+	) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostOff
@@ -906,6 +967,11 @@ func TestHostRefusesPendingMigrations(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "dustpan.db")
 	db := "sqlite:" + file
 
+	// A new file gets mode 0600, as the store makes it: the store refuses a wider mode.
+	if writeErr := os.WriteFile(file, nil, 0o600); writeErr != nil {
+		t.Fatalf("make raw database file: %v", writeErr)
+	}
+
 	raw, openErr := sql.Open("sqlite", file)
 	if openErr != nil {
 		t.Fatalf("open raw database: %v", openErr)
@@ -953,7 +1019,9 @@ func TestHostReadsTheModeThroughLookup(t *testing.T) { //nolint:paralleltest // 
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger, openMode, installation.Kind) (store, error) {
+	openStore = func(
+		context.Context, string, *slog.Logger, openMode, installation.Kind, ...dustpan.StoreOption,
+	) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostModeNone

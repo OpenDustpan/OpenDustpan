@@ -119,7 +119,7 @@ func callAuditChain(ctx context.Context, args []string, stderr io.Writer) (Audit
 		return none, err
 	}
 
-	token, err := BackupToken()
+	token, err := backupTokenFor(rerun)
 	if err != nil {
 		return none, err
 	}

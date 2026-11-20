@@ -274,7 +274,8 @@ func countFixture(t *testing.T, maxCheckpointBytes int) (updatesFixture, *counti
 	sealer := secrettest.NewMemorySealer()
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
-		Sealer: sealer, BlobGuard: blobguardtest.None{}, OnDeleteWait: nil, ManualLocks: nil,
+		Membership: stacktest.PlacedAll(),
+		Sealer:     sealer, BlobGuard: blobguardtest.None{}, OnDeleteWait: nil, ManualLocks: nil,
 		Updates: store, Tokens: nil, Checkpoints: store, Events: store, Namespaces: namespaces,
 		Stacks: store, Blobs: blobs, Now: clk.Now, Logger: nil,
 		MaxCheckpointBytes: maxCheckpointBytes, Journal: nil, Replayer: nil, Refusals: refusals,

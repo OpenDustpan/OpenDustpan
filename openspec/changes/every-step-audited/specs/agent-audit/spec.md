@@ -1,89 +1,73 @@
 ## ADDED Requirements
 
-### Requirement: Audit delegation and reason of each delegated step
+### Requirement: delegated-step-is-audited
 
-When an agent acts under a delegation, the server SHALL write one audit entry that names the delegation and the reason.
+When an agent acts under a delegation, the server SHALL write one audit entry whose agent block holds the delegation ID, and SHALL write the reason in the `Reason` field of the entry.
 
-#### Scenario: Tool call under delegation
-- **WHEN** An agent calls a tool under a delegation with the body field reason.
-- **THEN** One audit entry exists that names the delegation and the reason alongside the agent block of audit-entry-has-no-agent.
+#### Scenario: tool-call-under-delegation
+- **WHEN** an agent calls a tool under a live delegation with a valid reason
+- **THEN** one entry exists with the agent block that holds the delegation ID, and with the reason
 
-### Requirement: Audit denied delegated call
+### Requirement: denied-delegated-call-is-audited
 
-When an agent calls outside the delegation scope or under a revoked or expired delegation, the server SHALL write one denial audit entry that names the delegation where known and the refusal cause.
+When a delegated call is refused because it is outside the scope or because the delegation ended, the server SHALL write one denial entry that names the delegation where known and the cause.
 
-#### Scenario: Call outside delegation scope
-- **WHEN** An agent calls outside the delegation scope or under a revoked or expired delegation.
-- **THEN** One denial audit entry exists that names the delegation where known and the refusal cause alongside the agent block of audit-entry-has-no-agent.
+#### Scenario: call-outside-the-scope
+- **WHEN** an agent calls outside the scope of its delegation, or under an ended delegation
+- **THEN** one denial entry exists that names the delegation where known and the cause
 
-### Requirement: Validate reason
+### Requirement: invalid-reason-is-refused
 
-When a delegated call carries a missing reason, a reason above 500 Unicode code points, or a reason outside ASCII printable 0x20 to 0x7E, the server SHALL refuse with audit.reason-invalid.
+When a delegated call carries a reason that `audit.ValidateReason` refuses, the server SHALL refuse the call with `audit.reason-invalid`, SHALL repeat nothing of the input and SHALL write no entry.
 
-#### Scenario: Invalid reason refused
-- **WHEN** A delegated call carries a missing reason, a reason above 500 Unicode code points, or a reason outside ASCII printable 0x20 to 0x7E.
-- **THEN** The server refuses with audit.reason-invalid, repeats nothing of the input, and writes no entry.
+#### Scenario: invalid-reason
+- **WHEN** a delegated call carries an invalid reason
+- **THEN** the server answers 400 with `audit.reason-invalid` and writes no entry
 
-### Requirement: Refuse step when append fails
+### Requirement: failed-append-refuses-the-step
 
 When the audit append of a delegated step fails, the server SHALL refuse the step with no effect.
 
-#### Scenario: Audit append fails
-- **WHEN** The audit append of a delegated step fails.
-- **THEN** The step has no effect and no step entry exists.
+#### Scenario: append-fails
+- **WHEN** the append of a delegated step fails
+- **THEN** the step has no effect and no step entry exists
 
-### Requirement: Denial append failure refuses the call
+### Requirement: read-delegated-entries
 
-When the denial append of a refused delegated call fails, the server SHALL still refuse the call with 503 audit.entry-read-unavailable.
+When an authorized caller lists audit entries, the server SHALL return the agent block and the reason of each delegated entry, and SHALL refuse a read of a scope that the caller may not read.
 
-#### Scenario: Denial append fails
-- **WHEN** The denial append of a refused delegated call fails.
-- **THEN** The call is still refused with 503 audit.entry-read-unavailable.
+#### Scenario: list-entries
+- **WHEN** an authorized caller lists the entries
+- **THEN** each delegated entry returns its agent block and its reason
 
-### Requirement: Read delegation and reason entries
+#### Scenario: cross-namespace-read
+- **WHEN** a caller with a token of one namespace reads the entries of another
+- **THEN** the server answers 404 with `audit.entry-not-found`
 
-When an authorized caller lists audit entries, the server SHALL return the delegation and the reason of each agent entry.
+### Requirement: chain-covers-the-delegation
 
-#### Scenario: List entries
-- **WHEN** An authorized caller lists the entries of the namespace.
-- **THEN** Each agent entry returns the delegation and the reason alongside the agent block of audit-entry-has-no-agent.
+The chain check SHALL include the delegation ID and the reason of each delegated entry, with no block version and no path for old entries.
 
-#### Scenario: Cross-namespace read denied
-- **WHEN** A caller with only one namespace token reads entries of another namespace.
-- **THEN** The server refuses with audit.entry-not-found.
+#### Scenario: chain-passes
+- **WHEN** a caller checks a chain that holds delegated entries
+- **THEN** the check passes
 
-### Requirement: Verify chain with delegation and reason
+#### Scenario: tampered-entry
+- **WHEN** the delegation ID or the reason of a stored entry was changed or removed
+- **THEN** the check fails and names the first bad sequence number
 
-Where the namespace hash chain holds delegation entries, the server SHALL include each delegation and reason field in the chain verification.
+### Requirement: reads-fail-fast-in-a-database-gap
 
-#### Scenario: Chain check passes
-- **WHEN** A caller checks the hash chain of the namespace.
-- **THEN** The check passes with each delegation and reason field hashed in order.
+When a caller lists entries or checks the chain while the database is unavailable, the server SHALL answer 503 with `Retry-After: 5` and `audit.entry-read-unavailable`.
 
-#### Scenario: Tampered delegation entry
-- **WHEN** A delegation or reason field was changed, removed or reordered.
-- **THEN** The check fails and names the first bad sequence number.
+#### Scenario: read-during-a-gap
+- **WHEN** the database is unavailable
+- **THEN** the server answers 503 with `Retry-After: 5` and `audit.entry-read-unavailable`
 
-### Requirement: Verify entries written before the change
+### Requirement: installation-scope-steps-are-audited
 
-Where a chain holds entries written before this change, the server SHALL verify each old entry with the hash input stored with it.
+When an agent acts on an object with no namespace, the server SHALL write the entry in the installation scope chain.
 
-#### Scenario: Old entries verify
-- **WHEN** A caller checks a chain that holds entries written before this change.
-- **THEN** The check verifies old entries with version 1 input and new entries with version 2 input that adds the stored delegation and reason fields, and a version 2 entry with stripped delegation or reason fields fails verification.
-
-### Requirement: Reads fail fast during a database gap
-
-When a caller lists entries or checks the chain while the database is unavailable, the server SHALL answer 503 with Retry-After 5 and audit.entry-read-unavailable.
-
-#### Scenario: Read during gap
-- **WHEN** A caller lists entries or checks the chain while the database is unavailable.
-- **THEN** The server answers 503 with Retry-After 5 and audit.entry-read-unavailable.
-
-### Requirement: Audit installation-scope agent steps
-
-When an agent acts on an installation object with no namespace, the server SHALL write one audit entry in the installation scope chain.
-
-#### Scenario: Installation step audited
-- **WHEN** An agent acts on an installation object with no namespace.
-- **THEN** One entry exists in the installation scope chain with the delegation and the reason alongside the agent block of audit-entry-has-no-agent.
+#### Scenario: installation-step
+- **WHEN** an agent acts on an object with no namespace
+- **THEN** one entry exists in the installation scope chain with the block and the reason

@@ -321,7 +321,7 @@ func (a *testAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry,
 }
 
 func (a *testAudit) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: append([]audit.Entry(nil), a.entries...), Total: int64(len(a.entries))}, nil
+	return audit.Listing{Entries: append([]audit.Entry(nil), a.entries...), More: false}, nil
 }
 
 func (a *testAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {

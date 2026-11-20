@@ -178,6 +178,11 @@ type Store struct {
 	// Tests set it to prove a concurrent write stays blocked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context)
+	// swapAfterKeepHook, when set, runs in the swap of a restore after the
+	// keeps of the staged copy and before the fence. A non-nil error fails the
+	// swap. Tests set it to prove that a retry of a swap starts again from the
+	// staged file. Nil in production.
+	swapAfterKeepHook func(ctx context.Context) error
 	// beforeLockDelete, when set, runs in the removal of a manual lock between
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
@@ -220,6 +225,9 @@ type Store struct {
 	// walGuardCollect reports whether the store collects guard ticks. Only
 	// WithWALGuardForTest sets it, before the guard starts.
 	walGuardCollect bool
+	// allowWideFileMode lets Open and the reopen after a restore accept a
+	// database file, -wal or -shm file that group or other users can access.
+	allowWideFileMode bool
 	// logger records guard warnings. It defaults to a discard handler; pass
 	// WithLogger to record the busy warning.
 	logger *slog.Logger
@@ -279,6 +287,17 @@ func WithLogger(logger *slog.Logger) Option {
 			s.logger = logger
 		}
 	}
+}
+
+// WithAllowWideFileMode lets Open start on a database file, a -wal file or a
+// -shm file that group or other users can access, for an operator who
+// accepted that mode and cannot change it. Open logs a warning for each such
+// file with its mode, and still runs the check. It does not change the mode
+// of a new file (0600, created exclusively). It does not relax the refusal of
+// a file that is not a regular file or is a link, and it does not relax the
+// check of a staged file before a restore swap.
+func WithAllowWideFileMode() Option {
+	return func(s *Store) { s.allowWideFileMode = true }
 }
 
 // WithBinaryVersion sets the version of the binary, for example v0.1.0. Open
@@ -343,21 +362,36 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 
+	// The file gets mode 0600 before SQLite opens it, so the file and the
+	// -wal and -shm files that SQLite copies the mode to never have a wider
+	// mode. An existing file with a wider mode fails here.
+	wide, prepareErr := prepareDatabaseFile(resolved, probe.widePolicy())
+	if prepareErr != nil {
+		return nil, errors.Join(prepareErr, guard.release())
+	}
+
 	var extra url.Values
 	if probe.noMigrate {
 		extra = url.Values{dsnModeKey: {"rw"}}
 	}
 
-	conn, err := openDatabase(ctx, resolved, extra)
+	conn, connected, err := openDatabase(ctx, resolved, extra, probe.widePolicy())
 	if err != nil {
 		return nil, errors.Join(err, guard.release())
 	}
+
+	// SQLite makes the -wal and -shm files when it connects, with the mode of
+	// the database file. Warn for the files of both checks, once for each path.
+	wide = mergeWide(wide, connected)
 
 	s := newStore(conn, resolved, guard)
 
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	s.warnWideFiles(ctx, wide)
+
 	if err := s.migrate(ctx); err != nil {
 		return nil, errors.Join(err, conn.Close(), guard.release())
 	}
@@ -377,6 +411,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		conn:                     conn,
 		queries:                  db.New(conn),
 		path:                     path,
+		allowWideFileMode:        false,
 		mu:                       sync.RWMutex{},
 		sweepMu:                  sync.Mutex{},
 		enterGate:                newWriteGate(),
@@ -396,6 +431,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		lastTruncateSuccess:      time.Now(),
 		busyWarned:               false,
 		keepAccessHook:           nil,
+		swapAfterKeepHook:        nil,
 		attemptDeadline:          secret.AttemptDeadline,
 		now:                      time.Now,
 		beforeLockDelete:         nil,
@@ -491,7 +527,9 @@ func followLinkChain(abs string) (string, error) {
 // openDatabase opens the database file at abs with the store pragmas and
 // the extra URL parameters. The parameter mode=rw opens a file that exists
 // and creates none.
-func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, error) {
+func openDatabase(
+	ctx context.Context, abs string, extra url.Values, policy widePolicy,
+) (*sql.DB, []WideFile, error) {
 	query := url.Values{}
 	maps.Copy(query, extra)
 
@@ -507,14 +545,38 @@ func openDatabase(ctx context.Context, abs string, extra url.Values) (*sql.DB, e
 
 	conn, err := openGuarded(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite database: %w", err)
+		return nil, nil, fmt.Errorf("open sqlite database: %w", err)
 	}
 
-	if err := conn.PingContext(ctx); err != nil {
-		return nil, errors.Join(fmt.Errorf("connect to sqlite database: %w", err), conn.Close())
+	if pingErr := conn.PingContext(ctx); pingErr != nil {
+		return nil, nil, errors.Join(fmt.Errorf("connect to sqlite database: %w", pingErr), conn.Close())
 	}
 
-	return conn, nil
+	// Defense in depth: Open makes the file with mode 0600 and refuses a wider
+	// one before this call. This check stays because swap and reopen call
+	// openDatabase without Open, and because it also checks the -wal and
+	// -shm files that were there before the connect. It does not rely on the
+	// check of Open or on the startup check of the command.
+	wide, err := inspectFiles(policy, databaseFiles(abs)...)
+	if err != nil {
+		return nil, nil, errors.Join(err, conn.Close())
+	}
+
+	// SQLite makes a missing -wal or -shm file at the first access of the
+	// database, with the mode of the database file, and not when it connects.
+	// One read makes them now. The check before the read stays first, because
+	// the read makes SQLite replace a -wal or -shm file that was there. This
+	// second check lists the new files, so the caller can warn for them.
+	if _, readErr := conn.ExecContext(ctx, "SELECT 1 FROM sqlite_master LIMIT 1"); readErr != nil {
+		return nil, nil, errors.Join(fmt.Errorf("read sqlite database: %w", readErr), conn.Close())
+	}
+
+	made, err := inspectFiles(policy, databaseFiles(abs)...)
+	if err != nil {
+		return nil, nil, errors.Join(err, conn.Close())
+	}
+
+	return conn, mergeWide(wide, made), nil
 }
 
 // Close closes the database. It stops the write-ahead log guard and waits
@@ -689,6 +751,14 @@ func placementMove(st stack.Stack, p stack.Placement) collection.Move {
 // createStackRows inserts the stack, its tags and its inventory entry in the
 // transaction of q.
 func createStackRows(ctx context.Context, q *db.Queries, st stack.Stack) error {
+	// Defense in depth: the handler and the service check the tags too. This
+	// check stays so that a new caller of the store cannot write a tag value
+	// that one dialect refuses or stores in another way than the other
+	// dialect does; it does not rely on them.
+	if err := stack.CheckTagValues(st.Tags); err != nil {
+		return err
+	}
+
 	row := codec.ToStackRow(st)
 
 	n, err := q.CreateStack(ctx, db.CreateStackParams{
@@ -758,11 +828,27 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 }
 
 // UpdateStackTags implements stack.Store: it replaces every tag row of the
-// stack, keyed by its stable ID, and stamps updatedAt. The inventory entry is
-// written in the same transaction.
+// stack, keyed by its stable ID, and stamps u.UpdatedAt. The inventory entry is
+// written in the same transaction, and so is the audit entry u.Entry with one change
+// for each tag key that the update adds, removes or changes. An update that
+// changes no key appends no entry.
 func (s *Store) UpdateStackTags(
-	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
+	ctx context.Context, ref stack.Ref, u stack.TagUpdate, fence namespace.Fence,
 ) error {
+	// Defense in depth: the service and the handler build a valid entry too;
+	// this check stays so that a new caller cannot skip the audit entry.
+	if err := checkFencedEntry(fence, u.Entry); err != nil {
+		return err
+	}
+
+	// Defense in depth: the handler and the service check the tags too. This
+	// check stays so that a new caller of the store cannot write a tag value
+	// that one dialect refuses or stores in another way than the other
+	// dialect does; it does not rely on them.
+	if err := stack.CheckTagValues(u.Tags); err != nil {
+		return err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -780,19 +866,20 @@ func (s *Store) UpdateStackTags(
 			return fmt.Errorf("select stack ID: %w", err)
 		}
 
-		if err := q.DeleteStackTags(ctx, id); err != nil {
-			return fmt.Errorf("delete stack tags: %w", err)
+		before, err := stackTags(ctx, q, id)
+		if err != nil {
+			return err
 		}
 
-		touchErr := q.TouchStack(ctx, db.TouchStackParams{
-			UpdatedAtMs: codec.Millis(updatedAt),
-			ID:          id,
-		})
-		if touchErr != nil {
-			return fmt.Errorf("stamp stack: %w", touchErr)
+		// Check the entry, with the changes that it will hold, before the first
+		// write: a hostile tag key returns audit.ErrInvalidEntry, and no driver
+		// error for the key hides it.
+		entry, due, err := tagChangeEntry(u.Entry, id, stack.TagChanges(before, u.Tags))
+		if err != nil {
+			return err
 		}
 
-		if err := insertStackTags(ctx, q, id, tags); err != nil {
+		if err := replaceStackTags(ctx, q, id, u, tagEntry{entry: entry, due: due}); err != nil {
 			return err
 		}
 
@@ -800,9 +887,68 @@ func (s *Store) UpdateStackTags(
 			ctx,
 			q,
 			ref,
-			unitWrite{unitID: id, atMs: codec.Millis(updatedAt), kind: inventory.ChangeChanged},
+			unitWrite{unitID: id, atMs: codec.Millis(u.UpdatedAt), kind: inventory.ChangeChanged},
 		)
 	})
+}
+
+// tagEntry is the audit entry of a tag update, and whether the update owes it.
+type tagEntry struct {
+	entry audit.Entry
+	due   bool
+}
+
+// replaceStackTags replaces the tag rows of the stack ID with u.Tags, stamps
+// the stack and appends the entry of the update when it is due, in the
+// transaction of q.
+func replaceStackTags(ctx context.Context, q *db.Queries, id string, u stack.TagUpdate, te tagEntry) error {
+	if err := q.DeleteStackTags(ctx, id); err != nil {
+		return fmt.Errorf("delete stack tags: %w", err)
+	}
+
+	touchErr := q.TouchStack(ctx, db.TouchStackParams{
+		UpdatedAtMs: codec.Millis(u.UpdatedAt),
+		ID:          id,
+	})
+	if touchErr != nil {
+		return fmt.Errorf("stamp stack: %w", touchErr)
+	}
+
+	if err := insertStackTags(ctx, q, id, u.Tags); err != nil {
+		return err
+	}
+
+	if te.due {
+		if _, err := appendAuditEntry(ctx, q, te.entry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// tagChangeEntry returns e with the stable stack ID and changes, ready to
+// append, and false when changes is empty and no entry is due. It returns audit.ErrInvalidEntry
+// when the entry with its changes fails validation, for example for a tag key
+// that holds a line break, a hidden character, invalid UTF-8 or too many
+// bytes.
+//
+// Defense in depth: the service checks the tag names, and the audit package
+// checks each change text. This check stays so that a caller of the store
+// cannot write a change that no other layer saw.
+func tagChangeEntry(e audit.Entry, id string, changes []audit.Change) (audit.Entry, bool, error) {
+	if len(changes) == 0 {
+		return e, false, nil
+	}
+
+	e.ObjectID = id
+	e.Changes = changes
+
+	if err := e.Validate(); err != nil {
+		return e, false, fmt.Errorf("audit entry: %w", err)
+	}
+
+	return e, true, nil
 }
 
 // insertStackTags writes one row per tag, keyed by the stack ID. A nil or

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/internal/logguard"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/slogsink"
@@ -99,7 +100,9 @@ func newAppLog(items []string, level slog.Level, format string, stderr io.Writer
 			return appLog{}, errors.Join(err, out.close(context.Background()))
 		}
 
-		handlers = append(handlers, h)
+		// The guard wraps the sink handler, so a sink gets no hidden rune
+		// from a value.
+		handlers = append(handlers, logguard.New(h))
 	}
 
 	switch len(handlers) {
@@ -167,13 +170,18 @@ func (a *appLog) openSinkHandler(
 }
 
 // streamHandler answers the JSON handler on w, or the text handler when
-// format is text.
+// format is text. A guard that escapes hidden runes wraps each.
+//
+// Defense in depth: the JSON and the text handler of log/slog escape
+// control characters too, and each call site quotes its values; the guard
+// stays so that a handler or a call site that does not escape is not
+// enough to forge a line.
 func streamHandler(w io.Writer, format string, opts *slog.HandlerOptions) slog.Handler {
 	if normalizeLogLevel(format) == "text" {
-		return slog.NewTextHandler(w, opts)
+		return logguard.New(slog.NewTextHandler(w, opts))
 	}
 
-	return slog.NewJSONHandler(w, opts)
+	return logguard.New(slog.NewJSONHandler(w, opts))
 }
 
 // close flushes each queued handler within ctx and logFlushTimeout, then

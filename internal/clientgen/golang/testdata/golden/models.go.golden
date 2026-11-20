@@ -105,8 +105,11 @@ const (
 	ErrorCodeAuthRateLimited                       ErrorCode = "auth.rate-limited"
 	ErrorCodeAuthUnauthenticated                   ErrorCode = "auth.unauthenticated"
 	ErrorCodeBackupCorrupt                         ErrorCode = "backup.corrupt"
+	ErrorCodeBackupEndedFailed                     ErrorCode = "backup.ended-failed"
 	ErrorCodeBackupRegistryFilesTooLarge           ErrorCode = "backup.registry-files-too-large"
+	ErrorCodeBackupStillRunning                    ErrorCode = "backup.still-running"
 	ErrorCodeBackupTooManyUnverified               ErrorCode = "backup.too-many-unverified"
+	ErrorCodeBreakGlassSelfReview                  ErrorCode = "break-glass.self-review"
 	ErrorCodeCollectionAlreadyExists               ErrorCode = "collection.already-exists"
 	ErrorCodeCollectionChanged                     ErrorCode = "collection.changed"
 	ErrorCodeCollectionInvalidName                 ErrorCode = "collection.invalid-name"
@@ -120,6 +123,11 @@ const (
 	ErrorCodeContextUnitDeleted                    ErrorCode = "context.unit-deleted"
 	ErrorCodeContextUnknownSection                 ErrorCode = "context.unknown-section"
 	ErrorCodeDriftStartConflict                    ErrorCode = "drift.start-conflict"
+	ErrorCodeFirstAdministratorAlreadyMade         ErrorCode = "first-administrator.already-made"
+	ErrorCodeFirstAdministratorCodeInvalid         ErrorCode = "first-administrator.code-invalid"
+	ErrorCodeFirstAdministratorGrantExists         ErrorCode = "first-administrator.grant-exists"
+	ErrorCodeFirstAdministratorPrincipalInvalid    ErrorCode = "first-administrator.principal-invalid"
+	ErrorCodeFirstAdministratorReasonInvalid       ErrorCode = "first-administrator.reason-invalid"
 	ErrorCodeGateApproversCountAbove               ErrorCode = "gate.approvers-count-above"
 	ErrorCodeGateApproversGroupInvalid             ErrorCode = "gate.approvers-group-invalid"
 	ErrorCodeGateApproversGroupMissing             ErrorCode = "gate.approvers-group-missing"
@@ -137,6 +145,7 @@ const (
 	ErrorCodeGateUnavailable                       ErrorCode = "gate.unavailable"
 	ErrorCodeGateVersionConflict                   ErrorCode = "gate.version-conflict"
 	ErrorCodeGitHostAppBudgetSpent                 ErrorCode = "git-host.app-budget-spent"
+	ErrorCodeGitHostAppNoRotation                  ErrorCode = "git-host.app-no-rotation"
 	ErrorCodeGitHostAppNotRegistered               ErrorCode = "git-host.app-not-registered"
 	ErrorCodeGitHostInstallationNotAssigned        ErrorCode = "git-host.installation-not-assigned"
 	ErrorCodeGitHostLinkAccountInvalid             ErrorCode = "git-host.link-account-invalid"
@@ -163,6 +172,7 @@ const (
 	ErrorCodeJobAgentDenied                        ErrorCode = "job.agent-denied"
 	ErrorCodeJobAlreadyApproved                    ErrorCode = "job.already-approved"
 	ErrorCodeJobConflict                           ErrorCode = "job.conflict"
+	ErrorCodeJobDamaged                            ErrorCode = "job.damaged"
 	ErrorCodeJobFinished                           ErrorCode = "job.finished"
 	ErrorCodeJobFrozen                             ErrorCode = "job.frozen"
 	ErrorCodeJobGateEnforced                       ErrorCode = "job.gate-enforced"
@@ -201,6 +211,7 @@ const (
 	ErrorCodeLocalUserSignInFailed                 ErrorCode = "local-user.sign-in-failed"
 	ErrorCodeLocalUserUnavailable                  ErrorCode = "local-user.unavailable"
 	ErrorCodeLockAlreadyLocked                     ErrorCode = "lock.already-locked"
+	ErrorCodeLockBulkSize                          ErrorCode = "lock.bulk-size"
 	ErrorCodeLockChanged                           ErrorCode = "lock.changed"
 	ErrorCodeLockInvalidTarget                     ErrorCode = "lock.invalid-target"
 	ErrorCodeLockLocked                            ErrorCode = "lock.locked"
@@ -229,6 +240,17 @@ const (
 	ErrorCodeMfaSignInFailed                       ErrorCode = "mfa.sign-in-failed"
 	ErrorCodeMfaSignInSourceLimit                  ErrorCode = "mfa.sign-in-source-limit"
 	ErrorCodeMfaUnavailable                        ErrorCode = "mfa.unavailable"
+	ErrorCodeMtlsAmbiguousRule                     ErrorCode = "mtls.ambiguous-rule"
+	ErrorCodeMtlsBundleDisabled                    ErrorCode = "mtls.bundle-disabled"
+	ErrorCodeMtlsExpired                           ErrorCode = "mtls.expired"
+	ErrorCodeMtlsNoClientCertificate               ErrorCode = "mtls.no-client-certificate"
+	ErrorCodeMtlsNoMatchingRule                    ErrorCode = "mtls.no-matching-rule"
+	ErrorCodeMtlsNotYetValid                       ErrorCode = "mtls.not-yet-valid"
+	ErrorCodeMtlsPrincipalDisabled                 ErrorCode = "mtls.principal-disabled"
+	ErrorCodeMtlsRateLimited                       ErrorCode = "mtls.rate-limited"
+	ErrorCodeMtlsRevocationUnknown                 ErrorCode = "mtls.revocation-unknown"
+	ErrorCodeMtlsRevoked                           ErrorCode = "mtls.revoked"
+	ErrorCodeMtlsUnknownIssuer                     ErrorCode = "mtls.unknown-issuer"
 	ErrorCodeNamespaceAlreadyExists                ErrorCode = "namespace.already-exists"
 	ErrorCodeNamespaceFenced                       ErrorCode = "namespace.fenced"
 	ErrorCodeNamespaceInvalidName                  ErrorCode = "namespace.invalid-name"
@@ -262,6 +284,8 @@ const (
 	ErrorCodePreferencesPreconditionFailed         ErrorCode = "preferences.precondition-failed"
 	ErrorCodePreferencesUnavailable                ErrorCode = "preferences.unavailable"
 	ErrorCodePrincipalAlreadyExists                ErrorCode = "principal.already-exists"
+	ErrorCodePrincipalBreakGlassKind               ErrorCode = "principal.break-glass-kind"
+	ErrorCodePrincipalBreakGlassPassword           ErrorCode = "principal.break-glass-password"
 	ErrorCodePrincipalDisabled                     ErrorCode = "principal.disabled"
 	ErrorCodePrincipalInvalid                      ErrorCode = "principal.invalid"
 	ErrorCodePrincipalManagedByDirectory           ErrorCode = "principal.managed-by-directory"
@@ -379,12 +403,14 @@ const (
 	ErrorCodeStackAlreadyExists                    ErrorCode = "stack.already-exists"
 	ErrorCodeStackHasResources                     ErrorCode = "stack.has-resources"
 	ErrorCodeStackInvalidName                      ErrorCode = "stack.invalid-name"
+	ErrorCodeStackInvalidTags                      ErrorCode = "stack.invalid-tags"
 	ErrorCodeStackNoState                          ErrorCode = "stack.no-state"
 	ErrorCodeStackNoStateAtTime                    ErrorCode = "stack.no-state-at-time"
 	ErrorCodeStackNotFound                         ErrorCode = "stack.not-found"
 	ErrorCodeStackOtherSecretsProvider             ErrorCode = "stack.other-secrets-provider"
 	ErrorCodeStackResourceNotFound                 ErrorCode = "stack.resource-not-found"
 	ErrorCodeStackRevealPathTooLong                ErrorCode = "stack.reveal-path-too-long"
+	ErrorCodeStackStateTooComplex                  ErrorCode = "stack.state-too-complex"
 	ErrorCodeStateVersionBudgetTooSmall            ErrorCode = "state-version.budget-too-small"
 	ErrorCodeStateVersionBusy                      ErrorCode = "state-version.busy"
 	ErrorCodeStateVersionChecksumMismatch          ErrorCode = "state-version.checksum-mismatch"
@@ -394,6 +420,7 @@ const (
 	ErrorCodeStateVersionResourceNotFound          ErrorCode = "state-version.resource-not-found"
 	ErrorCodeStateVersionRevealPathTooLong         ErrorCode = "state-version.reveal-path-too-long"
 	ErrorCodeStateVersionStaleSerial               ErrorCode = "state-version.stale-serial"
+	ErrorCodeStateVersionTooComplex                ErrorCode = "state-version.too-complex"
 	ErrorCodeStateVersionTooLarge                  ErrorCode = "state-version.too-large"
 	ErrorCodeStateVersionUploadDenied              ErrorCode = "state-version.upload-denied"
 	ErrorCodeStateBadPath                          ErrorCode = "state.bad-path"
@@ -410,10 +437,12 @@ const (
 	ErrorCodeTokenCallerNotPerson                  ErrorCode = "token.caller-not-person"
 	ErrorCodeTokenEnded                            ErrorCode = "token.ended"
 	ErrorCodeTokenInvalid                          ErrorCode = "token.invalid"
+	ErrorCodeTokenIssueFailed                      ErrorCode = "token.issue-failed"
 	ErrorCodeTokenKindHasNone                      ErrorCode = "token.kind-has-none"
 	ErrorCodeTokenNotFound                         ErrorCode = "token.not-found"
 	ErrorCodeTokenOutsideReach                     ErrorCode = "token.outside-reach"
 	ErrorCodeTokenRequiresSignIn                   ErrorCode = "token.requires-sign-in"
+	ErrorCodeTokenUnknownKind                      ErrorCode = "token.unknown-kind"
 	ErrorCodeTokenUnsupported                      ErrorCode = "token.unsupported"
 	ErrorCodeTokenWrongKind                        ErrorCode = "token.wrong-kind"
 	ErrorCodeTriggerCycle                          ErrorCode = "trigger.cycle"
@@ -433,6 +462,7 @@ const (
 	ErrorCodeTrustRuleNotFound                     ErrorCode = "trust-rule.not-found"
 	ErrorCodeTrustRulePrincipalRefused             ErrorCode = "trust-rule.principal-refused"
 	ErrorCodeTrustRuleSignInRequired               ErrorCode = "trust-rule.sign-in-required"
+	ErrorCodeTrustRuleSpiffeWildcard               ErrorCode = "trust-rule.spiffe-wildcard"
 	ErrorCodeUnitSettingsBulkSize                  ErrorCode = "unit-settings.bulk-size"
 	ErrorCodeUnitSettingsConnectionLacksCapability ErrorCode = "unit-settings.connection-lacks-capability"
 	ErrorCodeUnitSettingsConnectionUnknown         ErrorCode = "unit-settings.connection-unknown"
@@ -508,15 +538,16 @@ func (v *ErrorResponse) UnmarshalJSON(data []byte) error {
 
 // GitHostApp is a schema of the API description.
 type GitHostApp struct {
-	ApiAddress  string               `json:"apiAddress"`
-	AppID       string               `json:"appID"`
-	CreatedAt   string               `json:"createdAt"`
-	EventSecret GitHostCredentialSet `json:"eventSecret"`
-	HookID      string               `json:"hookID"`
-	Kind        string               `json:"kind"`
-	PrivateKey  GitHostCredentialSet `json:"privateKey"`
-	UpdatedAt   string               `json:"updatedAt"`
-	Version     int64                `json:"version"`
+	ApiAddress      string               `json:"apiAddress"`
+	AppID           string               `json:"appID"`
+	CreatedAt       string               `json:"createdAt"`
+	EventSecret     GitHostCredentialSet `json:"eventSecret"`
+	HookID          string               `json:"hookID"`
+	Kind            string               `json:"kind"`
+	OldSecretEndsAt *int64               `json:"oldSecretEndsAt,omitempty"`
+	PrivateKey      GitHostCredentialSet `json:"privateKey"`
+	UpdatedAt       string               `json:"updatedAt"`
+	Version         int64                `json:"version"`
 }
 
 // UnmarshalJSON checks that the required members are there.

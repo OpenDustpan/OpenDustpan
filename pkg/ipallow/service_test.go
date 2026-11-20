@@ -112,7 +112,7 @@ func (f *fakeStore) NamespaceList(_ context.Context, ns namespace.Name) (ipallow
 }
 
 // NamespacesWithList implements ipallow.Store.
-func (*fakeStore) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+func (*fakeStore) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
 	return nil, nil
 }
 

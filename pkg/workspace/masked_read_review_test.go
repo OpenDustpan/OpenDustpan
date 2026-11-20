@@ -1,9 +1,9 @@
 package workspace_test
 
 // Hostile tests for the masked read of a workspace state: the deadline of the
-// diff, the count of the distinct pointers, the walk of an object filler and
-// the keys below a value that sensitive_attributes names. Each case sends its
-// input directly to one layer and fails when its guard is removed.
+// diff, the repeat of a pointer and the keys below a value that
+// sensitive_attributes names. Each case sends its input directly to one layer
+// and fails when its guard is removed.
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -26,19 +25,19 @@ func stateWithInstance(instance string) string {
 }
 
 // TestDiffStatesFailsClosedOnExpiredContext proves a diff with an expired
-// context gives ErrReadDeadline: with the context live, the changed key below a
-// marked map is one secret path, and with the context expired no path of the
-// key reaches the answer. Without the check, the masked copy is empty and the
-// key name leaks as a changed path.
+// context gives an error and no diff: with the context live, the changed key
+// below a marked map is one secret path, and with the context expired no path
+// of the key reaches the answer. A masked copy that the end of the context cut
+// short would hold no marker, and the key name would leak as a changed path.
 func TestDiffStatesFailsClosedOnExpiredContext(t *testing.T) {
 	t.Parallel()
 
 	marks := workspace.SensitiveMarks{"t.n": {"/tags"}}
 	from := workspace.StateWithMarks{
-		State: []byte(stateWithAttributes(`{"tags":{"hunter2":"a"}}`)), Marks: marks,
+		State: []byte(maskedStateWithAttributes(`{"tags":{"hunter2":"a"}}`)), Marks: marks,
 	}
 	to := workspace.StateWithMarks{
-		State: []byte(stateWithAttributes(`{"tags":{"hunter2":"b"}}`)), Marks: marks,
+		State: []byte(maskedStateWithAttributes(`{"tags":{"hunter2":"b"}}`)), Marks: marks,
 	}
 
 	live, err := workspace.DiffStates(t.Context(), from, to, "", 0)
@@ -55,8 +54,8 @@ func TestDiffStatesFailsClosedOnExpiredContext(t *testing.T) {
 	cancel()
 
 	diff, err := workspace.DiffStates(ctx, from, to, "", 0)
-	if !errors.Is(err, workspace.ErrReadDeadline) {
-		t.Fatalf("expired context: err = %v, want ErrReadDeadline", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expired context: err = %v, want context.Canceled", err)
 	}
 
 	if strings.Contains(fmt.Sprintf("%+v", diff), "hunter2") {
@@ -64,117 +63,22 @@ func TestDiffStatesFailsClosedOnExpiredContext(t *testing.T) {
 	}
 }
 
-// singleInstanceMarks returns the attributes of one resource with n objects
-// and the n distinct marks that name them.
-func singleInstanceMarks(n int) (string, workspace.SensitiveMarks) {
-	var b strings.Builder
-
-	marks := make([]string, 0, n)
-
-	b.WriteString(`{`)
-
-	for i := range n {
-		if i > 0 {
-			b.WriteString(",")
-		}
-
-		fmt.Fprintf(&b, `"k%d":"v"`, i)
-
-		marks = append(marks, fmt.Sprintf("/k%d", i))
-	}
-
-	b.WriteString(`}`)
-
-	return b.String(), workspace.SensitiveMarks{"t.n": marks}
-}
-
-// TestMaskedPathsCountsDistinctPointers proves the count of the markers uses
-// each pointer once: a single-instance resource has the same address and base,
-// so 5001 distinct marks are no more than the bound, and the error of a state
-// over the bound names the true count.
-func TestMaskedPathsCountsDistinctPointers(t *testing.T) {
+// TestMaskedPathsRepeatedPointerAnswersOnce proves a path that
+// sensitive_attributes and a kept mark both name answers as one marker path.
+func TestMaskedPathsRepeatedPointerAnswersOnce(t *testing.T) {
 	t.Parallel()
 
-	attrs, marks := singleInstanceMarks(5001)
+	instance := `{"schema_version":0,"sensitive_attributes":[[{"type":"get_attr","value":"k"}]],` +
+		`"attributes":{"k":"v","other":"w"}}`
+	marks := workspace.SensitiveMarks{"t.n": {"/k", "/k"}}
 
-	paths, err := workspace.MaskedPaths([]byte(stateWithAttributes(attrs)), marks)
+	paths, err := workspace.MaskedReadPaths([]byte(stateWithInstance(instance)), marks)
 	if err != nil {
-		t.Fatalf("5001 distinct marks: err = %v, want a read", err)
+		t.Fatalf("err = %v, want a read", err)
 	}
 
-	if len(paths) != 5001 {
-		t.Fatalf("5001 distinct marks: %d paths, want 5001", len(paths))
-	}
-
-	attrs, marks = singleInstanceMarks(10001)
-
-	_, err = workspace.MaskedPaths([]byte(stateWithAttributes(attrs)), marks)
-	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("10001 distinct marks: err = %v, want ErrTooLarge", err)
-	}
-
-	if !strings.Contains(err.Error(), "10001 markers") {
-		t.Fatalf("10001 distinct marks: err = %q, want the true count 10001", err)
-	}
-}
-
-// TestMaskedPathsCountsSensitiveAttributesAndMarkOnceEach proves a path that
-// sensitive_attributes and a kept mark both name counts once: three lists of
-// 5001 pointers hold 5001 distinct paths.
-func TestMaskedPathsCountsSensitiveAttributesAndMarkOnceEach(t *testing.T) {
-	t.Parallel()
-
-	attrs, marks := singleInstanceMarks(5001)
-
-	var sensitive strings.Builder
-
-	for i := range 5001 {
-		if i > 0 {
-			sensitive.WriteString(",")
-		}
-
-		fmt.Fprintf(&sensitive, `[{"type":"get_attr","value":"k%d"}]`, i)
-	}
-
-	instance := `{"schema_version":0,"sensitive_attributes":[` + sensitive.String() + `],"attributes":` + attrs + `}`
-
-	paths, err := workspace.MaskedPaths([]byte(stateWithInstance(instance)), marks)
-	if err != nil {
-		t.Fatalf("err = %v, want a read: each path counts once", err)
-	}
-
-	if len(paths) != 5001 {
-		t.Fatalf("%d paths, want 5001", len(paths))
-	}
-}
-
-// TestMaskedPathsWalksCheckTheContextObjectFiller proves the duplicate pass
-// ticks inside an object: the filler is one object with many entries, so the
-// tick of the object walk is the only check. Without it the read answers.
-func TestMaskedPathsWalksCheckTheContextObjectFiller(t *testing.T) {
-	t.Parallel()
-
-	var b strings.Builder
-
-	b.WriteString(`{"p":{"s0":{"a":"s0"}},"f":{`)
-
-	for i := range 9000 {
-		if i > 0 {
-			b.WriteString(",")
-		}
-
-		fmt.Fprintf(&b, `"k%d":"%d"`, i, i)
-	}
-
-	b.WriteString(`}}`)
-
-	ctx := expiringCtx{calls: &atomic.Int64{}, after: 1}
-
-	_, err := workspace.MaskedPathsContext(
-		ctx, []byte(stateWithAttributes(b.String())), workspace.SensitiveMarks{"t.n": {"/p/s0"}},
-	)
-	if !errors.Is(err, workspace.ErrReadDeadline) {
-		t.Fatalf("err = %v, want ErrReadDeadline", err)
+	if want := []string{"/resources/0/instances/0/attributes/k"}; !slices.Equal(paths, want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
 	}
 }
 
@@ -192,7 +96,7 @@ func TestSensitiveAttributesWithNoKeptMarks(t *testing.T) {
 
 	state := []byte(stateWithInstance(instance("v")))
 
-	paths, err := workspace.MaskedPaths(state, nil)
+	paths, err := workspace.MaskedReadPaths(state, nil)
 	if err != nil {
 		t.Fatalf("masked paths: %v", err)
 	}
@@ -259,7 +163,7 @@ func (w wrongCurrentStates) CurrentStateVersion(ctx context.Context, _ workspace
 func TestMaskedReadRefusesACurrentVersionOfAnotherWorkspace(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"own":"x"}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"own":"x"}`), 4<<20)
 	others := otherWorkspaces(t, h.f)
 
 	h.f.svc = serviceOverStore(t, h.f, wrongCurrentStates{memStore: h.f.store, other: others.sameNS})
@@ -317,7 +221,7 @@ func TestMaskedReadsRefuseUnreadableInstanceShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := workspace.MaskedPaths([]byte(tc.state), tc.marks)
+			_, err := workspace.MaskedReadPaths([]byte(tc.state), tc.marks)
 			if !errors.Is(err, workspace.ErrUnreadableState) {
 				t.Errorf("masked paths: err = %v, want ErrUnreadableState", err)
 			}
@@ -343,7 +247,7 @@ func TestMaskedPathsMalformedOutputs(t *testing.T) {
 		state := `{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"l","outputs":` + outputs +
 			`,"resources":[]}`
 
-		_, err := workspace.MaskedPathsWithOutputs(t.Context(), []byte(state), nil)
+		_, err := workspace.MaskedStateAndOutputPaths(t.Context(), []byte(state), nil)
 		if !errors.Is(err, workspace.ErrUnreadableState) {
 			t.Errorf("outputs %s: err = %v, want ErrUnreadableState", outputs, err)
 

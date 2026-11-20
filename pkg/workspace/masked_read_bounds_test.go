@@ -9,7 +9,6 @@ package workspace_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -23,9 +22,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// stateWithAttributes returns a state with one resource instance that has the
+// maskedStateWithAttributes returns a state with one resource instance that has the
 // attributes JSON text attrs.
-func stateWithAttributes(attrs string) string {
+func maskedStateWithAttributes(attrs string) string {
 	return `{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"lin-w","outputs":{},` +
 		`"resources":[{"mode":"managed","type":"t","name":"n","provider":"p",` +
 		`"instances":[{"schema_version":0,"attributes":` + attrs + `}]}]}`
@@ -43,10 +42,10 @@ func leafAttributes(keyBytes, n int) string {
 	return `{"` + strings.Repeat("k", keyBytes) + `":[` + strings.TrimSuffix(strings.Repeat("0,", n), ",") + `]}`
 }
 
-// TestMaskedPathsNestingBound proves the depth bound: a document that nests
-// 100 levels is read, one that nests 101 is refused with ErrTooLarge before it
-// is decoded, and the sum of the nesting of the document and of the attributes
-// is what counts.
+// TestMaskedPathsNestingBound proves the depth bound: a document whose deepest
+// value sits at 100 levels is read, one at 101 is refused with ErrStateBound
+// before the walk, and the sum of the nesting of the document and of the
+// attributes is what counts.
 func TestMaskedPathsNestingBound(t *testing.T) {
 	t.Parallel()
 
@@ -54,13 +53,15 @@ func TestMaskedPathsNestingBound(t *testing.T) {
 	// the resources array, the resource, the instances array and the instance.
 	const above = 5
 
+	maxDepth := workspace.MaxStateDepth
+
 	tests := []struct {
 		name    string
 		depth   int
 		wantErr bool
 	}{
-		{name: "at the bound", depth: workspace.MaskedMaxDepth - above, wantErr: false},
-		{name: "one level over", depth: workspace.MaskedMaxDepth - above + 1, wantErr: true},
+		{name: "at the bound", depth: maxDepth - above, wantErr: false},
+		{name: "one level over", depth: maxDepth - above + 1, wantErr: true},
 		{name: "far over", depth: 8000, wantErr: true},
 	}
 
@@ -68,11 +69,11 @@ func TestMaskedPathsNestingBound(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := workspace.MaskedPaths([]byte(stateWithAttributes(nestedAttributes(tc.depth))), nil)
+			_, err := workspace.MaskedReadPaths([]byte(maskedStateWithAttributes(nestedAttributes(tc.depth))), nil)
 
 			if tc.wantErr {
-				if !errors.Is(err, workspace.ErrTooLarge) {
-					t.Fatalf("err = %v, want ErrTooLarge", err)
+				if !errors.Is(err, workspace.ErrStateBound) {
+					t.Fatalf("err = %v, want ErrStateBound", err)
 				}
 
 				return
@@ -85,105 +86,33 @@ func TestMaskedPathsNestingBound(t *testing.T) {
 	}
 }
 
-// TestMaskedPathsDepthIgnoresBracketsInStrings proves that the depth count
-// skips strings: a key full of brackets and escaped quotes does not count as
-// nesting.
-func TestMaskedPathsDepthIgnoresBracketsInStrings(t *testing.T) {
+// overBudgetLeaves is the count of leaves under a key of 1 MiB whose value
+// paths need more than the budget of one read: 200 paths of 1 MiB.
+const overBudgetLeaves = 200
+
+// TestMaskedPathsWorkBound proves the work budget of the read: a long key above
+// many values multiplies in each path, so the read refuses it with ErrStateBound
+// although the document is small, and it builds no path first.
+func TestMaskedPathsWorkBound(t *testing.T) {
 	t.Parallel()
 
-	key := strings.Repeat(`[{\"`, 400)
-
-	if _, err := workspace.MaskedPaths([]byte(stateWithAttributes(`{"`+key+`":1}`)), nil); err != nil {
-		t.Fatalf("err = %v, want none: brackets in a string are not nesting", err)
+	_, err := workspace.MaskedReadPaths([]byte(maskedStateWithAttributes(leafAttributes(1<<20, overBudgetLeaves))), nil)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("err = %v, want ErrStateBound", err)
 	}
 }
 
-// TestMaskedPathsMarkerBound proves the bound on the markers of a version:
-// 10000 are read, 10001 are refused with ErrTooLarge, for a version with no
-// kept marks and for one with kept marks.
-func TestMaskedPathsMarkerBound(t *testing.T) {
+// TestMaskedPathsManyMarkersFitTheBudget proves the read has no count limit of
+// its own on the markers: 20000 markers of short paths are inside the budget,
+// and the read pages them.
+func TestMaskedPathsManyMarkersFitTheBudget(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no kept marks at the bound", func(t *testing.T) {
-		t.Parallel()
+	const leaves = 20000
 
-		state := stateWithAttributes(leafAttributes(1, workspace.MaskedMaxMarkers))
-
-		paths, err := workspace.MaskedPaths([]byte(state), nil)
-		if err != nil || len(paths) != workspace.MaskedMaxMarkers {
-			t.Fatalf("paths = %d, err = %v, want %d paths", len(paths), err, workspace.MaskedMaxMarkers)
-		}
-	})
-
-	t.Run("no kept marks over the bound", func(t *testing.T) {
-		t.Parallel()
-
-		_, err := workspace.MaskedPaths(
-			[]byte(stateWithAttributes(leafAttributes(1, workspace.MaskedMaxMarkers+1))), nil,
-		)
-		if !errors.Is(err, workspace.ErrTooLarge) {
-			t.Fatalf("err = %v, want ErrTooLarge", err)
-		}
-	})
-
-	t.Run("kept marks over the bound", func(t *testing.T) {
-		t.Parallel()
-
-		marks := workspace.SensitiveMarks{"t.n": make([]string, workspace.MaskedMaxMarkers+1)}
-		for i := range marks["t.n"] {
-			marks["t.n"][i] = fmt.Sprintf("/k/%d", i)
-		}
-
-		_, err := workspace.MaskedPaths([]byte(stateWithAttributes(`{"k":[0]}`)), marks)
-		if !errors.Is(err, workspace.ErrTooLarge) {
-			t.Fatalf("err = %v, want ErrTooLarge", err)
-		}
-	})
-}
-
-// TestMaskedPathsDuplicateMarkersBound proves the bound on the markers that the
-// copy of a secret adds: one kept mark names one value, and 10001 copies of it
-// answer masked too, so the count after the walk is the second layer of the
-// bound on the pointers.
-func TestMaskedPathsDuplicateMarkersBound(t *testing.T) {
-	t.Parallel()
-
-	copies := strings.TrimSuffix(strings.Repeat(`"v",`, workspace.MaskedMaxMarkers+1), ",")
-	state := stateWithAttributes(`{"s":"v","d":[` + copies + `]}`)
-
-	_, err := workspace.MaskedPaths([]byte(state), workspace.SensitiveMarks{"t.n": {"/s"}})
-	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
-	}
-}
-
-// TestMaskedStatePathsOutputsCountAsMarkers proves the bound counts the
-// sensitive outputs with the resource markers: 10000 markers in the resources
-// and one sensitive output are over the bound.
-func TestMaskedStatePathsOutputsCountAsMarkers(t *testing.T) {
-	t.Parallel()
-
-	state := strings.Replace(
-		stateWithAttributes(leafAttributes(1, workspace.MaskedMaxMarkers)),
-		`"outputs":{}`, `"outputs":{"o":{"value":"x","type":"string","sensitive":true}}`, 1,
-	)
-
-	_, err := workspace.MaskedStateAndOutputPaths(t.Context(), []byte(state), nil)
-	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
-	}
-}
-
-// TestMaskedPathsPathBytesBound proves the bound on the bytes that the paths
-// need: a long key above many values multiplies in each path, so the read
-// refuses it with ErrTooLarge although the document is small and has few
-// markers.
-func TestMaskedPathsPathBytesBound(t *testing.T) {
-	t.Parallel()
-
-	_, err := workspace.MaskedPaths([]byte(stateWithAttributes(leafAttributes(1<<20, 40))), nil)
-	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
+	paths, err := workspace.MaskedReadPaths([]byte(maskedStateWithAttributes(leafAttributes(1, leaves))), nil)
+	if err != nil || len(paths) != leaves {
+		t.Fatalf("paths = %d, err = %v, want %d paths", len(paths), err, leaves)
 	}
 }
 
@@ -199,12 +128,12 @@ func refusedAllocation(t *testing.T, state string) uint64 {
 
 	runtime.ReadMemStats(&before)
 
-	_, err := workspace.MaskedPaths(data, nil)
+	_, err := workspace.MaskedReadPaths(data, nil)
 
 	runtime.ReadMemStats(&after)
 
-	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("err = %v, want ErrStateBound", err)
 	}
 
 	return after.TotalAlloc - before.TotalAlloc
@@ -224,11 +153,9 @@ func TestMaskedPathsRefusalBuildsNoPath(t *testing.T) {
 		name  string
 		state string
 	}{
-		{name: "deep nesting", state: stateWithAttributes(nestedAttributes(8000))},
-		// 10001 leaves below a key of 2 KiB: the paths would need 20 MB.
-		{name: "too many markers", state: stateWithAttributes(leafAttributes(2<<10, workspace.MaskedMaxMarkers+1))},
-		// 40 leaves below a key of 1 MiB: the paths would need 40 MB.
-		{name: "path bytes", state: stateWithAttributes(leafAttributes(1<<20, 40))},
+		{name: "deep nesting", state: maskedStateWithAttributes(nestedAttributes(8000))},
+		// 200 leaves below a key of 1 MiB: the paths would need 200 MB.
+		{name: "path bytes", state: maskedStateWithAttributes(leafAttributes(1<<20, overBudgetLeaves))},
 	}
 
 	for _, tc := range tests {
@@ -239,13 +166,13 @@ func TestMaskedPathsRefusalBuildsNoPath(t *testing.T) {
 }
 
 // checkOverBoundRefusal reads the version that h holds and proves the answer is
-// ErrTooLarge with the refusal reason too-large and no page.
+// ErrStateBound with the refusal reason too-large and no page.
 func checkOverBoundRefusal(t *testing.T, h *maskedHostile) {
 	t.Helper()
 
 	page, err := h.read(t.Context(), latest(), "")
-	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
+	if !errors.Is(err, workspace.ErrStateBound) {
+		t.Fatalf("err = %v, want ErrStateBound", err)
 	}
 
 	if len(page.Markers) != 0 || page.NextCursor != "" {
@@ -258,23 +185,23 @@ func checkOverBoundRefusal(t *testing.T, h *maskedHostile) {
 }
 
 // TestMaskedReadDeepNestingRefused proves the read refuses a version under the
-// size limit with a nesting depth above 100: ErrTooLarge, the reason too-large,
-// no page. TestMaskedPathsRefusalBuildsNoPath measures the allocation.
+// size limit with a nesting depth above 100: ErrStateBound, the reason
+// too-large, no page. TestMaskedPathsRefusalBuildsNoPath measures the allocation.
 func TestMaskedReadDeepNestingRefused(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(nestedAttributes(300)), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(nestedAttributes(300)), 4<<20)
 
 	checkOverBoundRefusal(t, h)
 }
 
-// TestMaskedReadTooManyMarkersRefused proves the read refuses a version under the
-// size limit with more than 10000 markers: ErrTooLarge, the reason too-large,
-// no page.
-func TestMaskedReadTooManyMarkersRefused(t *testing.T) {
+// TestMaskedReadOverBudgetRefused proves the read refuses a version under the
+// size limit whose value paths need more than the budget of the read:
+// ErrStateBound, the reason too-large, no page.
+func TestMaskedReadOverBudgetRefused(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(leafAttributes(1, workspace.MaskedMaxMarkers+1)), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(leafAttributes(1<<20, overBudgetLeaves)), 4<<20)
 
 	checkOverBoundRefusal(t, h)
 }
@@ -313,7 +240,7 @@ func TestMaskedPathsUnknownShapeFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			paths, err := workspace.MaskedPaths([]byte(tc.state), nil)
+			paths, err := workspace.MaskedReadPaths([]byte(tc.state), nil)
 			if !errors.Is(err, workspace.ErrUnreadableState) {
 				t.Fatalf("paths = %q, err = %v, want ErrUnreadableState", paths, err)
 			}
@@ -334,7 +261,7 @@ func TestMaskedPathsEmptyStateIsNotUnreadable(t *testing.T) {
 		`{"version":4,"serial":1,"lineage":"l","outputs":{},"resources":[]}`,
 		`{"version":4,"serial":1,"lineage":"l","outputs":{}}`,
 	} {
-		paths, err := workspace.MaskedPaths([]byte(state), nil)
+		paths, err := workspace.MaskedReadPaths([]byte(state), nil)
 		if err != nil || len(paths) != 0 {
 			t.Fatalf("paths = %q, err = %v, want no paths and no error", paths, err)
 		}
@@ -391,7 +318,7 @@ func (c singleShotCtx) Err() error {
 
 // maskedReadContextChecks is the number of calls to Err of the context in one
 // read of the test state.
-const maskedReadContextChecks = 5
+const maskedReadContextChecks = 7
 
 // TestMaskedReadNeverAnswersPastTheDeadline proves the read checks the deadline
 // after the parse and after the walk. A context that expires at any one check
@@ -400,7 +327,7 @@ const maskedReadContextChecks = 5
 func TestMaskedReadNeverAnswersPastTheDeadline(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"k":[0,1]}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"k":[0,1]}`), 4<<20)
 
 	count := &atomic.Int64{}
 
@@ -409,7 +336,8 @@ func TestMaskedReadNeverAnswersPastTheDeadline(t *testing.T) {
 	}
 
 	// The checks of one read: the start, the chunk loop of the load, the load
-	// itself, the parse, and the walk. A change of this number must be
+	// itself, the parse, the work scan of the instance, the masking of the
+	// instance, and the end of the walk. A change of this number must be
 	// deliberate: the sweep below proves each check by its own position.
 	total := count.Load()
 	if total != maskedReadContextChecks {
@@ -429,7 +357,7 @@ func TestMaskedReadNeverAnswersPastTheDeadline(t *testing.T) {
 func TestMaskedReadDeadlineAfterTheWalkReportsTheDeadline(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"k":[0,1]}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"k":[0,1]}`), 4<<20)
 
 	count := &atomic.Int64{}
 	if _, err := h.read(singleShotCtx{calls: count, at: 0}, latest(), ""); err != nil {
@@ -538,7 +466,7 @@ func otherWorkspaces(t *testing.T, f fixture) siblings {
 		t.Fatalf("create foreign: %v", err)
 	}
 
-	secretState := stateWithAttributes(`{"other-workspace-secret":"x"}`)
+	secretState := maskedStateWithAttributes(`{"other-workspace-secret":"x"}`)
 
 	return siblings{
 		sameNS: writeStateOf(t, f, sibling, secretState), otherNS: writeStateOf(t, f, foreign, secretState),
@@ -559,7 +487,7 @@ func TestMaskedReadRefusesAVersionOfAnotherWorkspace(t *testing.T) {
 		t.Run(layer, func(t *testing.T) {
 			t.Parallel()
 
-			h, _ := newMaskedHostile(t, stateWithAttributes(`{"own":"x"}`), 4<<20)
+			h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"own":"x"}`), 4<<20)
 			others := otherWorkspaces(t, h.f)
 
 			if layer == "service check alone" {
@@ -597,7 +525,7 @@ func checkNotReadable(t *testing.T, h *maskedHostile, name string, id workspace.
 func TestMaskedReadRefusesAVersionThatIsNotFinalized(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"own":"x"}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"own":"x"}`), 4<<20)
 
 	pending := func() workspace.StateVersionID {
 		h.f.store.mu.Lock()
@@ -652,7 +580,7 @@ func (s *swapAuthorizer) Authorize(
 func TestMaskedReadReadsByTheAuthorizedID(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"old":"x"}`), 4<<20)
 
 	swap := &swapAuthorizer{grantAuthorizer: h.authz, once: sync.Once{}, hook: func() { replaceWorkspace(t, h) }}
 
@@ -689,7 +617,7 @@ func replaceWorkspace(t *testing.T, h *maskedHostile) {
 		return
 	}
 
-	writeStateOf(t, h.f, again, stateWithAttributes(`{"new-unit-secret":"x"}`))
+	writeStateOf(t, h.f, again, maskedStateWithAttributes(`{"new-unit-secret":"x"}`))
 }
 
 // TestMaskedReadRefusesAnObjectWithNoUnitID proves a read with no stable ID in
@@ -697,7 +625,7 @@ func replaceWorkspace(t *testing.T, h *maskedHostile) {
 func TestMaskedReadRefusesAnObjectWithNoUnitID(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"old":"x"}`), 4<<20)
 
 	bare, err := identity.UnitObject("opentofu", h.f.ws.Ref.Namespace, h.f.ws.Ref.Name.String())
 	if err != nil {
@@ -718,7 +646,7 @@ func TestMaskedReadRefusesAnObjectWithNoUnitID(t *testing.T) {
 func TestMaskedReadRefusesAnIDOfAnotherNamespace(t *testing.T) {
 	t.Parallel()
 
-	h, _ := newMaskedHostile(t, stateWithAttributes(`{"old":"x"}`), 4<<20)
+	h, _ := newMaskedHostile(t, maskedStateWithAttributes(`{"old":"x"}`), 4<<20)
 	foreign := otherWorkspaces(t, h.f).foreignID
 
 	other := h.obj.WithUnitID(foreign.String())

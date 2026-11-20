@@ -23,7 +23,8 @@ func pgCopyGitHostTables() []pgCopyTable {
 			columns: []string{
 				pgColKind, "app_id", "base_url", "hook_id", "sealed_key", "key_set_id", pgColKeyCreatedAtMs,
 				"sealed_event_secret", "event_secret_set_id", "event_secret_created_at_ms", "address_digest",
-				pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
+				pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs, "old_event_secret_ends_at_ms",
+				"old_event_secret_set_id", "old_sealed_event_secret",
 			},
 			orderBy: []string{pgColKind},
 		},
@@ -67,7 +68,8 @@ func checkStagedGitHost(ctx context.Context, pool pgQuerier, staging string) err
 func checkStagedRegistrations(ctx context.Context, pool pgQuerier, staging string) error {
 	query := "SELECT kind, app_id, base_url, hook_id, sealed_key, key_set_id, key_created_at_ms, " +
 		"sealed_event_secret, event_secret_set_id, event_secret_created_at_ms, address_digest, version, " +
-		"created_at_ms, updated_at_ms FROM " + stagingTable(staging, backup.TableGitHostAppRegistrations)
+		"created_at_ms, updated_at_ms, old_event_secret_ends_at_ms, old_event_secret_set_id, old_sealed_event_secret FROM " +
+		stagingTable(staging, backup.TableGitHostAppRegistrations)
 
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
@@ -82,7 +84,8 @@ func checkStagedRegistrations(ctx context.Context, pool pgQuerier, staging strin
 		scanErr := rows.Scan(
 			&row.Kind, &row.AppID, &row.BaseURL, &row.HookID, &row.SealedKey, &row.KeySetID, &row.KeyCreatedAtMs,
 			&row.SealedEventSecret, &row.EventSecretSetID, &row.EventSecretCreatedAtMs, &row.AddressDigest,
-			&row.Version, &row.CreatedAtMs, &row.UpdatedAtMs,
+			&row.Version, &row.CreatedAtMs, &row.UpdatedAtMs, &row.OldEventSecretEndsAtMs, &row.OldEventSecretSetID,
+			&row.OldSealedEventSecret,
 		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged Git host registrations: %w", backup.ErrExportRead)

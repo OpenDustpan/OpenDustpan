@@ -40,6 +40,8 @@ var outsideByDesign = []string{
 	// client, a scrape configuration or a chat app stores.
 	"/sign-in/{id}/callback",
 	"/oidc/{nsid}/.well-known/openid-configuration", "/oidc/{nsid}/jwks",
+	// The address that the operator sets as the webhook of the GitHub App.
+	"/webhooks/{hookID}",
 	"/mcp", "/metrics",
 	"/chat/{tool}/actions",
 }
@@ -119,6 +121,9 @@ var notMoved = map[string]string{
 	"PATCH /api/server/session-policy":                                               "/api/dustpan/v1/settings/session-policy",
 	"GET /api/server/audit/sinks":                                                    "/api/dustpan/v1/audit/sinks",
 	"POST /api/server/audit/checkpoint-epochs":                                       "/api/dustpan/v1/audit/checkpoint-epochs",
+	"GET /api/server/first-administrator":                                            "/api/dustpan/v1/first-administrator",
+	"POST /api/server/first-administrator":                                           "/api/dustpan/v1/first-administrator",
+	"POST /api/server/first-administrator/redeem":                                    "/api/dustpan/v1/first-administrator/redeem",
 	"GET /api/server/sign-in/{provider}":                                             "/api/dustpan/v1/sign-in/{id}",
 	"GET /api/server/sign-in/{provider}/callback":                                    "/sign-in/{id}/callback",
 	"GET /api/server/session":                                                        "/api/dustpan/v1/session",
@@ -309,6 +314,9 @@ var rootMounts = []string{
 	// The protocol routes of the OIDC issuers. The path is part of the issuer
 	// URL that clouds hold, so it cannot move under the prefix.
 	"/oidc/",
+	// The deliveries of the webhook of a Git host. The operator writes the path
+	// in the settings of the GitHub App.
+	"/webhooks/",
 	// Service discovery, the metrics route and the probes.
 	"GET /.well-known/terraform.json", "GET /metrics",
 	"GET /health/live", "GET /health/ready", "GET /health/ready/{component}",

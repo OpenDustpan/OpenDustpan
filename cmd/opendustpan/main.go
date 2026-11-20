@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -46,10 +47,12 @@ import (
 	"syscall"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/internal/logguard"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -61,13 +64,34 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 var (
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
+	// errServeArgument reports an argument of serve that is not a flag.
+	errServeArgument = errors.New("serve takes flags only: remove the argument")
+	// errListenAddress reports a --listen value that is not host:port.
+	errListenAddress = errors.New("invalid --listen (DUSTPAN_LISTEN): use host:port, for example :8080")
+	// errListenPort reports a --listen port that is a number outside 0 to 65535.
+	errListenPort = errors.New(
+		"invalid --listen (DUSTPAN_LISTEN): the port must be a number from 0 to 65535, for example :8080",
+	)
+	// errPublicURL reports a --public-url value that is not an absolute http or https URL.
+	errPublicURL = errors.New(
+		"invalid --public-url (DUSTPAN_PUBLIC_URL): use an absolute http or https URL with a host, " +
+			"no query and no fragment, for example https://dustpan.example.com",
+	)
+	// errSQLitePathEmpty reports a --database value of sqlite: with no file path.
+	errSQLitePathEmpty = errors.New(
+		"the file path in --database (DUSTPAN_DATABASE) is empty: write the path after sqlite:, " +
+			"for example sqlite:/var/lib/opendustpan/dustpan.db",
+	)
+	// errInstallationName reports an --installation value that is not valid.
+	errInstallationName = errors.New(
+		"invalid --installation (DUSTPAN_INSTALLATION): use 1 to 100 letters, digits, '-', '_' and '.', " +
+			"and do not start with '.' or '-'",
+	)
 	// errTLSCertMissing reports --tls-key without --tls-cert.
 	errTLSCertMissing = errors.New(
 		"TLS certificate is missing: set --tls-cert (DUSTPAN_TLS_CERT) or clear --tls-key",
@@ -177,7 +201,7 @@ func main() {
 	stop()
 
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "opendustpan:", err)
+		writeErrorLine(os.Stderr, "opendustpan", err)
 		os.Exit(1)
 	}
 }
@@ -218,6 +242,10 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	if fs.NArg() > 0 {
+		return fmt.Errorf("%w: %q", errServeArgument, fs.Arg(0))
+	}
+
 	if err := refuseDevEnvironment(os.LookupEnv); err != nil {
 		return err
 	}
@@ -240,7 +268,17 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return err
 	}
 
+	if err := f.checkTLSFiles(); err != nil {
+		return err
+	}
+
 	if err := f.requireDecisions(terminal, os.LookupEnv); err != nil {
+		return err
+	}
+
+	// The key and the database come first: with neither, the person most
+	// likely wants a trial, and that error names dev.
+	if err := f.checkPlainHTTP(); err != nil {
 		return err
 	}
 
@@ -292,6 +330,7 @@ type serveFlags struct {
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
+	allowPlainHTTP               bool
 	issuerBaseURL                string
 	oidcIssuer                   string
 	oidcProvider                 string
@@ -328,8 +367,12 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
-	auditChain              string
-	softDeleteRetention     string
+
+	// databaseAllowWideFileMode lets serve start on a SQLite database file
+	// that group or other users can access. The default is off.
+	databaseAllowWideFileMode bool
+	auditChain                string
+	softDeleteRetention       string
 	// retention is softDeleteRetention after the check.
 	retention time.Duration
 	// planRetention and jobLogRetention are the retention flags. jobRetention is
@@ -366,7 +409,7 @@ func (f *serveFlags) kind() installation.Kind {
 // retention in f.retention.
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
-	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+	if err := f.checkNames(); err != nil {
 		return err
 	}
 
@@ -424,7 +467,50 @@ func (f *serveFlags) check() error {
 
 	f.auditSinkRanges = ranges
 
-	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+	return f.checkFlagValues()
+}
+
+// checkNames refuses an incomplete TLS pair, a --listen value that is not host:port and an
+// --installation value that is not a valid installation name. Each error
+// names the flag, so the operator sees the error before the database opens.
+func (f *serveFlags) checkNames() error {
+	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+		return err
+	}
+
+	if _, port, err := net.SplitHostPort(f.listen); err != nil || port == "" {
+		return fmt.Errorf("%w: %q", errListenAddress, f.listen)
+	} else if !validListenPort(port) {
+		return fmt.Errorf("%w: %q", errListenPort, f.listen)
+	}
+
+	// Defense in depth: the server parses the public URL again when it
+	// starts; this check stays so that the error names the flag and comes
+	// before the database opens. It rejects the value and never changes it.
+	if _, err := baseurl.Parse(f.publicURL); err != nil {
+		return errPublicURL
+	}
+
+	if _, err := namespace.ParseInstallationName(f.installation); err != nil {
+		return fmt.Errorf("%w: %q", errInstallationName, f.installation)
+	}
+
+	return nil
+}
+
+// validListenPort reports whether port is not a number above 65535. A port
+// that is not a number, for example a service name, passes: the listen call
+// resolves it.
+func validListenPort(port string) bool {
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+
+	n, err := strconv.ParseUint(port, 10, 32)
+
+	return err == nil && n <= 65535
 }
 
 // checkProxyFlags refuses a trusted proxy list or header that the server
@@ -451,6 +537,7 @@ func checkProxyFlags(list, header string) error {
 func (f *serveFlags) register(fs *flag.FlagSet) {
 	cli.ByFlag("config").String(fs, &f.config)
 	f.common.register(fs)
+	cli.ByFlag("database-allow-wide-file-mode").Bool(fs, &f.databaseAllowWideFileMode)
 	f.registerNet(fs)
 	f.registerLimits(fs)
 	f.registerStorage(fs)
@@ -535,6 +622,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag(cli.AllowPlainHTTPFlag).Bool(fs, &f.allowPlainHTTP)
 	cli.ByFlag("issuer-base-url").String(fs, &f.issuerBaseURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
@@ -625,7 +713,9 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		f.warnKeyNextToData(logger, path)
 	}
 
-	opened, storeErr := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
+	opened, storeErr := openStore(
+		ctx, f.database, logger, openMigrate, installation.KindProduction, f.databaseStoreOptions()...,
+	)
 	if storeErr != nil {
 		return storeErr
 	}
@@ -657,6 +747,16 @@ func (f *serveFlags) beforeServe(
 	ctx context.Context, st store, logger *slog.Logger, reloads *reloadMetrics, started *startedReloader,
 ) func(context.Context) error {
 	return func(hookCtx context.Context) error {
+		// The clear leaves HTTP_PROXY, HTTPS_PROXY and ALL_PROXY set: they may
+		// carry a password, but the Go HTTP client reads them once, at its first
+		// outbound request. That request can come before this hook or after it,
+		// by configuration: with an S3 blob store, the probe writes of
+		// blobs3.Open come before it; without S3, the first request can come
+		// after it. The clear would then make each later request skip the proxy.
+		if clearErr := clearSensitiveEnv(hookCtx, logger, os.LookupEnv, os.Unsetenv); clearErr != nil {
+			return clearErr
+		}
+
 		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
 			return startErr
 		}
@@ -669,6 +769,16 @@ func (f *serveFlags) beforeServe(
 	}
 }
 
+// databaseStoreOptions returns the options of the database open that the
+// serve flags set.
+func (f *serveFlags) databaseStoreOptions() []dustpan.StoreOption {
+	if !f.databaseAllowWideFileMode {
+		return nil
+	}
+
+	return []dustpan.StoreOption{dustpan.WithStoreAllowWideFileMode()}
+}
+
 // checkDatabaseFlag rejects a --database value with an unknown form before
 // serve resolves the key file, so the backend error keeps its precedence.
 func checkDatabaseFlag(database string) error {
@@ -676,6 +786,13 @@ func checkDatabaseFlag(database string) error {
 	case strings.TrimSpace(database) == "":
 		return errNoDatabase
 	case strings.HasPrefix(database, "sqlite:"):
+		// Defense in depth: the store checks the file path too; this check
+		// stays so that an empty path gets its own error before the store
+		// opens.
+		if strings.TrimSpace(strings.TrimPrefix(database, "sqlite:")) == "" {
+			return errSQLitePathEmpty
+		}
+
 		return nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
 		return nil
@@ -959,6 +1076,17 @@ func (f *serveFlags) serveWithStores(
 
 	opts = append(opts, dustpan.WithBeforeServe(f.beforeServe(ctx, st, logger, reloads, started)))
 
+	// Serve binds the listen address itself and checks the bound address,
+	// then passes the listener to the server.
+	ln, err := f.listenChecked(ctx, logger)
+	if err != nil {
+		return err
+	}
+
+	defer closeServeListener(ctx, logger, ln)
+
+	opts = append(opts, dustpan.WithListener(ln))
+
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
@@ -1010,6 +1138,8 @@ func (f *serveFlags) openBlobStores(
 //
 //nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
 func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (blob.Store, error) {
+	f.warnUnusedS3Endpoint(ctx, logger)
+
 	cfg := blobOpenConfig{
 		database: f.database,
 		dir:      f.blobDir,
@@ -1019,6 +1149,20 @@ func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (bl
 	}
 
 	return openBlobs(ctx, cfg, logger)
+}
+
+// warnUnusedS3Endpoint warns when --s3-endpoint is set and neither
+// --blob-store nor --backup-target is an s3:// address. Both flags use the
+// endpoint.
+func (f *serveFlags) warnUnusedS3Endpoint(ctx context.Context, logger *slog.Logger) {
+	if strings.TrimSpace(f.s3Endpoint) == "" ||
+		strings.HasPrefix(strings.TrimSpace(f.blobStore), "s3://") ||
+		strings.HasPrefix(strings.TrimSpace(f.backupTarget), "s3://") {
+		return
+	}
+
+	logger.WarnContext(ctx, "--s3-endpoint has no effect: --blob-store and --backup-target are not s3:// addresses",
+		slog.String("blob_store", blobStoreKind(f.blobStore)))
 }
 
 // closeLiveStore closes the live blob store when it holds a directory
@@ -1551,8 +1695,7 @@ func normalizeLogLevel(s string) string {
 // closing, so a failure goes to stderr.
 func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
 	if err := app.close(ctx); err != nil {
-		//nolint:errcheck // Nothing is left to report a failed write of stderr to.
-		fmt.Fprintln(stderr, "opendustpan: close log sinks:", err)
+		writeErrorLine(stderr, "opendustpan: close log sinks", err)
 	}
 }
 
@@ -1598,8 +1741,14 @@ type openedStore struct {
 // close closes the store and writes a warning when the close fails.
 func (s openedStore) close() {
 	if err := s.Close(); err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Warn("close database", slog.String("error", err.Error()))
+		warnCloseDatabase(os.Stderr, err)
 	}
+}
+
+// warnCloseDatabase writes the warning of a failed close of the database
+// to w, through the guard that escapes hidden runes.
+func warnCloseDatabase(w io.Writer, err error) {
+	slog.New(logguard.New(slog.NewTextHandler(w, nil))).Warn("close database", slog.String("error", err.Error()))
 }
 
 // builtin answers the handle that the server options need.
@@ -1632,22 +1781,23 @@ const (
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
 var openStore = func(
 	ctx context.Context, database string, logger *slog.Logger, mode openMode, kind installation.Kind,
+	extra ...dustpan.StoreOption,
 ) (store, error) {
-	opts := []dustpan.StoreOption{
+	opts := append([]dustpan.StoreOption{
 		dustpan.WithStoreLogger(logger),
 		dustpan.WithStoreBinaryVersion(version),
 		dustpan.WithStoreInstallationKind(kind),
-	}
+	}, extra...)
 	if mode == openNoMigrate {
 		opts = append(opts, dustpan.WithoutStoreMigrate())
 	}
 
 	opened, err := dustpan.OpenStore(ctx, database, opts...)
 	if err != nil {
-		if errors.Is(err, postgres.ErrFailoverSetting) {
+		if errors.Is(err, dustpan.ErrStoreFailoverSetting) {
 			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreFailoverSettingInvalid, err)
 		}
-		if errors.Is(err, postgres.ErrServerVersion) {
+		if errors.Is(err, dustpan.ErrStoreServerVersion) {
 			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreServerVersionUnsupported, err)
 		}
 
@@ -1668,7 +1818,7 @@ type appliedMigrationsReader interface {
 // minimum binary version. A dev build counts as newer than every release, so
 // the minimum never refuses it.
 func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsReader) {
-	if !schema.IsDevBuild(version) {
+	if !dustpan.IsDevBuildVersion(version) {
 		return
 	}
 
@@ -1680,7 +1830,7 @@ func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsR
 		return
 	}
 
-	minimum, err := schema.HighestMinimum(minimums)
+	minimum, err := dustpan.HighestMinimumBinaryVersion(minimums)
 	if err != nil || minimum == "" {
 		return
 	}
@@ -1736,6 +1886,10 @@ func splitList(s string) []string {
 // memory that child processes inherit.
 func loadKeyEncryptionKey() ([]byte, error) {
 	if raw, ok := os.LookupEnv(keyEnvVar); ok && strings.TrimSpace(raw) != "" {
+		// Defense in depth: the serve hook (clearSensitiveEnv) clears this
+		// variable too, after the start. This clear stays so that the key leaves
+		// the environment at the read, for a caller that runs before the hook or
+		// never reaches it. It does not rely on the hook.
 		if err := os.Unsetenv(keyEnvVar); err != nil {
 			return nil, fmt.Errorf("%s: clear variable: %w", keyEnvVar, err)
 		}
@@ -1800,4 +1954,125 @@ func readKeyFile(path string) ([]byte, error) {
 	}
 
 	return decodeKey(keyFileEnvVar, string(raw))
+}
+
+// writeErrorLine writes "<prefix>: <error text>" and a newline to w. The
+// error text can hold a value from outside the process, such as a path from
+// a flag, so a raw CR or LF could forge a second line. writeErrorLine
+// escapes each hidden rune of the error text as visible text, for example
+// "\n", and writes a backslash as two, so a reader can tell an escaped line
+// feed from a backslash and an "n".
+//
+// Two kinds of error keep line breaks that the program makes:
+//
+//   - The usage error (see usageOf): writeErrorLine escapes only its
+//     message and then writes the usage text, which is fixed program text,
+//     as it is.
+//   - An errors.Join result (see joinParts): writeErrorLine writes each part
+//     on its own line, and escapes each part. Each line starts with
+//     "<prefix>: ", which is fixed program text, so a part whose text starts
+//     like a log record cannot make a line that reads as one. It does this
+//     for nested joins too, to a depth of maxJoinDepth.
+//
+// Any other error, a wrapped usage error or a wrapped join included, is one
+// escaped line. A part of a join that is the usage error is escaped too.
+//
+// Defense in depth: each call site quotes its values with %q too; this
+// escape stays so that one call site that does not quote is not enough to
+// forge a line.
+//
+// A failed write of the line is not reported: nothing is left to report it
+// to.
+func writeErrorLine(w io.Writer, prefix string, err error) {
+	// Each line starts with the prefix: a part cannot start a line with
+	// text from outside.
+	text := strings.Join(errorLines(err, 0), "\n"+prefix+": ")
+
+	if message, ok := usageOf(err); ok {
+		text = errUsage.Error()
+		if message != "" {
+			text = logguard.EscapeLine(message) + "\n" + text
+		}
+	}
+
+	if _, werr := fmt.Fprintln(w, prefix+":", text); werr != nil {
+		return
+	}
+}
+
+// maxJoinDepth bounds the nested joins that writeErrorLine writes as lines.
+// A deeper join is one escaped line.
+const maxJoinDepth = 8
+
+// errorLines answers the lines of err: one escaped line for each part of a
+// join (see joinParts), else one escaped line for all of err.
+func errorLines(err error, depth int) []string {
+	if depth < maxJoinDepth {
+		if parts, ok := joinParts(err); ok {
+			lines := make([]string, 0, len(parts))
+
+			for _, part := range parts {
+				lines = append(lines, errorLines(part, depth+1)...)
+			}
+
+			return lines
+		}
+	}
+
+	return []string{logguard.EscapeLine(err.Error())}
+}
+
+// joinError is the error that errors.Join makes: it has the parts.
+type joinError interface {
+	error
+	Unwrap() []error
+}
+
+// joinParts answers the parts of err when err is a join of errors that no
+// other error wraps: the text of err must be the texts of its parts with a
+// line feed between each two. A wrapped join adds text that can hold a
+// value from outside, so it answers false for it, and for any other error.
+func joinParts(err error) ([]error, bool) {
+	join, found := errors.AsType[joinError](err)
+	if !found {
+		return nil, false
+	}
+
+	parts := join.Unwrap()
+	texts := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		// A custom error can answer a nil part, and its Error method would
+		// panic in the printer: such an error is one escaped line.
+		if part == nil {
+			return nil, false
+		}
+
+		texts = append(texts, part.Error())
+	}
+
+	// Defense in depth: errors.Join answers nil for no parts, so no join
+	// with no parts reaches this check today. The check stays so that a
+	// custom error with no parts and an empty text is never split.
+	if len(parts) == 0 || strings.Join(texts, "\n") != err.Error() {
+		return nil, false
+	}
+
+	return parts, true
+}
+
+// blobStoreKind returns the kind of the --blob-store value for a log record:
+// "fs" when the value is empty, "dir" for a dir: address, else "other". It
+// never returns the value, which can hold a key or a control character.
+func blobStoreKind(v string) string {
+	v = strings.TrimSpace(v)
+
+	switch {
+	case v == "":
+		return "fs"
+	case strings.HasPrefix(v, "dir:"):
+		return "dir"
+	default:
+		return "other"
+	}
 }

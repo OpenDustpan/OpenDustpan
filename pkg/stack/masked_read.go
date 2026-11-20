@@ -27,19 +27,6 @@ const maskedPageMarkers = 200
 // content.
 const maskedMaxVersionBytes = 5 << 20
 
-// maskedMaxDepth is the deepest nesting of objects and arrays that a masked
-// read decodes. A deeper version is refused before it is decoded.
-const maskedMaxDepth = 100
-
-// maskedMaxMarkers is the most markers that one version may hold. A version
-// with more is refused before the server builds any path.
-const maskedMaxMarkers = 10000
-
-// maskedMaxPathBytes is the most bytes that the paths of all markers of one
-// version may hold together. A version with more is refused before the
-// server builds any path.
-const maskedMaxPathBytes = 8 << 20
-
 // ReadMaskedArgs are the arguments of one masked read. Key is the HMAC key
 // of the cursors, bound by the server; Sink counts the refusals of the
 // read, and nil disables it. Cursor is the cursor of a previous page, or
@@ -307,24 +294,24 @@ func (s *Updates) maskedCheckpoint(ctx context.Context, ref Ref, sel StateSelect
 // masked read: a secret is not descended into. Each step is bounded and
 // fails closed:
 //
-//  1. a byte scan refuses a nesting depth above maskedMaxDepth before any
-//     decoding;
+//  1. the decode refuses a nesting depth above MaxStateDepth with
+//     ErrStateBound;
 //  2. the decoded document must have an object at the top and, when it
 //     holds resources, an array there;
-//  3. a counting pass builds no path and refuses more than maskedMaxMarkers
-//     markers or more than maskedMaxPathBytes bytes of marker paths;
+//  3. the work scan of the read charges every value to the one budget of the
+//     read, and refuses with ErrStateBound before the walk builds any path;
 //  4. only then the walk builds one path for each marker, never one for a
 //     container.
 //
-// The deadline of ctx is checked after the decode and after the walk. An
-// error carries no bytes of the deployment.
+// The deadline of ctx is checked after the decode, after the scan and after
+// the walk. An error carries no bytes of the deployment.
 func maskedValuePaths(ctx context.Context, deployment []byte) ([]string, error) {
-	if !nestingWithin(deployment, maskedMaxDepth) {
-		return nil, maskedRefused(RefusalTooLarge, ErrTooLarge)
-	}
-
 	doc, err := decodeDeployment(deployment)
 	if err != nil {
+		if errors.Is(err, ErrStateBound) {
+			return nil, maskedRefused(RefusalTooLarge, ErrStateBound)
+		}
+
 		return nil, maskedRefused(RefusalUnreadable, ErrUnreadableState)
 	}
 
@@ -336,14 +323,18 @@ func maskedValuePaths(ctx context.Context, deployment []byte) ([]string, error) 
 		return nil, maskedRefused(RefusalUnreadable, ErrUnreadableState)
 	}
 
-	var total markerTotals
-
-	if !countMarkers(doc, 0, &total) {
-		return nil, maskedRefused(RefusalTooLarge, ErrTooLarge)
+	// The scan charges the value paths and the markers of all values before the
+	// walk builds the first path.
+	budget := new(maskBudget)
+	if boundErr := checkMaskWork(budget, doc, 0); boundErr != nil {
+		return nil, maskedRefused(RefusalTooLarge, boundErr)
 	}
 
-	paths := make([]string, 0, total.markers)
-	walker := markerWalker{keys: nil, paths: paths}
+	if ctx.Err() != nil {
+		return nil, maskedRefused(RefusalDeadline, ErrReadDeadline)
+	}
+
+	walker := markerWalker{keys: nil, paths: nil}
 	walker.walk(doc)
 
 	slices.Sort(walker.paths)
@@ -353,47 +344,6 @@ func maskedValuePaths(ctx context.Context, deployment []byte) ([]string, error) 
 	}
 
 	return slices.Compact(walker.paths), nil
-}
-
-// nestingWithin reports whether the JSON text has at most limit levels of
-// objects and arrays. It scans the bytes and builds nothing: braces and
-// brackets inside a string, and a string escape, do not count. The scan
-// runs before the decode, so a deep document never reaches the decoder.
-func nestingWithin(text []byte, limit int) bool {
-	depth := 0
-	inString := false
-	escaped := false
-
-	for _, c := range text {
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			default:
-			}
-
-			continue
-		}
-
-		switch c {
-		case '"':
-			inString = true
-		case '{', '[':
-			depth++
-			if depth > limit {
-				return false
-			}
-		case '}', ']':
-			depth--
-		default:
-		}
-	}
-
-	return true
 }
 
 // readableShape reports whether doc has the shape of a Pulumi deployment: an
@@ -412,52 +362,6 @@ func readableShape(doc any) bool {
 	_, isArray := raw.([]any)
 
 	return isArray
-}
-
-// markerTotals counts the markers of a document and the bytes of their
-// paths.
-type markerTotals struct {
-	markers   int
-	pathBytes int64
-}
-
-// pointerTokenLen returns the length of EscapePointerToken(key) without
-// building the token: each "~" and each "/" takes one more byte.
-func pointerTokenLen(key string) int {
-	return len(key) + strings.Count(key, "~") + strings.Count(key, "/")
-}
-
-// countMarkers counts the secret values below v, with the byte length of
-// each path, and builds no string. pathLen is the byte length of the path of
-// v. It reports false as soon as a bound is crossed. The nesting depth of v
-// is bounded by the scan before the decode, so the recursion is bounded.
-func countMarkers(v any, pathLen int64, total *markerTotals) bool {
-	if isSecret(v) {
-		total.markers++
-		total.pathBytes += pathLen
-
-		return total.markers <= maskedMaxMarkers && total.pathBytes <= maskedMaxPathBytes
-	}
-
-	switch typed := v.(type) {
-	case map[string]any:
-		for key, elem := range typed {
-			if !countMarkers(elem, pathLen+1+int64(pointerTokenLen(key)), total) {
-				return false
-			}
-		}
-
-	case []any:
-		for i, elem := range typed {
-			if !countMarkers(elem, pathLen+1+int64(len(strconv.Itoa(i))), total) {
-				return false
-			}
-		}
-
-	default:
-	}
-
-	return true
 }
 
 // markerWalker walks a document and keeps a stack of the escaped keys on the
