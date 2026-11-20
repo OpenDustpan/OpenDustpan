@@ -126,9 +126,8 @@ func repeatedName(gates []Gate) bool {
 func candidates(
 	gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy,
 ) ([]string, [][]int) {
-	var subjects []string
-
-	var eligible [][]int
+	subjects := make([]string, 0, len(approvals))
+	eligible := make([][]int, 0, len(approvals))
 
 	index := make(map[string]int, len(approvals))
 
@@ -139,7 +138,7 @@ func candidates(
 			continue
 		}
 
-		var mine []int
+		mine := make([]int, 0, len(gates))
 
 		for gi := range gates {
 			if gates[gi].counts(a, startedBy, policy) && slices.Contains(a.For, gates[gi].Name) {
