@@ -828,3 +828,90 @@ func TestAgentModeValid(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyGatesSeveral(t *testing.T) {
+	t.Parallel()
+
+	a := job.Gate{Type: "", Name: "default/ns", Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0, BindPlan: true}
+	b := a
+	b.Name, b.Approvals = "default", 1
+
+	d := job.Decision{
+		Allow: true, Reason: "", Gates: map[job.PhaseKind][]job.Gate{job.PhaseApply: {a, b}}, PolicyVersion: "v1",
+	}
+
+	got := job.PolicyGates([]job.PhaseKind{job.PhasePlan, job.PhaseApply}, d)
+	if len(got) != 2 || len(got[0]) != 0 || len(got[1]) != 2 {
+		t.Fatalf("gates = %+v, want none for plan and two for apply", got)
+	}
+
+	for i, want := range []string{"default/ns", "default"} {
+		g := got[1][i]
+		if g.Name != want || g.Type != job.GateApproval {
+			t.Errorf("gate %d = %+v, want the approval gate %q in the order of the decision", i, g, want)
+		}
+	}
+
+	if got[1][0].Approvals != 2 || got[1][1].Approvals != 1 {
+		t.Errorf("counts = %d, %d; want 2, 1", got[1][0].Approvals, got[1][1].Approvals)
+	}
+}
+
+// TestCheckGates proves that the start refuses a set of gates that the
+// matching cannot count, and stores no job.
+func TestCheckGates(t *testing.T) {
+	t.Parallel()
+
+	named := func(names ...string) []job.Gate {
+		out := make([]job.Gate, 0, len(names))
+
+		for _, n := range names {
+			out = append(out, job.Gate{
+				Type: job.GateApproval, Name: n, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
+				Timeout: 0, BindPlan: false,
+			})
+		}
+
+		return out
+	}
+
+	tests := []struct {
+		name  string
+		gates []job.Gate
+		want  error
+	}{
+		{"one gate with no name", named(""), nil},
+		{"three gates with names", named("a", "b", "c"), nil},
+		{"four gates", named("a", "b", "c", "d"), job.ErrInvalid},
+		{"a repeated name", named("a", "a"), job.ErrInvalid},
+		{"an empty name with two gates", named("a", ""), job.ErrInvalid},
+		{"two empty names", named("", ""), job.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, func(_ *job.ServiceConfig, r *rig) {
+				r.decider.decision = job.Decision{
+					Allow: true, Reason: "", PolicyVersion: "v1",
+					Gates: map[job.PhaseKind][]job.Gate{job.PhasePlan: tt.gates},
+				}
+			})
+
+			_, err := r.svc.Start(t.Context(), actorOf("ada"), r.plan(""))
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Start = %v, want %v", err, tt.want)
+			}
+
+			wantCreates := 1
+			if tt.want != nil {
+				wantCreates = 0
+			}
+
+			if len(r.store.creates) != wantCreates {
+				t.Fatalf("Create calls = %d, want %d", len(r.store.creates), wantCreates)
+			}
+		})
+	}
+}

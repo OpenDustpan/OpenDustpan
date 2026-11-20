@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -233,5 +234,220 @@ func TestApproveRefusesAnInactiveMemberOfTheGroup(t *testing.T) {
 				t.Errorf("changes = %d, want %d", len(r.store.applies), wantChanges)
 			}
 		})
+	}
+}
+
+// severalGates seeds the apply phase with two gates: "platform" holds group
+// grp-a and needs one approval, "dba" holds group grp-b and needs one. A third
+// gate named "open" names no group.
+func severalGates(withOpen bool) func(*job.Job) {
+	return func(j *job.Job) {
+		gates := []job.Gate{
+			{
+				Type: job.GateApproval, Name: "platform", Approvals: 1, Groups: []string{"platform"},
+				GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+			},
+			{
+				Type: job.GateApproval, Name: "dba", Approvals: 1, Groups: []string{"dba"},
+				GroupIDs: []string{"grp-b"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+			},
+		}
+
+		if withOpen {
+			gates = []job.Gate{
+				gates[0],
+				{
+					Type: job.GateApproval, Name: "open", Approvals: 1, Groups: nil, GroupIDs: nil,
+					AllowSelf: false, Timeout: 0, BindPlan: true,
+				},
+			}
+		}
+
+		j.Phases[1].Gates = gates
+	}
+}
+
+// TestApproveSeveralGates proves that an approval records the gates that hold
+// the approver in For, and refuses an approver that no gate holds.
+func TestApproveSeveralGates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		gates     func(*job.Job)
+		subject   string
+		members   map[string][]string
+		suspended map[string][]string
+		err       error
+		nilPort   bool
+		want      error
+		wantFor   []string
+		asked     int
+	}{
+		{
+			name: "a member of group platform fills platform only", gates: severalGates(false), subject: "carol",
+			members: map[string][]string{"carol": {"grp-a"}}, wantFor: []string{"platform"}, asked: 2,
+		},
+		{
+			name: "a member of both groups holds both gates", gates: severalGates(false), subject: "carol",
+			members: map[string][]string{"carol": {"grp-a", "grp-b"}}, wantFor: []string{"platform", "dba"}, asked: 2,
+		},
+		{
+			name: "a member of neither group is refused", gates: severalGates(false), subject: "carol",
+			members: map[string][]string{"carol": {"grp-z"}}, want: identity.ErrDenied, asked: 2,
+		},
+		{
+			name: "an inactive member is refused", gates: severalGates(false), subject: "carol",
+			members:   map[string][]string{"carol": {"grp-a"}},
+			suspended: map[string][]string{"carol": {"grp-a"}}, want: identity.ErrDenied, asked: 2,
+		},
+		{
+			name: "a failure of the reader is refused", gates: severalGates(false), subject: "carol",
+			members: map[string][]string{"carol": {"grp-a"}}, err: errGroupsDown, want: errGroupsDown, asked: 1,
+		},
+		{
+			name: "no reader is refused", gates: severalGates(false), subject: "carol", nilPort: true,
+			want: identity.ErrDenied, asked: 0,
+		},
+		{
+			name: "a gate with no groups holds a person in no group", gates: severalGates(true), subject: "carol",
+			members: map[string][]string{"carol": {"grp-z"}}, wantFor: []string{"open"}, asked: 1,
+		},
+		{
+			name: "the starter is refused when no gate allows it", gates: severalGates(false), subject: "alice",
+			members: map[string][]string{"alice": {"grp-a", "grp-b"}}, want: job.ErrSelfApproval, asked: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader := &fakeGroups{members: tc.members, suspended: tc.suspended, removed: nil, err: tc.err, asked: nil}
+
+			var port job.GroupReader = reader
+			if tc.nilPort {
+				port = nil
+			}
+
+			r := approveRigWithGroups(t, openPolicy(), port)
+			r.seed(tc.gates)
+
+			_, err := r.svc.Approve(t.Context(), actorOf(tc.subject), approveID, job.VerdictApprove, r.binding(), "")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Approve = %v, want %v", err, tc.want)
+			}
+
+			if len(reader.asked) != tc.asked {
+				t.Errorf("reader calls = %d, want %d", len(reader.asked), tc.asked)
+			}
+
+			if tc.want != nil {
+				if len(r.store.applies) != 0 {
+					t.Fatalf("changes = %d, want none after a refusal", len(r.store.applies))
+				}
+
+				if errors.Is(tc.want, identity.ErrDenied) || errors.Is(tc.want, errGroupsDown) {
+					denied, ok := errors.AsType[*job.DeniedError](err)
+					if !ok {
+						t.Fatalf("Approve = %v, want a *DeniedError that the handler audits", err)
+					}
+
+					if errors.Is(tc.want, identity.ErrDenied) && tc.members != nil && tc.err == nil &&
+						!strings.Contains(denied.Error(), "platform") {
+						t.Errorf("refusal = %q, want the names of the requirements", denied.Error())
+					}
+				}
+
+				return
+			}
+
+			if len(r.store.applies) != 1 {
+				t.Fatalf("changes = %d, want 1", len(r.store.applies))
+			}
+
+			if got := r.store.applies[0].Approval.For; !slices.Equal(got, tc.wantFor) {
+				t.Fatalf("For = %v, want %v", got, tc.wantFor)
+			}
+		})
+	}
+}
+
+// TestApproveSeveralGatesRepeat proves that a second approval by one person is
+// refused with ErrAlreadyApproved, also when the person holds two gates.
+func TestApproveSeveralGatesRepeat(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeGroups{
+		members: map[string][]string{"carol": {"grp-a", "grp-b"}}, suspended: nil, removed: nil, err: nil, asked: nil,
+	}
+
+	r := approveRigWithGroups(t, openPolicy(), reader)
+	r.seed(func(j *job.Job) {
+		severalGates(false)(j)
+		j.Phases[1].Approvals = []job.Approval{approvedBy("carol")}
+		j.Phases[1].Approvals[0].For = []string{"platform", "dba"}
+	})
+
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+	if !errors.Is(err, job.ErrAlreadyApproved) {
+		t.Fatalf("Approve = %v, want ErrAlreadyApproved", err)
+	}
+
+	if len(r.store.applies) != 0 {
+		t.Fatalf("changes = %d, want none", len(r.store.applies))
+	}
+}
+
+// TestApproveSeveralGatesOnePersonFillsOneSlot proves that the event stays
+// approval-recorded after the one person who holds both gates approves, and
+// becomes approved only with a second person.
+func TestApproveSeveralGatesOnePersonFillsOneSlot(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeGroups{
+		members:   map[string][]string{"carol": {"grp-a", "grp-b"}, "dave": {"grp-b"}},
+		suspended: nil, removed: nil, err: nil, asked: nil,
+	}
+
+	r := approveRigWithGroups(t, openPolicy(), reader)
+	r.seed(severalGates(false))
+
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+	if err != nil {
+		t.Fatalf("Approve by carol: %v", err)
+	}
+
+	if got := r.store.applies[0].Event; got != job.EventApprovalRecorded {
+		t.Fatalf("event after one person who holds two gates = %s, want %s", got, job.EventApprovalRecorded)
+	}
+
+	requirements := ""
+
+	for _, c := range r.store.applyEntries[0][0].Changes {
+		if c.Key == "requirements" {
+			requirements = c.New
+		}
+	}
+
+	if requirements != "platform,dba" {
+		t.Errorf("audit change requirements = %q, want platform,dba", requirements)
+	}
+
+	r2 := approveRigWithGroups(t, openPolicy(), reader)
+	r2.seed(func(j *job.Job) {
+		severalGates(false)(j)
+		first := approvedBy("carol")
+		first.For = []string{"platform", "dba"}
+		j.Phases[1].Approvals = []job.Approval{first}
+	})
+
+	_, err = r2.svc.Approve(t.Context(), actorOf("dave"), approveID, job.VerdictApprove, r2.binding(), "")
+	if err != nil {
+		t.Fatalf("Approve by dave: %v", err)
+	}
+
+	if got := r2.store.applies[0].Event; got != job.EventApproved {
+		t.Fatalf("event after carol and dave = %s, want %s", got, job.EventApproved)
 	}
 }

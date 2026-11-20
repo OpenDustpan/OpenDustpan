@@ -64,7 +64,7 @@ const PolicyVersion = "approval-defaults"
 // collection and the unit of the job. A plan phase gets none.
 //
 // It returns an error, and so the start fails, when the defaults need more
-// than this version enforces: more than job.MaxApprovalGates requirements,
+// than this version enforces: more than three requirements,
 // approvers that are users or unit owners, a fresh authentication window, or
 // an unless body.
 // The error wraps gate.ErrUnavailable. It also returns the errors of the
@@ -166,16 +166,7 @@ func inChain(defaults []gate.ApprovalDefault, chain []gate.Scope) []gate.Approva
 // approvers of all gates of a phase are distinct people. So a gate expresses
 // one requirement of groups, and nothing else. For any other requirement it
 // returns an error that wraps gate.ErrUnavailable and says what to change.
-//
-// Defense in depth: the job service refuses a phase with more than
-// job.MaxApprovalGates gates, and the matching refuses it too. This check stays
-// so that the decider never gives a set that the other layers must refuse.
 func gatesOf(reqs []gate.Requirement) ([]job.Gate, error) {
-	if len(reqs) > job.MaxApprovalGates {
-		return nil, fmt.Errorf("%w: %d approval requirements apply (%s), and a job enforces at most %d; "+
-			"remove an approval default", gate.ErrUnavailable, len(reqs), names(reqs), job.MaxApprovalGates)
-	}
-
 	out := make([]job.Gate, 0, len(reqs))
 
 	for i := range reqs {
