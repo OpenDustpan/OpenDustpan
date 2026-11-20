@@ -2610,6 +2610,7 @@
           "job.agent-denied",
           "job.already-approved",
           "job.conflict",
+          "job.damaged",
           "job.finished",
           "job.frozen",
           "job.gate-enforced",

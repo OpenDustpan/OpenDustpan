@@ -100,6 +100,8 @@ type reachFixture struct {
 
 	reach  access.ReachConfig
 	tokens *accesstoken.Service
+	// group is the group that gives member the token role on ops.
+	group principal.Group
 
 	// account holds account-administrator on the installation, site holds
 	// site-administrator, tm holds token-manager on the installation,
@@ -162,6 +164,7 @@ func newReachFixture(t *testing.T) reachFixture {
 		t.Fatalf("add member: %v", err)
 	}
 
+	rf.group = group
 	rf.tokens = rf.newService(t, rf.reach)
 
 	return rf

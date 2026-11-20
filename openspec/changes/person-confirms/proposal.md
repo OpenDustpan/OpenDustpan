@@ -2,56 +2,57 @@ Roadmap: `docs/roadmap.md:775` (A person confirms it).
 
 ## Why
 
-**Persona: developer.** A developer asks Dusty to draft a change and then confirms it before anything applies, so work moves only after a person says yes and four-eyes still holds.
+**Persona: developer.** A developer asks Dusty to draft a change and then confirms it before anything applies. Work moves only after a person says yes, and four-eyes still holds.
 
 The user path this change must make work:
 
-1. **Console.** Open the proposed change order from Dusty and read the plan revision.
-2. **API.** Confirm the change order with a session credential; under a two-person rule ask a second person to approve.
-3. **API.** Check jobs and audit log show no apply step before confirmation.
-4. **Docs page.** Follow docs/guides/approval-rules.md to set authorMayApprove false.
+1. **Console.** Open the draft from Dusty and read the plan.
+2. **API.** Confirm the draft with a console session. Under a two-person rule, ask a second person to approve.
+3. **API.** Read the audit log and see the confirmation entry before any apply entry.
+4. **Docs page.** Follow `docs/guides/approval-rules.md` to set `authorMayApprove` to false.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Agent tries to confirm or approve its own change order. | 403 with the NEW error code `changeorder.agent-confirm-refused`; the response names the NEW person confirm route. | `POST /api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/confirm (NEW)` |
-| Delegator tries second approval under a two-person rule. | 403 with error code access.denied; the response names the approval rule and the authorMayApprove setting. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-rules` |
-| Apply or destroy starts before a person confirms the revision. | 409 with the NEW error code `changeorder.not-ready`; the response names the NEW confirm route that must come first. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job}` |
-| Person confirms with an access token while a fresh step is needed. | 403 with error code mfa.fresh-step-required; the response names the enrollment page. | `POST /api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/confirm (NEW)` |
+| An agent tries to confirm | Refused and written as a denial entry. The error code is open question 4. | `GET /api/audit/entries` |
+| The delegator tries a second approval under a two-person rule | 403 with the existing error code `access.denied`. The answer names the approval rule and the setting `authorMayApprove`. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-rules` |
+| A confirm needs a fresh step and the caller has none | 403 with the existing error code `mfa.fresh-step-required`, only when `freshAuthEnabled` is on (ADR 385 decision 2). | The enrollment page |
 
 Evidence for the claims above:
 
-- Approval rules have e2e coverage in the pack. Proof: e2e/approval_rules_test.go and e2e/state_write_gate_test.go are listed for Approval rule.
-- The audit log has e2e and guide coverage in the pack. Proof: e2e/audit_export_test.go and docs/guides/audit-log.md are listed for Audit log.
-- No change-order e2e file is listed in the pack. Proof: The Change order entry lists e2e: [] and e2e_count: 0.
+- Approval rules have e2e coverage on main. Proof: `e2e/approval_rules_test.go` and `e2e/state_write_gate_test.go`.
+- The audit log has e2e and guide coverage on main. Proof: `e2e/audit_export_test.go` and `docs/guides/audit-log.md`.
+- The error codes `access.denied` and `mfa.fresh-step-required` exist. Proof: `internal/errcode/errcode.go:19` and `internal/errcode/catalog_mfa.go:15`.
+- No change order package, no confirm route and no change order action exist on main. Proof: `rg -n 'changeorder' -g '*.go' pkg internal` finds no such package. The earlier draft of this change named a NEW route `POST .../change-orders/{id}/confirm`, an action `changeorder:confirm`, and a NEW audit route `GET /api/dustpan/v1/namespaces/{namespace}/audit`. No ADR or RFC line names the first two. The third does not exist. The audit routes on main are `/api/audit/entries`, `/api/audit/entries/{sequence}`, `/api/audit/check` and `/api/audit/export` (`internal/api/audit/routes.go:49` to `:52`).
 
 ## What Changes
 
-- Only a person principal confirms or approves a change order proposed by an agent; an agent request is refused.
-- The delegator counts as author, so a two-person approval rule needs a different second approver.
-- No apply job starts while the change order is in state proposed.
-- The NEW audit export route GET /api/dustpan/v1/namespaces/{namespace}/audit shows the person confirmation entry before any apply entry of the revision.
+- Only a person confirms a draft of an agent. A request of an agent is refused and written as a denial entry (ADR 344 decision 2, RFC 121 decision 24).
+- The person who delegated may confirm (ADR 354 decision 1).
+- The person is the proposer, so four-eyes sees the person. Under `authorMayApprove` false the delegator is not a different second approver (RFC 121 decision 26).
+- The confirmation writes its audit entry before any apply entry of the change (RFC 121 decision 51).
+- When `freshAuthEnabled` is on, the confirm needs a fresh step (ADR 385 decision 2 lists "a confirmation"). An access token never gives a fresh step (ADR 227 decision 6).
 
 Out of scope:
 
-- Delegation record shape and revoke behavior
-- Dusty run loop and agent tools
-- Audit entry shape for agent steps
-- Console screens for confirmation
+- The delegation record, in `person-delegates-dusty`.
+- The draft, in `dusty-proposes-change-order`.
+- The audit entry shape, in `every-step-audited`.
+- The rules that bind a confirmation to a plan revision, the race of a new revision and a confirm, the cancel of a queued destroy, and the re-check of the grant of a confirmer. The earlier draft of this change specified them. They belong to the change order package, which is not on main, and this change could not verify an ADR line for each of them. They go to the change that makes the package.
+- The console screens.
 
 Depends on:
 
-- person-delegates-dusty
-- dusty-proposes-change-order
-- every-step-audited
+- `person-delegates-dusty`, `dusty-proposes-change-order` and `every-step-audited`.
+- The change that makes the change order package. It is a dependency to be written.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- The path still costs time when the person cannot see why a second approval is refused under authorMayApprove false.
-- The delegator may expect one confirm to approve and apply; the console must show that confirmation and approval are separate steps.
+- The person may not see why a second approval is refused under `authorMayApprove` false. The refusal names the rule and the setting.
+- The delegator may expect one confirm to approve and apply. The console shows that a confirm and an approval are separate steps, if open question 2 keeps them separate.
 
 ## What main already does
 
@@ -59,57 +60,57 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Main has a job gate status test for confirmation gates. (`pkg/job/gate_test.go:101 (TestConfirmationGateStatus)`)
 - Main ships audit entries in order and moves cursors. (`pkg/audit/ship_test.go:258 (TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors)`)
-- Main refuses a grant after a racing move. (`pkg/access/race_test.go:577 (TestGrantRefusedAfterARacingMove)`)
-- Main leaves one entry and one operation for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:109 (TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
+- Main refuses a grant after a racing move. (`pkg/access/race_test.go:578 (TestGrantRefusedAfterARacingMove)`)
+- Main leaves one entry and one operation for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:112 (TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed by" chain and the "Current rule" come from `docs/adr/INDEX.md`.
 
-**ADR 190: Change orders: an object above jobs** (owner-tagged: decision 14).
+**ADR 344: An agent drafts a change order, and a person confirms it** (owner-tagged).
 
-- Decisions that apply: 14 (changed).
-- Changed by: ADR 222 changes decisions 6 and 7; ADR 225 changes decisions 6 and 7; ADR 299 changes decisions 4, 9, 10, 12 and 14; ADR 300 changes decision 10; ADR 344 changes decision 14; ADR 365 changes decision 10. Chain to the end: ADR 222, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 286, ADR 335, ADR 351, ADR 354, ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 222, 225, 299, 300, 344, 365.
-- Quote: "An agent records no verdict: it submits its blocking threads in a review of the verdict `comment` (ADR 192 decision 2)."
-- Effect: The change keeps the agent limit: an agent leaves comments and blocking comments only and records no verdict, so confirmation and approval stay acts of a person.
+- Decisions that apply: 1 and 2. Changed by: -. Chain to the end: none. Current rule: this ADR.
+- Quote, decision 2: "The draft is not a change order until a person confirms it."
+- Quote: "This ADR does not decide the state of a draft, the tool in ADR 122, the action name or the audit entry. A later ADR decides them."
+- Effect: the action name, the state and the audit entry of a confirm are open questions here.
 - Conflict: none.
 
-**ADR 297: Console sessions are sealed cookies, not stored sessions** (owner-tagged (all decisions)).
+**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged) and **RFC 121** (accepted by ADR 354 decision 6).
 
-- Decisions that apply: 18 (current).
-- Changed by: ADR 301 extends decision 1; ADR 333 extends decision 4. Chain to the end: ADR 301, ADR 333.
-- Current rule: this ADR, with ADR 301, 333.
-- Quote: "They keep their access tokens (ADR 53), with no change. An access token never gives a fresh authentication (ADR 227 decision 6)."
-- Effect: Confirmation that needs a fresh step needs a session with that step; an access token alone never satisfies it.
+- Quote, ADR 354 decision 1: "The person who delegated may confirm (owner, 2026-11-07)."
+- RFC 121 decision 24: a change order that an agent drafts waits for the ADR 344 confirmation. Decision 26: the person is the proposer, and four-eyes sees the person. Decision 27: "The agent never holds step-up. An agent never has a fresh authentication."
+- Current rule: this ADR. Conflict: none.
+
+**ADR 190: Change orders: an object above jobs** (decisions 4 and 14 are owner-tagged).
+
+- Decision that applies: 14 (changed by ADR 344). Current rule: this ADR, with ADR 222, 225, 299, 300, 344, 365. Chain to the end: ADR 222, 225, 299, 300, 344, 365, 286, 335, 351, 354, 328, 359, 377.
+- Quote, decision 14: "An agent records no verdict: it submits its blocking threads in a review of the verdict `comment`."
+- Effect: an agent records no verdict. Conflict: none.
+
+**ADR 385: A fresh step is opt-in** (owner-tagged) and **ADR 227** (decisions 2 and 3 are owner-tagged).
+
+- ADR 385 current rule: this ADR. ADR 227 current rule: this ADR, with ADR 301, 320, 339, 354, 373, 385.
+- Quote, ADR 385 decision 2: "Off means no step (owner, 2026-11-15). When the setting is off, the server asks a person for no fresh authentication." The list that follows names "a confirmation".
+- Quote, ADR 297 decision 18: "An access token never gives a fresh authentication (ADR 227 decision 6)."
+- Quote, ADR 301 decision 4: "No factor, no fresh step (owner)."
+- Effect: with the setting on, a confirm needs a fresh step, and a person with no factor cannot confirm. With the setting off, no step.
 - Conflict: none.
 
-**ADR 301: A passkey, TOTP or SSH signature gives the fresh step to a person who signed in with OAuth or a trusted header** (owner-tagged (all decisions)).
-
-- Decisions that apply: 4 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "No factor, no fresh step (owner). A person of these methods who has enrolled no factor cannot do a step that needs a fresh authentication."
-- Effect: When confirm needs a fresh step and the person enrolled no factor, the server refuses with mfa.fresh-step-required.
-- Conflict: none.
-
-**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged (all decisions)).
-
-- Decisions that apply: 1 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "The person who delegated may confirm (owner, 2026-11-07). Question 1. The person who delegated (Alice) may confirm a change that her own agent proposed, by default."
-- Effect: The change follows the owner rule that the person who delegated may confirm the change of the agent; four-eyes comes only from the approval rule with authorMayApprove false.
-- Conflict: none.
+**ADR 299: one integration with the Git host** (owner-tagged). Quote, decision 35: "Agents never approve, on either side (owner)." Current rule: this ADR, with ADR 328, 359, 368.
 
 ## Open questions
 
-none
+Open questions: 4, parked
+
+The questions below are not decided. No ADR line and no RFC line settles them. The owner decides each one.
+
+1. **What are the route, the action and the states of the confirm?** ADR 344 leaves the action name open, and no state of a draft is decided. The earlier draft invented a route, an action `changeorder:confirm` and the states `in-review` and `approved`. Options: (a) one action `changeorder:confirm` on the namespace; (b) the action on the unit. Cost of (b): a confirm of a plan with many units needs a grant on each. Decides: the owner.
+2. **Does a confirm count as an approval, or are they two steps?** The earlier draft said that the delegator confirms and then approves, and that the second approval is refused under `authorMayApprove` false. Options: (a) two steps, as the earlier draft; (b) one step, and the confirm is the approval of the person. Cost of (a): a second click. Cost of (b): the confirm and the four-eyes rule share one entry. Decides: the owner.
+3. **Which audit read route proves "no apply before confirm"?** Options: (a) `GET /api/audit/entries` with a filter on the object; (b) `GET /api/audit/export`. Cost of (b): the person reads a file and not a page. The scope that the caller needs is open too. Decides: the owner.
+4. **What is the answer to an agent that confirms?** Options: (a) the standard 403 `access.denied`; (b) a NEW code `changeorder.agent-confirm-refused` as the earlier draft said. Cost of (b): one more code. Decides: the owner.
 
 Questions considered and answered:
 
-- May the person who delegated confirm the change of the agent? Yes, by default. ADR 354 decision 1 allows it; a different second person is needed only when the namespace sets authorMayApprove false.
-- May the agent confirm or approve its own change order? No. ADR 190 decision 14 records no verdict for an agent.
-- Is a jobs-route check enough for no apply before confirmation? No. The roadmap step needs the audit log to show no apply step before confirmation, so the spec checks the audit log too.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+- May the person who delegated confirm? Yes (ADR 354 decision 1). A different second person is needed only when the setting `authorMayApprove` is false.
+- May the agent confirm or approve? No (ADR 299 decision 35, RFC 121 decision 27).
+- Is a check of the jobs route enough for "no apply before confirm"? No. The audit log must show it too (roadmap step 3).
