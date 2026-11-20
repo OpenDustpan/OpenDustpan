@@ -196,9 +196,14 @@ func testRestoreReplaceAccessTakesBackupTempAdmins(t *testing.T, newStore Restor
 	dst := newStore(t)
 	dstPorts := keepAccessStores(t, dst)
 
-	if _, err := dstPorts.stager.StagePortable(
-		t.Context(), PortableOpener(files), sum, descs, StageAs(t, dstPorts.stager),
-	); err != nil {
+	dstTemp, ok := dst.(tempadmin.Store)
+	if !ok {
+		t.Fatal("the target store keeps no temporary administrators, but the source store does")
+	}
+
+	opts := StageAs(t, dstPorts.stager)
+
+	if _, err := dstPorts.stager.StagePortable(t.Context(), PortableOpener(files), sum, descs, opts); err != nil {
 		t.Fatalf("stage the backup: %v", err)
 	}
 
@@ -206,7 +211,7 @@ func testRestoreReplaceAccessTakesBackupTempAdmins(t *testing.T, newStore Restor
 		t.Fatalf("apply replacing the access tables: %v", err)
 	}
 
-	record, err := dst.(tempadmin.Store).GetTempAdmin(t.Context(), keepTempAdminID)
+	record, err := dstTemp.GetTempAdmin(t.Context(), keepTempAdminID)
 	if err != nil {
 		t.Fatalf("get the temporary administrator of the backup: %v", err)
 	}
