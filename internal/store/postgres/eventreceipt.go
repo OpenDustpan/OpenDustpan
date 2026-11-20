@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/githoststore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
-	"github.com/jackc/pgx/v5"
-
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
