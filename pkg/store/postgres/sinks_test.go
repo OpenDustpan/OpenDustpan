@@ -58,15 +58,19 @@ func (d sinkDomain) BumpFence(ctx context.Context, fence namespace.Fence) (names
 func (d sinkDomain) AuditEntries(ctx context.Context, scope namespace.Name) ([]audit.Entry, error) {
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := d.s.List(ctx, scope, audit.Page{Number: page, Size: audit.MaxPageSize})
+	for before := int64(0); ; {
+		listing, err := d.s.List(ctx, scope, audit.Page{Size: audit.MaxPageSize, Before: before})
 		if err != nil {
 			return nil, fmt.Errorf("list audit of %s: %w", scope, err)
 		}
 
 		out = append(out, listing.Entries...)
 
-		if len(listing.Entries) < audit.MaxPageSize {
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
 			break
 		}
 	}

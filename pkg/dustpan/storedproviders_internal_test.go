@@ -22,6 +22,14 @@ type storedFixture struct {
 func newStoredFixture(t *testing.T) storedFixture {
 	t.Helper()
 
+	return newStoredFixtureWith(t, func(st providerStores) providerStores { return st })
+}
+
+// newStoredFixtureWith is newStoredFixture with a wrapper around the store
+// that the provider service reads.
+func newStoredFixtureWith(t *testing.T, wrap func(providerStores) providerStores) storedFixture {
+	t.Helper()
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -45,7 +53,7 @@ func newStoredFixture(t *testing.T) storedFixture {
 		Scopes: nil, AutoCreate: true,
 	}}
 
-	admin, err := newProviderAdmin(cfg, st)
+	admin, err := newProviderAdmin(cfg, wrap(st))
 	if err != nil {
 		t.Fatalf("provider admin: %v", err)
 	}

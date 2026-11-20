@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -163,22 +164,14 @@ func runnerDropEntries(t *testing.T, s RestoreStore) []audit.Entry {
 
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := store.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
-		if err != nil {
-			t.Fatalf("list the audit log: %v", err)
-		}
-
-		for i := range listing.Entries {
-			if listing.Entries[i].Action == backup.ActionDroppedRunnerCredentials {
-				out = append(out, listing.Entries[i])
-			}
-		}
-
-		if len(listing.Entries) < audit.MaxPageSize {
-			return out
+	entries := audittest.All(t, store, audit.ServerScope)
+	for i := range entries {
+		if entries[i].Action == backup.ActionDroppedRunnerCredentials {
+			out = append(out, entries[i])
 		}
 	}
+
+	return out
 }
 
 // runnerCredentials is the handoff token and the job session that the token

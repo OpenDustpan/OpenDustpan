@@ -261,7 +261,8 @@ func (a *ProviderAdmin) Update(
 		return ProviderConfig{}, fmt.Errorf("get sign-in provider: %w", err)
 	}
 
-	if err := checkChange(old, c); err != nil {
+	err = checkChange(old, c)
+	if err != nil {
 		return ProviderConfig{}, err
 	}
 
@@ -269,43 +270,33 @@ func (a *ProviderAdmin) Update(
 	p := applyChange(old, c)
 	p.UpdatedAt, p.Version = maxTime(at, old.UpdatedAt), old.Version+1
 
-	if err := p.Validate(); err != nil {
+	// A change that only disables the provider sets no field, so it checks
+	// no field. A stored row that the current rules refuse, from an older
+	// version or a restored backup, must still be possible to disable.
+	// Any other change validates the whole merged row.
+	disable, err := checkMerged(old, p, c)
+	if err != nil {
 		return ProviderConfig{}, err
 	}
 
-	if err := a.sealChange(ctx, &p, c); err != nil {
-		return ProviderConfig{}, err
+	// A disable of a provider that is already disabled changes nothing, so
+	// it writes no row, no audit entry and no new version.
+	if disable && !old.Enabled {
+		return old, nil
 	}
 
-	// Bind after the seal, so a refused change binds no new issuer.
-	if p.Binding().binding() != old.Binding().binding() {
-		if err := a.bind(ctx, p.Binding(), at); err != nil {
-			return ProviderConfig{}, err
-		}
-	}
+	return a.write(ctx, e, &writeInput{old: old, p: p, c: c, at: at, disable: disable})
+}
 
-	changes := changedChanges(old, p)
-	if c.ClientSecret != nil {
-		changes = append(changes, secretChanged())
-	}
-
-	entry := providerEntry(e, at, id, changes)
-
-	// A change that only disables the provider takes the narrowing write,
-	// which works in maintenance mode. Any other change, also one that
-	// disables and changes a setting, takes the general write.
-	var storeErr error
+// checkMerged reports whether c only disables the provider, and validates the
+// merged row p when it does not. A change that only disables the provider
+// sets no field, so it checks no field.
+func checkMerged(old, p ProviderConfig, c ProviderChange) (bool, error) {
 	if disablesOnly(old, p, c) {
-		storeErr = a.store.DisableProviderConfig(ctx, id, old.Version, p.UpdatedAt, entry)
-	} else {
-		storeErr = a.store.UpdateProviderConfig(ctx, p, entry)
+		return true, nil
 	}
 
-	if storeErr != nil {
-		return ProviderConfig{}, fmt.Errorf("update sign-in provider: %w", storeErr)
-	}
-
-	return p, nil
+	return false, p.Validate()
 }
 
 // disablesOnly reports whether the change from old to p, made by c, sets the
@@ -360,6 +351,56 @@ func (a *ProviderAdmin) Delete(ctx context.Context, e audit.Entry, id string) er
 	}
 
 	return nil
+}
+
+// writeInput is a change that passed its checks: p is old with c applied, at
+// is the time of the change, and disable is true when c only disables the
+// provider.
+type writeInput struct {
+	at      time.Time
+	old, p  ProviderConfig
+	c       ProviderChange
+	disable bool
+}
+
+// write seals the new client secret of c, binds the issuer of p, and writes p
+// with an audit entry.
+func (a *ProviderAdmin) write(ctx context.Context, e audit.Entry, in *writeInput) (ProviderConfig, error) {
+	old, p, c, at, disable, id := in.old, in.p, in.c, in.at, in.disable, in.p.ID
+
+	if err := a.sealChange(ctx, &p, c); err != nil {
+		return ProviderConfig{}, err
+	}
+
+	// Bind after the seal, so a refused change binds no new issuer.
+	if p.Binding().binding() != old.Binding().binding() {
+		if err := a.bind(ctx, p.Binding(), at); err != nil {
+			return ProviderConfig{}, err
+		}
+	}
+
+	changes := changedChanges(old, p)
+	if c.ClientSecret != nil {
+		changes = append(changes, secretChanged())
+	}
+
+	entry := providerEntry(e, at, id, changes)
+
+	// A change that only disables the provider takes the narrowing write,
+	// which works in maintenance mode. Any other change, also one that
+	// disables and changes a setting, takes the general write.
+	var storeErr error
+	if disable {
+		storeErr = a.store.DisableProviderConfig(ctx, id, old.Version, p.UpdatedAt, entry)
+	} else {
+		storeErr = a.store.UpdateProviderConfig(ctx, p, entry)
+	}
+
+	if storeErr != nil {
+		return ProviderConfig{}, fmt.Errorf("update sign-in provider: %w", storeErr)
+	}
+
+	return p, nil
 }
 
 // sealChange seals the new client secret of c into p, when c has one.

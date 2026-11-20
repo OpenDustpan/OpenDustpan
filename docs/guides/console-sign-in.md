@@ -52,7 +52,9 @@ that its group or other users can read. Run `chmod 600` on the file.
 The server keeps each space of the client secret. From the file, it ignores
 one line ending at the end of the file.
 
-The issuer must use HTTPS. The server reads the discovery document of the
+The issuer must use HTTPS. It must have no user information, no query and
+no fragment. The server refuses the start with such an issuer, and it does not
+change the issuer. The server reads the discovery document of the
 provider at the first sign-in, not at start. So the server starts while the
 provider is down. When the provider does not answer, the start of a
 sign-in answers 502.
@@ -104,6 +106,11 @@ The rules:
 - At a sign-in, the server reads the discovery document from the issuer.
   So only a site administrator may set the issuer: give
   `server:manage-sign-in` to no other person.
+- A stored provider can hold an issuer that the server now refuses, for
+  example from an older version or a restored backup. The answer shows
+  `issuerRefused: true` for it. That provider cannot sign a person in.
+  Disable it with `"enabled": false`, which always works, and make a new
+  provider with a new ID for the issuer.
 - Disable a provider with `"enabled": false`. A disabled provider answers
   404 at the start of a sign-in. The disable also ends every active
   session of a person with a subject of the provider, and its audit entry
@@ -219,11 +226,12 @@ principal has the source `oauth`. The person can sign in, but can do
 nothing until an administrator gives a role. A grant needs a console session
 with a recent sign-in (see "Tokens from a console session"). The bootstrap
 admin token has no console session, so `POST` on a grant answers 403 with
-`mfa.fresh-step-required`. On `opendustpan serve`, a person who holds no role
-cannot give a first role: the token cannot do it, and no other route does it.
-The token can make principals and local users, but it cannot give them a
-role. `opendustpan host create-temp-admin` also does not help: its token is
-an access token, and it gets the same 403 on a grant.
+`mfa.fresh-step-required`. The token can make principals and local users, but
+it cannot give them a role. `opendustpan host create-temp-admin` also does not
+help: its token is an access token, and it gets the same 403 on a grant. Make
+the first administrator with the one-time code of the installation
+([Make the first administrator](first-administrator.md)). That administrator
+then gives the other roles in a console session.
 
 With `--oidc-no-auto-create`, the server refuses the sign-in of a person
 who has no principal yet. It answers 403 and writes an audit entry with

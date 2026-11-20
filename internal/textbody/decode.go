@@ -26,6 +26,12 @@ var (
 	// shape: a syntax fault, a field of the wrong type, an unknown field, or
 	// data after the value.
 	ErrJSON = errors.New("request body is not one JSON value with known fields")
+	// ErrNotObject reports a body that is not one JSON object, for example
+	// null, on a route that uses the option Object. It matches ErrJSON.
+	ErrNotObject = fmt.Errorf("%w: the body must be one JSON object", ErrJSON)
+	// ErrRepeatedKey reports a body in which one object names a key two times,
+	// on a route that uses the option Object. It matches ErrJSON.
+	ErrRepeatedKey = fmt.Errorf("%w: an object of the body names a key two times", ErrJSON)
 )
 
 // TooLargeError is the error of a body over the limit. It matches
@@ -52,6 +58,17 @@ type Option func(*rules)
 type rules struct {
 	allowEmpty   bool
 	allowUnknown bool
+	object       bool
+}
+
+// Object makes the body one JSON object in which no object, at any depth,
+// names a key two times. It refuses null and every other value that is not an
+// object with ErrNotObject, and a repeated key with ErrRepeatedKey. Without it,
+// a decode into a struct accepts null and changes nothing, and keeps the last
+// value of a repeated key, so two readers of one body could see two
+// documents.
+func Object() Option {
+	return func(r *rules) { r.object = true }
 }
 
 // AllowEmpty makes an empty body valid. Unmarshal then returns nil and does
@@ -89,8 +106,10 @@ func Read(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 
 // Unmarshal decodes body into v. It refuses, in this order: an empty body
 // with ErrEmpty (unless AllowEmpty), text that a decode would change with
-// ErrText, and a body that is not one JSON value with only the fields of v
-// with ErrJSON (unless AllowUnknownFields). It checks the text before the
+// ErrText, with the option Object a body that is not one object with
+// ErrNotObject and a repeated key with ErrRepeatedKey, and a body that is not
+// one JSON value with only the fields of v with ErrJSON (unless
+// AllowUnknownFields). It checks the text before the
 // decode, because encoding/json replaces each bad byte and each lone
 // surrogate escape with U+FFFD, and a check after the decode cannot see them.
 func Unmarshal(body []byte, v any, opts ...Option) error {
@@ -111,6 +130,12 @@ func Unmarshal(body []byte, v any, opts ...Option) error {
 
 	if Refused(body) {
 		return ErrText
+	}
+
+	if rule.object {
+		if err := checkObject(body); err != nil {
+			return err
+		}
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(body))

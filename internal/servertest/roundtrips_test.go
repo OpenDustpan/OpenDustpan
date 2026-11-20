@@ -1551,7 +1551,7 @@ func restoreModel() costModel {
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
-			updateLeaseExpireTrips - eventReceiptTrips,
+			updateLeaseExpireTrips + swappedSettingTrips - eventReceiptTrips + firstAdministratorTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1559,11 +1559,36 @@ func restoreModel() costModel {
 	}
 }
 
+// swappedSettingTrips is the number of round trips of the read of the restore
+// access setting row in the swap transaction: one SELECT after the swap and
+// before the step record, so the record holds the value that the installation
+// uses. A swap that keeps the live row skips it, but the restores of this test
+// take the row from the backup. It does not grow with the units or the tables.
+const swappedSettingTrips = 1
+
 // eventReceiptTrips is the number of round trips that the table of the Git host
 // event receipts takes off the fixed part. A restore leaves the table empty and
 // reads it only for its column check, 1 round trip, so it costs 1 less than the
 // 2 that perOther gives.
 const eventReceiptTrips = 1
+
+// firstAdministratorTrips is the change in the fixed part for the two tables of
+// the first administrator. The measured restore makes 3 round trips fewer than
+// the model gives for them, at 3 and at 30 units, so the count does not grow
+// with the units:
+//
+//   - The marker table first_administrator is a table of Tables that the dev
+//     strip never counts: its rows hold the ID of a person that was never a dev
+//     person. It makes 5 round trips, 2 fewer than perTable gives, as for
+//     proxy_rule_sets. It has the 3 column checks, the count of the staged rows
+//     and the export read, and no count of the strip. The restore with
+//     server:restore-access brings the marker back from the backup, and a
+//     restore without it keeps the live marker: the kept rows are copied in the
+//     statements of the other access tables, so the step counts are the same.
+//   - The code table first_administrator_codes is emptied. It makes 1 round
+//     trip, its column check, which is 1 fewer than perOther gives: the swap
+//     deletes no row of it, and a backup holds none.
+const firstAdministratorTrips = -2 - 1
 
 // updateLeaseExpireTrips is the number of round trips of the statement that
 // expires the lease of every running update in the swap transaction. It is one

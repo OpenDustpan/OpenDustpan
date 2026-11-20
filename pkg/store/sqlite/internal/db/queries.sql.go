@@ -952,19 +952,6 @@ func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountA
 	return count, err
 }
 
-const countAuditEntries = `-- name: CountAuditEntries :one
-SELECT COUNT(*)
-FROM audit_entries
-WHERE namespace = ?
-`
-
-func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAuditEntries, namespace)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countBlobPurges = `-- name: CountBlobPurges :one
 SELECT COUNT(*) AS pending, CAST(COALESCE(MIN(purged_at_ms), 0) AS INTEGER) AS oldest_ms
 FROM blob_purges
@@ -3393,6 +3380,27 @@ DELETE FROM runner_nonces WHERE expires_at_ms < ?1
 func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64) error {
 	_, err := q.db.ExecContext(ctx, deleteExpiredRunnerNonces, beforeMs)
 	return err
+}
+
+const deleteFirstAdministratorCode = `-- name: DeleteFirstAdministratorCode :execrows
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = ?1 AND principal_id = ?2 AND expires_at_ms > ?3
+`
+
+type DeleteFirstAdministratorCodeParams struct {
+	Digest      string
+	PrincipalID string
+	NowMs       int64
+}
+
+// The delete is a check: it matches the code row only when the digest, the
+// principal and the open time are those that the redeem checked.
+func (q *Queries) DeleteFirstAdministratorCode(ctx context.Context, arg DeleteFirstAdministratorCodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteFirstAdministratorCode, arg.Digest, arg.PrincipalID, arg.NowMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteForgeAccountLink = `-- name: DeleteForgeAccountLink :execrows
@@ -6343,6 +6351,58 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
+}
+
+const getFirstAdministratorCode = `-- name: GetFirstAdministratorCode :one
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+`
+
+type GetFirstAdministratorCodeRow struct {
+	PrincipalID string
+	Digest      string
+	CreatedBy   string
+	Reason      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) GetFirstAdministratorCode(ctx context.Context) (GetFirstAdministratorCodeRow, error) {
+	row := q.db.QueryRowContext(ctx, getFirstAdministratorCode)
+	var i GetFirstAdministratorCodeRow
+	err := row.Scan(
+		&i.PrincipalID,
+		&i.Digest,
+		&i.CreatedBy,
+		&i.Reason,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
+const getFirstAdministratorMarker = `-- name: GetFirstAdministratorMarker :one
+SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1
+`
+
+type GetFirstAdministratorMarkerRow struct {
+	PrincipalID string
+	GrantID     string
+	SessionID   string
+	CreatedBy   string
+	MadeAtMs    int64
+}
+
+func (q *Queries) GetFirstAdministratorMarker(ctx context.Context) (GetFirstAdministratorMarkerRow, error) {
+	row := q.db.QueryRowContext(ctx, getFirstAdministratorMarker)
+	var i GetFirstAdministratorMarkerRow
+	err := row.Scan(
+		&i.PrincipalID,
+		&i.GrantID,
+		&i.SessionID,
+		&i.CreatedBy,
+		&i.MadeAtMs,
+	)
+	return i, err
 }
 
 const getForgeAccountLink = `-- name: GetForgeAccountLink :one
@@ -10962,6 +11022,30 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 	return err
 }
 
+const insertFirstAdministratorMarker = `-- name: InsertFirstAdministratorMarker :exec
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, ?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertFirstAdministratorMarkerParams struct {
+	PrincipalID string
+	GrantID     string
+	SessionID   string
+	CreatedBy   string
+	MadeAtMs    int64
+}
+
+func (q *Queries) InsertFirstAdministratorMarker(ctx context.Context, arg InsertFirstAdministratorMarkerParams) error {
+	_, err := q.db.ExecContext(ctx, insertFirstAdministratorMarker,
+		arg.PrincipalID,
+		arg.GrantID,
+		arg.SessionID,
+		arg.CreatedBy,
+		arg.MadeAtMs,
+	)
+	return err
+}
+
 const insertFirstSessionGeneration = `-- name: InsertFirstSessionGeneration :execrows
 INSERT INTO principal_session_generations (principal_id, generation)
 SELECT CAST(?1 AS TEXT), 2
@@ -13801,26 +13885,27 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 	return items, nil
 }
 
-const listAuditEntries = `-- name: ListAuditEntries :many
+const listAuditEntriesBefore = `-- name: ListAuditEntriesBefore :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
-WHERE namespace = ?
+WHERE namespace = ? AND sequence < ?
 ORDER BY sequence DESC
-LIMIT ? OFFSET ?
+LIMIT ?
 `
 
-type ListAuditEntriesParams struct {
+type ListAuditEntriesBeforeParams struct {
 	Namespace string
+	Sequence  int64
 	Limit     int64
-	Offset    int64
 }
 
-// One page of the entries of a namespace, newest first. Ties on time break
-// by sequence, as the port comment promises.
-func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditEntry, error) {
-	rows, err := q.db.QueryContext(ctx, listAuditEntries, arg.Namespace, arg.Limit, arg.Offset)
+// One page of the entries of a namespace below a sequence, newest first. It
+// reads the primary key (namespace, sequence) backwards, so a page costs the
+// same at any depth.
+func (q *Queries) ListAuditEntriesBefore(ctx context.Context, arg ListAuditEntriesBeforeParams) ([]AuditEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditEntriesBefore, arg.Namespace, arg.Sequence, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -21612,6 +21697,35 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const replaceFirstAdministratorCode = `-- name: ReplaceFirstAdministratorCode :exec
+INSERT INTO first_administrator_codes (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms)
+VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = excluded.digest,
+  created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
+  expires_at_ms = excluded.expires_at_ms
+`
+
+type ReplaceFirstAdministratorCodeParams struct {
+	PrincipalID string
+	Digest      string
+	CreatedBy   string
+	Reason      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) ReplaceFirstAdministratorCode(ctx context.Context, arg ReplaceFirstAdministratorCodeParams) error {
+	_, err := q.db.ExecContext(ctx, replaceFirstAdministratorCode,
+		arg.PrincipalID,
+		arg.Digest,
+		arg.CreatedBy,
+		arg.Reason,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+	)
+	return err
 }
 
 const replaceForgeAccountLink = `-- name: ReplaceForgeAccountLink :execrows

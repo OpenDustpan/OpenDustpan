@@ -116,7 +116,7 @@ func TestPlacementRuleInternalErrorWritesNoDenial(t *testing.T) {
 func checkDenialRecords(t *testing.T, store *memPlacements, want int) {
 	t.Helper()
 
-	list, err := store.denials.List(t.Context(), "acme", audit.Page{Number: 0, Size: 0})
+	list, err := store.denials.List(t.Context(), "acme", audit.Page{Size: 0, Before: 0})
 	if err != nil {
 		t.Fatalf("list the denial audit: %v", err)
 	}

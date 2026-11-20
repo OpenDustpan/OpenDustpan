@@ -265,6 +265,12 @@ func sameSteps(a, b []job.Step) bool {
 func (s *Service) Put(
 	ctx context.Context, in *unitsettings.Settings, expected int64, e audit.Entry,
 ) (View, error) {
+	// A write accepts RootDirectory, the effective directory that a read
+	// shows, and stores the root in one form. The checks, the audit entry and
+	// the answer then see the stored form.
+	canonical := in.Canonical()
+	in = &canonical
+
 	if err := in.Validate(); err != nil {
 		return View{}, fmt.Errorf("unit settings: %w", err)
 	}

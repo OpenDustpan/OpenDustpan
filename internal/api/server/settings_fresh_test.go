@@ -41,6 +41,13 @@ func newKeyedSettingsEnv(t *testing.T) keyedSettingsEnv {
 func newKeyedSettingsEnvWith(t *testing.T, reg *setting.Registry) keyedSettingsEnv {
 	t.Helper()
 
+	return newKeyedSettingsEnvAs(t, reg, allowAll{})
+}
+
+// newKeyedSettingsEnvAs is newKeyedSettingsEnvWith with the authorizer authz.
+func newKeyedSettingsEnvAs(t *testing.T, reg *setting.Registry, authz identity.Authorizer) keyedSettingsEnv {
+	t.Helper()
+
 	st := openRouteTestStore(t)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
@@ -56,7 +63,7 @@ func newKeyedSettingsEnvWith(t *testing.T, reg *setting.Registry) keyedSettingsE
 	}
 
 	cfg := settingsConfig(
-		t, st, namespaces, allowAll{},
+		t, st, namespaces, authz,
 		setting.NewService(st.SettingStore(), reg, nil, st, nil),
 	)
 

@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -744,22 +745,13 @@ func (d *delegation) changeOf(t *testing.T, ns namespace.Name, object, key strin
 func (d *delegation) entryOf(t *testing.T, ns namespace.Name, object string) audit.Entry {
 	t.Helper()
 
-	for number := 1; ; number++ {
-		listing, err := d.st.List(t.Context(), ns, audit.Page{Number: number, Size: audit.MaxPageSize})
-		if err != nil {
-			t.Fatalf("list audit: %v", err)
-		}
-
-		for i := range listing.Entries {
-			if listing.Entries[i].Object == object {
-				return listing.Entries[i]
-			}
-		}
-
-		if int64(number*audit.MaxPageSize) >= listing.Total {
-			t.Fatalf("no audit entry of %q", object)
-		}
+	entries := audittest.All(t, d.st, ns)
+	i := slices.IndexFunc(entries, func(e audit.Entry) bool { return e.Object == object })
+	if i < 0 {
+		t.Fatalf("no audit entry of %q", object)
 	}
+
+	return entries[i]
 }
 
 // countChanges returns the count of the changes with the key in the

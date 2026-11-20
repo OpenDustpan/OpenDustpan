@@ -96,7 +96,7 @@ func (f *fakeAudit) Append(context.Context, namespace.Fence, audit.Entry) (audit
 }
 
 func (f *fakeAudit) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil, More: false}, nil
 }
 
 func (f *fakeAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {
@@ -142,7 +142,7 @@ func (plainAudit) Append(context.Context, namespace.Fence, audit.Entry) (audit.E
 }
 
 func (plainAudit) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil, More: false}, nil
 }
 
 func (plainAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {

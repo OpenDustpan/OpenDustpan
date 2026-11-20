@@ -317,7 +317,7 @@ func (f sweepFixture) checkBlobs(t *testing.T, units []sweptUnit, want int, when
 func checkSweepAudit(t *testing.T, f sweepFixture, units []sweptUnit) {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	listing, err := f.store.List(t.Context(), "acme", audit.Page{Size: 100, Before: 0})
 	if err != nil {
 		t.Fatalf("audit entries: %v", err)
 	}

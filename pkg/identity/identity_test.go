@@ -251,6 +251,54 @@ func TestObjectConstructors(t *testing.T) {
 	}
 }
 
+// TestUnitNameRefusesHiddenRunes proves that a unit name with a control
+// character, a format character, a line separator or bytes that are not
+// valid UTF-8 is refused by both entry points: UnitObject and ParseObject. A
+// name without such a character, with a letter that is not ASCII too, is
+// accepted.
+func TestUnitNameRefusesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		unit    string
+		invalid bool
+	}{
+		{"clean name", "web/prod", false},
+		{"letter that is not ASCII", "web/\u00e9quipe", false},
+		{"right-to-left override U+202E", "web/\u202eprod", true},
+		{"left-to-right isolate U+2066", "web/\u2066prod", true},
+		{"line separator U+2028", "web/a\u2028b", true},
+		{"zero width space U+200B", "web/a\u200bb", true},
+		{"bell U+0007", "web/a\x07b", true},
+		{"tab", "web/a\tb", true},
+		{"line feed", "web/a\nb", true},
+		{"carriage return", "web/a\rb", true},
+		{"NUL", "web/a\x00b", true},
+		{"invalid UTF-8", "web/a\xffb", true},
+	}
+
+	ns := mustName(t, "acme")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := identity.UnitObject("pulumi", ns, tc.unit)
+			if tc.invalid != errors.Is(err, identity.ErrInvalidObject) {
+				t.Fatalf("UnitObject(%q) = %v, want invalid = %t", tc.unit, err, tc.invalid)
+			}
+
+			raw := "pulumi:acme/" + tc.unit
+
+			_, err = identity.ParseObject(raw)
+			if tc.invalid != errors.Is(err, identity.ErrInvalidObject) {
+				t.Fatalf("ParseObject(%q) = %v, want invalid = %t", raw, err, tc.invalid)
+			}
+		})
+	}
+}
+
 // TestCallerObject proves the caller reference names no namespace or unit,
 // that ParseObject rejects its wire form, and that a namespace named
 // "caller" never equals it.

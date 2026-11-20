@@ -130,6 +130,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopyForgeLinkTables()...)
+	tables = append(tables, pgCopyFirstAdministratorTables()...)
 	tables = append(tables, pgCopyLocalUserTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
@@ -577,6 +578,11 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table:   backup.TableFirstAdministratorCodes,
+			columns: pgFirstAdministratorCodeColumns(),
+			orderBy: []string{"id"},
 		},
 		{
 			table: backup.TableJobTokens,

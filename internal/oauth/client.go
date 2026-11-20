@@ -33,6 +33,8 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Errors of the client. Each one wraps the reason. No error holds a code,
@@ -192,13 +194,33 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: redirect URL is empty", ErrConfig)
 	}
 
+	// The form check comes first: it refuses user information, and its text
+	// never holds the issuer. The two checks below give fixed text too.
+	if err := checkIssuerForm(cfg.Issuer); err != nil {
+		return err
+	}
+
 	issuer, err := url.Parse(cfg.Issuer)
 	if err != nil || issuer.Host == "" {
-		return fmt.Errorf("%w: issuer %q is not an absolute URL", ErrConfig, cfg.Issuer)
+		return fmt.Errorf("%w: the issuer is not an absolute URL", ErrConfig)
 	}
 
 	if !secureURL(issuer) {
-		return fmt.Errorf("%w: issuer %q must use https", ErrConfig, cfg.Issuer)
+		return fmt.Errorf("%w: the issuer must use https", ErrConfig)
+	}
+
+	return nil
+}
+
+// checkIssuerForm returns ErrConfig for an issuer that session.CheckIssuer
+// refuses. The text of the error never holds the issuer, because user
+// information can hold a password.
+func checkIssuerForm(raw string) error {
+	// Defense in depth: the flag parser, the server start and the provider
+	// API check the issuer with the same function. This check stays so that
+	// a new caller of the client cannot skip it.
+	if err := session.CheckIssuer(raw); err != nil {
+		return fmt.Errorf("%w: %w", ErrConfig, err)
 	}
 
 	return nil
