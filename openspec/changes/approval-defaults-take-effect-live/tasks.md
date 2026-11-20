@@ -1,32 +1,21 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each row of "What the change was and what main already does" at its file and line on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing service test in NEW file internal/jobsvc/approval_wait_test.go for Pulumi apply that waits under an approval default. Check: TestJobApprovalWaitPulumiFailsOnMain shows missing wait for a Pulumi apply under a default.
-- [ ] 1.2 Add failing service test in NEW file internal/jobsvc/approval_wait_test.go for OpenTofu apply that waits under an approval default. Check: TestJobApprovalWaitOpenTofuFailsOnMain shows missing wait for an OpenTofu run under a default.
-- [ ] 1.3 Add failing service test in NEW file internal/jobsvc/approval_wait_test.go for apply with no default that needs no approval. Check: TestJobNoDefaultNeedsNoApprovalFailsOnMain shows an apply without default proceeds.
-- [ ] 1.4 Add failing test in NEW file internal/jobsvc/approval_recheck_test.go for recheck at change.apply with a new requirement. Check: TestJobRecheckApplyFailsOnMain shows a default saved after start blocks the apply dispatch.
-- [ ] 1.5 Add failing test in NEW file internal/jobsvc/approval_recheck_test.go for recheck-only-adds on removal during wait. Check: TestJobRecheckOnlyAddsFailsOnMain shows removal of a default while in wait does not release the wait.
-- [ ] 1.6 Add failing test in NEW file internal/jobsvc/approval_combine_test.go for deny plus approval requirement combine order. Check: TestJobDenyBeatsApprovalFailsOnMain shows deny stops the change when an approval requirement also matches.
-- [ ] 1.7 Add failing test in NEW file internal/jobsvc/approval_combine_test.go for deny gate and engine error fail-closed. Check: TestJobDenyAndErrorFailClosedFailsOnMain shows deny refusal and enforce-mode error stop.
-- [ ] 1.8 Add failing test in NEW file internal/jobsvc/approval_facts_test.go for unavailable facts fail-closed. Check: TestJobUnavailableFactsFailsOnMain shows unavailable facts keep the wait with error result.
-- [ ] 1.9 Add failing test in NEW file internal/jobsvc/approval_facts_test.go for evaluate mode with no block. Check: TestJobEvaluateModeFailsOnMain shows an evaluate-mode default records without wait.
-- [ ] 1.10 Add failing test in NEW file internal/jobsvc/approval_persist_test.go for wait persistence across restart and lease expiry. Check: TestJobWaitSurvivesRestartFailsOnMain shows stored wait and signatures survive restart and lease loss.
-- [ ] 1.11 Add failing test in NEW file internal/jobsvc/approval_authz_test.go for authorization refusal at StartJob (NEW). Check: TestJobPlanRightsRefusedFailsOnMain shows 403 for apply with plan-only rights.
-- [ ] 1.12 Add failing test in NEW file internal/jobsvc/approval_record_test.go for decision record contents. Check: TestJobDecisionRecordNamesGateFailsOnMain shows the record holds gate versions and schema version.
-
-- [ ] 1.13 SECURITY. Add hostile test TestJobBoundaryRejectsHostileInput in internal/jobsvc/approval_authz_test.go. It sends an empty subject and a malformed unit reference to StartJob. Check: TestJobBoundaryRejectsHostileInput shows refusal and zero engine calls.
-- [ ] 1.14 SECURITY. Add hostile test TestStateWriteReplayPriorRevisionRefused in NEW file internal/jobsvc/state_write_guard_test.go. It replays a prior-revision approval at the tool write handler. Check: TestStateWriteReplayPriorRevisionRefused shows refusal with the record named and no state write.
+- [ ] 1.1 Add a failing test for the start of an apply and a destroy of an OpenTofu workspace in `pkg/dustpan/jobservice_internal_test.go`. It replaces `TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer` for OpenTofu and keeps the refusal for another tool. Check: `TestJobPlannerStartsApplyAndDestroyOfOpenTofuFailsOnMain` shows the 422 on main.
+- [ ] 1.2 Add a failing service test in `pkg/job/service_test.go` for an apply job under a default of two approvers: it waits after the plan phase and is queued after two approvers. Check: `TestApplyJobWaitsForTheDefaultFailsOnMain` fails on main.
+- [ ] 1.3 Add failing reconcile tests in `pkg/job/reconcile_test.go` and a store suite case in `pkg/job/jobtest/reconcile.go` for the recheck: a default added after the start gates the dispatch, a removed default releases nothing, and an unreadable default blocks the dispatch. Check: `TestReconcileRechecksTheDefaultsFailsOnMain` fails on main.
+- [ ] 1.4 Add a failing test in `pkg/job/service_start_internal_test.go` for the policy version in the audit entry of the start. Check: `TestStartEntryNamesThePolicyVersionFailsOnMain` fails on main.
+- [ ] 1.5 SECURITY. Add one table of hostile cases for the apply start at the HTTP handler in `internal/api/jobs/start_test.go`: an operation with control characters, an apply by a principal with only the plan action, and an apply on a unit of another tool. Check: each case answers 400, 403 or 422 and stores no job, and the test fails when its guard is removed.
+- [ ] 1.6 SECURITY. Add hostile tests for the recheck in `pkg/job/reconcile_test.go`: a reader that returns defaults of another namespace, and a reader that returns an error. Check: the job is not dispatched in both cases.
 
 ## 2. Wiring
 
-- [ ] 2.1 Add the new file internal/jobsvc and wire jobgate.Decider into the job service points from #968 with gate evaluation from #899. Check: go test ./pkg/gate/jobgate/... passes with the Decider wired at change.propose, change.planned and change.apply.
-- [ ] 2.2 Record each evaluation with gate versions and resume on the latest requirement set inside one store transaction, in NEW file internal/jobsvc/approval_record.go. Check: go test -race ./... for the touched packages passes and decision records name the gate, the gate versions and the schema version.
-
-- [ ] 2.3 SECURITY. Build the record version check in the tool write handlers in NEW file internal/jobsvc/state_write_guard.go. The handler refuses a state write when the stored record version does not match the dispatched revision. Check: go test ./internal/jobsvc/... passes and a state write with a stale record version is refused with the record named.
-- [ ] 2.4 SECURITY. Build the boundary validation of the job service port adapter in NEW file internal/jobsvc/boundary.go. It refuses an empty subject and a malformed unit reference before any Decider call. Check: go test ./internal/jobsvc/... passes and no engine call happens for hostile input.
+- [ ] 2.1 Lift the refusal for an apply and a destroy of an OpenTofu workspace in `pkg/dustpan/jobservice.go` (`checkPlanRequest`, `startsOnRunner`). Keep the refusal for another tool, for edits and for another executor. Check: `go test ./pkg/dustpan/...` passes.
+- [ ] 2.2 Add the recheck to the reconcile in `pkg/job/reconcile.go`: a port that reads the decision for a queued job, the change that adds a gate to the stored phase, and the reason that names the default. The store port and its conformance suite get the change before any adapter implements it. Check: `go test ./pkg/job/... ./pkg/store/...` passes, with `-timeout 60m` for the store packages.
+- [ ] 2.3 Write the policy version of the decision in the audit entry of the start in `pkg/job/service_start.go`. Check: `go test ./pkg/job/...` passes.
 
 ## 3. Side effects (computed from main)
 
@@ -34,6 +23,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e step in NEW file e2e/approval_defaults_take_effect_live_test.go for a Pulumi update and an OpenTofu run that wait and continue, with deny path. Check: e2e step on PUT /api/dustpan/v1/namespaces/{namespace}/approval-default with an access-token credential drives the real Pulumi CLI and the real OpenTofu CLI through TLS and shows approval wait then continue after approvals, plus deny refusal with the record named. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the docs page for approval defaults on live jobs in NEW file docs/guides/approval-defaults-live.md. Check: Docs page runs as written and shows the default, the wait state and the approve command. Confirmed by: CI (an e2e step in the NEW file e2e/approval_defaults_take_effect_live_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Run usability check from the docs page alone and make check with zero findings. Check: make check reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add an e2e step in the NEW file `e2e/jobs_apply_approval_test.go` that starts an apply of an OpenTofu workspace on a runner with the real OpenTofu CLI, sets the default with `PUT /api/dustpan/v1/namespaces/{namespace}/approval-default`, shows `awaiting-approval`, approves with two principals and shows the apply. Check: the step passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Update `docs/guides/approval-rules.md` and `docs/reference/jobs-api.md` for the apply start, the wait and the recheck, and remove the lines that say that an apply is not accepted. Check: the docs commands run in an e2e step in the NEW file `e2e/jobs_apply_approval_docs_test.go`, and `make docs-lint` passes. Confirmed by: CI.
+- [ ] 4.3 Run the usability check from the docs page alone and `make check` with zero findings. Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
