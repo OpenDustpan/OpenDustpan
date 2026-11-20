@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // errStoreCanary and errBlobCanary are the Ping failures the tests use. A

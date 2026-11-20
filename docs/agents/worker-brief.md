@@ -31,7 +31,7 @@ Authority. The project owner has delegated ALL direction for this work to the le
 3. Never add a Go dependency. If `git diff origin/main -- go.mod go.sum` shows a new `require` line, undo with `git checkout origin/main -- go.mod go.sum` and tell the implementer to solve it without a new dependency.
 4. Never rebase, amend or force-push. Never push to any branch except your own branch.
 5. Never skip, disable or delete a test to make a check pass.
-6. Never edit an existing file in `pkg/store/sqlite/migrations/` or `pkg/store/postgres/migrations/`. A new migration may use ONLY the number the lead gave you in your issue brief.
+6. Never edit an existing file in `internal/store/sqlite/migrations/` or `internal/store/postgres/migrations/`. A new migration may use ONLY the number the lead gave you in your issue brief.
 7. Never write a URL that contains `user:password@` in any file. Never print a secret.
 8. Do not contact the Pulumi project in any way (no issues, comments, stars). You can read its public source with `git clone`.
 9. Never put a model name in a commit message, a PR title or a PR body.
@@ -198,7 +198,7 @@ When the issue is ready (or blocked), send the lead one final message. Give the 
 
 - The environment setup script installs the tools. If one is missing in Step 0, report it and stop.
 - The implementer cannot write to /tmp. That is fine: the brief goes to the implementer as text.
-- Under load, `go test -race` can time out in `pkg/store/sqlite` or `internal/api/server`. If that is the only failure, run `go test -race` on that package alone. If it passes alone, count the gate as passed and say so in the PR "Checks" section. CI is the gate.
+- Under load, `go test -race` can time out in `internal/store/sqlite` or `internal/api/server`. If that is the only failure, run `go test -race` on that package alone. If it passes alone, count the gate as passed and say so in the PR "Checks" section. CI is the gate.
 - Only send messages for: already done or taken, a blocker, PR ready, final summary. No progress messages.
 
 ## Your issue brief (copy this block EXACTLY into /tmp/briefs/<N>.md in Step 3)
@@ -207,5 +207,5 @@ When the issue is ready (or blocked), send the lead one final message. Give the 
 BRIEF FOR #<N> (branch slug: <SLUG>, e2e: <yes or no>)
 <ISSUE BRIEF>
 
-RULES FOR YOU (implementer): Work only inside the current directory, which is a git worktree of the OpenDustpan Go server. First read CLAUDE.md and GLOSSARY.md in this directory and follow them. Go standard library only. No new dependencies (do not change go.mod). No testify. Tests use the standard testing package, black-box _test packages, t.Parallel() and t.Context(). Every new test package needs a leak_test.go with goleak.VerifyTestMain (copy an existing one). Do not edit .github/, .golangci.yml, .trivyignore, or any existing file in pkg/store/*/migrations/. Never edit internal/db by hand: change queries.sql and run `make generate`. Put a new query block in its place in the name order of queries.sql, next to the queries of its area. Never put it at the end of the file. Errors are sentinel Err values wrapped with fmt.Errorf("...: %w", err). Error and log text: short, exact, sentence case, US spelling, no exclamation marks. Do NOT write ADR, RFC, issue or PR numbers in code, comments, tests or error text. When you finish, run `go build ./... && go vet ./...` and `go test` on every package you changed, and fix failures. Do not commit; leave the changes in the working tree.
+RULES FOR YOU (implementer): Work only inside the current directory, which is a git worktree of the OpenDustpan Go server. First read CLAUDE.md and GLOSSARY.md in this directory and follow them. Go standard library only. No new dependencies (do not change go.mod). No testify. Tests use the standard testing package, black-box _test packages, t.Parallel() and t.Context(). Every new test package needs a leak_test.go with goleak.VerifyTestMain (copy an existing one). Do not edit .github/, .golangci.yml, .trivyignore, or any existing file in internal/store/*/migrations/. Never edit internal/db by hand: change queries.sql and run `make generate`. Put a new query block in its place in the name order of queries.sql, next to the queries of its area. Never put it at the end of the file. Errors are sentinel Err values wrapped with fmt.Errorf("...: %w", err). Error and log text: short, exact, sentence case, US spelling, no exclamation marks. Do NOT write ADR, RFC, issue or PR numbers in code, comments, tests or error text. When you finish, run `go build ./... && go vet ./...` and `go test` on every package you changed, and fix failures. Do not commit; leave the changes in the working tree.
 ```

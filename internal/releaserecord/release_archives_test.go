@@ -301,7 +301,7 @@ func extendRecord(t *testing.T, dir, version string) {
 	lines.Write(record)
 
 	for _, dialect := range []string{"sqlite", "postgres"} {
-		files, err := fs.Glob(root.FS(), "pkg/store/"+dialect+"/migrations/[0-9]*.sql")
+		files, err := fs.Glob(root.FS(), "internal/store/"+dialect+"/migrations/[0-9]*.sql")
 		if err != nil {
 			t.Fatal(err)
 		}

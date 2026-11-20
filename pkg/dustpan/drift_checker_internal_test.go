@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/drift/drifttest"
@@ -19,7 +20,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

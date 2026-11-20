@@ -21,11 +21,11 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/servertest"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // This file holds the regression benchmark of database round trips: for each
@@ -106,7 +106,7 @@ const (
 const (
 	serveFrame      = "net/http.(*conn).serve"
 	backupFrame     = "/pkg/backup."
-	storeFrame      = "/pkg/store/postgres."
+	storeFrame      = "/internal/store/postgres."
 	maxTraceFrames  = 96
 	maxStatementLen = 110
 )

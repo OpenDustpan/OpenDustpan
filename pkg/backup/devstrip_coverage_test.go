@@ -229,7 +229,7 @@ func TestDevStripCoversEveryPrincipalColumn(t *testing.T) {
 			decision, listed := devColumnDecisions[key]
 			if !listed {
 				t.Errorf("column %s can name a principal and has no decision: add it to devColumnDecisions "+
-					"and, when the strip must remove it, to pkg/store/internal/devstrip", key)
+					"and, when the strip must remove it, to internal/store/devstrip", key)
 
 				continue
 			}

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // serverTemplateState holds the once, directory, path and build error of the

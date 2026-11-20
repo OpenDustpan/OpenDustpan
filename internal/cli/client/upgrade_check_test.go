@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli/client"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // serveUpgradeCheck answers one upgrade check document with the given

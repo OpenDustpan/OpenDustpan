@@ -8,7 +8,7 @@
 // The package writes no HTTP answer and imports no net/http, so it does not
 // depend on an adapter. It lives under internal/api because its callers are
 // the HTTP adapters only, and because it reads the errors of the store
-// (pkg/store/schema), which a domain package must not import.
+// (internal/store/schema), which a domain package must not import.
 package stategate
 
 import (
@@ -20,10 +20,10 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // Guard checks a write of state against the access limits of its action and

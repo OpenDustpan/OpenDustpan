@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -24,7 +25,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/savedview"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // Tokens of the callers in a view fixture.
