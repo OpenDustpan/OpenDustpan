@@ -162,6 +162,8 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
               desc: The job proxy depends on ports, never on store adapters.
+            - pkg: opendustpan.org/opendustpan/internal/store
+              desc: The job proxy depends on ports, never on store adapters.
             - pkg: opendustpan.org/opendustpan/internal/api
               desc: The job proxy must not import transport adapters.
             - pkg: opendustpan.org/opendustpan/pkg/blob/
@@ -310,6 +312,8 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
               desc: Domain code depends on ports, never on store adapters.
+            - pkg: opendustpan.org/opendustpan/internal/store
+              desc: Domain code depends on ports, never on store adapters.
             - pkg: opendustpan.org/opendustpan/internal/api
               desc: Domain code must not import transport adapters.
             - pkg: opendustpan.org/opendustpan/pkg/blob/
@@ -392,6 +396,8 @@ linters:
             - "!**/*_test.go"
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
+              desc: The binary opens the store through pkg/dustpan, never through a store package.
+            - pkg: opendustpan.org/opendustpan/internal/store
               desc: The binary opens the store through pkg/dustpan, never through a store package.
 
         runnerdeps:
