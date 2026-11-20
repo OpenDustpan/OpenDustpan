@@ -20,5 +20,5 @@
 - [x] 4.1 Route test lists the settings route with its actions. Check: Route test passes
 - [x] 4.2 E2E: PATCH /api/dustpan/v1/settings with a console session cookie (fresh step, never an access token), then POST /api/dustpan/v1/restores with the same session, over TLS. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
 - [x] 4.3 Add the docs page NEW file docs/guides/restore-access-setting.md, and list the value in the restore audit object in the existing function restoreAuditObject of pkg/backup/restore_steps.go. Check: Docs page and the restore audit object show the value. `make docs-lint` passes on each edited guide.
-- [ ] 4.4 Usability walk from the docs page alone. Check: Each error names one command. A person's step.
-- [ ] 4.5 Run full checks. Check: `make check` has zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.4 Usability walk from the docs page alone. Check: Each error names one command. A person's step.
+- [x] 4.5 Run full checks. Check: `make check` has zero findings. Confirmed by: CI (the agent runs the fast checks only).

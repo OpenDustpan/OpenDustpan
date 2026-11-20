@@ -18,6 +18,9 @@ func prepareGroup(cmd *exec.Cmd, a *ProcessAdapter) {
 	cmd.SysProcAttr = new(syscall.SysProcAttr)
 	cmd.SysProcAttr.Setpgid = true
 	cmd.Cancel = func() error {
+		a.groupMu.Lock()
+		defer a.groupMu.Unlock()
+
 		if a.groupEnded.Load() {
 			return nil
 		}
@@ -48,6 +51,11 @@ func endGroupAfterExit(a *ProcessAdapter) {
 	if err := waitForExitNoReap(p.Pid); err != nil {
 		a.stderr.note(err)
 	}
+
+	// The mark and the kill are one step under groupMu: a kill that is in
+	// progress ends before the mark, and a kill after the mark sends nothing.
+	a.groupMu.Lock()
+	defer a.groupMu.Unlock()
 
 	if err := killGroup(p); err != nil {
 		a.stderr.note(err)
