@@ -270,6 +270,54 @@ func TestRestoreSettingChangeEntryNeedsAnEffectiveChange(t *testing.T) {
 	}
 }
 
+// TestRestoreSettingChangeEntryWhenTheLiveValueWasNotRead is the hostile table
+// of the setting-change entry when the restore did not read the live value
+// before the swap (a read error, or no reader). A restore by a caller with
+// server:restore-access that takes a new value from the backup writes one
+// entry that names the new value and marks the old value unknown. Each other
+// guard of the entry still holds when the old value is unknown: a kept live
+// row, the static layer, and a backup with no value write none.
+func TestRestoreSettingChangeEntryWhenTheLiveValueWasNotRead(t *testing.T) {
+	t.Parallel()
+
+	failing := func(context.Context) (string, error) { return "", errAccessSettingRead }
+	static := func(context.Context) (bool, error) { return true, nil }
+
+	for _, tc := range []struct {
+		name   string
+		read   func(context.Context) (string, error)
+		static func(context.Context) (bool, error)
+		keep   bool
+		next   string
+		want   bool
+	}{
+		{name: "a read error, new value on", read: failing, static: nil, keep: false, next: "true", want: true},
+		{name: "a read error, new value off", read: failing, static: nil, keep: false, next: "false", want: true},
+		{name: "no reader, new value on", read: nil, static: nil, keep: false, next: "true", want: true},
+		{name: "a read error, live row kept", read: failing, static: nil, keep: true, next: "true", want: false},
+		{name: "a read error, the static layer sets the key", read: failing, static: static, keep: false, next: "true", want: false},
+		{name: "a read error, the backup has no value", read: failing, static: nil, keep: false, next: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+				cfg.AccessSetting, cfg.AccessSettingStatic = tc.read, tc.static
+			})
+			setup.live.backupSetting = tc.next
+
+			runStartedRestore(t, setup, tc.keep)
+
+			found := settingChangeEntries(setup)
+			if tc.want {
+				checkSettingChange(t, found, backup.SettingValueUnknown, tc.next)
+			} else if len(found) != 0 {
+				t.Fatalf("setting-change entries = %+v, want none", found)
+			}
+		})
+	}
+}
+
 // TestRestoreSwapRecordHostileDecode proves the decoder of the swap record
 // refuses a record that shows a swap that took the restore setting while it
 // kept or widened the access tables, and a record that is both kept and

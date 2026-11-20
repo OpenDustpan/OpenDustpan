@@ -224,8 +224,15 @@ func accessModeText(op durable.Operation) string {
 	return mode + "; setting " + SettingRestoreAccessTables + " " + settingModeText(d)
 }
 
+// SettingValueUnknown is the old value of the change entry of the restore
+// access setting when the restore did not read the live value before the swap.
+// The entry names the new value and marks the old value with this text, so a
+// reader never takes a value that was not read for an empty value.
+const SettingValueUnknown = "unknown"
+
 // settingModeText says what the swap did to the row of the restore access
-// setting, with the live value before the swap.
+// setting, with the live value before the swap and, when the swap took the row
+// from the backup, the value after it.
 func settingModeText(d SwapDecision) string {
 	value := "the live value was not read"
 	if d.SettingBefore != "" {
@@ -236,11 +243,17 @@ func settingModeText(d SwapDecision) string {
 		return "kept (" + value + ")"
 	}
 
-	if d.SettingStatic {
-		return "taken from the backup (" + value + " before the swap); the static layer sets the effective value"
+	if d.SettingAfter != "" {
+		value += " before the swap, the new value is " + d.SettingAfter
+	} else {
+		value += " before the swap"
 	}
 
-	return "taken from the backup (" + value + " before the swap)"
+	if d.SettingStatic {
+		return "taken from the backup (" + value + "); the static layer sets the effective value"
+	}
+
+	return "taken from the backup (" + value + ")"
 }
 
 // settingAuditEntry returns the setting-change entry of a restore that took a
@@ -249,7 +262,10 @@ func settingModeText(d SwapDecision) string {
 // change by the settings API: the key, the old and the new value. It reads
 // both values from the record of the swap step, which the store wrote in the
 // swap transaction, and never reads the live setting, so a change after the
-// swap, or an error of a read, cannot change or drop the entry.
+// swap, or an error of a read, cannot change or drop the entry. When the live
+// value was not read before the swap, the entry names the new value and marks
+// the old value as SettingValueUnknown: the setting can have changed, and the
+// entry must say so.
 func (s *RestoreService) settingAuditEntry(op durable.Operation, in restoreInput) (audit.Entry, bool) {
 	var none audit.Entry
 
@@ -259,14 +275,23 @@ func (s *RestoreService) settingAuditEntry(op durable.Operation, in restoreInput
 	}
 
 	d, err := DecodeRestoreSwapDecision(rec.Result)
+	// Defense in depth: a record that does not decode gives the zero decision,
+	// which the checks below refuse too. The error check stays so that a change
+	// of the decoder cannot let a corrupt record write an entry; it does not
+	// rely on those checks.
+	//
 	// A value from the static layer shadows the row that the swap took, so the
 	// effective value did not change and the restore writes no change entry.
-	if err != nil || len(d.KeepSettingKeys) > 0 || d.SettingStatic || d.SettingBefore == "" || d.SettingAfter == "" ||
+	if err != nil || len(d.KeepSettingKeys) > 0 || d.SettingStatic || d.SettingAfter == "" ||
 		d.SettingAfter == d.SettingBefore {
 		return none, false
 	}
 
 	old := d.SettingBefore
+	if old == "" {
+		old = SettingValueUnknown
+	}
+
 	entry := s.restoreAuditEntry(in, "installation settings")
 	entry.Action = string(identity.ActionServerManageSettings)
 	entry.Reason = "restore " + in.ID.String() + " took the value from backup " + in.BackupID.String()
