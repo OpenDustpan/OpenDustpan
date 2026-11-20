@@ -8,9 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
-	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

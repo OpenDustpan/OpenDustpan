@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/storecheck"
-	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/internal/storecheck"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 var _ storecheck.Records = (*Store)(nil)

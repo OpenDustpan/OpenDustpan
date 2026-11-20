@@ -24,12 +24,12 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

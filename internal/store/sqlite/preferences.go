@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/preferences"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 var _ preferences.Store = (*Store)(nil)

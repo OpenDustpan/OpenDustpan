@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // TestBackupCoverageFailsOnAddedColumn adds the column that the spike of ADR 42

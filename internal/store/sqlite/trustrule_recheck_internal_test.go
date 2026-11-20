@@ -8,9 +8,9 @@ import (
 	"errors"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 

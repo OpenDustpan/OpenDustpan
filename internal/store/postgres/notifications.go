@@ -10,11 +10,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/notifystore"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/internal/store/notifystore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // Notifications returns the store of the outbox, the sinks, the subscriptions

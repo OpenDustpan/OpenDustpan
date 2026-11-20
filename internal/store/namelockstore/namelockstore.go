@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/internal/store/codec"
 )
 
 // KeyBytes is the length of the key of the digests of the names.

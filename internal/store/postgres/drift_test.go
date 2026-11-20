@@ -7,11 +7,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

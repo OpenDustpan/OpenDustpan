@@ -11,11 +11,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

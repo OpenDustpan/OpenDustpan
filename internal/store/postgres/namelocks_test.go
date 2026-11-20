@@ -8,9 +8,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // TestNameLockConformance runs the suite of the lockout by name: each handle

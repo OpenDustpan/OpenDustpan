@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // sweepChainServer answers a Server with the chain, the deleted-unit

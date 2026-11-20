@@ -11,10 +11,10 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 func newLabelTestServer(t *testing.T) *Server {

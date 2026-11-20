@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/internal/store/trustrulestore"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 

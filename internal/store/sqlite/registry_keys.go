@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/registrystore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/registry"
 )
 
 // RegistryKeys returns the store of the trusted signing keys of the

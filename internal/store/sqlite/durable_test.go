@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // TestDurableConformance runs the durable operations suite. One SQLite file

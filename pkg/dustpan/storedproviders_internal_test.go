@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // storedFixture is the provider service of a SQLite store with the static

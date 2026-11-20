@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/registry"
 )
 
 // registryLimitRecorder wraps the database of a store and records the limit

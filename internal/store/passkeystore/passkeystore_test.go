@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/passkeystore"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/passkeystore"
 )
 
 // row returns a row that every check passes.

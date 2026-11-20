@@ -7,13 +7,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/driftstore"
+	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/driftstore"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // DriftResults returns the store of the latest drift result of each unit.

@@ -8,9 +8,9 @@ import (
 	"context"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // AppendChange runs the append code of the store in a fenced transaction of

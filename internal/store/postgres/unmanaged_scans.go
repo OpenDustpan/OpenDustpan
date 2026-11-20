@@ -9,14 +9,14 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // scanIDPrefix starts the ID of a sweep. The ID is the key of the durable

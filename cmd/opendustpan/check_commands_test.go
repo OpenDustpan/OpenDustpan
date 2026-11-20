@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // checkBearer is the Bearer credential the fake check servers expect.

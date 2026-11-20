@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/forgelinkstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // sqliteForgeLinkBackupTables holds the backup columns of the tables of the

@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/internal/store/storeerr"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 var _ installation.InstanceStore = (*Store)(nil)

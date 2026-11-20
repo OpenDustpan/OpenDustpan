@@ -9,9 +9,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/internal/store/storeerr"
 )
 
 var _ installation.KindStore = (*Store)(nil)

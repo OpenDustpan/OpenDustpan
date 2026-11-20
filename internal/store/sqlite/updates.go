@@ -12,13 +12,13 @@ import (
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 var (

@@ -16,10 +16,10 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // killWait bounds the wait for the server to end the sessions that a test

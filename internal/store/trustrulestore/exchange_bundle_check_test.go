@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/internal/store/trustrulestore"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 

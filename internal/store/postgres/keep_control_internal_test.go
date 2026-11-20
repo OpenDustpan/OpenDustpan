@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/migrate"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // connectKeepControl connects to the test database and closes the

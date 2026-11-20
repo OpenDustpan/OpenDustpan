@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/internal/store/storeerr"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 var _ maintenance.Store = (*Store)(nil)

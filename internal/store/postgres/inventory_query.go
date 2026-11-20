@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/inventory"
 )
 
 // unitPageColumns are the columns of ListInventory for one page of units.

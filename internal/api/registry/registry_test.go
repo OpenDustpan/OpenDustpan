@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/internal/registry/pgpfixture"
 	"opendustpan.org/opendustpan/internal/registry/releasecheck"
 	"opendustpan.org/opendustpan/internal/registry/service"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -40,7 +41,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/registry/pgpverify"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can

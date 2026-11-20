@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // errDeliverySeam reports a delivery that the harness cannot store.

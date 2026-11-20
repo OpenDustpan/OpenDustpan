@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 )
 
 // pgCopyUnmanagedTables holds the COPY columns of the sweep target and sweep

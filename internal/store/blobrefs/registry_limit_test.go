@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/blobrefs"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/internal/store/blobrefs"
 )
 
 // sizedRelease returns a release with one archive for each size. Each archive

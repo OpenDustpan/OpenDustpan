@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // ControlMinimum is the minimum binary version that Raise sets in the

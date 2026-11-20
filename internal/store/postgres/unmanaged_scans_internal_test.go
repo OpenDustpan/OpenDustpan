@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // unmanagedSeedStatements returns the SQL that writes one runner pool of sweeps

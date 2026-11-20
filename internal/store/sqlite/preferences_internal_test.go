@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // prefsEntry returns a valid audit entry of a preferences change.

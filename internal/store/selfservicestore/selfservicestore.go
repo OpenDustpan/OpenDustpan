@@ -16,9 +16,9 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/selfservice"
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/codec"
 )
 
 // ErrCorrupt reports a stored row that does not pass the checks of a blueprint.

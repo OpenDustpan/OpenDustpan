@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
 )
 
 // LateKeyStore is what the late item key cases need of a store: a namespace,

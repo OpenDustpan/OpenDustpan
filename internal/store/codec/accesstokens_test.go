@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 )
 
 // knownRow returns a row with the stored kind and no other field but the ID.

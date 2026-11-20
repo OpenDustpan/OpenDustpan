@@ -10,12 +10,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // issueTestURL names the variable that holds the PostgreSQL URL of the

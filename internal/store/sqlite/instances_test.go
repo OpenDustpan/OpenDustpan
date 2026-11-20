@@ -3,9 +3,9 @@ package sqlite_test
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

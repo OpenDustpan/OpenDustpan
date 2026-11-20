@@ -8,10 +8,10 @@ import (
 	"slices"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // OutputSharingSettings returns the store of the output sharing setting of

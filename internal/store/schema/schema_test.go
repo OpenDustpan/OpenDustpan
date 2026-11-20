@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 func TestCheckMinimum(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 )
 
 // sqliteUnmanagedBackupTables holds the backup columns of the sweep target and

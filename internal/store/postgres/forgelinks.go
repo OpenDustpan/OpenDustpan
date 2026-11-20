@@ -8,10 +8,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/internal/store/forgelinkstore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 )
 
 // ForgeLinks returns the store of the links from accounts of a Git host to

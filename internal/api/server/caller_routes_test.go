@@ -12,11 +12,11 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // fallbackAuthenticator tries the primary authenticator first, and the access

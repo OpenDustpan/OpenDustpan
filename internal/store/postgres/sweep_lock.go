@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/inventory"
 )
 
 var _ inventory.SweepLocker = (*Store)(nil)

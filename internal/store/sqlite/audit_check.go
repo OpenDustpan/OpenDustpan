@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 var _ audit.CheckStore = (*Store)(nil)

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // itemKeyRow returns a row that a store wrote, with the attempt part attempt.

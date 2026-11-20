@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/trustrulestore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/trustrulestore"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 

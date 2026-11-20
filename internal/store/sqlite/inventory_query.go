@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/inventory"
 )
 
 // unitPageColumns are the columns of ListInventory for one page of units.

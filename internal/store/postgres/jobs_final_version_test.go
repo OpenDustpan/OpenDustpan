@@ -1,8 +1,8 @@
 package postgres_test
 
 import (
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // The job store of the PostgreSQL adapter must give the final version reader.

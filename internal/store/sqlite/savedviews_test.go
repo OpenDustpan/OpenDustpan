@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/viewstore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/savedview/savedviewtest"
-	"opendustpan.org/opendustpan/internal/store/viewstore"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // savedViewHarness returns a harness over a fresh store. The namespaces it

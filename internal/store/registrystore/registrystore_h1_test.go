@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/internal/store/registrystore"
+	"opendustpan.org/opendustpan/pkg/registry"
 )
 
 const testSum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

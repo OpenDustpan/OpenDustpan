@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/selfservice/selfservicetest"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // blueprintDomain is selfservicetest.BlueprintDomain over a Store.

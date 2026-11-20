@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forgelink/forgelinktest"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // forgeLinkPrincipals makes the principals of the cases of the suite, one for

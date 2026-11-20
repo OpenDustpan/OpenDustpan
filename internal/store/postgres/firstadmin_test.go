@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"opendustpan.org/opendustpan/pkg/firstadmin/firstadmintest"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/firstadmin/firstadmintest"
 )
 
 // TestFirstAdministratorConformance runs the first administrator store suite.

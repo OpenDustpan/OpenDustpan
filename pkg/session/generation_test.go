@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // generationStore is a store whose lookup changes the generations that the

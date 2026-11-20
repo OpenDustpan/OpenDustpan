@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/manuallock/manuallocktest"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 func TestManualLockConformance(t *testing.T) {

@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/gatestore"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/gatestore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

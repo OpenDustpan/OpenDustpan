@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // runnerSeedEntry returns a valid audit entry in the namespace acme for the

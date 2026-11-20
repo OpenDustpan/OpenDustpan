@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // oidcProvider returns a valid provider with the ID id.

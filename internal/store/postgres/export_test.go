@@ -8,13 +8,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // Pool returns the connection pool of s, so a test can read or change rows

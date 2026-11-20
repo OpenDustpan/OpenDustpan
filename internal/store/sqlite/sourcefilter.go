@@ -8,10 +8,10 @@ import (
 	"slices"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/source"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // SourceFilters returns the store of the source filter of each namespace. The

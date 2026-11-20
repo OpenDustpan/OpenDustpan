@@ -13,13 +13,13 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
-	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // errDiskFull stands for an error that no classify function knows.

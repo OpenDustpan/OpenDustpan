@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/githoststore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // Columns that more than one Git host table holds, or another table too.

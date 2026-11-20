@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/storeerr"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // pgError returns a server error with the SQLSTATE code.

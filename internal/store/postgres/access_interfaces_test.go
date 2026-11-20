@@ -1,13 +1,13 @@
 package postgres_test
 
 import (
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // The access suite runs an optional case only when the store implements the

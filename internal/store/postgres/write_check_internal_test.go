@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // legacyReadStateSQL is the read-state statement from before the minimum

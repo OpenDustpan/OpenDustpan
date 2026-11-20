@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -23,9 +26,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/postgres"
-	"opendustpan.org/opendustpan/internal/store/schema"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )

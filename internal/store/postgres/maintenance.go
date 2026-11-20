@@ -9,10 +9,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/internal/store/storeerr"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 var _ maintenance.Store = (*Store)(nil)

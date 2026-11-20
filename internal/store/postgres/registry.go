@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"slices"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/store/registrystore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/registrystore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // Registry returns the store of registry releases. Each write checks the

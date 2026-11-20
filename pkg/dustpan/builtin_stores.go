@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/forge"
@@ -14,8 +16,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/registry"
 	"opendustpan.org/opendustpan/pkg/savedview"
-	"opendustpan.org/opendustpan/internal/store/postgres"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/trigger"
 )
 

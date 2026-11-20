@@ -9,8 +9,8 @@ import (
 
 	"modernc.org/sqlite"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/storeerr"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // openShortBusy opens path through the guarded driver with a 1 ms busy bound.

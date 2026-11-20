@@ -8,10 +8,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/store/sinkstore"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/internal/store/sinkstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // NotificationSinks returns the store of notification sinks. It is the store of

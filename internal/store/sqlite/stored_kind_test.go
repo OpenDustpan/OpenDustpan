@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/installation"
 )
 
 // storedKindDB makes a database at a new path. A kind that is not empty

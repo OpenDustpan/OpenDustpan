@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 func TestIdempotencyConformance(t *testing.T) {

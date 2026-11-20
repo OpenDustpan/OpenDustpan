@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/selfservice"
+	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 )
 
 // sqliteSelfServiceBackupTables holds the backup columns of the tables of self-service

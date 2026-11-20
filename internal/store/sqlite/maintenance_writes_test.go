@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

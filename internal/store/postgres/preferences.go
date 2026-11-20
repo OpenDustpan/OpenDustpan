@@ -7,9 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/preferences"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 var _ preferences.Store = (*Store)(nil)

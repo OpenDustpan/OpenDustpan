@@ -23,6 +23,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/internal/api/runnerpools"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -32,7 +33,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

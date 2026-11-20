@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/selfservice"
+	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 )
 
 func selfServiceTestBlueprint(name string) selfservice.Blueprint {

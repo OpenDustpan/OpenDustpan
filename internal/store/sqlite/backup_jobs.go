@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
 )
 
 // sqliteJobBackupTables holds the backup columns of the tables of jobs,

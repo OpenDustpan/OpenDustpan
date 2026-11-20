@@ -14,9 +14,9 @@ import (
 	"io"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/codec"
 )
 
 // ErrCorrupt reports a stored row that does not pass the checks of a target or

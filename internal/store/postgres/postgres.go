@@ -28,6 +28,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/gatestore"
+	"opendustpan.org/opendustpan/internal/store/migrate"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -36,12 +42,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/gatestore"
-	"opendustpan.org/opendustpan/internal/store/migrate"
-	"opendustpan.org/opendustpan/internal/store/storeerr"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
-	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 //go:embed migrations/*.sql

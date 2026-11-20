@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/internal/store/sinkstore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 // NotificationSinks returns the store of notification sinks. It is the store of

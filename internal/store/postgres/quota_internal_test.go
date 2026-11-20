@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/internal/quota"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // The fixed values of the changed-row cases.

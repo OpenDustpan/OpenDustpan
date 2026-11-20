@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/notifystore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // checkStagedNotifications checks the notification tables of a staged backup

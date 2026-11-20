@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/internal/store/localuserstore"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // TestLocalUserConstraints is the last layer of the local user table: a row

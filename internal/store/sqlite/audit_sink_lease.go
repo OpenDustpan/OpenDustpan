@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 var _ audit.SinkLeaser = (*Store)(nil)

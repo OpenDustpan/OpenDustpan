@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/firstadmin/firstadmintest"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/firstadmin/firstadmintest"
 )
 
 // TestFirstAdministratorConformance runs the first administrator store suite.

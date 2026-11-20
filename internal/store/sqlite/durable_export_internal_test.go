@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // durableTestInstallation is the primary installation of the namespaces of the domain.

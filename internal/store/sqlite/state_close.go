@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // stateCloseTx runs the close of the jobs that wait for a state version over

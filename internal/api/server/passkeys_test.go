@@ -15,13 +15,13 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/mfasvc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/mfa"
 	"opendustpan.org/opendustpan/pkg/mfa/gowebauthn"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // The relying party and the routes of the passkey route tests.

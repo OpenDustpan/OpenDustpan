@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/internal/signinsvc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -26,7 +27,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // coverageSignInRoutes returns the sign-in rows of the installation route

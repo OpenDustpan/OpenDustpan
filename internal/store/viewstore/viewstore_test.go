@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/internal/store/viewstore"
+	"opendustpan.org/opendustpan/pkg/savedview"
 )
 
 // TestCheckCounts proves the check of the saved view limits: a count at a

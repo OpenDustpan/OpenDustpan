@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify/notifytest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // sinkDomain makes the namespaces that sinks need and reads the audit entries

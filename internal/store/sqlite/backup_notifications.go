@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/notifystore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // stagedScopeQuery lists the scopes of the notification tables of a staged

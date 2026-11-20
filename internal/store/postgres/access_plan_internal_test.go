@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 )
 
 // TestAccessByIDReadsUseThePrimaryKey proves that each statement that reads

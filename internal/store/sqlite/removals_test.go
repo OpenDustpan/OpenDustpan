@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
-	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // TestBackupCoverageFailsOnAddedColumn adds a column outside the migrations

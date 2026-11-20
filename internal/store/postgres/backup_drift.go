@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/driftstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // pgCopyDriftTables holds the COPY columns of the drift result table, in the

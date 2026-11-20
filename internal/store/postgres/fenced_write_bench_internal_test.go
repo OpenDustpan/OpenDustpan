@@ -14,8 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // fenceOnlyTx is the fenced transaction as it was before the installation

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/forgelinkstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // pgCopyForgeLinkTables holds the COPY columns of the tables of the Git host

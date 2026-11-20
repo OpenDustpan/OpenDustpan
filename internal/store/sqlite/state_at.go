@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 var _ stack.StateAtReader = (*Store)(nil)

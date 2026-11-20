@@ -8,9 +8,9 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/notify"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // TestNameLockConformance runs the suite of the lockout by name. One SQLite

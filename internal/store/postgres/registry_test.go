@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry/registrytest"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // registryHarness returns a harness over a fresh store. The namespaces it makes

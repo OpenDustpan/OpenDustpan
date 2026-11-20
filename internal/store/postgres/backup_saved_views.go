@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/viewstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // pgCopySavedViewTables holds the COPY columns of the saved view table, in the

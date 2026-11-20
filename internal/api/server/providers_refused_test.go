@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/fakecred"
-	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // refusedIssuerStore shows the stored providers with the issuer that the

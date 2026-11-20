@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // TestJobIndexError checks that a unique violation of an unknown index keeps

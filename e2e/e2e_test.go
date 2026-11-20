@@ -36,11 +36,11 @@ import (
 	_ "modernc.org/sqlite"
 
 	"opendustpan.org/opendustpan/e2e"
+	dbschema "opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	dbschema "opendustpan.org/opendustpan/internal/store/schema"
 )
 
 const (

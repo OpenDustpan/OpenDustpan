@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/setting"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 var errSyncFailed = errors.New("the store is gone")

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // TestPruneSignInRequestsOnce proves that the server deletes the sign-in

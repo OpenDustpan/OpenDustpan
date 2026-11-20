@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // CreateNamespacePrincipal implements principal.Store.

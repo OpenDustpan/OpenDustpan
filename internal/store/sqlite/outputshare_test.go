@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/outputshare/outputsharetest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/internal/store/viewstore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/savedview"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/viewstore"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // SavedViews returns the store of saved views. Each write checks the

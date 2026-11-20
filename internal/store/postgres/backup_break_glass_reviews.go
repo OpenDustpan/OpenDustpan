@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // pgCopyBreakGlassReviewTables holds the COPY columns of the break-glass

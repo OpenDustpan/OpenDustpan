@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/blob"
 )
 
 // checkAttempt refuses the commit of a write attempt that started at started

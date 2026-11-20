@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/selfservice"
+	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 )
 
 const ns = namespace.Name("payments")

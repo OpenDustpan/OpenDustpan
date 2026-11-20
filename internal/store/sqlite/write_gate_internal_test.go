@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // gateWait bounds each wait of the tests below. It is a safety net against a

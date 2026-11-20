@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/internal/store/notifystore"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 func goodNotification() notifystore.NotificationRow {

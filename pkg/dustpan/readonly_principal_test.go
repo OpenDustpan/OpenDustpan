@@ -14,6 +14,7 @@ import (
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -21,7 +22,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

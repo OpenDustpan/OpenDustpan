@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

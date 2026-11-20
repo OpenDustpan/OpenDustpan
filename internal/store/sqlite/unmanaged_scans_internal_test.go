@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // seedUnmanaged makes the namespace acme with a pool of sweeps (sweepers), one

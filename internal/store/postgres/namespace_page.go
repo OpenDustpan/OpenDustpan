@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"math"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 var _ namespace.Pager = (*Store)(nil)

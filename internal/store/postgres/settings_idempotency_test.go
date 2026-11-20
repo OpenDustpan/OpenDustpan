@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -14,7 +15,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // settingsKeyedChange returns the change input that sets test.label to value.

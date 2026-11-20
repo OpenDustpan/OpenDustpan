@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 )
 
 // leaseTakeResult holds the three answers of one TakeLease call.

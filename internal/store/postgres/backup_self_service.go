@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/selfservice"
+	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/selfservicestore"
 )
 
 // pgColNumber is the column that holds the number of a version.

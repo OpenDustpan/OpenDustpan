@@ -7,11 +7,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/jobproxy"
 	"opendustpan.org/opendustpan/pkg/jobproxy/rulestore"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // Values of the scope_kind column of proxy_rule_sets.

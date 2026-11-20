@@ -28,6 +28,8 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -36,8 +38,6 @@ import (
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

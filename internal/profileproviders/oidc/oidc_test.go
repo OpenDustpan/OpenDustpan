@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/profileproviders/oidc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -26,7 +27,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/profile/provider"
 	"opendustpan.org/opendustpan/pkg/profile/provider/providertest"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 const (

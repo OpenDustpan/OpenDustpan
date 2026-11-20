@@ -9,10 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"opendustpan.org/opendustpan/internal/storecheck"
-	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/storecheck"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 var _ storecheck.Records = (*Store)(nil)

@@ -24,10 +24,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // writeTestCertificate generates a self-signed certificate for localhost and

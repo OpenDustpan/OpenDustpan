@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // pgCopyItemKeyTables holds the COPY columns of the item key table, in the

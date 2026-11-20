@@ -13,9 +13,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/firstadmin"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

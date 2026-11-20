@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/codec"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // PutJournalRow implements stack.JournalStore. It checks the fence, the stack and

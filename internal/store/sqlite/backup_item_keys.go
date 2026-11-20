@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // sqliteItemKeyBackupTables holds the backup columns of the item key table,

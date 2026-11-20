@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -18,7 +19,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // benchAllowAll is an identity.Authorizer that allows every request. The

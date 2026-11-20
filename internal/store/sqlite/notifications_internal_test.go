@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/internal/store/notifystore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/notify"
 )
 
 const (

@@ -5,9 +5,9 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 var _ session.TicketStore = (*sqlite.Store)(nil)

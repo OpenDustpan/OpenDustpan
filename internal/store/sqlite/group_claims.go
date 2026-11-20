@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/access"
-	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/groupclaims"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 var _ principal.GroupMappingStore = (*Store)(nil)

@@ -9,9 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // TestTransactionTimeoutMsFloor checks the floor of the value of

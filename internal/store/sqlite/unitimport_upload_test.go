@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/internal/unitimport/unitimporttest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // TestUploadCommitStatementPredicates runs the commit statement alone, as if

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
 )
 
 // pgCopyJobTables holds the COPY columns of the tables of jobs, change

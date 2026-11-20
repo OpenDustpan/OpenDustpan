@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/preferences/preferencestest"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/preferences/preferencestest"
 )
 
 // rawPreferencesStore wraps a Store with its path, so the suite can write a

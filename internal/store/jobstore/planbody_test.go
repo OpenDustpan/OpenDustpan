@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // TestCheckPlanBodyAcceptsAReserve proves that the plan row of a reserve, which

@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // hotpathNoRefusals drops every out-of-scope refusal. The benchmarks never

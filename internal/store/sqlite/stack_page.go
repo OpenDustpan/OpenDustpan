@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // QueryStacks implements stack.Store. It reads the range of each namespace of

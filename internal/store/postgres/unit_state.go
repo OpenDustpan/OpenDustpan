@@ -10,11 +10,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // unitStateKind is the kind of a write of unit_state: a state write that

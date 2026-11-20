@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/registrystore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // Column names of the registry tables that the backup code of this file names.

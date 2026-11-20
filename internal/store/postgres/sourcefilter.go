@@ -9,10 +9,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/source"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // SourceFilters returns the store of the source filter of each namespace. The

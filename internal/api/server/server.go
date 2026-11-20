@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -42,7 +43,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
-	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 

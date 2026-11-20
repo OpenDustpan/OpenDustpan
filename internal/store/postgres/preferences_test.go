@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/preferences/preferencestest"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/preferences/preferencestest"
 )
 
 // rawPreferencesStore wraps a Store with its schema URL, so the suite can write

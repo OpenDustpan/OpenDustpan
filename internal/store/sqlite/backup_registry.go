@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/registrystore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // sqliteRegistryBackupTables holds the backup columns of the registry release

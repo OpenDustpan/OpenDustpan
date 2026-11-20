@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/codec"
 )
 
 // TestToCheckpointRowBoundsMemory proves the save path holds at most one

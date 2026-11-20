@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/forge"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/githoststore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // GitHost returns the store of the Git host connections of the namespaces,

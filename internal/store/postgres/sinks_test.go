@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify/notifytest"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // sinkDomain makes the namespaces that sinks need and reads the audit entries

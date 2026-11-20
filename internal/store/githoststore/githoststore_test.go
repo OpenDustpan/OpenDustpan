@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/internal/store/githoststore"
+	"opendustpan.org/opendustpan/pkg/forge"
 )
 
 const testTimeMs = 1_700_000_000_000

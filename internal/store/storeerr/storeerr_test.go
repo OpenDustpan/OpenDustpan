@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/storeerr"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // errDriver stands for the error of the driver, with text that must not

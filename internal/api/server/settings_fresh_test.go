@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 // maxExpiredList bounds one page of ListExpiredDeleted.

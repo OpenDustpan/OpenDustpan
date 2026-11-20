@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // SettingStore returns the store of settings. Each write checks the installation

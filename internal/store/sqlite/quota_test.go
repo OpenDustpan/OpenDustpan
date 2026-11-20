@@ -9,8 +9,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/quota"
 	"opendustpan.org/opendustpan/internal/quota/quotatest"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // quotaDomain is quotatest.Domain over a Store: it makes the namespaces and

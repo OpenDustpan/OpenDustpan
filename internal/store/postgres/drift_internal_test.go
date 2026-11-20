@@ -10,13 +10,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/driftstore"
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/driftstore"
-	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 )
 
 const driftRowSQL = `INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated,

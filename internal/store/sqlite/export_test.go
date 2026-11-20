@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // RunWithoutForeignKeys runs query with args on one connection of sqlDB with

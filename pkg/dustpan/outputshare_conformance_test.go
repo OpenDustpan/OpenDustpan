@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/outputsharesvc"
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -25,8 +27,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/outputshare/outputsharetest"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/internal/store/postgres"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/devstrip"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/internal/store/devstrip"
 )
 
 var _ backup.DevStripper = (*Store)(nil)

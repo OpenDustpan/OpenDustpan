@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/internal/store/triggerstore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/internal/store/triggerstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // sqliteTriggerBackupTables holds the backup columns of the trigger table, in

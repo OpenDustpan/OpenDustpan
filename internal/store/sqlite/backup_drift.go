@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/driftstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // sqliteDriftBackupTables holds the backup columns of the drift result table,

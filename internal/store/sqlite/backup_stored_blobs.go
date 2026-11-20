@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/blobrefs"
 	"opendustpan.org/opendustpan/internal/store/registrystore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // addStoredBlobRefs adds the blob references of the rows of job plans, of job

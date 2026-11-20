@@ -7,9 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/internal/store/triggerstore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/internal/store/triggerstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // pgCopyTriggerTables holds the COPY columns of the trigger table, in the order

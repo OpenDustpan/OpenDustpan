@@ -11,13 +11,13 @@ import (
 
 	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // newBuiltinSQLiteServer opens a server over the built-in SQLite store at path,

@@ -3,10 +3,10 @@ package sqlite_test
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/registry/registrytest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // registryHarness returns a harness over a fresh store. The namespaces it makes

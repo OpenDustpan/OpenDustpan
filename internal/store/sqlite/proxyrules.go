@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/jobproxy"
 	"opendustpan.org/opendustpan/pkg/jobproxy/rulestore"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // Values of the scope_kind column of proxy_rule_sets.

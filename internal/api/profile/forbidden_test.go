@@ -5,8 +5,8 @@ import (
 
 	apiprofile "opendustpan.org/opendustpan/internal/api/profile"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // TestForbiddenCodes proves that each cause of a 403 keeps its message and

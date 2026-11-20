@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/groupclaims"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/groupclaims"
 )
 
 // These tests send hostile input to one layer of the shared logic with a fake

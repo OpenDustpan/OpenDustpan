@@ -3,11 +3,11 @@ package storetest
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
 )
 
 const (

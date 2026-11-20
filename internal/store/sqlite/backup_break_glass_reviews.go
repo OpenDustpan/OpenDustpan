@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // sqliteBreakGlassReviewBackupTables holds the backup columns of the

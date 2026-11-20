@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/gatestore"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/gatestore"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 func gateRecordRow(id string) gatestore.RecordRow {

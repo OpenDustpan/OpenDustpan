@@ -7,9 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // hostileProxyRows are rows that the save refuses but that a restore or

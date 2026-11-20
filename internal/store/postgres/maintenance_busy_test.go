@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

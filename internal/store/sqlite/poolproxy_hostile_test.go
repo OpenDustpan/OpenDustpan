@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // hostileProxyRows are rows that the save refuses but that a restore or

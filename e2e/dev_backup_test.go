@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // devBackupFlag is the flag that lets a production installation restore a

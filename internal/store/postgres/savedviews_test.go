@@ -9,12 +9,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/viewstore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/savedview"
 	"opendustpan.org/opendustpan/pkg/savedview/savedviewtest"
-	"opendustpan.org/opendustpan/internal/store/viewstore"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // savedViewHarness returns a harness over a fresh store. The namespaces it

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // TestFromBackupRowRefusesABadAttempt proves the decode layer: a stored

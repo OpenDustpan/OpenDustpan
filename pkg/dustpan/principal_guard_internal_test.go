@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // TestPrincipalServiceWithoutGrantsRefusesANonAdministrator proves the wiring:

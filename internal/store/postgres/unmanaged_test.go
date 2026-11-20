@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/internal/unmanaged/unmanagedtest"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -16,7 +17,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // unmanagedDomain makes the namespaces and the runner pools that the sweep

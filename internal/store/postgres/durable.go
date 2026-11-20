@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 // durableIDPrefix starts the ID of each durable operation.

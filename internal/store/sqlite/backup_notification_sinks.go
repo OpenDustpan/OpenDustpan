@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"slices"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/internal/store/sinkstore"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // Column names of the sink tables that other tables share.

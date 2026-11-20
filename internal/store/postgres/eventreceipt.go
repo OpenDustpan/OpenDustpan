@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"opendustpan.org/opendustpan/pkg/forge"
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/githoststore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/forge"
 )
 
 // errReceiptDuplicate rolls back the transaction of a receipt that hit a key,

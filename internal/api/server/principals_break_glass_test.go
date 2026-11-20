@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 

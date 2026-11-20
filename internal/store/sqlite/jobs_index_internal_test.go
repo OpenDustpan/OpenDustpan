@@ -8,8 +8,8 @@ import (
 
 	"modernc.org/sqlite"
 
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 const (

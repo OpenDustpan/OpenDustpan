@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner/runnertest"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // runnerDomain makes the rows that the runner stores need, on the real

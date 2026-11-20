@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/internal/unitimport"
 	"opendustpan.org/opendustpan/internal/unitimport/unitimporttest"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // TestUploadCommitStatementPredicates runs the commit statement alone, as if

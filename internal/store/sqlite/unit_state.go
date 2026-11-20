@@ -9,11 +9,11 @@ import (
 	"log/slog"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/jobstore"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 // unitStateKind is the kind of a write of unit_state: a state write that

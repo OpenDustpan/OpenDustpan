@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -33,7 +34,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can

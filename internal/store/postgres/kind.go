@@ -8,9 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"opendustpan.org/opendustpan/internal/store/storeerr"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/internal/store/storeerr"
 )
 
 var _ installation.KindStore = (*Store)(nil)

@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/gatestore"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/internal/store/gatestore"
-	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 )
 
 var _ gate.Store = (*Store)(nil)

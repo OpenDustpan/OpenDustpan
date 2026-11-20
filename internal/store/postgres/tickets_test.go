@@ -4,9 +4,9 @@ import (
 	"os"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
-	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 var _ session.TicketStore = (*postgres.Store)(nil)
