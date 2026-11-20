@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // ErrFileMode reports a database file, or one of its -wal and -shm files,
@@ -119,7 +120,7 @@ func inspectFiles(policy widePolicy, names ...string) ([]WideFile, error) {
 		}
 
 		if err != nil {
-			return nil, fmt.Errorf("check database file mode: %w", err)
+			return nil, quotedPathError("check database file mode of", name, err)
 		}
 
 		if !info.Mode().IsRegular() {
@@ -149,6 +150,37 @@ func inspectFiles(policy widePolicy, names ...string) ([]WideFile, error) {
 	return wide, nil
 }
 
+// quotedPathError wraps err with the operation and the path of the file, with
+// the path quoted. A *os.PathError holds the raw path in its text, and a path
+// can hold CR and LF, so the error keeps only the cause of the PathError. The
+// wrap keeps errors.Is for the cause.
+func quotedPathError(operation, path string, err error) error {
+	cause := err
+
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
+		cause = pathErr.Err
+	}
+
+	return fmt.Errorf("%s %q: %w", operation, path, cause)
+}
+
+// createDatabaseFile makes the empty database file at path with mode 0600.
+// The create is exclusive, so it never follows a link at path and never opens
+// an existing file: an existing name, a dangling link included, fails with an
+// error that wraps os.ErrExist and makes no file.
+func createDatabaseFile(path string) error {
+	file, err := os.OpenFile(filepath.Clean(path), os.O_RDWR|os.O_CREATE|os.O_EXCL, databaseFileMode)
+	if err != nil {
+		return quotedPathError("create database file", path, err)
+	}
+
+	if closeErr := file.Close(); closeErr != nil {
+		return quotedPathError("create database file", path, closeErr)
+	}
+
+	return nil
+}
+
 // prepareDatabaseFile makes the database file with mode 0600 when it does not
 // exist, and then checks the file and its sidecar files. It never widens a
 // mode and never tightens one: an existing file with a wider mode fails with
@@ -167,18 +199,13 @@ func prepareDatabaseFile(path string, policy widePolicy) ([]WideFile, error) {
 	case err == nil:
 		// The file exists: the check below decides.
 	case errors.Is(err, os.ErrNotExist):
-		file, createErr := os.OpenFile(filepath.Clean(path), os.O_RDWR|os.O_CREATE|os.O_EXCL, databaseFileMode)
-		if createErr != nil && !errors.Is(createErr, os.ErrExist) {
-			return nil, fmt.Errorf("create database file: %w", createErr)
-		}
-
-		if createErr == nil {
-			if closeErr := file.Close(); closeErr != nil {
-				return nil, fmt.Errorf("create database file: %w", closeErr)
-			}
+		// Another process can make the file between the Lstat and the create.
+		// The check below then decides on that file.
+		if createErr := createDatabaseFile(path); createErr != nil && !errors.Is(createErr, os.ErrExist) {
+			return nil, createErr
 		}
 	default:
-		return nil, fmt.Errorf("check database file: %w", err)
+		return nil, quotedPathError("check database file", path, err)
 	}
 
 	// Defense in depth: Open and openDatabase check the mode too, and the
@@ -209,4 +236,18 @@ func (s *Store) widePolicy() widePolicy {
 	}
 
 	return refuseWide
+}
+
+// mergeWide answers the union of two lists of wide files, with one entry for
+// each path. The first list keeps its order, then the new paths of the second.
+func mergeWide(first, second []WideFile) []WideFile {
+	merged := slices.Clone(first)
+
+	for _, file := range second {
+		if !slices.ContainsFunc(merged, func(known WideFile) bool { return known.Path == file.Path }) {
+			merged = append(merged, file)
+		}
+	}
+
+	return merged
 }

@@ -228,3 +228,32 @@ func TestCheckFileModeAllowWide(t *testing.T) {
 		t.Fatalf("directory = %v, want ErrFileMode", err)
 	}
 }
+
+// A database file alone, with mode 0644, gets a -wal and a -shm file from
+// SQLite when it connects, with the same mode. Open warns for each of the three
+// files, once for each path, though no sidecar file existed before Open.
+func TestOpenAllowWideFileModeWarnsForSidecarFilesThatSQLiteMakes(t *testing.T) {
+	t.Parallel()
+
+	db := filepath.Join(t.TempDir(), "dustpan.db")
+	chmodFile(t, db, 0o644)
+
+	logger, logs := logCapture()
+
+	st, err := sqlite.Open(t.Context(), db, sqlite.WithLogger(logger), sqlite.WithAllowWideFileMode())
+	if err != nil {
+		t.Fatalf("Open with the opt-out: %v", err)
+	}
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	text := logs.String()
+
+	for _, name := range []string{db, db + "-wal", db + "-shm"} {
+		if got := strings.Count(text, "file="+name+" "); got != 1 {
+			t.Fatalf("log has %d warnings for %s, want 1:\n%s", got, name, text)
+		}
+	}
+}

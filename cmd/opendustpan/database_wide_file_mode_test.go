@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // wideModeEnv is the variable of the opt-out for a wide database file.
 const wideModeEnv = "DUSTPAN_DATABASE_ALLOW_WIDE_FILE_MODE"
+
+// serveRefusalDeadline bounds a serve call that must refuse.
+const serveRefusalDeadline = 15 * time.Second
 
 // wideDatabaseMode is the mode of an install that an earlier build made.
 const wideDatabaseMode os.FileMode = 0o644
@@ -45,7 +50,12 @@ func TestServeRefusesWideDatabaseFileAndNamesTheFix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	widenDatabase(t, path)
 
-	err := serveDatabase(t, path)
+	// A regression that lets serve start would block it. The deadline makes
+	// serve return after a few seconds, and then the test fails at once.
+	ctx, cancel := context.WithTimeout(t.Context(), serveRefusalDeadline)
+	defer cancel()
+
+	err := serve(ctx, []string{"--database", "sqlite:" + path}, io.Discard)
 	if err == nil {
 		t.Fatal("serve started on a database file with mode 0644, want a refusal")
 	}

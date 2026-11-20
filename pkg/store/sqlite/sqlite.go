@@ -375,10 +375,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		extra = url.Values{dsnModeKey: {"rw"}}
 	}
 
-	conn, err := openDatabase(ctx, resolved, extra, probe.widePolicy())
+	conn, connected, err := openDatabase(ctx, resolved, extra, probe.widePolicy())
 	if err != nil {
 		return nil, errors.Join(err, guard.release())
 	}
+
+	// SQLite makes the -wal and -shm files when it connects, with the mode of
+	// the database file. Warn for the files of both checks, once for each path.
+	wide = mergeWide(wide, connected)
 
 	s := newStore(conn, resolved, guard)
 
@@ -523,7 +527,9 @@ func followLinkChain(abs string) (string, error) {
 // openDatabase opens the database file at abs with the store pragmas and
 // the extra URL parameters. The parameter mode=rw opens a file that exists
 // and creates none.
-func openDatabase(ctx context.Context, abs string, extra url.Values, policy widePolicy) (*sql.DB, error) {
+func openDatabase(
+	ctx context.Context, abs string, extra url.Values, policy widePolicy,
+) (*sql.DB, []WideFile, error) {
 	query := url.Values{}
 	maps.Copy(query, extra)
 
@@ -539,23 +545,38 @@ func openDatabase(ctx context.Context, abs string, extra url.Values, policy wide
 
 	conn, err := openGuarded(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite database: %w", err)
+		return nil, nil, fmt.Errorf("open sqlite database: %w", err)
 	}
 
-	if err := conn.PingContext(ctx); err != nil {
-		return nil, errors.Join(fmt.Errorf("connect to sqlite database: %w", err), conn.Close())
+	if pingErr := conn.PingContext(ctx); pingErr != nil {
+		return nil, nil, errors.Join(fmt.Errorf("connect to sqlite database: %w", pingErr), conn.Close())
 	}
 
 	// Defense in depth: Open makes the file with mode 0600 and refuses a wider
 	// one before this call. This check stays because swap and reopen call
 	// openDatabase without Open, and because it also checks the -wal and
-	// -shm files that SQLite made on connect. It does not rely on the
+	// -shm files that were there before the connect. It does not rely on the
 	// check of Open or on the startup check of the command.
-	if _, err := inspectFiles(policy, databaseFiles(abs)...); err != nil {
-		return nil, errors.Join(err, conn.Close())
+	wide, err := inspectFiles(policy, databaseFiles(abs)...)
+	if err != nil {
+		return nil, nil, errors.Join(err, conn.Close())
 	}
 
-	return conn, nil
+	// SQLite makes a missing -wal or -shm file at the first access of the
+	// database, with the mode of the database file, and not when it connects.
+	// One read makes them now. The check before the read stays first, because
+	// the read makes SQLite replace a -wal or -shm file that was there. This
+	// second check lists the new files, so the caller can warn for them.
+	if _, readErr := conn.ExecContext(ctx, "SELECT 1 FROM sqlite_master LIMIT 1"); readErr != nil {
+		return nil, nil, errors.Join(fmt.Errorf("read sqlite database: %w", readErr), conn.Close())
+	}
+
+	made, err := inspectFiles(policy, databaseFiles(abs)...)
+	if err != nil {
+		return nil, nil, errors.Join(err, conn.Close())
+	}
+
+	return conn, mergeWide(wide, made), nil
 }
 
 // Close closes the database. It stops the write-ahead log guard and waits

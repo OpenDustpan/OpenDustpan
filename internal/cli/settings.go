@@ -155,8 +155,9 @@ var Settings = []*Setting{
 			"volume with fixed permissions. The server then starts on a database file, `<path>-wal` or "+
 			"`<path>-shm` that the group or others can access. It writes one warning with the path and the mode "+
 			"of each such file at each start. Every other file check stays. The server still makes a new file "+
-			"with mode 0600. It still refuses a file that is not a regular file and a link. It still refuses a "+
-			"staged restore file with a wider mode. It has no effect with a PostgreSQL database",
+			"with mode 0600. It still refuses a file that is not a regular file. It still refuses a link in "+
+			"place of the `-wal` or `-shm` file. It still refuses a staged restore file with a wider mode. It "+
+			"has no effect with a PostgreSQL database",
 	).WithFile("database-allow-wide-file-mode"),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
