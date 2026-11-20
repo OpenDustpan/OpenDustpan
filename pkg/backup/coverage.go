@@ -62,7 +62,7 @@ var ControlTables = []string{
 // a restore leaves empty: the replay records of the Idempotency-Key header and
 // the server key of their fingerprints, the heartbeats of the workers, the
 // reset codes and set-up codes of local users, the open passkey ceremonies,
-// the job tokens, the event receipts of the Git host, the open sessions of
+// the job tokens, the event receipts of the Git host and their counter, the open sessions of
 // profiles, and the state version of each unit. A reset code that a restore
 // brought back would set a password that an administrator gave out before
 // the time of the restore. A ceremony lives 300 seconds, and a restore that
@@ -85,6 +85,7 @@ var ControlTables = []string{
 var EmptiedTables = []string{
 	TableDurableHeartbeats,
 	TableFirstAdministratorCodes,
+	TableGitHostEventReceiptCount,
 	TableGitHostEventReceipts,
 	TableIdempotencyRecords,
 	TableIdempotencyServerKey,

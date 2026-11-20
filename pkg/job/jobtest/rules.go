@@ -284,7 +284,7 @@ func testConfirmationStored(t *testing.T, h Harness) {
 
 	confirm := change(&stored, job.EventApproved)
 	confirm.Approval = &job.Approval{
-		Gate: job.GateConfirmation, Subject: "al", Agent: "", Verdict: job.VerdictApprove, Comment: "",
+		Gate: job.GateConfirmation, For: nil, Subject: "al", Agent: "", Verdict: job.VerdictApprove, Comment: "",
 		Plan: nil, At: now, Auth: job.ConfirmAuthMFA, AuthAt: now.Add(-time.Minute),
 	}
 

@@ -148,7 +148,7 @@ func CheckAttemptForTest(ctx context.Context, target blob.Store, id ID, attempt 
 // does with the claim.
 func NewFencedServiceForTest(target blob.Store, check func(context.Context) error) *Service {
 	return &Service{
-		exporter: nil, kinds: nil, registry: nil, source: nil, opener: nil,
+		jobs: nil, exporter: nil, kinds: nil, registry: nil, source: nil, opener: nil,
 		target: fencedStore{Store: target, claimCheck: check}, targetName: "test",
 		now: nil, version: "test", maxSQL: 0, maxUnverified: 0, runner: nil, operations: nil, lease: 0,
 		logger: slog.New(slog.DiscardHandler),

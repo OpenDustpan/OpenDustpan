@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -94,6 +95,7 @@ func gatedService(t *testing.T, d durableSetup, opts gatedSvcOpts) *backup.Servi
 	t.Helper()
 
 	svc, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    &stubExporter{sum: testSummary(), data: tableData, err: nil},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    opts.reg,

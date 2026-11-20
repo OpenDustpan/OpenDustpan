@@ -114,7 +114,7 @@ func headerOf(mode string) http.Header {
 }
 
 // unitImportUpload follows Source.Put in internal/unitimport/upload/upload.go
-// and CommitUploadVersion in pkg/store/postgres/unitimport_upload.go: the PUT
+// and CommitUploadVersion in internal/store/postgres/unitimport_upload.go: the PUT
 // of the body, the PUT of the unit file (a refusal counts as present), the
 // PUT of the facts file, and one fenced, audited commit transaction. The old
 // path is the same with the conditional header and one fixed key for each

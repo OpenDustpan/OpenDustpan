@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
@@ -26,7 +27,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -901,16 +901,17 @@ func createDiscoveryWorkspaces(
 		}
 
 		w := workspace.Workspace{
-			CreatedAt:   at,
-			UpdatedAt:   at,
-			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			LastRelease: workspace.NoRelease(),
-			ID:          workspace.ID(ident.NewID("ws-")),
-			Ref:         workspace.Ref{Namespace: "acme", Name: wname},
-			NamespaceID: "",
-			Revision:    1,
-			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-			Origin:      identity.StateOrigin{Job: "", Commit: ""},
+			CreatedAt:    at,
+			UpdatedAt:    at,
+			Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease:  workspace.NoRelease(),
+			ID:           workspace.ID(ident.NewID("ws-")),
+			Ref:          workspace.Ref{Namespace: "acme", Name: wname},
+			NamespaceID:  "",
+			Revision:     1,
+			Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+			Origin:       identity.StateOrigin{Job: "", Commit: ""},
+			InCollection: false,
 		}
 
 		placementEntry := discoveryCollectionEntry(at, "workspace:"+names[i])

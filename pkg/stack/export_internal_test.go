@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/outputshare"
 )
@@ -102,4 +103,31 @@ func DecodeForTest(text string) (any, error) {
 	}
 
 	return doc, nil
+}
+
+// MaskedPageAt answers the page of paths that starts at offset, as the masked
+// read does after the cursor check. The tests call it with an offset that a
+// signed cursor never holds, to reach the guard against a negative offset.
+func MaskedPageAt(key []byte, paths []string, offset int) (MaskedPage, error) {
+	bind := cursorPayload{Unit: "", Version: "1", Subject: "", Offset: 0, Expiry: 0}
+
+	return maskedPageOf(key, bind, paths, offset, time.Unix(0, 0))
+}
+
+// CursorCheck names what a test cursor must bind: the unit, the version and
+// the caller, and the time of the check.
+type CursorCheck struct {
+	Unit    string
+	Version string
+	Subject string
+	Now     time.Time
+}
+
+// VerifyCursorOffset checks raw as the masked read does before it pages. The
+// tests call it alone, so the check of the cursor answers without the guard of
+// the page behind it.
+func VerifyCursorOffset(key []byte, raw string, want CursorCheck) (int, error) {
+	bind := cursorPayload{Unit: want.Unit, Version: want.Version, Subject: want.Subject, Offset: 0, Expiry: 0}
+
+	return verifyCursor(key, raw, bind, want.Now)
 }

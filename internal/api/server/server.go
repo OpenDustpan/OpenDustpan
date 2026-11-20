@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -42,7 +43,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
@@ -224,41 +224,45 @@ type JournalReporter interface {
 
 // Handler serves the installation API under /api/server/.
 type Handler struct {
-	authn          identity.Authenticator
-	authz          identity.Authorizer
-	guard          *denials.Recorder
-	logger         *slog.Logger
-	namespaces     *namespace.Service
-	backups        *backup.Service
-	restores       *backup.RestoreService
-	maintenance    Maintenance
-	metrics        MetricsWriter
-	version        string
-	schema         SchemaReporter
-	journal        JournalReporter
-	principals     *principal.Service
-	access         *access.Service
-	reach          access.ReachConfig
-	tokens         *accesstoken.Service
-	audit          audit.ServerStore
-	ipAllowlists   *ipallow.Service
-	gates          GateConfig
-	sessions       *session.Policies
-	epochs         CheckpointEpochs
-	onAuditFailure func()
-	deletedUnits   DeletedUnitSweeper
-	tempAdmins     tempadmin.Reader
-	now            func() time.Time
-	auditChain     AuditChain
-	auditSinks     AuditSinkSource
-	workers        WorkerSource
-	signIn         *signInState
-	kind           installation.Kind
-	stateWrite     stategate.Effective
-	preferences    *preferences.Service
-	gitHostLinks   *forgelinksvc.Service
-	localUsers     *localusersvc.Service
-	firstAdmin     FirstAdministratorService
+	authn       identity.Authenticator
+	authz       identity.Authorizer
+	guard       *denials.Recorder
+	logger      *slog.Logger
+	namespaces  *namespace.Service
+	backups     *backup.Service
+	restores    *backup.RestoreService
+	maintenance Maintenance
+	metrics     MetricsWriter
+	version     string
+	schema      SchemaReporter
+	journal     JournalReporter
+	principals  *principal.Service
+	access      *access.Service
+	reach       access.ReachConfig
+	tokens      *accesstoken.Service
+	// lostMakerTimeout bounds the revoke of the service tokens whose maker
+	// lost the act-as path (lostMakerRevokeTimeout). A test in the package
+	// sets it shorter.
+	lostMakerTimeout time.Duration
+	audit            audit.ServerStore
+	ipAllowlists     *ipallow.Service
+	gates            GateConfig
+	sessions         *session.Policies
+	epochs           CheckpointEpochs
+	onAuditFailure   func()
+	deletedUnits     DeletedUnitSweeper
+	tempAdmins       tempadmin.Reader
+	now              func() time.Time
+	auditChain       AuditChain
+	auditSinks       AuditSinkSource
+	workers          WorkerSource
+	signIn           *signInState
+	kind             installation.Kind
+	stateWrite       stategate.Effective
+	preferences      *preferences.Service
+	gitHostLinks     *forgelinksvc.Service
+	localUsers       *localusersvc.Service
+	firstAdmin       FirstAdministratorService
 	// passkeys is the passkey service of the console sign-in. With no
 	// sign-in there is no service.
 	passkeys      PasskeyService
@@ -312,42 +316,43 @@ func NewHandler(cfg *Config) (*Handler, error) {
 // has validated cfg.
 func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder) *Handler {
 	h := &Handler{
-		authn:          cfg.Authenticator,
-		authz:          cfg.Authorizer,
-		guard:          guard,
-		logger:         cfg.Logger,
-		namespaces:     cfg.Namespaces,
-		backups:        cfg.Backups,
-		restores:       cfg.Restores,
-		maintenance:    cfg.Maintenance,
-		metrics:        cfg.Metrics,
-		version:        cfg.Version,
-		schema:         cfg.Schema,
-		journal:        cfg.Journal,
-		principals:     cfg.Principals,
-		access:         cfg.Access,
-		reach:          cfg.Reach,
-		tokens:         cfg.Tokens,
-		deletedUnits:   cfg.DeletedUnits,
-		tempAdmins:     cfg.TempAdmins,
-		auditChain:     cfg.AuditChain,
-		audit:          cfg.Audit,
-		ipAllowlists:   cfg.IPAllowlists,
-		gates:          cfg.Gates,
-		sessions:       cfg.SessionPolicy,
-		epochs:         cfg.CheckpointEpochs,
-		onAuditFailure: cfg.OnAuditFailure,
-		now:            cfg.Now,
-		auditSinks:     cfg.AuditSinks,
-		workers:        cfg.Workers,
-		signIn:         signIn,
-		kind:           cfg.InstallationKind,
-		gitHostLinks:   cfg.GitHostLinks,
-		stateWrite:     cfg.StateWriteGates,
-		preferences:    cfg.Preferences,
-		localUsers:     cfg.LocalUsers,
-		firstAdmin:     cfg.FirstAdministrator,
-		passkeys:       nil, passkeyBegins: newBeginLimiter(),
+		authn:            cfg.Authenticator,
+		authz:            cfg.Authorizer,
+		guard:            guard,
+		logger:           cfg.Logger,
+		namespaces:       cfg.Namespaces,
+		backups:          cfg.Backups,
+		restores:         cfg.Restores,
+		maintenance:      cfg.Maintenance,
+		metrics:          cfg.Metrics,
+		version:          cfg.Version,
+		schema:           cfg.Schema,
+		journal:          cfg.Journal,
+		principals:       cfg.Principals,
+		access:           cfg.Access,
+		reach:            cfg.Reach,
+		tokens:           cfg.Tokens,
+		lostMakerTimeout: lostMakerRevokeTimeout,
+		deletedUnits:     cfg.DeletedUnits,
+		tempAdmins:       cfg.TempAdmins,
+		auditChain:       cfg.AuditChain,
+		audit:            cfg.Audit,
+		ipAllowlists:     cfg.IPAllowlists,
+		gates:            cfg.Gates,
+		sessions:         cfg.SessionPolicy,
+		epochs:           cfg.CheckpointEpochs,
+		onAuditFailure:   cfg.OnAuditFailure,
+		now:              cfg.Now,
+		auditSinks:       cfg.AuditSinks,
+		workers:          cfg.Workers,
+		signIn:           signIn,
+		kind:             cfg.InstallationKind,
+		gitHostLinks:     cfg.GitHostLinks,
+		stateWrite:       cfg.StateWriteGates,
+		preferences:      cfg.Preferences,
+		localUsers:       cfg.LocalUsers,
+		firstAdmin:       cfg.FirstAdministrator,
+		passkeys:         nil, passkeyBegins: newBeginLimiter(),
 		settings:  cfg.Settings,
 		gitHost:   cfg.GitHost,
 		idem:      cfg.Idempotency,

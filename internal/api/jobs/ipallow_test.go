@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -72,7 +73,7 @@ func newRefusalHandler(
 		Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Audit: records, OnAuditFailure: nil, DenialLimiter: limiter,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler),
-		Logs: nil, Cursors: nil,
+		Logs: nil, Cursors: nil, Approvers: gate.ApproverPolicy{Production: false, IsDev: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

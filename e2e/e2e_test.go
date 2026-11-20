@@ -36,11 +36,11 @@ import (
 	_ "modernc.org/sqlite"
 
 	"opendustpan.org/opendustpan/e2e"
+	dbschema "opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	dbschema "opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 const (
@@ -1291,6 +1291,9 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiChangeSecretsProviderScenario(t, env, org)
 
 	pulumiMaskedStateScenario(t, env, org)
+
+	// The reads of the state with an access token after a real update.
+	pulumiReadingStateScenario(t, env, org)
 
 	pulumiDiffScenario(t, env, org)
 
@@ -3601,6 +3604,9 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// a terraform_data input, a provider attribute the provider schema marks
 	// sensitive, and a client-encrypted state.
 	tofuMaskedStateScenario(t, env)
+
+	// The tool-neutral masked read of the state of a unit after a real apply.
+	tofuReadingStateScenario(t, env)
 
 	// The state diff of two versions with one added, one removed and one
 	// changed resource and one changed sensitive value.
@@ -12561,6 +12567,14 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 		"operator restore keeps a revoked token revoked",
 		"installation-operator restore kept the access tables",
 	)
+
+	if checkOperatorRestoreKeepsTempAdmin(ctx, t, env, store) {
+		env.NoteStep(
+			t,
+			"operator restore keeps a temporary administrator",
+			"installation-operator restore kept the live temporary administrator, its grant and its expiry",
+		)
+	}
 }
 
 // writeExitTestState writes the checked state with both CLIs: a Pulumi stack

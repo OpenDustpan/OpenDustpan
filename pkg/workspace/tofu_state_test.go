@@ -578,19 +578,23 @@ func TestReadTofuResourceWithoutMarks(t *testing.T) {
 	marker := secretMarker(t, attributes, "id")
 	checkMarkerPath(t, marker, "/resources/0/instances/0/attributes/id")
 
-	for _, key := range []string{"input", "output"} {
-		wrapped, ok := attributes[key].(map[string]any)
-		if !ok {
-			t.Fatalf("%s = %v, want the wrapped object", key, attributes[key])
-		}
-
-		if !isSecretMarker(wrapped["value"]) {
-			t.Fatalf("%s value = %v, want a secret marker", key, wrapped["value"])
-		}
+	// sensitive_attributes names input as a whole, so it answers as one marker
+	// with no key below it; every leaf of output answers as a marker.
+	if !isSecretMarker(attributes["input"]) {
+		t.Fatalf("input = %v, want one secret marker", attributes["input"])
 	}
 
-	if len(detail.Masked) != 6 {
-		t.Errorf("masked = %q, want every attribute leaf", detail.Masked)
+	wrapped, ok := attributes["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want the wrapped object", attributes["output"])
+	}
+
+	if !isSecretMarker(wrapped["value"]) {
+		t.Fatalf("output value = %v, want a secret marker", wrapped["value"])
+	}
+
+	if len(detail.Masked) != 5 {
+		t.Errorf("masked = %q, want id, input, output value, output type and triggers_replace", detail.Masked)
 	}
 }
 
@@ -988,17 +992,18 @@ func TestMaskedReadWithoutMarksThroughService(t *testing.T) {
 	marker := secretMarker(t, attributes, "id")
 	checkMarkerPath(t, marker, "/resources/0/instances/0/attributes/id")
 
-	for _, key := range []string{"input", "output"} {
-		wrapped, ok := attributes[key].(map[string]any)
-		if !ok {
-			t.Fatalf("%s = %v, want the wrapped object", key, attributes[key])
-		}
+	// sensitive_attributes names input as a whole: one marker, no key below it.
+	secretMarker(t, attributes, "input")
 
-		secretMarker(t, wrapped, "value")
+	wrapped, ok := attributes["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want the wrapped object", attributes["output"])
 	}
 
-	if len(detail.Masked) != 6 {
-		t.Errorf("masked = %q, want every attribute leaf", detail.Masked)
+	secretMarker(t, wrapped, "value")
+
+	if len(detail.Masked) != 5 {
+		t.Errorf("masked = %q, want id, input, output value, output type and triggers_replace", detail.Masked)
 	}
 }
 

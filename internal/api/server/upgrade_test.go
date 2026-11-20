@@ -11,9 +11,9 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // upgradeCheckDoc decodes an upgrade check answer in tests.

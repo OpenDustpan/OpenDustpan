@@ -18,9 +18,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // devBackupFlag is the flag that lets a production installation restore a
@@ -178,6 +179,7 @@ func backupDev(t *testing.T, dir, targetDir string) string {
 	})
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    st,
 		Kinds:       st,
 		Registry:    st,

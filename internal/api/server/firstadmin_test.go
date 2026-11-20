@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/firstadminsvc"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -30,7 +31,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -378,8 +378,11 @@ func (c faCaller) with(headers map[string]string) faCaller {
 func (f faFixture) sessionOf(t *testing.T, subject string, authTime time.Time) (*http.Cookie, string) {
 	t.Helper()
 
-	return accessFixture{store: f.store, path: f.path, sessions: f.sessions, handler: f.handler, passwords: f.limiter}.
-		sessionOf(t, subject, authTime)
+	base := accessFixture{
+		store: f.store, path: f.path, sessions: f.sessions, handler: f.handler, passwords: f.limiter, tokens: nil,
+	}
+
+	return base.sessionOf(t, subject, authTime)
 }
 
 // send sends one request as who.

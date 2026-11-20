@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/internal/proxysessionsvc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (
@@ -101,7 +101,7 @@ func newProxyEnv(t *testing.T) *proxyEnv {
 
 		return stores{
 			namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), jobtokens: s.JobTokens(), units: s,
-			runners: s.Runners(), audit: s,
+			runners: s.Runners(), audit: s, ageCancel: nil,
 		}
 	}
 

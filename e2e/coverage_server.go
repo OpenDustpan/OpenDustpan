@@ -12,9 +12,9 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/firstadminsvc"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/firstadmin"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // firstAdministratorCoveringTest names the test that covers the three routes

@@ -2,6 +2,7 @@ package jobtest
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 func approveCases() []suiteCase {
 	return []suiteCase{
 		{"approval: the first of two keeps the job waiting, the second queues it", testApprovalTwoApprovers},
+		{
+			"approval: several named gates keep their names and the approvals keep For, and the job opens after the third person",
+			testApprovalSeveralGates,
+		},
 		{"approval: a rejection ends the job rejected", testApprovalRejected},
 		{
 			"approval: the event that records one approval is refused outside awaiting-approval",
@@ -48,6 +53,17 @@ func awaitingApproval(t *testing.T, h Harness, f fixture) job.Job {
 func awaitingApprovalFor(t *testing.T, h Harness, f fixture, op job.Operation) job.Job {
 	t.Helper()
 
+	return awaitingApprovalWith(t, h, f, op, []job.Gate{{
+		Type: job.GateApproval, Name: "", Approvals: needApprovals, Groups: nil, GroupIDs: nil, AllowSelf: false,
+		Timeout: 0, BindPlan: true,
+	}})
+}
+
+// awaitingApprovalWith is awaitingApprovalFor with the gates of the apply
+// phase.
+func awaitingApprovalWith(t *testing.T, h Harness, f fixture, op job.Operation, gates []job.Gate) job.Job {
+	t.Helper()
+
 	// A harness without a state writer has no state version to bind.
 	version := ""
 	if h.WriteState != nil {
@@ -67,10 +83,7 @@ func awaitingApprovalFor(t *testing.T, h Harness, f fixture, op job.Operation) j
 		},
 		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}
-	j.Phases[1].Gates = []job.Gate{{
-		Type: job.GateApproval, Approvals: needApprovals, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
-		BindPlan: true,
-	}}
+	j.Phases[1].Gates = gates
 
 	stored := create(t, h, f, j, nil)
 
@@ -144,7 +157,7 @@ func testDestroyApprovalProofStored(t *testing.T, h Harness) {
 func verdict(j *job.Job, subject string, v job.Verdict, ev job.Event) job.Change {
 	c := change(j, ev)
 	c.Approval = &job.Approval{
-		Gate: job.GateApproval, Subject: subject, Agent: "", Verdict: v, Comment: "ok", Plan: nil,
+		Gate: job.GateApproval, For: []string{""}, Subject: subject, Agent: "", Verdict: v, Comment: "ok", Plan: nil,
 		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
 	}
 
@@ -210,6 +223,81 @@ func checkApprovals(t *testing.T, name string, j *job.Job, want approvalsWant) {
 	}
 }
 
+// The numbers of people in testApprovalSeveralGates.
+const (
+	onePerson   = 1
+	threePeople = 3
+)
+
+// severalGates returns the two named gates of the apply phase of the cases: a
+// gate of two approvals and a gate of one.
+func severalGates() []job.Gate {
+	return []job.Gate{
+		{
+			Type:      job.GateApproval,
+			Name:      "default/namespace/acme",
+			Approvals: needApprovals,
+			Groups:    []string{"platform"},
+			GroupIDs:  []string{"grp-a"},
+			AllowSelf: false,
+			Timeout:   0,
+			BindPlan:  true,
+		},
+		{
+			Type: job.GateApproval, Name: "default", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
+			Timeout: 0, BindPlan: true,
+		},
+	}
+}
+
+// verdictFor is verdict with the names of the gates that the approval fills.
+func verdictFor(j *job.Job, subject string, ev job.Event, names ...string) job.Change {
+	c := verdict(j, subject, job.VerdictApprove, ev)
+	c.Approval.For = names
+
+	return c
+}
+
+func testApprovalSeveralGates(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := awaitingApprovalWith(t, h, f, job.OperationApply, severalGates())
+
+	if got := j.Phases[1].Gates; len(got) != 2 || got[0].Name != "default/namespace/acme" || got[1].Name != "default" ||
+		got[0].Approvals != 2 || got[1].Approvals != 1 {
+		t.Fatalf("stored gates = %+v, want the two named gates in order", got)
+	}
+
+	const ns, def = "default/namespace/acme", "default"
+
+	first := apply(t, h, f, verdictFor(&j, "cy", job.EventApprovalRecorded, ns, def))
+	checkApprovals(t, "first approval", &first, approvalsWant{
+		state: job.StateAwaitingApproval, count: onePerson, status: job.GateWaiting,
+	})
+
+	second := apply(t, h, f, verdictFor(&first, "di", job.EventApprovalRecorded, ns))
+	checkApprovals(t, "second approval", &second, approvalsWant{
+		state: job.StateAwaitingApproval, count: needApprovals, status: job.GateWaiting,
+	})
+
+	third := apply(t, h, f, verdictFor(&second, "ed", job.EventApproved, def))
+	checkApprovals(t, "third approval", &third, approvalsWant{
+		state: job.StateQueued, count: threePeople, status: job.GateOpen,
+	})
+
+	got, err := h.Jobs.Get(t.Context(), j.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	for i, want := range [][]string{{ns, def}, {ns}, {def}} {
+		if !slices.Equal(got.Phases[1].Approvals[i].For, want) {
+			t.Errorf("approval %d For = %v, want %v", i, got.Phases[1].Approvals[i].For, want)
+		}
+	}
+}
+
 func testApprovalRejected(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -232,8 +320,16 @@ func testApprovalRecordedElsewhere(t *testing.T, h Harness) {
 
 	c := change(&queued, job.EventApprovalRecorded)
 	c.Approval = &job.Approval{
-		Gate: job.GateApproval, Subject: "cy", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
-		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
+		Gate:    job.GateApproval,
+		For:     []string{""},
+		Subject: "cy",
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      time.Now().UTC(),
+		Auth:    "",
+		AuthAt:  time.Time{},
 	}
 
 	_, err := h.Jobs.Apply(t.Context(), c, f.fence, nil)

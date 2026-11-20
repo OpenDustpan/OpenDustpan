@@ -754,7 +754,6 @@ func swapDecisionConsistent(d SwapDecision) bool {
 // restoreSwapResult is the result that ApplyRestoreArea records with the
 // swap step.
 type restoreSwapResult struct {
-	DroppedTempAdmins   int64    `json:"droppedTempAdmins"`
 	ExpiredUpdateLeases int64    `json:"expiredUpdateLeases"`
 	KeepAccessTables    bool     `json:"keepAccessTables"`
 	Widened             bool     `json:"widened"`
@@ -773,14 +772,14 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 	}
 
 	out, err := json.Marshal(restoreSwapResult{
-		DroppedTempAdmins: kept.DroppedTempAdmins, ExpiredUpdateLeases: kept.ExpiredUpdateLeases,
-		KeepAccessTables: d.KeepAccessTables, Widened: d.Widened,
+		ExpiredUpdateLeases: kept.ExpiredUpdateLeases,
+		KeepAccessTables:    d.KeepAccessTables, Widened: d.Widened,
 		KeepSettingKeys: keys, SettingBefore: d.SettingBefore, SettingAfter: d.SettingAfter,
 		SettingStatic: d.SettingStatic,
 	})
 	if err != nil {
 		// A struct of integers, booleans and strings always encodes.
-		return []byte(`{"droppedTempAdmins":0,"expiredUpdateLeases":0,"keepAccessTables":true,` +
+		return []byte(`{"expiredUpdateLeases":0,"keepAccessTables":true,` +
 			`"widened":false,"keepSettingKeys":[],"settingBefore":"","settingAfter":"","settingStatic":false}`)
 	}
 
@@ -792,10 +791,10 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
 	out, err := parseRestoreSwap(result)
 	if err != nil {
-		return KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}, err
+		return KeepAccessResult{ExpiredUpdateLeases: 0}, err
 	}
 
-	return KeepAccessResult{DroppedTempAdmins: out.DroppedTempAdmins, ExpiredUpdateLeases: out.ExpiredUpdateLeases}, nil
+	return KeepAccessResult{ExpiredUpdateLeases: out.ExpiredUpdateLeases}, nil
 }
 
 // DecodeRestoreSwapDecision returns the decision that EncodeRestoreSwap
@@ -832,7 +831,7 @@ func parseRestoreSwap(result []byte) (restoreSwapResult, error) {
 	// a line break, one of 1 MiB, or "unknown". The audit entries and the log
 	// line of the restore use these texts. The check does not rely on the store
 	// that wrote the record, or on the checks of the service that reads it.
-	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 || out.ExpiredUpdateLeases < 0 ||
+	if err := decoder.Decode(&out); err != nil || out.ExpiredUpdateLeases < 0 ||
 		!KnownSettingText(out.SettingBefore) || !KnownSettingText(out.SettingAfter) ||
 		!swapDecisionConsistent(SwapDecision{
 			KeepAccessTables: out.KeepAccessTables, Widened: out.Widened, KeepSettingKeys: out.KeepSettingKeys,

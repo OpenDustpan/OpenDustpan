@@ -31,7 +31,8 @@ func newWorkspaceValue(t *testing.T, ns namespace.Namespace, name string) worksp
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 

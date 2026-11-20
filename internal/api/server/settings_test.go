@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -151,6 +152,7 @@ func newBackupService(in backupInputs) (*backup.Service, error) {
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Jobs:        jobcheck.Checker{},
 		Kinds:       kinds,
 		Registry:    registry,
 		Blobs:       in.blobs,

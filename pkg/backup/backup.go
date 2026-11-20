@@ -75,6 +75,10 @@ const (
 	// it: the code lives 10 minutes and names a person of the installation
 	// that made it. The marker table, TableFirstAdministrator, travels.
 	TableFirstAdministratorCodes = "first_administrator_codes"
+	// TableGitHostEventReceiptCount holds the one row that counts the rows of
+	// TableGitHostEventReceipts. A restore leaves it empty, as it leaves the
+	// receipts empty.
+	TableGitHostEventReceiptCount = "git_host_event_receipt_count"
 	// TableGitHostEventReceipts holds the receipts of the verified deliveries of
 	// the last 24 hours: a hint and not state. A restore leaves it empty.
 	TableGitHostEventReceipts = "git_host_event_receipts"

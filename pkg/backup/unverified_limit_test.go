@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
@@ -49,6 +50,7 @@ func newUnverifiedFixture(t *testing.T, exporter backup.PortableExporter, limit 
 	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,

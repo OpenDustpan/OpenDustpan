@@ -15,7 +15,7 @@
 # The script takes the migration files of the ref, not of the work tree, so
 # it gives the same baseline when the work tree already holds one. A Go test
 # applies the old migrations and testdata/after-<dialect>.sql of
-# pkg/store/internal/baseline to an empty database, writes its schema and
+# internal/store/baseline to an empty database, writes its schema and
 # rows as the baseline, and checks that the baseline gives the same schema
 # and rows.
 #
@@ -62,21 +62,21 @@ fi
 : "${DUSTPAN_TEST_POSTGRES_URL:?set DUSTPAN_TEST_POSTGRES_URL to a PostgreSQL database}"
 
 for dialect in sqlite postgres; do
-	if [ -n "$(find "$ROOT/pkg/store/$dialect/testdata/tag-migrations" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
+	if [ -n "$(find "$ROOT/internal/store/$dialect/testdata/tag-migrations" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
 		echo "regenerate-baseline: tagged migrations exist; collapse only above the last tag is not implemented" >&2
 		exit 1
 	fi
 done
 
-if [ -n "$(git -C "$ROOT" status --porcelain -- pkg/store/schema pkg/store/sqlite/migrations pkg/store/postgres/migrations pkg/backup/backup.go)" ]; then
-	echo "regenerate-baseline: commit or stash the changes in pkg/store/schema, the migrations and pkg/backup/backup.go first" >&2
+if [ -n "$(git -C "$ROOT" status --porcelain -- internal/store/schema internal/store/sqlite/migrations internal/store/postgres/migrations pkg/backup/backup.go)" ]; then
+	echo "regenerate-baseline: commit or stash the changes in internal/store/schema, the migrations and pkg/backup/backup.go first" >&2
 	exit 1
 fi
 
 IN="$(mktemp -d)"
 trap 'rm -rf "$IN"' EXIT
 
-git -C "$ROOT" archive "$REF" pkg/store/sqlite/migrations pkg/store/postgres/migrations | tar -x -C "$IN"
+git -C "$ROOT" archive "$REF" internal/store/sqlite/migrations internal/store/postgres/migrations | tar -x -C "$IN"
 
 SHA="$(git -C "$ROOT" rev-parse --short=12 "$REF^{commit}")"
 echo "regenerate-baseline: collapse the migrations of $REF ($SHA)"
@@ -84,19 +84,19 @@ echo "regenerate-baseline: collapse the migrations of $REF ($SHA)"
 # The baseline names no Git ref: its SHA-256 covers its header, so a
 # regeneration with no change of the schema gives the same bytes.
 DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" \
-	go -C "$ROOT" test -count=1 -run '^TestWrite(SQLite|Postgres)Baseline$' ./pkg/store/internal/baseline/
+	go -C "$ROOT" test -count=1 -run '^TestWrite(SQLite|Postgres)Baseline$' ./internal/store/baseline/
 
 # The new baseline is the baseline file with the highest version. Both
 # dialects must have the same one.
 BASELINE=""
 for dialect in sqlite postgres; do
 	newest=""
-	for file in "$ROOT/pkg/store/$dialect/migrations/"[0-9]*_baseline.sql; do
+	for file in "$ROOT/internal/store/$dialect/migrations/"[0-9]*_baseline.sql; do
 		[ -e "$file" ] || continue
 		newest="$(basename "$file")"
 	done
 	if [ -z "$newest" ]; then
-		echo "regenerate-baseline: no baseline file in pkg/store/$dialect/migrations" >&2
+		echo "regenerate-baseline: no baseline file in internal/store/$dialect/migrations" >&2
 		exit 1
 	fi
 	if [ -n "$BASELINE" ] && [ "$newest" != "$BASELINE" ]; then
@@ -108,10 +108,10 @@ done
 VERSION="$(printf '%s' "$BASELINE" | cut -d_ -f1 | sed 's/^0*//')"
 
 # Delete each migration file with a lower version than the new baseline. The
-# shared list in pkg/store/schema/migrations holds name-only stubs and no
+# shared list in internal/store/schema/migrations holds name-only stubs and no
 # hash files.
 for dialect in sqlite postgres schema; do
-	for file in "$ROOT/pkg/store/$dialect/migrations/"*.sql "$ROOT/pkg/store/$dialect/migrations/"*.sql.sha256; do
+	for file in "$ROOT/internal/store/$dialect/migrations/"*.sql "$ROOT/internal/store/$dialect/migrations/"*.sql.sha256; do
 		[ -e "$file" ] || continue
 		name="$(basename "$file" .sha256)"
 		version="$(printf '%s' "$name" | cut -d_ -f1 | sed 's/^0*//')"
@@ -125,7 +125,7 @@ done
 printf '%s\n%s\n' \
 	'-- Name record for the shared migration list. Each store dialect holds the' \
 	'-- migration SQL under this file name in its own migrations directory.' \
-	>"$ROOT/pkg/store/schema/migrations/$BASELINE"
+	>"$ROOT/internal/store/schema/migrations/$BASELINE"
 
 # The three directories must end with the same file names.
 sql_names() {
@@ -135,11 +135,11 @@ sql_names() {
 	done
 }
 
-sqlite_names="$(sql_names "$ROOT/pkg/store/sqlite/migrations")"
+sqlite_names="$(sql_names "$ROOT/internal/store/sqlite/migrations")"
 for dir in postgres schema; do
-	names="$(sql_names "$ROOT/pkg/store/$dir/migrations")"
+	names="$(sql_names "$ROOT/internal/store/$dir/migrations")"
 	if [ "$names" != "$sqlite_names" ]; then
-		echo "regenerate-baseline: pkg/store/$dir/migrations holds other file names than pkg/store/sqlite/migrations" >&2
+		echo "regenerate-baseline: internal/store/$dir/migrations holds other file names than internal/store/sqlite/migrations" >&2
 		exit 1
 	fi
 done
@@ -161,15 +161,15 @@ set_constant() {
 		exit 1
 	fi
 }
-OLD_NAME="$(sed -n 's/^const BaselineName = "\(.*\)"$/\1/p' "$ROOT/pkg/store/schema/schema.go")"
-set_constant "$ROOT/pkg/store/schema/schema.go" '^const BaselineVersion int64 = [0-9]*$' "const BaselineVersion int64 = $VERSION"
-set_constant "$ROOT/pkg/store/schema/schema.go" '^const BaselineName = "[0-9]*_baseline\.sql"$' "const BaselineName = \"$BASELINE\""
+OLD_NAME="$(sed -n 's/^const BaselineName = "\(.*\)"$/\1/p' "$ROOT/internal/store/schema/schema.go")"
+set_constant "$ROOT/internal/store/schema/schema.go" '^const BaselineVersion int64 = [0-9]*$' "const BaselineVersion int64 = $VERSION"
+set_constant "$ROOT/internal/store/schema/schema.go" '^const BaselineName = "[0-9]*_baseline\.sql"$' "const BaselineName = \"$BASELINE\""
 set_constant "$ROOT/pkg/backup/backup.go" '^const BaselineSchemaVersion = [0-9]*$' "const BaselineSchemaVersion = $VERSION"
 
 # No Go file may name the old baseline file: a test that reads it by name
 # fails after the collapse. The files that the script edits are exempt.
 if [ -n "$OLD_NAME" ] && [ "$OLD_NAME" != "$BASELINE" ]; then
-	stale="$(grep -rn "$OLD_NAME" "$ROOT/pkg" --include=*.go | grep -v -e "^$ROOT/pkg/store/schema/schema.go:" -e "^$ROOT/pkg/backup/backup.go:" || true)"
+	stale="$(grep -rn "$OLD_NAME" "$ROOT/pkg" --include=*.go | grep -v -e "^$ROOT/internal/store/schema/schema.go:" -e "^$ROOT/pkg/backup/backup.go:" || true)"
 	if [ -n "$stale" ]; then
 		echo "regenerate-baseline: Go files still name $OLD_NAME:" >&2
 		echo "$stale" >&2

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // SchemaStore is the schema-reporting port the installation API answers for

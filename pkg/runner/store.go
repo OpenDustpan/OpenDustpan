@@ -210,14 +210,17 @@ type SessionStore interface {
 	//   - returns ErrClaimLost when the claim of the session is no longer
 	//     live, so the launcher of a claim that another claim replaced
 	//     renews nothing;
+	//   - returns ErrClaimLost when a cancel is requested and it is older than
+	//     SessionCancelBound on the clock of the database, and changes
+	//     nothing, so the claim expires and the operation ends canceled;
 	//   - else moves the expiry of the claim to the time of the database plus
 	//     d, also while a cancel is requested, and returns the claim.
 	//
 	// The renewal during a cancel is the difference from durable.Store.Extend,
 	// which refuses it: the launcher stops its step with the grace period of
 	// the step (up to 10 minutes) and then writes its last log chunks and its
-	// finish, so its claim must stay live until then. It returns ErrInvalid
-	// for a d that is not positive.
+	// finish, so its claim must stay live until then, but only for
+	// SessionCancelBound. It returns ErrInvalid for a d that is not positive.
 	SessionRenew(ctx context.Context, id string, fence namespace.Fence, d time.Duration) (durable.Claim, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a

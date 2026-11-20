@@ -97,6 +97,16 @@ suffix" for each reason that gets this text.
   0, a window out of range, a policy read that fails, and a sign-in dated in
   the future ([Git host account links API](git-host-links-api.md)).
 
+## Git host event receipts
+
+- The table of event receipts holds at most 100000 rows. A counter row,
+  which each write of the table changes in the same transaction, keeps the
+  bound exact for concurrent deliveries and costs the same at any row count.
+  A receipt that would make the count pass the bound is refused with the
+  error `receipts-full`, and nothing is stored. A receipt that hits a key of
+  an earlier delivery is a duplicate, also when the table is at the bound,
+  because it adds no row. A restore leaves the receipts and the counter empty.
+
 ## Break-glass accounts
 
 <!-- code-rule: principal.ErrNoWorkingBreakGlass -->

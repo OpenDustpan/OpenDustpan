@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -20,7 +21,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	principalpkg "opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -192,8 +192,9 @@ func newBreakGlassSWEnv(t *testing.T, setup swSetup) swEnv {
 				Forced:   false,
 				Unlocked: false,
 			},
-			Revision: 1,
-			Origin:   identity.StateOrigin{Job: "", Commit: ""},
+			Revision:     1,
+			Origin:       identity.StateOrigin{Job: "", Commit: ""},
+			InCollection: false,
 		}
 		if err = st.CreateWorkspace(t.Context(), w, fence); err != nil {
 			t.Fatalf("create workspace %s: %v", name, err)
@@ -1190,8 +1191,9 @@ func TestStateWriteGateStaysWithTheUnit(t *testing.T) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err = e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
 		t.Fatalf("create workspace again: %v", err)
@@ -1231,8 +1233,9 @@ func (e swEnv) reuseSWWeb(t *testing.T) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err := e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
 		t.Fatalf("create workspace again: %v", err)

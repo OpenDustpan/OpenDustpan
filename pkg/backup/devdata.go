@@ -126,7 +126,9 @@ const (
 	// reserved provider ID.
 	RemovedProviders DevRemovalClass = "providers"
 	// RemovedTempAdmins counts temp_admins rows, matched by the principal ID
-	// of a removed principal and by a subject with the reserved prefix.
+	// of a removed principal and by a subject with the reserved prefix. Only
+	// the strip counts this class: a swap that keeps the access tables takes
+	// no staged temp_admins row, so it drops and counts none.
 	RemovedTempAdmins DevRemovalClass = "temp-admins"
 	// RemovedTrustRules counts the trust rules whose principal is a removed
 	// principal. A rule lets a workload act as its principal, so it goes

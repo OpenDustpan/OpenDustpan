@@ -108,20 +108,14 @@ type AccessKeepingApplier interface {
 	// on the whole staging area, also on the access tables that it does not
 	// take.
 	//
-	// The swap takes temp_admins from the backup and keeps the live
-	// principals. So it drops, in the swap transaction, each staged
-	// temp_admins row that names a principal that the live principals table
-	// does not hold, and returns the count in the result.
+	// temp_admins is an access table: the swap keeps the live rows of the
+	// table and takes no staged row.
 	ApplyStagingKeepingAccess(ctx context.Context) (KeepAccessResult, error)
 }
 
 // KeepAccessResult is what a swap that keeps the access tables changed beyond
 // the plain swap.
 type KeepAccessResult struct {
-	// DroppedTempAdmins is the count of staged temp_admins rows that the swap
-	// dropped because they name a principal that the live principals table
-	// does not hold.
-	DroppedTempAdmins int64
 	// ExpiredUpdateLeases is the count of running updates whose lease the
 	// swap expired. Those updates stay running and keep their stack locked
 	// until an operator cancels them.

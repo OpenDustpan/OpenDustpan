@@ -3,6 +3,7 @@ package jobgate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -247,12 +248,12 @@ func checkGate(t *testing.T, tt gateCase) {
 		t.Fatalf("Decide() = %+v, %v; want allow", got, err)
 	}
 
-	if len(got.Gates) != 1 {
+	if len(got.Gates) != 1 || len(got.Gates[tt.kind]) != 1 {
 		t.Fatalf("gates = %+v, want one gate for %s", got.Gates, tt.kind)
 	}
 
-	g, ok := got.Gates[tt.kind]
-	if !ok || g.Type != job.GateApproval || g.Approvals != tt.count || g.AllowSelf || g.BindPlan != tt.bind ||
+	g := got.Gates[tt.kind][0]
+	if g.Type != job.GateApproval || g.Approvals != tt.count || g.AllowSelf || g.BindPlan != tt.bind ||
 		len(g.Groups) != tt.groups {
 		t.Fatalf("gate of %s = %+v, want %d approvals, %d groups, bind %t, no self approval", tt.kind, g,
 			tt.count, tt.groups, tt.bind)
@@ -278,10 +279,11 @@ func TestDecideNamesTheGroupsAndNeverCountsTheAuthor(t *testing.T) {
 		t.Fatalf("Decide() = %+v, %v; want allow", got, err)
 	}
 
-	g, ok := got.Gates[job.PhaseApply]
-	if !ok {
-		t.Fatalf("gates = %+v, want a gate on the apply phase", got.Gates)
+	if len(got.Gates[job.PhaseApply]) != 1 {
+		t.Fatalf("gates = %+v, want one gate on the apply phase", got.Gates)
 	}
+
+	g := got.Gates[job.PhaseApply][0]
 
 	if !slices.Equal(g.Groups, []string{"platform", "bo-team"}) {
 		t.Fatalf("groups = %v, want [platform bo-team]", g.Groups)
@@ -438,19 +440,41 @@ func TestDecideFailsClosed(t *testing.T) {
 	unless := def(nsScope(), 1)
 	unless.Unless = "true"
 
+	colUsers := def(colScope(), 1, "dba")
+	colUsers.Approvers.Users = []string{"bo"}
+
+	colOwners := def(colScope(), 1)
+	colOwners.Approvers.UnitOwners = true
+
+	colFresh := def(colScope(), 1, "dba")
+	colFresh.FreshAuth = gate.FreshAuth{Set: true, Seconds: 0}
+
+	colUnless := def(colScope(), 1, "dba")
+	colUnless.Unless = "true"
+
 	tests := []struct {
 		name     string
 		defaults []gate.ApprovalDefault
 		want     error
 	}{
 		{
-			"two requirements",
-			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), def(colScope(), 1)},
+			"users in the second requirement",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), colUsers},
 			gate.ErrUnavailable,
 		},
 		{
-			"two named defaults",
-			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), def(colScope(), 1, "dba")},
+			"unit owners in the second requirement",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), colOwners},
+			gate.ErrUnavailable,
+		},
+		{
+			"fresh authentication in the second requirement",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), colFresh},
+			gate.ErrUnavailable,
+		},
+		{
+			"unless body in the second requirement",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), colUnless},
 			gate.ErrUnavailable,
 		},
 		{"users", []gate.ApprovalDefault{users}, gate.ErrUnavailable},
@@ -469,6 +493,71 @@ func TestDecideFailsClosed(t *testing.T) {
 			got, err := d.Decide(t.Context(), input(t, job.ExecutorRunner, job.OperationApply))
 			if !errors.Is(err, tt.want) || got.Allow || len(got.Gates) != 0 {
 				t.Fatalf("Decide() = %+v, %v; want a refusal that wraps %v", got, err, tt.want)
+			}
+		})
+	}
+}
+
+// gateSummary returns the sorted texts "name=count" of the gates, and fails t
+// for a gate that is not an approval gate that binds the plan.
+func gateSummary(t *testing.T, gates []job.Gate) []string {
+	t.Helper()
+
+	out := make([]string, 0, len(gates))
+
+	for _, g := range gates {
+		if g.Type != job.GateApproval || !g.BindPlan {
+			t.Errorf("gate %q = %+v, want an approval gate that binds the plan", g.Name, g)
+		}
+
+		out = append(out, fmt.Sprintf("%s=%d", g.Name, g.Approvals))
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// TestDecideSeveralRequirements proves that two defaults give two gates with
+// the names of their requirements, on every phase that changes.
+func TestDecideSeveralRequirements(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		defaults []gate.ApprovalDefault
+		want     []string
+	}{
+		{
+			"a namespace default with groups and a collection default with none",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), def(colScope(), 1)},
+			[]string{"default/namespace/acme=2", "default=1"},
+		},
+		{
+			"two defaults with groups",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), def(colScope(), 1, "dba")},
+			[]string{"default/collection/acme/prod=1", "default/namespace/acme=2"},
+		},
+		{
+			"three defaults",
+			[]gate.ApprovalDefault{def(nsScope(), 2, "platform"), def(colScope(), 1, "dba"), def(unitScope(t), 1)},
+			[]string{"default/collection/acme/prod=1", "default/namespace/acme=2", "default=1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := newDecider(t, withDefaults(tt.defaults...), inCollection("prod"))
+
+			got, err := d.Decide(t.Context(), input(t, job.ExecutorRunner, job.OperationApply))
+			if err != nil || !got.Allow {
+				t.Fatalf("Decide() = %+v, %v; want allow", got, err)
+			}
+
+			if summary := gateSummary(t, got.Gates[job.PhaseApply]); !slices.Equal(summary, tt.want) {
+				t.Fatalf("gates = %v, want %v", summary, tt.want)
 			}
 		})
 	}

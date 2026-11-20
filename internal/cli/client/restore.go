@@ -71,8 +71,16 @@ const restoreForceHelp = "end that work, or run opendustpan restore --server %s 
 // restoreCorruptHelp names the one command that helps after a restore of a
 // backup with corrupt data: the check of the backup, which names each missing
 // or bad object. A second run of the same restore fails in the same way.
-const restoreCorruptHelp = "run opendustpan backup check --server %s --backup %s to find each missing or bad object, " +
-	"or restore another backup"
+const restoreCorruptHelp = "run opendustpan backup check --server %s --backup %s to find each missing, bad or " +
+	"damaged object, or restore another backup"
+
+// restoreDamagedJobHelp names the one action that helps after a restore of a
+// backup with a damaged job row. The server of the backup holds the row, so a
+// restore of the same backup fails again. The cancel route of the job ends the
+// row, and a new backup then holds no damaged row.
+const restoreDamagedJobHelp = "cancel the damaged job on the server that made the backup " +
+	"(POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel), run opendustpan backup there, " +
+	"and restore the new backup, or restore another backup"
 
 // restoreResumeHelp says what to do when the command cannot read a restore
 // that started: the server resumes the restore on its own, for example after
@@ -624,6 +632,10 @@ func restoreFailureHelp(doc RestoreStatusResponse, f restoreFlags, server, id st
 		return restoreBreakGlassHelp
 	case backup.CodeBreakGlassPassword:
 		return restoreBreakGlassPasswordHelp
+	}
+
+	if strings.HasPrefix(strings.TrimSpace(doc.Error), backup.DamagedJobPrefix) {
+		return restoreDamagedJobHelp
 	}
 
 	if strings.HasSuffix(strings.TrimSpace(doc.Error), backup.ErrCorrupt.Error()) {

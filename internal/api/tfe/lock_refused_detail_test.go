@@ -11,8 +11,8 @@ import (
 )
 
 // lateLockWorkspaces models a lock that another principal takes after the
-// handler read the workspace as free. Until LockForJob runs, GetByID reports
-// a free workspace. LockForJob then refuses with refusal. Later reads report
+// handler read the workspace as free. Until LockForJobInCollection runs, GetByID reports
+// a free workspace. LockForJobInCollection then refuses with refusal. Later reads report
 // the workspace as held by laterHolder, or as free when laterHolder is empty.
 type lateLockWorkspaces struct {
 	stubWorkspaces
@@ -23,7 +23,7 @@ type lateLockWorkspaces struct {
 	readsPreLock atomic.Int32
 }
 
-func (l *lateLockWorkspaces) LockForJob(
+func (l *lateLockWorkspaces) LockForJobInCollection(
 	_ context.Context, id workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
@@ -121,7 +121,7 @@ func TestLockRefusedAfterFreeReadKeepsTheHolderDetail(t *testing.T) {
 			}
 
 			if got := workspaces.lockCalls.Load(); got != 1 {
-				t.Fatalf("LockForJob called %d times, want 1: a refusal ends the request", got)
+				t.Fatalf("LockForJobInCollection called %d times, want 1: a refusal ends the request", got)
 			}
 
 			want := "Workspace ws-test123 is locked by User " + tt.wantHolder

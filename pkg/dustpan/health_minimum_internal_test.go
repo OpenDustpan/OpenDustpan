@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/metrics"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // errMinimumRead stands for a check that cannot read the minimum because the

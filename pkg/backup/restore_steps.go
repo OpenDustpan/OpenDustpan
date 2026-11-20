@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -1401,13 +1400,8 @@ func (s *RestoreService) stepFinish(ctx context.Context, sc durable.StepContext,
 	report := st.Report
 
 	if rec, ok := sc.Operation.Step(RestoreStepSwap); ok && len(rec.Result) > 0 {
-		kept, err := DecodeRestoreSwap(rec.Result)
-		if err != nil {
+		if _, err := DecodeRestoreSwap(rec.Result); err != nil {
 			return nil, durable.Permanent(err)
-		}
-
-		if kept.DroppedTempAdmins > 0 {
-			report.Classes = withClass(report.Classes, RemovedTempAdmins, kept.DroppedTempAdmins)
 		}
 	}
 
@@ -1450,16 +1444,6 @@ func withPreBackupFindings(report DevStripReport, op durable.Operation) DevStrip
 	}
 
 	return report
-}
-
-// withClass returns classes with n added to class.
-func withClass(classes map[DevRemovalClass]int64, class DevRemovalClass, n int64) map[DevRemovalClass]int64 {
-	out := make(map[DevRemovalClass]int64, len(classes)+1)
-	maps.Copy(out, classes)
-
-	out[class] += n
-
-	return out
 }
 
 // restoreWriter is the maintenance.StateWriter of one restore step: each

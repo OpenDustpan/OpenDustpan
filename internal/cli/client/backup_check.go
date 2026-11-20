@@ -117,7 +117,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	if !answer.Complete {
-		return fmt.Errorf("%w: %s", backup.ErrCorrupt, answer.Error)
+		return checkFailure(id, answer.Error)
 	}
 
 	if _, err := fmt.Fprintf(stdout, "backup %s is complete\n", id); err != nil {
@@ -187,4 +187,21 @@ func readBackupCheck(
 	}
 
 	return answer, nil
+}
+
+// checkFailure returns the error of a backup that the check does not call
+// complete. The text of a damaged job row gets the help of that row. The
+// server text starts with the wrapping of the check, which this function
+// removes before it reads the start of the text.
+func checkFailure(id, text string) error {
+	rest := strings.TrimSpace(text)
+	if cut, ok := strings.CutPrefix(rest, "check backup "+id+": "); ok {
+		rest = cut
+	}
+
+	if strings.HasPrefix(rest, backup.DamagedJobPrefix) {
+		return fmt.Errorf("%w: %s: %s", backup.ErrCorrupt, text, restoreDamagedJobHelp)
+	}
+
+	return fmt.Errorf("%w: %s", backup.ErrCorrupt, text)
 }

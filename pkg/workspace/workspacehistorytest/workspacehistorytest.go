@@ -130,6 +130,7 @@ func makeWorkspace(t *testing.T, s Store, f namespace.Fence, id workspace.ID) {
 		Ref:         workspace.Ref{Namespace: f.Namespace, Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, f)
 	if err != nil {
 		t.Fatalf("create workspace %q: %v", id, err)

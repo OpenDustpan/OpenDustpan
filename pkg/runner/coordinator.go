@@ -163,6 +163,66 @@ func GraceFor(s *job.Step) time.Duration {
 	return GraceOther
 }
 
+// SessionCancelBound is the longest time from a requested cancel to the
+// last renewal of the claim of a job session: the longest grace period of a
+// step (GraceChanges) and the time for the last log chunks and the finish
+// (ReportTime). SessionStore.SessionRenew refuses a renewal after it, so a
+// launcher that ignores a cancel loses its claim, and the operation ends
+// canceled.
+const SessionCancelBound = GraceChanges + ReportTime
+
+// SessionCancelSkew is the longest time that the time of a cancel may be later
+// than the time of a renewal. Both times come from the clock of the database,
+// so a gap is small: it comes from a clock step or a rounding of a timestamp.
+// One minute is far over such a gap and far under SessionCancelBound. A cancel
+// later than now plus this time is not a valid time of a cancel, and a renewal
+// of it is refused.
+const SessionCancelSkew = time.Minute
+
+// SessionCancel is the cancel state of the operation of a job session, as the
+// store holds it. Requested is true when a cancel is requested. At is the time
+// of the cancel on the clock of the store: the zero Time when the store holds
+// no time for the cancel.
+type SessionCancel struct {
+	Requested bool
+	At        time.Time
+}
+
+// CheckSessionRenew checks a renewal of the claim of a job session at now. It
+// returns nil when no cancel is requested. It returns ErrClaimLost when the cancel is older than
+// SessionCancelBound, and also when a cancel is requested but its time is the
+// zero Time: a cancel with no time is not a young cancel. A renewal at exactly
+// SessionCancelBound after the cancel passes. A cancel later than now by no
+// more than SessionCancelSkew counts as a cancel at now. A cancel later than
+// that is refused: a row from a restored backup or from another version can
+// hold any time, and a time in the future must not extend the bound.
+func CheckSessionRenew(cancel SessionCancel, now time.Time) error {
+	if !cancel.Requested {
+		return nil
+	}
+
+	// Defense in depth: the subtraction below also refuses the zero Time,
+	// because the age of a cancel at the year 1 is far over the bound. This
+	// check stays so that a change of the arithmetic cannot make a cancel
+	// with no time a young cancel. It does not rely on the store adapters.
+	if cancel.At.IsZero() {
+		return fmt.Errorf("%w: the cancel has no time", ErrClaimLost)
+	}
+
+	// Defense in depth: the store adapters record the time of a cancel from
+	// the clock of the database, so a time in the future should not exist. This
+	// check stays so that a row with such a time cannot extend the bound.
+	if cancel.At.Sub(now) > SessionCancelSkew {
+		return fmt.Errorf("%w: the cancel is later than now", ErrClaimLost)
+	}
+
+	if now.Sub(cancel.At) > SessionCancelBound {
+		return fmt.Errorf("%w: the cancel is older than %v", ErrClaimLost, SessionCancelBound)
+	}
+
+	return nil
+}
+
 // Limits are the time limits of one launcher. The launcher owns the
 // deadline of each step: it stops a step at its timeout. The deadline of
 // the Job or the sandbox is a generous limit after which the platform

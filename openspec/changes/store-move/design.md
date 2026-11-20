@@ -24,7 +24,7 @@ check. This file gives the structure.
 
 ## The importers of the moved packages
 
-`scripts/move-store.sh` rewrites the import path in every tracked Go file that imports a moved package, tests and e2e included; no other edit in those files. On main they are 196 Go files in 38 package directories outside `pkg/store` (`git grep -l -E '"opendustpan\.org/opendustpan/pkg/store/(sqlite|postgres|schema|internal)' -- '*.go' ':!pkg/store/*'`). Task 1.3 names each directory, so that the scope guard of the driver admits the rewrite.
+`scripts/move-store.sh` rewrites the import path in every tracked Go file that imports a moved package, tests and e2e included; no other edit in those files. On main (ac41a29) they are 218 Go files in 43 package directories outside `pkg/store` (`git grep -l -E '"opendustpan\.org/opendustpan/pkg/store/(sqlite|postgres|schema|internal)' -- '*.go' ':!pkg/store/*'`). Task 1.3 names each directory, so that the scope guard of the driver admits the rewrite.
 
 ## Why this structure
 

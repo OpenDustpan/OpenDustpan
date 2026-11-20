@@ -34,7 +34,7 @@ type writeWorkspaces struct {
 	discard func(ctx context.Context, id workspace.StateVersionID, tok token.Token, content io.Reader) error
 }
 
-func (w writeWorkspaces) BeginState(
+func (w writeWorkspaces) BeginStateInCollection(
 	ctx context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return w.begin(ctx, id, holder, in)
@@ -405,7 +405,7 @@ type lineageLockWorkspaces struct {
 	holder string
 }
 
-func (l lineageLockWorkspaces) BeginState(
+func (l lineageLockWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, fmt.Errorf(

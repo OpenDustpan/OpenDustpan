@@ -175,6 +175,19 @@ func (p *Placer) Require(ctx context.Context, obj identity.Object) error {
 	return nil
 }
 
+// RequireEnabled returns an error that matches ErrPlacementOff when the Placer
+// cannot check the collection of a workspace: a nil Placer, or a Placer with no
+// collections. It reads nothing. A write path that gets the collection of the
+// workspace from its own read, so that it adds no round trip, calls it first, so
+// that a server with no collections still refuses the write. It fails closed.
+func (p *Placer) RequireEnabled(obj identity.Object) error {
+	if p == nil || p.Collections == nil {
+		return fmt.Errorf("write to %s: %w", obj, ErrPlacementOff)
+	}
+
+	return nil
+}
+
 // rule returns the first placement rule that matches the new workspace. When no
 // rule matches, a namespace that does not exist and a workspace that exists
 // get their own errors first.
