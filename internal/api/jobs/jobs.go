@@ -269,6 +269,11 @@ func classifyJobRefusal(err error) (problem.Problem, bool) {
 	case errors.Is(err, job.ErrUnsupported):
 		return problem.RefusedText(problem.Detail(err, job.ErrUnsupported),
 			http.StatusUnprocessableEntity, errcode.JobUnsupported), true
+	case errors.Is(err, gate.ErrUnavailable):
+		// The approval defaults of the unit need more than a job enforces. The
+		// start fails closed, and the text names the requirement to change.
+		return problem.RefusedText(problem.Detail(err, gate.ErrUnavailable),
+			http.StatusServiceUnavailable, errcode.GateUnavailable), true
 	case errors.Is(err, job.ErrPolicyDenied):
 		return problem.Refused(err, http.StatusForbidden, errcode.JobPolicyDenied), true
 	case errors.Is(err, job.ErrGateEnforced):

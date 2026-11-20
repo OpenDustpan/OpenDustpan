@@ -136,6 +136,7 @@ The `errorCode` is a stable code for a program.
 | 403 | `gate.limited` | An access limit forbids the start |
 | 403 | `gate.rule-failed` | An access limit failed to evaluate, so the start is refused |
 | 403 | `job.policy-denied` | The policy refused the start. A job token cannot start a job, even when it holds the start grants. |
+| 503 | `gate.unavailable` | An approval default of the unit needs more than a job enforces: it names users or unit owners, sets `freshAuthSeconds`, or holds an `unless` body. The message names the requirement. Change the default, and start the job again |
 | 403 | `job.agent-denied` | The agent mode does not allow the start |
 | 403 | `job.gate-enforced` | An enforced gate at `change.propose` or `state.write` covers the workspace, or the server cannot read the gates |
 | 404 | | The namespace does not exist, or the caller cannot read it |

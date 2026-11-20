@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -530,6 +531,11 @@ func TestStartMapsTheErrorsOfTheService(t *testing.T) {
 			"plans are off",
 		},
 		{fmt.Errorf("%w: no agents", job.ErrAgentDenied), http.StatusForbidden, "job.agent-denied", "no agents"},
+		{
+			fmt.Errorf("policy: %w: the requirement default/collection/acme/prod names users or unit owners, and a job "+
+				"enforces groups only; name groups instead", gate.ErrUnavailable),
+			http.StatusServiceUnavailable, "gate.unavailable", "default/collection/acme/prod names users",
+		},
 		{job.ErrFrozen, http.StatusConflict, "job.frozen", "freeze"},
 		{job.ErrLimit, http.StatusTooManyRequests, "job.limit", "too many"},
 		{job.ErrKeyConflict, http.StatusUnprocessableEntity, "request.idempotency-key-reused", "key"},
