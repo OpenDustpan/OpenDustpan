@@ -160,6 +160,24 @@ type DamagedRow struct {
 	// Reason names the kind of the damage, for example "the body is not
 	// JSON". It never holds a value that the body stored.
 	Reason string
+	// State is the state of the row, from its state column. It never comes
+	// from the body: the body did not decode.
+	State State
+	// Version is the version of the row, from its version column.
+	Version int64
+}
+
+// DamagedCancel is what Store.CancelDamaged stored for a damaged row. It holds
+// the values that the cancel answer needs and that the row columns keep, as
+// the body did not decode.
+type DamagedCancel struct {
+	// Version is the version that the cancel stored for the row.
+	Version int64
+	// CreatedAt is the creation time of the row, from its created column.
+	CreatedAt time.Time
+	// ChangedAt is the time of the cancel: the update time of the row and the
+	// time of its last state change.
+	ChangedAt time.Time
 }
 
 // Page is one page of Store.List: the jobs that decoded, the damaged rows
@@ -232,8 +250,9 @@ type Store interface {
 	// stale fence. The row keeps the rest of its columns and its body. A
 	// caller uses it only for a row that List or Orphans reported as
 	// damaged: a job whose body decodes is canceled through Apply with
-	// EventCancel, which also ends its operation.
-	CancelDamaged(ctx context.Context, id ID, fence namespace.Fence, e []audit.Entry) error
+	// EventCancel, which also ends its operation. It returns the version
+	// and the times that the cancel stored for the row.
+	CancelDamaged(ctx context.Context, id ID, fence namespace.Fence, e []audit.Entry) (DamagedCancel, error)
 	// GetDamaged returns the damaged row id and the namespace of its row,
 	// and reads no body: a caller that Get answered with ErrDamaged uses it
 	// to find the unit of the row, so that it can check the rights of a

@@ -24,6 +24,10 @@ While the worker component runs on a server with a durable store, the server SHA
 - **WHEN** the server has no durable store
 - **THEN** the server runs no prune
 
+#### Scenario: The entry names the server subject
+- **WHEN** the prune writes the audit entry of a batch
+- **THEN** the actor of the entry is the server subject `@server`
+
 ### Requirement: One prune at a time
 
 The server SHALL run the prune in one process for each tick of the schedule.

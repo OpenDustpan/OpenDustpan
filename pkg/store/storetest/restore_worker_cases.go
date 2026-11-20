@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // workerLease is the lease of a claim that a case takes by hand.
@@ -200,6 +201,7 @@ func newWorkerRig(t *testing.T, newStore RestoreFactory) *workerRig {
 	)
 
 	r.backups, err = backup.NewService(backup.Config{
+		Jobs:     jobcheck.Checker{},
 		Exporter: st, Registry: st, Kinds: st, Blobs: r.live.Store, StateOpener: nil, Target: r.target,
 		TargetName: "dir:test", Now: nil, Version: "test", MaxSQLBytes: 0, Operations: r.ops, Owner: "backup",
 		Lease: 0, Logger: nil,

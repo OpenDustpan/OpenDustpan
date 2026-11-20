@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // durableWait is the longest time that a test waits for a state of the
@@ -122,6 +123,7 @@ func (d durableSetup) service(
 	t.Helper()
 
 	svc, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    d.reg,

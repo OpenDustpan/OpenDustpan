@@ -924,7 +924,7 @@ func sanitizeRestoreError(err error) string {
 		return refusalSentence(reasonDevSwap, "")
 	}
 
-	if text, ok := missingObjectText(err); ok {
+	if text, ok := backupObjectText(err); ok {
 		return text
 	}
 
@@ -943,6 +943,21 @@ func sanitizeRestoreError(err error) string {
 	}
 
 	return "restore failed"
+}
+
+// backupObjectText answers the stored text of a refusal at an object of the
+// backup: a missing object names its key, and a damaged job row names the job,
+// the unit and the reason. It reports whether err is one of them.
+func backupObjectText(err error) (string, bool) {
+	if text, ok := missingObjectText(err); ok {
+		return text, true
+	}
+
+	if damaged, ok := errors.AsType[*DamagedJobError](err); ok && damaged != nil {
+		return damaged.Error(), true
+	}
+
+	return "", false
 }
 
 // liveBlobsRestoreMessage answers the stored text of a refusal at the live

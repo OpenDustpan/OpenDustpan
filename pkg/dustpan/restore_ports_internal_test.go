@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -244,6 +245,7 @@ func restoreDeps(t *testing.T, store *sqlite.Store) installationDeps {
 	t.Helper()
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    store,
 		Kinds:       store,
 		Registry:    store,

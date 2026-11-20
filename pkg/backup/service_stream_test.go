@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // errSealedOpen is the injected failure of opening a tampered sealed blob.
@@ -106,6 +107,7 @@ func newStreamFixture(
 	target := newMemStore()
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,
@@ -173,6 +175,7 @@ func restoreStreamedBackup(
 	live := newRestoreServiceLive(liveChecks, regs)
 	live.maint = maint
 	backups, err := backup.NewService(backup.Config{
+		Jobs: jobcheck.Checker{},
 		Exporter: &stubBackupExporter{
 			sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
 		},

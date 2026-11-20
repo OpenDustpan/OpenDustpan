@@ -21,7 +21,7 @@ func newNoPublicURLFixture(t *testing.T) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: true, getGrantErr: nil,
+		noSignIn: true, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
 
