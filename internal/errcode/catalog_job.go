@@ -9,6 +9,9 @@ const (
 	JobAlreadyApproved = "job.already-approved"
 	// JobConflict means that the job changed since the caller read it.
 	JobConflict = "job.conflict"
+	// JobDamaged means that the stored job cannot be read, and only a cancel
+	// can clear it.
+	JobDamaged = "job.damaged"
 	// JobFinished means that the job ended already.
 	JobFinished = "job.finished"
 	// JobFrozen means that a freeze stops the job.
@@ -47,6 +50,7 @@ func jobSpecs() []Spec {
 		{JobAgentDenied, "the rules of the agent refuse the job"},
 		{JobAlreadyApproved, "the caller approved this phase already"},
 		{JobConflict, "the job changed since the caller read it"},
+		{JobDamaged, "the stored job cannot be read, and only a cancel can clear it"},
 		{JobFinished, "the job ended already"},
 		{JobFrozen, "a freeze stops the job"},
 		{JobGateEnforced, "an enforced gate refuses the job"},

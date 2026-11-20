@@ -185,6 +185,10 @@ type closedResponse struct {
 // with the job. The route wrapper already allowed namespace:read on the
 // namespace and job:read on the unit of the job.
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request, _ identity.Principal, t *target) {
+	if h.refuseDamaged(r.Context(), w, t) {
+		return
+	}
+
 	setETag(w, &t.job)
 	h.answerJob(r.Context(), w, http.StatusOK, &t.job)
 }

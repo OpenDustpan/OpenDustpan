@@ -2,7 +2,7 @@
 
 A job holds one gate for each phase kind, and a gate is one requirement: one count and one list of groups (`pkg/job/gate.go:89`). The decider refuses a unit with more than one requirement (`pkg/gate/jobgate/jobgate.go:168`). This change lets a phase hold up to 3 gates, one for each requirement, and counts approvals with a maximum matching, so that one person fills one slot.
 
-Part A (groups only) is decided by ADR 225 decision 6 and ADR 192 decision 6. Part B (users, unit owners, fresh authentication, unless) waits for the five open questions in the proposal. In Part A the decider keeps its refusal for each Part B shape.
+Part A (groups only) is decided by ADR 225 decision 6 and ADR 192 decision 6. Part B (users, unit owners, fresh windows, the refusal of `unless`) follows the owner decisions of 2026-11-20 that the proposal lists. In Part A the decider keeps its refusal for each Part B shape, and Part B removes the refusals one task at a time. One question is open: which kinds of principal may approve. Until the owner answers, this design keeps what main does for the kind of the approver (an agent is refused, no other kind is).
 
 The flow on main, which this change keeps:
 
@@ -14,15 +14,20 @@ The flow on main, which this change keeps:
 ## Decisions
 
 1. **Several gates in one phase, one name each.** `Gate` gets the NEW field `Name string`, the name of its requirement (`default`, `default/<scope key>`). The name is unique in a phase. `Decision.Gates` becomes `map[PhaseKind][]Gate`. `PolicyGates` copies every gate of the kind, sets the type `GateApproval`, and keeps the order that `DefaultRequirements` gives (`pkg/gate/requirements.go:30`). The phase stores `[]Gate` already (`pkg/store/internal/jobstore/body.go:164`).
-2. **Eligibility is recorded when the person signs.** The matching needs to know, for each approver, the gates whose groups hold the approver. `GatesStatus` is pure and runs in the reconciler with no group reader. So `Approve` computes the gates that hold the approver and stores their names in `Approval.For`. The matching reads `For` only. This is the same moment as the group check on main, so the behavior for one gate does not change (question 3 asks whether to check again at dispatch).
+2. **Eligibility is recorded when the person signs.** The matching needs to know, for each approver, the gates whose groups hold the approver. `GatesStatus` is pure and runs in the reconciler with no group reader. So `Approve` computes the gates that hold the approver and stores their names in `Approval.For`. The matching reads `For` only. This is the same moment as the group check on main, so the behavior for one gate does not change. The owner decided that an approval counts as of the approval time (2026-11-20), so nothing checks the approver again at dispatch. A recheck at dispatch is a separate, later change.
 3. **Maximum matching with augmenting paths.** A new file `pkg/job/match.go` holds `matchGates(gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy) (filled map[string]int, ok bool)`. Each gate has `Approvals` slots. An approval is a candidate for gate `g` when `g.counts` is true for it (`pkg/job/gate.go:266`) and `g.Name` is in `For`. Two approvals of one subject make one candidate. The search runs from each distinct subject with an augmenting path. The result is independent of the order of the approvals (ADR 225 decision 6). The size is at most 3 gates times 10 slots, so the cost is bounded.
 4. **`Gate.Status` stays for one gate.** `GatesStatus` (`:295`) calls `matchGates` for the approval gates, returns `GateRejected` when any verdict rejects (as main does), `GateOpen` when every slot is filled, and `GateWaiting` otherwise. A confirmation gate keeps its own rule and is counted apart from the matching (`pkg/job/gate.go:266`, `WithConfirmations`).
 5. **The approver check goes by gate.** `checkApprover` (`:208`) keeps the agent, policy, self-approval and repeat checks. The self-approval check changes from "no gate allows the starter" to "the starter fills only the gates that allow it": the starter's `For` holds only the gates with `AllowSelf`, and an empty `For` is refused. `checkGroups` (`:253`) returns the list of gates that hold the subject, and refuses with `identity.ErrDenied` when the list is empty. The refusal text names the requirements of the phase that the subject cannot fill. A gate with no groups holds every approver who passes the other checks (main: "any holder of the approve action").
 6. **Approvals bind to the plan, as on main.** `BindPlan` is set on every gate of a changing phase after a plan phase (`pkg/gate/jobgate/jobgate.go:100-104`). `checkPlan` stays.
-7. **Part B shapes stay refused.** `gatesOf` keeps the three `gate.ErrUnavailable` cases of `gateOf` (users or unit owners, `freshAuthSeconds`, groups with no IDs), per requirement, with the same message. `DefaultRequirements` keeps its refusal of an `unless` body (`pkg/gate/requirements.go:44`). So Part A opens no new path for a shape that has no decision.
+7. **Part B shapes stay refused in Part A.** `gatesOf` keeps the three `gate.ErrUnavailable` cases of `gateOf` (users or unit owners, `freshAuthSeconds`, groups with no IDs), per requirement, with the same message. So Part A opens no new path for a shape that Part B has not built yet. Decisions 11 to 14 describe Part B. `DefaultRequirements` keeps its refusal of an `unless` body (`pkg/gate/requirements.go:44`) for good (decision 14).
 8. **The count is bound by structure.** `UnitChain` gives at most 3 scopes (`pkg/gate/scope.go:459`) and a scope holds one default (`pkg/gate/rules.go:298`), so `DefaultRequirements` gives at most 3 requirements. The cap of 10 requirements and the 429 refusal of the first draft are dropped: nothing counts requirements today, and a refusal that no input can reach is dead code. A defense-in-depth check stays in the start: a decision with more than `MaxApprovalGates` (3) gates for one phase fails with `ErrInvalid`.
 9. **No SQL change.** The job state is the JSON column `jobs.body` (`pkg/store/internal/jobstore/body.go`), shared by `pkg/store/sqlite` and `pkg/store/postgres`. `gateBody` gets `name`, `approvalBody` gets `for`. A job row that holds no `name` is a job of an older shape that no tag shipped, so no conversion code is written. The baselines in `pkg/store/sqlite/migrations/` and `pkg/store/postgres/migrations/` do not change, and no migration is added.
 10. **The audit entry names the requirements.** `approvalEntry` (`:391`) adds the change `requirements` with the names in `For`, and `event` as on main. A refusal writes an audit entry through `approvalRefusalReason` (`internal/api/jobs/approve.go:247`), with a new reason for "no requirement of the phase holds the subject".
+11. **Users by stable ID (owner, 2026-11-20).** `Approvers` gets `UserIDs`, parallel to `Users`, as `GroupIDs` is parallel to `Groups` (`pkg/gate/rules.go:147`). The config service sets both at save, so a caller cannot choose the IDs, and `Users` is for display. `Gate` gets `UserIDs` and `Users`. A user entry with no ID counts no one, and `gatesOf` refuses the requirement with `gate.ErrUnavailable` (fail closed). `Approve` maps the subject of the approver to the stable principal ID with a small reader port in `pkg/job` (`PrincipalIDs`), and a gate holds the approver when the ID is in `UserIDs`. The `users` field changes meaning, and no tag shipped the old one, so no conversion code is written. Any holder of `job:approve` may reject, whatever the approvers say (owner, 2026-11-20): the rejection path of `Approve` still skips the group and the user check.
+12. **Unit owners resolve at each approval (owner, 2026-11-20).** A gate with `UnitOwners` set makes `Approve` read the owners of the unit from the context at the scope of the rule or wider, through a reader port in `pkg/job` (`UnitOwners`). `objectcontext.ParseOwner` gives the kind. Only `group:<name>` (the group by name now, then its stable ID, then the same membership check as a group gate) and `principal:<ID>` count. An owner of the kind text counts no one. A read error, no reader or an owner that does not parse refuses the approval with a `*DeniedError` on `job:approve` (fail closed). The result goes into `For`, so the matching never reads the context.
+13. **Each requirement keeps its own fresh window (owner, 2026-11-20).** A requirement with `freshAuthSeconds` becomes a gate with `FreshAuthSeconds` (the pair `Set` and `Seconds` of `gate.FreshAuth`, `pkg/gate/rules.go:83`). `Approve` adds a gate to `For` only when the fresh step of the approver meets the window of that gate. The approval already records the time of the fresh step (`Approval.AuthAt`). An approval that fills no gate because of the windows is refused with `mfa.fresh-step-required`. The window of a gate is never longer than the one window of the installation (ADR 227 decision 4). `freshAuthEnabled` is read at the one place that ADR 385 names, and when it is off no window is enforced and the job response shows the stored value with `"enforced": false`. A person with no fresh step fills only the gates with no window.
+14. **No `unless` on a job (owner, 2026-11-20).** `DefaultRequirements` keeps its refusal. The error text names the requirement and says to remove the `unless` body. The test of the decider fixes it, also when the `unless` default is the second requirement. No evaluation of `unless` is added, so ADR 353 decision 6 has no fact to read.
+15. **The kind of the approver is not changed here.** `checkApprover` refuses an agent and nothing else by kind, as main does. The rule for a service principal, a job token and an access token is the open question. A later task (5.6) adds the check when the owner answers. The design adds no code path that a token approval needs.
 
 ## Contract
 
@@ -35,6 +40,14 @@ type Gate struct {
     // Name is the name of the requirement of the gate: "default" or
     // "default/<scope key>". It is unique in a phase.
     Name string
+    // Part B: UserIDs holds the stable principal IDs of the approvers that
+    // the requirement names, Users holds their names for display, UnitOwners
+    // is true when the requirement names the owners of the unit, and
+    // FreshAuth is the window of the requirement.
+    Users      []string
+    UserIDs    []string
+    UnitOwners bool
+    FreshAuth  gate.FreshAuth
 }
 
 type Approval struct {
@@ -58,6 +71,19 @@ type Decision struct {
 // pkg/job/match.go (NEW, unexported)
 func matchGates(gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy) (filled map[string]int, open bool)
 
+// pkg/job (Part B, NEW). Each port is optional; with a gate that needs it and
+// no port, the approval is refused (fail closed).
+type PrincipalIDs interface {
+    // IDOf returns the stable principal ID of subject.
+    IDOf(ctx context.Context, subject string) (string, error)
+}
+
+type UnitOwnerReader interface {
+    // UnitOwners returns the owners of the unit from the context at the scope
+    // of the rule or wider.
+    UnitOwners(ctx context.Context, unit identity.Object, scope gate.Scope) ([]objectcontext.Owner, error)
+}
+
 // pkg/job/service_start.go (NEW, unexported). Errors: ErrInvalid.
 func checkGates(gates []Gate) error
 ```
@@ -67,6 +93,8 @@ Sentinels: `ErrInvalid` for a bad gate set at the start; `identity.ErrDenied` (a
 Endpoints: no new route. The response of `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` gets `gates[].name` (string), `gates[].filled` (integer, the slots that the matching fills) and `approvals[].for` (array of strings). The request of `POST .../approvals` does not change.
 
 Stored shape: `jobs.body` JSON of both dialects gets `gates[].name` and `approvals[].for`. No table, column or migration changes.
+
+Stored shape of Part B: `gates[].userIds`, `gates[].users`, `gates[].unitOwners` and `gates[].freshAuth` in the same JSON body. The response of the jobs API gets `gates[].freshAuthSeconds` and `gates[].freshAuthEnforced`.
 
 Audit entry of an approval: the changes `job`, `verdict`, `phase`, `operation`, `event` and `plan` as on main, plus `requirements` (comma-separated names from `For`).
 
@@ -93,6 +121,8 @@ The service checks `job:read` and `job:approve` again on the unit (`authorizedJo
 | Gate set (`pkg/job`, `checkGates`) | Refuses a phase with more than 3 gates, a repeated name, or an empty name with several gates. | A decision with 4 gates, 2 gates with one name, 2 gates with an empty name. Each wants `ErrInvalid`. |
 | Matcher (`pkg/job/match.go`) | One subject fills one slot. An approval with an empty `For`, an agent, a reject verdict, a subject that the policy does not count, or the starter on a gate with no `AllowSelf` fills no slot. | A table in `pkg/job/match_test.go`: one person who holds both gates fills one slot; two approvals of one subject fill one; a greedy order that fails and a maximum matching that succeeds; the reverse order of the same approvals gives the same result. |
 | Service (`pkg/job`, `Approve`) | `checkApprover` and `checkGroups` check each gate by group ID with the reader. A failed read, no reader, a gate with no IDs, or an empty `For` is a `*DeniedError` on `job:approve`. | Extend `pkg/job/service_approve_groups_test.go`: a member of group A only fills gate A; a member of neither group is refused; an inactive member is refused; a read error is refused; the refusal names the gates. |
+| Decider, Part B | `gatesOf` refuses a user entry with no ID, and `DefaultRequirements` refuses an `unless` body, also in the second scope. | A table with a user with no ID and an `unless` default in the second scope. Each row wants `gate.ErrUnavailable`. |
+| Service, Part B (`Approve`) | The owner read, the principal ID read and the window check each fail closed: a read error, no reader, a text owner, a user with no ID, or a stale fresh step fills no gate and refuses the approval. | Extend `pkg/job/service_approve_groups_test.go`: a read error of the context is refused; a text owner counts no one; a stale step with a gate that has a window fills only the gates with none; with `freshAuthEnabled` off no window applies. Each row fails when the guard is removed. |
 | Reconciler (`pkg/job/reconcile.go`) | `dispatchJob` dispatches only when `GatesStatus` is open, computed from the stored `For`. | A job with 2 gates, 3 approvals from 2 people: stays queued until the third distinct person. |
 | Store (`pkg/store/internal/jobstore`) | The store keeps the codec round trip of `name` and `for`, and `Store.Apply` for `EventDispatch` keeps its checks. | The job store conformance suite (`pkg/job/jobtest`): a job with 2 named gates and approvals with `for` round-trips on both dialects. |
 | HTTP (`internal/api/jobs`) | The route keeps `job:read` and `job:approve`. The refusal maps to 403 with the audit reason. | `internal/servertest/jobs_api_test.go`: a caller without `job:approve` gets 403 and no approval is stored; a caller who is in no group gets 403 with the requirement names. |
@@ -112,16 +142,25 @@ Hostile cases for the matcher and the service (each is a row in the table tests)
 | A subject that the approver policy does not count (a dev subject on production) | refused and fills no slot |
 | 4 gates in a decision | the start fails with `ErrInvalid` |
 | Group read fails | the approval is refused, and an audit entry is written |
+| A user is removed and made again with the same name | the new user fills no slot: the gate holds the old principal ID |
+| The context read fails at an approval of a unit-owner gate | the approval is refused with 403, and an audit entry is written |
+| The context names an owner as plain text | that owner fills no slot |
+| The owners change after Bo approved | the approval of Bo still fills its slot |
+| A fresh step of 10 minutes, gate A window 300 s, gate B no window | `For` holds gate B only |
+| A default with an `unless` body in the second scope | the start fails with `gate.ErrUnavailable` |
+| A holder of `job:approve` who is in no approver list rejects | the job is rejected |
 
 ## Failure modes
 
-- A person leaves a group after signing: the approval counts (question 3). The audit entry shows `requirements`.
+- A person leaves a group after signing: the approval counts (owner decision, 2026-11-20: an approval counts as of the approval time). The audit entry shows `requirements`. A recheck at dispatch is a separate, later change.
 - A group is made again with the same name: the gate holds the old ID, so the new group does not match (`GroupIDs`, ADR 362).
 - Two approvals arrive at the same time: the store checks the job version in `Store.Apply`, so the second call gets a conflict (409) and may be sent again.
 - A job of a unit with no default: no gate, no matching, no change.
 - The reconciler runs on a job with 2 gates and an old approval with no `For`: the approval fills no slot, and the job waits. This is the closed choice.
 
 ## Risks
+
+- A service principal, a job token or an access token that holds `job:approve` may approve, as on main. The open question decides it. Until the owner answers, this design does not widen or narrow it.
 
 - One approver counted for two requirements lets a change run with too few people. The matcher test and the removal test cover it.
 - A first-fit count refuses a valid set. The matching test with a second approver covers it.

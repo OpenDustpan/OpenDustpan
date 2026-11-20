@@ -2,57 +2,60 @@ Roadmap: `docs/roadmap.md:779` (Every step is audited).
 
 ## Why
 
-**Persona: site administrator.** A site administrator reviews what an agent did in an installation. The administrator needs each agent step in the audit log with the agent, the delegation and the reason, and a hash chain that verifies.
+**Persona: site administrator.** A site administrator reviews what an agent did in an installation. The administrator needs each delegated agent step in the audit log with the agent, the delegation and the reason, and a hash chain that verifies.
 
 The user path this change must make work:
 
-1. **Console.** Delegate to the agent from the console, then run one agent step through the API with a reason.
-2. **API.** List the entries of the namespace and read the delegation and reason of each agent step alongside the agent block of audit-entry-has-no-agent.
-3. **API.** Run the chain check for the namespace and confirm it verifies.
+1. **Console.** Delegate to the agent from the console, then run one agent step through the API.
+2. **API.** List the entries and read the agent block (with the delegation ID) and the reason of each delegated step.
+3. **API.** Run the chain check and confirm that it verifies.
 4. **Docs page.** Follow the audit log guide to repeat the list and check commands.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Read of an agent entry in a namespace the caller may not read fails. | 404 with error code audit.entry-not-found. List entries with `GET /api/audit/entries`. | `GET /api/audit/entries` |
-| Read or chain verification during a database gap fails. | 503 with Retry-After 5 and error code audit.entry-read-unavailable. | `GET /api/audit/check` |
-| Delegated call with a missing or invalid reason fails. | 400 with error code audit.reason-invalid that repeats nothing of the input and writes no entry. | `GET /api/audit/entries` |
+| Read of an entry in a namespace the caller may not read | 404 with the existing error code `audit.entry-not-found`. | `GET /api/audit/entries` |
+| Read or chain check during a database gap | 503 with `Retry-After: 5` and the existing error code `audit.entry-read-unavailable`. | `GET /api/audit/check` |
+| A delegated call with an invalid reason | 400 with the existing error code `audit.reason-invalid`. The answer repeats nothing of the input. | `GET /api/audit/entries` |
 
 Evidence for the claims above:
 
-- The audit log port exists on main. Proof: pkg/audit
-- The audit entries read route exists on main. Proof: ANY /api/audit/entries
-- The audit chain check route exists on main. Proof: ANY /api/audit/check
-- The audit export route is covered by e2e on main. Proof: e2e/audit_export_test.go
-- The audit log guide exists on main. Proof: docs/guides/audit-log.md
+- The audit log port exists on main. Proof: `pkg/audit/audit.go`.
+- The entries route and the check route exist. Proof: `internal/api/audit/routes.go:49` and `:52`.
+- The three error codes exist. Proof: `internal/errcode/catalog_audit.go:8` (`audit.entry-not-found`), `:11` (`audit.entry-read-unavailable`) and `:17` (`audit.reason-invalid`). The earlier draft of this change called `audit.reason-invalid` NEW. It is not.
+- The entry has a `Reason` field and a check for it. Proof: `pkg/audit/audit.go:153` (`MaxReasonLen` is 500), `:182` (`ErrInvalidReason`) and `:195` (`ValidateReason`).
+- The agent block exists on main with six of its seven fields. Proof: `pkg/audit/audit.go:256` (`NewOrigin`). The field `delegationID` of ADR 380 depends on a delegation record that main does not have (`rg -n 'delegationID' -g '*.go' .` finds no production use).
+- The audit export is covered by e2e and the guide exists. Proof: `e2e/audit_export_test.go` and `docs/guides/audit-log.md`.
 
 ## What Changes
 
-- Each delegated agent step writes one audit entry that names the delegation and the reason alongside the agent block of audit-entry-has-no-agent.
-- Each denied delegated call writes one denial entry that names the delegation where known and the refusal cause alongside the agent block of audit-entry-has-no-agent.
-- Audit reads return the delegation and reason of each agent entry alongside the agent block of audit-entry-has-no-agent.
-- Namespace chain verification covers delegation and reason fields and names the first bad sequence number.
+- Each step that an agent takes under a delegation writes one audit entry. The entry carries the agent block of ADR 380 with `delegationID` set, and the existing `Reason` field of the entry (ADR 380 decision 1: the agent block holds seven fields, and the reason of a delegated step stays the existing field of the entry).
+- Each refused delegated call writes one denial entry that names the delegation where it is known and the cause.
+- Audit reads return the block and the reason. The chain check covers them. The hash input has no version and no path for old entries (ADR 380 decision 3).
+- An entry of an action with no namespace goes to the installation scope chain, as an entry of a person does on main.
 
 Out of scope:
 
-- Agent field block, covered by audit-entry-has-no-agent
-- Delegation create, list and revoke
-- Change order propose and confirm
-- Model connection and run loop
+- The seven-field block itself. `audit-entry-has-no-agent` owns the type and the hash input of the other six fields.
+- Delegation create, renew, list and revoke, and their audit entries. They are in `person-delegates-dusty`.
+- The refusal of delegated work after an end. It is in `revoke-stops-work`.
+- Change order drafting and confirmation.
+- Model connect and the Dusty run loop.
 
 Depends on:
 
-- person-delegates-dusty
-- audit-entry-has-no-agent
-- audit-agent-block
+- `person-delegates-dusty` (the delegation ID and `Resolve`).
+- `audit-entry-has-no-agent` (still an active change; it makes the agent block).
+- A change that makes a tool call carry a delegation and a reason (RFC 121 slices 3 and 6). No such change is in `openspec/changes/` on 20 November 2026. It is a dependency to be written.
+- `audit-agent-block` is archived and landed. It is no longer a dependency.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- The reader sees delegation and reason in one entry without a second lookup.
-- Chain failure names the first bad sequence number and the one check command.
+- The reader sees the delegation and the reason in one entry with no second lookup.
+- A chain failure names the first bad sequence number and the one check command.
 
 ## What main already does
 
@@ -61,61 +64,65 @@ Each fact names its file, line and function on main. The change specifies only t
 - Context writes are audited on main. (`pkg/dustpan/context_test.go:747 (TestContextWritesAreAudited)`)
 - Audit chain families are tested on main. (`pkg/access/audit_chain_families_test.go:11 (TestAuditChainFamilies)`)
 - User-agent truncation for audit entries is tested on main. (`pkg/audit/user_agent_test.go:14 (TestTruncateUserAgentKeepsRunes)`)
-- The audit kind audit-read is defined on main. (`pkg/audit/audit.go:69 (audit-read)`)
-- The error code audit.entry-not-found is defined on main. (`internal/errcode/catalog_audit.go:8 (audit.entry-not-found)`)
+- The audit kind `audit-read` is defined on main. (`pkg/audit/audit.go:69 (audit-read)`)
+- The error code `audit.entry-not-found` is defined on main. (`internal/errcode/catalog_audit.go:8 (audit.entry-not-found)`)
+- `NewOrigin` refuses a block that has only `delegationID` set, unless `breakGlass` is set. (`pkg/audit/audit.go:256 (NewOrigin)`) See open question 2.
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed by" chain and the "Current rule" come from `docs/adr/INDEX.md`.
 
-**ADR 380: The delegation in the agent block of an audit entry** (owner-tagged: "Decided by the project owner", 2026-11-15).
+**ADR 380: The delegation in the agent block of an audit entry** (owner-tagged).
 
-- Decisions that apply: 1, 2, 3 (current).
-- Changed by: -. It changes ADR 126 decision 10.
-- Current rule: this ADR.
+- Decisions that apply: 1, 2 and 3 (current). Changed by: -. Chain to the end: none. Current rule: this ADR. It changes ADR 126 decision 10.
 - Quote, decision 1: "The agent block of ADR 126 decision 10 holds seven fields in this fixed order: `agentRun`, `agentSession`, `tool`, `argsDigest`, `breakGlass` as `true` or `false`, `secretStage`, and `delegationID`."
 - Quote, decision 1: "`delegationID` is the stable ID of the delegation of ADR 354 under which the agent acted (ADR 362), and it is empty when the step had no delegation."
-- Quote, decision 2: "An entry with all seven fields empty (and `breakGlass` false) writes no block."
 - Quote, decision 3: "The block keeps the text `agent/1`."
-- Effect: the block holds seven fields, with the delegation ID last; there is no block version and no path for old entries, because no tag shipped.
+- Effect: the delegation ID is the seventh field of the block. There is no block version and no compatibility path.
+- Conflict: none.
+
+**ADR 126: The audit entry of an agent step** (not owner-tagged).
+
+- Decision that applies: 10 (changed by ADR 380). Changed by: ADR 129, 380. Chain to the end: ADR 129, 380. Current rule: this ADR, with ADR 129, 380.
+- Effect: the block is the one that ADR 380 gives.
 - Conflict: none.
 
 **ADR 120: Dusty, the built-in agent, runs on durable operations** (not owner-tagged).
 
-- Decisions that apply: 5 (current).
-- Changed by: ADR 128 changes decision 22; ADR 129 changes decisions 3, 7 and 20; ADR 129 extends; ADR 210 changes; ADR 297 changes decisions 13 and 14; ADR 311 extends; ADR 314 extends; ADR 354 changes decisions 13, 14, 15 and 16. Chain to the end: ADR 128, ADR 129, ADR 210, ADR 297, ADR 311, ADR 314, ADR 354, ADR 190, ADR 222, ADR 227, ADR 286, ADR 247, ADR 301, ADR 333, ADR 357, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 335, ADR 351, ADR 320, ADR 339, ADR 328, ADR 359, ADR 332.
-- Current rule: this ADR, with ADR 128, 129, 210, 297, 311, 314, 354.
+- Decision that applies: 5 (current). Changed by: ADR 128, 129, 210, 297, 311, 314, 354, 367. Chain to the end: ADR 128, 129, 210, 297, 311, 314, 354, 367, 190, 222, 227, 286, 247, 301, 333, 357, 225, 299, 300, 344, 365, 335, 351, 320, 339, 373, 385, 372, 328, 359, 368, 377, 332, 376. Current rule: this ADR, with ADR 128, 129, 210, 297, 311, 314, 354, 367.
 - Quote: "The audit log must be on. Every tool call writes an audit entry (ADR 126)."
-- Effect: The change keeps decision 5 that every tool call writes an audit entry and that the step is refused when the append fails. It does not change the refusal of the connect route when the audit log is off.
+- Effect: a tool call whose entry cannot be written is refused.
 - Conflict: none.
 
-**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged (all decisions)).
+**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged). RFC 121 decision 51 lists the entries of a delegation: "Each delegation create, renew, use, revoke, expiry and end ... writes an entry."
 
-- Decisions that apply: 1 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "The person who delegated may confirm (owner, 2026-11-07)."
-- Effect: The change follows the current rule that an agent acts for the person who delegated under a stored delegation. It writes the delegation on each entry and does not change who may confirm.
-- Conflict: none.
+- Current rule: this ADR. Conflict: none.
 
-**ADR 298: PostgreSQL failover readiness** (not owner-tagged).
+**ADR 298: PostgreSQL failover readiness** (not owner-tagged). Decision 2 is current; changed by ADR 337 (decision 9).
 
-- Decisions that apply: 2 (current).
-- Changed by: ADR 337 changes decision 9. Chain to the end: ADR 337.
-- Current rule: this ADR, with ADR 337.
-- Quote: "Requests fail fast with 503. During the gap, each request that needs the database gets 503 with `Retry-After: 5`, in the shape of its API (W3, ADR 280 decision 4)."
-- Effect: Reads and chain checks that need the database follow the fail-fast rule during a database gap.
-- Conflict: none.
+- Quote: "Requests fail fast with 503."
+- Effect: a read or a check that needs the database during a gap answers 503. Conflict: none.
 
 ## Open questions
 
-none
+Open questions: 4, parked
+
+The questions below are not decided. No ADR line and no RFC line settles them. The owner decides each one.
+
+1. **How does a delegated call give its reason, and what may the reason hold?** `audit.ValidateReason` exists and the limit is 500. The earlier draft of this change asked for a required body field `reason` on each tool call, and for ASCII 0x20 to 0x7E only. No ADR line or RFC line says either. Options:
+   - (a) Use `ValidateReason` as it is, and take the reason from the call. Cost: each tool needs a place for it.
+   - (b) Add the ASCII allowlist. Cost: a reason in a language other than English fails, which the person may not expect.
+   - (c) The server writes the reason from the step (tool name and run) and the agent supplies none. Cost: the reason does not say why.
+   - Decides: the owner.
+2. **How does a delegated entry get a block with only `delegationID`?** `NewOrigin` (`pkg/audit/audit.go:256`) refuses that. A delegation create, a renew and an end entry have a delegation and no agent run. Options:
+   - (a) Change `NewOrigin` so that `delegationID` alone is valid. Cost: a change to a function with an ADR 380 test.
+   - (b) Lifecycle entries carry the delegation in the entry fields and no block. Cost: two places hold the delegation ID, and a reader joins them.
+   - Decides: the owner. This question is the same as question 6 of `person-delegates-dusty`.
+3. **What does the denial entry hold for an ID that names no delegation?** The earlier draft stored the text `unknown-delegation` plus 64 characters of the input. No line asks for it. Options: (a) store nothing of the input; (b) store a bounded, escaped part of it. Cost of (b): an attacker may write text into the log. Decides: the owner.
+4. **What does the caller get when a denial entry cannot be written?** The earlier draft said 503 with `audit.entry-read-unavailable`. That code names a read. Options: (a) reuse it; (b) a NEW code for a failed write. Cost of (b): one more code in the catalog. Decides: the owner.
 
 Questions considered and answered:
 
-- Does a delegated agent step run when the audit log is off? No. ADR 120 decision 5 keeps the refusal of the connect route when the audit log is off, so a delegated run does not start without an audit log.
-- Does a reason with hostile text or secret text enter the audit entry? No. A reason outside the allowlist is refused with audit.reason-invalid and no entry is written. Transcript text never enters an entry.
-- What happens when the audit append fails or two agent steps append at the same time? When the step append fails the step is refused with no effect. When the denial append fails the call is still refused, with 503 audit.entry-read-unavailable. Sequence numbers come from the database in the same transaction, so this works across instances.
-- How do entries written before this change verify after the hash input changes? Each entry stores a hash-input version. Old entries verify with version 1 input. New entries verify with version 2 input that adds the stored delegation and reason fields alongside the agent block of audit-entry-has-no-agent. The version is hashed, so stripping the delegation or reason fields fails verification. No numbered migration and no shim are used.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+- Does a delegated step run when the audit log is off? No. ADR 120 decision 5.
+- What if the append of a step fails? The step is refused with no effect (ADR 120 decision 5, with RFC 121 decision 51).
+- How do old entries verify after the hash input changes? The earlier answer (hash-input versions 1 and 2) is withdrawn. ADR 380 decision 3 gives no block version and no compatibility path, because no tag shipped (rule: no shim for a shape that no tag shipped).

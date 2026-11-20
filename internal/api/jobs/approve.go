@@ -114,6 +114,16 @@ func classifyApproval(err error) (problem.Problem, bool) {
 // API knows the MFA step of the session yet. So the approval of a destroy fails
 // closed until the server sets them from the sign-in.
 func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
+	if h.refuseDamaged(r.Context(), w, t) {
+		return
+	}
+
+	h.approveVerdict(w, r, p, t)
+}
+
+// approveVerdict reads the verdict of the request and gives it to the job
+// service, for a job that the server can read.
+func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	// The route takes no idempotency key. Refuse it with an error, so the

@@ -44,9 +44,15 @@ expires or closes a damaged job. It stays as it is until a person cancels it.
 | Route | Answer for a damaged job |
 | --- | --- |
 | `GET .../jobs` | The job is not in `jobs`. The field `damaged` counts the damaged rows that the page read, for units that the caller may list. The count has no ID and no reason. A row that sits between the jobs of two pages can be in the count of both. |
-| `GET .../jobs/{job_id}` | 500 with the code `server.internal`. |
-| `POST .../jobs/{job_id}/approvals`, `confirmations` and `log-redactions` | 500 with the code `server.internal`. |
+| `GET .../jobs/{job_id}` and `GET .../jobs/{job_id}/logs/{phase}` | 409 with the code `job.damaged`. |
+| `POST .../jobs/{job_id}/approvals`, `confirmations` and `log-redactions` | 409 with the code `job.damaged`. |
 | `POST .../jobs/{job_id}/cancel` | Cancels the job. See below. |
+
+The 409 has the same text each time. The text names the cancel route. It holds
+no content of the row. A caller without `job:read` on the unit of the job, a damaged job of
+another namespace, and a damaged job whose unit the server cannot find get the
+same 404 as for an unknown job, so these answers never tell that the row
+exists.
 
 The list shows the number of damaged rows, not their IDs. When the artifact
 sweep skips a damaged row, the server log has the message "sweep job artifact
