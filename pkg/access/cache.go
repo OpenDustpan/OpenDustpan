@@ -39,11 +39,6 @@ func WithoutRequestCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, requestCacheKey{}, (*requestCache)(nil))
 }
 
-// HasRequestCache reports whether decisions made with ctx keep their reads.
-func HasRequestCache(ctx context.Context) bool {
-	return cacheOf(ctx) != nil
-}
-
 // cacheOf returns the request cache of ctx, or nil when ctx has none. Each
 // method of a nil cache keeps nothing and finds nothing.
 func cacheOf(ctx context.Context) *requestCache {

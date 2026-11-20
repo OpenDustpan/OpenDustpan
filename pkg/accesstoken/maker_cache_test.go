@@ -2,76 +2,93 @@ package accesstoken_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// cacheProbe is a MakerChecker that records whether the context it gets
-// holds a request cache, and answers that the maker has no path.
-type cacheProbe struct {
-	cached *bool
+// authorizerMakers is a MakerChecker that decides with the Authorizer of the
+// grants and reads through the cache of its context, as it is: it does not
+// drop the cache. It stands for any checker that a caller might wire, so a
+// test of RevokeLostMakers does not depend on the guard of access.Service.
+type authorizerMakers struct {
+	authz      *access.Authorizer
+	principals accesstoken.PrincipalReader
 }
 
-func (p cacheProbe) CanActAs(ctx context.Context, _, _ string) (bool, error) {
-	*p.cached = access.HasRequestCache(ctx)
+func (m authorizerMakers) CanActAs(ctx context.Context, maker, principalID string) (bool, error) {
+	p, err := m.principals.GetPrincipalBySubject(ctx, maker)
+	if err != nil {
+		return false, fmt.Errorf("read the maker %q: %w", maker, err)
+	}
 
-	return false, nil
+	err = m.authz.Authorize(ctx, as(p), identity.ActionPrincipalManageTokens, identity.PrincipalObject(principalID))
+
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, identity.ErrDenied):
+		return false, nil
+	default:
+		return false, fmt.Errorf("decide: %w", err)
+	}
 }
 
-// TestRevokeLostMakersDropsTheRequestCache sends contexts that hold a request
-// cache to RevokeLostMakers. The checker must never get one: a cache holds the
-// reads of the route check of the request before the change, so a decision
-// on it can keep a token whose maker just lost the path. The guard is in the
-// service, so it holds for each MakerChecker.
-func TestRevokeLostMakersDropsTheRequestCache(t *testing.T) {
+// TestRevokeLostMakersReadsTheGroupsAfterTheChange sends the case of a
+// request whose route check filled the request cache with the groups of the
+// maker. The maker leaves the group that gives her the path, and
+// RevokeLostMakers runs with the same context. The service drops the cache
+// itself, so the token ends even with a checker that reads through the cache.
+func TestRevokeLostMakersReadsTheGroupsAfterTheChange(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		ctx  func(t *testing.T) context.Context
-	}{
-		{"a context with a request cache", func(t *testing.T) context.Context {
-			t.Helper()
+	rf := newReachFixture(t)
+	authz := rf.authorizerOf(t)
 
-			return access.WithRequestCache(t.Context())
-		}},
-		{"a context with a request cache under other values", func(t *testing.T) context.Context {
-			t.Helper()
-
-			type key struct{}
-
-			return context.WithValue(access.WithRequestCache(context.WithValue(t.Context(), key{}, 1)), key{}, 2)
-		}},
-		{"a context with no request cache", func(t *testing.T) context.Context {
-			t.Helper()
-
-			return t.Context()
-		}},
+	// The token of member for the service principal ops.
+	made, _, err := rf.tokens.Create(t.Context(), as(rf.member), caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: rf.clock.Now().Add(accesstoken.DefaultLifetime), PrincipalID: rf.ops.ID, Name: "ci"})
+	if err != nil {
+		t.Fatalf("create the token of the maker: %v", err)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			seen := true
-			f := newMakerFixture(t, cacheProbe{cached: &seen})
-
-			cause := accesstoken.Cause{Subject: "tina", Action: "server:manage-groups", Object: "group:grp-1"}
-
-			got, err := f.checked.RevokeLostMakers(tc.ctx(t), cause)
-			if err != nil {
-				t.Fatalf("revoke lost makers: %v", err)
-			}
-
-			if seen {
-				t.Fatal("the checker got a context with the request cache")
-			}
-
-			if len(got.Revoked) != 1 {
-				t.Fatalf("revoked = %v, want the service token", got.Revoked)
-			}
-		})
+	checked, err := accesstoken.NewService(accesstoken.Config{
+		Makers: authorizerMakers{authz: authz, principals: rf.store}, TempAdmins: nil,
+		Store: rf.store, Principals: rf.store, Freshness: nil, Authorizer: nil, Reach: rf.reach,
+		Logger: nil, Now: rf.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
 	}
+
+	// The route check of the request: it reads the groups of the maker into
+	// the cache of the request.
+	ctx := access.WithRequestCache(t.Context())
+
+	routeErr := authz.Authorize(ctx, as(rf.member), identity.ActionPrincipalManageTokens,
+		identity.PrincipalObject(rf.ops.ID))
+	if routeErr != nil {
+		t.Fatalf("the route check before the change: %v", routeErr)
+	}
+
+	err = rf.principals.RemoveMember(ctx, caller(), admin(), rf.group.ID, rf.member.ID)
+	if err != nil {
+		t.Fatalf("remove the maker from the group: %v", err)
+	}
+
+	cause := accesstoken.Cause{Subject: rf.member.Subject, Action: "server:manage-groups", Object: "group:" + rf.group.ID}
+
+	got, err := checked.RevokeLostMakers(ctx, cause)
+	if err != nil {
+		t.Fatalf("revoke lost makers: %v", err)
+	}
+
+	if len(got.Revoked) != 1 || got.Revoked[0] != made.ID {
+		t.Fatalf("revoked = %v, want the token %s of the maker who left the group", got.Revoked, made.ID)
+	}
+
 }

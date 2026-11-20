@@ -37,10 +37,6 @@ func cachedTina(t *testing.T, f *fixture, ci identity.Object) context.Context {
 func wantNoPathWithCache(ctx context.Context, t *testing.T, f *fixture) {
 	t.Helper()
 
-	if !access.HasRequestCache(ctx) {
-		t.Fatal("the test context has no cache")
-	}
-
 	got, err := f.svc.CanActAs(ctx, "tina", "prn-ci")
 	if err != nil {
 		t.Fatalf("CanActAs after the change: %v", err)

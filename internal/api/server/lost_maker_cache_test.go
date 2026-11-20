@@ -99,8 +99,11 @@ func TestMakerWhoRemovesHerselfFromTheGroupLosesTheToken(t *testing.T) {
 	}, "server:manage-groups group:grp-deployers")
 }
 
-// TestMakerWhoDeletesTheGroupLosesTheToken sends the delete of the group
-// that gives the path, by the maker herself, with the request cache on.
+// TestMakerWhoDeletesTheGroupLosesTheToken is a regression case, not a guard
+// against the request cache. The delete of a group removes its grants, and a
+// request never caches a grant, so this test passes also without the cache
+// guards. It proves that the maker who deletes the group that gives her the
+// path, with the request cache on, loses the token before the answer.
 func TestMakerWhoDeletesTheGroupLosesTheToken(t *testing.T) {
 	t.Parallel()
 
