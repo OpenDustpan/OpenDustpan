@@ -39,6 +39,11 @@ func TestLinkedDependencies(t *testing.T) {
 
 	contract := goList(t, module+"pkg/launcher")
 
+	// The log guard escapes control characters in each log line of the
+	// launcher. It links only the standard library and internal/ident,
+	// which the contract links already.
+	allowed := []string{module + "internal/logguard"}
+
 	for _, dep := range goList(t, module+"cmd/dustpan-launcher") {
 		for _, prefix := range forbidden {
 			if dep == prefix || strings.HasPrefix(dep, prefix+"/") {
@@ -46,7 +51,8 @@ func TestLinkedDependencies(t *testing.T) {
 			}
 		}
 
-		if strings.HasPrefix(dep, module+"internal/") && !slices.Contains(contract, dep) {
+		if strings.HasPrefix(dep, module+"internal/") && !slices.Contains(contract, dep) &&
+			!slices.Contains(allowed, dep) {
 			t.Errorf("the launcher links %q, an internal package that the launcher contract does not link", dep)
 		}
 	}

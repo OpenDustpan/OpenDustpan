@@ -125,7 +125,12 @@ func writeJSON(buf *bytes.Buffer, v any) error {
 		return fmt.Errorf("encode OTLP value: %w", err)
 	}
 
-	buf.Write(bytes.TrimSuffix(tmp.Bytes(), []byte("\n")))
+	// Defense in depth: the logger escapes hidden runes before a record
+	// reaches a sink, and each call site quotes its values; this escape
+	// stays so that a record from another writer of the port, or a value
+	// that the logger did not escape, reaches the collector with no raw
+	// control character.
+	buf.Write(logsink.EscapeJSON(bytes.TrimSuffix(tmp.Bytes(), []byte("\n"))))
 
 	return nil
 }
