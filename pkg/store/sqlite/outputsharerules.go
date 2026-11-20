@@ -17,21 +17,21 @@ import (
 // OutputSharingStore returns the store of the sharing rules and of the output
 // sharing setting. Each write checks the fence of the namespace of the
 // producer and appends its audit entry in one transaction.
-//
-//nolint:ireturn // Store-agnostic wiring takes the port.
-func (s *Store) OutputSharingStore() outputshare.Store {
-	return outputSharingRules{outputSharingSettings{s: s}}
+func (s *Store) OutputSharingStore() OutputSharingStore {
+	return OutputSharingStore{outputSharingSettings{s: s}}
 }
 
-// outputSharingRules is outputshare.Store over the database of a Store.
-type outputSharingRules struct {
+// OutputSharingStore is outputshare.Store over the database of a Store. It is
+// a concrete type, so that the method that returns it needs no interface
+// return.
+type OutputSharingStore struct {
 	outputSharingSettings
 }
 
-var _ outputshare.Store = outputSharingRules{outputSharingSettings{s: nil}}
+var _ outputshare.Store = OutputSharingStore{outputSharingSettings{s: nil}}
 
 // Put implements outputshare.Store.
-func (o outputSharingRules) Put(ctx context.Context, r outputshare.Rule, fence namespace.Fence, e audit.Entry) error {
+func (o OutputSharingStore) Put(ctx context.Context, r outputshare.Rule, fence namespace.Fence, e audit.Entry) error {
 	row, err := outputsharestore.CheckPut(r, fence, e)
 	if err != nil {
 		return err
@@ -46,7 +46,7 @@ func (o outputSharingRules) Put(ctx context.Context, r outputshare.Rule, fence n
 }
 
 // Get implements outputshare.Store.
-func (o outputSharingRules) Get(
+func (o OutputSharingStore) Get(
 	ctx context.Context, producer identity.Object, id outputshare.ID,
 ) (outputshare.Rule, error) {
 	key, err := outputsharestore.ProducerKey(producer)
@@ -82,7 +82,7 @@ func (o outputSharingRules) Get(
 }
 
 // List implements outputshare.Store. A row that fails its checks is left out.
-func (o outputSharingRules) List(ctx context.Context, producer identity.Object) ([]outputshare.Rule, error) {
+func (o OutputSharingStore) List(ctx context.Context, producer identity.Object) ([]outputshare.Rule, error) {
 	key, err := outputsharestore.ProducerKey(producer)
 	if err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func (o outputSharingRules) List(ctx context.Context, producer identity.Object) 
 }
 
 // Delete implements outputshare.Store.
-func (o outputSharingRules) Delete(
+func (o OutputSharingStore) Delete(
 	ctx context.Context, producer identity.Object, id outputshare.ID, fence namespace.Fence, e audit.Entry,
 ) error {
 	key, err := outputsharestore.ProducerKey(producer)
@@ -155,7 +155,7 @@ func (o outputSharingRules) Delete(
 
 // Find implements outputshare.Store. A row that fails its checks never
 // matches.
-func (o outputSharingRules) Find(
+func (o OutputSharingStore) Find(
 	ctx context.Context, producer, consumer outputshare.Placement,
 ) (outputshare.Rule, error) {
 	args, ns, err := outputsharestore.FindArgs(producer, consumer)
