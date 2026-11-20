@@ -195,7 +195,7 @@ Open questions: none. The four questions of version 8 are answered or moved:
 - Which switch turns the namespace and token lists on? Answered by owner decision 9.
 - Which action reads and changes the namespace list through the view? Answered by owner decision 10.
 - How does the list fit the stored value? Answered by owner decision 11.
-- Who sets the list of an access token, and does a change need a fresh step? Moved with the whole token list to the change `ip-allowlists-token-lists`, which says "Open questions: 1, parked". Nothing in this change sets, stores or reads the own list of an access token.
+- Who sets the list of an access token, and does a change need a fresh step? Moved with the whole token list to the change `ip-allowlists-token-lists`, which answers it with owner decision 8 (20 Nov 2026) and says "Open questions: none". Nothing in this change sets, stores or reads the own list of an access token.
 
 Provisional, kept from version 7. It now describes main. It is a PM record under rule 88, not an owner decision:
 

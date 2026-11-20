@@ -24,6 +24,10 @@ const SettingRestoreAccessTables = "restore.replace-access-tables"
 // whose restored settings hold no row for the key.
 const RestoreAccessSettingDefault = "false"
 
+// restoreAccessSettingOn is the text of the restore access setting that turns
+// it on.
+const restoreAccessSettingOn = "true"
+
 // ErrRestoreAccessSetting reports a stored value of the restore access setting
 // that is not true or false.
 var ErrRestoreAccessSetting = errors.New("invalid restore access setting")
@@ -41,7 +45,7 @@ func newRestoreAccessSetting(text string) (restoreAccessSetting, error) {
 	switch text {
 	case "", "false":
 		return restoreAccessSetting{on: false}, nil
-	case "true":
+	case restoreAccessSettingOn:
 		return restoreAccessSetting{on: true}, nil
 	default:
 		return restoreAccessSetting{
@@ -66,10 +70,18 @@ func EffectiveRestoreAccessSettingText(text string) string {
 	}
 
 	if value.on {
-		return "true"
+		return restoreAccessSettingOn
 	}
 
 	return RestoreAccessSettingDefault
+}
+
+// KnownSettingText reports whether text is one of the texts that a swap
+// decision records for the restore access setting: "" (no value), "true" or
+// "false". Every other text, for example one with a line break, a long text,
+// "TRUE" or the marker SettingValueUnknown, is not a value that a swap records.
+func KnownSettingText(text string) bool {
+	return text == "" || text == restoreAccessSettingOn || text == RestoreAccessSettingDefault
 }
 
 // RestoreAccessSettingDeclarations returns the declaration of the restore
@@ -179,7 +191,12 @@ func (s *RestoreService) swapDecision(ctx context.Context, in restoreInput) Swap
 	d := PlainSwap(in.KeepAccessTables)
 
 	if ok {
-		d.SettingBefore = text
+		// The decision records the effective value, never the raw text of the
+		// reader: the audit entries and the log line of the restore name it.
+		// An empty text or a text that the declaration refuses gives "false",
+		// which is the value that the installation uses, so an empty
+		// SettingBefore always means that the live value was not read.
+		d.SettingBefore = EffectiveRestoreAccessSettingText(text)
 	}
 
 	d.SettingStatic = s.accessSettingIsStatic(ctx)
@@ -224,23 +241,49 @@ func accessModeText(op durable.Operation) string {
 	return mode + "; setting " + SettingRestoreAccessTables + " " + settingModeText(d)
 }
 
+// SettingValueUnknown is the old value of the change entry of the restore
+// access setting when the restore did not read the live value before the swap.
+// The entry names the new value and marks the old value with this text, so a
+// reader never takes a value that was not read for an empty value.
+const SettingValueUnknown = "unknown"
+
 // settingModeText says what the swap did to the row of the restore access
-// setting, with the live value before the swap.
+// setting, with the live value before the swap and, when the swap took the row
+// from the backup, the value after it.
 func settingModeText(d SwapDecision) string {
+	// Defense in depth: the decoder and the store allow only known texts too.
+	// This check stays so that a decision that did not come through them never
+	// puts raw text in the restore entry or the log line. It does not rely on
+	// either of them.
+	before, after := d.SettingBefore, d.SettingAfter
+	if !KnownSettingText(before) {
+		before = ""
+	}
+
+	if !KnownSettingText(after) {
+		after = ""
+	}
+
 	value := "the live value was not read"
-	if d.SettingBefore != "" {
-		value = "the live value was " + d.SettingBefore
+	if before != "" {
+		value = "the live value was " + before
 	}
 
 	if len(d.KeepSettingKeys) > 0 {
 		return "kept (" + value + ")"
 	}
 
-	if d.SettingStatic {
-		return "taken from the backup (" + value + " before the swap); the static layer sets the effective value"
+	if after != "" {
+		value += " before the swap, the new value is " + after
+	} else {
+		value += " before the swap"
 	}
 
-	return "taken from the backup (" + value + " before the swap)"
+	if d.SettingStatic {
+		return "taken from the backup (" + value + "); the static layer sets the effective value"
+	}
+
+	return "taken from the backup (" + value + ")"
 }
 
 // settingAuditEntry returns the setting-change entry of a restore that took a
@@ -249,7 +292,10 @@ func settingModeText(d SwapDecision) string {
 // change by the settings API: the key, the old and the new value. It reads
 // both values from the record of the swap step, which the store wrote in the
 // swap transaction, and never reads the live setting, so a change after the
-// swap, or an error of a read, cannot change or drop the entry.
+// swap, or an error of a read, cannot change or drop the entry. When the live
+// value was not read before the swap, the entry names the new value and marks
+// the old value as SettingValueUnknown: the setting can have changed, and the
+// entry must say so.
 func (s *RestoreService) settingAuditEntry(op durable.Operation, in restoreInput) (audit.Entry, bool) {
 	var none audit.Entry
 
@@ -259,14 +305,44 @@ func (s *RestoreService) settingAuditEntry(op durable.Operation, in restoreInput
 	}
 
 	d, err := DecodeRestoreSwapDecision(rec.Result)
+	// Defense in depth: the decoder returns a kept decision with no new value
+	// for a record that does not decode, and the checks of settingChangeEntry
+	// refuse that decision too (the kept setting keys and the empty new value).
+	// This check stays so that a change of the decoder cannot let a corrupt
+	// record write an entry. It does not rely on those checks.
+	if err != nil {
+		return none, false
+	}
+
+	return s.settingChangeEntry(d, in)
+}
+
+// settingChangeEntry returns the setting-change entry for the decision d, or
+// false when the swap wrote none. d comes from the record of the swap step.
+func (s *RestoreService) settingChangeEntry(d SwapDecision, in restoreInput) (audit.Entry, bool) {
+	var none audit.Entry
+
+	// Defense in depth: the decoder and the store allow only known texts too.
+	// This check stays so that a decision that did not come through them never
+	// puts raw text, for example a line break, a very long text, "TRUE" or the
+	// marker SettingValueUnknown, in the audit entry. It fails closed. It does
+	// not rely on the decoder or on the store.
+	if !KnownSettingText(d.SettingBefore) || !KnownSettingText(d.SettingAfter) {
+		return none, false
+	}
+
 	// A value from the static layer shadows the row that the swap took, so the
 	// effective value did not change and the restore writes no change entry.
-	if err != nil || len(d.KeepSettingKeys) > 0 || d.SettingStatic || d.SettingBefore == "" || d.SettingAfter == "" ||
+	if len(d.KeepSettingKeys) > 0 || d.SettingStatic || d.SettingAfter == "" ||
 		d.SettingAfter == d.SettingBefore {
 		return none, false
 	}
 
 	old := d.SettingBefore
+	if old == "" {
+		old = SettingValueUnknown
+	}
+
 	entry := s.restoreAuditEntry(in, "installation settings")
 	entry.Action = string(identity.ActionServerManageSettings)
 	entry.Reason = "restore " + in.ID.String() + " took the value from backup " + in.BackupID.String()
