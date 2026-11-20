@@ -44,7 +44,7 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 // merge by ID: existing ones are updated, extra ones are deleted, and missing
 // ones are inserted last. It locks the live access tables first, so a revoke
 // between the copy and the swap cannot be lost. It sets kept to the count of
-// the dropped temp_admins rows and to the count of the expired update leases.
+// the expired update leases.
 func (s *Store) keepAccessTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -65,17 +65,6 @@ func (s *Store) keepAccessTx(
 	if err := keepAccessTables(ctx, tx, live, plan.staging); err != nil {
 		return err
 	}
-
-	// The swap takes temp_admins from the backup and keeps the live
-	// principals, which keepAccessTables put into the staged schema. So a
-	// staged row can name a principal that the live principals table does
-	// not hold.
-	dropped, err := dropDanglingTempAdmins(ctx, tx, plan.staging)
-	if err != nil {
-		return err
-	}
-
-	kept.DroppedTempAdmins = dropped
 
 	previous, drop := previousSchema(live, plan.previous)
 

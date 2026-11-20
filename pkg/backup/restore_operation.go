@@ -751,7 +751,6 @@ func swapDecisionConsistent(d SwapDecision) bool {
 // restoreSwapResult is the result that ApplyRestoreArea records with the
 // swap step.
 type restoreSwapResult struct {
-	DroppedTempAdmins   int64    `json:"droppedTempAdmins"`
 	ExpiredUpdateLeases int64    `json:"expiredUpdateLeases"`
 	KeepAccessTables    bool     `json:"keepAccessTables"`
 	Widened             bool     `json:"widened"`
@@ -770,14 +769,14 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 	}
 
 	out, err := json.Marshal(restoreSwapResult{
-		DroppedTempAdmins: kept.DroppedTempAdmins, ExpiredUpdateLeases: kept.ExpiredUpdateLeases,
-		KeepAccessTables: d.KeepAccessTables, Widened: d.Widened,
+		ExpiredUpdateLeases: kept.ExpiredUpdateLeases,
+		KeepAccessTables:    d.KeepAccessTables, Widened: d.Widened,
 		KeepSettingKeys: keys, SettingBefore: d.SettingBefore, SettingAfter: d.SettingAfter,
 		SettingStatic: d.SettingStatic,
 	})
 	if err != nil {
 		// A struct of integers, booleans and strings always encodes.
-		return []byte(`{"droppedTempAdmins":0,"expiredUpdateLeases":0,"keepAccessTables":true,` +
+		return []byte(`{"expiredUpdateLeases":0,"keepAccessTables":true,` +
 			`"widened":false,"keepSettingKeys":[],"settingBefore":"","settingAfter":"","settingStatic":false}`)
 	}
 
@@ -789,10 +788,10 @@ func EncodeRestoreSwap(kept KeepAccessResult, d SwapDecision) []byte {
 func DecodeRestoreSwap(result []byte) (KeepAccessResult, error) {
 	out, err := parseRestoreSwap(result)
 	if err != nil {
-		return KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}, err
+		return KeepAccessResult{ExpiredUpdateLeases: 0}, err
 	}
 
-	return KeepAccessResult{DroppedTempAdmins: out.DroppedTempAdmins, ExpiredUpdateLeases: out.ExpiredUpdateLeases}, nil
+	return KeepAccessResult{ExpiredUpdateLeases: out.ExpiredUpdateLeases}, nil
 }
 
 // DecodeRestoreSwapDecision returns the decision that EncodeRestoreSwap
@@ -822,7 +821,7 @@ func parseRestoreSwap(result []byte) (restoreSwapResult, error) {
 	// negative count, because a step record is read from the database, which a
 	// restore of another version or a person can change, and the audit entry of
 	// the restore uses the counts. It does not rely on the encoder or the store.
-	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 || out.ExpiredUpdateLeases < 0 ||
+	if err := decoder.Decode(&out); err != nil || out.ExpiredUpdateLeases < 0 ||
 		!swapDecisionConsistent(SwapDecision{
 			KeepAccessTables: out.KeepAccessTables, Widened: out.Widened, KeepSettingKeys: out.KeepSettingKeys,
 			SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter, SettingStatic: out.SettingStatic,

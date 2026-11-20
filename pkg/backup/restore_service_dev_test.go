@@ -661,27 +661,6 @@ func TestRestoreSurvivesAFailedAuditAppend(t *testing.T) {
 	}
 }
 
-// TestRestoreCountsDroppedTempAdmins checks that the temp admins that the
-// keeping swap drops reach the report and the record.
-func TestRestoreCountsDroppedTempAdmins(t *testing.T) {
-	t.Parallel()
-
-	setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AllowDevBackups = true })
-	setup.live.dev.detect = dirtyReport()
-	setup.live.dev.remove = dirtyReport()
-	setup.live.dev.dropped = 2
-
-	id, err := startRestoreOf(t, setup, restoreRequestOf(false, true))
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-
-	row := waitRestoreEnd(t, setup.regs, id)
-	if row.DevReport == nil || row.DevReport.Classes[backup.RemovedTempAdmins] != 2 {
-		t.Fatalf("record = %+v, want 2 dropped temp admins", row.DevReport)
-	}
-}
-
 // TestRestoreAuditsExpiredUpdateLeases checks that the swap result with expired
 // update leases makes one audit entry of the restore that names the count, and
 // that a swap with none makes no such entry.

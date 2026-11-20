@@ -31,7 +31,7 @@ type restoreStateDoc struct {
 func checkOperatorRestoreKeepsRevokedToken(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	operatorSecret := makeOperatorToken(ctx, t, env)
+	operatorSecret := makeOperatorToken(ctx, t, env, "operator")
 	victim := makeVictimToken(ctx, t, env)
 
 	backupID := runBackupCommand(ctx, t, env)
@@ -43,16 +43,62 @@ func checkOperatorRestoreKeepsRevokedToken(ctx context.Context, t *testing.T, en
 	checkTokenRevoked(ctx, t, env, victim.ID)
 }
 
-// makeOperatorToken creates a principal with the installation-operator role
-// and returns the secret of its token.
-func makeOperatorToken(ctx context.Context, t *testing.T, env *e2e.Env) string {
+// checkOperatorRestoreKeepsTempAdmin proves a restore without
+// server:restore-access keeps the live temporary administrators: it takes a
+// backup, makes a temporary administrator on the host, restores the backup as
+// the installation operator, and proves the principal keeps its
+// site-administrator grant and its expiry. A restore that took temp_admins
+// from the backup would drop the record of the live administrator, and a row
+// of the backup could end it. It reports false when the store cannot run the
+// host command in this mode: a SQLite database needs the binary server, which
+// the command opens while the server is stopped.
+func checkOperatorRestoreKeepsTempAdmin(
+	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store,
+) bool {
+	t.Helper()
+
+	if store == e2e.StoreSQLite && !e2e.UseBinaryServer() {
+		return false
+	}
+
+	const person = "restore-temp-admin"
+
+	operatorSecret := makeOperatorToken(ctx, t, env, "operator-temp")
+	backupID := runBackupCommand(ctx, t, env)
+
+	if store == e2e.StoreSQLite {
+		env.StopServer(ctx, t)
+	}
+
+	token, expires := runHostBinary(ctx, t, env, person)
+
+	if store == e2e.StoreSQLite {
+		env.StartServer(ctx, t)
+	}
+
+	session := hostSession{token: token, person: person, expires: expires}
+	checkHostPrincipal(ctx, t, env, session)
+
+	restoreID := startRestoreAs(ctx, t, env, operatorSecret, backupID)
+	waitRestoreSucceeded(ctx, t, env, restoreID)
+
+	// The principal list needs the site-administrator grant of the person, and
+	// shows the live record with its fixed expiry.
+	checkHostPrincipal(ctx, t, env, session)
+
+	return true
+}
+
+// makeOperatorToken creates a principal named name with the
+// installation-operator role and returns the secret of its token.
+func makeOperatorToken(ctx context.Context, t *testing.T, env *e2e.Env, name string) string {
 	t.Helper()
 
 	var operator e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost,
 		"/api/server/principals",
-		`{"subject":"` + e2e.SignInSubject("operator") + `","kind":"person"}`,
+		`{"subject":"` + e2e.SignInSubject(name) + `","kind":"person"}`,
 		http.StatusCreated,
 	}, &operator)
 
@@ -62,7 +108,7 @@ func makeOperatorToken(ctx context.Context, t *testing.T, env *e2e.Env) string {
 		http.StatusCreated,
 	}, nil)
 
-	return env.PersonalToken(ctx, t, operator.ID, "operator").Secret
+	return env.PersonalToken(ctx, t, operator.ID, name).Secret
 }
 
 // makeVictimToken creates a principal with a token and returns the token.

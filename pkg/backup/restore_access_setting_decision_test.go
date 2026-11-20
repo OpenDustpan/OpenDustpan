@@ -278,7 +278,7 @@ func TestRestoreSwapRecordHostileDecode(t *testing.T) {
 	t.Parallel()
 
 	const (
-		head = `{"droppedTempAdmins":0,`
+		head = `{"expiredUpdateLeases":0,`
 		tail = `"settingBefore":"false","settingAfter":""}`
 	)
 

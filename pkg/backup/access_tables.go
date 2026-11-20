@@ -16,7 +16,13 @@ const (
 	// an identity provider to groups. A mapping decides who joins a group, so
 	// a restore without server:restore-access keeps the current rows. Each row
 	// names a group by a foreign key, so the table moves with the groups.
-	TableGroupMappings     = "group_mappings"
+	TableGroupMappings = "group_mappings"
+	// TableTempAdmins holds the temporary administrators. A row names a
+	// principal by a foreign key and gives it the authority of an
+	// administrator for a time, so the table moves with the principals table:
+	// a restore without server:restore-access keeps the current rows and never
+	// brings in a row of the backup, and never lets a row of the backup end a
+	// live administrator.
 	TableTempAdmins        = "temp_admins"
 	TableAccessTokens      = "access_tokens"
 	TableRoles             = "roles"
@@ -103,6 +109,7 @@ const (
 // the current rows of these tables and replaces the other tables.
 var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, like Tables.
 	TablePrincipals,
+	TableTempAdmins,
 	TablePrincipalGroups,
 	TableGroupMembers,
 	TableGroupMappings,

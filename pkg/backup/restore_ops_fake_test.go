@@ -431,7 +431,7 @@ func (m applyMode) apply(ctx context.Context, l *restoreServiceLive) (backup.Kee
 	expired := l.dev.expiredLeases
 	l.mu.Unlock()
 
-	return backup.KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: expired}, l.ApplyStaging(ctx)
+	return backup.KeepAccessResult{ExpiredUpdateLeases: expired}, l.ApplyStaging(ctx)
 }
 
 // ApplyRestoreArea implements backup.RestoreStaging over the applies of the
