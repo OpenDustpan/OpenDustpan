@@ -344,7 +344,7 @@ func (r *devRun) deleteStaleAddr(envParent string) error {
 // lines that wait are not lost.
 func (r *devRun) openLog() {
 	if err := r.logGate.open(); err != nil {
-		_, _ = fmt.Fprintln(r.stderr, "opendustpan:", err) //nolint:errcheck // Nothing is left to report to.
+		writeErrorLine(r.stderr, "opendustpan", err)
 	}
 }
 

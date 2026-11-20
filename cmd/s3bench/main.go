@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"opendustpan.org/opendustpan/internal/logguard"
 	"opendustpan.org/opendustpan/pkg/blob/s3"
 )
 
@@ -44,7 +45,7 @@ const (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(logguard.New(slog.NewTextHandler(os.Stderr, nil)))
 	err := run(ctx, logger, os.Args[1:], os.Stdout)
 
 	stop()

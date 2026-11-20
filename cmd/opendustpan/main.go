@@ -51,6 +51,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/internal/logguard"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -185,7 +186,7 @@ func main() {
 	stop()
 
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "opendustpan:", err)
+		writeErrorLine(os.Stderr, "opendustpan", err)
 		os.Exit(1)
 	}
 }
@@ -1592,8 +1593,7 @@ func normalizeLogLevel(s string) string {
 // closing, so a failure goes to stderr.
 func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
 	if err := app.close(ctx); err != nil {
-		//nolint:errcheck // Nothing is left to report a failed write of stderr to.
-		fmt.Fprintln(stderr, "opendustpan: close log sinks:", err)
+		writeErrorLine(stderr, "opendustpan: close log sinks", err)
 	}
 }
 
@@ -1639,7 +1639,8 @@ type openedStore struct {
 // close closes the store and writes a warning when the close fails.
 func (s openedStore) close() {
 	if err := s.Close(); err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Warn("close database", slog.String("error", err.Error()))
+		slog.New(logguard.New(slog.NewTextHandler(os.Stderr, nil))).
+			Warn("close database", slog.String("error", err.Error()))
 	}
 }
 
@@ -1845,4 +1846,17 @@ func readKeyFile(path string) ([]byte, error) {
 	}
 
 	return decodeKey(keyFileEnvVar, string(raw))
+}
+
+// writeErrorLine writes "<prefix>: <error text>" and a newline to w, with
+// each hidden rune of the error text escaped as visible text, for example
+// "\n". The error text can hold a value from outside the process, such as
+// a path from a flag, so a raw CR or LF could forge a second line.
+//
+// Defense in depth: each call site quotes its values with %q too; this
+// escape stays so that one call site that does not quote is not enough to
+// forge a line.
+func writeErrorLine(w io.Writer, prefix string, err error) {
+	//nolint:errcheck // Nothing is left to report a failed write of stderr to.
+	fmt.Fprintln(w, prefix+":", logguard.Escape(err.Error()))
 }

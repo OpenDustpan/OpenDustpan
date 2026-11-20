@@ -256,6 +256,8 @@ Values are `debug`, `info`, `warn` and `error`.
 `--log-format` (`DUSTPAN_LOG_FORMAT`) sets the format.
 The default is `json`.
 Values are `json` and `text`.
+The server escapes each control character in a log value as visible text, for example `\n` for a line feed.
+Thus a value cannot start a new log line.
 
 ## Send the application log to other targets
 

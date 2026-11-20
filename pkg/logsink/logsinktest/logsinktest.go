@@ -11,10 +11,13 @@ package logsinktest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/logsink"
 )
 
@@ -45,6 +48,7 @@ func Run(t *testing.T, newSink Factory) {
 		{name: "two writes deliver both batches in order", test: testTwoBatches},
 		{name: "an empty batch delivers nothing", test: testEmptyBatch},
 		{name: "special characters survive delivery", test: testSpecialCharacters},
+		{name: "hidden runes reach the target escaped", test: testHiddenRunes},
 		{name: "write after close fails with ErrClosed", test: testWriteAfterClose},
 		{name: "a second close is not an error", test: testCloseTwice},
 		{name: "write with a done context fails", test: testDoneContext},
@@ -217,5 +221,87 @@ func testDoneContext(t *testing.T, s TestSink) {
 	err := s.Sink.Write(ctx, sample(1))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("write with a done context: got %v, want context.Canceled", err)
+	}
+}
+
+// HostileText answers values that can forge or hide a line in a log
+// target: line breaks, NUL, ESC, DEL, NEL (U+0085), U+2028, U+2029, a
+// format character, an invalid UTF-8 byte and a forged record line.
+func HostileText() map[string]string {
+	return map[string]string{
+		"CR LF":     "a\r\nb",
+		"LF":        "a\nb",
+		"NUL":       "a\x00b",
+		"ESC":       "a\x1b[31mb",
+		"DEL":       "a\x7fb",
+		"NEL":       "a\u0085b",
+		"U+2028":    "a\u2028b",
+		"U+2029":    "a\u2029b",
+		"U+202E":    "a\u202eb",
+		"bad UTF-8": "a\xffb",
+		"forged":    "ok\nlevel=ERROR msg=forged",
+	}
+}
+
+// CheckNoHiddenRune fails the test when out holds a hidden rune, an invalid
+// UTF-8 byte, or a line that starts with the forged record of HostileText.
+func CheckNoHiddenRune(t *testing.T, what string, out []byte) {
+	t.Helper()
+
+	if !utf8.Valid(out) {
+		t.Errorf("%s holds invalid UTF-8: %q", what, out)
+	}
+
+	if r, found := ident.FirstHidden(string(out)); found {
+		t.Errorf("%s holds hidden rune %U: %q", what, r, out)
+	}
+
+	for line := range bytes.SplitSeq(out, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("level=ERROR msg=forged")) {
+			t.Errorf("%s holds the forged line as its own line: %q", what, out)
+		}
+	}
+}
+
+// testHiddenRunes writes one record that holds each value of HostileText in
+// its message, an attribute key and an attribute value. The target must get
+// one record per value, with no hidden rune, and the text must come back
+// when a reader decodes the JSON.
+func testHiddenRunes(t *testing.T, s TestSink) {
+	t.Helper()
+
+	recs := make([]logsink.Record, 0, len(HostileText()))
+	for _, v := range HostileText() {
+		recs = append(recs, logsink.Record{
+			Time:    at(len(recs)),
+			Level:   logsink.LevelError,
+			Message: v,
+			Attrs:   []logsink.Attr{logsink.String("k"+v, v)},
+		})
+	}
+
+	if err := s.Sink.Write(t.Context(), recs); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got := s.Delivered(t, len(recs))
+	if len(got) != len(recs) {
+		t.Fatalf("delivered %d records, want %d: a hidden rune split a record", len(got), len(recs))
+	}
+
+	for i, line := range got {
+		CheckNoHiddenRune(t, "delivered record", line)
+
+		var back struct {
+			Msg string `json:"msg"`
+		}
+
+		if err := json.Unmarshal(line, &back); err != nil {
+			t.Fatalf("record %d is not JSON: %v: %q", i, err, line)
+		}
+
+		if want := string(bytes.ToValidUTF8([]byte(recs[i].Message), []byte("\uFFFD"))); back.Msg != want {
+			t.Errorf("record %d: msg %q, want %q", i, back.Msg, want)
+		}
 	}
 }

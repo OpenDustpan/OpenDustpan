@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"opendustpan.org/opendustpan/internal/logguard"
 	"opendustpan.org/opendustpan/pkg/launcher"
 	"opendustpan.org/opendustpan/pkg/launcher/helper"
 	"opendustpan.org/opendustpan/pkg/launcher/run"
@@ -33,7 +34,7 @@ func main() {
 // launch runs one start of the binary and returns its exit code. Its
 // messages go to stderr; they never hold a secret.
 func launch(argv []string, stderr io.Writer) launcher.ExitCode {
-	log := slog.New(slog.NewTextHandler(stderr, nil)).With(slog.String("program", launcher.Binary))
+	log := slog.New(logguard.New(slog.NewTextHandler(stderr, nil))).With(slog.String("program", launcher.Binary))
 
 	if err := harden(); err != nil {
 		log.Error("protect the launcher process", slog.Any("error", err))
