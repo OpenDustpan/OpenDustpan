@@ -654,6 +654,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			columns: []string{"owner", backupColAtMs, "lease_ms"},
 		},
 		{
+			table:   backup.TableGitHostEventReceiptCount,
+			columns: []string{"id", "receipts", "max_receipts"},
+		},
+		{
 			table: backup.TableGitHostEventReceipts,
 			columns: []string{
 				"kind", "delivery_id", "body_digest", backupColInstallationID, "event_kind", "repo", "review_id",
