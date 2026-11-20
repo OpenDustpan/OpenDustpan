@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -60,6 +61,45 @@ func TestDiffStatesFailsClosedOnExpiredContext(t *testing.T) {
 
 	if strings.Contains(fmt.Sprintf("%+v", diff), "hunter2") {
 		t.Fatalf("expired context: the diff holds the key: %+v", diff)
+	}
+}
+
+// TestDiffStatesEndOfContextAtAnyCheckLeaksNoKey proves a diff whose context
+// ends at any one check of the diff gives an error and no key of the marked
+// map. The context is done at one call only, so each check of the diff is
+// tested alone: a check that is missing, or an error of the masking that the
+// diff drops, gives a diff with the key in the changed paths.
+func TestDiffStatesEndOfContextAtAnyCheckLeaksNoKey(t *testing.T) {
+	t.Parallel()
+
+	marks := workspace.SensitiveMarks{"t.n": {"/tags"}}
+	from := workspace.StateWithMarks{
+		State: []byte(maskedStateWithAttributes(`{"tags":{"hunter2":"a"}}`)), Marks: marks,
+	}
+	to := workspace.StateWithMarks{
+		State: []byte(maskedStateWithAttributes(`{"tags":{"hunter2":"b"}}`)), Marks: marks,
+	}
+
+	count := &atomic.Int64{}
+
+	if _, err := workspace.DiffStates(singleShotCtx{calls: count, at: 0}, from, to, "", 0); err != nil {
+		t.Fatalf("uninterrupted diff: %v", err)
+	}
+
+	total := count.Load()
+	if total == 0 {
+		t.Fatal("the diff checked the context 0 times, want at least one check")
+	}
+
+	for k := int64(1); k <= total; k++ {
+		diff, err := workspace.DiffStates(singleShotCtx{calls: &atomic.Int64{}, at: k}, from, to, "", 0)
+		if err == nil {
+			t.Errorf("context ends at check %d of %d: diff answered %+v, want an error", k, total, diff)
+		}
+
+		if strings.Contains(fmt.Sprintf("%+v", diff), "hunter2") {
+			t.Errorf("context ends at check %d of %d: the diff holds the key: %+v", k, total, diff)
+		}
 	}
 }
 
