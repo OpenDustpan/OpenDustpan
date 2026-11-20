@@ -36,8 +36,16 @@ type issuerChangedError struct {
 }
 
 func (e issuerChangedError) Error() string {
+	// A stored row from an older version or a restored backup can hold an
+	// issuer that the rule refuses, with user information. Its text is not
+	// shown, and the advice is not to restore it.
+	if CheckIssuer(e.recorded) != nil {
+		return fmt.Sprintf("sign-in provider %q has an issuer in the database that the server now refuses, so "+
+			"disable the provider and make a new provider with a new ID for the issuer", e.id)
+	}
+
 	return fmt.Sprintf("sign-in provider %q has the issuer %q in the database and the issuer %q in the "+
-		"configuration, so set the issuer (--oidc-issuer) back to %q, or set a new provider ID only if the "+
+		"configuration, so set the issuer back to %q, or set a new provider ID only if the "+
 		"identity provider changed", e.id, e.recorded, e.configured, e.recorded)
 }
 
@@ -107,14 +115,8 @@ func (p Provider) matches(recorded string) bool {
 // the same issuer.
 func BindProviders(ctx context.Context, store ProviderStore, providers []Provider, at time.Time) error {
 	for _, p := range providers {
-		// Defense in depth: ldapauth.parseURL checks the directory URL when
-		// the server starts. This check stays so that a caller of the session
-		// layer cannot bind a provider to a URL with user information, a
-		// path or another scheme. It does not rely on that check.
-		if p.DirectoryURL != "" {
-			if _, err := NormalizeDirectoryURL(p.DirectoryURL); err != nil {
-				return fmt.Errorf("sign-in provider %q: %w", p.ID, err)
-			}
+		if err := checkProviderText(p); err != nil {
+			return err
 		}
 
 		recorded, err := store.BindProvider(ctx, p.ID, p.binding(), at)
@@ -135,6 +137,32 @@ func BindProviders(ctx context.Context, store ProviderStore, providers []Provide
 		}
 
 		return issuerChangedError{id: p.ID, recorded: recorded, configured: p.Issuer}
+	}
+
+	return nil
+}
+
+// checkProviderText refuses a provider whose directory URL or issuer has a
+// form that the server never records.
+func checkProviderText(p Provider) error {
+	// Defense in depth: ldapauth.parseURL checks the directory URL when
+	// the server starts. This check stays so that a caller of the session
+	// layer cannot bind a provider to a URL with user information, a
+	// path or another scheme. It does not rely on that check.
+	if p.DirectoryURL != "" {
+		if _, err := NormalizeDirectoryURL(p.DirectoryURL); err != nil {
+			return fmt.Errorf("sign-in provider %q: %w", p.ID, err)
+		}
+	}
+
+	// Defense in depth: the flag parser, NewServer and the sign-in client
+	// check the issuer too. This check stays so that a caller of the
+	// session layer cannot record an issuer with a query, a fragment or
+	// user information. It does not rely on those checks.
+	if p.Issuer != "" {
+		if err := CheckIssuer(p.Issuer); err != nil {
+			return fmt.Errorf("sign-in provider %q: %w", p.ID, err)
+		}
 	}
 
 	return nil

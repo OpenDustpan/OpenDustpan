@@ -106,9 +106,10 @@ func checkStaticLDAP(t *testing.T, doc staticProviderDoc) {
 	}
 }
 
-// TestStaticProviderListHidesIssuerSecrets proves that the list of the
-// sign-in providers shows the issuer of a static provider with no user
-// information, query or fragment, even when the setting holds them.
+// TestStaticProviderListHidesIssuerSecrets proves that a static provider with
+// user information, a query or a fragment in its issuer never reaches the list
+// of the sign-in providers: the server refuses the issuer at start, and the
+// error holds none of the secrets of the issuer.
 func TestStaticProviderListHidesIssuerSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -119,34 +120,12 @@ func TestStaticProviderListHidesIssuerSecrets(t *testing.T) {
 	opts := append(auditSinkServerOptions(t, st),
 		dustpan.WithPublicURL("https://dustpan.example"), dustpan.WithOIDCProvider(oidc))
 
-	srv, err := dustpan.NewServer(opts...)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
+	_, err := dustpan.NewServer(opts...)
+	if err == nil {
+		t.Fatal("NewServer accepted an issuer with user information, a query and a fragment")
 	}
 
-	if err := srv.Start(t.Context()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/sign-in-providers", http.NoBody)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
-
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
-
-	var list struct {
-		Providers []staticProviderDoc `json:"providers"`
-	}
-
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != http.StatusOK {
-		t.Fatalf("list = %d %s, %v", rec.Code, rec.Body.String(), err)
-	}
-
-	if len(list.Providers) != 1 || list.Providers[0].Issuer != "https://idp.example/r" {
-		t.Fatalf("list = %+v, want the issuer https://idp.example/r", list.Providers)
-	}
-
-	if strings.Contains(rec.Body.String(), "secret") {
-		t.Fatalf("the list holds a secret: %s", rec.Body.String())
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("the error holds a secret: %v", err)
 	}
 }

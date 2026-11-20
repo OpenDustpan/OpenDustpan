@@ -294,22 +294,22 @@ func TestASubjectOfTheWrongFormIsErrMethodAnswer(t *testing.T) {
 	}{
 		{
 			name:    "a binary value of a named attribute",
-			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "employeeNumber"},
-			attrs:   map[string][]string{"employeeNumber": {"\xff\xfe\x00\x01"}},
+			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "nsUniqueId"},
+			attrs:   map[string][]string{"nsUniqueId": {"\xff\xfe\x00\x01"}},
 		},
 		{
 			name:    "a control character in a named attribute",
-			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "employeeNumber"},
-			attrs:   map[string][]string{"employeeNumber": {"42\n"}},
+			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "nsUniqueId"},
+			attrs:   map[string][]string{"nsUniqueId": {"42\n"}},
 		},
 		{
 			name:    "two values of a named attribute",
-			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "employeeNumber"},
-			attrs:   map[string][]string{"employeeNumber": {"42", "43"}},
+			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "nsUniqueId"},
+			attrs:   map[string][]string{"nsUniqueId": {"42", "43"}},
 		},
 		{
 			name:    "no value",
-			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "employeeNumber"},
+			subject: ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "nsUniqueId"},
 			attrs:   map[string][]string{},
 		},
 		{
@@ -348,12 +348,12 @@ func TestANamedSubjectAttributeIsTheSubject(t *testing.T) {
 
 	s := newSetup(t)
 	s.dir.AddUser(ldaptest.User{
-		Attributes: map[string][]string{"employeeNumber": {"E-1042"}, "userAccountControl": {"512"}},
+		Attributes: map[string][]string{"nsUniqueId": {"E-1042"}, "userAccountControl": {"512"}},
 		UserName:   "alice", Password: goodPassword,
 	})
 
 	m := newMethod(t, s.configWith(func(c *ldapauth.Config) {
-		c.Subject = ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "employeeNumber"}
+		c.Subject = ldapauth.Subject{Kind: ldapauth.SubjectAttribute, Attribute: "nsUniqueId"}
 	}))
 
 	a, err := m.Verify(t.Context(), credentials("alice", goodPassword), openGate{})
