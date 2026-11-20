@@ -485,7 +485,7 @@ func Escape(s string) string {
 
 	var b strings.Builder
 
-	b.Grow(len(s) + escapeRoom)
+	b.Grow(len(s))
 
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
@@ -515,12 +515,10 @@ func EscapeLine(s string) string {
 	return Escape(strings.ReplaceAll(s, `\`, `\\`))
 }
 
-// Limits of the short escape forms, and the room that Escape adds to its
-// buffer for the escapes.
+// Limits of the short escape forms.
 const (
 	maxByteRune = 0xFF
 	maxBMPRune  = 0xFFFF
-	escapeRoom  = 16
 )
 
 // writeEscapedRune writes the Go quoting form of r.

@@ -28,7 +28,7 @@ func EscapeJSON(js []byte) []byte {
 		return js
 	}
 
-	out := bytes.NewBuffer(make([]byte, 0, len(js)+escapeRoom))
+	out := bytes.NewBuffer(make([]byte, 0, len(js)))
 
 	for i := 0; i < len(js); {
 		r, size := utf8.DecodeRune(js[i:])
@@ -63,12 +63,8 @@ func needsJSONEscape(js []byte) bool {
 	return false
 }
 
-// maxBMPRune is the highest rune that one "\uXXXX" escape holds, and
-// escapeRoom is the room that EscapeJSON adds to its buffer for the escapes.
-const (
-	maxBMPRune = 0xFFFF
-	escapeRoom = 16
-)
+// maxBMPRune is the highest rune that one "\uXXXX" escape holds.
+const maxBMPRune = 0xFFFF
 
 // writeJSONRuneEscape writes r as a JSON "\uXXXX" escape, or as a UTF-16
 // surrogate pair of two escapes when r is above U+FFFF.
