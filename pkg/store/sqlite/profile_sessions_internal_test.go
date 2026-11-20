@@ -200,7 +200,9 @@ func TestCheckSessionKey(t *testing.T) {
 	}
 
 	for _, o := range []profile.SessionOwner{
-		{Kind: "job", ID: "alice"}, {Kind: "", ID: "alice"}, {Kind: profile.OwnerPrincipal, ID: ""},
+		{Kind: "job", ID: "alice"},
+		{Kind: "", ID: "alice"},
+		{Kind: profile.OwnerPrincipal, ID: ""},
 		{Kind: profile.OwnerPrincipal, ID: "al\rice"},
 	} {
 		if err := checkSessionKey(rowID, o); !errors.Is(err, profile.ErrNotFound) {
