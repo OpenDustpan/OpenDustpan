@@ -340,6 +340,23 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   TableOutputSharingRules,
+			OrderBy: []string{portColNamespace, "id"},
+			Columns: []Column{
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "id", Kind: KindText},
+				{Name: "producer_kind", Kind: KindText},
+				{Name: "producer_id", Kind: KindText},
+				{Name: "consumer_kind", Kind: KindText},
+				{Name: "consumer_namespace", Kind: KindText},
+				{Name: "consumer_id", Kind: KindText},
+				{Name: "consumer_tool", Kind: KindText},
+				{Name: "consumer_name", Kind: KindText},
+				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
 			Table: "object_context",
 			OrderBy: []string{
 				portColNamespaceID,

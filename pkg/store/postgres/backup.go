@@ -319,6 +319,14 @@ func pgCopyCollectionTables() []pgCopyTable {
 			orderBy: []string{pgColNamespace, pgColPosition, "id"},
 		},
 		{
+			table: backup.TableOutputSharingRules,
+			columns: []string{
+				pgColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
+				"consumer_id", "consumer_tool", "consumer_name", "created_by", pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, "id"},
+		},
+		{
 			table: "object_context",
 			columns: []string{
 				pgColNamespaceID,

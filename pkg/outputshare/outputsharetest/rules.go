@@ -1127,3 +1127,42 @@ func RawRuleRow(r outputshare.Rule) []any {
 
 	return row
 }
+
+// HostileRuleRow is one row for the table test of the CHECK constraints.
+type HostileRuleRow struct {
+	// Name says what the row names.
+	Name string
+	// Row holds the namespace, the rule ID, the kind and the stable ID of the
+	// producer, the kind, the namespace, the stable ID, the tool and the name
+	// of the consumer, and the principal that saved the rule.
+	Row [10]string
+	// OK is true for the one row that the table accepts.
+	OK bool
+}
+
+// HostileRuleRows are rows that the CHECK constraints of the rule table
+// refuse, each for one reason, and the one row that they accept. The columns
+// are namespace, id, producer kind, producer ID, consumer kind, consumer
+// namespace, consumer ID, consumer tool, consumer name, created by.
+func HostileRuleRows() []HostileRuleRow {
+	return []HostileRuleRow{
+		{"a unit that names a unit of its namespace", [10]string{"acme", "r1", "unit", "u1", "unit", "acme", "u2", "", "", "tester"}, true},
+		{"a unit that names a unit of another namespace by name", [10]string{"acme", "r2", "unit", "u1", "unit", "globex", "", "opentofu", "web", "tester"}, true},
+		{"a producer that is a principal", [10]string{"acme", "r3", "principal", "p1", "unit", "acme", "u2", "", "", "tester"}, false},
+		{"a consumer that is a principal", [10]string{"acme", "r4", "unit", "u1", "principal", "acme", "p1", "", "", "tester"}, false},
+		{"a namespace producer with a stable ID", [10]string{"acme", "r5", "namespace", "x", "unit", "acme", "u2", "", "", "tester"}, false},
+		{"a unit producer with no stable ID", [10]string{"acme", "r6", "unit", "", "unit", "acme", "u2", "", "", "tester"}, false},
+		{"a whole other namespace as the consumer", [10]string{"acme", "r7", "unit", "u1", "namespace", "globex", "", "", "", "tester"}, false},
+		{"a consumer of the namespace with no stable ID", [10]string{"acme", "r8", "unit", "u1", "unit", "acme", "", "", "", "tester"}, false},
+		{"a consumer of the namespace with a name", [10]string{"acme", "r9", "unit", "u1", "unit", "acme", "u2", "opentofu", "web", "tester"}, false},
+		{"a consumer of another namespace with a stable ID", [10]string{"acme", "r10", "unit", "u1", "unit", "globex", "u2", "opentofu", "web", "tester"}, false},
+		{"a unit consumer of another namespace with no tool", [10]string{"acme", "r11", "unit", "u1", "unit", "globex", "", "", "web", "tester"}, false},
+		{"a collection consumer of another namespace with a tool", [10]string{"acme", "r12", "unit", "u1", "collection", "globex", "", "opentofu", "web", "tester"}, false},
+		{"a consumer of another namespace with no name", [10]string{"acme", "r13", "unit", "u1", "unit", "globex", "", "opentofu", "", "tester"}, false},
+		{"a rule with no creator", [10]string{"acme", "r14", "unit", "u1", "unit", "acme", "u2", "", "", ""}, false},
+		{"a rule ID with a capital letter", [10]string{"acme", "R15", "unit", "u1", "unit", "acme", "u2", "", "", "tester"}, false},
+		{"a rule ID with a space", [10]string{"acme", "r 16", "unit", "u1", "unit", "acme", "u2", "", "", "tester"}, false},
+		{"a rule ID that is empty", [10]string{"acme", "", "unit", "u1", "unit", "acme", "u2", "", "", "tester"}, false},
+		{"a rule ID of 65 characters", [10]string{"acme", strings.Repeat("a", 65), "unit", "u1", "unit", "acme", "u2", "", "", "tester"}, false},
+	}
+}

@@ -476,6 +476,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteItemKeyBackupTables(),
 		sqliteSettingBackupTables(),
 		sqlitePlacementBackupTables(),
+		sqliteOutputSharingBackupTables(),
 		sqliteSelfServiceBackupTables(),
 		sqliteQuotaBackupTables(),
 		sqliteTrustRuleBackupTables(),
@@ -493,6 +494,19 @@ func sqlitePlacementBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id", backupColNamespace, backupColPosition, backupColTool, backupColProject, "stack",
 				"collection_id", "created_by", backupColCreatedAtMs,
+			},
+		},
+	}
+}
+
+// sqliteOutputSharingBackupTables lists the column list of the sharing rules.
+func sqliteOutputSharingBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: backup.TableOutputSharingRules,
+			columns: []string{
+				backupColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
+				"consumer_id", "consumer_tool", "consumer_name", "created_by", backupColCreatedAtMs,
 			},
 		},
 	}

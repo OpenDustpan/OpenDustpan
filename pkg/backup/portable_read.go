@@ -221,6 +221,8 @@ func checkPortableValue(table, column string, value any) error {
 		return checkOutputSharingDefault(value)
 	case table == portTableNamespaces && column == portColSourceFilter:
 		return checkSourceFilter(value)
+	case table == TableOutputSharingRules:
+		return checkOutputSharingRuleValue(column, value)
 	case table == portTableManualLocks && column == portColReason:
 		return checkManualLockReason(value)
 	case table == TablePersonPreferences && column == portColDocument:
@@ -527,4 +529,44 @@ func portableFileOf(files []PortableFile, table string) (PortableFile, bool) {
 	var none PortableFile
 
 	return none, false
+}
+
+// checkOutputSharingRuleValue runs the check of one column of a sharing rule
+// row: the rule ID, the two kinds of object and the principal that saved the
+// rule. It returns ErrCorrupt, wrapped with outputshare.ErrInvalid. The error
+// does not hold the value.
+//
+// Defense in depth: the CHECK constraints of the table refuse the same values
+// at the copy, and the store leaves out a row that fails Rule.Validate at each
+// read. This check stays so that a restored backup fails before it reaches the
+// database.
+func checkOutputSharingRuleValue(column string, value any) error {
+	text, isText := value.(string)
+	if !isText {
+		return fmt.Errorf("sharing rule row has a %s that is not text: %w: %w", column, outputshare.ErrInvalid, ErrCorrupt)
+	}
+
+	var err error
+
+	switch column {
+	case "id":
+		err = outputshare.ID(text).Validate()
+	case "producer_kind", "consumer_kind":
+		if text != "unit" && text != "collection" && text != "namespace" {
+			err = fmt.Errorf("%w: kind of object", outputshare.ErrInvalid)
+		}
+	case "created_by":
+		if text == "" {
+			err = fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
+		}
+	default:
+		// The other columns hold names and stable IDs. The table CHECKs and
+		// the store read check their shape.
+	}
+
+	if err != nil {
+		return fmt.Errorf("sharing rule row has an invalid %s: %w: %w", column, err, ErrCorrupt)
+	}
+
+	return nil
 }

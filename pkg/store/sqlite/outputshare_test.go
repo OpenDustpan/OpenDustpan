@@ -446,3 +446,31 @@ func TestOutputSharingSettingSurvivesABackupRestore(t *testing.T) {
 		t.Fatalf("Setting after the restore = %q, %v, want namespace", got, err)
 	}
 }
+
+// TestSharingRuleTableRefusesAnotherKind proves the layer of the table alone:
+// the CHECK constraints refuse a rule that names a principal, a whole other
+// namespace, an object with no stable ID or a consumer of another namespace
+// with a stable ID, also when the store code is skipped.
+func TestSharingRuleTableRefusesAnotherKind(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range outputsharetest.HostileRuleRows() {
+		t.Run(tc.Name, func(t *testing.T) {
+			t.Parallel()
+
+			s, path := openOutputShare(t)
+			ensureNamespace(t, s, "acme")
+
+			_, err := rawSettingDB(t, path).ExecContext(t.Context(), outputsharetest.RawRuleInsert(false),
+				tc.Row[0], tc.Row[1], tc.Row[2], tc.Row[3], tc.Row[4], tc.Row[5], tc.Row[6], tc.Row[7],
+				tc.Row[8], tc.Row[9], int64(1))
+
+			switch {
+			case tc.OK && err != nil:
+				t.Fatalf("insert %s: %v", tc.Name, err)
+			case !tc.OK && (err == nil || !strings.Contains(err.Error(), "CHECK")):
+				t.Fatalf("insert %s = %v, want the refusal of a CHECK", tc.Name, err)
+			}
+		})
+	}
+}
