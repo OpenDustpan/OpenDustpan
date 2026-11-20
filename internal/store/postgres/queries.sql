@@ -1018,6 +1018,13 @@ SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, output
 FROM state_versions
 WHERE id = $1;
 
+-- name: GetWorkspaceStateVersion :one
+-- One state version, only when it belongs to the workspace in the namespace.
+SELECT sv.*
+FROM state_versions sv
+JOIN workspaces w ON w.id = sv.workspace_id
+WHERE sv.id = $1 AND sv.workspace_id = $2 AND w.namespace = $3;
+
 -- name: ListStateVersions :many
 -- Finalized versions of one workspace, newest first. Ties on finalize time
 -- break by ID, as the port comment promises. The caller normalizes the page.
@@ -4956,15 +4963,25 @@ ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = ex
   created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
   expires_at_ms = excluded.expires_at_ms;
 
--- name: LockGitHostEventReceipts :exec
--- Makes the writers of receipts take turns, so the bound is exact. Readers do not wait.
-LOCK TABLE git_host_event_receipts IN SHARE ROW EXCLUSIVE MODE;
+-- name: AddGitHostEventReceiptCount :one
+-- Adds delta to the counter of the event receipts and returns the new count. The row lock that this
+-- statement takes is the only wait between two writers of receipts, and it ends with the transaction.
+-- It writes nothing, and returns no row, when the new count would pass max_receipts. The row keeps the
+-- bound of the last write, so a reader sees it. EnsureGitHostEventReceiptCount runs before it.
+UPDATE git_host_event_receipt_count
+SET receipts = receipts + sqlc.arg(delta)::bigint, max_receipts = sqlc.arg(max_receipts)::bigint
+WHERE id = TRUE AND receipts + sqlc.arg(delta)::bigint <= sqlc.arg(max_receipts)::bigint
+RETURNING receipts;
+
+-- name: EnsureGitHostEventReceiptCount :exec
+-- Makes the counter row when it is missing, as after a restore, which leaves the receipts empty. A row
+-- that exists is not locked or changed.
+INSERT INTO git_host_event_receipt_count (id, receipts, max_receipts)
+VALUES (TRUE, 0, sqlc.arg(max_receipts)::bigint)
+ON CONFLICT (id) DO NOTHING;
 
 -- name: PurgeGitHostEventReceipts :execrows
 DELETE FROM git_host_event_receipts WHERE received_at_ms < sqlc.arg(before_ms)::bigint;
-
--- name: CountGitHostEventReceipts :one
-SELECT COUNT(*) FROM git_host_event_receipts;
 
 -- name: InsertGitHostEventReceipt :execrows
 -- A receipt that hits the key of the delivery ID or the key of the body digest writes nothing.

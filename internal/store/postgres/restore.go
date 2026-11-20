@@ -148,9 +148,8 @@ type swapPlan struct {
 // with old failover versions: either both land or neither does. The SQLite
 // adapter fences the staged file before its rename for the same guarantee: a
 // file rename cannot share a transaction with SQL, so it carries
-// already-fenced versions instead. It returns the count of the dropped
-// temp_admins rows of a swap that keeps the access tables, and the count of
-// the update leases that the swap expired.
+// already-fenced versions instead. It returns the count of the update
+// leases that the swap expired.
 func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (backup.KeepAccessResult, error) {
 	if !hasStagingPrefix(plan.staging) {
 		return backup.KeepAccessResult{}, fmt.Errorf("apply staging schema %q: %w", plan.staging, backup.ErrCorrupt)
@@ -284,9 +283,8 @@ type swapInTarget struct {
 }
 
 // swapIn swaps in.plan.staging in for in.live in tx, after the swap lock and
-// the checks, and sets kept to the count of the dropped temp_admins rows of
-// a swap that keeps the access tables and to the count of the expired update
-// leases. srv is the locked server audit transaction of tx.
+// the checks, and sets kept to the count of the expired update leases. srv is
+// the locked server audit transaction of tx.
 func (s *Store) swapIn(
 	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, kept *backup.KeepAccessResult,
 ) error {

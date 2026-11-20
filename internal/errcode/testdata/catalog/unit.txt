@@ -1,5 +1,6 @@
 unit.client-encrypted
 unit.deleted-not-found
+unit.forbidden
 unit.history-unavailable
 unit.invalid-name
 unit.name-taken

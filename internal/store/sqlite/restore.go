@@ -199,7 +199,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAcces
 	// for this attempt alone. The keeps commit to the file that they change, so
 	// a retry that decides another way must start from the staged file as the
 	// backup made it, not from the keeps of the failed attempt.
-	work, dropped, err := s.keepOnWorkCopy(ctx, plan)
+	work, err := s.keepOnWorkCopy(ctx, plan)
 	if work != plan.staged {
 		// After a successful rename the name is free and the call removes nothing.
 		defer removeSnapshot(work)
@@ -216,7 +216,7 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAcces
 			return plan.after(
 				ctx,
 				tx,
-				backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired},
+				backup.KeepAccessResult{ExpiredUpdateLeases: expired},
 			)
 		}
 	}
@@ -235,31 +235,29 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAcces
 		removeSnapshot(plan.staged)
 	}
 
-	return backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired}, nil
+	return backup.KeepAccessResult{ExpiredUpdateLeases: expired}, nil
 }
 
 // keepOnWorkCopy makes the file that one swap attempt changes, keeps the live
 // rows of plan in it, and runs the hook of the test. It returns the path of
-// the file, which the caller removes when it is not plan.staged, and the count
-// of the dropped temp_admins rows.
-func (s *Store) keepOnWorkCopy(ctx context.Context, plan swapPlan) (string, int64, error) {
+// the file, which the caller removes when it is not plan.staged.
+func (s *Store) keepOnWorkCopy(ctx context.Context, plan swapPlan) (string, error) {
 	work, err := s.workCopy(ctx, plan)
 	if err != nil {
-		return plan.staged, 0, err
+		return plan.staged, err
 	}
 
-	dropped, err := s.keepLive(ctx, work, plan)
-	if err != nil {
-		return work, 0, err
+	if err := s.keepLive(ctx, work, plan); err != nil {
+		return work, err
 	}
 
 	if s.swapAfterKeepHook != nil {
 		if hookErr := s.swapAfterKeepHook(ctx); hookErr != nil {
-			return work, 0, hookErr
+			return work, hookErr
 		}
 	}
 
-	return work, dropped, nil
+	return work, nil
 }
 
 // workCopy returns the path of the file that one swap attempt changes. A plan
@@ -402,27 +400,20 @@ func chmodWorkCopy(path string, info os.FileInfo) (result error) {
 
 // keepLive keeps the live rows that plan names in the staged file: first the
 // rows of the settings keys, then, with plan.keepAccess, the access tables.
-// It returns the count of the dropped temp_admins rows.
-func (s *Store) keepLive(ctx context.Context, path string, plan swapPlan) (int64, error) {
+// temp_admins is one of the access tables, so the swap takes no staged row.
+func (s *Store) keepLive(ctx context.Context, path string, plan swapPlan) error {
 	// Defense in depth: the service and the restore route decide which keys a
 	// caller may take from a backup; this layer keeps the live row of each
 	// named key itself and refuses a key that is not on the list.
 	if err := s.keepLiveSettings(ctx, path, plan.keepSettings); err != nil {
-		return 0, err
+		return err
 	}
 
 	if !plan.keepAccess {
-		return 0, nil
+		return nil
 	}
 
-	if err := s.keepLiveAccessTables(ctx, path); err != nil {
-		return 0, err
-	}
-
-	// The swap takes temp_admins from the backup and keeps the live
-	// principals, so a staged row can name a principal that the live
-	// principals table does not hold.
-	return dropDanglingTempAdmins(ctx, path)
+	return s.keepLiveAccessTables(ctx, path)
 }
 
 // fenceStagedFile fences the staged file at path, copies the control tables

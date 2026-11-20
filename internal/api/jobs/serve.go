@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -128,7 +129,13 @@ type planPartResponse struct {
 }
 
 type gateResponse struct {
-	Type      string   `json:"type"`
+	Type string `json:"type"`
+	// Name is the name of the requirement of the gate, for example "default"
+	// or "default/namespace/acme". It is empty for a gate with no name.
+	Name string `json:"name"`
+	// Filled is the number of slots of the gate that the approvals fill, after
+	// each approver has been assigned to one slot of one gate.
+	Filled    int      `json:"filled"`
 	Approvals int      `json:"approvals"`
 	Groups    []string `json:"groups,omitempty"`
 	AllowSelf bool     `json:"allowSelf"`
@@ -136,7 +143,10 @@ type gateResponse struct {
 }
 
 type approvalResponse struct {
-	Gate    string    `json:"gate"`
+	Gate string `json:"gate"`
+	// For holds the names of the gates that the approval can fill: the gates
+	// whose groups held the approver when the approver signed.
+	For     []string  `json:"for,omitempty"`
 	Subject string    `json:"subject"`
 	Agent   string    `json:"agent,omitempty"`
 	Verdict string    `json:"verdict"`
@@ -187,7 +197,7 @@ func (h *Handler) getJob(w http.ResponseWriter, r *http.Request, _ identity.Prin
 // the job. A failed read of the pool answers 500, and never a document with a
 // silent blank in place of the name.
 func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
-	out := toJobResponse(j)
+	out := toJobResponse(j, h.approvers)
 
 	name, err := h.poolName(ctx, j)
 	if err != nil {
@@ -206,7 +216,7 @@ func (h *Handler) answerJob(ctx context.Context, w http.ResponseWriter, status i
 // keeps the status, with poolID and without pool: a write that committed never
 // gets a failure answer.
 func (h *Handler) answerStartedJob(ctx context.Context, w http.ResponseWriter, status int, j *job.Job) {
-	out := toJobResponse(j)
+	out := toJobResponse(j, h.approvers)
 
 	name, err := h.poolName(ctx, j)
 	if err != nil {
@@ -304,7 +314,7 @@ func locationSourceOf(s *job.Spec) string {
 }
 
 // toJobResponse maps a job to its wire shape.
-func toJobResponse(j *job.Job) jobResponse {
+func toJobResponse(j *job.Job, policy gate.ApproverPolicy) jobResponse {
 	out := jobResponse{
 		ID:        string(j.ID),
 		Namespace: j.Spec.Unit.Namespace().String(),
@@ -347,7 +357,7 @@ func toJobResponse(j *job.Job) jobResponse {
 	}
 
 	for i := range j.Phases {
-		out.Phases = append(out.Phases, toPhaseResponse(&j.Phases[i]))
+		out.Phases = append(out.Phases, toPhaseResponse(&j.Phases[i], j.StartedBy, policy))
 	}
 
 	if j.BreakGlass != nil {
@@ -373,7 +383,7 @@ func toJobResponse(j *job.Job) jobResponse {
 	return out
 }
 
-func toPhaseResponse(p *job.Phase) phaseResponse {
+func toPhaseResponse(p *job.Phase, startedBy string, policy gate.ApproverPolicy) phaseResponse {
 	out := phaseResponse{
 		Kind: string(p.Kind), Claims: p.Claims, Executor: p.Executor, StateVersion: p.StateVersion,
 		Steps: make([]stepRecordResponse, 0, len(p.Steps)), Plan: nil, Gates: make([]gateResponse, 0, len(p.Gates)),
@@ -413,17 +423,26 @@ func toPhaseResponse(p *job.Phase) phaseResponse {
 		out.Plan = plan
 	}
 
-	for _, g := range p.Gates {
+	_, filled := job.GatesProgress(p.Gates, p.Approvals, startedBy, policy)
+
+	for i := range p.Gates {
+		g := &p.Gates[i]
+
+		slots := filled[g.Name]
+		if g.Type == job.GateConfirmation && g.Status(p.Approvals, startedBy, policy) == job.GateOpen {
+			slots = 1
+		}
+
 		out.Gates = append(out.Gates, gateResponse{
-			Type: string(g.Type), Approvals: g.Approvals, Groups: g.Groups, AllowSelf: g.AllowSelf,
-			BindPlan: g.BindPlan,
+			Type: string(g.Type), Name: g.Name, Filled: slots, Approvals: g.Approvals, Groups: g.Groups,
+			AllowSelf: g.AllowSelf, BindPlan: g.BindPlan,
 		})
 	}
 
 	for i := range p.Approvals {
 		a := &p.Approvals[i]
 		out.Approvals = append(out.Approvals, approvalResponse{
-			Gate: string(a.Gate), Subject: a.Subject, Agent: a.Agent, Verdict: string(a.Verdict),
+			Gate: string(a.Gate), For: a.For, Subject: a.Subject, Agent: a.Agent, Verdict: string(a.Verdict),
 			Comment: a.Comment, At: a.At,
 		})
 	}

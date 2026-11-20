@@ -437,6 +437,14 @@ func (s *service) create(
 	}
 
 	gates := PolicyGates(kinds, decision)
+
+	for i := range gates {
+		err = checkGates(gates[i])
+		if err != nil {
+			return Job{}, false, err
+		}
+	}
+
 	if confirm {
 		gates = WithConfirmations(kinds, gates)
 	}
@@ -449,6 +457,38 @@ func (s *service) create(
 	}
 
 	return s.persist(ctx, &j, fence, e)
+}
+
+// checkGates refuses a set of approval gates of one phase that the matching
+// cannot count: more than MaxApprovalGates gates, a repeated name, or an empty
+// name when the phase holds more than one gate. It is ErrInvalid.
+//
+// Defense in depth: the decider gives at most one gate for each scope, with a
+// unique name. This check stays so that another decider, or a decider with a
+// defect, cannot start a job that the matching counts wrongly. matchGates
+// refuses a larger set too, and does not rely on this check.
+func checkGates(gates []Gate) error {
+	if len(gates) > MaxApprovalGates {
+		return fmt.Errorf("%w: a phase holds %d approval gates, and the most is %d",
+			ErrInvalid, len(gates), MaxApprovalGates)
+	}
+
+	seen := make(map[string]bool, len(gates))
+
+	for i := range gates {
+		name := gates[i].Name
+		if name == "" && len(gates) > 1 {
+			return fmt.Errorf("%w: gate %d of a phase with %d gates has no name", ErrInvalid, i, len(gates))
+		}
+
+		if seen[name] {
+			return fmt.Errorf("%w: two gates of a phase have the name %q", ErrInvalid, clip(name))
+		}
+
+		seen[name] = true
+	}
+
+	return nil
 }
 
 // checkAgent applies the agent mode with the switches of the user.

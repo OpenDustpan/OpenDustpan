@@ -214,20 +214,3 @@ func checkSwapDev(ctx context.Context, tx pgx.Tx, staging string) error {
 
 	return nil
 }
-
-// dropDanglingTempAdmins removes the rows of temp_admins in the staging schema
-// that name a principal that the principals table of the staging schema does
-// not hold. The caller has put the live principals into the staging schema, so
-// the rows that go are the rows that dangle against the live principals. It
-// returns the count.
-func dropDanglingTempAdmins(ctx context.Context, tx pgx.Tx, staging string) (int64, error) {
-	schema := pgIdent(staging)
-
-	tag, err := tx.Exec(ctx, "DELETE FROM "+schema+".temp_admins WHERE principal_id NOT IN (SELECT id FROM "+
-		schema+".principals)")
-	if err != nil {
-		return 0, fmt.Errorf("drop dangling temporary administrators: %w", backup.ErrExportRead)
-	}
-
-	return tag.RowsAffected(), nil
-}

@@ -96,6 +96,29 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 	return i, err
 }
 
+const addGitHostEventReceiptCount = `-- name: AddGitHostEventReceiptCount :one
+UPDATE git_host_event_receipt_count
+SET receipts = receipts + ?1, max_receipts = ?2
+WHERE id = 1 AND receipts + ?1 <= ?2
+RETURNING receipts
+`
+
+type AddGitHostEventReceiptCountParams struct {
+	Delta       int64
+	MaxReceipts int64
+}
+
+// Adds delta to the counter of the event receipts and returns the new count. The row lock that this
+// statement takes is the only wait between two writers of receipts, and it ends with the transaction.
+// It writes nothing, and returns no row, when the new count would pass max_receipts. The row keeps the
+// bound of the last write, so a reader sees it. EnsureGitHostEventReceiptCount runs before it.
+func (q *Queries) AddGitHostEventReceiptCount(ctx context.Context, arg AddGitHostEventReceiptCountParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, addGitHostEventReceiptCount, arg.Delta, arg.MaxReceipts)
+	var receipts int64
+	err := row.Scan(&receipts)
+	return receipts, err
+}
+
 const addGroupMember = `-- name: AddGroupMember :execrows
 INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1101,17 +1124,6 @@ WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
 
 func (q *Queries) CountGitHostConnections(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countGitHostConnections, namespace)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countGitHostEventReceipts = `-- name: CountGitHostEventReceipts :one
-SELECT COUNT(*) FROM git_host_event_receipts
-`
-
-func (q *Queries) CountGitHostEventReceipts(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countGitHostEventReceipts)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4995,6 +5007,19 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const ensureGitHostEventReceiptCount = `-- name: EnsureGitHostEventReceiptCount :exec
+INSERT INTO git_host_event_receipt_count (id, receipts, max_receipts)
+VALUES (1, 0, ?1)
+ON CONFLICT (id) DO NOTHING
+`
+
+// Makes the counter row when it is missing, as after a restore, which leaves the receipts empty. A row
+// that exists is not locked or changed.
+func (q *Queries) EnsureGitHostEventReceiptCount(ctx context.Context, maxReceipts int64) error {
+	_, err := q.db.ExecContext(ctx, ensureGitHostEventReceiptCount, maxReceipts)
+	return err
 }
 
 const ensureNameLock = `-- name: EnsureNameLock :exec
@@ -10346,6 +10371,51 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.LastReleaseBy,
 		&i.LastReleaseKind,
 		&i.LastReleaseAtMs,
+	)
+	return i, err
+}
+
+const getWorkspaceStateVersion = `-- name: GetWorkspaceStateVersion :one
+SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size, sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms, sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed, sv.sensitive_marks, sv.fenced_by, sv.unlocked_write, sv.origin_job, sv.client_encrypted
+FROM state_versions sv
+JOIN workspaces w ON w.id = sv.workspace_id
+WHERE sv.id = ? AND sv.workspace_id = ? AND w.namespace = ?
+`
+
+type GetWorkspaceStateVersionParams struct {
+	ID          string
+	WorkspaceID string
+	Namespace   string
+}
+
+// One state version, only when it belongs to the workspace in the namespace.
+func (q *Queries) GetWorkspaceStateVersion(ctx context.Context, arg GetWorkspaceStateVersionParams) (StateVersion, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspaceStateVersion, arg.ID, arg.WorkspaceID, arg.Namespace)
+	var i StateVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.Serial,
+		&i.Lineage,
+		&i.Md5,
+		&i.Size,
+		&i.ContentKey,
+		&i.Outputs,
+		&i.Force,
+		&i.UploadDigest,
+		&i.UploadExpiresAtMs,
+		&i.Holder,
+		&i.LockID,
+		&i.CreatedAtMs,
+		&i.FinalizedAtMs,
+		&i.RestoredFrom,
+		&i.Sealed,
+		&i.SensitiveMarks,
+		&i.FencedBy,
+		&i.UnlockedWrite,
+		&i.OriginJob,
+		&i.ClientEncrypted,
 	)
 	return i, err
 }

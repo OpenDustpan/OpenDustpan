@@ -1038,7 +1038,7 @@ func (k swapKiller) ApplyRestoreArea(
 
 	k.gate.crash(ctx)
 
-	return backup.KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}, errors.Join(durable.ErrClaimLost, err)
+	return backup.KeepAccessResult{ExpiredUpdateLeases: 0}, errors.Join(durable.ErrClaimLost, err)
 }
 
 func testWorkerSwapKill(t *testing.T, newStore RestoreFactory) {

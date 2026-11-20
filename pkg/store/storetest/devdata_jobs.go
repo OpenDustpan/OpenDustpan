@@ -22,8 +22,8 @@ const devJobBody = `{"spec":{"unit":{"tool":"opentofu","namespace":"acme","name"
 	`"operation":"apply","purpose":"","executor":"","location":{"connection":"","repository":"","ref":"",` +
 	`"directory":"","revision":""},"steps":[],"pool":"","profile":"","edits":[],"delivery":""},` +
 	`"reason":"","phases":[{"kind":"plan","operation":"","claims":0,"executor":"","steps":[],"stateVersion":"",` +
-	`"plan":null,"gates":[{"type":"approval","approvals":1,"groups":[],"groupIds":[],"allowSelf":false,` +
-	`"timeoutNanos":0,"bindPlan":false}],"approvals":[{"gate":"approval","subject":"` + devJobApprover + `",` +
+	`"plan":null,"gates":[{"type":"approval","name":"","approvals":1,"groups":[],"groupIds":[],"allowSelf":false,` +
+	`"timeoutNanos":0,"bindPlan":false}],"approvals":[{"gate":"approval","for":[""],"subject":"` + devJobApprover + `",` +
 	`"agent":"","verdict":"approve","comment":"","plan":null,"at":"2026-10-20T09:30:00Z","auth":"",` +
 	`"authAt":"0001-01-01T00:00:00Z"}],"startedAt":"0001-01-01T00:00:00Z","finishedAt":"0001-01-01T00:00:00Z"}],` +
 	`"startedBy":"` + devJobStarter + `","source":"api","agent":"","agentMode":"","breakGlass":null,"delivery":null,` +

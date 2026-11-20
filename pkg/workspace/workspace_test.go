@@ -643,6 +643,27 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 	return sv, nil
 }
 
+// GetWorkspaceStateVersion implements workspace.StateStore: the version must
+// belong to the workspace, and the workspace to the namespace.
+func (m *memStore) GetWorkspaceStateVersion(
+	_ context.Context, ns namespace.Name, ws workspace.ID, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sv, ok := m.versions[id]
+	if !ok || sv.Workspace != ws {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	w, ok := m.workspaces[ws]
+	if !ok || w.Ref.Namespace != ns {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	return sv, nil
+}
+
 // FenceAndUnlock implements workspace.StateStore: it releases the lock of w
 // and makes the fence version current, checking the same guards as the
 // adapters: the fence, a held lock and the revision.

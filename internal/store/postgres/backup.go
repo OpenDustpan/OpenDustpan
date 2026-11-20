@@ -562,6 +562,11 @@ func pgEmptiedTables() []pgCopyTable {
 			orderBy: []string{pgColOwner},
 		},
 		{
+			table:   backup.TableGitHostEventReceiptCount,
+			columns: []string{"id", "receipts", "max_receipts"},
+			orderBy: []string{"id"},
+		},
+		{
 			table: backup.TableGitHostEventReceipts,
 			columns: []string{
 				pgColKind, "delivery_id", "body_digest", pgColInstallationID, "event_kind", "repo", "review_id",

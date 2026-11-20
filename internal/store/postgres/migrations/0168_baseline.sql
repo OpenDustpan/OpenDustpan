@@ -393,6 +393,14 @@ CREATE TABLE git_host_connections (
     CONSTRAINT git_host_connections_version_check CHECK ((version >= 1))
 );
 
+CREATE TABLE git_host_event_receipt_count (
+    id boolean NOT NULL,
+    receipts bigint NOT NULL,
+    max_receipts bigint NOT NULL,
+    CONSTRAINT git_host_event_receipt_count_id_check CHECK (id),
+    CONSTRAINT git_host_event_receipt_count_receipts_check CHECK ((receipts >= 0))
+);
+
 CREATE TABLE git_host_event_receipts (
     kind text NOT NULL,
     delivery_id text NOT NULL,
@@ -1816,6 +1824,9 @@ ALTER TABLE ONLY git_host_app_registrations
 
 ALTER TABLE ONLY git_host_connections
     ADD CONSTRAINT git_host_connections_pkey PRIMARY KEY (namespace_id, id);
+
+ALTER TABLE ONLY git_host_event_receipt_count
+    ADD CONSTRAINT git_host_event_receipt_count_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY git_host_event_receipts
     ADD CONSTRAINT git_host_event_receipts_kind_body_digest_key UNIQUE (kind, body_digest);

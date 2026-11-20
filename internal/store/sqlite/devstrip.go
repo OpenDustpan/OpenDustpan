@@ -187,32 +187,3 @@ func (s *Store) checkSwapDevLocked(ctx context.Context, staged string) error {
 
 	return nil
 }
-
-// dropDanglingTempAdmins removes the rows of temp_admins in the staged file at
-// path that name a principal that the principals table of the staged file does
-// not hold. The caller has put the live principals into the staged file, so
-// the rows that go are the rows that dangle against the live principals. It
-// returns the count.
-func dropDanglingTempAdmins(ctx context.Context, path string) (int64, error) {
-	conn, err := openStagedAccess(ctx, path)
-	if err != nil {
-		return 0, err
-	}
-
-	defer func() {
-		_ = conn.Close() //nolint:errcheck // Best-effort close of the staging handle.
-	}()
-
-	res, err := conn.ExecContext(ctx,
-		`DELETE FROM temp_admins WHERE principal_id NOT IN (SELECT id FROM principals)`)
-	if err != nil {
-		return 0, fmt.Errorf("drop dangling temporary administrators: %w", backup.ErrExportRead)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("drop dangling temporary administrators: %w", backup.ErrExportRead)
-	}
-
-	return n, nil
-}

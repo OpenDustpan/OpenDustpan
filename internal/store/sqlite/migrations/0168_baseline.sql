@@ -1066,6 +1066,12 @@ CREATE TABLE git_host_connections (
     PRIMARY KEY (namespace_id, id)
 ) STRICT;
 
+CREATE TABLE git_host_event_receipt_count (
+    id           INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    receipts     INTEGER NOT NULL CHECK (receipts >= 0),
+    max_receipts INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE git_host_event_receipts (
     kind            TEXT    NOT NULL,
     delivery_id     TEXT    NOT NULL,

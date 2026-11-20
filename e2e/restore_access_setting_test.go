@@ -50,7 +50,7 @@ func restoreAccessScenario(t *testing.T, store e2e.Store) {
 		t.Skip("needs E2E_SERVER=binary: the restore worker runs in the server binary")
 	}
 
-	operator := makeOperatorToken(ctx, t, env)
+	operator := makeOperatorToken(ctx, t, env, "operator")
 	victim := makeVictimToken(ctx, t, env)
 	backupID := haStartBackup(ctx, t, env)
 	waitBackupSucceeded(ctx, t, env, backupID)

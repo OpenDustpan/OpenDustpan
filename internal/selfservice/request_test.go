@@ -365,9 +365,14 @@ func TestGateForOpensWithApprovals(t *testing.T) {
 		t.Fatalf("GateFor() = %v", err)
 	}
 
+	forGates := make([]string, 0, len(gates))
+	for i := range gates {
+		forGates = append(forGates, gates[i].Name)
+	}
+
 	approval := func(subject string, v job.Verdict) job.Approval {
 		return job.Approval{
-			Gate: job.GateApproval, Subject: subject, Agent: "", Verdict: v, Comment: "", Plan: nil,
+			Gate: job.GateApproval, For: forGates, Subject: subject, Agent: "", Verdict: v, Comment: "", Plan: nil,
 			At: time.Time{}, Auth: "", AuthAt: time.Time{},
 		}
 	}
@@ -379,7 +384,16 @@ func TestGateForOpensWithApprovals(t *testing.T) {
 	}{
 		{"no approval", nil, job.GateWaiting},
 		{"the requester never counts", []job.Approval{approval("requester", job.VerdictApprove)}, job.GateWaiting},
-		{"one person who is not the requester", []job.Approval{approval("alice", job.VerdictApprove)}, job.GateOpen},
+		{
+			"one person fills one of the two requirements",
+			[]job.Approval{approval("alice", job.VerdictApprove)},
+			job.GateWaiting,
+		},
+		{
+			"two people who are not the requester",
+			[]job.Approval{approval("alice", job.VerdictApprove), approval("bob", job.VerdictApprove)},
+			job.GateOpen,
+		},
 		{"a rejection", []job.Approval{approval("alice", job.VerdictReject)}, job.GateRejected},
 	}
 

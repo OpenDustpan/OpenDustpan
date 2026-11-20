@@ -89,6 +89,10 @@ const (
 type Gate struct {
 	// Type names who can pass the gate. Empty is GateApproval.
 	Type GateType
+	// Name is the name of the requirement of the gate: "default" or
+	// "default/<scope key>". It is unique in a phase. It may be empty only
+	// when the phase holds one gate.
+	Name string
 	// Approvals is the number of approvals that a gate of type GateApproval
 	// needs. Zero needs none. A confirmation gate needs one confirmation.
 	Approvals int
@@ -118,19 +122,24 @@ type Gate struct {
 // one.
 func ConfirmationGate(bindPlan bool) Gate {
 	return Gate{
-		Type: GateConfirmation, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		Type: GateConfirmation, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
 		BindPlan: bindPlan,
 	}
 }
 
-// PolicyGates returns the gates of each phase of kinds, in order: the gate
-// that d gives for the kind, as a gate of type GateApproval. A phase with no
-// gate in d gets none.
+// MaxApprovalGates is the most approval gates that one phase may hold. The
+// approval defaults of the namespace, the collection and the unit give at most
+// one requirement each.
+const MaxApprovalGates = 3
+
+// PolicyGates returns the gates of each phase of kinds, in order: the gates
+// that d gives for the kind, each as a gate of type GateApproval. A phase with
+// no gate in d gets none.
 func PolicyGates(kinds []PhaseKind, d Decision) [][]Gate {
 	out := make([][]Gate, len(kinds))
 
 	for i, k := range kinds {
-		if g, ok := d.Gates[k]; ok {
+		for _, g := range d.Gates[k] {
 			g.Type = GateApproval
 			out[i] = append(out[i], g)
 		}
@@ -172,7 +181,11 @@ const (
 type Approval struct {
 	// Gate is the type of the gate that the verdict is for. Empty is
 	// GateApproval.
-	Gate    GateType
+	Gate GateType
+	// For holds the names of the approval gates whose groups held the
+	// approver when the approver signed. An approval with an empty For fills
+	// no slot of an approval gate.
+	For     []string
 	Subject string
 	// Agent names the agent that recorded the verdict for Subject, or is
 	// empty. An agent can record a rejection, never an approval.
@@ -291,20 +304,10 @@ func freshAuth(a *Approval) bool {
 
 // GatesStatus returns the result of approvals for all gates of one
 // phase: rejected when a verdict rejects, open when every gate is open,
-// and waiting otherwise. A phase with no gate is open.
+// and waiting otherwise. A phase with no gate is open. The approval gates
+// share the approvers: see GatesProgress.
 func GatesStatus(gates []Gate, approvals []Approval, startedBy string, policy gate.ApproverPolicy) GateStatus {
-	status := GateOpen
-
-	for _, g := range gates {
-		st := g.Status(approvals, startedBy, policy)
-		if st == GateRejected {
-			return GateRejected
-		}
-
-		if st == GateWaiting {
-			status = GateWaiting
-		}
-	}
+	status, _ := GatesProgress(gates, approvals, startedBy, policy)
 
 	return status
 }
@@ -428,7 +431,7 @@ type DecisionInput struct {
 type Decision struct {
 	Allow  bool
 	Reason string
-	Gates  map[PhaseKind]Gate
+	Gates  map[PhaseKind][]Gate
 	// PolicyVersion names the policy that decided, for the audit entry.
 	PolicyVersion string
 }
