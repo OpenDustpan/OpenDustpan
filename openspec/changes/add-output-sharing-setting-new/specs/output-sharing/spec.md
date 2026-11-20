@@ -50,7 +50,19 @@ When a caller with `unit:manage-sharing` on a unit, a collection or a namespace 
 
 ### Requirement: Rule list and removal
 
-When a caller with `unit:read-access` on a unit lists its rules, the server SHALL answer the rules whose producer is that unit, ordered by ID. When a caller with `unit:manage-sharing` removes a rule, the server SHALL remove it only when its producer is the object of the route.
+When a caller lists the rules of a producer, the server SHALL answer the rules whose producer is that object, ordered by ID, and SHALL need `unit:read-access` on a unit, `collection:read-access` on a collection and `namespace:read-access` on a namespace (owner, 2026-11-20). When a caller with `unit:manage-sharing` removes a rule, the server SHALL remove it only when its producer is the object of the route.
+
+#### Scenario: Collection rules listed
+- **WHEN** a caller with `collection:read-access` on a collection lists its rules
+- **THEN** the answer holds the rules whose producer is that collection, ordered by ID, and no rule of a unit, of a sibling collection or of the namespace.
+
+#### Scenario: Namespace rules listed
+- **WHEN** a caller with `namespace:read-access` on a namespace lists its rules
+- **THEN** the answer holds the rules whose producer is that namespace, ordered by ID.
+
+#### Scenario: List with the wrong read action
+- **WHEN** a caller holds `unit:read-access`, `collection:read-access` or `namespace:read-access` on another object kind than the object of the list route, or holds `unit:manage-sharing` only
+- **THEN** the list answers 403 and names the action.
 
 #### Scenario: Removal on another producer
 - **WHEN** a caller removes a rule by the ID of a rule of another producer
