@@ -136,14 +136,6 @@ func (downUnits) GetUnit(context.Context, string) (coreinventory.Entry, error) {
 	return coreinventory.Entry{}, errInventoryDown
 }
 
-// allowAll is a route authorizer that allows every action on every object,
-// the zero object too.
-type allowAll struct{ identity.Authorizer }
-
-func (allowAll) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
-	return nil
-}
-
 // TestJobActionRoutesCancelADamagedJobFailsClosed is the hostile table of the
 // resolver of a damaged job: each case stops before the service, even when the
 // authorizer would allow every object.
@@ -190,7 +182,7 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 
 			var logBuf syncBuffer
 
-			h := newLoggedWorkerHandler(t, allowAll{nil}, handlerDeps{
+			h := newLoggedWorkerHandler(t, allowAll{}, handlerDeps{
 				jobs: store, units: tc.units, starter: svc,
 				entries:   &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
 				artifacts: nil, logs: nil, cursors: nil,
