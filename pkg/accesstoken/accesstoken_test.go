@@ -114,6 +114,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: fresh, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
@@ -233,6 +234,7 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      nil, Principals: nil, Freshness: nil, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
@@ -1057,6 +1059,7 @@ func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *acc
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: authz,
 		Reach: access.ReachConfig{
@@ -1597,6 +1600,7 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	f := newFixture(t, nil)
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
@@ -1833,6 +1837,7 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	alice := as(f.person)
 
 	holder, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
@@ -1847,6 +1852,7 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	}
 
 	denied, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      f.store, Principals: reader, Freshness: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},

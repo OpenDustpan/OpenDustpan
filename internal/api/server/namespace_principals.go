@@ -135,6 +135,7 @@ func (h *Handler) serveNamespacePrincipalChange(op namespacePrincipalOp) RouteHa
 		}
 
 		if ok {
+			h.revokeLostMakers(r, p, action, res.object)
 			h.writePrincipalResult(w, r, res, committedWrite)
 		}
 	}

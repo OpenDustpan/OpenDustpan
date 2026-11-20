@@ -174,6 +174,7 @@ func checkMtlsBadPolicy(t *testing.T) {
 	at := f.clock.Now()
 
 	svc, svcErr := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil, Store: badPolicyStore{Store: f.store}, Principals: f.store, Freshness: nil,
 		Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,

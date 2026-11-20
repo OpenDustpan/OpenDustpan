@@ -458,6 +458,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 		if err == nil {
+			h.revokeLostMakers(r, p, action, res.object)
 			h.writePrincipalResult(w, r, res, committedWrite)
 
 			return

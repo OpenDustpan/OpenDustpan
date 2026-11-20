@@ -229,9 +229,23 @@ func checkHostToken(ctx context.Context, t *testing.T, st *sqlite.Store, token, 
 	t.Helper()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -345,9 +359,23 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		st.close()
@@ -381,6 +409,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	checkSt := openHostStore(ctx, t, db)
 
 	checkTokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
 		Reach: access.ReachConfig{
 			Grants:      nil,
 			Roles:       nil,
@@ -494,9 +523,23 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 	defer st.close()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -751,9 +794,23 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)

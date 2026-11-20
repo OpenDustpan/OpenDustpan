@@ -3436,9 +3436,14 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	var authz identity.Authorizer
+	var (
+		authz  identity.Authorizer
+		makers accesstoken.MakerChecker
+	)
+
 	if grants != nil {
 		authz = grants.Authorizer()
+		makers = grants
 	}
 
 	reach, err := reachConfig(cfg)
@@ -3447,7 +3452,8 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
+		Makers: makers,
+		Store:  store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {

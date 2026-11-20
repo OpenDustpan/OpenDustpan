@@ -257,6 +257,7 @@ func newMtlsEnv(t *testing.T) *mtlsEnv {
 	e.rule = e.createRule("acme", "worker", spiffeWorker, e.worker, e.bundleAcme.ID)
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
 		Reach: access.ReachConfig{
 			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
 		},

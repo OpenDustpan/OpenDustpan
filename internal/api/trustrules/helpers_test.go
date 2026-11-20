@@ -178,6 +178,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	// The token service reads the reach from the store, so the trust rule
 	// service compares reaches as the server does.
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
 		Reach: access.ReachConfig{
 			Grants: e.store, Roles: e.store, Callers: e.store, Principals: e.store,
 			Collections: nil, Units: e.store,

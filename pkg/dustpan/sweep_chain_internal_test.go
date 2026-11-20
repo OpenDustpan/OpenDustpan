@@ -221,6 +221,7 @@ func TestSweepOnceSkipsWhileChainChangeWaits(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{

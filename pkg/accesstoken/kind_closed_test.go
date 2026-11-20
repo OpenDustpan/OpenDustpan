@@ -65,6 +65,7 @@ func serviceOver(t *testing.T, f *fixture, st accesstoken.Store) *accesstoken.Se
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: f.store, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
