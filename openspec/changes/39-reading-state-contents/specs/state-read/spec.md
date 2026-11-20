@@ -12,6 +12,10 @@ When a caller with unit:read reads one state version through ReadMasked, the ser
 - **WHEN** caller with unit:read reads one OpenTofu version through ReadMasked
 - **THEN** server masks each sensitive output, each sensitive_attributes path and each sensitive_values path
 
+#### Scenario: OpenTofu version with no kept marks
+- **WHEN** the version has no kept marks and an instance names a whole value in sensitive_attributes
+- **THEN** server answers that value as one marker with no marker for a key below it, and each other attribute value as a marker of its own
+
 ### Requirement: value paths and pages
 
 When the server answers a masked read, the server SHALL key each marker by its JSON Pointer value path for that version.
@@ -70,30 +74,30 @@ If a caller causes repeated refusals on the read route, then the server SHALL co
 
 ### Requirement: bounded work for one read
 
-The server SHALL limit the work of one read by the shape of the state, not only by its size. A version with a nesting depth above 100, or with more than 10000 markers, SHALL be refused with 413 before the server builds the path of any marker, and the refusal goes to the denial limiter. The server SHALL build paths only after these bounds pass, and the paths of one read SHALL NOT total more than the path-byte bound: 32 MB for OpenTofu and 8 MiB for Pulumi.
+The server SHALL limit the work of one read by the shape of the state, not only by its size, with the one bound that the masked reads of the tool share: a nesting depth of at most 100 levels, and one work budget of 128 MiB for the whole read. The scan charges each value the length of its value path plus a fixed cost for its marker. A state above a bound SHALL be refused with 413 and the code `stack.state-too-complex` (Pulumi) or `state-version.too-complex` (OpenTofu) before the server builds the path of any marker, and the refusal goes to the denial limiter. The server SHALL build paths only after the bound passes. The server SHALL NOT add a second bound for the count of markers or the bytes of paths: a state inside the budget is read in pages.
 
 #### Scenario: deep nesting under the size limit
 - **WHEN** a version of less than 5 MB has a nesting depth above 100
-- **THEN** server refuses with 413 and builds no path
+- **THEN** server refuses with 413 and the code of the tool, and builds no path
 
-#### Scenario: too many markers under the size limit
-- **WHEN** a version of less than 5 MB holds more than 10000 markers
-- **THEN** server refuses with 413 and builds no path
+#### Scenario: value paths over the work budget
+- **WHEN** a version of less than 5 MB holds values whose paths need more than the work budget, for example a key of 1 MiB above 200 values
+- **THEN** server refuses with 413 and the code of the tool, and builds no path
+
+#### Scenario: many markers inside the budget
+- **WHEN** a version of less than 5 MB holds more than 10000 markers with short paths
+- **THEN** server answers 200 and holds the markers in pages of 200
+
+### Requirement: deadline inside the masking
+
+The server SHALL check the deadline of the request after the parse, inside the masking of each instance and after the walk, and SHALL answer 504 with the code `state.read-timeout` and no bytes when it has passed. The duplicate pass of OpenTofu works from an index of the masked secrets, so its work does not grow with the product of the values and the secrets.
+
+#### Scenario: deadline inside the masking
+- **WHEN** the deadline passes while the masking of an instance runs
+- **THEN** server answers 504 with the code `state.read-timeout` and no bytes
 
 #### Scenario: deadline after the walk
 - **WHEN** the walk of the state ends after the 30 second deadline
-- **THEN** server answers 504 with the code `state.read-timeout` and no bytes
-
-### Requirement: bounded comparisons and deadline inside a masking walk
-
-For OpenTofu, the server SHALL refuse with 413, before any masking, an instance whose values times its propagable secrets are above 50000000 comparisons. The server SHALL check the deadline after the parse and after the walk, and inside each masking walk at least every 4096 values.
-
-#### Scenario: many secrets and many values under the size limit
-- **WHEN** an OpenTofu version of less than 5 MB has kept marks that name thousands of secrets, and tens of thousands of other values, so that the values times the secrets are above 50000000
-- **THEN** server refuses with 413 before any masking, and the work of the read does not grow with that product
-
-#### Scenario: deadline inside the walk
-- **WHEN** the deadline passes while a masking walk visits more than 4096 values
 - **THEN** server answers 504 with the code `state.read-timeout` and no bytes
 
 #### Scenario: deadline after the parse

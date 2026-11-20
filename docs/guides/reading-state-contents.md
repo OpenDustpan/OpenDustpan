@@ -14,7 +14,8 @@ shows that the value at one path is a secret. The value is not in the answer.
 
 - Pulumi: a marker names each value that the stack stores as a secret.
 - OpenTofu: a marker names each sensitive output, each sensitive attribute
-  path and each sensitive value path of the state.
+  path and each sensitive value path of the state. A value that OpenTofu marks
+  as sensitive as a whole is one marker, with no marker for a key below it.
 
 ## Before you start
 
@@ -103,7 +104,8 @@ accepts.
 | 404 | `unit.not-found` | The unit does not exist. |
 | 404 | `unit.no-state` | The unit has no state yet. |
 | 404 | `state-version.not-found` | The version does not exist. |
-| 413 | `state-version.too-large` | The version is larger than 5 MB, nests deeper than 100 levels, holds more than 10000 markers, or needs more than 50,000,000 comparisons to find the copies of a secret. The server refuses it. |
+| 413 | `state-version.too-large` | The version is larger than 5 MB. The server refuses it before it loads the version. |
+| 413 | `stack.state-too-complex` (Pulumi), `state-version.too-complex` (OpenTofu) | The state nests deeper than 100 levels, or the work of the read is more than 128 MiB. For OpenTofu, a sensitive mark of the state that the server cannot find with one rule gives this code too. The server refuses the state before it builds the path of any marker. |
 | 500 | `server.internal` | The server cannot read the shape of the version, for example an OpenTofu state that the client encrypted. The answer has no content. |
 | 504 | `state.read-timeout` | The read took more than 30 seconds. |
 
@@ -115,19 +117,23 @@ entry for each window. The answer of a refusal keeps its own status.
 - The server refuses a version larger than 5 MB before it loads the version.
 - For OpenTofu, the server loads the version in chunks of 256 KB and stops
   at 5 MB. For Pulumi, the server checks the size of the stored version
-  before it loads the version, and checks the size again after the load.
+  before it loads the version, and checks the size again after the load. The
+  server decodes the state document whole, so the limit of 5 MB bounds the
+  memory of the decode.
 - The server limits the work of one read by the shape of the state, not only
-  by its size. It refuses a version with a nesting depth above 100, with more
-  than 10000 markers, or whose value paths need more bytes than the limit of
-  the tool (8 MB for Pulumi, 32 MB for OpenTofu), with 413. It decides this
-  before it builds the path of any marker.
+  by its size. It refuses a state that nests deeper than 100 levels, or whose
+  values need more than 128 MiB of work, with 413 and the code
+  `stack.state-too-complex` or `state-version.too-complex`. The work of a value
+  is the length of its path plus a fixed cost for its marker. One budget covers
+  the whole read. The server decides this before it builds the path of any
+  marker. A state with many markers under these limits is read in pages.
 - The server refuses an OpenTofu state that it cannot read, with 500 and no
   content. A reader can then tell this answer from a state with no secrets.
   Examples are a state that the client encrypted, a `resources` value that is
   not an array, and a resource with no type or name.
 - A read that takes more than 30 seconds ends with 504 and no bytes. The
-  server checks the time after it parses the state and after it walks the
-  state, so a read never answers 200 after the deadline.
+  server checks the time after it parses the state, inside the masking and
+  after it walks the state, so a read never answers 200 after the deadline.
 - The read uses the stable ID of the unit that the grant names, not its name.
   A unit that is deleted and made again with the same name, while the read
   runs, has a new ID. The read refuses it and answers 404.
