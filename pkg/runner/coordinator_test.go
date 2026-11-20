@@ -283,6 +283,12 @@ func TestCheckSessionRenew(t *testing.T) {
 		})
 	}
 
+	const maxSkew = 5 * time.Minute
+
+	if runner.SessionCancelSkew <= 0 || runner.SessionCancelSkew > maxSkew {
+		t.Fatalf("SessionCancelSkew = %v, want more than 0 and at most %v", runner.SessionCancelSkew, maxSkew)
+	}
+
 	if runner.SessionCancelBound != runner.GraceChanges+runner.ReportTime {
 		t.Fatalf("SessionCancelBound = %v, want the longest grace period plus the report time (%v)",
 			runner.SessionCancelBound, runner.GraceChanges+runner.ReportTime)
