@@ -348,6 +348,16 @@ func TestMaskedReadNeverAnswersPastTheDeadline(t *testing.T) {
 		page, err := h.read(singleShotCtx{calls: &atomic.Int64{}, at: k}, latest(), "")
 		if err == nil {
 			t.Errorf("deadline at check %d of %d: read answered a page with %d markers", k, total, len(page.Markers))
+
+			continue
+		}
+
+		// The refusal is the one deadline refusal, whichever layer saw the end of
+		// the context: the masking answers with the error of the context, and the
+		// boundary of the read maps it. The context of this test is done at one
+		// call only, so the check of the boundary cannot see it again.
+		if !errors.Is(err, workspace.ErrReadDeadline) {
+			t.Errorf("deadline at check %d of %d: err = %v, want ErrReadDeadline", k, total, err)
 		}
 	}
 }
