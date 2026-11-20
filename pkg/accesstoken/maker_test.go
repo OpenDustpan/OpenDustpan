@@ -88,10 +88,9 @@ func (f *makerFixture) revoked(t *testing.T, id string) bool {
 	return !tok.RevokedAt.IsZero()
 }
 
-// revocationEntry returns the one audit entry of @server of the revocation
-// of the token id with the subject accesstoken.MakerSubject, and fails the
-// test unless there is exactly one.
-func (f *makerFixture) revocationEntry(t *testing.T, id string) audit.Entry {
+// revocationEntries returns the audit entries of @server of the revocation
+// of the token id with the subject accesstoken.MakerSubject.
+func (f *makerFixture) revocationEntries(t *testing.T, id string) []audit.Entry {
 	t.Helper()
 
 	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
@@ -108,6 +107,15 @@ func (f *makerFixture) revocationEntry(t *testing.T, id string) audit.Entry {
 		}
 	}
 
+	return found
+}
+
+// revocationEntry returns the one audit entry of the revocation of the token
+// id, and fails the test unless there is exactly one.
+func (f *makerFixture) revocationEntry(t *testing.T, id string) audit.Entry {
+	t.Helper()
+
+	found := f.revocationEntries(t, id)
 	if len(found) != 1 {
 		t.Fatalf("revocation entries of %s = %+v, want one", id, found)
 	}
@@ -197,8 +205,8 @@ func TestRevokeLostMakersKeepsATokenWithAPath(t *testing.T) {
 
 // TestLostMakerCheckFailsClosed sends the error of a checker that cannot
 // decide to both checks. The run after a change returns the error and keeps
-// the token. The check at the use refuses the token and keeps it, so a later
-// use checks again.
+// the token. The check at the use returns the same error, with no wrap of
+// ErrUnauthenticated, and keeps the token, so a later use checks again.
 func TestLostMakerCheckFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -212,8 +220,8 @@ func TestLostMakerCheckFailsClosed(t *testing.T) {
 	}
 
 	_, authErr := f.checked.AuthenticateToken(t.Context(), f.secret.Reveal())
-	if !errors.Is(authErr, identity.ErrUnauthenticated) {
-		t.Fatalf("authenticate with a checker that cannot decide = %v, want ErrUnauthenticated", authErr)
+	if authErr == nil || errors.Is(authErr, identity.ErrUnauthenticated) || !errors.Is(authErr, errDecide) {
+		t.Fatalf("authenticate with a checker that cannot decide = %v, want the error of the checker", authErr)
 	}
 
 	if f.revoked(t, f.token.ID) {
@@ -269,5 +277,88 @@ func TestNoMakerCheckerKeepsTheTokens(t *testing.T) {
 
 	if _, err := f.svc.AuthenticateToken(t.Context(), f.secret.Reveal()); err != nil {
 		t.Fatalf("authenticate: %v", err)
+	}
+}
+
+// makerCheckPath runs one of the two checks of a service token and returns
+// its error.
+type makerCheckPath func(t *testing.T, f *makerFixture) error
+
+// makerCheckPaths returns the check at the authentication and the check of a
+// lease request.
+func makerCheckPaths() map[string]makerCheckPath {
+	return map[string]makerCheckPath{
+		"authenticate": func(t *testing.T, f *makerFixture) error {
+			t.Helper()
+
+			_, err := f.checked.AuthenticateToken(t.Context(), f.secret.Reveal())
+
+			return err
+		},
+		"lease check": func(t *testing.T, f *makerFixture) error {
+			t.Helper()
+
+			return f.checked.CheckActive(t.Context(), f.token.ID)
+		},
+	}
+}
+
+// TestMakerCheckErrorIsNoRefusalOfTheToken sends a checker that cannot decide
+// to the two checks of a service token: the check at the authentication and
+// the check of a lease request. Both answer the error of the checker, which
+// does not wrap ErrUnauthenticated, so the server answers 5xx and no client
+// ends a session as for a revoked token. The token is kept and no entry is
+// written.
+func TestMakerCheckErrorIsNoRefusalOfTheToken(t *testing.T) {
+	t.Parallel()
+
+	for name, check := range makerCheckPaths() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMakerFixture(t, fakeMakers{can: nil, err: errDecide})
+
+			for range 2 {
+				err := check(t, &f)
+				if err == nil || errors.Is(err, identity.ErrUnauthenticated) || !errors.Is(err, errDecide) {
+					t.Fatalf("check = %v, want the error of the checker with no ErrUnauthenticated", err)
+				}
+			}
+
+			if f.revoked(t, f.token.ID) {
+				t.Fatal("a checker that cannot decide revoked the token")
+			}
+
+			if n := len(f.revocationEntries(t, f.token.ID)); n != 0 {
+				t.Fatalf("%d revocation entries, want none", n)
+			}
+		})
+	}
+}
+
+// TestMakerWithNoPathRefusesAndRevokesOnBothChecks sends a maker with no path
+// to the same two checks. Both answer ErrUnauthenticated, revoke the token and
+// write one entry.
+func TestMakerWithNoPathRefusesAndRevokesOnBothChecks(t *testing.T) {
+	t.Parallel()
+
+	for name, check := range makerCheckPaths() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMakerFixture(t, fakeMakers{can: map[string]bool{}, err: nil})
+
+			if err := check(t, &f); !errors.Is(err, identity.ErrUnauthenticated) {
+				t.Fatalf("check = %v, want ErrUnauthenticated", err)
+			}
+
+			if !f.revoked(t, f.token.ID) {
+				t.Fatal("the token of a maker with no path is not revoked")
+			}
+
+			if n := len(f.revocationEntries(t, f.token.ID)); n != 1 {
+				t.Fatalf("%d revocation entries, want 1", n)
+			}
+		})
 	}
 }
