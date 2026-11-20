@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -54,7 +55,9 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, "test-token")
 
 	previous := openStore
-	openStore = func(_ context.Context, _ string, _ *slog.Logger, _ openMode, _ installation.Kind) (store, error) {
+	openStore = func(
+		_ context.Context, _ string, _ *slog.Logger, _ openMode, _ installation.Kind, _ ...dustpan.StoreOption,
+	) (store, error) {
 		t.Error(errGateStoreOpened.Error())
 
 		return nil, errGateStoreOpened

@@ -89,7 +89,7 @@ func TestPrepareDatabaseFileMakesOwnerOnlyFile(t *testing.T) {
 
 	db := filepath.Join(t.TempDir(), "dustpan.db")
 
-	if err := prepareDatabaseFile(db); err != nil {
+	if _, err := prepareDatabaseFile(db, refuseWide); err != nil {
 		t.Fatalf("prepareDatabaseFile: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestPrepareDatabaseFileRefusesHostileFiles(t *testing.T) {
 
 			before := snapshotModes(db)
 
-			if err := prepareDatabaseFile(db); !errors.Is(err, ErrFileMode) {
+			if _, err := prepareDatabaseFile(db, refuseWide); !errors.Is(err, ErrFileMode) {
 				t.Fatalf("prepareDatabaseFile = %v, want ErrFileMode", err)
 			}
 
@@ -144,7 +144,7 @@ func TestPrepareDatabaseFileAcceptsOwnerOnlyFiles(t *testing.T) {
 		writeMode(t, f, 0o600)
 	}
 
-	if err := prepareDatabaseFile(db); err != nil {
+	if _, err := prepareDatabaseFile(db, refuseWide); err != nil {
 		t.Fatalf("prepareDatabaseFile: %v", err)
 	}
 }
@@ -165,7 +165,7 @@ func TestOpenDatabaseRefusesHostileFiles(t *testing.T) {
 			db := filepath.Join(t.TempDir(), "dustpan.db")
 			setup(t, db)
 
-			conn, err := openDatabase(t.Context(), db, nil)
+			conn, err := openDatabase(t.Context(), db, nil, refuseWide)
 			if conn != nil {
 				if closeErr := conn.Close(); closeErr != nil {
 					t.Errorf("close: %v", closeErr)
@@ -185,7 +185,7 @@ func TestOpenDatabaseKeepsSidecarFilesOwnerOnly(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "dustpan.db")
 	writeMode(t, db, databaseFileMode)
 
-	conn, err := openDatabase(t.Context(), db, nil)
+	conn, err := openDatabase(t.Context(), db, nil, refuseWide)
 	if err != nil {
 		t.Fatalf("openDatabase: %v", err)
 	}
@@ -316,4 +316,126 @@ func openTestStore(t *testing.T, path string) *Store {
 	})
 
 	return st
+}
+
+// Layer: the move of a staged file over the live database. The opt-out of the
+// operator does not relax it: a store that allows a wide live file still
+// refuses a wide staged file, and keeps its live connection.
+func TestSwapDatabaseRefusesWideStagedFileWithOptOut(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	live := filepath.Join(dir, "dustpan.db")
+	writeMode(t, live, 0o644)
+
+	st, err := Open(t.Context(), live, WithAllowWideFileMode())
+	if err != nil {
+		t.Fatalf("Open with the opt-out: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
+
+	staged := filepath.Join(dir, "staged.db")
+	writeMode(t, staged, 0o644)
+
+	liveConn := st.conn
+
+	st.mu.Lock()
+	err = st.swapDatabaseLocked(t.Context(), staged)
+	st.mu.Unlock()
+
+	if !errors.Is(err, ErrFileMode) {
+		t.Fatalf("swapDatabaseLocked = %v, want ErrFileMode", err)
+	}
+
+	if st.conn != liveConn {
+		t.Fatal("refused swap replaced the live connection")
+	}
+
+	if err := st.Ping(t.Context()); err != nil {
+		t.Fatalf("store unusable after refused swap: %v", err)
+	}
+}
+
+// Layer: prepareDatabaseFile with the opt-out. A wide file passes and is
+// listed. A new file still gets mode 0600, and a directory still fails.
+func TestPrepareDatabaseFileAllowWide(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	fresh := filepath.Join(dir, "fresh.db")
+
+	wide, err := prepareDatabaseFile(fresh, listWide)
+	if err != nil || len(wide) != 0 {
+		t.Fatalf("prepareDatabaseFile(new) = %v, %v, want no wide file", wide, err)
+	}
+
+	if got := modeOf(t, fresh); got&groupOtherBits != 0 {
+		t.Fatalf("new file mode = %04o, want owner only", got)
+	}
+
+	existing := filepath.Join(dir, "existing.db")
+	writeMode(t, existing, 0o640)
+
+	wide, err = prepareDatabaseFile(existing, listWide)
+	if err != nil || len(wide) != 1 || wide[0].Path != existing || wide[0].Mode != 0o640 {
+		t.Fatalf("prepareDatabaseFile(wide) = %v, %v, want the file at 0640", wide, err)
+	}
+
+	if got := modeOf(t, existing); got != 0o640 {
+		t.Fatalf("mode changed to %04o, want 0640", got)
+	}
+
+	notFile := filepath.Join(dir, "dir.db")
+	if err := os.Mkdir(notFile, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if _, err := prepareDatabaseFile(notFile, listWide); !errors.Is(err, ErrFileMode) {
+		t.Fatalf("prepareDatabaseFile(directory) = %v, want ErrFileMode", err)
+	}
+}
+
+// Layer: openDatabase with the opt-out accepts a wide file and refuses a link
+// in place of a sidecar file.
+func TestOpenDatabaseAllowWide(t *testing.T) {
+	t.Parallel()
+
+	db := filepath.Join(t.TempDir(), "dustpan.db")
+	writeMode(t, db, 0o644)
+
+	conn, err := openDatabase(t.Context(), db, nil, listWide)
+	if err != nil {
+		t.Fatalf("openDatabase with the opt-out: %v", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := openDatabase(t.Context(), db, nil, refuseWide); !errors.Is(err, ErrFileMode) {
+		t.Fatalf("openDatabase without the opt-out = %v, want ErrFileMode", err)
+	}
+
+	target := filepath.Join(filepath.Dir(db), "elsewhere")
+	writeMode(t, target, 0o600)
+
+	if err := os.Remove(db + "-wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove wal: %v", err)
+	}
+
+	if err := os.Symlink(target, db+"-wal"); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	// SQLite itself refuses to open a -wal link, so the check of the files is
+	// tested on its own: it refuses the link even with the opt-out.
+	if _, err := inspectFiles(listWide, databaseFiles(db)...); !errors.Is(err, ErrFileMode) {
+		t.Fatalf("inspectFiles with a -wal link = %v, want ErrFileMode", err)
+	}
 }

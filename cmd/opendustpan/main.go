@@ -326,8 +326,12 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
-	auditChain              string
-	softDeleteRetention     string
+
+	// databaseAllowWideFileMode lets serve start on a SQLite database file
+	// that group or other users can access. The default is off.
+	databaseAllowWideFileMode bool
+	auditChain                string
+	softDeleteRetention       string
 	// retention is softDeleteRetention after the check.
 	retention time.Duration
 	// planRetention and jobLogRetention are the retention flags. jobRetention is
@@ -449,6 +453,7 @@ func checkProxyFlags(list, header string) error {
 func (f *serveFlags) register(fs *flag.FlagSet) {
 	cli.ByFlag("config").String(fs, &f.config)
 	f.common.register(fs)
+	cli.ByFlag("database-allow-wide-file-mode").Bool(fs, &f.databaseAllowWideFileMode)
 	f.registerNet(fs)
 	f.registerLimits(fs)
 	f.registerStorage(fs)
@@ -623,7 +628,9 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		f.warnKeyNextToData(logger, path)
 	}
 
-	opened, storeErr := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
+	opened, storeErr := openStore(
+		ctx, f.database, logger, openMigrate, installation.KindProduction, f.databaseStoreOptions()...,
+	)
 	if storeErr != nil {
 		return storeErr
 	}
@@ -675,6 +682,16 @@ func (f *serveFlags) beforeServe(
 
 		return nil
 	}
+}
+
+// databaseStoreOptions returns the options of the database open that the
+// serve flags set.
+func (f *serveFlags) databaseStoreOptions() []dustpan.StoreOption {
+	if !f.databaseAllowWideFileMode {
+		return nil
+	}
+
+	return []dustpan.StoreOption{dustpan.WithStoreAllowWideFileMode()}
 }
 
 // checkDatabaseFlag rejects a --database value with an unknown form before
@@ -1640,12 +1657,13 @@ const (
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
 var openStore = func(
 	ctx context.Context, database string, logger *slog.Logger, mode openMode, kind installation.Kind,
+	extra ...dustpan.StoreOption,
 ) (store, error) {
-	opts := []dustpan.StoreOption{
+	opts := append([]dustpan.StoreOption{
 		dustpan.WithStoreLogger(logger),
 		dustpan.WithStoreBinaryVersion(version),
 		dustpan.WithStoreInstallationKind(kind),
-	}
+	}, extra...)
 	if mode == openNoMigrate {
 		opts = append(opts, dustpan.WithoutStoreMigrate())
 	}

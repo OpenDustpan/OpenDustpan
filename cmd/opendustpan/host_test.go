@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -815,7 +816,9 @@ func TestHostOffOpensNoStore(t *testing.T) { //nolint:paralleltest // It swaps t
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger, openMode, installation.Kind) (store, error) {
+	openStore = func(
+		context.Context, string, *slog.Logger, openMode, installation.Kind, ...dustpan.StoreOption,
+	) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostOff
@@ -959,7 +962,9 @@ func TestHostReadsTheModeThroughLookup(t *testing.T) { //nolint:paralleltest // 
 
 	t.Cleanup(func() { openStore = saved })
 
-	openStore = func(context.Context, string, *slog.Logger, openMode, installation.Kind) (store, error) {
+	openStore = func(
+		context.Context, string, *slog.Logger, openMode, installation.Kind, ...dustpan.StoreOption,
+	) (store, error) {
 		t.Fatal("the host command opened a store")
 
 		return nil, errHostModeNone

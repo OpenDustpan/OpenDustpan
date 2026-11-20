@@ -10,6 +10,7 @@ func ServeFlags() []*Setting {
 	return SettingsFor(append([]string{
 		"config",
 		"database",
+		"database-allow-wide-file-mode",
 		"installation",
 		"components",
 		"listen",
