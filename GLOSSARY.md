@@ -479,7 +479,7 @@ _Avoid_: User (when the caller can be a machine), actor
 _Copy says_: "principal", explained once where it first shows: "a person, a service or a workload".
 
 **Principal kind**:
-What a principal is: `person`, `service` or `workload` (ADR 52). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `service`. A trust rule names a service principal of its namespace, as a cloud maps a workload identity to a service account. A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
+What a principal is: `person`, `service`, `workload` or `agent` (ADR 52, ADR 354). Each request carries the kind of its principal, from the record that the authenticator reads (ADR 240). The kind is the kind of the principal record. The request also carries its credential: `session`, `access-token`, `job-token` or `trust-token`. A console session and a personal token give `person`. A service token gives `service`. A token from a trust rule (ADR 54) gives `workload` (ADR 240 decision 3, ADR 354 decision 7). A trust rule names a service principal of its namespace, as a cloud maps a workload identity to a service account. A principal of the kind `agent` is an agent principal. An unknown kind is refused (ADR 354). A job token gives the kind of the principal that started the job. The bootstrap admin token gives no kind, and the server counts it as a person (ADR 240). The audit entry records it as `principalKind`.
 _Avoid_: Principal type, account type, token kind (a token kind is `personal` or `service`)
 
 **Principal of a namespace**:
@@ -667,7 +667,7 @@ A named set of actions (ADR 52). A built-in role has a fixed name. An administra
 _Avoid_: Permission set, policy
 
 **Action family**:
-One of four sets of actions that do not overlap: operator, administration, data and delegation. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds delegation actions only.
+One of four sets of actions that do not overlap: operator, administration, data and act-as. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds act-as actions only. The code and the API still write the act-as family as `delegation`. A delegation of a person to an agent is another record (see Delegation).
 _Avoid_: Permission category, scope
 _Copy says_: "kind of action". Never use "scope" for it.
 
@@ -697,11 +697,11 @@ _Avoid_: Effective access, permission set
 _Copy says_: "what the principal can do", with the actions named. Never use "reach" as a plain verb.
 
 **Act-as edge**:
-A right that lets one principal use the authority of another. It has two forms: `principal:manage-tokens` on a principal, and the right to write a trust rule that names a principal.
+A right that lets one principal use the authority of another. It has two forms: `principal:manage-tokens` on a principal, and the right to write a trust rule that names a principal. A delegation is not an act-as edge (RFC 121 decision 18).
 _Avoid_: Impersonation, delegation
 
 **Protected group**:
-A group whose reach holds a sensitive action that is not confined to one namespace. The sensitive actions are access management on the installation, delegation, sign-in settings, the operator family, and identity provider and SCIM configuration. The identity provider cannot add members to it unless the group trusts the identity provider.
+A group whose reach holds a sensitive action that is not confined to one namespace. The sensitive actions are access management on the installation, an act-as right on a principal and sign-in settings. They also include the operator family and the configuration of the identity provider and SCIM. The identity provider cannot add members to it unless the group trusts the identity provider.
 _Avoid_: Privileged group, admin group
 
 **Full sync**:
@@ -1457,11 +1457,11 @@ _Avoid_: Webhook, plugin, connector
 ### Agents
 
 **Dusty**:
-The built-in AI agent of OpenDustpan (ADR 120). It is a Go agent loop in each server instance, on durable operations, so a run continues after a restart. It is off until an administrator connects a model. It is not a principal: it holds no grant, no role and no token. No tool of Dusty runs a shell, a command, a script or code that the model writes.
+The built-in AI agent of OpenDustpan (ADR 120). It is a Go agent loop in each server instance, on durable operations, so a run continues after a restart. It is off until an administrator connects a model. The connect request makes Dusty as an agent principal (RFC 121 decision 7, ADR 354). A run names a delegation (RFC 121 decision 9). Dusty has no client registration and no delegated token (RFC 121 decision 10). No tool of Dusty runs a shell, a command, a script or code that the model writes.
 _Avoid_: Assistant, copilot, bot
 
 **Outside agent**:
-An AI agent that a team brings, which calls the agent tools through the MCP endpoint or the stdio proxy (ADR 123). It gets the same tools, the same act-as and the same audit log as Dusty. It uses no model of the installation, so it pays for its own tokens.
+An AI agent that a team brings, which calls the agent tools through the MCP endpoint or the stdio proxy (ADR 123). It gets the same tools and the same audit log as Dusty, and it acts under a delegation as Dusty does (ADR 354). It uses no model of the installation, so it pays for its own tokens.
 _Avoid_: External agent, third-party agent, MCP client (that is the program)
 
 **Agent run**:
@@ -1469,15 +1469,27 @@ One request of a person to Dusty, from a prompt to its end (ADR 120 decision 6).
 _Avoid_: Run (alone, where an update or a job can be meant), session, job, task
 
 **Stop reason**:
-The reason that an agent run ended, which the status route of the run gives. Examples are `canceled`, `turn-failed` and `credential-ended` (ADR 120). ADR 129 adds three. `model-quota` is for a used-up plan, quota or credit. `model-rate-limited` is for a wait above 5 minutes. `connection-changed` is for a change of the format, the model or the base address during a run.
+The reason that an agent run ended, which the status route of the run gives. Examples are `canceled`, `turn-failed`, `credential-ended` and `delegation-ended` (ADR 120, RFC 121 decision 33). ADR 129 adds three. `model-quota` is for a used-up plan, quota or credit. `model-rate-limited` is for a wait above 5 minutes. `connection-changed` is for a change of the format, the model or the base address during a run.
 _Avoid_: Exit code, end state, status (alone)
 
 **Turn**:
 One model call and the tool calls of its answer (ADR 120 decision 8). Each turn is one durable operation of the kind `agent.turn`, with the steps `check`, `model`, `tools` and `advance`, in this order. The `advance` step starts the next turn, or ends the run when the answer was final.
 _Avoid_: Step (a turn has steps), iteration, round
 
+**Delegation**:
+The stored record that lets one person use an agent principal for a time (ADR 354, RFC 121 decisions 11 to 17). It holds the person, the agent, the mode, the scope, the creator (always the person), the time, the expiry, the client authentication and the audiences. Only a person delegates. It ends by revoke or by expiry. It also ends when the agent is disabled or deleted. It ends too when the person is disabled or deleted, or when SCIM or the identity provider ends the person. Each end writes an audit entry with the cause. The reach of a delegated request is the intersection of the person, the ceiling of the agent and the scope. A delegation adds nothing to the reach of the agent. It is not an act-as right.
+_Avoid_: Act-as right, grant (a delegation is not a grant), impersonation, agent token
+
+**Delegation mode**:
+One of `read`, `propose` and `operate` (RFC 121 decision 12). The server stores the list of actions that the mode expands to when the person consents, not the mode name alone (RFC 121 decision 13).
+_Avoid_: Level, permission level, role
+
+**Agent principal**:
+A principal of the kind `agent` (ADR 354). Dusty is one. It holds the grants of its ceiling only and is never a member of a group. It never delegates and never has a fresh authentication. The model connect request makes Dusty, with the administrator as its creator and first sponsor (RFC 121 decision 7). A request of an agent principal is a delegated request: the person and the delegation come first.
+_Avoid_: Bot user, service account, agent identity
+
 **Act-as**:
-The rule that an agent run acts as its person, at the time of each call (ADR 120 decision 13). The run records the subject and the credential ID, never the credential. It resolves the credential at the start of each step and again before each tool call. So a run never has more access than its person, and needs no act-as edge (ADR 120 decision 15).
+The right that lets one principal use the authority of another (ADR 70 decisions 1 and 13). The word "act-as right" replaces "delegation" for this right (ADR 354). A delegation of a person to an agent is another record and is not an act-as right (RFC 121 decision 18).
 _Avoid_: Impersonation, delegation, agent identity
 
 **Agent tool**:

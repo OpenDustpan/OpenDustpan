@@ -203,7 +203,10 @@ func newOutputShareRig(t *testing.T, dialect string) *outputShareRig {
 // harness returns the harness of the suite over the rig.
 func (r *outputShareRig) harness() outputsharetest.Harness {
 	return outputsharetest.Harness{
-		Store:        nil,
+		Store: nil,
+		// This rig serves the setting and the checker, not the rule store. The rule
+		// cases and the cases of the unit hooks skip when Store is nil.
+		RemoveUnit: nil, PurgeUnit: nil, RenameUnit: nil, MoveUnit: nil, RemakeCollection: nil,
 		Settings:     r.store.OutputSharingSettings(),
 		Attachments:  nil,
 		UnitFault:    nil,
