@@ -148,6 +148,9 @@ type accessFixtureParts struct {
 	// noSignIn builds the handler with no console sign-in, as a server with
 	// no public URL does.
 	noSignIn bool
+	// getGrantErr is the error of each read of a grant by the access service.
+	// With nil, the read goes to the store.
+	getGrantErr error
 }
 
 // newAccessFixturePorts is newAccessFixture with the collection port and the
@@ -158,7 +161,7 @@ func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -174,7 +177,7 @@ func newAccessFixtureSignIn(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -197,7 +200,7 @@ func newAccessFixtureLinks(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -212,7 +215,7 @@ func newAccessFixtureClock(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
-		noSignIn: false,
+		noSignIn: false, getGrantErr: nil,
 	})
 }
 
@@ -262,7 +265,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Store: readFailStore{Store: st, err: parts.getGrantErr}, Directory: st, Namespaces: st, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
@@ -336,47 +339,48 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		LocalUsers:       newRouteLocalUsers(t, st),
-		Preferences:      nil,
-		GitHostLinks:     links(st),
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    subjectAuthenticator{},
-		Authorizer:       authz,
-		Logger:           logger,
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       principals,
-		Tokens:           tokens,
-		Access:           grants,
-		Audit:            parts.entries(st),
-		OnAuditFailure:   nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		SignIn:           consoleOf(parts, signIn),
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
-		Reach:            routeReach(st),
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		LocalUsers:         newRouteLocalUsers(t, st),
+		Preferences:        nil,
+		GitHostLinks:       links(st),
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      subjectAuthenticator{},
+		Authorizer:         authz,
+		Logger:             logger,
+		Namespaces:         namespaces,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         principals,
+		Tokens:             tokens,
+		Access:             grants,
+		Audit:              parts.entries(st),
+		OnAuditFailure:     nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		SignIn:             consoleOf(parts, signIn),
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
+		Reach:              routeReach(st),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -786,7 +790,7 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 		t.Fatalf("delta grants = %+v, want none", list.Grants)
 	}
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -841,7 +845,7 @@ func TestGrantChangesWriteAuditEntries(t *testing.T) {
 
 	// A grant on a namespace writes its entries in that namespace, so the
 	// auditor of the namespace sees them.
-	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), "acme", audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list acme entries: %v", err)
 	}
@@ -1149,7 +1153,7 @@ func TestEscalationRefusalIsAudited(t *testing.T) {
 		http.StatusForbidden,
 	}, nil)
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
@@ -1180,4 +1184,20 @@ func consoleOf(parts accessFixtureParts, in *apiserver.SignIn) *apiserver.SignIn
 	}
 
 	return in
+}
+
+// readFailStore is the store of the access service. A non-nil err fails each
+// read of a grant by ID.
+type readFailStore struct {
+	*sqlite.Store
+
+	err error
+}
+
+func (s readFailStore) GetGrant(ctx context.Context, id string) (access.Grant, error) {
+	if s.err != nil {
+		return access.Grant{}, s.err
+	}
+
+	return s.Store.GetGrant(ctx, id)
 }

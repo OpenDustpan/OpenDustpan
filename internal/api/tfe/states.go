@@ -784,12 +784,14 @@ func (h *Handler) resolveStateOutputID(_ http.ResponseWriter, r *http.Request) (
 func (h *Handler) resolveStateVersion(
 	r *http.Request, id workspace.StateVersionID,
 ) (identity.Object, error) {
-	sv, err := h.workspaces.ReadState(r.Context(), id)
+	// The lookup opens no output: decryption runs only after the guard
+	// authorizes the unit that this function returns.
+	wsID, err := h.workspaces.StateVersionWorkspace(r.Context(), id)
 	if err != nil {
 		return identity.Object{}, err
 	}
 
-	ws, err := h.workspaces.GetByID(r.Context(), sv.Workspace)
+	ws, err := h.workspaces.GetByID(r.Context(), wsID)
 	if err != nil {
 		return identity.Object{}, err
 	}
@@ -809,7 +811,8 @@ func (h *Handler) rollbackState(
 	if err != nil {
 		// A state over a size limit is a limit and not a fault of the store.
 		// The refusal then has the code gate.limit.
-		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) {
+		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) ||
+			errors.Is(err, workspace.ErrStateBound) {
 			return nil, fmt.Errorf("%w: read the state change of the restore: %w", gate.ErrLimit, err)
 		}
 

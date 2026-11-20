@@ -216,9 +216,9 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	}
 
 	h, err := trustrules.NewHandler(trustrules.Config{
-		Exchanger:  exchanger,
+		Exchanger: exchanger, MtlsExchanger: nil, MtlsGuard: nil,
 		Namespaces: namespaces, Rules: rules, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Audit: e.audit, OnAuditFailure: nil, DenialLimiter: nil, Sessions: nil,
+		Audit: e.audit, OnAuditFailure: nil, OnMtlsRefused: nil, DenialLimiter: nil, Sessions: nil,
 		Logger: slog.New(slog.DiscardHandler), Now: nil,
 	})
 	if err != nil {
@@ -447,7 +447,7 @@ func errorCode(t *testing.T, body []byte) string {
 func (e *env) ruleEntries() []audit.Entry {
 	e.t.Helper()
 
-	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(e.t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		e.t.Fatalf("list audit: %v", err)
 	}

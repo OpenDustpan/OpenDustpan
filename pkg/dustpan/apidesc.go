@@ -38,6 +38,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{name: "runnerpools", handler: a.runnerPools, label: metrics.AdapterServer},
 		{name: "profiles", handler: a.profiles, label: metrics.AdapterServer},
 		{name: "issuer", handler: a.issuer, label: metrics.AdapterServer},
+		{name: "githostwebhook", handler: a.gitHostWebhook, label: metrics.AdapterServer},
 		{name: "sinks", handler: a.sinks, label: metrics.AdapterServer},
 		{name: "jobs", handler: a.jobs, label: metrics.AdapterServer},
 		{name: "triggers", handler: a.triggers, label: metrics.AdapterServer},

@@ -3,6 +3,7 @@ package stack_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,47 @@ func (a acceptAnyPlacement) CreateStackPlaced(
 	ctx context.Context, st stack.Stack, _ stack.Placement, fence namespace.Fence,
 ) error {
 	return a.CreateStack(ctx, st, fence)
+}
+
+// placedRecorder is a PlacedStore that records each create and does not
+// delegate it to any store. It proves the check of the service alone: a
+// refused create must make no call, as tagRecorder does for UpdateTags.
+type placedRecorder struct {
+	stack.Store
+
+	mu      sync.Mutex
+	creates int
+}
+
+func (r *placedRecorder) CreateStack(context.Context, stack.Stack, namespace.Fence) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.creates++
+
+	return nil
+}
+
+func (r *placedRecorder) CreateStackPlaced(context.Context, stack.Stack, stack.Placement, namespace.Fence) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.creates++
+
+	return nil
+}
+
+func (r *placedRecorder) GetStack(context.Context, stack.Ref) (stack.Stack, error) {
+	var st stack.Stack
+
+	return st, nil
+}
+
+func (r *placedRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.creates
 }
 
 // TestCreatePlacedRefusedWithoutCollection proves that CreatePlaced makes no
@@ -125,6 +167,43 @@ func permissiveService(t *testing.T) (*stack.Service, stack.Ref) {
 	}
 
 	return svc, ref
+}
+
+// recordingPlacedService returns a service over a placedRecorder, so that a
+// test sees every create call that the service lets through.
+func recordingPlacedService(t *testing.T) (*stack.Service, *placedRecorder, stack.Ref) {
+	t.Helper()
+
+	inner, _ := openCrashSQL(t, nil)
+
+	ns := namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.Unix(1, 0), Name: "acme", PrimaryInstallation: "eu-west",
+		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := inner.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: inner, Now: nil, Installation: "eu-west"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	rec := &placedRecorder{Store: inner, mu: sync.Mutex{}, creates: 0}
+
+	svc, err := stack.NewService(stack.Config{
+		Store: rec, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil,
+	})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	return svc, rec, ref
 }
 
 // requireRefused fails the test unless err is collection.ErrNoCollection and

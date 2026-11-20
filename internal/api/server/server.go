@@ -84,6 +84,9 @@ type Config struct {
 	// answers. Nil means the upgrade check answers 0: a store that predates
 	// the count still serves.
 	Journal JournalReporter
+	// FirstAdministrator is the service of the first administrator. Nil
+	// means the three routes of the first administrator are not mounted.
+	FirstAdministrator FirstAdministratorService
 	// Principals keeps the principals and the groups of the installation
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
@@ -255,6 +258,7 @@ type Handler struct {
 	preferences    *preferences.Service
 	gitHostLinks   *forgelinksvc.Service
 	localUsers     *localusersvc.Service
+	firstAdmin     FirstAdministratorService
 	// passkeys is the passkey service of the console sign-in. With no
 	// sign-in there is no service.
 	passkeys      PasskeyService
@@ -342,6 +346,7 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		stateWrite:     cfg.StateWriteGates,
 		preferences:    cfg.Preferences,
 		localUsers:     cfg.LocalUsers,
+		firstAdmin:     cfg.FirstAdministrator,
 		passkeys:       nil, passkeyBegins: newBeginLimiter(),
 		settings:  cfg.Settings,
 		gitHost:   cfg.GitHost,
@@ -746,9 +751,13 @@ func classifyRequest(err error) (failure, bool) {
 // classifyRegistry maps the backup and restore registry errors to their
 // status and message. Registry and target failures may hold driver text, so
 // only the sentinel decides the status and the message. A missing backup
-// answers 404 and a second start 409.
+// answers 404, a second start 409, and a backup that runs or failed 409.
 func classifyRegistry(err error) failure {
 	switch {
+	case errors.Is(err, backup.ErrStillRunning):
+		return failCoded(http.StatusConflict, backup.ErrStillRunning.Error(), errcode.BackupStillRunning)
+	case errors.Is(err, backup.ErrEndedFailed):
+		return failCoded(http.StatusConflict, backup.ErrEndedFailed.Error(), errcode.BackupEndedFailed)
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return fail(http.StatusConflict, "a backup is already running")
 	case errors.Is(err, backup.ErrRestoreRunning):

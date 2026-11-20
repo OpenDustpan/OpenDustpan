@@ -97,6 +97,8 @@ var (
 	ErrFinished = errors.New("job already ended")
 	// ErrSelfApproval reports an approval by the principal that started the
 	// job, when the decision does not allow it.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrSelfApproval = errors.New("the principal that started the job cannot approve it")
 	// ErrAlreadyApproved reports an approval by a subject that approved the
 	// current phase already. An approval counts once, and a repeat adds
@@ -122,9 +124,13 @@ var (
 	// ErrAgentDenied reports an approval, a confirmation or a break-glass
 	// that an agent asks for, and a start that the agent mode does not
 	// allow. Only a person can approve, confirm or break a freeze.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrAgentDenied = errors.New("an agent cannot do this")
 	// ErrNotRequester reports a confirmation by a principal that is not the
 	// person who asked the agent for the job.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNotRequester = errors.New("only the person who asked the agent can confirm the job")
 	// ErrAuthStale reports a confirmation with no fresh authentication
 	// (ConfirmAuth) inside ConfirmFreshness.

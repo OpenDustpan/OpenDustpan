@@ -111,3 +111,30 @@ func View(r Row) (savedview.View, error) {
 
 	return v, nil
 }
+
+// ErrOverLimit reports stored rows in which an owner or a namespace has more
+// saved views than savedview.MaxPerOwner or savedview.MaxPerNamespace.
+var ErrOverLimit = errors.New("saved views over the limit")
+
+// CheckCounts checks the counts of the view v of a stored row: ofOwner is the
+// number of views of the owner in the namespace, and inNamespace is the
+// number of views in the namespace. It returns ErrOverLimit for a count over a
+// limit. The error names the owner or the namespace, the count and the limit.
+// The caller builds v with View, so that the names in the error are valid.
+//
+// Defense in depth: the create of a view refuses a view over a limit. This
+// check stays so that a backup that a person edited cannot bring in more
+// views than the create allows.
+func CheckCounts(v savedview.View, ofOwner, inNamespace int64) error {
+	if ofOwner > savedview.MaxPerOwner {
+		return fmt.Errorf("owner %q has %d saved views in namespace %q, the limit is %d: %w",
+			v.Owner, ofOwner, v.Namespace, savedview.MaxPerOwner, ErrOverLimit)
+	}
+
+	if inNamespace > savedview.MaxPerNamespace {
+		return fmt.Errorf("namespace %q has %d saved views, the limit is %d: %w",
+			v.Namespace, inNamespace, savedview.MaxPerNamespace, ErrOverLimit)
+	}
+
+	return nil
+}

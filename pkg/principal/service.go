@@ -1,7 +1,6 @@
 package principal
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -644,7 +643,9 @@ func groupKey(g Group) string { return strings.ToLower(g.Name) }
 type SignInInput struct {
 	Subject string
 	// Source is the source of a principal that the sign-in makes:
-	// SourceOIDC or SourceOAuth. Empty is SourceOIDC.
+	// for example SourceOIDC or SourceOAuth. An empty or unknown source
+	// gets ErrInvalid when the sign-in makes a principal. A sign-in that
+	// finds a principal does not read it.
 	Source Source
 	Names  []string
 	Create bool
@@ -779,7 +780,7 @@ func (s *Service) signIn(
 		Subject:     in.Subject,
 		DisplayName: signInDisplayName(in),
 		Kind:        KindPerson,
-		Source:      cmp.Or(in.Source, SourceOIDC),
+		Source:      in.Source,
 		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 

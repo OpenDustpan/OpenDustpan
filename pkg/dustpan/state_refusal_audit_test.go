@@ -108,7 +108,7 @@ type securityEntryWire struct {
 func (w *contextWorld) securityEntries(t *testing.T) []securityEntryWire {
 	t.Helper()
 
-	code, body := w.call(t, http.MethodGet, "/api/audit/entries?organization=@server&page[size]=100",
+	code, body := w.call(t, http.MethodGet, "/api/audit/entries?organization=@server&pageSize=100",
 		ctxAdminToken, "")
 	if code != http.StatusOK {
 		t.Fatalf("list @server entries: status = %d: %s", code, body)

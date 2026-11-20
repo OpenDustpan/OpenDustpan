@@ -1,12 +1,15 @@
 package stack_test
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -108,11 +111,13 @@ func TestSecretCiphertextOfRejectsRepeatedSecretsProviders(t *testing.T) {
 	secret := revealDeployment("cipher")
 	repeated := strings.Replace(secret, `"resources":`, `"secrets_providers":{"type":"service"},"resources":`, 1)
 
-	if _, _, err := stack.SecretCiphertextOf([]byte(secret), "/resources/0/outputs/password"); err != nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), []byte(secret), "/resources/0/outputs/password"); err != nil {
 		t.Fatalf("reveal of the deployment with one copy: %v", err)
 	}
 
-	if _, _, err := stack.SecretCiphertextOf([]byte(repeated), "/resources/0/outputs/password"); err == nil {
+	const path = "/resources/0/outputs/password"
+
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), []byte(repeated), path); err == nil {
 		t.Fatal("reveal of a deployment with two copies answered, want an error")
 	}
 }
@@ -130,7 +135,7 @@ func TestSecretCiphertextOf(t *testing.T) {
 		t.Fatalf("masked paths: %v", err)
 	}
 
-	cipher, _, err := stack.SecretCiphertextOf(deployment, masked[0])
+	cipher, _, err := stack.SecretCiphertextOf(t.Context(), deployment, masked[0])
 	if err != nil {
 		t.Fatalf("ciphertext: %v", err)
 	}
@@ -139,7 +144,7 @@ func TestSecretCiphertextOf(t *testing.T) {
 		t.Fatalf("ciphertext = %q, want cipher-bytes", cipher)
 	}
 
-	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/greeting"); err == nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/greeting"); err == nil {
 		t.Fatal("plain path succeeded, want a not-found error")
 	} else if !isNotFound(err) {
 		t.Fatalf("plain path error = %v, want a not-found error", err)
@@ -200,7 +205,7 @@ func TestSecretCiphertextOfEscapedKeys(t *testing.T) {
 		"/resources/0/inputs/a~1b": "slash-cipher",
 		"/resources/0/inputs/c~0d": "tilde-cipher",
 	} {
-		cipher, _, err := stack.SecretCiphertextOf(deployment, path)
+		cipher, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
 		if err != nil {
 			t.Fatalf("ciphertext of %q: %v", path, err)
 		}
@@ -252,7 +257,7 @@ func TestSecretCiphertextOfStreamsLargeDeployment(t *testing.T) {
 
 	// Warm the path once, so one-time allocations stay out of the
 	// measurement.
-	if _, _, err := stack.SecretCiphertextOf(deployment, path); err != nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path); err != nil {
 		t.Fatalf("warm reveal: %v", err)
 	}
 
@@ -263,7 +268,7 @@ func TestSecretCiphertextOfStreamsLargeDeployment(t *testing.T) {
 
 	runtime.ReadMemStats(&before)
 
-	cipher, masked, err := stack.SecretCiphertextOf(deployment, path)
+	cipher, masked, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
 
 	var after runtime.MemStats
 
@@ -303,7 +308,7 @@ func TestSecretCiphertextOfRejectsResourceWithoutURN(t *testing.T) {
 		`"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` + cipher + `"}},` +
 		`"outputs":{}}]}`)
 
-	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/inputs/password"); err == nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/inputs/password"); err == nil {
 		t.Fatal("URN-less resource succeeded, want a not-found error")
 	} else if !isNotFound(err) {
 		t.Fatalf("URN-less resource error = %v, want a not-found error", err)
@@ -311,7 +316,7 @@ func TestSecretCiphertextOfRejectsResourceWithoutURN(t *testing.T) {
 
 	plain := []byte(`{"secrets_providers":{"type":"service"},"resources":[null]}`)
 
-	if _, _, err := stack.SecretCiphertextOf(plain, "/resources/0/inputs/password"); err == nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), plain, "/resources/0/inputs/password"); err == nil {
 		t.Fatal("non-object resource succeeded, want a not-found error")
 	} else if !isNotFound(err) {
 		t.Fatalf("non-object resource error = %v, want a not-found error", err)
@@ -330,7 +335,7 @@ func TestSecretCiphertextOfURNLast(t *testing.T) {
 		`"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` + cipher + `"}},` +
 		`"urn":"urn:pulumi:dev::web::pkg:index:Res::res"}]}`)
 
-	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/password")
+	got, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/password")
 	if err != nil {
 		t.Fatalf("ciphertext: %v", err)
 	}
@@ -370,7 +375,7 @@ func TestSecretCiphertextOfLargeSectionBeforeURN(t *testing.T) {
 
 	runtime.ReadMemStats(&before)
 
-	got, masked, err := stack.SecretCiphertextOf(deployment, path)
+	got, masked, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
 
 	var after runtime.MemStats
 
@@ -418,7 +423,7 @@ func TestSecretCiphertextOfDuplicateURN(t *testing.T) {
 		t.Fatalf("masked = %q, want it to hold %q", masked, path)
 	}
 
-	got, _, err := stack.SecretCiphertextOf(deployment, path)
+	got, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
 	if err != nil {
 		t.Fatalf("reveal: %v", err)
 	}
@@ -427,7 +432,7 @@ func TestSecretCiphertextOfDuplicateURN(t *testing.T) {
 		t.Fatalf("ciphertext = %q, want dup-cipher", got)
 	}
 
-	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/k"); err == nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/k"); err == nil {
 		t.Fatal("reveal of /resources/0/outputs/k answered, want not-found")
 	}
 }
@@ -478,7 +483,7 @@ func TestSecretCiphertextOfBoundsLargeStringToken(t *testing.T) {
 	path := "/resources/" + strconv.Itoa(fillers+1) + "/outputs/password"
 
 	// Warm the path once, so one-time allocations stay out of the measurement.
-	if _, _, err := stack.SecretCiphertextOf(deployment, path); err != nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path); err != nil {
 		t.Fatalf("warm reveal: %v", err)
 	}
 
@@ -489,7 +494,7 @@ func TestSecretCiphertextOfBoundsLargeStringToken(t *testing.T) {
 
 	runtime.ReadMemStats(&before)
 
-	got, masked, err := stack.SecretCiphertextOf(deployment, path)
+	got, masked, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
 
 	var after runtime.MemStats
 
@@ -528,7 +533,7 @@ func TestSecretCiphertextOfRejectsNonObjectElement(t *testing.T) {
 			`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},"outputs":{"k":` +
 			secret + `}}]}`)
 
-		if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/k"); err == nil {
+		if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/k"); err == nil {
 			t.Fatalf("element %s: reveal answered a later resource's secret, want not-found", element)
 		}
 	}
@@ -561,12 +566,12 @@ func TestSecretCiphertextOfRejectsSecretInsideSecret(t *testing.T) {
 		t.Fatalf("masked = %q, want the outer secret only", masked)
 	}
 
-	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/inputs/a")
+	got, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/inputs/a")
 	if err != nil || string(got) != "outer-cipher" {
 		t.Fatalf("outer reveal = %q, %v; want outer-cipher", got, err)
 	}
 
-	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/inputs/a/inner"); err == nil {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/inputs/a/inner"); err == nil {
 		t.Fatal("reveal of a secret inside a secret answered, want not-found")
 	}
 }
@@ -592,7 +597,7 @@ func TestSecretCiphertextOfRejectsDuplicateKeys(t *testing.T) {
 	}
 
 	for name, doc := range cases {
-		if _, _, err := stack.SecretCiphertextOf([]byte(doc), "/resources/0/outputs/k"); err == nil {
+		if _, _, err := stack.SecretCiphertextOf(t.Context(), []byte(doc), "/resources/0/outputs/k"); err == nil {
 			t.Errorf("%s: reveal answered, want an error", name)
 		}
 	}
@@ -615,12 +620,12 @@ func TestSecretCiphertextOfRejectsNonCanonicalPath(t *testing.T) {
 		"/resources/0/outputs/a~2b",
 		"/resources/0/outputs/a~0b~",
 	} {
-		if _, _, err := stack.SecretCiphertextOf(deployment, path); err == nil {
+		if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path); err == nil {
 			t.Errorf("reveal of %q answered, want not-found", path)
 		}
 	}
 
-	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a~0b")
+	got, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/a~0b")
 	if err != nil || string(got) != "tilde" {
 		t.Fatalf("canonical reveal = %q, %v; want tilde", got, err)
 	}
@@ -665,7 +670,7 @@ func TestSecretCiphertextOfDoesNotReadLargeTarget(t *testing.T) {
 
 		runtime.ReadMemStats(&before)
 
-		_, _, err := stack.SecretCiphertextOf(deployment, path)
+		_, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
 
 		runtime.ReadMemStats(&after)
 
@@ -681,8 +686,8 @@ func TestSecretCiphertextOfDoesNotReadLargeTarget(t *testing.T) {
 }
 
 // TestSecretCiphertextOfDeepPathAllocatesLinearly reveals a secret at the end
-// of a deep path, in a document of about 8 MiB that nests 4000 objects, each
-// with a 2 KiB string beside the path. A lookup that copies or re-reads the
+// of the deepest path that the bound allows, in a document of about 1.6 MiB
+// that nests MaxStateDepth objects, each with a 16 KiB string beside the path. A lookup that copies or re-reads the
 // subtree at each level allocates a multiple of the document size. The test
 // bounds the bytes that one reveal allocates, which does not depend on the
 // scheduler. It runs without t.Parallel, because the measurement needs a quiet
@@ -691,13 +696,13 @@ func TestSecretCiphertextOfDoesNotReadLargeTarget(t *testing.T) {
 //nolint:paralleltest // The allocation measurement needs a quiet runtime, so this test never runs in parallel.
 func TestSecretCiphertextOfDeepPathAllocatesLinearly(t *testing.T) {
 	const (
-		depth = 4000
-		// maxAlloc is about twice the 2.6 MiB that one reveal allocates under
-		// -race, measured when the bound was set.
-		maxAlloc = 5 << 20
+		depth = stack.MaxStateDepth
+		// maxAlloc is about five times the 183 KiB that one reveal allocates
+		// under -race, and less than one copy of the 1.6 MiB document.
+		maxAlloc = 1 << 20
 	)
 
-	padding := strings.Repeat("p", 2048)
+	padding := strings.Repeat("p", 16<<10)
 
 	var (
 		open   strings.Builder
@@ -726,7 +731,7 @@ func TestSecretCiphertextOfDeepPathAllocatesLinearly(t *testing.T) {
 
 		runtime.ReadMemStats(&before)
 
-		got, _, err := stack.SecretCiphertextOf(deployment, path+tokens.String())
+		got, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path+tokens.String())
 
 		runtime.ReadMemStats(&after)
 
@@ -770,7 +775,7 @@ func TestSecretCiphertextOfRejectsSignedAncestorInAnyOrder(t *testing.T) {
 			`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
 			`"outputs":{"a":` + outer + `}}]}`)
 
-		_, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a/inner")
+		_, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/a/inner")
 		if !isNotFound(err) {
 			t.Errorf("%s: reveal error = %v, want not-found", name, err)
 		}
@@ -796,12 +801,146 @@ func TestSecretCiphertextOfKeyWithTildeTwo(t *testing.T) {
 		t.Fatalf("masked = %q, want the escaped path a~02b", masked)
 	}
 
-	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a~02b")
+	got, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/a~02b")
 	if err != nil || string(got) != "tilde-two" {
 		t.Fatalf("reveal of a~02b = %q, %v; want tilde-two", got, err)
 	}
 
-	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a~2b"); !isNotFound(err) {
+	if _, _, err := stack.SecretCiphertextOf(t.Context(), deployment, "/resources/0/outputs/a~2b"); !isNotFound(err) {
 		t.Fatalf("reveal of a~2b error = %v, want not-found", err)
+	}
+}
+
+// TestSecretCiphertextOfRefusesPathPastTheDepthBound proves a reveal path
+// that goes deeper than MaxStateDepth under the section fails with
+// ErrStateBound, and a path at the bound still reads. The document is small,
+// so only the depth check of the path can refuse it.
+func TestSecretCiphertextOfRefusesPathPastTheDepthBound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		depth   int
+		wantErr bool
+	}{
+		{name: "path at the bound reads", depth: stack.MaxStateDepth, wantErr: false},
+		{name: "path one past the bound is refused", depth: stack.MaxStateDepth + 1, wantErr: true},
+		{name: "path far past the bound is refused", depth: stack.MaxStateDepth + 400, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			secret := `{"4dabf18193072939515e22adb298388d":` +
+				`"1b47061264138c4ac30d75fd1eb44270","ciphertext":"x"}`
+			deployment := []byte(`{"resources":[{"urn":"u","outputs":` +
+				strings.Repeat(`{"a":`, tt.depth) + secret + strings.Repeat(`}`, tt.depth) + `}]}`)
+			path := "/resources/0/outputs" + strings.Repeat("/a", tt.depth)
+
+			cipher, _, err := stack.SecretCiphertextOf(t.Context(), deployment, path)
+			if got := errors.Is(err, stack.ErrStateBound); got != tt.wantErr {
+				t.Fatalf("ErrStateBound = %v, want %v (err %v)", got, tt.wantErr, err)
+			}
+
+			if tt.wantErr && cipher != nil {
+				t.Fatalf("refused lookup returned %d bytes of ciphertext", len(cipher))
+			}
+		})
+	}
+}
+
+// TestSecretCiphertextOfCanceledContextReturnsNoSecret proves a lookup with a
+// canceled context fails with the context error and returns no ciphertext,
+// although the path names a secret. The check runs after the stream of the
+// whole deployment.
+func TestSecretCiphertextOfCanceledContextReturnsNoSecret(t *testing.T) {
+	t.Parallel()
+
+	deployment := []byte(revealDeployment("cipher-bytes"))
+
+	masked, err := stack.MaskedPaths(deployment)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	cipher, paths, err := stack.SecretCiphertextOf(ctx, deployment, masked[0])
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+
+	if cipher != nil || paths != nil {
+		t.Fatalf("canceled lookup returned ciphertext %q and paths %q", cipher, paths)
+	}
+}
+
+// errCallsContext is a context whose Err reports cancellation from call
+// number from on, and counts the calls.
+type errCallsContext struct {
+	from  int
+	calls int
+}
+
+func (c *errCallsContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (c *errCallsContext) Done() <-chan struct{} { return nil }
+
+func (c *errCallsContext) Value(any) any { return nil }
+
+func (c *errCallsContext) Err() error {
+	c.calls++
+	if c.from > 0 && c.calls >= c.from {
+		return context.Canceled
+	}
+
+	return nil
+}
+
+// TestSecretCiphertextOfCanceledContextStopsTheDrain proves a call that the
+// caller leaves stops during the drain of a deployment with many tokens, and
+// not after the stream of the whole deployment. The deployment holds a second
+// resource of 20000 tokens after the secret. A live context is checked during
+// the drain and once at the end. A context that ends at the second check ends
+// the lookup at that check: the call makes no further check, and returns no
+// ciphertext.
+func TestSecretCiphertextOfCanceledContextStopsTheDrain(t *testing.T) {
+	t.Parallel()
+
+	const tokens = 20000
+
+	deployment := []byte(strings.Replace(revealDeployment("cipher-bytes"), `"greeting":"hi"}}]}`,
+		`"greeting":"hi"}},{"urn":"u","type":"t","inputs":{"big":[`+strings.Repeat("0,", tokens)+`0]}}]}`, 1))
+
+	masked, err := stack.MaskedPaths(deployment)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	live := &errCallsContext{from: 0, calls: 0}
+
+	if cipher, _, liveErr := stack.SecretCiphertextOf(live, deployment, masked[0]); liveErr != nil || cipher == nil {
+		t.Fatalf("live context: cipher = %q, err = %v, want the ciphertext", cipher, liveErr)
+	}
+
+	if live.calls < 3 {
+		t.Fatalf("the lookup checked the context %d times, want a check during the drain", live.calls)
+	}
+
+	ctx := &errCallsContext{from: 2, calls: 0}
+
+	cipher, paths, err := stack.SecretCiphertextOf(ctx, deployment, masked[0])
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+
+	if cipher != nil || paths != nil {
+		t.Fatalf("canceled lookup returned ciphertext %q and paths %q", cipher, paths)
+	}
+
+	if ctx.calls != 2 {
+		t.Fatalf("the lookup checked the context %d times, want it to stop at check 2", ctx.calls)
 	}
 }

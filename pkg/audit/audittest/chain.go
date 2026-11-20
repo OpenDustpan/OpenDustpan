@@ -237,7 +237,7 @@ func wantInvalidAt(t *testing.T, got audit.CheckResult, seq int64) {
 func listScope(t *testing.T, s ChainStore, ns namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list %s: %v", ns, err)
 	}
@@ -673,7 +673,7 @@ func testStoreRefusesPartialOriginRow(t *testing.T, ts ChainTestStore) {
 
 	ts.TamperEntry(t, tl.ns.Name, 1, "tool", "read")
 
-	_, err := ts.Store.List(t.Context(), tl.ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	_, err := ts.Store.List(t.Context(), tl.ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if !errors.Is(err, audit.ErrInvalidOrigin) {
 		t.Fatalf("list with a partial origin row = %v, want audit.ErrInvalidOrigin", err)
 	}
@@ -1189,7 +1189,7 @@ func approvalFixed(t *testing.T, change audit.ChainChange) durable.StartRequest 
 func approvalEntryCount(t *testing.T, s ChainStore) int {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server scope: %v", err)
 	}

@@ -762,11 +762,20 @@ func TestStartRefusesBadRequests(t *testing.T) {
 			"object is not a unit", "ada", job.ErrInvalid, 0,
 			func(r *job.StartRequest) { r.Unit = identity.NamespaceObject("acme") }, nil,
 		},
-		{
-			"unit name with a control character", "ada", job.ErrInvalid, 0,
-			func(r *job.StartRequest) { r.Unit = mustUnit("acme", "a\nb") }, nil,
-		},
 	})
+}
+
+// TestStartUnitNameWithHiddenRuneStopsAtUnitObject proves that a unit name
+// with a hidden rune cannot become the unit of a start request: the unit
+// reference refuses it. The internal test of checkUnitName sends such names
+// to the check of Start directly.
+func TestStartUnitNameWithHiddenRuneStopsAtUnitObject(t *testing.T) {
+	t.Parallel()
+
+	_, err := identity.UnitObject("opentofu", "acme", "a\nb")
+	if !errors.Is(err, identity.ErrInvalidObject) {
+		t.Fatalf("UnitObject with a line feed = %v, want ErrInvalidObject", err)
+	}
 }
 
 func TestStartRefusesCallers(t *testing.T) {

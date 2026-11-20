@@ -112,7 +112,7 @@ func KindFor(k principal.Kind) (Kind, error) {
 	case principal.KindService:
 		return KindService, nil
 	case principal.KindWorkload:
-		return "", fmt.Errorf("%w: a workload uses a trust rule (ADR 54)", ErrNoTokenForKind)
+		return "", fmt.Errorf("%w: a workload uses a trust rule", ErrNoTokenForKind)
 	case principal.KindAgent:
 		return "", fmt.Errorf("%w: an agent principal gets no access token", ErrNoTokenForKind)
 	default:

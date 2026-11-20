@@ -63,7 +63,7 @@ func checkRenewalDuringSwap(t *testing.T, keepAccess bool) {
 	done := make(chan error, 1)
 
 	go func() {
-		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, keepAccess)
+		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(keepAccess))
 		done <- applyErr
 	}()
 
@@ -124,13 +124,14 @@ func TestSlowRestoreSwapKeepsItsClaim(t *testing.T) {
 	}
 
 	swap := func(ctx context.Context, sc durable.StepContext) ([]byte, error) {
-		_, applyErr := s.ApplyRestoreArea(ctx, sc.Fence, staged.Area, false)
+		_, applyErr := s.ApplyRestoreArea(ctx, sc.Fence, staged.Area, backup.PlainSwap(false))
 
 		return nil, applyErr
 	}
 
 	runner, err := durable.NewRunner(durable.RunnerConfig{
-		Store: ops, Owner: "instance-b",
+		Store: ops,
+		Owner: "instance-b",
 		Kinds: []durable.KindSpec{
 			{
 				Kind:       backup.RestoreOperationKind,
@@ -139,9 +140,19 @@ func TestSlowRestoreSwapKeepsItsClaim(t *testing.T) {
 				Steps:      []durable.Step{{Name: backup.RestoreStepSwap, Run: swap}},
 			},
 		},
-		Lease: slowSwapLease, RenewEvery: slowSwapRenew, PollEvery: 0, MaxAttempts: 1, ExpiryLimit: 0,
-		Backoff: durable.Backoff{Base: 0, Max: 0}, ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout: 0, Deferred: nil, StopOnRenewalError: true, Logger: nil, Rand: nil,
+		Lease:                slowSwapLease,
+		RenewEvery:           slowSwapRenew,
+		PollEvery:            0,
+		MaxAttempts:          1,
+		ExpiryLimit:          0,
+		DeadlineReleaseLimit: 0,
+		Backoff:              durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff:         durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:         0,
+		Deferred:             nil,
+		StopOnRenewalError:   true,
+		Logger:               nil,
+		Rand:                 nil,
 	})
 	if err != nil {
 		t.Fatalf("new runner: %v", err)
@@ -243,7 +254,7 @@ func checkChangeDuringSwap(
 	done := make(chan error, 1)
 
 	go func() {
-		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false)
+		_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(false))
 		done <- applyErr
 	}()
 

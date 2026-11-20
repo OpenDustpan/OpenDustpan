@@ -41,7 +41,8 @@ func newRegistration(key string) forge.Registration {
 		CreatedAt: at, UpdatedAt: at, KeyCreatedAt: at, EventSecretCreatedAt: at, Kind: forge.KindGitHub,
 		AppID: testAppID, BaseURL: testBaseURL, HookID: forge.NewHookID(), KeySetID: forge.NewSetID(),
 		EventSecretSetID: forge.NewSetID(), AddressDigest: "", SealedKey: []byte(key),
-		SealedEventSecret: []byte("sealed-event-" + key), Version: 1,
+		SealedEventSecret: []byte("sealed-event-" + key), OldEventSecretSetID: "", OldSealedEventSecret: nil,
+		OldEventSecretEndsAt: time.Time{}, Version: 1,
 	}
 	r.AddressDigest = r.Digest()
 

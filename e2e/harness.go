@@ -2503,6 +2503,14 @@ type cliCall struct {
 // stdin is piped to the CLI as standard input, or no input when empty. A
 // non-zero exit is reported in the Result, not as an error.
 func (e *Env) runCLI(ctx context.Context, call cliCall) (Result, error) {
+	// The CLI configuration of OpenTofu takes its providers from the mirror
+	// only, so the mirror must hold them before init.
+	if call.cli.Tool == ToolTofu && len(call.args) > 0 && call.args[0] == "init" {
+		if err := fillProviderMirror(ctx); err != nil {
+			return Result{}, err
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
@@ -2704,8 +2712,8 @@ func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
 
 	cert := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: ts.Certificate().Raw})
 	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
-	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
-	e.write(tb, filepath.Join(e.home, "tofurc-b"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.tokenB))
+	e.write(tb, filepath.Join(e.home, "tofurc"), tofuRC(tb, e.Host(), e.token))
+	e.write(tb, filepath.Join(e.home, "tofurc-b"), tofuRC(tb, e.Host(), e.tokenB))
 	e.write(tb, filepath.Join(e.project, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
 }
 

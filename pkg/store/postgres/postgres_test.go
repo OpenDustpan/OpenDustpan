@@ -1046,8 +1046,15 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		keep bool
 		want string
 	}{
-		{name: "replaces access tables", keep: false, want: "access tables replaced"},
-		{name: "keeps access tables", keep: true, want: "access tables kept"},
+		{
+			name: "replaces access tables", keep: false,
+			want: "access tables replaced; setting restore.replace-access-tables " +
+				"taken from the backup (the live value was not read before the swap)",
+		},
+		{
+			name: "keeps access tables", keep: true,
+			want: "access tables kept; setting restore.replace-access-tables kept (the live value was not read)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1175,14 +1182,16 @@ func newRestoreAuditServices(
 		AfterApply:   nil,
 		Admit:        nil,
 
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1240,7 +1249,7 @@ func assertRestoreAuditEntry(
 	t.Helper()
 
 	listing, err := st.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0},
 	)
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
@@ -1490,6 +1499,10 @@ type sqlUpdatesStore struct {
 	t   *testing.T
 }
 
+// Unwrap implements storetest.Unwrapper: the embedded interface hides the
+// collection methods that the suites use to put a stack in a collection.
+func (s *sqlUpdatesStore) Unwrap() any { return s.UpdatesStore }
+
 var (
 	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
 	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
@@ -1607,12 +1620,12 @@ func (s *sqlUpdatesStore) Inner() any {
 func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
-		return audit.Listing{}, errNoAuditList
+		return audit.Listing{Entries: nil, More: false}, errNoAuditList
 	}
 
 	listing, err := lister.List(ctx, ns, page)
 	if err != nil {
-		return audit.Listing{}, fmt.Errorf("list audit entries: %w", err)
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("list audit entries: %w", err)
 	}
 
 	return listing, nil
@@ -1891,11 +1904,17 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 
 	next := map[string]string{"team": "e2e"}
-	if err := s.UpdateStackTags(ctx, ref, next, now, ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		ctx,
+		ref,
+		stack.TagUpdate{Tags: next, UpdatedAt: now, Entry: renameTestEntry(ref.Namespace, ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
+	if err = s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -2375,6 +2394,17 @@ func BenchmarkProtectedGroups(b *testing.B) {
 	}
 
 	accesstest.BenchProtectedGroups(b, open(b, base))
+}
+
+// BenchmarkUnitLookup measures the read of one unit of a namespace of 20,000
+// units, by a list and a scan and by the unit ID. It needs the PostgreSQL URL.
+func BenchmarkUnitLookup(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	storetest.BenchUnitLookup(b, open(b, base))
 }
 
 // revocationStore adds to the store the two hooks of the revocation suite: the

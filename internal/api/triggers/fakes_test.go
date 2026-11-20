@@ -199,7 +199,25 @@ func (s *fakeStore) Put(_ context.Context, t trigger.Trigger, _ namespace.Fence,
 	return nil
 }
 
-func (s *fakeStore) Get(_ context.Context, _ namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+func checkGet(ns namespace.Name, id trigger.ID) error {
+	// Like CheckGet of the adapters: an ID or a namespace that is not valid is
+	// refused before any read.
+	if err := id.Validate(); err != nil {
+		return fmt.Errorf("get trigger: %w", err)
+	}
+
+	if _, err := namespace.ParseName(string(ns)); err != nil {
+		return fmt.Errorf("%w: namespace: %w", trigger.ErrInvalid, err)
+	}
+
+	return nil
+}
+
+func (s *fakeStore) Get(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+	if err := checkGet(ns, id); err != nil {
+		return trigger.Trigger{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -216,7 +234,11 @@ func (s *fakeStore) Get(_ context.Context, _ namespace.Name, id trigger.ID) (tri
 	return t, nil
 }
 
-func (s *fakeStore) Stored(_ context.Context, _ namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+func (s *fakeStore) Stored(_ context.Context, ns namespace.Name, id trigger.ID) (trigger.Trigger, error) {
+	if err := checkGet(ns, id); err != nil {
+		return trigger.Trigger{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

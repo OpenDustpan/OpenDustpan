@@ -58,15 +58,19 @@ func (d blueprintDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([
 
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := d.s.List(ctx, ns, audit.Page{Number: page, Size: audit.MaxPageSize})
+	for before := int64(0); ; {
+		listing, err := d.s.List(ctx, ns, audit.Page{Size: audit.MaxPageSize, Before: before})
 		if err != nil {
 			return nil, fmt.Errorf("list audit of %s: %w", ns, err)
 		}
 
 		out = append(out, listing.Entries...)
 
-		if len(listing.Entries) < audit.MaxPageSize {
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
 			break
 		}
 	}

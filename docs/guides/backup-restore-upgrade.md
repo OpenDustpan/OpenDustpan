@@ -39,6 +39,8 @@ A backup of an installation with no registry release prints `registry files: 0 f
 
 The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
+If the command cannot read the state of a backup that started, it names the backup ID. The server continues the backup on its own. Do not run the command again. To read the state of the backup, send `GET /api/dustpan/v1/backups/{id}`.
+
 A backup keeps running when you start or restart a server process, or when you update the server processes one at a time. If the server process that runs the backup stops, another server process continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any server process answers the state of the backup. A backup that fails ends as `failed` with the error text.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
@@ -68,7 +70,7 @@ The publish path limits each file of an upload to 512 MiB and the sum of the fil
 
 The server copies a blob only when the SQL data holds its size and its MD5. It checks the copy against these values. A row can name a blob without them, for example a row that an earlier version of the server wrote. The server does not copy that blob. It lists the key in the optional `unverified` list of the manifest and writes a warning to the server log.
 
-Registry release files follow a stricter rule. A published release that names a file its row holds no size and MD5 of stops the backup. A file hash outside 64 lowercase hex characters stops it too. The error names the release, the version and the SHA-256 key. A file that the blob store cannot read stops the backup the same way. A copy whose bytes do not match its SHA-256 key stops it too. The failed backup writes no manifest, so no partial backup stays. Fix the blob store or the row, then run `opendustpan backup` again.
+Registry release files follow a stricter rule. A published release that names a file its row holds no size and MD5 of stops the backup. A file hash outside 64 lowercase hex characters stops it too. The error names the release, the version and the SHA-256 key. A file that the blob store cannot read stops the backup the same way. A copy whose bytes do not match its SHA-256 key stops it too. The failed backup writes no manifest and no `live.json`, so no read, check or restore uses it. The table files that the run wrote stay in the target under `backups/<id>/<attempt>/sql/`. The CLI prints the failure, and then the warnings about the key-encryption key and about the OpenTofu state. To find a missing blob, run `opendustpan store check --target blobs`. Fix the blob store or the row, then run `opendustpan backup` again.
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
@@ -90,12 +92,17 @@ opendustpan backup check --server https://dustpan.example --ca-file ca.pem --bac
 
 The command takes only `--server`, `--ca-file` and `--backup`. A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key, or the total that does not match.
 
+A backup that is still running, or that ended with an error, is not corrupt. For such a backup, the command prints the text that says so, and exits with status 1.
+
 ## Restore a backup
 
 Restore loads a backup from the configured backup target into the running
-installation. Restore is an API operation: the server checks the backup,
-backs up the live data, enters maintenance mode, and only then applies the
-backup. Use the same key-encryption key and the same schema version as the backup
+installation. Restore is an API operation. The server runs these steps in
+this order: it stages the backup and checks it, enters maintenance mode, backs
+up the live data, copies the blobs, and swaps the staged data into the live
+data. The restore state is `checking` until the backup of the live data starts,
+and then `applying`, so maintenance mode is on for a time while the state is
+still `checking`. Use the same key-encryption key and the same schema version as the backup
 source. The database may differ: a backup of SQLite restores into PostgreSQL
 and a backup of PostgreSQL restores into SQLite.
 
@@ -117,6 +124,8 @@ backup before restore: bkp-cnsz7imkyfh4mcrk5n3z
 
 It ends with `restore rst-aaa succeeded`. Only one restore runs
 at a time. A second start while one runs answers 409.
+
+A start for a backup that is still running answers 409 with the code `backup.still-running`. A start for a backup that ended with an error answers 409 with the code `backup.ended-failed`. Each answer has a text that names the state. A start for a backup ID that the server does not know answers 404 with the text `backup not found`. A backup that has no record on this installation starts when the target holds its live pointer. Use this to restore into a new installation. If the target holds a live pointer that the server cannot read, the start is refused and makes no restore.
 
 The server answers the start with 202 and the restore ID. A `worker` process
 runs the restore in steps, and records the result of each step in the
@@ -232,6 +241,16 @@ restored data. The restore also releases every OpenTofu workspace lock that
 the backup holds. A client that holds a lock from before the restore must take
 a new lock and read the restored state before it writes.
 
+The restore also expires the lease of every Pulumi update that was running when
+the backup was made. The update stays `running` and its stack stays locked. The
+client that holds the old lease token cannot renew the lease, save a
+checkpoint or complete the update: each call answers 401 with the error code
+`update.lease-expired`. To unlock the stack, run `pulumi cancel` on it. The
+cancel ends the update as canceled and builds its checkpoint from the journal,
+as for any update whose lease ran out. When the restore expired at least one
+lease, the audit log holds one entry of the restore that gives the count of the
+expired leases.
+
 The server checks the key that it started with before it writes anything. The
 `opendustpan restore` command does not read `DUSTPAN_KEY_ENCRYPTION_KEY`. When
 the server has no key, or its key does not open the backup, the restore stops,
@@ -254,6 +273,13 @@ key-encryption key, each table file against its descriptor, and each blob
 against its size and MD5. It loads the table files into a staging area. The
 stage checks the staged data against the row counts, the blob references and
 the foreign keys of the manifest. A failed check leaves the live data unchanged.
+
+The stage also checks each saved view with the rules of a new view, and with
+the limits of a create: 100 saved views for one owner in one namespace, and
+10000 saved views in one namespace. A backup over a limit is corrupt. The
+restore stops and leaves the live data unchanged. The error names the owner or
+the namespace, the number of saved views and the limit, for example `namespace
+"acme" has 10001 saved views, the limit is 10000`.
 
 The command refuses a backup with no manifest or with an unknown format
 number. The refusal does not change the live data.
@@ -280,14 +306,15 @@ curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 
 | Answer | Meaning |
 | --- | --- |
-| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/dustpan/v1/restores/{id}` until its status is `failed`. |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. The time depends on the step that runs. In one test run with about 1.2 GB of blobs, this took about 13 seconds. Read `GET /api/dustpan/v1/restores/{id}` until its status is `failed`. |
 | 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
 | 409 `restore.ended` | The restore already ended. |
 | 404 | No restore has this ID. |
 
 Each cancel of a known restore writes an audit entry. A canceled restore
-leaves the live data unchanged, and leaves the maintenance mode that it
-entered. The audit log of a restore that stopped before the swap holds an
+leaves the live data unchanged. The server leaves the maintenance mode that
+it entered, so the state of the installation is `normal` when the restore
+is `failed`. The audit log of a restore that stopped before the swap holds an
 entry with the outcome `failure` and the text `canceled before the swap` (or
 `failed before the swap`, or `stopped before the swap` for a restore that
 ended with no end write). The text says that the live state, history and
@@ -476,9 +503,9 @@ The command takes only `--server` and `--ca-file`. Against a local server with n
 ```text
 binary version: dev
 server version: dev
-database schema version: 100
-binary schema version: 100
-schema minimum binary version: none
+database schema version: 168
+binary schema version: 168
+schema minimum binary version: v0.1.0
 pending migrations: none
 running journaled updates: 0
 warning: this binary is a dev build. It ignores the minimum binary version of the database schema.

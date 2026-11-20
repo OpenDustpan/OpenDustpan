@@ -89,7 +89,10 @@ func NewService(cfg Config) (*Service, error) {
 // object. The holder is the subject of p. The reason is required and has at
 // most 500 characters. The audit entry by names the caller and the request; the
 // service sets its time and its reason. A lock on an object that has one
-// returns ErrAlreadyLocked, and the message names the holder.
+// returns ErrAlreadyLocked, and the message names the holder. It returns
+// identity.ErrDenied when the Authorizer denies the action, and
+// ErrAuthorizerFailed when the Authorizer fails with another error. The two
+// errors never match together, and the store is not called for either.
 func (s *Service) Lock(
 	ctx context.Context,
 	p identity.Principal,
@@ -132,7 +135,10 @@ func (s *Service) Lock(
 
 // Unlock removes the manual lock of t, which the principal p must hold. The
 // principal needs unit:lock on the object. It returns ErrNotHolder when
-// another principal holds the lock.
+// another principal holds the lock. It returns identity.ErrDenied when the
+// Authorizer denies the action, and ErrAuthorizerFailed when the Authorizer
+// fails with another error. The two errors never match together, and the store
+// is not called for either.
 func (s *Service) Unlock(ctx context.Context, p identity.Principal, t Target, by audit.Entry) error {
 	if err := t.Valid(); err != nil {
 		return err
@@ -357,6 +363,10 @@ func (s *Service) authorize(ctx context.Context, p identity.Principal, action id
 	}
 
 	if err := s.authorizer.Authorize(ctx, p, action, obj); err != nil {
+		if !errors.Is(err, identity.ErrDenied) {
+			return fmt.Errorf("authorize %s on %s: %w: %w", action, t, ErrAuthorizerFailed, err)
+		}
+
 		return fmt.Errorf("authorize %s on %s: %w", action, t, err)
 	}
 

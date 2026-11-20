@@ -16,7 +16,7 @@ func TestEveryClassHasACode(t *testing.T) {
 	t.Parallel()
 
 	errs := []error{
-		errMissingOrganization, errInvalidPage, errInvalidSequence, identity.ErrInvalidObject,
+		errMissingOrganization, errRemovedPaging, errInvalidSequence, identity.ErrInvalidObject,
 		namespace.ErrNotFound, audit.ErrEntryNotFound, errNoEntryReader,
 	}
 

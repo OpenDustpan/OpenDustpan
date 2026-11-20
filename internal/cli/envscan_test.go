@@ -186,7 +186,7 @@ func envReaderValuesAllowed() map[string]valueUse {
 			reason: "serve passes the lookup to the dev check, the setting snapshot, the setting layers and the start checks",
 			vars:   append([]string{"DUSTPAN_DEV"}, cli.DeclaredEnvs()...),
 		},
-		"internal/cli/client/backup.go#BackupToken": {
+		"internal/cli/client/backup.go#backupTokenFor": {
 			sites:  1,
 			reason: "the backup client loads the admin tokens through the lookup",
 			vars:   []string{"DUSTPAN_ADMIN_TOKEN", "DUSTPAN_ADMIN_TOKEN_FILE"},

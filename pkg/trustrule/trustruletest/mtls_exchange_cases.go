@@ -17,7 +17,8 @@ const (
 
 const (
 	mtlsSPIFFEID = "spiffe://example.org/ns/acme/sa/deploy"
-	// mtlsWildcard is a valid rule pattern, and never a verified SPIFFE ID.
+	// mtlsWildcard is a pattern that no rule holds, and never a verified
+	// SPIFFE ID.
 	mtlsWildcard = "spiffe://example.org/ns/acme/sa/*"
 )
 
@@ -220,12 +221,12 @@ func testMtlsOtherBundle(t *testing.T, h Harness) {
 	mustRefuseMtls(t, h, &y, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
 }
 
-// testMtlsWildcard sends a rule pattern as the SPIFFE ID of an exchange,
-// although a rule of the bundle names that same pattern.
+// testMtlsWildcard sends a pattern with a * as the SPIFFE ID of an exchange,
+// although a rule of the bundle names an exact SPIFFE ID.
 func testMtlsWildcard(t *testing.T, h Harness) {
 	t.Helper()
 
-	r := mtlsRule(t, h, "wildcard", mtlsWildcard)
+	r := mtlsRule(t, h, "wildcard", mtlsSPIFFEID)
 	x := mtlsExchangeOf(t, h, &r, mtlsWildcard)
 	fence := h.Namespace(t, nsAcme)
 

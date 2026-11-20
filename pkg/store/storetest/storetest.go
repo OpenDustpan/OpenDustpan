@@ -778,7 +778,13 @@ func testUpdateTags(t *testing.T, s Store) {
 	updated := now().Add(time.Hour)
 	next := map[string]string{"team": "e2e", "owner": "sre"}
 
-	if err := s.UpdateStackTags(t.Context(), st.Ref, next, updated, ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		st.Ref,
+		stack.TagUpdate{Tags: next, UpdatedAt: updated, Entry: renameEntry(st.Ref.Namespace, st.Ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
@@ -820,7 +826,13 @@ func testUpdateTagsClear(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.UpdateStackTags(t.Context(), st.Ref, map[string]string{}, now(), ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		st.Ref,
+		stack.TagUpdate{Tags: map[string]string{}, UpdatedAt: now(), Entry: renameEntry(st.Ref.Namespace, st.Ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("clear tags: %v", err)
 	}
 
@@ -840,9 +852,17 @@ func testUpdateTagsMissing(t *testing.T, s Store) {
 	ns := newNamespace(t, s, "acme")
 	ref := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "prod"}
 
-	if err := s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "e2e"}, now(), ns.Fence()); !errors.Is(
-		err, stack.ErrNotFound,
-	) {
+	err := s.UpdateStackTags(
+		t.Context(),
+		ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"team": "e2e"},
+			UpdatedAt: now(),
+			Entry:     renameEntry(ref.Namespace, ref),
+		},
+		ns.Fence(),
+	)
+	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("update tags of missing stack: err = %v, want ErrNotFound", err)
 	}
 }
@@ -859,9 +879,17 @@ func testUpdateTagsStaleFence(t *testing.T, s Store) {
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 
-	if err := s.UpdateStackTags(t.Context(), st.Ref, map[string]string{"team": "e2e"}, now(), stale); !errors.Is(
-		err, namespace.ErrFenced,
-	) {
+	err := s.UpdateStackTags(
+		t.Context(),
+		st.Ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"team": "e2e"},
+			UpdatedAt: now(),
+			Entry:     renameEntry(st.Ref.Namespace, st.Ref),
+		},
+		stale,
+	)
+	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("update tags with stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -888,11 +916,17 @@ func testRenameKeepsTags(t *testing.T, s Store) {
 
 	next := map[string]string{"team": "e2e"}
 
-	if err := s.UpdateStackTags(t.Context(), st.Ref, next, now(), ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		st.Ref,
+		stack.TagUpdate{Tags: next, UpdatedAt: now(), Entry: renameEntry(st.Ref.Namespace, st.Ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.RenameStack(t.Context(), st.Ref, "renamed", ns.Fence(), renameEntry(ns.Name, st.Ref)); err != nil {
+	if err = s.RenameStack(t.Context(), st.Ref, "renamed", ns.Fence(), renameEntry(ns.Name, st.Ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -939,7 +973,7 @@ func testRenameWritesAuditEntry(t *testing.T, s Store) {
 		t.Fatalf("rename stack: %v", err)
 	}
 
-	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -1051,7 +1085,7 @@ func runSameNameRename(t *testing.T, s Store, lister auditLister, tc sameNameRen
 		assertStack(t, got, st)
 	}
 
-	listing, listErr := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, listErr := lister.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if listErr != nil {
 		t.Fatalf("list audit entries: %v", listErr)
 	}
@@ -1125,11 +1159,17 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 	}
 
 	tags := map[string]string{"team": "e2e", "old": "only"}
-	if err := s.UpdateStackTags(t.Context(), first.Ref, tags, now(), ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		first.Ref,
+		stack.TagUpdate{Tags: tags, UpdatedAt: now(), Entry: renameEntry(first.Ref.Namespace, first.Ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	err := s.DeleteStack(
+	err = s.DeleteStack(
 		t.Context(),
 		first.Ref,
 		ns.Fence(),
@@ -1402,7 +1442,17 @@ func testInventoryLabels(t *testing.T, s Store) {
 	}
 
 	want := map[string]string{"team": "payments", "app": "web"}
-	if err := s.UpdateStackTags(t.Context(), tagged.Ref, want, now().Add(time.Minute), ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		tagged.Ref,
+		stack.TagUpdate{
+			Tags:      want,
+			UpdatedAt: now().Add(time.Minute),
+			Entry:     renameEntry(tagged.Ref.Namespace, tagged.Ref),
+		},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
@@ -1495,7 +1545,13 @@ func testInventoryAfterTagChange(t *testing.T, s Store) {
 	updated := now().Add(time.Hour)
 	next := map[string]string{"team": "e2e"}
 
-	if err := s.UpdateStackTags(t.Context(), st.Ref, next, updated, ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		st.Ref,
+		stack.TagUpdate{Tags: next, UpdatedAt: updated, Entry: renameEntry(st.Ref.Namespace, st.Ref)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 

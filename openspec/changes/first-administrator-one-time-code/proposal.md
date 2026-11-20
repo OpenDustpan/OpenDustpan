@@ -22,6 +22,7 @@ Errors the person may hit, and the one command that helps:
 - The code is wrong, spent, expired or for another person: `400` NEW error code `first-administrator.code-invalid`. One text covers the four cases. The text says to ask the operator for a new code with `POST /api/server/first-administrator`.
 - The sign-in is too old, or the request has an access token: `403` `mfa.fresh-step-required` with the path of a new sign-in (the existing code and text of the console).
 - The marker is set: `409` NEW error code `first-administrator.already-made`. The text says that recovery is `opendustpan host create-temp-admin` (host recovery guide).
+- The person holds the `site-administrator` role already: `409` NEW error code `first-administrator.grant-exists`. The code is not spent and no marker is stored. The text says that the person holds the role already.
 - The principal is not a live, enabled person, or is a break-glass person, a temporary administrator, a service or a `dev:` subject: `400` NEW error code `first-administrator.principal-invalid`. The text names the rule that failed.
 - The reason is empty, longer than 500 characters or holds a control or format character: `400` NEW error code `first-administrator.reason-invalid`.
 
@@ -29,7 +30,7 @@ The change also gives the three guides of ADR 339 decision 8 the true text: cons
 
 ## Evidence
 
-- The route, the code, the marker and the change do not exist on main. Proof, run on main (a39ce4470, 18 Nov 2026):
+- The route, the code, the marker and the change do not exist on main. Proof, run on main (8c76edc53, 19 Nov 2026):
   `rg -n -i "first-administrator|first_administrator|FirstAdministrator" --glob '!openspec/**' --glob '!docs/adr/**' --glob '!docs/rfc/**' .` prints nothing.
   a search of the guides for the words "first administrator" prints one line, one line in a guide about the Helm chart, which names the bootstrap admin tokens only.
 - The bootstrap admin token cannot make a grant. `requireFresh` answers `errFreshStepRequired` to each request that has no console session ((read only) `internal/api/server/freshness.go`, line 112, `:67`). An access token never gives a fresh authentication.

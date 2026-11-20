@@ -44,7 +44,7 @@ const maxOwnContractDirs = 4
 
 // maxOwnBodyRows is the row count of ownBodies, summed over all directories.
 // A new row fails TestExemptionListsOnlyShrink until this pin changes.
-const maxOwnBodyRows = 9
+const maxOwnBodyRows = 11
 
 // ownContractDirs returns the adapters that keep their own wire contract. The
 // gate does not check them. Each value is the reason. The list only shrinks.
@@ -66,13 +66,15 @@ func ownBodies() map[string]map[string]string {
 			"Body": "the one error body of the tool-neutral APIs",
 		},
 		"server": {
-			"errorResponse":        "an own error writer of the installation API that has not moved to problem.Writer yet",
-			"codedResponse":        "an own error writer of the installation API that has not moved to problem.Writer yet",
-			"enterRefusedResponse": "an own error writer of the installation API that has not moved to problem.Writer yet",
-			"devCodeRequest":       "the request body of the dev sign-in; code is the sign-in code",
-			"getRestoreResponse":   "a 200 row; errorCode repeats the stored catalog code of a restore",
-			"restoreSummaryJSON":   "a 200 row; errorCode repeats the stored catalog code of a restore",
-			"restoreWarningJSON":   "a warning in the report of a restore that succeeded; it is no error answer",
+			"errorResponse":                   "an own error writer of the installation API that has not moved to problem.Writer yet",
+			"codedResponse":                   "an own error writer of the installation API that has not moved to problem.Writer yet",
+			"enterRefusedResponse":            "an own error writer of the installation API that has not moved to problem.Writer yet",
+			"devCodeRequest":                  "the request body of the dev sign-in; code is the sign-in code",
+			"getRestoreResponse":              "a 200 row; errorCode repeats the stored catalog code of a restore",
+			"restoreSummaryJSON":              "a 200 row; errorCode repeats the stored catalog code of a restore",
+			"offerFirstAdministratorResponse": "a 201 row; code is the one-time code of the offer, no error code",
+			"redeemFirstAdministratorRequest": "the request body of the redeem; code is the one-time code, no error code",
+			"restoreWarningJSON":              "a warning in the report of a restore that succeeded; it is no error answer",
 		},
 		"settings": {
 			"bulkError": "the error of one item inside a 200 bulk answer",

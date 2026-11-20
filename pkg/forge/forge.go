@@ -206,6 +206,11 @@ type Opener interface {
 	// kind, an auth kind that the adapter does not support, a missing
 	// parameter, or a secret that it cannot parse.
 	Open(ctx context.Context, c Connection, cred Credential) (Forge, error)
+	// ParseEvent checks an event of the kind. It has the contract of
+	// Events.ParseEvent. It needs no connection and makes no call to the
+	// forge: the server checks the signature of an event before it knows
+	// which installation sent it.
+	ParseEvent(ctx context.Context, r EventRequest, secrets [][]byte) (Event, error)
 }
 
 // Forge is one forge connection with one credential set. Each method takes
@@ -428,9 +433,11 @@ type Events interface {
 	// ParseEvent checks the signature or the token of r against each of
 	// secrets, which are the active event secrets of the app registration
 	// or of the hook, and returns the event. The event is valid when it
-	// matches any one of them. It ignores an empty secret. It returns
+	// matches any one of them. It ignores an empty secret and a secret
+	// shorter than MinEventSecretBytes. It returns
 	// ErrSignature for a request that matches none of them, and for a list
-	// with no secret or with empty secrets only. It returns ErrInvalid for a
+	// with no secret, with empty secrets only, or with secrets shorter than
+	// MinEventSecretBytes only. It returns ErrInvalid for a
 	// body that it cannot parse, and ErrUnsupported for a kind of event
 	// that the port does not name. It makes no call to the forge. An
 	// event is a hint: the server reads the object through the API before
@@ -1312,6 +1319,11 @@ type EventRequest struct {
 	Header map[string][]string
 	Body   []byte
 }
+
+// MaxEventBodyBytes is the largest body of an event that any layer accepts:
+// the handler reads no more, the service refuses more, and the verifier of an
+// adapter refuses more before it computes a digest.
+const MaxEventBodyBytes = 2 << 20
 
 // EventKind is the kind of a forge event.
 type EventKind string

@@ -159,6 +159,7 @@ again under the same name has no lock.
 | Remove your own lock | `unit:lock` | The stack, workspace, collection or namespace | `maintainer`, `admin` |
 | Remove the lock of another person (force-unlock) | `unit:manage` | The stack, workspace, collection or namespace | `maintainer`, `admin` |
 | Read a lock | `unit:read` for a stack or workspace, `collection:read` for a collection, `namespace:read` for a namespace | The stack, workspace, collection or namespace | Every role that reads |
+| Lock or unlock many stacks and workspaces | `namespace:read` for the route, then `unit:read` and `unit:lock` for each stack or workspace | The namespace for the route, each stack or workspace for its item | `maintainer`, `admin` |
 
 For a namespace, the role must be granted on the namespace itself. A grant on one
 collection or one unit does not reach the lock of the namespace.
@@ -224,6 +225,115 @@ The server answers:
 - 404 when the stack, workspace, collection or namespace does not exist.
 - 409 when the object already has a manual lock. The message names the holder
   and the reason. Remove the lock, or ask the holder to remove it.
+
+## Lock many stacks and workspaces
+
+To lock several stacks or workspaces of one namespace with one call, use the
+bulk routes. They take the IDs of the stacks and workspaces, not their
+references. Read the IDs from the field `unitID` of
+`GET /api/dustpan/v1/namespaces/<namespace>/units`.
+
+Lock the stacks and workspaces, with one reason for all of them:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -d '{"reason":"change window closed","units":[{"id":"stk-1"},{"id":"wsp-2"},{"id":"stk-3"}]}' \
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/unit-locks/bulk-lock"
+```
+
+Remove your own locks from them:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_TOKEN" \
+  -d '{"units":[{"id":"stk-1"},{"id":"wsp-2"},{"id":"stk-3"}]}' \
+  "https://dustpan.example/api/dustpan/v1/namespaces/acme/unit-locks/bulk-unlock"
+```
+
+Each entry is a separate lock call on that stack or workspace. One entry that
+fails does not stop the others. The answer is 200 with one result for each
+entry, in the order of the request. This example is the answer of `bulk-lock`
+when `stk-3` already had a lock of another person:
+
+```json
+{
+  "results": [
+    {
+      "id": "stk-1",
+      "status": "ok",
+      "lock": {
+        "kind": "unit",
+        "object": "pulumi:acme/web/prod",
+        "holder": "alice",
+        "reason": "change window closed",
+        "since": "2026-10-19T10:00:00Z"
+      }
+    },
+    {
+      "id": "wsp-2",
+      "status": "ok",
+      "lock": {
+        "kind": "unit",
+        "object": "opentofu:acme/network",
+        "holder": "alice",
+        "reason": "change window closed",
+        "since": "2026-10-19T10:00:00Z"
+      }
+    },
+    {
+      "id": "stk-3",
+      "status": "error",
+      "error": {
+        "code": 409,
+        "errorCode": "lock.already-locked",
+        "message": "object already has a manual lock: held by bob since 2026-10-19T09:00:00Z: deploy in progress"
+      }
+    }
+  ]
+}
+```
+
+A result with `status` `ok` has the field `lock` for a lock call, and no field
+`lock` for an unlock call. A result with `status` `error` has the field `error`
+with the same `code`, `errorCode` and `message` that a call on that stack or
+workspace alone gives. When the error has arguments, the field `errorArgs`
+holds them.
+
+The call needs 1 to 100 entries, and the body has at most 20480 bytes. A call
+with no entry or with more than 100 entries gets 400 and the error code
+`lock.bulk-size`. A body larger than 20480 bytes gets 413. In both cases the
+server changes nothing. If one ID is in the call two times, each entry is one
+lock call: the first entry locks the stack or workspace, and the second entry
+gets `lock.already-locked`.
+
+The `errorCode` of an error result is, for example, one of these:
+
+| `errorCode` | Code | Meaning |
+| --- | --- | --- |
+| `lock.already-locked` | 409 | The stack or workspace already has a manual lock. The message names the holder and the reason. |
+| `lock.not-holder` | 409 | Another person holds the lock, so `bulk-unlock` leaves it. Use the force-unlock of the stack or workspace. |
+| `lock.changed` | 409 | The lock changed while the call removed it. Send the entry again. |
+| `lock.not-locked` | 404 | The stack or workspace has no manual lock, so `bulk-unlock` has nothing to remove. |
+| `lock.target-not-found` | 404 | The ID is not valid, or it is longer than 100 characters. The stack or workspace does not exist, is in another namespace, or you cannot read it. All these cases give the same result. |
+| `access.denied` | 403 | You can read the stack or workspace but cannot lock it. The server writes a denied audit entry for it. |
+| `request.idempotency-key-in-progress` | 409 | The first request for this entry has not ended. Retry later. |
+| `namespace.unavailable` | 503 | The namespace cannot take writes now. Retry later. |
+| `server.internal` | 500 | The server failed on this entry. Retry later. |
+
+The call accepts the header `Idempotency-Key`. The server stores the result of
+each entry and answers the stored result on a retry with the same key and the
+same body, so it does not lock or unlock that stack or workspace a second time.
+The exception is a result with a 5xx status or with 429: the server does not
+replay it, and a retry runs only those entries again. The answer has the header
+`Idempotent-Replayed: true` only when at least one entry came from the store and no entry ran again. A retry checks `unit:lock` again before it answers a stored entry. If that check refuses an entry, the refusal is a new result. It writes a new denied audit entry. The answer then has no `Idempotent-Replayed` header, also when other entries came from the store. A stored refusal that a retry answers writes no new denied audit entry.
+
+The server refuses the whole call, and changes nothing, in these cases:
+
+| Code | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.idempotency-key-unsupported` | The server keeps no replay records. Send the request without the header. |
+| 400 | `request.idempotency-key-invalid` | The header is more than once in the request, or the key does not have 1 to 255 printable ASCII characters. |
+| 409 | `request.idempotency-key-in-progress` | The first request with this key has not ended. Retry later. |
+| 422 | `request.idempotency-key-reused` | The key was used with another body. Send a new key. |
 
 ## Read a lock
 

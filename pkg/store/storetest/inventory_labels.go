@@ -131,7 +131,13 @@ func testInventoryLabelsFollowTagUpdate(t *testing.T, s Store) {
 	for _, step := range steps {
 		at = at.Add(time.Minute)
 
-		if err := s.UpdateStackTags(t.Context(), st.Ref, maps.Clone(step.tags), at, ns.Fence()); err != nil {
+		err := s.UpdateStackTags(
+			t.Context(),
+			st.Ref,
+			stack.TagUpdate{Tags: maps.Clone(step.tags), UpdatedAt: at, Entry: renameEntry(st.Ref.Namespace, st.Ref)},
+			ns.Fence(),
+		)
+		if err != nil {
 			t.Fatalf("%s: update tags: %v", step.name, err)
 		}
 
@@ -161,7 +167,13 @@ func testInventoryLabelsFollowRename(t *testing.T, s Store) {
 	renamed := stack.Ref{Namespace: ns.Name, Project: st.Ref.Project, Stack: "live"}
 	next := map[string]string{"app": "web"}
 
-	if err := s.UpdateStackTags(t.Context(), renamed, next, now().Add(time.Minute), ns.Fence()); err != nil {
+	err := s.UpdateStackTags(
+		t.Context(),
+		renamed,
+		stack.TagUpdate{Tags: next, UpdatedAt: now().Add(time.Minute), Entry: renameEntry(renamed.Namespace, renamed)},
+		ns.Fence(),
+	)
+	if err != nil {
 		t.Fatalf("update tags after the rename: %v", err)
 	}
 
@@ -232,13 +244,14 @@ func testInventoryLabelsPurge(t *testing.T, s Store) {
 
 // testInventoryLabelsOutsideGrammar checks that the store keeps and lists a
 // tag whose key or value the label grammar of the API does not allow, because
-// the Pulumi CLI sets the tags and the store must not lose them.
+// the Pulumi CLI sets the tags and the store must not lose them. The long
+// value has the largest size that a stack tag may have (256 bytes).
 func testInventoryLabelsOutsideGrammar(t *testing.T, s Store) {
 	t.Helper()
 
 	want := map[string]string{
 		"a key with spaces": "value",
-		"long":              strings.Repeat("x", 300),
+		"long":              strings.Repeat("x", 256),
 		"multi":             "line one\nline two",
 	}
 

@@ -1,6 +1,6 @@
 # Architecture and sizing
 
-This guide shows one supported layout and one target design. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. The [measured sizing page](measured-sizing.md) shows one load run of one to three instances.
+This guide shows two supported layouts: one instance, and several instances behind a load balancer. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. The [measured sizing page](measured-sizing.md) shows one load run of one to three instances.
 
 ## One instance with SQLite and a local blob directory
 
@@ -37,32 +37,32 @@ This layout is supported. The [high availability guide](high-availability.md) gi
 
 ### What runs where
 
-In this design:
+In this layout:
 
-- Each instance would run the same server binary with the same flags. Each instance would serve every API.
-- The load balancer would receive each request. It would pass each request to one healthy instance.
-- The SQL store would be one PostgreSQL database. Set it with `--database postgres://...` (`DUSTPAN_DATABASE`). When the URL holds a password, set it only in `DUSTPAN_DATABASE`, because `serve` refuses a password in the flag.
-- The blob store would be one S3-compatible bucket. Set it with `--blob-store s3://<bucket>` (`DUSTPAN_BLOB_STORE`). The [S3 guide](s3-blobs.md) shows the endpoint, region, and credential settings.
-- The key-encryption key would have the same value on each instance. Set it with `DUSTPAN_KEY_ENCRYPTION_KEY`. Keep it outside the database and the backup target.
-- The backup target would have the same value on each instance. Set a directory or an S3-compatible bucket with `--backup-target` (`DUSTPAN_BACKUP_TARGET`).
+- Each instance runs the same server binary with the same flags. Each instance serves every API.
+- The load balancer receives each request. It passes each request to one healthy instance.
+- The SQL store is one PostgreSQL database. Set it with `--database postgres://...` (`DUSTPAN_DATABASE`). When the URL holds a password, set it only in `DUSTPAN_DATABASE`, because `serve` refuses a password in the flag.
+- The blob store is one S3-compatible bucket. Set it with `--blob-store s3://<bucket>` (`DUSTPAN_BLOB_STORE`). The [S3 guide](s3-blobs.md) shows the endpoint, region, and credential settings.
+- The key-encryption key has the same value on each instance. Set it with `DUSTPAN_KEY_ENCRYPTION_KEY` or `--key-encryption-key-file`. Keep it outside the database and the backup target.
+- The backup target has the same value on each instance. Set a directory or an S3-compatible bucket with `--backup-target` (`DUSTPAN_BACKUP_TARGET`).
 
 ### What the parts share
 
-In the target design, each instance would share the SQL store, the blob store, the key-encryption key, and the backup target. Each instance would see the same namespaces, units, and history. No two instances would share a SQLite file. This layout would always use PostgreSQL.
+Each instance shares the SQL store, the blob store, the key-encryption key, and the backup target. Each instance sees the same namespaces, units, and history. No two instances share a SQLite file. This layout always uses PostgreSQL.
 
 ### What stops when one part stops
 
-In this design:
+In this layout:
 
-- If one instance stopped, the load balancer would pass requests to the healthy instances. Requests in flight to the stopped instance would fail.
-- If PostgreSQL stopped, all reads and writes would fail on each instance.
-- If the S3-compatible store stopped, checkpoint and state reads and writes would fail on each instance.
-- If the load balancer stopped, no request would reach any instance.
-- If you lost the key-encryption key, the server could not open secret values or OpenTofu state. Nobody could recover them.
+- When one instance stops, the load balancer passes requests to the healthy instances. Requests in flight to the stopped instance fail.
+- When PostgreSQL stops, all reads and writes fail on each instance.
+- When the S3-compatible store stops, checkpoint and state reads and writes fail on each instance.
+- When the load balancer stops, no request reaches any instance.
+- When you lose the key-encryption key, the server cannot open secret values or OpenTofu state. Nobody can recover them.
 
 ### How to back it up
 
-In the target design, you would back up this layout the same way as any installation. The [backup guide](backup-restore-upgrade.md) shows the commands. A backup would cover the whole installation. It would hold the SQL data with the blob content that the data names. Keep the key-encryption key apart from the backup target. A backup never holds the key.
+Back up this layout the same way as any installation. The [backup guide](backup-restore-upgrade.md) shows the commands. A backup covers the whole installation. It holds the SQL data with the blob content that the data names. Keep the key-encryption key apart from the backup target. A backup never holds the key.
 
 ## Sizing
 
@@ -72,37 +72,37 @@ Size each installation from a load run, not from guesses. The [measured sizing p
 
 | Release | Hardware | Date | Peak memory per instance |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ### CPU per instance
 
 | Release | Hardware | Date | CPU per instance |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ### Database size
 
 | Release | Hardware | Date | Database size |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ### Database connections
 
 | Release | Hardware | Date | Database connections |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ### Blob storage per update
 
 | Release | Hardware | Date | Blob bytes per update |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ### Largest checkpoint
 
 | Release | Hardware | Date | Largest checkpoint tested |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ### Inventory writes in one namespace
 
@@ -114,7 +114,7 @@ A PostgreSQL benchmark on a machine with 4 CPUs and 32 clients measured approxim
 
 | Release | Hardware | Date | Units tested |
 | --- | --- | --- | --- |
-| No measurement yet. The first release load run fills this table. | | | |
+| No release yet. See [measured sizing](measured-sizing.md) for one run of a dev build. | | | |
 
 ## Measure your own installation
 

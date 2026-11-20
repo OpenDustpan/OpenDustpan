@@ -585,6 +585,12 @@ func classifyRefusal(err error) (problem.Problem, bool) {
 		return problem.RefusedText(
 			problem.Detail(err, trustrule.ErrPrincipal), http.StatusBadRequest, errcode.TrustRulePrincipalRefused,
 		), true
+	case errors.Is(err, trustrule.ErrSpiffeWildcard):
+		// The check comes before the ErrInvalid case, because the error wraps
+		// both. The text of the sentinel names the field and the fix.
+		return problem.RefusedText(
+			trustrule.ErrSpiffeWildcard.Error(), http.StatusBadRequest, errcode.TrustRuleSpiffeWildcard,
+		), true
 	case errors.Is(err, trustrule.ErrInvalid):
 		return problem.RefusedText(
 			problem.Detail(err, trustrule.ErrInvalid), http.StatusBadRequest, errcode.TrustRuleInvalid,

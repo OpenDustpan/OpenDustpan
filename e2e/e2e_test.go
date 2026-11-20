@@ -70,16 +70,12 @@ var errUnexpected = errors.New("unexpected output")
 func cacheDir(t *testing.T) string {
 	t.Helper()
 
-	if dir := os.Getenv("E2E_CACHE_DIR"); dir != "" {
-		return dir
-	}
-
-	base, err := os.UserCacheDir()
+	dir, err := e2e.CacheDir()
 	if err != nil {
-		t.Fatalf("find user cache dir: %v", err)
+		t.Fatalf("find cache dir: %v", err)
 	}
 
-	return filepath.Join(base, "opendustpan-e2e")
+	return dir
 }
 
 // fetchers holds one Fetcher for each cache directory. A Fetcher checks each
@@ -1298,8 +1294,14 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	pulumiDiffScenario(t, env, org)
 
+	pulumiMultiLineDescriptionScenario(t, env, org)
+
 	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
 		pulumiUnitWithoutCollectionRefused(t, env)
+	})
+
+	t.Run("stack_in_no_collection_is_refused", func(t *testing.T) {
+		pulumiStackInNoCollectionRefused(t, env, org)
 	})
 }
 
@@ -2955,18 +2957,21 @@ func checkUnitObjectIDs(t *testing.T, entries []auditListItem) {
 }
 
 // fetchAuditEntries lists every audit entry of org through the API, one page
-// at a time. The list defaults to 50 entries per page, while a run with
+// at a time with pageSize and the nextPageToken of the page before, until the
+// token is empty. The list defaults to 50 entries per page, while a run with
 // decrypt calls writes more, so one page never holds the full log.
 func fetchAuditEntries(ctx context.Context, env *e2e.Env, org string) ([]auditListItem, error) {
 	const size = 200
 
 	var all []auditListItem
 
-	var total int64 = -1
+	token := ""
 
-	for number := 1; ; number++ {
-		path := "/api/audit/entries?organization=" + url.QueryEscape(org) +
-			"&page[number]=" + strconv.Itoa(number) + "&page[size]=" + strconv.Itoa(size)
+	for {
+		path := "/api/audit/entries?organization=" + url.QueryEscape(org) + "&pageSize=" + strconv.Itoa(size)
+		if token != "" {
+			path += "&pageToken=" + url.QueryEscape(token)
+		}
 
 		status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
 		if err != nil {
@@ -2978,36 +2983,31 @@ func fetchAuditEntries(ctx context.Context, env *e2e.Env, org string) ([]auditLi
 		}
 
 		var got struct {
-			Entries []auditListItem `json:"entries"`
-			Total   int64           `json:"total"`
+			Entries       []auditListItem `json:"entries"`
+			NextPageToken string          `json:"nextPageToken"`
+			PageSize      int             `json:"pageSize"`
 		}
 
 		if err := json.Unmarshal([]byte(body), &got); err != nil {
 			return nil, fmt.Errorf("%w: decode audit entries: %w (%s)", errUnexpected, err, body)
 		}
 
-		if total < 0 {
-			total = got.Total
-		} else if got.Total != total {
-			total = max(total, got.Total)
+		if got.PageSize != size {
+			return nil, fmt.Errorf("%w: pageSize = %d, want %d", errUnexpected, got.PageSize, size)
 		}
 
 		all = append(all, got.Entries...)
 
-		if int64(len(all)) >= total {
-			break
+		if got.NextPageToken == "" {
+			return all, nil
 		}
 
 		if len(got.Entries) == 0 {
-			break
+			return nil, fmt.Errorf("%w: a page with no entry has a next page token", errUnexpected)
 		}
-	}
 
-	if int64(len(all)) != total {
-		return nil, fmt.Errorf("%w: entries = %d with total %d", errUnexpected, len(all), total)
+		token = got.NextPageToken
 	}
-
-	return all, nil
 }
 
 // readAuditEntries lists the audit entries of org through the API.
@@ -3062,6 +3062,43 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 
 	checkAuditChain(ctx, t, env, org)
 	checkAuditExport(ctx, t, env, org)
+	checkAuditPagingRefusals(ctx, t, env, org)
+}
+
+// checkAuditPagingRefusals proves that the audit list refuses the removed
+// names page[number] and page[size], and a page token of another scope: the
+// token of a page of org does not read the log of the installation.
+func checkAuditPagingRefusals(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	removed := "/api/audit/entries?organization=" + url.QueryEscape(org) + "&page[number]=1"
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, removed, "")
+	if err != nil || status != http.StatusBadRequest {
+		t.Fatalf("GET %s answers %d, want %d (%v, %s)", removed, status, http.StatusBadRequest, err, body)
+	}
+
+	first := "/api/audit/entries?pageSize=1&organization=" + url.QueryEscape(org)
+
+	status, body, err = env.APIStatus(ctx, http.MethodGet, first, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s answers %d, want %d (%v, %s)", first, status, http.StatusOK, err, body)
+	}
+
+	var page struct {
+		NextPageToken string `json:"nextPageToken"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &page); decodeErr != nil || page.NextPageToken == "" {
+		t.Fatalf("decode the first page: %v, token %q (%s)", decodeErr, page.NextPageToken, body)
+	}
+
+	other := "/api/audit/entries?organization=@server&pageToken=" + url.QueryEscape(page.NextPageToken)
+
+	status, body, err = env.APIStatus(ctx, http.MethodGet, other, "")
+	if err != nil || status != http.StatusBadRequest {
+		t.Fatalf("GET %s answers %d, want %d (%v, %s)", other, status, http.StatusBadRequest, err, body)
+	}
 }
 
 // checkAuditEntryRead proves that GET /api/audit/entries/{sequence} reads
@@ -6782,7 +6819,8 @@ func maskedCloudConfig(host, workspace string) string {
   }
   required_providers {
     random = {
-      source = "hashicorp/random"
+      source  = "hashicorp/random"
+      version = %q
     }
   }
 }
@@ -6811,7 +6849,27 @@ output "secret_out" {
   value     = var.secret_input
   sensitive = true
 }
-`, host, e2e.Namespace, workspace)
+`, host, e2e.Namespace, workspace, e2e.RandomProviderVersion)
+}
+
+// maskedCloudConfig puts each value in its own block: the host in the cloud
+// block, the namespace as the organization, the workspace as the name and the
+// pinned version in required_providers.
+func TestMaskedCloudConfigArgumentOrder(t *testing.T) {
+	t.Parallel()
+
+	cfg := maskedCloudConfig("tf.example.test", "ws-name")
+
+	for _, want := range []string{
+		`hostname     = "tf.example.test"`,
+		`organization = "` + e2e.Namespace + `"`,
+		`name = "ws-name"`,
+		`version = "` + e2e.RandomProviderVersion + `"`,
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("configuration lacks %s:\n%s", want, cfg)
+		}
+	}
 }
 
 // maskedApplyEnv returns the step environment that sets the sensitive

@@ -45,7 +45,8 @@ func TestAnswerTextHintOnlyForServerFaults(t *testing.T) {
 				t.Errorf("%s, status %d: error %q, want the server message once", name, tc.status, text)
 			}
 
-			hint := strings.Contains(text, " again") || strings.Contains(text, "resumes restore")
+			hint := strings.Contains(text, " again") || strings.Contains(text, "resumes restore") ||
+				strings.Contains(text, "continues backup")
 			if hint != tc.hint {
 				t.Errorf("%s, status %d: error %q, want a retry hint %v", name, tc.status, text, tc.hint)
 			}

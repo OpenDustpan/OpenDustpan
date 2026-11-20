@@ -26,16 +26,18 @@ opendustpan serve \
   --ldap-user-filter '(&(objectClass=person)(uid={user}))'
 ```
 
-The same settings in the configuration file:
+The same settings in the configuration file. Each key is the flat file key
+of a setting, with a dot in its name. The file takes no nested map: a nested
+`ldap:` block stops the start with the error `config file key has no
+setting: "ldap"`.
 
 ```yaml
-ldap:
-  url: ldaps://ldap.example.com
-  provider: corp-ldap
-  displayName: Corp directory
-  bindDN: cn=dustpan,ou=services,dc=example,dc=com
-  baseDN: ou=people,dc=example,dc=com
-  userFilter: (&(objectClass=person)(uid={user}))
+ldap.url: ldaps://ldap.example.com
+ldap.provider: corp-ldap
+ldap.displayName: Corp directory
+ldap.bindDN: cn=dustpan,ou=services,dc=example,dc=com
+ldap.baseDN: ou=people,dc=example,dc=com
+ldap.userFilter: (&(objectClass=person)(uid={user}))
 ```
 
 The password of the service account comes only from the variable
@@ -60,7 +62,9 @@ shows the provider with the source `static`, the mode `ldap` and the
 effective value of each LDAP setting. It shows the lockout limit as
 `subjectFailureLimit`, and the layer that sets it as
 `subjectFailureLimitSource`: `flag`, `env`, `file` or `default`. It shows
-`"bindPasswordSet": true`, never the password.
+the CA file as `caFile`, the disabled mask as `disabledMask` (a decimal
+text, empty when no mask is set) and the disabled values as
+`disabledValues`. It shows `"bindPasswordSet": true`, never the password.
 
 ## Sign in
 
@@ -179,7 +183,7 @@ minutes for the first lock, and longer for a lock that follows.
 | User name attribute | `--ldap-user-name-attribute` | `uid` | Optional. Empty uses the typed user name. |
 | Email attribute | `--ldap-email-attribute` | `mail` | Optional. |
 | Name attribute | `--ldap-name-attribute` | `cn` | Optional. |
-| Subject | `--ldap-subject` | `entryUUID` | `entryUUID`, `objectGUID`, or an attribute that you name. |
+| Subject | `--ldap-subject` | `entryUUID` | `entryUUID`, `objectGUID`, `nsUniqueId`, `ipaUniqueID`, `GUID`, `orclGUID` or `ibm-entryUUID`. |
 | Subject failure limit | `--ldap-subject-failure-limit` | `5` | 1 to 100. The count of one person from every source locks the person after this limit. See "Lockout". |
 | Disabled rule | `--ldap-disabled-attribute`, `--ldap-disabled-mask`, `--ldap-disabled-values` | `userAccountControl`, mask `2` | Optional. See "Disabled persons". |
 | Groups | `--ldap-groups` | `off` | `off`, `search` or `memberOf`. See "Groups". |
@@ -204,10 +208,11 @@ Use `ldaps://`, or `ldap://` with StartTLS. The server checks the
 certificate of the directory against the CA bundle and the host name of
 the URL. It uses TLS 1.2 or later.
 
-The server refuses a connection with no TLS, unless the host of the URL is
-a loopback IP address, for example `127.0.0.1` or `[::1]`, or the setting
-in [Plain connections](#plain-connections) is on. A host name, also
-`localhost`, is not enough, because its address can change.
+The server refuses a connection with no TLS, unless the setting in
+[Plain connections](#plain-connections) is on. A sign-in then answers 503
+with a text that names `ldaps://` and StartTLS. A loopback address does not
+change this: the server always refuses a connection to a loopback address
+(see [Network](#network)).
 
 ## Network
 
@@ -224,16 +229,20 @@ reach an address that these rules refuse.
 ## Plain connections
 
 The setting `egress.allowPlainConnections` allows a connection with no TLS
-to a host that is not a loopback IP address. It is off by default. The same
+to a directory. It is off by default. The same
 setting allows an SMTP connection with no TLS.
 
-Set it with one call:
+Read the revision from the `ETag` header of `GET /api/dustpan/v1/settings`.
+Set it with one call. The route needs the header `Idempotency-Key`, a new
+random key for each change. Without it, the answer is `400`
+`request.idempotency-key-required`.
 
 ```sh
 curl -X PATCH "$SERVER/api/dustpan/v1/settings" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/merge-patch+json" \
   -H 'If-Match: "<revision>"' \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"egress.allowPlainConnections": true}'
 ```
 
@@ -257,11 +266,21 @@ The subject identifies the person in the server. It must not change when
 the person changes a name or an email. The server never uses the DN, the
 `uid` or the email as the subject.
 
+The subject attribute must be an attribute that holds a stable directory ID.
+The server accepts only these names: `entryUUID`, `objectGUID`, `nsUniqueId`,
+`ipaUniqueID`, `GUID`, `orclGUID` and `ibm-entryUUID`. The comparison ignores
+case. The server refuses every other name, for example the DN, `uid`, `mail`,
+`cn`, `displayName`, `employeeNumber` and `krbPrincipalName`, and it refuses
+an OID. It refuses a name with a space at its start or its end. It does not
+remove the space for you. The start stops with an error that names the
+attribute. The start also stops when the subject names the same attribute as
+the user name, the email or the person name (--ldap-name-attribute).
+
 | Subject | Directory | Text form |
 | --- | --- | --- |
 | `entryUUID` | OpenLDAP, 389 Directory Server and others (RFC 4530) | The UUID in lowercase, for example `6ba7b810-9dad-11d1-80b4-00c04fd430c8`. |
 | `objectGUID` | Active Directory | The GUID text that Active Directory shows, in lowercase. |
-| A named attribute | Any | Its one value as text, 1 to 255 bytes, with no control character. |
+| `nsUniqueId`, `ipaUniqueID`, `GUID`, `orclGUID`, `ibm-entryUUID` | 389 Directory Server, FreeIPA and other directories | Its one value as text, 1 to 255 bytes, with no control character. |
 
 For `objectGUID`, the first three groups of the text come from the bytes in
 little-endian order, and the last two groups come in the order of the bytes.
@@ -270,6 +289,52 @@ The bytes `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10` give the text
 
 The server refuses the sign-in when the entry has no value or two values of
 the subject attribute, or when the value is binary or has the wrong form.
+
+## Directory binding
+
+The server records the directory URL of each LDAP provider ID at its first
+start. A later start that gives a recorded provider ID another URL stops
+before it serves. The error names the provider ID, the recorded URL and
+the URL in the configuration. The URL is part of the identity of each
+person, because the subject of a person is `<provider ID>:<subject>`
+and does not hold the directory.
+
+The server compares the URLs in this form:
+
+- The scheme and the host have lowercase letters. The server changes only
+  the letters A to Z. A host name with another letter keeps it, so
+  `BÜCHER.example` and `bücher.example` are different directories. An IPv6
+  zone keeps its case, so `[fe80::1%25eth0]` and `[fe80::1%25ETH0]` are
+  different directories.
+- A trailing dot after the host is removed.
+- An IP address has its canonical form, so `[::1]` and `[0:0::1]` are the
+  same address.
+- The port is a number. The server removes the default port: 636 for
+  `ldaps` and 389 for `ldap`. So `ldaps://h`, `ldaps://h:636` and
+  `ldaps://h:0636` are the same directory. An empty port, as in `ldaps://h:`,
+  is the default port.
+- A slash after the host is removed.
+- The server refuses port 0 and a port above 65535.
+- `ldap` and `ldaps` are different. A URL with another port is different.
+
+A host name with one label, for example `dc1`, is resolved through the search
+list of the resolver. So `dc1` and `dc1.` are the same directory only when
+they resolve to the same host. The IPv4-mapped IPv6 form of an address, for
+example `[::ffff:10.0.0.1]`, and the IPv4 form `10.0.0.1` are different
+directories.
+
+The server does not translate host names. An internationalized host name
+and its punycode form, for example `bücher.example` and
+`xn--bcher-kva.example`, count as different directories. Write the host in
+the form that you used at the first start.
+
+The server refuses a URL that has user information, a path other than `/`, a
+query, a fragment, or a scheme other than `ldap` or `ldaps`. The error does
+not show the URL.
+
+If the URL changed by mistake, set `--ldap-url` back to the recorded URL.
+Use a new `--ldap-provider` only when you move to another directory. Each
+person then gets a new principal with no grant.
 
 ## Disabled persons
 

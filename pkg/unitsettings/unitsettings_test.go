@@ -86,7 +86,12 @@ func hostileCases() []hostileCase {
 		{"connection that is not an ID", func(s *unitsettings.Settings) { s.CodeLocation.Connection = "github" }},
 		{"directory that climbs out", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "../x" }},
 		{"absolute directory", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "/etc" }},
-		{"root spelled as one period", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "." }},
+		{"root spelled with a slash", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "./" }},
+		{"root spelled as two parts", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "./." }},
+		{"directory that starts with the root", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "./a" }},
+		{"directory that ends with the root", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "a/." }},
+		{"parent directory", func(s *unitsettings.Settings) { s.CodeLocation.Directory = ".." }},
+		{"root after a parent", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "../." }},
 		{"directory in CI configuration", func(s *unitsettings.Settings) { s.CodeLocation.Directory = "a/.github/b" }},
 		{"directory in CI configuration with no file", func(s *unitsettings.Settings) {
 			s.CodeLocation.Directory, s.WriteBack.Files = "a/.github/b", nil
@@ -315,6 +320,73 @@ func TestMarshalParseRoundTrip(t *testing.T) {
 	s.Unit = identity.Object{}
 	if !reflect.DeepEqual(got, s) {
 		t.Fatalf("Parse = %+v, want %+v", got, s)
+	}
+}
+
+// TestCanonicalDirectory proves that only the root directory changes: it
+// becomes empty, and every other value stays as it is, also the values that
+// Validate refuses.
+func TestCanonicalDirectory(t *testing.T) {
+	t.Parallel()
+
+	for in, want := range map[string]string{
+		unitsettings.RootDirectory: "", "": "", "stacks/prod": "stacks/prod", "./": "./", "..": "..", "a/.": "a/.",
+	} {
+		if got := unitsettings.CanonicalDirectory(in); got != want {
+			t.Errorf("CanonicalDirectory(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestRootDirectoryHasOneStoredForm proves that the root directory, as the
+// effective value shows it, is valid input and has the empty stored form at
+// each step: Canonical, Marshal, Parse and Resolve. Each step gets "." as if
+// the step before it had not changed it.
+func TestRootDirectoryHasOneStoredForm(t *testing.T) {
+	t.Parallel()
+
+	s := validSettings(t)
+	s.CodeLocation.Directory = unitsettings.RootDirectory
+
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Validate of the root directory = %v, want nil", err)
+	}
+
+	if c := s.Canonical(); c.CodeLocation.Directory != "" || s.CodeLocation.Directory != unitsettings.RootDirectory {
+		t.Fatalf("Canonical = %q and the source %q, want empty and an unchanged source",
+			c.CodeLocation.Directory, s.CodeLocation.Directory)
+	}
+
+	doc, err := unitsettings.Marshal(&s)
+	if err != nil || strings.Contains(string(doc), `"directory"`) {
+		t.Fatalf("Marshal = %s, %v; want a document with no directory", doc, err)
+	}
+
+	got, err := unitsettings.Parse([]byte(`{"codeLocation":{"directory":"."}}`))
+	if err != nil || got.CodeLocation.Directory != "" {
+		t.Fatalf("Parse of a stored root = %+v, %v; want the empty directory", got.CodeLocation, err)
+	}
+
+	empty := validSettings(t)
+	empty.CodeLocation.Directory = ""
+
+	if !unitsettings.Equal(new(s.Canonical()), &empty) {
+		t.Fatal("the root and the empty directory are not equal in the stored form")
+	}
+}
+
+// TestResolveOfTheRootDirectoryIsBuiltIn proves that a record that names the
+// root, as if no write had changed it, gives the root with the built-in
+// origin, so the root never goes into the location of a job.
+func TestResolveOfTheRootDirectoryIsBuiltIn(t *testing.T) {
+	t.Parallel()
+
+	s := validSettings(t)
+	s.CodeLocation.Directory = unitsettings.RootDirectory
+
+	e := unitsettings.Resolve(&s, poolDefaults(testPool), resolveContext())
+	if e.Directory.Value != unitsettings.RootDirectory || e.Directory.Origin != unitsettings.OriginBuiltIn {
+		t.Fatalf("directory = %+v, want the root from the built-in default", e.Directory)
 	}
 }
 

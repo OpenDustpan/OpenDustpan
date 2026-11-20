@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -661,6 +662,21 @@ const (
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.
 	ActionRegistryManageKeys Action = "registry:manage-keys"
+	// ActionServerOfferFirstAdministrator allows asking for the one-time code
+	// that makes the first administrator of the installation. No family
+	// classifies it, so only a principal with Admin passes the authorizer. The
+	// route also needs the static bootstrap principal. Its object is the
+	// installation.
+	ActionServerOfferFirstAdministrator Action = "server:offer-first-administrator"
+	// ActionServerReadFirstAdministrator allows reading the marker "first
+	// administrator made" and the open offer, never the code. Its object is
+	// the installation.
+	ActionServerReadFirstAdministrator Action = "server:read-first-administrator"
+	// ActionCallerRedeemFirstAdministrator allows a signed-in person to send
+	// the one-time code of the first administrator. The code, the principal
+	// of the session and the marker decide the result. Its object is the
+	// installation.
+	ActionCallerRedeemFirstAdministrator Action = "caller:redeem-first-administrator"
 )
 
 // Actions returns every action that the core knows, sorted. The catalog
@@ -710,7 +726,8 @@ func Actions() []Action {
 		ActionNamespaceReadGitHostConnections, ActionNamespaceManageGitHostConnections,
 		ActionNamespaceUseGitHostConnection, ActionServerReadGitHost, ActionServerManageGitHost,
 		ActionRegistryRead, ActionRegistryPublish, ActionNamespaceManageIssuer,
-		ActionRegistryManageKeys,
+		ActionRegistryManageKeys, ActionServerOfferFirstAdministrator,
+		ActionServerReadFirstAdministrator, ActionCallerRedeemFirstAdministrator,
 	}
 	slices.Sort(catalog)
 
@@ -1008,9 +1025,21 @@ func parseUnitObject(s string) (Object, error) {
 	}, nil
 }
 
-// validUnitName reports whether name is a usable opaque unit name.
+// validUnitName reports whether name is a usable opaque unit name. A name
+// that is not valid UTF-8, or that holds a hidden rune (a control character,
+// a format character such as U+202E, or a line or paragraph separator), is
+// not usable: its text can look different from its bytes when an error, a
+// log or the console shows it.
 func validUnitName(name string) bool {
 	if name == "" || len(name) > MaxUnitLength {
+		return false
+	}
+
+	// Defense in depth: the tool adapters accept only ASCII letters, digits
+	// and a few punctuation characters in a stack or workspace name, so no
+	// stored unit has such a name. This check stays so that a reference from
+	// another caller cannot hold a hidden rune and does not rely on them.
+	if !utf8.ValidString(name) || ident.HasHidden(name) {
 		return false
 	}
 
@@ -1311,7 +1340,11 @@ var _ Authenticator = (*StaticToken)(nil)
 // NewStaticToken returns an authenticator accepting token for an admin named subject.
 func NewStaticToken(subject, token string) (*StaticToken, error) {
 	if len(token) < minTokenLength {
-		return nil, fmt.Errorf("%w: need at least %d bytes", ErrWeakToken, minTokenLength)
+		return nil, fmt.Errorf(
+			"%w: need at least %d bytes: make one with: openssl rand -hex 32",
+			ErrWeakToken,
+			minTokenLength,
+		)
 	}
 
 	return &StaticToken{
@@ -1373,7 +1406,8 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 	for i, raw := range tokens {
 		token := strings.TrimSpace(raw)
 		if len(token) < minTokenLength {
-			return nil, fmt.Errorf("%w: token %d needs at least %d bytes", ErrWeakToken, i+1, minTokenLength)
+			return nil, fmt.Errorf("%w: token %d needs at least %d bytes: make one with: openssl rand -hex 32",
+				ErrWeakToken, i+1, minTokenLength)
 		}
 
 		sum := sha256.Sum256([]byte(token))

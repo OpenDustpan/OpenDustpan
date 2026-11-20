@@ -52,6 +52,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	contextRoutes := coverageContextRoutes(tb, namespaces)
 	profileRoutes := coverageProfileRoutes(tb)
 	issuerRoutes := coverageIssuerRoutes(tb)
+	webhookRoutes := coverageGitHostWebhookRoutes(tb)
 	sinkRoutes := coverageSinkRoutes(tb)
 	jobRoutes := coverageJobRoutes(tb, namespaces)
 	driftRoutes := coverageDriftRoutes(tb, namespaces)
@@ -71,6 +72,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		contextRoutes,
 		profileRoutes,
 		issuerRoutes,
+		webhookRoutes,
 		sinkRoutes,
 		jobRoutes,
 		driftRoutes,
@@ -227,6 +229,7 @@ func CoverageAllowlist() []AllowEntry {
 		namespacePrincipalAllowEntries(),
 		auditSinkAllowEntries(),
 		manualLockAllowEntries(),
+		manualLockBulkAllowEntries(),
 		jobAllowEntries(),
 		driftAllowEntries(),
 		triggerAllowEntries(),

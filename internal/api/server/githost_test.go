@@ -784,7 +784,7 @@ func TestGitHostRoutesEnforceTheirActions(t *testing.T) {
 		}
 	}
 
-	const want = 13
+	const want = 14
 
 	if rows != want {
 		t.Fatalf("%d Git host routes, want %d: a new route needs its row in this test", rows, want)

@@ -59,7 +59,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{
-		ProxyRules:     nil,
+		ProxyRules: nil, FirstAdministrator: nil,
 		LocalUsers:     coverageLocalUsers(tb, st, principals),
 		Preferences:    nil,
 		GitHostLinks:   nil,
@@ -267,6 +267,7 @@ func coveragePasswordProvider() serverapi.PasswordProvider {
 			EmailAttribute: "", NameAttribute: "", Subject: "", DisabledAttribute: "", Groups: "", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
 			StartTLS: false, SubjectFailureLimit: 0, SubjectFailureLimitSource: "",
+			CAFile: "", DisabledMask: "", DisabledValues: nil,
 		},
 	}
 }
