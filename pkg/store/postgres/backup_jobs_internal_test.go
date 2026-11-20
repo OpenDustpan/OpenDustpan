@@ -159,7 +159,7 @@ func TestCheckStagedJobsRefusesAMissingNamespace(t *testing.T) {
 	}
 
 	err := checkStagedJobs(t.Context(), s.pool, currentSchema(t, s))
-	if err == nil || !errors.Is(err, backup.ErrCorrupt) || !strings.Contains(err.Error(), "has no namespace") {
+	if err == nil || !errors.Is(err, backup.ErrCorrupt) || !strings.Contains(err.Error(), backup.ReasonJobNoNamespace) {
 		t.Fatalf("check = %v, want the refusal of a job with no namespace", err)
 	}
 }
