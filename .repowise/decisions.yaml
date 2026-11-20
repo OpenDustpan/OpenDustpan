@@ -4403,3 +4403,15 @@ decisions:
   accepted_artifact: "docs/adr/0390-fresh-window-zero-passes-once-and-never-locks-out.md"
   evidence:
   - "docs/adr/0390-fresh-window-zero-passes-once-and-never-locks-out.md"
+- id: "adr-0392"
+  title: "ADR 392: Open sessions have no cap on their count, and a rate limit on opens replaces it"
+  decision: "1. **No cap on the count of open sessions (owner, 2026-11-20).** A principal has no maximum number of sessions of direct opens that did not end. A job has no maximum number of sessions that did not end. The number of sessions is not bounded. A session still ends at the end of its duration or at the first expiry of a credential in it, and the schedule still sweeps each session that ended (ADR 203 decision 3).\n2. **A rate limit on opens replaces the cap (owner, 2026-11-20).** The server limits the number of opens for each principal in a window. The rate limit is the guard against a runaway loop and against the use of the quota of a provider. This ADR does not set the values, the window, the answer or the audit record of a refusal. RFC 135 holds them. Until the owner accepts a decision on RFC 135, the server has no limit on the count of sessions and no rate limit on opens.\n3. **What does not change (owner, 2026-11-20).** Only the credential that opened a session reads it. Each read checks the action again. The result of a session is sealed with the data key of the root profile. A session is not in a backup. A refused open writes an audit entry, and an open writes one (ADR 203 decision 9).\n\nLater changes, from the status line of ADR 392: Decided by the project owner (owner, 2026-11-20). The form of the rate limit is an open question in RFC 135."
+  reason: "ADR 203 decision 3 says: > [...] A principal has at most 100 > sessions of direct opens that did not end. A job has at most 100 > sessions that did not end, so a principal of a CI system with many > jobs at the same time does not reach the limit."
+  scope:
+  - "docs/adr/0392-open-sessions-have-no-count-cap-and-opens-have-a-rate-limit.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-20"
+  accepted_artifact: "docs/adr/0392-open-sessions-have-no-count-cap-and-opens-have-a-rate-limit.md"
+  evidence:
+  - "docs/adr/0392-open-sessions-have-no-count-cap-and-opens-have-a-rate-limit.md"
