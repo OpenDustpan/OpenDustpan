@@ -29,8 +29,8 @@ func outputShareHarness(base string) outputsharetest.Factory {
 		schemaURL := isolatedURL(t, base)
 		s := openURL(t, schemaURL)
 
-		return outputsharetest.Harness{
-			Store:        nil,
+		h := outputsharetest.Harness{
+			Store:        s.OutputSharingStore(),
 			Checker:      nil,
 			Attachments:  nil,
 			States:       nil,
@@ -58,14 +58,52 @@ func outputShareHarness(base string) outputsharetest.Factory {
 
 				return auditActionsOf(t, s, namespace.Name(ns))
 			},
-			Calls:    nil,
-			StoreRaw: nil,
+			Calls: nil,
+			StoreRaw: func(t *testing.T, r outputshare.Rule) {
+				t.Helper()
+
+				plantRuleRow(t, schemaURL, r)
+			},
 			SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 				t.Helper()
 
 				plantSettingRow(t, schemaURL, ns, value)
 			},
 		}
+
+		return outputsharetest.WithUnits(h, s)
+	}
+}
+
+// plantRuleRow drops the CHECK constraints of the rule table in the schema
+// that schemaURL names and writes the rule r as a row, as a row of another
+// version could hold it.
+func plantRuleRow(t *testing.T, schemaURL string, r outputshare.Rule) {
+	t.Helper()
+
+	conn := rawSettingConn(t, schemaURL)
+	defer closeSettingConn(t, conn)
+
+	rows, err := conn.Query(t.Context(),
+		`SELECT conname FROM pg_constraint WHERE conrelid = 'output_sharing_rules'::regclass AND contype = 'c'`)
+	if err != nil {
+		t.Fatalf("list the checks of the rule table: %v", err)
+	}
+
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("read the checks of the rule table: %v", err)
+	}
+
+	for _, name := range names {
+		if _, execErr := conn.Exec(t.Context(),
+			"ALTER TABLE output_sharing_rules DROP CONSTRAINT "+pgx.Identifier{name}.Sanitize()); execErr != nil {
+			t.Fatalf("drop the check %s: %v", name, execErr)
+		}
+	}
+
+	if _, err = conn.Exec(t.Context(), outputsharetest.RawRuleInsert(true), outputsharetest.RawRuleRow(r)...); err != nil {
+		t.Fatalf("plant the sharing rule %q: %v", r.ID, err)
 	}
 }
 
