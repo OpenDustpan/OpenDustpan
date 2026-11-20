@@ -47,6 +47,7 @@ import (
 	"syscall"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -72,6 +73,20 @@ var (
 	errServeArgument = errors.New("serve takes flags only: remove the argument")
 	// errListenAddress reports a --listen value that is not host:port.
 	errListenAddress = errors.New("invalid --listen (DUSTPAN_LISTEN): use host:port, for example :8080")
+	// errListenPort reports a --listen port that is a number outside 0 to 65535.
+	errListenPort = errors.New(
+		"invalid --listen (DUSTPAN_LISTEN): the port must be a number from 0 to 65535, for example :8080",
+	)
+	// errPublicURL reports a --public-url value that is not an absolute http or https URL.
+	errPublicURL = errors.New(
+		"invalid --public-url (DUSTPAN_PUBLIC_URL): use an absolute http or https URL with a host, " +
+			"no query and no fragment, for example https://dustpan.example.com",
+	)
+	// errSQLitePathEmpty reports a --database value of sqlite: with no file path.
+	errSQLitePathEmpty = errors.New(
+		"the file path in --database (DUSTPAN_DATABASE) is empty: write the path after sqlite:, " +
+			"for example sqlite:/var/lib/opendustpan/dustpan.db",
+	)
 	// errInstallationName reports an --installation value that is not valid.
 	errInstallationName = errors.New(
 		"invalid --installation (DUSTPAN_INSTALLATION): use 1 to 100 letters, digits, '-', '_' and '.', " +
@@ -465,6 +480,15 @@ func (f *serveFlags) checkNames() error {
 
 	if _, port, err := net.SplitHostPort(f.listen); err != nil || port == "" {
 		return fmt.Errorf("%w: %q", errListenAddress, f.listen)
+	} else if !validListenPort(port) {
+		return fmt.Errorf("%w: %q", errListenPort, f.listen)
+	}
+
+	// Defense in depth: the server parses the public URL again when it
+	// starts; this check stays so that the error names the flag and comes
+	// before the database opens. It rejects the value and never changes it.
+	if _, err := baseurl.Parse(f.publicURL); err != nil {
+		return errPublicURL
 	}
 
 	if _, err := namespace.ParseInstallationName(f.installation); err != nil {
@@ -472,6 +496,21 @@ func (f *serveFlags) checkNames() error {
 	}
 
 	return nil
+}
+
+// validListenPort reports whether port is not a number above 65535. A port
+// that is not a number, for example a service name, passes: the listen call
+// resolves it.
+func validListenPort(port string) bool {
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+
+	n, err := strconv.ParseUint(port, 10, 32)
+
+	return err == nil && n <= 65535
 }
 
 // checkProxyFlags refuses a trusted proxy list or header that the server
@@ -747,6 +786,13 @@ func checkDatabaseFlag(database string) error {
 	case strings.TrimSpace(database) == "":
 		return errNoDatabase
 	case strings.HasPrefix(database, "sqlite:"):
+		// Defense in depth: the store checks the file path too; this check
+		// stays so that an empty path gets its own error before the store
+		// opens.
+		if strings.TrimSpace(strings.TrimPrefix(database, "sqlite:")) == "" {
+			return errSQLitePathEmpty
+		}
+
 		return nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
 		return nil
