@@ -28,6 +28,11 @@ const (
 	pathGroup
 )
 
+// lostMakerAt is the fixed time of the rows of these tests. It is far in the
+// future, so the service token that expires 24 hours after it never expires
+// while the tests run, and no test reads the wall clock.
+var lostMakerAt = time.Date(2030, time.January, 2, 12, 0, 0, 0, time.UTC)
+
 // seedLostMaker stores the service principal prn-ci, the person tina with the
 // role token-manager on it through grant (direct or through the group
 // grp-deployers), and the service token lostMakerToken that tina made.
@@ -35,7 +40,7 @@ func seedLostMaker(t *testing.T, f accessFixture, path makerPath) {
 	t.Helper()
 
 	ctx := t.Context()
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := lostMakerAt
 
 	ci := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-ci", Subject: "ci-deploy",
@@ -271,7 +276,7 @@ func TestTokenStaysWhileItsMakerKeepsAPath(t *testing.T) {
 	f := newAccessFixture(t)
 	seedLostMaker(t, f, pathDirect)
 
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := lostMakerAt
 	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
 
 	other := access.Grant{
