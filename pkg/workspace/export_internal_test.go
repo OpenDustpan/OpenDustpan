@@ -3,11 +3,13 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // The reveal lookup over bytes and over an opener, and the masked set, for
@@ -210,4 +212,71 @@ func IsMarkBoundForTest(err error) bool {
 	var bound *stateBoundError
 
 	return errors.As(err, &bound)
+}
+
+// MaskedReadPaths returns the masked set of state as the masked read builds
+// it, with the checks of the read before the masking: the encrypted state, the
+// shapes, and the work scan. It is MaskedPaths with those checks, for the
+// tests of the masked read.
+func MaskedReadPaths(state []byte, marks SensitiveMarks) ([]string, error) {
+	return maskedResourcePaths(context.Background(), state, marks)
+}
+
+// MaskedReadPathsContext is MaskedReadPaths under the context of the test.
+func MaskedReadPathsContext(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	return maskedResourcePaths(ctx, state, marks)
+}
+
+// MaskedStateAndOutputPaths is maskedStatePaths for the tests: the resource
+// markers and the sensitive outputs of state, under the bounds of the read.
+func MaskedStateAndOutputPaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
+	return maskedStatePaths(ctx, state, marks)
+}
+
+// MaskedCursorSpec names what a test cursor of the masked read binds.
+type MaskedCursorSpec struct {
+	Unit    string
+	Version string
+	Subject string
+	Offset  int
+	At      time.Time
+}
+
+// NewTestCursor makes a cursor of the masked read for the tests, signed with
+// key and bound as spec says.
+func NewTestCursor(key []byte, spec MaskedCursorSpec) (string, error) {
+	return mintMaskedCursor(
+		key, maskedBinding{Unit: spec.Unit, Version: spec.Version, Subject: spec.Subject}, spec.Offset, spec.At,
+	)
+}
+
+// NewTestSignedCursor returns a cursor of the masked read over an arbitrary
+// payload, signed with key, so a test reaches the checks after the signature.
+func NewTestSignedCursor(key, payload []byte) string {
+	return base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(signMaskedCursor(key, payload))
+}
+
+// LoadMaskedChunks is readMaskedChunks for the tests.
+func LoadMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
+	return readMaskedChunks(ctx, r)
+}
+
+// MaskedChunkBytes is the chunk size of the masked read, for the tests.
+const MaskedChunkBytes = maskedChunkBytes
+
+// MaskedMaxVersionBytes is the size limit of the masked read, for the tests.
+const MaskedMaxVersionBytes = maskedMaxVersionBytes
+
+// MaskedMaxCursorBytes is the length limit of a cursor, for the tests.
+const MaskedMaxCursorBytes = maskedMaxCursorBytes
+
+// MaskedPageMarkers is the size of a page of the masked read, for the tests.
+const MaskedPageMarkers = maskedPageMarkers
+
+// MaskedPageAt answers the page of paths that starts at offset, as the masked
+// read does after the cursor check. The tests call it with an offset that a
+// signed cursor never holds, to reach the guard against a negative offset.
+func MaskedPageAt(key []byte, paths []string, offset int) (MaskedPage, error) {
+	return maskedPageOf(paths, offset, key, maskedBinding{Unit: "", Version: "sv-1", Subject: ""}, time.Unix(0, 0))
 }

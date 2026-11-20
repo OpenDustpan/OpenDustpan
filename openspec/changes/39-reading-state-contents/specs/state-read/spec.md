@@ -12,6 +12,10 @@ When a caller with unit:read reads one state version through ReadMasked, the ser
 - **WHEN** caller with unit:read reads one OpenTofu version through ReadMasked
 - **THEN** server masks each sensitive output, each sensitive_attributes path and each sensitive_values path
 
+#### Scenario: OpenTofu version with no kept marks
+- **WHEN** the version has no kept marks and an instance names a whole value in sensitive_attributes
+- **THEN** server answers that value as one marker with no marker for a key below it, and each other attribute value as a marker of its own
+
 ### Requirement: value paths and pages
 
 When the server answers a masked read, the server SHALL key each marker by its JSON Pointer value path for that version.
@@ -68,20 +72,40 @@ If a caller causes repeated refusals on the read route, then the server SHALL co
 - **WHEN** version is above 5 MB
 - **THEN** server refuses with 413 and no content
 
-### Requirement: bounded work for one read
+### Requirement: bounded depth for one read
 
-The server SHALL limit the work of one read by the shape of the state, not only by its size. A version with a nesting depth above 100, or with more than 10000 markers, SHALL be refused with 413 before the server builds the path of any marker, and the refusal goes to the denial limiter. The server SHALL build the path of a marker only for the page that the answer holds, and SHALL check the deadline after the parse and after the walk.
+The server SHALL refuse a state that nests deeper than 100 levels with 413 and the code `stack.state-too-complex` (Pulumi) or `state-version.too-complex` (OpenTofu), before it builds the path of any marker. The refusal goes to the denial limiter.
 
 #### Scenario: deep nesting under the size limit
 - **WHEN** a version of less than 5 MB has a nesting depth above 100
-- **THEN** server refuses with 413, builds no path, and the memory of the read stays below the bound of the page
+- **THEN** server refuses with 413 and the code of the tool, and builds no path
 
-#### Scenario: too many markers under the size limit
-- **WHEN** a version of less than 5 MB holds more than 10000 markers
-- **THEN** server refuses with 413 and builds no path
+### Requirement: bounded work budget for one read
+
+The server SHALL charge each value of the state the length of its value path plus a fixed cost for its marker, against one budget of 128 MiB for the whole read, before it builds any path. A state over the budget SHALL be refused with 413 and the code of the tool. The server SHALL NOT add a second bound for the count of markers or the bytes of paths: a state inside the budget is read in pages.
+
+#### Scenario: value paths over the work budget
+- **WHEN** a version of less than 5 MB holds values whose paths need more than the work budget, for example a key of 1 MiB above 200 values
+- **THEN** server refuses with 413 and the code of the tool, and builds no path
+
+#### Scenario: many markers inside the budget
+- **WHEN** a version of less than 5 MB holds more than 10000 markers with short paths
+- **THEN** server answers 200 and holds the markers in pages of 200
+
+### Requirement: deadline inside the masking
+
+The server SHALL check the deadline of the request after the parse, inside the masking of each instance and after the walk, and SHALL answer 504 with the code `state.read-timeout` and no bytes when it has passed. The duplicate pass of OpenTofu works from an index of the masked secrets, so its work does not grow with the product of the values and the secrets.
+
+#### Scenario: deadline inside the masking
+- **WHEN** the deadline passes while the masking of an instance runs
+- **THEN** server answers 504 with the code `state.read-timeout` and no bytes
 
 #### Scenario: deadline after the walk
 - **WHEN** the walk of the state ends after the 30 second deadline
+- **THEN** server answers 504 with the code `state.read-timeout` and no bytes
+
+#### Scenario: deadline after the parse
+- **WHEN** the deadline passes after the parse of the state
 - **THEN** server answers 504 with the code `state.read-timeout` and no bytes
 
 ### Requirement: a shape that the server cannot read fails closed

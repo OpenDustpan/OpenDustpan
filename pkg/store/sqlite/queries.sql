@@ -896,6 +896,13 @@ SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, output
 FROM state_versions
 WHERE id = ?;
 
+-- name: GetWorkspaceStateVersion :one
+-- One state version, only when it belongs to the workspace in the namespace.
+SELECT sv.*
+FROM state_versions sv
+JOIN workspaces w ON w.id = sv.workspace_id
+WHERE sv.id = ? AND sv.workspace_id = ? AND w.namespace = ?;
+
 -- name: ListStateVersions :many
 -- Finalized versions of one workspace, newest first. Ties on finalize time
 -- break by ID, as the port comment promises. The caller normalizes the page.

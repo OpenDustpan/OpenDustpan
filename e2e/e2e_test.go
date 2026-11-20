@@ -1292,6 +1292,9 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	pulumiMaskedStateScenario(t, env, org)
 
+	// The reads of the state with an access token after a real update.
+	pulumiReadingStateScenario(t, env, org)
+
 	pulumiDiffScenario(t, env, org)
 
 	pulumiMultiLineDescriptionScenario(t, env, org)
@@ -3601,6 +3604,9 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// a terraform_data input, a provider attribute the provider schema marks
 	// sensitive, and a client-encrypted state.
 	tofuMaskedStateScenario(t, env)
+
+	// The tool-neutral masked read of the state of a unit after a real apply.
+	tofuReadingStateScenario(t, env)
 
 	// The state diff of two versions with one added, one removed and one
 	// changed resource and one changed sensitive value.

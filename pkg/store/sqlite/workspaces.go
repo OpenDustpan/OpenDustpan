@@ -411,6 +411,29 @@ func (s *Store) GetStateVersion(
 	return stateFromRow(row)
 }
 
+// GetWorkspaceStateVersion implements workspace.StateStore. The query joins the
+// workspace, so a version of another workspace or of another namespace reads
+// as not found.
+func (s *Store) GetWorkspaceStateVersion(
+	ctx context.Context, ns namespace.Name, ws workspace.ID, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetWorkspaceStateVersion(ctx, db.GetWorkspaceStateVersionParams{
+		ID: id.String(), WorkspaceID: ws.String(), Namespace: ns.String(),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	if err != nil {
+		return workspace.StateVersion{}, fmt.Errorf("select workspace state version: %w", err)
+	}
+
+	return stateFromRow(row)
+}
+
 // CurrentStateVersion implements workspace.StateStore. It follows the
 // workspace pointer; a missing workspace reads as no state.
 func (s *Store) CurrentStateVersion(
