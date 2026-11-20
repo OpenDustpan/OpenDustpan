@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
@@ -24,6 +25,9 @@ const (
 	gateNamespaceBase  = "/api/dustpan/v1/namespaces/{namespace}"
 	gateCollectionBase = gateNamespaceBase + "/collections/{collection}"
 	gateUnitBase       = gateNamespaceBase + "/units/by-name/{tool}/{name}"
+	// gateInstallationBase is the scope of the installation. It has no
+	// namespace, collection or unit in its path.
+	gateInstallationBase = "/api/dustpan/v1"
 )
 
 // Tags of the operations of the gates and the access limits.
@@ -36,20 +40,29 @@ const (
 // level: list, get, set and delete.
 const routesPerObject = 4
 
-// gateObjectScope is one scope level of the routes of the gates and the access
-// limits.
+// gateObjectScope is one scope level of the routes of the gates, the access
+// limits, the approval rules and the approval defaults.
 type gateObjectScope struct {
 	// base is the path of the scope.
 	base string
 	// infix is the part of the operation ID that names the scope level.
 	infix string
-	// kind is the kind of the object of the actions. All three levels
-	// authorize on the namespace: one action covers the namespace, its
-	// collections and its units.
+	// kind is the kind of the object of the actions. The namespace, the
+	// collection and the unit level authorize on the namespace: one action
+	// covers the namespace, its collections and its units. The installation
+	// level authorizes on the installation.
 	kind string
+	// read and manage are the actions of the read routes and of the write
+	// routes of the level.
+	read, manage identity.Action
+	// resolve returns the object that the actions apply to.
+	resolve ObjectResolver
+	// approvalDefault is true when the level holds an approval default. The
+	// installation holds none.
+	approvalDefault bool
 }
 
-// gateObjectResource is one kind of object that a scope holds by ID.
+// gateObjectResource is one kind of object that a scope holds.
 type gateObjectResource struct {
 	// segment is the path segment after the scope.
 	segment string
@@ -60,64 +73,127 @@ type gateObjectResource struct {
 	listBody, itemBody apidesc.Body
 	// reasonQuery is true when the delete takes the query parameter reason.
 	reasonQuery bool
+	// single is true for an object that a scope holds once, with no ID in its
+	// path and no list route: the approval default.
+	single bool
 }
 
-// gateObjectScopes returns the three scope levels, narrowest last.
+// gateObjectScopes returns the four scope levels, narrowest of the namespace
+// last, and the installation after them. Each row of the routes and of the
+// labels comes from this table, so a new level gets every row at once.
 func gateObjectScopes() []gateObjectScope {
+	read, manage := identity.ActionNamespaceReadGates, identity.ActionNamespaceManageGates
+
 	return []gateObjectScope{
-		{base: gateNamespaceBase, infix: "", kind: apidesc.KindNamespace},
-		{base: gateCollectionBase, infix: "Collection", kind: apidesc.KindNamespace},
-		{base: gateUnitBase, infix: "Unit", kind: apidesc.KindNamespace},
+		{
+			base: gateNamespaceBase, infix: "", kind: apidesc.KindNamespace, read: read, manage: manage,
+			resolve: resolveNamespacePath, approvalDefault: true,
+		},
+		{
+			base: gateCollectionBase, infix: "Collection", kind: apidesc.KindNamespace, read: read, manage: manage,
+			resolve: resolveNamespacePath, approvalDefault: true,
+		},
+		{
+			base: gateUnitBase, infix: "Unit", kind: apidesc.KindNamespace, read: read, manage: manage,
+			resolve: resolveNamespacePath, approvalDefault: true,
+		},
+		{
+			base: gateInstallationBase, infix: "Installation", kind: apidesc.KindServer,
+			read: identity.ActionInstallationReadGates, manage: identity.ActionInstallationManageGates,
+			resolve: resolveServer, approvalDefault: false,
+		},
 	}
 }
 
-// gateObjectResources returns the gates and the access limits.
+// gateObjectResources returns the gates, the access limits, the approval rules
+// and the approval default.
 func gateObjectResources() []gateObjectResource {
 	return []gateObjectResource{
 		{
 			segment: "gates", plural: "Gates", singular: "Gate", tag: tagGates,
-			listBody: gateListSchema, itemBody: gateSchema, reasonQuery: true,
+			listBody: gateListSchema, itemBody: gateSchema, reasonQuery: true, single: false,
 		},
 		{
 			segment: "access-limits", plural: "AccessLimits", singular: "AccessLimit", tag: tagAccessLimits,
-			listBody: accessLimitListSchema, itemBody: accessLimitSchema, reasonQuery: false,
+			listBody: accessLimitListSchema, itemBody: accessLimitSchema, reasonQuery: false, single: false,
+		},
+		{
+			segment: "approval-rules", plural: "ApprovalRules", singular: "ApprovalRule", tag: tagApprovals,
+			listBody: approvalRuleListSchema, itemBody: approvalRuleSchema, reasonQuery: false, single: false,
+		},
+		{
+			segment: "approval-default", plural: "", singular: "ApprovalDefault", tag: tagApprovals,
+			listBody: apidesc.NoBody, itemBody: approvalDefaultSchema, reasonQuery: false, single: true,
 		},
 	}
 }
 
-// gateObjectRoutes returns the rows of the gates and the access limits of the
-// three scope levels. A read needs namespace:read-gates, and a write needs
-// namespace:manage-gates and a fresh sign-in.
-func (h *Handler) gateObjectRoutes(
-	row func(method, path string, actions []identity.Action, serve RouteHandler) Route,
-	read, manage []identity.Action,
-) []Route {
+// holds reports whether the scope level has the routes of the resource.
+func (sc *gateObjectScope) holds(res *gateObjectResource) bool {
+	return !res.single || sc.approvalDefault
+}
+
+// gateObjectRoutes returns the rows of the gates, the access limits, the
+// approval rules and the approval defaults of each scope level. A read needs
+// the read action of its level, and a write needs the manage action of its
+// level and a fresh sign-in.
+func (h *Handler) gateObjectRoutes() []Route {
 	scopes, resources := gateObjectScopes(), gateObjectResources()
 	routes := make([]Route, 0, len(scopes)*len(resources)*routesPerObject)
 
-	fresh := func(serve RouteHandler) RouteHandler { return h.fresh(identity.ActionNamespaceManageGates, serve) }
-
 	// The handlers are bound here and not in gateObjectResources: the labels
 	// read the resources, and the handlers read the labels through queryOf.
-	handlers := map[string][4]RouteHandler{
+	type handlers struct{ list, read, write, remove RouteHandler }
+
+	bound := map[string]handlers{
 		"gates": {h.listGates, h.readGate, h.writeGate, h.removeGate},
 		"access-limits": {
 			h.listAccessLimits, h.readAccessLimit, h.writeAccessLimit, h.removeAccessLimit,
 		},
+		"approval-rules": {
+			h.listApprovalRules, h.readApprovalRule, h.writeApprovalRule, h.removeApprovalRule,
+		},
+		"approval-default": {nil, h.readApprovalDefault, h.writeApprovalDefault, h.removeApprovalDefault},
 	}
 
 	for i := range scopes {
+		sc := &scopes[i]
+
+		row := func(method, path string, action identity.Action, serve RouteHandler) Route {
+			return Route{
+				Method: method, Path: path, Scope: ScopeAuthorized, Actions: []identity.Action{action},
+				Resolve: sc.resolve, ActionsFor: nil, OpaqueDenial: false, Serve: serve,
+			}
+		}
+
+		fresh := func(serve RouteHandler) RouteHandler { return h.fresh(sc.manage, serve) }
+
 		for j := range resources {
-			sc, res := &scopes[i], &resources[j]
-			listPath := sc.base + "/" + res.segment
-			item := listPath + "/{id}"
-			serve := handlers[res.segment]
+			res := &resources[j]
+			if !sc.holds(res) {
+				continue
+			}
+
+			serve := bound[res.segment]
+			path := sc.base + "/" + res.segment
+
+			if res.single {
+				routes = append(routes,
+					row(http.MethodGet, path, sc.read, serve.read),
+					row(http.MethodPut, path, sc.manage, fresh(serve.write)),
+					row(http.MethodDelete, path, sc.manage, fresh(serve.remove)),
+				)
+
+				continue
+			}
+
+			item := path + "/{id}"
 
 			routes = append(routes,
-				row(http.MethodGet, listPath, read, serve[0]),
-				row(http.MethodGet, item, read, serve[1]),
-				row(http.MethodPut, item, manage, fresh(serve[2])),
-				row(http.MethodDelete, item, manage, fresh(serve[3])),
+				row(http.MethodGet, path, sc.read, serve.list),
+				row(http.MethodGet, item, sc.read, serve.read),
+				row(http.MethodPut, item, sc.manage, fresh(serve.write)),
+				row(http.MethodDelete, item, sc.manage, fresh(serve.remove)),
 			)
 		}
 	}
@@ -125,8 +201,8 @@ func (h *Handler) gateObjectRoutes(
 	return routes
 }
 
-// gateObjectLabels returns the labels of the gate and access limit operations,
-// by the pattern of the route.
+// gateObjectLabels returns the labels of the gate, access limit, approval rule
+// and approval default operations, by the pattern of the route.
 func gateObjectLabels() map[string]apidesc.Label {
 	reason := apidesc.StringParam("reason", "Why a final gate is deleted. A final gate needs a reason to be deleted.")
 	labels := map[string]apidesc.Label{}
@@ -134,12 +210,16 @@ func gateObjectLabels() map[string]apidesc.Label {
 	scopes, resources := gateObjectScopes(), gateObjectResources()
 
 	for i := range scopes {
+		sc := &scopes[i]
+
 		for j := range resources {
-			sc, res := &scopes[i], &resources[j]
-			listPath := sc.base + "/" + res.segment
-			item := listPath + "/{id}"
+			res := &resources[j]
+			if !sc.holds(res) {
+				continue
+			}
+
+			path := sc.base + "/" + res.segment
 			name := sc.infix + res.singular
-			plural := sc.infix + res.plural
 
 			remove := apidesc.Name("delete"+name, res.tag).WithIfMatch().On(sc.kind).
 				WithBodies(apidesc.NoBody, apidesc.NoBody)
@@ -147,12 +227,24 @@ func gateObjectLabels() map[string]apidesc.Label {
 				remove = remove.WithQuery(reason)
 			}
 
-			labels[apidesc.Pattern(http.MethodGet, listPath)] = apidesc.Name("list"+plural, res.tag).
+			set := apidesc.Name("set"+name, res.tag).WithIfMatch().WithETag().On(sc.kind).
+				WithBodies(res.itemBody, res.itemBody)
+			get := apidesc.Name("get"+name, res.tag).WithETag().On(sc.kind).WithBodies(apidesc.NoBody, res.itemBody)
+
+			if res.single {
+				labels[apidesc.Pattern(http.MethodGet, path)] = get
+				labels[apidesc.Pattern(http.MethodPut, path)] = set
+				labels[apidesc.Pattern(http.MethodDelete, path)] = remove
+
+				continue
+			}
+
+			item := path + "/{id}"
+
+			labels[apidesc.Pattern(http.MethodGet, path)] = apidesc.Name("list"+sc.infix+res.plural, res.tag).
 				On(sc.kind).WithBodies(apidesc.NoBody, res.listBody)
-			labels[apidesc.Pattern(http.MethodGet, item)] = apidesc.Name("get"+name, res.tag).WithETag().
-				On(sc.kind).WithBodies(apidesc.NoBody, res.itemBody)
-			labels[apidesc.Pattern(http.MethodPut, item)] = apidesc.Name("set"+name, res.tag).WithIfMatch().
-				WithETag().On(sc.kind).WithBodies(res.itemBody, res.itemBody)
+			labels[apidesc.Pattern(http.MethodGet, item)] = get
+			labels[apidesc.Pattern(http.MethodPut, item)] = set
 			labels[apidesc.Pattern(http.MethodDelete, item)] = remove
 		}
 	}
@@ -247,10 +339,25 @@ func accessLimitOf(l gate.AccessLimit) accessLimitBody {
 	return accessLimitBody{ID: string(l.ID), Policy: l.Policy, Version: l.Version}
 }
 
-// gateScopeOf returns the scope that the path names: the namespace of obj, or
-// one of its collections, or one of its units. A name that is not valid
+// gateScopeOf returns the scope that the path names: the installation when obj
+// is the installation, else the namespace of obj, or one of its collections,
+// or one of its units. A name that is not valid
 // answers 400 before any store call.
 func gateScopeOf(r *http.Request, obj identity.Object) (gate.Scope, error) {
+	if obj.IsServer() {
+		// Defense in depth: no route of the installation has a collection or
+		// a unit in its path, and the service refuses a scope that a level
+		// does not hold too. This check stays so that a new row cannot name
+		// a narrower scope on the installation object.
+		if r.PathValue("collection") != "" || r.PathValue("tool") != "" {
+			return gate.Scope{}, fmt.Errorf(
+				"%w: the installation has no collection or unit scope", identity.ErrInvalidObject,
+			)
+		}
+
+		return gate.InstallationScope(), nil
+	}
+
 	ns := obj.Namespace()
 
 	if c := r.PathValue("collection"); c != "" {
@@ -544,8 +651,13 @@ func (h *Handler) writeAccessLimit(
 	// the membership rule or a diagnostic.
 	if groups, groupsErr := cedargo.LimitGroupDirections(in.Policy); groupsErr == nil && len(groups) > 0 {
 		if reachErr := h.limitGroupReach(ctx, p); reachErr != nil {
+			action := identity.ActionNamespaceManageGates
+			if scope.Level() == gate.LevelInstallation {
+				action = identity.ActionInstallationManageGates
+			}
+
 			h.guard.Record(ctx, r, p, denials.Denial{
-				Action:       identity.ActionNamespaceManageGates,
+				Action:       action,
 				Object:       obj,
 				Reason:       "access limit names a group that the author cannot manage",
 				ReasonWithin: nil,
@@ -601,24 +713,32 @@ func (h *Handler) limitGroupReach(ctx context.Context, p identity.Principal) err
 	}
 }
 
-// removeAccessLimit serves DELETE {scope}/access-limits/{id}. It answers 204.
-func (h *Handler) removeAccessLimit(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+// objectRemoval says how removeObject reads and deletes one kind of object.
+type objectRemoval struct {
+	// key reads the scope and the ID of the path.
+	key func(r *http.Request, obj identity.Object) (gate.Scope, gate.ID, error)
+	// version returns the stored version of the object, or gate.ErrNotFound.
+	version func(ctx context.Context, scope gate.Scope, id gate.ID) (int64, error)
+	// remove deletes the object that ref names.
+	remove func(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error
+}
+
+// removeObject serves a DELETE of one object. It checks the scope and the ID
+// before any store call, reads the version that the delete removes (the
+// If-Match version, else the stored one), and answers 204.
+func (h *Handler) removeObject(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, spec objectRemoval,
 ) {
 	ctx := r.Context()
 
-	scope, id, err := h.gateObjectKey(r, obj)
+	scope, id, err := spec.key(r, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	version, err := h.existingVersion(r, func() (int64, error) {
-		cur, getErr := h.gates.AccessLimit(ctx, scope, id)
-
-		return cur.Version, getErr
-	})
+	version, err := h.existingVersion(r, func() (int64, error) { return spec.version(ctx, scope, id) })
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -626,11 +746,26 @@ func (h *Handler) removeAccessLimit(
 	}
 
 	ref := gate.ObjectRef{Scope: scope, ID: id, Version: version}
-	if err = h.gates.DeleteAccessLimit(ctx, ref, gateEntry(r, p)); err != nil {
+	if err = spec.remove(ctx, ref, gateEntry(r, p)); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removeAccessLimit serves DELETE {scope}/access-limits/{id}. It answers 204.
+func (h *Handler) removeAccessLimit(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	h.removeObject(w, r, p, obj, objectRemoval{
+		key: h.gateObjectKey,
+		version: func(ctx context.Context, scope gate.Scope, id gate.ID) (int64, error) {
+			cur, err := h.gates.AccessLimit(ctx, scope, id)
+
+			return cur.Version, err
+		},
+		remove: h.gates.DeleteAccessLimit,
+	})
 }

@@ -52,6 +52,7 @@ docs/guides/terragrunt.md
 docs/reference/api-description.md
 docs/reference/blob-write-benchmark-record.md
 docs/reference/configuration.md
+docs/reference/gate-config-api.md
 docs/reference/inventory-api.md
 docs/reference/preferences-api.md
 docs/reference/s3-latency-benchmark.md

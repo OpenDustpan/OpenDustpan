@@ -458,7 +458,10 @@ var freshAuthRules = []freshAuthRule{
 		[]string{http.MethodPut, http.MethodDelete},
 	},
 	{
-		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/approval-(?:default|rules/[^/]+)$`),
+		// An approval default and an approval rule of a namespace, of a
+		// collection and of a unit.
+		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/(?:collections/[^/]+/|units/by-name/.+/)?` +
+			`approval-(?:default|rules/[^/]+)$`),
 		[]string{http.MethodPut, http.MethodDelete},
 	},
 	{
@@ -466,6 +469,11 @@ var freshAuthRules = []freshAuthRule{
 		// unit. The unit name keeps its percent-encoding, so it may hold a slash.
 		regexp.MustCompile(`^/api/dustpan/v1/namespaces/[^/]+/(?:collections/[^/]+/|units/by-name/.+/)?` +
 			`(?:gates|access-limits)/[^/]+$`),
+		[]string{http.MethodPut, http.MethodDelete},
+	},
+	{
+		// A gate, an access limit and an approval rule of the installation.
+		regexp.MustCompile(`^/api/dustpan/v1/(?:gates|access-limits|approval-rules)/[^/]+$`),
 		[]string{http.MethodPut, http.MethodDelete},
 	},
 }
