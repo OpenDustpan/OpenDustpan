@@ -934,7 +934,7 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 }
 
 // checkStagedRows checks the rows of the staged database with the rules of
-// the store: the namespace IDs, the owned rows, the grants and the
+// the store: the namespace IDs, the owned rows, the tag values, the grants and the
 // memberships of principals of a namespace, and the feature rows.
 func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) error {
 	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
@@ -943,6 +943,10 @@ func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) err
 
 	if ownedErr := checkStagedOwnedRows(ctx, conn, restoreAt); ownedErr != nil {
 		return ownedErr
+	}
+
+	if tagsErr := checkStagedStackTags(ctx, conn); tagsErr != nil {
+		return tagsErr
 	}
 
 	if idErr := checkStagedGrantIDs(ctx, conn); idErr != nil {

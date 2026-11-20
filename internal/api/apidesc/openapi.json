@@ -2837,6 +2837,7 @@
           "stack.already-exists",
           "stack.has-resources",
           "stack.invalid-name",
+          "stack.invalid-tags",
           "stack.no-state",
           "stack.no-state-at-time",
           "stack.not-found",
