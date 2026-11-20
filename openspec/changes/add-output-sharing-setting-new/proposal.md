@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #929.
@@ -23,6 +23,7 @@ Errors the person may hit, and the one command that helps:
 | A rule with the same producer and the same consumer exists. | 409. The answer names the rule ID. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules` (NEW route) |
 | The producer already has 100 rules. | 409 with the limit in the text. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules` (NEW route) |
 | The caller lacks `unit:manage-sharing` on the object of the route. | 403 that names the action. | `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` |
+| The caller lacks `unit:read-access`, `collection:read-access` or `namespace:read-access` on the object of a list route. | 403 that names the action. | `GET /api/dustpan/v1/namespaces/{namespace}/output-sharing` |
 
 Evidence for the claims above:
 
@@ -35,7 +36,7 @@ Evidence for the claims above:
 
 - The rule store: one table in the baseline of each dialect, the SQL adapters of `outputshare.Store` (Put, Get, List, Delete, Find), and the removal of the rules of a purged unit.
 - The rule of a new unit: the stack and workspace stores write the first rule in the transaction that makes the unit, when the setting of the namespace is `namespace`.
-- The rule service and the NEW routes of the rules, under `/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules`, `/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/sharing-rules` and `/api/dustpan/v1/namespaces/{namespace}/sharing-rules`: three rows for a unit and the same shape for a collection and for a namespace (the table is in design.md). The setting route is not moved or changed.
+- The rule service and the NEW routes of the rules, under `/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules`, `/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/sharing-rules` and `/api/dustpan/v1/namespaces/{namespace}/sharing-rules`: a list, a save and a removal for each of the three objects (the table, with the action and the object of each route, is in design.md). The list of a collection needs `collection:read-access` and the list of a namespace needs `namespace:read-access` (owner, 2026-11-20). The setting route is not moved or changed.
 - The audit entry of each rule write, in the transaction of the write.
 - The docs page update.
 
@@ -45,7 +46,6 @@ Out of scope:
 - Sharing between namespaces as a new feature: the store keeps and matches a consumer of another namespace as ADR 273 decision 3 says, and the routes accept it.
 - Console pages for sharing.
 - A move of the setting into the generic settings API (decision 2 of the design).
-- Listing the rules of a collection or a namespace: parked, see "Open questions".
 
 Depends on:
 
@@ -77,7 +77,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - No table keeps a sharing rule. `rg -n -i "sharing_rule|output_sharing_rule" pkg/store/*/migrations` finds nothing.
 - The service `Setting` and `SetSetting` check `namespace:read` and `unit:manage-sharing` and write the audit entry of the change. (`internal/outputsharesvc/outputsharesvc.go:74`, `:96`)
 - The routes `GET` and `PUT` `/api/dustpan/v1/namespaces/{namespace}/output-sharing` exist, with the body `{"newUnitDefault":"nobody"}` or `"namespace"`. (`internal/api/inventory/outputsharing.go:49`, `internal/api/inventory/routes.go:143`)
-- The action `unit:manage-sharing` has the object kinds unit, collection and namespace, and the built-in `admin` role holds it. (`pkg/identity/identity.go:219`)
+- The action `unit:manage-sharing` has the object kinds unit, collection and namespace, and the built-in `admin` role holds it. (`pkg/identity/identity.go:226`) The actions `unit:read-access`, `collection:read-access` and `namespace:read-access` have a unit, a collection and a namespace object, and the access-review routes use them in that order. (`pkg/identity/identity.go:356`, `:353`, `:350`, `internal/api/server/review.go:307`, `:308`, `:309`)
 - The stores make a stack and a workspace in one fenced transaction. They write no rule. (`pkg/store/sqlite/sqlite.go:638`, `:650`, `pkg/store/sqlite/workspaces.go:31`, `:43`, `pkg/store/postgres/postgres.go:435`, `:444`, `pkg/store/postgres/workspaces.go:34`, `:43`)
 - The conformance suite names 37 rule cases, 2 setting-and-audit cases and 5 new-unit cases with no body. They skip until an adapter runs them. The SQL harness gives `Store: nil` and `Unit: nil`. (`pkg/outputshare/outputsharetest/outputsharetest.go:201`, `:250`, `pkg/store/sqlite/outputshare_test.go:51`, `:65`)
 - The checker denies a read by a job token and says that no path serves it. (`internal/outputsharesvc/checker.go:226`)
@@ -103,7 +103,16 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 - Quote (decision 11): "The rule of a new unit is a write inside the SQL adapters (decision 4), not a port."
 - Quote (decision 12): "The store runs `Rule.Validate` at each write."
 - Effect: Decision 10 answers the open question of the audit. The setting stays on the output-sharing route, and each rule has its own route under `sharing-rules`. This change adds the store, the service, the routes and the seeding that decisions 4, 10, 11 and 12 describe.
-- Conflict: none. The list route of a collection and of a namespace has no decided action (see "Open questions").
+- Quote (decision 10): "The routes of a rule on a collection and on a namespace have the same shape under `collections/{collection}` and under the namespace." The owner decided the reading of "the same shape" on 2026-11-20 (owner, 2026-11-20): the list of a collection needs `collection:read-access` on the collection and the list of a namespace needs `namespace:read-access` on the namespace, as the list of a unit needs `unit:read-access` on the unit. Decision 10 names no action for these two lists, so this owner decision fills the gap. It is recorded in the ADR check of this change until an ADR amendment carries it.
+- Conflict: none.
+
+**ADR 362: Owner decisions of 8 November 2026: stable IDs** (owner decision 1, 2026-11-08).
+
+- Decisions that apply: 1 (current).
+- Changed by: none in `docs/adr/INDEX.md`. Current rule: this ADR.
+- Quote (decision 1): "Every stored reference to an entity uses the stable ID of the entity when a user can rename the entity, or delete and recreate it. A name is a label for people only."
+- Effect: A rule of this change stores a producer, and a consumer of the producer namespace, by stable ID. It meets decision 1 for them. The consumer of another namespace is the open item (see "Open questions").
+- Conflict: one, parked. See "Open questions".
 
 **ADR 322: No migrations or compatibility code before the first tag** (owner decisions 1, 2, 4 and 5).
 
@@ -131,9 +140,13 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 
 ## Open questions
 
-Open questions: one, parked. No task depends on it:
+Open questions: one, parked. No task depends on it. The build follows ADR 273 decision 3, which main already implements (`pkg/outputshare/outputshare.go:239`, `Rule.Validate`: a consumer of another namespace is a reference by name and carries no stable ID).
 
-- Parked: the action that lists the rules of a collection and of a namespace. ADR 273 decision 10 gives `unit:read-access` for the list on a unit, and says the routes of a collection and of a namespace have "the same shape". `unit:read-access` has a unit object only (`pkg/identity/identity.go:355`), and `collection:read-access` has a collection object and `namespace:read-access` a namespace object (`pkg/identity/identity.go:349`, `:352`). No ADR says which of them lists rules. Who may read the rules of a collection or a namespace is a security choice, so the change does not decide it. The save and the removal on a collection and on a namespace use `unit:manage-sharing`, which its definition allows for both objects (`pkg/identity/identity.go:219`). The person reads a saved rule from the answer of the save.
+- Parked, non-blocking follow-up: the name match of a consumer in another namespace. ADR 273 decision 3 says: "So the store keeps the reference of such a consumer, and matches it at each read. A rename in the other namespace ends the match. A new unit or a new collection with the old name matches." ADR 362 decision 1 (owner, 2026-11-08) says: "Every stored reference to an entity uses the stable ID of the entity when a user can rename the entity, or delete and recreate it." No ADR changes decision 3 of ADR 273 (the only ADR that changes ADR 273 is ADR 286, for renames), and the follow-up list of ADR 362 does not name ADR 273. So the two texts are not reconciled by an ADR. ADR 273 decision 3 gives its reason: the save must not tell whether an object of another namespace exists (ADR 220 decision 11), and a stable ID would need that look-up. The owner did not answer this question (owner, 2026-11-20). This change keeps the behavior of ADR 273 decision 3. A later RFC may change it. No task or requirement here depends on the answer.
+
+Questions answered by the owner:
+
+- Which action lists the rules of a collection and of a namespace? `collection:read-access` on the collection and `namespace:read-access` on the namespace (owner, 2026-11-20). It mirrors `unit:read-access` for a unit (ADR 273 decision 10, "the same shape"). The save and the removal use `unit:manage-sharing` on the object of the route.
 
 Questions considered and answered:
 
