@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -839,4 +840,122 @@ func TestConfigInstallationScope(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestPrepareLevelGuards proves the guard of prepare alone, as if requireScope
+// did not run: prepare picks the fence, the entry namespace and the audit
+// action from the level of the scope, and it refuses a level that has no name
+// for the write and a scope that holds no configuration.
+func TestPrepareLevelGuards(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	t.Run("installation takes the zero fence and the installation name", func(t *testing.T) {
+		t.Parallel()
+
+		f := newInstallationFixture(t)
+
+		fence, e, err := f.svc.PrepareGateForTest(ctx, gate.InstallationScope(), callerEntry())
+		if err != nil {
+			t.Fatalf("prepare = %v", err)
+		}
+
+		if fence != (namespace.Fence{Namespace: "", FailoverVersion: 0}) || e.Namespace != audit.ServerScope ||
+			e.Action != gate.AuditInstallationSetGate || f.reads.Load() != 0 {
+			t.Errorf("fence %+v, namespace %q, action %q, %d reads; want the zero fence, @server, installation:set-gate, 0",
+				fence, e.Namespace, e.Action, f.reads.Load())
+		}
+	})
+
+	t.Run("a namespace takes its fence and the namespace name", func(t *testing.T) {
+		t.Parallel()
+
+		f := newInstallationFixture(t)
+
+		fence, e, err := f.svc.PrepareGateForTest(ctx, gate.NamespaceScope("acme"), callerEntry())
+		if err != nil {
+			t.Fatalf("prepare = %v", err)
+		}
+
+		if fence.Namespace != "acme" || e.Namespace != "acme" || e.Action != gate.AuditSetGate {
+			t.Errorf("fence %+v, namespace %q, action %q; want acme, acme, namespace:set-gate",
+				fence, e.Namespace, e.Action)
+		}
+	})
+
+	t.Run("the installation has no name for an approval default", func(t *testing.T) {
+		t.Parallel()
+
+		f := newInstallationFixture(t)
+
+		_, _, err := f.svc.PrepareApprovalDefaultForTest(ctx, gate.InstallationScope(), callerEntry())
+		if !errors.Is(err, gate.ErrInvalid) {
+			t.Errorf("prepare = %v, want ErrInvalid", err)
+		}
+	})
+
+	for name, scope := range map[string]gate.Scope{
+		"profile": profileScope(t), "empty": {},
+	} {
+		t.Run(name+" scope", func(t *testing.T) {
+			t.Parallel()
+
+			f := newInstallationFixture(t)
+
+			_, _, err := f.svc.PrepareGateForTest(ctx, scope, callerEntry())
+			if !errors.Is(err, gate.ErrInvalid) {
+				t.Errorf("prepare = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+// limitedRules is an approval rule port whose Put refuses with the limit.
+type limitedRules struct {
+	gate.Objects[gate.ApprovalRule]
+
+	fences *[]namespace.Fence
+}
+
+func (l limitedRules) Put(
+	_ context.Context, _ gate.ApprovalRule, _ int64, f namespace.Fence, _ audit.Entry,
+) (int64, error) {
+	*l.fences = append(*l.fences, f)
+
+	return 0, fmt.Errorf("%w: the installation holds 64 approval-rule objects", gate.ErrLimit)
+}
+
+type limitedStore struct {
+	gate.Store
+
+	rules limitedRules
+}
+
+func (l limitedStore) ApprovalRules() gate.Objects[gate.ApprovalRule] { return l.rules }
+
+// TestConfigInstallationLimitPassesThrough proves that the 65th approval rule
+// of the installation gives gate.ErrLimit from the service, with the zero
+// fence, and that the service wraps no other error around it.
+func TestConfigInstallationLimitPassesThrough(t *testing.T) {
+	t.Parallel()
+
+	var fences []namespace.Fence
+
+	svc, err := gate.NewConfigService(gate.ConfigServiceConfig{
+		Store:      limitedStore{Store: nil, rules: limitedRules{Objects: nil, fences: &fences}},
+		Namespaces: fakeNamespaces{}, Approvers: fakeGroups{}, Engine: nil, Now: configNow,
+	})
+	if err != nil {
+		t.Fatalf("NewConfigService() = %v", err)
+	}
+
+	_, err = svc.PutApprovalRule(t.Context(), goodRule(gate.InstallationScope()), 0, callerEntry())
+	if !errors.Is(err, gate.ErrLimit) {
+		t.Fatalf("PutApprovalRule() = %v, want ErrLimit", err)
+	}
+
+	if len(fences) != 1 || fences[0] != (namespace.Fence{Namespace: "", FailoverVersion: 0}) {
+		t.Errorf("the store got the fences %+v, want one zero fence", fences)
+	}
 }

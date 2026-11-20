@@ -1,6 +1,7 @@
 package gatetest
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -15,27 +16,31 @@ import (
 // gate.Objects.
 func objectRunners() map[string]runner {
 	return map[string]runner{
-		"put-new-has-version-1":            eachKind(caseNewVersion),
-		"put-new-of-existing-id-conflicts": eachKind(caseNewExists),
-		"put-replace-increments-version":   eachKind(caseReplace),
-		"put-stale-version-conflicts":      eachKind(caseStale),
-		"put-replace-unknown-not-found":    eachKind(caseReplaceUnknown),
-		"same-id-in-two-scopes":            eachKind(caseSameIDTwoScopes),
-		"unit-name-with-slash":             eachKind(caseUnitNameSlash),
-		"get-other-scope-not-found":        eachKind(caseGetOtherScope),
-		"list-own-scope-by-id":             eachKind(caseListOwnScope),
-		"list-every-scope-by-id":           eachKind(caseListEveryScope),
-		"delete-removes":                   eachKind(caseDeleteRemoves),
-		"delete-stale-version-conflicts":   eachKind(caseDeleteStale),
-		"delete-unknown-not-found":         eachKind(caseDeleteUnknown),
-		"delete-other-scope-not-found":     eachKind(caseDeleteOtherScope),
-		"installation-takes-zero-fence":    eachKind(caseInstallationFence),
-		"stale-fence-changes-nothing":      eachKind(caseStaleFence),
-		"fence-of-other-namespace-refused": eachKind(caseOtherFence),
-		"entry-of-other-scope-refused":     eachKind(caseOtherEntry),
-		"entry-in-same-transaction":        eachKind(caseEntryCount),
-		"scope-without-routes-refused":     eachKind(caseNoRoutes),
-		"scope-limit":                      eachKind(caseScopeLimit),
+		"put-new-has-version-1":                   eachKind(caseNewVersion),
+		"put-new-of-existing-id-conflicts":        eachKind(caseNewExists),
+		"put-replace-increments-version":          eachKind(caseReplace),
+		"put-stale-version-conflicts":             eachKind(caseStale),
+		"put-replace-unknown-not-found":           eachKind(caseReplaceUnknown),
+		"same-id-in-two-scopes":                   eachKind(caseSameIDTwoScopes),
+		"unit-name-with-slash":                    eachKind(caseUnitNameSlash),
+		"get-other-scope-not-found":               eachKind(caseGetOtherScope),
+		"list-own-scope-by-id":                    eachKind(caseListOwnScope),
+		"list-every-scope-by-id":                  eachKind(caseListEveryScope),
+		"delete-removes":                          eachKind(caseDeleteRemoves),
+		"delete-stale-version-conflicts":          eachKind(caseDeleteStale),
+		"delete-unknown-not-found":                eachKind(caseDeleteUnknown),
+		"delete-other-scope-not-found":            eachKind(caseDeleteOtherScope),
+		"installation-takes-zero-fence":           eachKind(caseInstallationFence),
+		"stale-fence-changes-nothing":             eachKind(caseStaleFence),
+		"installation-refusals-change-nothing":    eachKind(caseInstallationRefusals),
+		"installation-concurrent-writes-one-wins": eachKind(caseInstallationConcurrent),
+		"installation-scope-limit":                eachKind(caseInstallationLimit),
+		"hostile-id-is-text":                      eachKind(caseHostileID),
+		"fence-of-other-namespace-refused":        eachKind(caseOtherFence),
+		"entry-of-other-scope-refused":            eachKind(caseOtherEntry),
+		"entry-in-same-transaction":               eachKind(caseEntryCount),
+		"scope-without-routes-refused":            eachKind(caseNoRoutes),
+		"scope-limit":                             eachKind(caseScopeLimit),
 	}
 }
 
@@ -329,6 +334,157 @@ func caseInstallationFence(t *testing.T, e *env, k kindOps) {
 		&write{scope: e.fx.installation, id: "c", salt: "one", prev: 0, fence: zeroFence(), entry: entry("acme")},
 	)
 	wantErr(t, "Put(installation, entry of acme)", err, audit.ErrInvalidEntry)
+}
+
+func caseInstallationRefusals(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	invalid := serverEntry()
+	invalid.Subject = ""
+
+	refused := []struct {
+		name  string
+		fence namespace.Fence
+		entry audit.Entry
+		want  error
+	}{
+		{"fence of a namespace", e.acme, serverEntry(), gate.ErrInvalid},
+		{"invalid entry", zeroFence(), invalid, audit.ErrInvalidEntry},
+		{"entry of a namespace", zeroFence(), entry("acme"), audit.ErrInvalidEntry},
+	}
+
+	for _, r := range refused {
+		_, err := k.putWith(
+			e, &write{scope: e.fx.installation, id: "a", salt: "one", prev: 0, fence: r.fence, entry: r.entry},
+		)
+		wantErr(t, "Put(installation, "+r.name+")", err, r.want)
+	}
+
+	_, err := k.get(e, e.fx.installation, "a")
+	wantErr(t, "Get(refused puts)", err, gate.ErrNotFound)
+
+	got, err := k.list(e, e.fx.installation)
+	mustNil(t, "List(refused puts)", err)
+
+	if len(got) != 0 {
+		t.Fatalf("List(refused puts) = %d objects, want 0", len(got))
+	}
+
+	e.wantEntries(audit.ServerScope, 0)
+
+	// A delete with the fence of a namespace leaves the object.
+	v, err := k.put(e, e.fx.installation, "a", "one", 0)
+	mustNil(t, "Put(installation)", err)
+
+	err = k.del(e, ref(e.fx.installation, v), e.acme, serverEntry())
+	wantErr(t, "Delete(installation, fence of acme)", err, gate.ErrInvalid)
+
+	_, err = k.get(e, e.fx.installation, "a")
+	mustNil(t, "Get(refused delete)", err)
+	e.wantEntries(audit.ServerScope, 1)
+}
+
+func caseInstallationConcurrent(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	v, err := k.put(e, e.fx.installation, "a", "one", 0)
+	mustNil(t, "Put(new)", err)
+
+	errs := concurrently(
+		func() error {
+			_, putErr := k.put(e, e.fx.installation, "a", "two", v)
+
+			return putErr
+		},
+		func() error {
+			_, putErr := k.put(e, e.fx.installation, "a", "three", v)
+
+			return putErr
+		},
+	)
+
+	wins, conflicts := 0, 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, gate.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("a concurrent Put(installation) = %v, want nil or ErrConflict", err)
+		}
+	}
+
+	if wins != 1 || conflicts != 1 {
+		t.Fatalf("two Put(installation) with one version = %d wins and %d conflicts, want 1 and 1", wins, conflicts)
+	}
+
+	got, err := k.get(e, e.fx.installation, "a")
+	mustNil(t, "Get()", err)
+
+	if got.Version != v+1 {
+		t.Fatalf("Get() = %s, want version %d", describe(got), v+1)
+	}
+
+	e.wantEntries(audit.ServerScope, 2)
+}
+
+func caseInstallationLimit(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	for i := range k.limit() {
+		_, err := k.put(e, e.fx.installation, gate.ID(fmt.Sprintf("o%d", i)), "one", 0)
+		mustNil(t, fmt.Sprintf("Put(installation, o%d)", i), err)
+	}
+
+	_, err := k.put(e, e.fx.installation, "over", "one", 0)
+	wantErr(t, "Put(installation, above the limit)", err, gate.ErrLimit)
+
+	_, err = k.put(e, e.fx.installation, "o0", "two", 1)
+	mustNil(t, "Put(installation, replace at the limit)", err)
+
+	_, err = k.put(e, e.fx.acme, "over", "one", 0)
+	mustNil(t, "Put(acme, the limit of the installation is separate)", err)
+}
+
+func caseHostileID(t *testing.T, e *env, k kindOps) {
+	t.Helper()
+
+	hostile := gate.ID("a'; DROP TABLE gate_objects; --")
+
+	_, err := k.put(e, e.fx.installation, hostile, "one", 0)
+	stored := err == nil
+
+	if !stored {
+		wantErr(t, "Put(SQL text as an ID)", err, gate.ErrInvalid)
+	}
+
+	_, err = k.put(e, e.fx.installation, "b", "one", 0)
+	mustNil(t, "Put(an ordinary ID after the hostile one)", err)
+
+	// The text matches no other ID: not its first letter, not a pattern.
+	for _, id := range []gate.ID{"a", "%", "a'", "b' OR '1'='1"} {
+		_, err = k.get(e, e.fx.installation, id)
+		wantErr(t, "Get("+string(id)+")", err, gate.ErrNotFound)
+	}
+
+	got, err := k.list(e, e.fx.installation)
+	mustNil(t, "List()", err)
+
+	want := 1
+	if stored {
+		want = 2
+	}
+
+	if len(got) != want {
+		t.Fatalf("List() = %d objects, want %d", len(got), want)
+	}
+
+	if stored {
+		_, err = k.get(e, e.fx.installation, hostile)
+		mustNil(t, "Get(SQL text as an ID)", err)
+	}
 }
 
 func caseStaleFence(t *testing.T, e *env, k kindOps) {
