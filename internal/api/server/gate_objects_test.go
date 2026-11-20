@@ -2,19 +2,24 @@ package server_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -1083,5 +1088,621 @@ func TestGateRoutesFollowTheUnit(t *testing.T) {
 
 	if created.Version != 1 {
 		t.Fatalf("gate of the new workspace net = version %d, want 1", created.Version)
+	}
+}
+
+// installationBase is the path of the gate routes of the installation.
+const installationBase = "/api/dustpan/v1"
+
+// swapGates is an authorizer whose rules a test changes while it runs. A test
+// seeds the rows with a permissive rule, and then asks as a caller with less.
+type swapGates struct {
+	cur *atomic.Pointer[identity.Authorizer]
+}
+
+func newSwapGates(a identity.Authorizer) swapGates {
+	p := new(atomic.Pointer[identity.Authorizer])
+	p.Store(&a)
+
+	return swapGates{cur: p}
+}
+
+func (s swapGates) set(a identity.Authorizer) { s.cur.Store(&a) }
+
+func (s swapGates) Authorize(ctx context.Context, p identity.Principal, a identity.Action, o identity.Object) error {
+	return (*s.cur.Load()).Authorize(ctx, p, a, o)
+}
+
+func (s swapGates) ListObjects(ctx context.Context, p identity.Principal, a identity.Action) (identity.Scope, error) {
+	return (*s.cur.Load()).ListObjects(ctx, p, a)
+}
+
+// failingGates is an authorizer whose grant lookup fails.
+type failingGates struct{}
+
+func (failingGates) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return errors.New("the grant store is down")
+}
+
+func (failingGates) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{}, errors.New("the grant store is down")
+}
+
+// installationOnly allows the actions on the installation object only.
+func installationOnly(actions ...identity.Action) gateAuthorizer {
+	allow := map[identity.Action]namespace.Name{}
+	for _, a := range actions {
+		allow[a] = ""
+	}
+
+	return gateAuthorizer{allow: allow}
+}
+
+// roleOnInstallation allows the actions of the built-in role on the
+// installation object, as a grant of the role on the installation does.
+func roleOnInstallation(t *testing.T, role string) gateAuthorizer {
+	t.Helper()
+
+	r, ok := access.BuiltInRole(role)
+	if !ok {
+		t.Fatalf("no built-in role %q", role)
+	}
+
+	return installationOnly(r.Actions...)
+}
+
+// installationDocs holds one valid body of each kind.
+var installationKinds = []struct{ segment, doc string }{
+	{"gates", freezeGateDoc},
+	{"access-limits", noWritesDoc},
+	{"approval-rules", `{"count":1,"approvers":{"groups":["ops"]}}`},
+}
+
+// TestGateRoutesInstallationReads proves the list and the get of the gates,
+// the access limits and the approval rules of the installation: the list
+// shows the objects of the installation only, and only a holder of
+// installation:read-gates reads.
+func TestGateRoutesInstallationReads(t *testing.T) {
+	t.Parallel()
+
+	read, manage := identity.ActionInstallationReadGates, identity.ActionInstallationManageGates
+	swap := newSwapGates(adminGates())
+	g := newGateEnv(t, swap)
+
+	// Seed one object of each kind at the installation and at acme.
+	swap.set(installationOnly(manage, read))
+
+	for _, k := range installationKinds {
+		wantStatus(
+			t, serveGate(t, g, gateCall{http.MethodPut, installationBase + "/" + k.segment + "/shared", k.doc, ""}),
+			http.StatusOK,
+		)
+	}
+
+	swap.set(gateAuthorizer{allow: map[identity.Action]namespace.Name{
+		identity.ActionNamespaceReadGates: "acme", identity.ActionNamespaceManageGates: "acme",
+	}})
+
+	for _, k := range installationKinds {
+		wantStatus(
+			t, serveGate(t, g, gateCall{http.MethodPut, gateBase + "acme/" + k.segment + "/local", k.doc, ""}),
+			http.StatusOK,
+		)
+	}
+
+	t.Run("a holder of the installation action reads", func(t *testing.T) {
+		swap.set(installationOnly(read))
+
+		for _, k := range installationKinds {
+			rec := serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment, "", ""})
+			wantStatus(t, rec, http.StatusOK)
+
+			body := rec.Body.String()
+			if !strings.Contains(body, `"id":"shared"`) || strings.Contains(body, `"local"`) {
+				t.Errorf("list of %s = %s, want the installation object shared and no namespace object", k.segment, body)
+			}
+
+			rec = serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/shared", "", ""})
+			wantStatus(t, rec, http.StatusOK)
+
+			if rec.Header().Get("ETag") != `"1"` {
+				t.Errorf("ETag of %s = %q, want \"1\"", k.segment, rec.Header().Get("ETag"))
+			}
+
+			// An object of a namespace is not an object of the installation.
+			rec = serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/local", "", ""})
+			wantStatus(t, rec, http.StatusNotFound)
+			wantCode(t, rec, errcode.GateNotFound)
+
+			rec = serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/unknown", "", ""})
+			wantStatus(t, rec, http.StatusNotFound)
+			wantCode(t, rec, errcode.GateNotFound)
+		}
+	})
+
+	denied := map[string]gateAuthorizer{
+		"namespace:read-gates only": {allow: map[identity.Action]namespace.Name{identity.ActionNamespaceReadGates: "acme"}},
+		"namespace administrator": {allow: map[identity.Action]namespace.Name{
+			identity.ActionNamespaceReadGates: "acme", identity.ActionNamespaceManageGates: "acme",
+		}},
+		"installation:manage-gates only": installationOnly(manage),
+		"no action":                      {allow: nil},
+	}
+
+	for name, authz := range denied {
+		t.Run("denied for "+name, func(t *testing.T) {
+			swap.set(authz)
+
+			for _, k := range installationKinds {
+				for _, target := range []string{installationBase + "/" + k.segment, installationBase + "/" + k.segment + "/shared"} {
+					rec := serveGate(t, g, gateCall{http.MethodGet, target, "", ""})
+					wantStatus(t, rec, http.StatusForbidden)
+					wantCode(t, rec, errcode.AccessDenied)
+				}
+			}
+		})
+	}
+}
+
+// TestApprovalRulesFollowTheUnit proves, through the routes, that an approval
+// rule belongs to the unit and not to its name: a rename keeps the rule, a new
+// unit with the name of a deleted unit has none, and an unknown unit answers
+// 404 with the code unit.not-found.
+func TestApprovalRulesFollowTheUnit(t *testing.T) {
+	t.Parallel()
+
+	st, h := newGateHandler(t, adminGates())
+	ctx := t.Context()
+	body := `{"count":1,"approvers":{"groups":["ops"]}}`
+
+	ns, err := st.GetNamespace(ctx, "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	t.Run("rename", func(t *testing.T) {
+		old := gateBase + "acme/units/by-name/pulumi/web%2Fprod"
+		renamed := gateBase + "acme/units/by-name/pulumi/web%2Fstage"
+
+		wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, old + "/approval-rules/review", body, ""}), http.StatusOK)
+
+		ref, refErr := stack.ParseRef("acme", "web", "prod")
+		if refErr != nil {
+			t.Fatalf("parse stack reference: %v", refErr)
+		}
+
+		if err = st.RenameStack(ctx, ref, "stage", ns.Fence(), gateTestEntry("stack:rename")); err != nil {
+			t.Fatalf("rename stack: %v", err)
+		}
+
+		wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, renamed + "/approval-rules/review", "", ""}), http.StatusOK)
+
+		rec := serveGate(t, h, gateCall{http.MethodGet, old + "/approval-rules/review", "", ""})
+		wantStatus(t, rec, http.StatusNotFound)
+	})
+
+	t.Run("reused name", func(t *testing.T) {
+		net := gateBase + "acme/units/by-name/opentofu/net"
+
+		wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, net + "/approval-rules/review", body, ""}), http.StatusOK)
+
+		del := inventory.Deletion{Entry: gateTestEntry("workspace:delete"), PurgeAfter: time.Now().Add(time.Hour)}
+		if err = st.DeleteWorkspace(ctx, workspace.Ref{Namespace: "acme", Name: "net"}, ns.Fence(), del); err != nil {
+			t.Fatalf("delete workspace: %v", err)
+		}
+
+		rec := serveGate(t, h, gateCall{http.MethodPut, net + "/approval-rules/review", body, ""})
+		wantStatus(t, rec, http.StatusNotFound)
+		wantCode(t, rec, errcode.UnitNotFound)
+
+		createGateWorkspace(t, st, "ws-gate-net-again", "net")
+
+		rec = serveGate(t, h, gateCall{http.MethodGet, net + "/approval-rules", "", ""})
+		wantStatus(t, rec, http.StatusOK)
+
+		if strings.TrimSpace(rec.Body.String()) != `{"rules":[]}` {
+			t.Fatalf("rules of the new workspace net = %s, want none", rec.Body.String())
+		}
+
+		rec = serveGate(t, h, gateCall{http.MethodPut, net + "/approval-rules/review", body, ""})
+		wantStatus(t, rec, http.StatusOK)
+
+		var created ruleDoc
+
+		decodeGateJSON(t, rec, &created)
+
+		if created.Version != 1 {
+			t.Fatalf("rule of the new workspace net = version %d, want 1", created.Version)
+		}
+	})
+
+	t.Run("unknown unit", func(t *testing.T) {
+		ghost := gateBase + "acme/units/by-name/opentofu/ghost"
+
+		for _, suffix := range []string{"/approval-rules/review", "/approval-default"} {
+			payload := body
+			if suffix == "/approval-default" {
+				payload = platformDefault
+			}
+
+			rec := serveGate(t, h, gateCall{http.MethodPut, ghost + suffix, payload, ""})
+			wantStatus(t, rec, http.StatusNotFound)
+			wantCode(t, rec, errcode.UnitNotFound)
+		}
+	})
+}
+
+// installationEntries returns the audit entries of the installation whose
+// action starts with prefix.
+func installationEntries(t *testing.T, st *sqlite.Store, prefix string) []audit.Entry {
+	t.Helper()
+
+	var out []audit.Entry
+
+	for _, e := range listNamespaceEntries(t, st, audit.ServerScope) {
+		if strings.HasPrefix(e.Action, prefix) {
+			out = append(out, e)
+		}
+	}
+
+	return out
+}
+
+// TestGateRoutesInstallationWrites proves one guard at a time of the PUT and
+// the DELETE of a gate, an access limit and an approval rule of the
+// installation. Each hostile request leaves the stored row and the audit log
+// as they were.
+func TestGateRoutesInstallationWrites(t *testing.T) {
+	t.Parallel()
+
+	t.Run("authorization", func(t *testing.T) { t.Parallel(); installationWriteAuthorization(t) })
+	t.Run("access token", func(t *testing.T) { t.Parallel(); installationWriteAccessToken(t) })
+	t.Run("stale sign-in", func(t *testing.T) { t.Parallel(); installationWriteStaleSession(t) })
+	t.Run("version", func(t *testing.T) { t.Parallel(); installationWriteVersion(t) })
+	t.Run("body", func(t *testing.T) { t.Parallel(); installationWriteBody(t) })
+	t.Run("id", func(t *testing.T) { t.Parallel(); installationWriteID(t) })
+	t.Run("failing grant lookup", func(t *testing.T) { t.Parallel(); installationWriteFailingLookup(t) })
+	t.Run("audit entry", func(t *testing.T) { t.Parallel(); installationWriteAudit(t) })
+	t.Run("limit", func(t *testing.T) { t.Parallel(); installationWriteLimit(t) })
+	t.Run("no approval default", func(t *testing.T) { t.Parallel(); installationNoApprovalDefault(t) })
+}
+
+// installationWriteAuthorization sends each write as a caller that lacks
+// installation:manage-gates, and as the two roles that hold it.
+func installationWriteAuthorization(t *testing.T) {
+	t.Helper()
+
+	manage, read := identity.ActionInstallationManageGates, identity.ActionInstallationReadGates
+	swap := newSwapGates(installationOnly(manage, read))
+	g := newGateEnv(t, swap)
+
+	denied := map[string]gateAuthorizer{
+		"namespace:manage-gates only": {allow: map[identity.Action]namespace.Name{
+			identity.ActionNamespaceManageGates: "acme", identity.ActionNamespaceReadGates: "acme",
+		}},
+		"installation:read-gates only": installationOnly(read),
+		"account administrator":        roleOnInstallation(t, access.RoleAccountAdministrator),
+		"namespace administrator":      roleOnInstallation(t, access.RoleAdmin),
+		"viewer":                       roleOnInstallation(t, access.RoleViewer),
+		"no action":                    {allow: nil},
+		"manage-gates on a namespace":  {allow: map[identity.Action]namespace.Name{manage: "acme", read: "acme"}},
+	}
+
+	for name, authz := range denied {
+		swap.set(authz)
+
+		for _, k := range installationKinds {
+			item := installationBase + "/" + k.segment + "/probe"
+
+			for _, c := range []gateCall{{http.MethodPut, item, k.doc, ""}, {http.MethodDelete, item, "", ""}} {
+				rec := serveGate(t, g, c)
+				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"errorCode":"access.denied"`) {
+					t.Fatalf("%s: %s %s = %d %s, want 403 access.denied", name, c.method, c.target, rec.Code, rec.Body.String())
+				}
+			}
+		}
+	}
+
+	swap.set(installationOnly(manage, read))
+
+	for _, k := range installationKinds {
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/probe", "", ""}), http.StatusNotFound)
+	}
+
+	if got := installationEntries(t, g.env.store, "installation:"); len(got) != 0 {
+		t.Fatalf("refused requests wrote the entries %+v", got)
+	}
+
+	for _, role := range []string{access.RoleInstallationOperator, access.RoleSiteAdministrator} {
+		swap.set(roleOnInstallation(t, role))
+
+		for _, k := range installationKinds {
+			item := installationBase + "/" + k.segment + "/" + strings.ReplaceAll(role, "-", "")
+			wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, k.doc, ""}), http.StatusOK)
+		}
+	}
+}
+
+// installationWriteAccessToken sends each write with an access token of a
+// caller that holds the action. A token never gives a fresh authentication.
+func installationWriteAccessToken(t *testing.T) {
+	t.Helper()
+
+	manage, read := identity.ActionInstallationManageGates, identity.ActionInstallationReadGates
+	g := newGateEnv(t, installationOnly(manage, read))
+
+	for _, k := range installationKinds {
+		item := installationBase + "/" + k.segment + "/seed"
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, k.doc, ""}), http.StatusOK)
+
+		for _, c := range []gateCall{
+			{http.MethodPut, item, k.doc, ""},
+			{http.MethodPut, installationBase + "/" + k.segment + "/new", k.doc, ""},
+			{http.MethodDelete, item, "", ""},
+		} {
+			rec := serveGate(t, g.env.handler, c)
+			wantStatus(t, rec, http.StatusForbidden)
+			wantCode(t, rec, errcode.MFAFreshStepRequired)
+		}
+
+		var got gateObjectDoc
+
+		decodeGateJSON(t, serveGate(t, g.env.handler, gateCall{http.MethodGet, item, "", ""}), &got)
+
+		if got.Version != 1 {
+			t.Fatalf("%s after the refused writes = %+v, want version 1", k.segment, got)
+		}
+
+		wantStatus(t, serveGate(t, g.env.handler, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/new", "", ""}), http.StatusNotFound)
+	}
+
+	if got := installationEntries(t, g.env.store, "installation:set-"); len(got) != len(installationKinds) {
+		t.Fatalf("set entries = %d, want %d (the seeds only)", len(got), len(installationKinds))
+	}
+}
+
+// installationWriteStaleSession sends each write from a session whose sign-in
+// is older than the freshness window.
+func installationWriteStaleSession(t *testing.T) {
+	t.Helper()
+
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
+		namespaces: []namespace.Name{"acme"}, hostile: nil, passwords: nil, failPolicyRead: nil,
+		idempotency: false, failTempAdminRead: false,
+	})
+	stale := e.staleSession(t)
+
+	for _, k := range installationKinds {
+		item := installationBase + "/" + k.segment + "/probe"
+
+		for _, c := range []gateCall{{http.MethodPut, item, k.doc, ""}, {http.MethodDelete, item, "", ""}} {
+			rec := e.sendWithSession(t, c.method, stale, c.target, c.body)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "reauthenticate") {
+				t.Fatalf("%s %s from a stale session = %d %s, want 403 with reauthenticate",
+					c.method, c.target, rec.Code, rec.Body.String())
+			}
+		}
+
+		if rec := e.sendWithSession(t, http.MethodGet, stale, item, ""); rec.Code != http.StatusNotFound {
+			t.Fatalf("GET %s after the refused writes = %d, want 404", item, rec.Code)
+		}
+	}
+
+	fresh := e.freshSignIn(t)
+	if rec := e.sendWithSession(t, http.MethodPut, fresh, installationBase+"/gates/probe", freezeGateDoc); rec.Code != http.StatusOK {
+		t.Fatalf("PUT from a fresh session = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// installationWriteVersion sends a stale If-Match for each kind.
+func installationWriteVersion(t *testing.T) {
+	t.Helper()
+
+	g := newGateEnv(t, installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+
+	for _, k := range installationKinds {
+		item := installationBase + "/" + k.segment + "/seed"
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, k.doc, ""}), http.StatusOK)
+
+		for _, c := range []gateCall{{http.MethodPut, item, k.doc, `"7"`}, {http.MethodDelete, item, "", `"7"`}} {
+			rec := serveGate(t, g, c)
+			wantStatus(t, rec, http.StatusConflict)
+			wantCode(t, rec, errcode.GateVersionConflict)
+		}
+
+		rec := serveGate(t, g, gateCall{http.MethodGet, item, "", ""})
+		wantStatus(t, rec, http.StatusOK)
+
+		if rec.Header().Get("ETag") != `"1"` {
+			t.Fatalf("ETag of %s after the refused writes = %q, want \"1\"", k.segment, rec.Header().Get("ETag"))
+		}
+
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, k.doc, `"1"`}), http.StatusOK)
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodDelete, item, "", `"2"`}), http.StatusNoContent)
+	}
+}
+
+// installationWriteBody sends a body with the field scope and a body one byte
+// above the cap.
+func installationWriteBody(t *testing.T) {
+	t.Helper()
+
+	g := newGateEnv(t, installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+
+	const capBytes = 64 * 1024
+
+	pad := func(prefix, suffix string) string {
+		return prefix + strings.Repeat("a", capBytes+1-len(prefix)-len(suffix)) + suffix
+	}
+
+	hostile := map[string]string{
+		"gates":          pad(`{"decisionPoint":"state.write","outcome":"deny","message":"`, `"}`),
+		"access-limits":  pad(`{"policy":"`, `"}`),
+		"approval-rules": pad(`{"count":1,"approvers":{"groups":["`, `"]}}`),
+	}
+
+	for _, k := range installationKinds {
+		item := installationBase + "/" + k.segment + "/probe"
+		withScope := strings.Replace(k.doc, "{", `{"scope":"installation",`, 1)
+
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, withScope, ""}), http.StatusBadRequest)
+
+		if len(hostile[k.segment]) != capBytes+1 {
+			t.Fatalf("hostile body of %s has %d bytes, want %d", k.segment, len(hostile[k.segment]), capBytes+1)
+		}
+
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, hostile[k.segment], ""}), http.StatusBadRequest)
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodGet, item, "", ""}), http.StatusNotFound)
+	}
+}
+
+// installationWriteID sends an ID with a capital letter, a slash and a
+// control character. Each answers 400 or 422, and nothing is stored.
+func installationWriteID(t *testing.T) {
+	t.Helper()
+
+	g := newGateEnv(t, installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+
+	for _, k := range installationKinds {
+		for _, id := range []string{"Freeze", "a%2Fb", "a%07b", "a%0Ab", "a%27%3B%20DROP%20TABLE%20x%3B--"} {
+			rec := serveGate(t, g, gateCall{http.MethodPut, installationBase + "/" + k.segment + "/" + id, k.doc, ""})
+			if rec.Code != http.StatusBadRequest && rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("PUT %s/%s = %d %s, want 400 or 422", k.segment, id, rec.Code, rec.Body.String())
+			}
+
+			rec = serveGate(t, g, gateCall{http.MethodDelete, installationBase + "/" + k.segment + "/" + id, "", ""})
+			if rec.Code != http.StatusBadRequest && rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("DELETE %s/%s = %d %s, want 400 or 422", k.segment, id, rec.Code, rec.Body.String())
+			}
+		}
+
+		rec := serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment, "", ""})
+		wantStatus(t, rec, http.StatusOK)
+
+		if strings.Contains(rec.Body.String(), `"id"`) {
+			t.Fatalf("list of %s after the refused writes = %s, want none", k.segment, rec.Body.String())
+		}
+	}
+
+	if got := installationEntries(t, g.env.store, "installation:"); len(got) != 0 {
+		t.Fatalf("refused requests wrote the entries %+v", got)
+	}
+}
+
+// installationWriteFailingLookup makes the grant lookup fail. Each request
+// answers an error status, and nothing is stored.
+func installationWriteFailingLookup(t *testing.T) {
+	t.Helper()
+
+	swap := newSwapGates(installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+	g := newGateEnv(t, swap)
+
+	swap.set(failingGates{})
+
+	for _, k := range installationKinds {
+		for _, c := range []gateCall{
+			{http.MethodPut, installationBase + "/" + k.segment + "/probe", k.doc, ""},
+			{http.MethodDelete, installationBase + "/" + k.segment + "/probe", "", ""},
+		} {
+			rec := serveGate(t, g, c)
+			if rec.Code < http.StatusInternalServerError {
+				t.Fatalf("%s %s with a failing grant lookup = %d %s, want a 5xx status",
+					c.method, c.target, rec.Code, rec.Body.String())
+			}
+		}
+	}
+
+	swap.set(installationOnly(identity.ActionInstallationReadGates))
+
+	for _, k := range installationKinds {
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/probe", "", ""}), http.StatusNotFound)
+	}
+
+	if got := installationEntries(t, g.env.store, "installation:"); len(got) != 0 {
+		t.Fatalf("requests with a failing grant lookup wrote the entries %+v", got)
+	}
+}
+
+// installationWriteAudit writes and deletes one object of each kind and checks
+// each entry: the caller, the action, the scope @server and the object.
+func installationWriteAudit(t *testing.T) {
+	t.Helper()
+
+	g := newGateEnv(t, installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+
+	for _, k := range installationKinds {
+		item := installationBase + "/" + k.segment + "/audited"
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, item, k.doc, ""}), http.StatusOK)
+		wantStatus(t, serveGate(t, g, gateCall{http.MethodDelete, item, "", ""}), http.StatusNoContent)
+	}
+
+	kinds := map[string]string{"gates": "gate", "access-limits": "access-limit", "approval-rules": "approval-rule"}
+	entries := installationEntries(t, g.env.store, "installation:")
+
+	if len(entries) != 2*len(installationKinds) {
+		t.Fatalf("entries = %d, want %d: %+v", len(entries), 2*len(installationKinds), entries)
+	}
+
+	seen := map[string]bool{}
+
+	for i := range entries {
+		e := &entries[i]
+		seen[e.Action] = true
+
+		if e.Namespace != audit.ServerScope || e.Subject == "" || e.Kind != audit.KindChange ||
+			e.Outcome != audit.OutcomeSuccess || !strings.HasPrefix(e.Object, "installation/") ||
+			!strings.HasSuffix(e.Object, "/audited") {
+			t.Errorf("entry = %+v, want the scope @server, a subject, kind change, success, an installation object", e)
+		}
+	}
+
+	for _, kind := range kinds {
+		for _, verb := range []string{"set", "delete"} {
+			if !seen["installation:"+verb+"-"+kind] {
+				t.Errorf("no entry with the action installation:%s-%s", verb, kind)
+			}
+		}
+	}
+
+	// No namespace holds an entry of the installation write.
+	for _, e := range listNamespaceEntries(t, g.env.store, "acme") {
+		if strings.HasPrefix(e.Action, "installation:") {
+			t.Errorf("acme holds the installation entry %+v", e)
+		}
+	}
+}
+
+// installationWriteLimit saves the 65th approval rule of the installation.
+func installationWriteLimit(t *testing.T) {
+	t.Helper()
+
+	g := newGateEnv(t, installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+	rules := installationBase + "/approval-rules"
+
+	for i := range gate.MaxApprovalRulesPerScope {
+		wantStatus(
+			t, serveGate(t, g, gateCall{http.MethodPut, fmt.Sprintf("%s/r%02d", rules, i), installationKinds[2].doc, ""}),
+			http.StatusOK,
+		)
+	}
+
+	rec := serveGate(t, g, gateCall{http.MethodPut, rules + "/over", installationKinds[2].doc, ""})
+	wantStatus(t, rec, http.StatusUnprocessableEntity)
+	wantCode(t, rec, errcode.GateLimit)
+}
+
+// installationNoApprovalDefault checks that the installation has no approval
+// default route: the installation holds none.
+func installationNoApprovalDefault(t *testing.T) {
+	t.Helper()
+
+	g := newGateEnv(t, installationOnly(identity.ActionInstallationManageGates, identity.ActionInstallationReadGates))
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		rec := serveGate(t, g, gateCall{method, installationBase + "/approval-default", platformDefault, ""})
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s /approval-default = %d, want 404 or 405", method, rec.Code)
+		}
 	}
 }

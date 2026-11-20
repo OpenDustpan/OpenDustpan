@@ -1396,3 +1396,483 @@ func TestGateConfigUnknownNamespace(t *testing.T) {
 		})
 	}
 }
+
+// scopeCaseBody is a rule that any scope level accepts.
+const scopeCaseBody = `{"count":1,"approvers":{"groups":["ops"]}}`
+
+// wantCode fails unless the body of rec holds the error code code.
+func wantCode(t *testing.T, rec *httptest.ResponseRecorder, code string) {
+	t.Helper()
+
+	if !strings.Contains(rec.Body.String(), `"errorCode":"`+code+`"`) {
+		t.Fatalf("body = %s, want the code %s", rec.Body.String(), code)
+	}
+}
+
+// TestApprovalRuleScopes proves that the approval rules have list, get, set
+// and delete at the namespace, the collection and the unit scope, that a list
+// and a read show the objects of their own scope only, and that each route
+// needs its action and a valid scope segment.
+func TestApprovalRuleScopes(t *testing.T) {
+	t.Parallel()
+
+	for level, base := range gateScopeURLs() {
+		t.Run(level, func(t *testing.T) {
+			t.Parallel()
+
+			_, h := newGateHandler(t, adminGates())
+			list := base + gateRulesURL
+			item := list + "/review"
+
+			rec := serveGate(t, h, gateCall{http.MethodGet, list, "", ""})
+			wantStatus(t, rec, http.StatusOK)
+
+			if strings.TrimSpace(rec.Body.String()) != `{"rules":[]}` {
+				t.Fatalf("empty list = %s, want {\"rules\":[]}", rec.Body.String())
+			}
+
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, item, "", ""}), http.StatusNotFound)
+
+			rec = serveGate(t, h, gateCall{http.MethodPut, item, scopeCaseBody, ""})
+			wantStatus(t, rec, http.StatusOK)
+
+			var created ruleDoc
+
+			decodeGateJSON(t, rec, &created)
+
+			if created.ID != "review" || created.Version != 1 || rec.Header().Get("ETag") != `"1"` {
+				t.Fatalf("created = %+v, ETag %q; want id review, version 1, ETag \"1\"", created, rec.Header().Get("ETag"))
+			}
+
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, item, "", ""}), http.StatusOK)
+
+			// A list and a read show the rules of their own scope only.
+			for other, otherBase := range gateScopeURLs() {
+				var listed struct {
+					Rules []ruleDoc `json:"rules"`
+				}
+
+				decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, otherBase + gateRulesURL, "", ""}), &listed)
+
+				want, status := 0, http.StatusNotFound
+				if other == level {
+					want, status = 1, http.StatusOK
+				}
+
+				if len(listed.Rules) != want {
+					t.Errorf("%s list holds %d rules of %s, want %d", other, len(listed.Rules), level, want)
+				}
+
+				rec = serveGate(t, h, gateCall{http.MethodGet, otherBase + gateRulesURL + "/review", "", ""})
+				wantStatus(t, rec, status)
+
+				if status == http.StatusNotFound {
+					wantCode(t, rec, errcode.GateNotFound)
+				}
+			}
+
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, item, "", `"9"`}), http.StatusConflict)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, item, "", `"1"`}), http.StatusNoContent)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, item, "", ""}), http.StatusNotFound)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, item, "", ""}), http.StatusNotFound)
+		})
+	}
+
+	t.Run("authorization", func(t *testing.T) { t.Parallel(); approvalAuthorizationCases(t, gateRulesURL+"/x", scopeCaseBody) })
+	t.Run("scope segments", func(t *testing.T) { t.Parallel(); approvalSegmentCases(t, gateRulesURL) })
+}
+
+// TestApprovalDefaultScopes proves that the approval default has get, set and
+// reset at the namespace, the collection and the unit scope, and that the
+// reset answers 204 when none is set.
+func TestApprovalDefaultScopes(t *testing.T) {
+	t.Parallel()
+
+	for level, base := range gateScopeURLs() {
+		t.Run(level, func(t *testing.T) {
+			t.Parallel()
+
+			_, h := newGateHandler(t, adminGates())
+			def := base + gateDefault
+
+			rec := serveGate(t, h, gateCall{http.MethodGet, def, "", ""})
+			wantStatus(t, rec, http.StatusNotFound)
+			wantCode(t, rec, errcode.GateNotFound)
+
+			// A reset with no default set is not an error.
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, def, "", ""}), http.StatusNoContent)
+
+			rec = serveGate(t, h, gateCall{http.MethodPut, def, platformDefault, ""})
+			wantStatus(t, rec, http.StatusOK)
+
+			var created defaultDoc
+
+			decodeGateJSON(t, rec, &created)
+
+			if created.Count != 2 || created.Version != 1 || rec.Header().Get("ETag") != `"1"` {
+				t.Fatalf("created = %+v, ETag %q; want count 2, version 1, ETag \"1\"", created, rec.Header().Get("ETag"))
+			}
+
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, def, "", ""}), http.StatusOK)
+
+			for other, otherBase := range gateScopeURLs() {
+				if other == level {
+					continue
+				}
+
+				wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, otherBase + gateDefault, "", ""}), http.StatusNotFound)
+			}
+
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, def, platformDefault, `"1"`}), http.StatusOK)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, def, "", `"1"`}), http.StatusConflict)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, def, "", `"2"`}), http.StatusNoContent)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, def, "", ""}), http.StatusNotFound)
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, def, "", ""}), http.StatusNoContent)
+		})
+	}
+
+	t.Run("authorization", func(t *testing.T) { t.Parallel(); approvalAuthorizationCases(t, gateDefault, platformDefault) })
+	t.Run("scope segments", func(t *testing.T) { t.Parallel(); approvalSegmentCases(t, gateDefault) })
+}
+
+// approvalAuthorizationCases proves, at the collection and the unit scope,
+// that a read needs namespace:read-gates and a write needs
+// namespace:manage-gates on the namespace of the path, with no stored change
+// and no audit entry of a change after a refusal.
+func approvalAuthorizationCases(t *testing.T, suffix, body string) {
+	t.Helper()
+
+	read, manage := identity.ActionNamespaceReadGates, identity.ActionNamespaceManageGates
+	readOnly := map[identity.Action]namespace.Name{read: "acme"}
+	manageOnly := map[identity.Action]namespace.Name{manage: "acme"}
+	other := map[identity.Action]namespace.Name{read: "beta", manage: "beta"}
+
+	cases := []struct {
+		name   string
+		allow  map[identity.Action]namespace.Name
+		method string
+	}{
+		{"read needs read", manageOnly, http.MethodGet},
+		{"put needs manage", readOnly, http.MethodPut},
+		{"delete needs manage", readOnly, http.MethodDelete},
+		{"manage of another namespace", other, http.MethodPut},
+		{"no action", nil, http.MethodGet},
+	}
+
+	for _, level := range []string{"collection", "unit"} {
+		for _, tt := range cases {
+			t.Run(level+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				st, h := newGateHandler(t, gateAuthorizer{allow: tt.allow})
+				target := gateScopeURLs()[level] + suffix
+
+				b := ""
+				if tt.method == http.MethodPut {
+					b = body
+				}
+
+				rec := serveGate(t, h, gateCall{tt.method, target, b, ""})
+				wantStatus(t, rec, http.StatusForbidden)
+				wantCode(t, rec, errcode.AccessDenied)
+
+				for _, e := range listNamespaceEntries(t, st, "acme") {
+					if strings.HasPrefix(e.Action, "namespace:set-") || strings.HasPrefix(e.Action, "namespace:delete-") {
+						t.Errorf("a refused request wrote the audit entry %+v", e)
+					}
+				}
+			})
+		}
+	}
+}
+
+// approvalSegmentCases proves that a collection name or a unit name that is
+// not valid answers 400 before any store call, for a read and for a write.
+func approvalSegmentCases(t *testing.T, suffix string) {
+	t.Helper()
+
+	bad := map[string]string{
+		"collection name too short":     gateBase + "acme/collections/ab",
+		"collection name with a dash":   gateBase + "acme/collections/-payments-",
+		"collection name with a slash":  gateBase + "acme/collections/pay%2Fments",
+		"tool that is not supported":    gateBase + "acme/units/by-name/svn/web%2Fprod",
+		"unit name with a control byte": gateBase + "acme/units/by-name/pulumi/web%07",
+	}
+
+	for name, base := range bad {
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				t.Parallel()
+
+				_, h := newGateHandler(t, adminGates())
+
+				body := ""
+				if method == http.MethodPut {
+					body = scopeCaseBody
+					if suffix == gateDefault {
+						body = platformDefault
+					}
+				}
+
+				target := base + suffix
+				if strings.HasSuffix(suffix, gateRulesURL) {
+					target += "/x"
+				}
+
+				wantStatus(t, serveGate(t, h, gateCall{method, target, body, ""}), http.StatusBadRequest)
+			})
+		}
+	}
+}
+
+// TestApprovalScopeGuards proves, for each of the three scope levels, one
+// guard at a time: the fresh sign-in, the version, the body, the final rule,
+// the limit and the audit entry. Each case sends the hostile request and
+// checks that the stored row does not change.
+func TestApprovalScopeGuards(t *testing.T) {
+	t.Parallel()
+
+	for level, base := range gateScopeURLs() {
+		t.Run(level, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("access token", func(t *testing.T) { t.Parallel(); guardAccessToken(t, base) })
+			t.Run("stale version", func(t *testing.T) { t.Parallel(); guardStaleVersion(t, base) })
+			t.Run("body", func(t *testing.T) { t.Parallel(); guardBody(t, base) })
+			t.Run("limit", func(t *testing.T) { t.Parallel(); guardLimit(t, base) })
+			t.Run("audit entry", func(t *testing.T) { t.Parallel(); guardAuditEntry(t, level, base) })
+		})
+	}
+
+	for _, level := range []string{"collection", "unit"} {
+		base := gateScopeURLs()[level]
+
+		t.Run(level+"/final rule of the namespace", func(t *testing.T) {
+			t.Parallel()
+
+			_, h := newGateHandler(t, adminGates())
+			wide := gateBase + "acme" + gateRulesURL + "/shared"
+
+			wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, wide, scopeCaseBody, ""}), http.StatusOK)
+
+			rec := serveGate(t, h, gateCall{http.MethodPut, base + gateRulesURL + "/shared", scopeCaseBody, ""})
+			wantStatus(t, rec, http.StatusConflict)
+			wantCode(t, rec, errcode.GateFinal)
+
+			var listed struct {
+				Rules []ruleDoc `json:"rules"`
+			}
+
+			decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, base + gateRulesURL, "", ""}), &listed)
+
+			if len(listed.Rules) != 0 {
+				t.Errorf("rules at the %s after the refused save = %+v, want none", level, listed.Rules)
+			}
+		})
+
+		t.Run(level+"/stale sign-in", func(t *testing.T) { t.Parallel(); guardStaleSession(t, level) })
+	}
+}
+
+// guardAccessToken sends each write with an access token, which never gives a
+// fresh authentication, and checks the code and that the rows stay.
+func guardAccessToken(t *testing.T, base string) {
+	t.Helper()
+
+	g := newGateEnv(t, adminGates())
+	def, rule := base+gateDefault, base+gateRulesURL+"/review"
+
+	wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, def, platformDefault, ""}), http.StatusOK)
+	wantStatus(t, serveGate(t, g, gateCall{http.MethodPut, rule, scopeCaseBody, ""}), http.StatusOK)
+
+	for _, c := range []gateCall{
+		{http.MethodPut, def, `{"count":3,"approvers":{"groups":["x"]}}`, ""},
+		{http.MethodDelete, def, "", ""},
+		{http.MethodPut, rule, `{"count":3,"approvers":{"groups":["ops"]}}`, ""},
+		{http.MethodDelete, rule, "", ""},
+		{http.MethodPut, base + gateRulesURL + "/new", scopeCaseBody, ""},
+	} {
+		rec := serveGate(t, g.env.handler, c)
+		wantStatus(t, rec, http.StatusForbidden)
+		wantCode(t, rec, errcode.MFAFreshStepRequired)
+	}
+
+	var gotDefault defaultDoc
+
+	decodeGateJSON(t, serveGate(t, g.env.handler, gateCall{http.MethodGet, def, "", ""}), &gotDefault)
+
+	var gotRule ruleDoc
+
+	decodeGateJSON(t, serveGate(t, g.env.handler, gateCall{http.MethodGet, rule, "", ""}), &gotRule)
+
+	if gotDefault.Count != 2 || gotDefault.Version != 1 || gotRule.Count != 1 || gotRule.Version != 1 {
+		t.Fatalf("rows after refused writes = %+v and %+v, want the seeded versions", gotDefault, gotRule)
+	}
+
+	wantStatus(
+		t, serveGate(t, g.env.handler, gateCall{http.MethodGet, base + gateRulesURL + "/new", "", ""}),
+		http.StatusNotFound,
+	)
+}
+
+// guardStaleSession sends each write from a session whose sign-in is older
+// than the freshness window, at one scope level, and checks that no row
+// changes. A fresh session then writes.
+func guardStaleSession(t *testing.T, level string) {
+	t.Helper()
+
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
+		namespaces: []namespace.Name{"acme"}, hostile: nil, passwords: nil, failPolicyRead: nil,
+		idempotency: false, failTempAdminRead: false,
+	})
+	createGateUnits(t, e.store)
+
+	stale := e.staleSession(t)
+	base := gateScopeURLs()[level]
+	def, rule := base+gateDefault, base+gateRulesURL+"/review"
+
+	for _, c := range []gateCall{
+		{http.MethodPut, def, platformDefault, ""},
+		{http.MethodDelete, def, "", ""},
+		{http.MethodPut, rule, scopeCaseBody, ""},
+		{http.MethodDelete, rule, "", ""},
+	} {
+		rec := e.sendWithSession(t, c.method, stale, c.target, c.body)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "reauthenticate") {
+			t.Fatalf("%s %s from a stale session = %d %s, want 403 with reauthenticate",
+				c.method, c.target, rec.Code, rec.Body.String())
+		}
+	}
+
+	for _, target := range []string{def, rule} {
+		if rec := e.sendWithSession(t, http.MethodGet, stale, target, ""); rec.Code != http.StatusNotFound {
+			t.Fatalf("GET %s after the refused writes = %d, want 404", target, rec.Code)
+		}
+	}
+
+	fresh := e.freshSignIn(t)
+	if rec := e.sendWithSession(t, http.MethodPut, fresh, rule, scopeCaseBody); rec.Code != http.StatusOK {
+		t.Fatalf("PUT from a fresh session = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// guardStaleVersion sends a write with an If-Match that is not the stored
+// version and checks the code and that the row stays.
+func guardStaleVersion(t *testing.T, base string) {
+	t.Helper()
+
+	_, h := newGateHandler(t, adminGates())
+	def, rule := base+gateDefault, base+gateRulesURL+"/review"
+
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, def, platformDefault, ""}), http.StatusOK)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, rule, scopeCaseBody, ""}), http.StatusOK)
+
+	for _, c := range []gateCall{
+		{http.MethodPut, def, platformDefault, `"7"`},
+		{http.MethodDelete, def, "", `"7"`},
+		{http.MethodPut, rule, scopeCaseBody, `"7"`},
+		{http.MethodDelete, rule, "", `"7"`},
+	} {
+		rec := serveGate(t, h, c)
+		wantStatus(t, rec, http.StatusConflict)
+		wantCode(t, rec, errcode.GateVersionConflict)
+	}
+
+	var gotRule ruleDoc
+
+	decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, rule, "", ""}), &gotRule)
+
+	if gotRule.Version != 1 {
+		t.Fatalf("rule after refused writes = %+v, want version 1", gotRule)
+	}
+}
+
+// guardBody sends a body with an unknown field, a body above the cap and a
+// body with an ID, and checks that nothing is stored.
+func guardBody(t *testing.T, base string) {
+	t.Helper()
+
+	_, h := newGateHandler(t, adminGates())
+	rule := base + gateRulesURL + "/review"
+	over := `{"count":1,"approvers":{"groups":["` + strings.Repeat("g", 64*1024) + `"]}}`
+
+	for name, c := range map[string]gateCall{
+		"rule with the field scope": {http.MethodPut, rule, `{"count":1,"approvers":{"groups":["ops"]},"scope":"x"}`, ""},
+		"rule with an ID":           {http.MethodPut, rule, `{"id":"x","count":1,"approvers":{"groups":["ops"]}}`, ""},
+		"rule above the cap":        {http.MethodPut, rule, over, ""},
+		"default with the scope":    {http.MethodPut, base + gateDefault, `{"count":1,"approvers":{"groups":["ops"]},"scope":"x"}`, ""},
+		"default above the cap":     {http.MethodPut, base + gateDefault, over, ""},
+	} {
+		wantStatus(t, serveGate(t, h, c), http.StatusBadRequest)
+
+		_ = name
+	}
+
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, rule, "", ""}), http.StatusNotFound)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, base + gateDefault, "", ""}), http.StatusNotFound)
+}
+
+// guardLimit saves gate.MaxApprovalRulesPerScope rules and checks that the
+// next one answers 422 with the code gate.limit and is not stored.
+func guardLimit(t *testing.T, base string) {
+	t.Helper()
+
+	_, h := newGateHandler(t, adminGates())
+	list := base + gateRulesURL
+
+	for i := range gate.MaxApprovalRulesPerScope {
+		rec := serveGate(t, h, gateCall{http.MethodPut, fmt.Sprintf("%s/r%02d", list, i), scopeCaseBody, ""})
+		wantStatus(t, rec, http.StatusOK)
+	}
+
+	rec := serveGate(t, h, gateCall{http.MethodPut, list + "/over", scopeCaseBody, ""})
+	wantStatus(t, rec, http.StatusUnprocessableEntity)
+	wantCode(t, rec, errcode.GateLimit)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, list + "/over", "", ""}), http.StatusNotFound)
+
+	// A replace at the limit is not a new rule.
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, list + "/r00", scopeCaseBody, ""}), http.StatusOK)
+}
+
+// guardAuditEntry writes a rule and a default and checks that each audit entry
+// names the caller, the action and the scope key of the row.
+func guardAuditEntry(t *testing.T, level, base string) {
+	t.Helper()
+
+	st, h := newGateHandler(t, adminGates())
+
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, base + gateRulesURL + "/review", scopeCaseBody, ""}), http.StatusOK)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, base + gateDefault, platformDefault, ""}), http.StatusOK)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, base + gateRulesURL + "/review", "", ""}), http.StatusNoContent)
+
+	prefix := map[string]string{
+		"namespace": "namespace/acme", "collection": "collection/acme/payments", "unit": "unit/acme/pulumi/web%2Fprod",
+	}[level]
+
+	want := map[string]string{
+		gate.AuditSetApprovalRule:       prefix + "/approval-rules/review",
+		gate.AuditSetApprovalDefault:    prefix + "/approval-default",
+		gate.AuditDeleteApprovalRule:    prefix + "/approval-rules/review",
+		gate.AuditDeleteApprovalDefault: "",
+	}
+
+	seen := 0
+
+	for _, e := range listNamespaceEntries(t, st, "acme") {
+		object, ok := want[e.Action]
+		if !ok || object == "" {
+			continue
+		}
+
+		seen++
+
+		if e.Object != object || e.Subject == "" || e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess {
+			t.Errorf("entry %q = %+v, want the object %q, a subject, kind change, success", e.Action, e, object)
+		}
+	}
+
+	if seen != 3 {
+		t.Fatalf("found %d of the 3 entries of the writes, want 3", seen)
+	}
+}
