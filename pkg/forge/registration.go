@@ -254,7 +254,8 @@ func (s *Service) openSealed(ctx context.Context, kind Kind, digest string, seal
 
 // ConfirmRotation ends the old event secret at once. It returns
 // ErrNoRegistration, ErrVersionConflict and ErrNoRotation when the
-// registration holds no old event secret. e is the entry of the caller: the
+// registration holds no old event secret, or when its window ended at or
+// before the time of the entry. e is the entry of the caller: the
 // service completes it.
 func (s *Service) ConfirmRotation(
 	ctx context.Context,
