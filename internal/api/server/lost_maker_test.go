@@ -1,8 +1,10 @@
 package server_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -296,5 +299,48 @@ func TestTokenStaysWhileItsMakerKeepsAPath(t *testing.T) {
 
 	if lostMakerRevocation(t, f) != nil {
 		t.Fatal("a change that leaves the maker a path revoked the token")
+	}
+}
+
+// TestRevokeOfLostMakersSurvivesTheCancelOfTheRequest proves that a client
+// that leaves after the commit of the change does not stop the revoke. The
+// request context ends right after the commit of the revoke of the grant. The
+// token still ends, and its audit entry names the change as the cause, not the
+// use of the token.
+func TestRevokeOfLostMakersSurvivesTheCancelOfTheRequest(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	f := newAccessFixtureAll(t, accessFixtureParts{
+		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
+		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
+		now: nil, logger: nil, noSignIn: false, getGrantErr: nil, afterRevoke: cancel,
+	})
+	seedLostMaker(t, f, pathDirect)
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/api/server/grants/grt-seed-tina", nil)
+	req.Header.Set("Authorization", "Bearer admin")
+
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+
+	if ctx.Err() == nil {
+		t.Fatal("the request context was not canceled after the commit: the test does not test the cancel")
+	}
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke of the grant answers %d, want %d (%s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	e := lostMakerRevocation(t, f)
+	if e == nil {
+		t.Fatal("the cancel of the request stopped the revoke: the token of the maker with no path is still active")
+	}
+
+	if !strings.HasPrefix(causeOf(e), "server:manage-access grant:grt-seed-tina") ||
+		e.Reason != accesstoken.ReasonMakerLostPath {
+		t.Fatalf("revocation entry = %+v, want the change as the cause and the reason of the sweep", *e)
 	}
 }

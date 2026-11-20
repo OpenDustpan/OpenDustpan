@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -151,6 +152,9 @@ type accessFixtureParts struct {
 	// getGrantErr is the error of each read of a grant by the access service.
 	// With nil, the read goes to the store.
 	getGrantErr error
+	// afterRevoke, when not nil, runs after each commit of the revoke of a
+	// grant, in the goroutine of the request.
+	afterRevoke func()
 }
 
 // newAccessFixturePorts is newAccessFixture with the collection port and the
@@ -161,7 +165,7 @@ func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 		links: noGitHostLinks, ports: ports, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
 	})
 }
 
@@ -177,7 +181,7 @@ func newAccessFixtureSignIn(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
 	})
 }
 
@@ -200,7 +204,7 @@ func newAccessFixtureLinks(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
 		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
-		noSignIn: false, getGrantErr: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
 	})
 }
 
@@ -215,7 +219,7 @@ func newAccessFixtureClock(
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
 		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
-		noSignIn: false, getGrantErr: nil,
+		noSignIn: false, getGrantErr: nil, afterRevoke: nil,
 	})
 }
 
@@ -265,7 +269,10 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	grants, err := access.NewService(access.ServiceConfig{
-		Store: readFailStore{Store: st, err: parts.getGrantErr}, Directory: st, Namespaces: st, Authorizer: authz,
+		Store:      readFailStore{Store: st, err: parts.getGrantErr, afterRevoke: parts.afterRevoke},
+		Directory:  st,
+		Namespaces: st,
+		Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
@@ -1193,6 +1200,24 @@ type readFailStore struct {
 	*sqlite.Store
 
 	err error
+	// afterRevoke runs after each committed revoke of a grant. A test cancels
+	// the request there, as a client that leaves after the commit does.
+	afterRevoke func()
+}
+
+func (s readFailStore) RevokeGrant(
+	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
+	err := s.Store.RevokeGrant(ctx, id, fence, e, check)
+	if err != nil {
+		return fmt.Errorf("revoke the grant in the store: %w", err)
+	}
+
+	if s.afterRevoke != nil {
+		s.afterRevoke()
+	}
+
+	return nil
 }
 
 func (s readFailStore) GetGrant(ctx context.Context, id string) (access.Grant, error) {
