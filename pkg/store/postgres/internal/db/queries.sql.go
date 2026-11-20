@@ -3812,6 +3812,27 @@ func (q *Queries) DeleteExpiredRunnerNonces(ctx context.Context, beforeMs int64)
 	return err
 }
 
+const deleteFirstAdministratorCode = `-- name: DeleteFirstAdministratorCode :execrows
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = $1 AND principal_id = $2 AND expires_at_ms > $3
+`
+
+type DeleteFirstAdministratorCodeParams struct {
+	Digest      string
+	PrincipalID string
+	NowMs       int64
+}
+
+// The delete is a check: it matches the code row only when the digest, the
+// principal and the open time are those that the redeem checked.
+func (q *Queries) DeleteFirstAdministratorCode(ctx context.Context, arg DeleteFirstAdministratorCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFirstAdministratorCode, arg.Digest, arg.PrincipalID, arg.NowMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteForgeAccountLink = `-- name: DeleteForgeAccountLink :execrows
 DELETE FROM forge_account_links
 WHERE forge_account_links.kind = $1 AND forge_account_links.host = $2
@@ -6973,6 +6994,59 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 	return failover_version, err
 }
 
+const getFirstAdministratorCode = `-- name: GetFirstAdministratorCode :one
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+FOR UPDATE
+`
+
+type GetFirstAdministratorCodeRow struct {
+	PrincipalID string
+	Digest      string
+	CreatedBy   string
+	Reason      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) GetFirstAdministratorCode(ctx context.Context) (GetFirstAdministratorCodeRow, error) {
+	row := q.db.QueryRow(ctx, getFirstAdministratorCode)
+	var i GetFirstAdministratorCodeRow
+	err := row.Scan(
+		&i.PrincipalID,
+		&i.Digest,
+		&i.CreatedBy,
+		&i.Reason,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
+const getFirstAdministratorMarker = `-- name: GetFirstAdministratorMarker :one
+SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1
+`
+
+type GetFirstAdministratorMarkerRow struct {
+	PrincipalID string
+	GrantID     string
+	SessionID   string
+	CreatedBy   string
+	MadeAtMs    int64
+}
+
+func (q *Queries) GetFirstAdministratorMarker(ctx context.Context) (GetFirstAdministratorMarkerRow, error) {
+	row := q.db.QueryRow(ctx, getFirstAdministratorMarker)
+	var i GetFirstAdministratorMarkerRow
+	err := row.Scan(
+		&i.PrincipalID,
+		&i.GrantID,
+		&i.SessionID,
+		&i.CreatedBy,
+		&i.MadeAtMs,
+	)
+	return i, err
+}
+
 const getForgeAccountLink = `-- name: GetForgeAccountLink :one
 SELECT l.kind, l.host, l.account_id, l.login, l.principal_id, l.linked_at_ms
 FROM forge_account_links AS l
@@ -10093,6 +10167,50 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 	return i, err
 }
 
+const getSessionForShare = `-- name: GetSessionForShare :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
+FROM sessions WHERE id = $1
+FOR SHARE
+`
+
+type GetSessionForShareRow struct {
+	ID           string
+	PrincipalID  string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    pgtype.Int8
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+	Generation   int64
+}
+
+// The redeem of the first administrator reads the session row with a share
+// lock, so a sign-out cannot end the session between the read and the commit.
+// The audit lock of the installation serializes the redeems only. It does not
+// serialize a sign-out, so this share lock is the guard against one.
+func (q *Queries) GetSessionForShare(ctx context.Context, id string) (GetSessionForShareRow, error) {
+	row := q.db.QueryRow(ctx, getSessionForShare, id)
+	var i GetSessionForShareRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Generation,
+	)
+	return i, err
+}
+
 const getSessionGeneration = `-- name: GetSessionGeneration :one
 SELECT CAST(COALESCE(g.generation, 1) AS bigint) AS generation
 FROM principals p LEFT JOIN principal_session_generations g ON g.principal_id = p.id
@@ -11724,6 +11842,30 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 		arg.Name,
 		arg.Result,
 		arg.NowMs,
+	)
+	return err
+}
+
+const insertFirstAdministratorMarker = `-- name: InsertFirstAdministratorMarker :exec
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, $1, $2, $3, $4, $5)
+`
+
+type InsertFirstAdministratorMarkerParams struct {
+	PrincipalID string
+	GrantID     string
+	SessionID   string
+	CreatedBy   string
+	MadeAtMs    int64
+}
+
+func (q *Queries) InsertFirstAdministratorMarker(ctx context.Context, arg InsertFirstAdministratorMarkerParams) error {
+	_, err := q.db.Exec(ctx, insertFirstAdministratorMarker,
+		arg.PrincipalID,
+		arg.GrantID,
+		arg.SessionID,
+		arg.CreatedBy,
+		arg.MadeAtMs,
 	)
 	return err
 }
@@ -22383,6 +22525,35 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const replaceFirstAdministratorCode = `-- name: ReplaceFirstAdministratorCode :exec
+INSERT INTO first_administrator_codes (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms)
+VALUES (1, $1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = excluded.digest,
+  created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
+  expires_at_ms = excluded.expires_at_ms
+`
+
+type ReplaceFirstAdministratorCodeParams struct {
+	PrincipalID string
+	Digest      string
+	CreatedBy   string
+	Reason      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) ReplaceFirstAdministratorCode(ctx context.Context, arg ReplaceFirstAdministratorCodeParams) error {
+	_, err := q.db.Exec(ctx, replaceFirstAdministratorCode,
+		arg.PrincipalID,
+		arg.Digest,
+		arg.CreatedBy,
+		arg.Reason,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+	)
+	return err
 }
 
 const replaceForgeAccountLink = `-- name: ReplaceForgeAccountLink :execrows

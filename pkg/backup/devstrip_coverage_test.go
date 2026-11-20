@@ -51,9 +51,18 @@ var devColumnDecisions = map[string]devDecision{
 	"forge_account_links.principal_id": {strip: true, reason: "Git host account link of a removed principal"},
 	"forge_link_requests.principal_id": {strip: true, reason: "link request of a removed principal"},
 	"trust_rules.principal_id":         {strip: true, reason: "trust rule that acts as a removed principal"},
-	"local_users.principal_id":         {strip: true, reason: "user name and password of a removed principal"},
-	"local_users.user_name":            {strip: false, reason: "the strip removes the row by its principal ID"},
-	"local_users.created_by":           {strip: false, reason: "history text of who made the local user"},
+	"first_administrator.principal_id": {
+		strip: false,
+		reason: "ID of a person that was never a dev person: the redeem refuses a dev: subject; the marker is " +
+			"history and grants no authority",
+	},
+	"first_administrator.created_by": {
+		strip:  false,
+		reason: "history text of the bootstrap administrator who made the offer",
+	},
+	"local_users.principal_id": {strip: true, reason: "user name and password of a removed principal"},
+	"local_users.user_name":    {strip: false, reason: "the strip removes the row by its principal ID"},
+	"local_users.created_by":   {strip: false, reason: "history text of who made the local user"},
 	"principal_session_generations.principal_id": {
 		strip: true, reason: "session generation of a removed principal",
 	},
@@ -151,7 +160,8 @@ var devColumnDecisions = map[string]devDecision{
 	"runner_join_tokens.used_by":    {strip: false, reason: "ID of a runner, not of a person"},
 	"runner_pool_proxy_settings.updated_by": {
 		strip: false, reason: "history text of who saved the proxy settings",
-	}, "sessions.user_agent": {strip: false, reason: "text of a client"},
+	},
+	"sessions.user_agent":                 {strip: false, reason: "text of a client"},
 	"sign_in_providers.authorization_url": {strip: false, reason: "address of a provider"},
 	"sign_in_providers.display_name":      {strip: false, reason: "label of a provider"},
 	"sign_in_providers.email_claim":       {strip: false, reason: "name of a claim of a provider"},
@@ -458,4 +468,80 @@ func jobRecordStructs(typ reflect.Type, seen map[reflect.Type]bool) []reflect.Ty
 	}
 
 	return out
+}
+
+// TestBackupMarkerNotCode proves that the marker "first administrator made"
+// travels in a backup and that the code does not: the marker table is in Tables,
+// in the portable description and in the access tables, with no column that can
+// hold a secret, and the code table is in the emptied list and in none of the
+// tables that a backup copies.
+func TestBackupMarkerNotCode(t *testing.T) {
+	t.Parallel()
+
+	checkMarkerTravels(t)
+	checkCodeStays(t)
+}
+
+// checkMarkerTravels fails unless the marker table is in Tables, in the access
+// tables and in the portable description, with no column that can hold a
+// secret.
+func checkMarkerTravels(t *testing.T) {
+	t.Helper()
+
+	if !slices.Contains(backup.Tables, backup.TableFirstAdministrator) {
+		t.Errorf("Tables lacks %q: a restore would reopen the route", backup.TableFirstAdministrator)
+	}
+
+	if !slices.Contains(backup.AccessTables, backup.TableFirstAdministrator) {
+		t.Errorf("AccessTables lacks %q: a restore without server:restore-access would replace the marker "+
+			"and keep the grants", backup.TableFirstAdministrator)
+	}
+
+	if slices.Contains(backup.EmptiedTables, backup.TableFirstAdministrator) {
+		t.Errorf("EmptiedTables holds %q: a restore would empty the marker and reopen the route",
+			backup.TableFirstAdministrator)
+	}
+
+	var marker *backup.PortableTable
+
+	for _, table := range backup.PortableTables() {
+		if table.Table == backup.TableFirstAdministrator {
+			marker = &table
+		}
+	}
+
+	if marker == nil {
+		t.Fatalf("the portable description lacks %q", backup.TableFirstAdministrator)
+	}
+
+	for _, column := range marker.Columns {
+		if strings.Contains(column.Name, "digest") || strings.Contains(column.Name, "code") {
+			t.Errorf("marker column %q can hold a code or its digest", column.Name)
+		}
+	}
+}
+
+// checkCodeStays fails unless the code table is in the emptied list and in none
+// of the lists that a backup copies.
+func checkCodeStays(t *testing.T) {
+	t.Helper()
+
+	if !slices.Contains(backup.EmptiedTables, backup.TableFirstAdministratorCodes) {
+		t.Errorf("EmptiedTables lacks %q: a restore would bring back a code", backup.TableFirstAdministratorCodes)
+	}
+
+	for name, list := range map[string][]string{
+		"Tables": backup.Tables, "AccessTables": backup.AccessTables, "ControlTables": backup.ControlTables,
+	} {
+		if slices.Contains(list, backup.TableFirstAdministratorCodes) {
+			t.Errorf("%s holds %q: a backup or a restore would copy a digest of a code",
+				name, backup.TableFirstAdministratorCodes)
+		}
+	}
+
+	for _, table := range backup.PortableTables() {
+		if table.Table == backup.TableFirstAdministratorCodes {
+			t.Errorf("the portable description holds %q: a backup would copy a digest of a code", table.Table)
+		}
+	}
 }

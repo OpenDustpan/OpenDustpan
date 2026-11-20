@@ -1,0 +1,341 @@
+package storetest
+
+import (
+	"errors"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
+)
+
+// tagSecret is a tag value that no audit entry may hold.
+const tagSecret = "s3cr3t-tag-value"
+
+// listAudit returns every audit entry of ns, newest first, or skips the test
+// when the store cannot list them. It follows the pages until the listing says
+// that no entry is left, so a test never misses an entry that a page cut off.
+func listAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
+	t.Helper()
+
+	lister, ok := s.(auditLister)
+	if !ok {
+		t.Skip("store does not list audit entries")
+	}
+
+	var entries []audit.Entry
+
+	page := audit.Page{Size: audit.MaxPageSize, Before: 0}
+
+	for {
+		listing, err := lister.List(t.Context(), ns, page)
+		if err != nil {
+			t.Fatalf("list audit entries: %v", err)
+		}
+
+		entries = append(entries, listing.Entries...)
+
+		if !listing.More || len(listing.Entries) == 0 {
+			return entries
+		}
+
+		page.Before = listing.Entries[len(listing.Entries)-1].Sequence
+	}
+}
+
+// tagUpdateAction is the action of the audit entry of a tags update: the entry
+// that renameEntry builds, which the tests pass to UpdateStackTags.
+const tagUpdateAction = "unit:manage"
+
+// listTagAudit returns the audit entries of ns that a tags update writes, the
+// entries of the action unit:manage. The fixture puts its stack in a
+// collection, and that writes entries of its own, so the tests of a tags
+// update look only at the entries of the update.
+func listTagAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
+	t.Helper()
+
+	var entries []audit.Entry
+
+	all := listAudit(t, s, ns)
+	for i := range all {
+		if all[i].Action == tagUpdateAction {
+			entries = append(entries, all[i])
+		}
+	}
+
+	return entries
+}
+
+// testUpdateTagsAppendsChangeEntry replaces the tags and expects one change
+// entry in the transaction of the update: it names each key that the update
+// adds, removes or changes, holds no tag value, and has the stable stack ID.
+func testUpdateTagsAppendsChangeEntry(t *testing.T, f fixture) {
+	t.Helper()
+
+	st := mustGetFixtureStack(t, f)
+	ns := f.ref.Namespace
+
+	first := map[string]string{"keep": "a", "drop": tagSecret, "edit": "old"}
+	err := f.s.UpdateStackTags(
+		t.Context(),
+		f.ref,
+		stack.TagUpdate{Tags: first, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+		f.fence,
+	)
+	if err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	second := map[string]string{"keep": "a", "edit": tagSecret, "new": tagSecret}
+	err = f.s.UpdateStackTags(
+		t.Context(),
+		f.ref,
+		stack.TagUpdate{Tags: second, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+		f.fence,
+	)
+	if err != nil {
+		t.Fatalf("update tags again: %v", err)
+	}
+
+	entries := listTagAudit(t, f.s, ns)
+	if len(entries) != 2 {
+		t.Fatalf("audit entries = %+v, want one for each update", entries)
+	}
+
+	got := entries[0]
+	if entries[1].Sequence > got.Sequence {
+		got = entries[1]
+	}
+	if got.Kind != audit.KindChange || got.ObjectID != st.ID.String() {
+		t.Fatalf("audit entry = %+v, want a change with object ID %s", got, st.ID)
+	}
+
+	keys := make([]string, 0, len(got.Changes))
+	for _, c := range got.Changes {
+		keys = append(keys, c.Key)
+
+		if strings.Contains(c.New, tagSecret) || (c.Old != nil && strings.Contains(*c.Old, tagSecret)) {
+			t.Fatalf("change %+v holds a tag value", c)
+		}
+	}
+
+	if want := []string{"tags.drop", "tags.edit", "tags.new"}; !slices.Equal(keys, want) {
+		t.Fatalf("changed keys = %v, want %v", keys, want)
+	}
+}
+
+// testUpdateTagsWithoutChangeAppendsNothing replaces the tags with the same
+// tags: the stack keeps its tags and the chain gets no entry.
+func testUpdateTagsWithoutChangeAppendsNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	same := map[string]string{"team": "core"}
+	ns := f.ref.Namespace
+
+	for range 2 {
+		err := f.s.UpdateStackTags(
+			t.Context(),
+			f.ref,
+			stack.TagUpdate{Tags: same, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+			f.fence,
+		)
+		if err != nil {
+			t.Fatalf("update tags: %v", err)
+		}
+	}
+
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 1 {
+		t.Fatalf("audit entries = %+v, want one: only the first update changes a key", entries)
+	}
+}
+
+// testUpdateTagsRefusedEntryChangesNothing passes an entry that fails
+// validation and an entry of another namespace: the update returns
+// audit.ErrInvalidEntry, and the tags and the chain stay as they were.
+func testUpdateTagsRefusedEntryChangesNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	ns := f.ref.Namespace
+	before := mustGetFixtureStack(t, f)
+
+	invalid := renameEntry(ns, f.ref)
+	invalid.Subject = ""
+
+	refused := []audit.Entry{invalid, renameEntry("other", f.ref)}
+	for i := range refused {
+		e := &refused[i]
+		err := f.s.UpdateStackTags(
+			t.Context(),
+			f.ref,
+			stack.TagUpdate{Tags: map[string]string{"k": "v"}, UpdatedAt: now(), Entry: *e},
+			f.fence,
+		)
+		if !errors.Is(err, audit.ErrInvalidEntry) {
+			t.Fatalf("update tags with entry %+v: err = %v, want ErrInvalidEntry", e, err)
+		}
+	}
+
+	after := mustGetFixtureStack(t, f)
+	if len(after.Tags) != len(before.Tags) {
+		t.Fatalf("tags after the refused update = %v, want %v", after.Tags, before.Tags)
+	}
+
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none", entries)
+	}
+}
+
+// testUpdateTagsHostileKeyChangesNothing sends tag keys that a reader of the
+// audit log could take for something else: a line break, a hidden character,
+// invalid UTF-8 and a key that is too long. The store checks the entry with
+// the changes that it builds, whatever the caller checked: the update returns
+// audit.ErrInvalidEntry, and the tags and the chain stay as they were.
+func testUpdateTagsHostileKeyChangesNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	ns := f.ref.Namespace
+	before := mustGetFixtureStack(t, f)
+
+	keys := []string{
+		"evil\r\nInjected: yes",
+		"a\u200bb",
+		"bad\xffutf",
+		strings.Repeat("k", audit.MaxChangeKeyLen+1),
+	}
+
+	for _, key := range keys {
+		err := f.s.UpdateStackTags(
+			t.Context(),
+			f.ref,
+			stack.TagUpdate{Tags: map[string]string{key: "v"}, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+			f.fence,
+		)
+		if !errors.Is(err, audit.ErrInvalidEntry) {
+			t.Fatalf("update tags with key %q: err = %v, want ErrInvalidEntry", key, err)
+		}
+	}
+
+	after := mustGetFixtureStack(t, f)
+	if !maps.Equal(after.Tags, before.Tags) {
+		t.Fatalf("tags after the refused updates = %v, want %v", after.Tags, before.Tags)
+	}
+
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none", entries)
+	}
+}
+
+// hostileTagValues are tag values that no store may write: a value over the
+// limit, a NUL (PostgreSQL refuses it, SQLite stores it), a right-to-left
+// override, a carriage return, an escape and invalid UTF-8.
+func hostileTagValues() map[string]string {
+	return map[string]string{
+		"100 KiB":       strings.Repeat("v", 100<<10),
+		"257 bytes":     strings.Repeat("v", 257),
+		"NUL":           "a\x00b",
+		"U+202E":        "a\u202eb",
+		"CR":            "a\rb",
+		"ESC":           "a\x1bb",
+		"invalid UTF-8": "a\xffb",
+	}
+}
+
+// testUpdateTagsHostileValueChangesNothing sends hostile tag values straight
+// to UpdateStackTags, CreateStack and CreateStackPlaced, as if the handler
+// and the service had not checked them. Each write returns stack.ErrInvalidTags,
+// never a driver error, and the tags, the stacks and the chain stay as they were.
+func testUpdateTagsHostileValueChangesNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	ns := f.ref.Namespace
+	before := mustGetFixtureStack(t, f)
+
+	for label, value := range hostileTagValues() {
+		err := f.s.UpdateStackTags(
+			t.Context(),
+			f.ref,
+			stack.TagUpdate{Tags: map[string]string{"k": value}, UpdatedAt: now(), Entry: renameEntry(ns, f.ref)},
+			f.fence,
+		)
+		if !errors.Is(err, stack.ErrInvalidTags) {
+			t.Fatalf("update tags with a %s value: err = %v, want ErrInvalidTags", label, err)
+		}
+
+		fresh := newStack(ns, "web", "created-"+strings.NewReplacer(" ", "-", "+", "").Replace(strings.ToLower(label)))
+		fresh.Tags = map[string]string{"k": value}
+
+		err = f.s.CreateStack(t.Context(), fresh, f.fence)
+		if !errors.Is(err, stack.ErrInvalidTags) {
+			t.Fatalf("create stack with a %s value: err = %v, want ErrInvalidTags", label, err)
+		}
+
+		placed, ok := f.s.(stack.PlacedStore)
+		if !ok {
+			continue
+		}
+
+		placement := stack.Placement{
+			Collection:   collection.Ref{Namespace: ns, Name: "payments"},
+			CollectionID: "col-hostile",
+			Entry:        renameEntry(ns, fresh.Ref),
+		}
+
+		err = placed.CreateStackPlaced(t.Context(), fresh, placement, f.fence)
+		if !errors.Is(err, stack.ErrInvalidTags) {
+			t.Fatalf("create placed stack with a %s value: err = %v, want ErrInvalidTags", label, err)
+		}
+
+		_, err = f.s.GetStack(t.Context(), fresh.Ref)
+		if !errors.Is(err, stack.ErrNotFound) {
+			t.Fatalf("get stack after the refused create with a %s value: err = %v, want ErrNotFound", label, err)
+		}
+	}
+
+	after := mustGetFixtureStack(t, f)
+	if !maps.Equal(after.Tags, before.Tags) {
+		t.Fatalf("tags after the refused updates = %v, want %v", after.Tags, before.Tags)
+	}
+
+	if entries := listTagAudit(t, f.s, ns); len(entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none", entries)
+	}
+}
+
+// testUpdateTagsFailedAppendChangesNothing breaks the audit append: the
+// update fails and the tags stay (fail closed).
+func testUpdateTagsFailedAppendChangesNothing(t *testing.T, f fixture) {
+	t.Helper()
+
+	breaker, ok := f.s.(AuditBreaker)
+	if !ok {
+		t.Skip("store cannot break audit appends")
+	}
+
+	before := mustGetFixtureStack(t, f)
+
+	if err := breaker.BreakAuditAppends(t.Context()); err != nil {
+		t.Fatalf("break audit appends: %v", err)
+	}
+
+	err := f.s.UpdateStackTags(
+		t.Context(),
+		f.ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"k": "v"},
+			UpdatedAt: now(),
+			Entry:     renameEntry(f.ref.Namespace, f.ref),
+		},
+		f.fence,
+	)
+	if err == nil {
+		t.Fatal("update tags with a broken audit append succeeded")
+	}
+
+	if after := mustGetFixtureStack(t, f); len(after.Tags) != len(before.Tags) {
+		t.Fatalf("tags after the failed update = %v, want %v", after.Tags, before.Tags)
+	}
+}

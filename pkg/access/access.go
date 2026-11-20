@@ -143,6 +143,9 @@ var families = map[identity.Action]Family{
 	// operator registers the app and assigns each installation to a namespace.
 	identity.ActionServerReadGitHost:   FamilyOperator,
 	identity.ActionServerManageGitHost: FamilyOperator,
+	// The marker of the first administrator and the open offer. The offer
+	// action has no family on purpose: only Admin passes the authorizer.
+	identity.ActionServerReadFirstAdministrator: FamilyOperator,
 
 	identity.ActionServerReadPrincipals:    FamilyAdministration,
 	identity.ActionServerManagePrincipals:  FamilyAdministration,
@@ -240,6 +243,9 @@ var families = map[identity.Action]Family{
 	identity.ActionCallerManagePreferences:  FamilySelf,
 	identity.ActionCallerManageSignIn:       FamilySelf,
 	identity.ActionCallerManageGitHostLinks: FamilySelf,
+	// Each signed-in principal reaches the redeem; the code and the store
+	// transaction decide.
+	identity.ActionCallerRedeemFirstAdministrator: FamilySelf,
 }
 
 // FamilyOf returns the family of action, and false when the core does not
@@ -326,6 +332,7 @@ func readOnlyServer(action identity.Action) bool {
 		identity.ActionServerReadSettings,
 		identity.ActionServerReadInstances,
 		identity.ActionServerReadGitHost,
+		identity.ActionServerReadFirstAdministrator,
 	}, action)
 }
 

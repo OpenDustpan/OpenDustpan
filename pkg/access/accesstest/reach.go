@@ -1161,6 +1161,7 @@ func readOnlyServerGroupCases(t *testing.T, s reachStore, server identity.Object
 		identity.ActionServerReadSettings,
 		identity.ActionServerReadInstances,
 		identity.ActionServerReadGitHost,
+		identity.ActionServerReadFirstAdministrator,
 	}
 
 	out := make([]protectedCase, 0, len(actions))

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -18,6 +19,7 @@ func writeCases() []suiteCase {
 		{name: "put with version 0 on an existing record returns conflict", test: testPutCreateConflict},
 		{name: "put raises the version by one", test: testPutRaisesVersion},
 		{name: "put of equal settings writes nothing", test: testPutNoChange},
+		{name: "put of the root directory stores the empty directory", test: testPutRootDirectory},
 		{name: "put appends one entry with the old and the new value of each changed field", test: testPutAudit},
 		{name: "put of invalid settings returns invalid and stores nothing", test: testPutInvalid},
 		{name: "put with a stale fence returns fenced and stores nothing", test: testPutStaleFence},
@@ -113,6 +115,47 @@ func testPutNoChange(t *testing.T, h Harness) {
 
 	if after := len(h.Audit(t, "acme")); after != before {
 		t.Fatalf("Put of equal settings wrote %d audit entries, want 0", after-before)
+	}
+}
+
+// testPutRootDirectory writes the directory RootDirectory, and checks that
+// the store returns and reads the empty directory, that the effective value is
+// RootDirectory with the built-in origin, and that a second write of the root
+// after a write with no directory changes nothing.
+func testPutRootDirectory(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	s := settingsFor(h.Unit(t, "acme", "pulumi", "web/prod"))
+	s.CodeLocation.Directory = unitsettings.RootDirectory
+
+	if got := put(t, h, &s, 0, fence); got.CodeLocation.Directory != "" {
+		t.Fatalf("Put of %q returned the directory %q, want empty", unitsettings.RootDirectory,
+			got.CodeLocation.Directory)
+	}
+
+	read, err := h.Store.Get(t.Context(), s.Unit)
+	if err != nil || read.CodeLocation.Directory != "" {
+		t.Fatalf("Get = %+v, %v; want the empty directory", read, err)
+	}
+
+	defaults := unitsettings.NamespaceDefaults{Namespace: "acme", Pool: "", Version: 0, UpdatedAt: time.Time{}}
+	e := unitsettings.Resolve(&read, defaults,
+		unitsettings.Context{DefaultConnection: "", HasJobPool: false, DefaultFiles: nil})
+	if e.Directory.Value != unitsettings.RootDirectory || e.Directory.Origin != unitsettings.OriginBuiltIn {
+		t.Fatalf("effective directory = %+v, want %q with the built-in origin", e.Directory,
+			unitsettings.RootDirectory)
+	}
+
+	before := len(h.Audit(t, "acme"))
+
+	s.CodeLocation.Directory = ""
+	if got := put(t, h, &s, 1, fence); got.Version != 1 {
+		t.Fatalf("Put of the empty directory over the root gave version %d, want 1", got.Version)
+	}
+
+	if after := len(h.Audit(t, "acme")); after != before {
+		t.Fatalf("Put of the same root wrote %d audit entries, want 0", after-before)
 	}
 }
 
