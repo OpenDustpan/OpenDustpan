@@ -92,7 +92,7 @@ opendustpan backup check --server https://dustpan.example --ca-file ca.pem --bac
 
 The command takes only `--server`, `--ca-file` and `--backup`. A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key, or the total that does not match.
 
-The check also reads each row of the `jobs` table of the backup, with the same rules that a restore applies. A row is damaged when its body does not decode, when a value of its body is not valid, or when its body names another namespace or another unit than the row. A row is also damaged when its namespace is not in the backup. The check stops at the first damaged row and names it with the job ID, the unit ID of the row and the reason:
+The check also reads each row of the `jobs` table of the backup, with the same rules that a restore applies. A row is damaged when its body does not decode or when a value of its body is not valid. A row is also damaged when its body names another namespace or another unit than the row. A row is also damaged when its namespace is not in the backup. The check stops at the first damaged row and names it with the job ID, the unit ID of the row and the reason:
 
 ```text
 damaged job job-dmg1 of unit ws-1: the body is not JSON: backup data is corrupt
