@@ -270,6 +270,115 @@ func TestRestoreSettingChangeEntryNeedsAnEffectiveChange(t *testing.T) {
 	}
 }
 
+// TestRestoreSettingChangeEntryWhenTheLiveValueWasNotRead is the hostile table
+// of the setting-change entry when the restore did not read the live value
+// before the swap (a read error, or no reader). A restore by a caller with
+// server:restore-access that takes a new value from the backup writes one
+// entry that names the new value and marks the old value unknown. Each other
+// guard of the entry still holds when the old value is unknown: a kept live
+// row, the static layer, and a backup with no value write none.
+func TestRestoreSettingChangeEntryWhenTheLiveValueWasNotRead(t *testing.T) {
+	t.Parallel()
+
+	failing := func(context.Context) (string, error) { return "", errAccessSettingRead }
+	static := func(context.Context) (bool, error) { return true, nil }
+
+	for _, tc := range []struct {
+		name   string
+		read   func(context.Context) (string, error)
+		static func(context.Context) (bool, error)
+		keep   bool
+		next   string
+		want   bool
+	}{
+		{name: "a read error, new value on", read: failing, static: nil, keep: false, next: "true", want: true},
+		{name: "a read error, new value off", read: failing, static: nil, keep: false, next: "false", want: true},
+		{name: "no reader, new value on", read: nil, static: nil, keep: false, next: "true", want: true},
+		{name: "a read error, live row kept", read: failing, static: nil, keep: true, next: "true", want: false},
+		{name: "a read error, the static layer sets the key", read: failing, static: static, keep: false, next: "true", want: false},
+		{name: "a read error, the backup has no value", read: failing, static: nil, keep: false, next: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) {
+				cfg.AccessSetting, cfg.AccessSettingStatic = tc.read, tc.static
+			})
+			setup.live.backupSetting = tc.next
+
+			runStartedRestore(t, setup, tc.keep)
+
+			found := settingChangeEntries(setup)
+			if tc.want {
+				checkSettingChange(t, found, backup.SettingValueUnknown, tc.next)
+			} else if len(found) != 0 {
+				t.Fatalf("setting-change entries = %+v, want none", found)
+			}
+		})
+	}
+}
+
+// restoreEntryObjects returns the object text of each restore entry that the
+// restore appended.
+func restoreEntryObjects(setup *restoreServiceSetup) []string {
+	var found []string
+
+	appends := setup.live.devSnapshot().appends
+	for i := range appends {
+		if appends[i].Action == string(identity.ActionServerRestore) {
+			found = append(found, appends[i].Object)
+		}
+	}
+
+	return found
+}
+
+// TestRestoreSettingChangeEntryRecordsTheEffectiveLiveValue is the hostile
+// table of the live value that the reader gives. The decision records the
+// effective value, so an empty text, a text that the declaration refuses, one
+// with a line break and one of 1 MiB all give the old value false in the change
+// entry, and the restore still writes its own entry, which holds no line break.
+// An empty text from a reader that answers without an error is a value that
+// was read, not an unknown one. The test fails when the source of the decision
+// records the raw text.
+func TestRestoreSettingChangeEntryRecordsTheEffectiveLiveValue(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "an empty text", text: ""},
+		{name: "a text that is not lower case", text: "TRUE"},
+		{name: "a text with a line break", text: "true\r\nforged line"},
+		{name: "a text of 1 MiB", text: strings.Repeat("A", 1<<20)},
+		{name: "the unknown marker", text: backup.SettingValueUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			read := fixedSetting(tc.text)
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AccessSetting = read })
+			setup.live.backupSetting = "true"
+
+			runStartedRestore(t, setup, false)
+
+			checkSettingChange(t, settingChangeEntries(setup), "false", "true")
+
+			objects := restoreEntryObjects(setup)
+			if len(objects) == 0 {
+				t.Fatal("the restore wrote no restore entry")
+			}
+
+			for _, object := range objects {
+				if strings.ContainsAny(object, "\r\n") || len(object) > 2048 {
+					t.Fatalf("the restore entry holds raw text: %d bytes", len(object))
+				}
+			}
+		})
+	}
+}
+
 // TestRestoreSwapRecordHostileDecode proves the decoder of the swap record
 // refuses a record that shows a swap that took the restore setting while it
 // kept or widened the access tables, and a record that is both kept and

@@ -1,26 +1,29 @@
 ## 0. Confirm against the code first
 
 - [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [ ] 0.2 BLOCKED by the open questions of the proposal and by the dependency to be written (a tool call that carries a delegation and a reason). Check: each answer is a repository record, and the dependency is on main.
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add a failing server test in NEW file pkg/dustpan/agent_audit_test.go that runs one delegated agent step with body field reason and reads the delegation ID in the agent block (`delegationID`, ADR 380) and the reason in the field `Reason` of `audit.Entry` from GET /api/audit/entries with an access token. Check: TestAgentStepWritesAuditEntry fails on main, passes after the fix.
-- [ ] 1.2 Add a failing server test in NEW file pkg/dustpan/agent_audit_test.go that denies a delegated call outside the scope through the tool API and checks the denial entry through GET /api/audit/entries with an access token. Check: TestAgentDenialIsAudited fails on main, passes after the fix.
-- [ ] 1.3 Add a failing server test in NEW file pkg/dustpan/agent_audit_test.go that writes delegation entries then calls GET /api/audit/check with an access token and checks the chain verifies and names the first bad sequence on tamper. Check: TestAgentChainVerifies fails on main, passes after the fix.
-- [ ] 1.4 Add a failing server test in NEW file pkg/dustpan/agent_audit_test.go that blocks the database, then calls the existing routes GET /api/audit/entries and GET /api/audit/check with an access token, and checks that both answer 503 with Retry-After 5 and audit.entry-read-unavailable. Check: TestAgentAuditReadsFailFast fails on main, passes after the fix.
+- [ ] 1.1 In the NEW file `pkg/dustpan/agent_audit_test.go`, add `TestAgentStepWritesAuditEntry`: run one delegated step and read the delegation ID in the agent block and the reason in `Entry.Reason` from `GET /api/audit/entries`. Check: it fails on main. BLOCKED by open question 1.
+- [ ] 1.2 In the same file, add `TestAgentDenialIsAudited`: a call outside the scope writes a denial entry. Check: it fails on main. BLOCKED by open questions 3 and 4.
+- [ ] 1.3 In the same file, add `TestAgentChainVerifies`: write delegated entries, call `GET /api/audit/check`, tamper one entry and check that the check names its sequence number. Check: it fails on main.
+- [ ] 1.4 In the same file, add `TestAgentAuditReadsFailFast`: block the database and check that the two routes answer 503 with `Retry-After: 5` and `audit.entry-read-unavailable`. Check: it fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Write the delegation ID into the agent block (`audit.Origin` field `delegationID`, ADR 380) and the reason into the field `Reason` of `audit.Entry`, with the helper in the NEW file pkg/audit/delegation.go, on each delegated step in the same transaction as an allowed step, and the denial entry in its own transaction for a denied step, with the database sequence per entry. Check: GET /api/audit/entries with an access token returns the delegation ID in the agent block and the reason for each delegated step.
-- [ ] 2.2 The agent block hash of audit-agent-block covers `delegationID` (ADR 380 decision 1), and the field `Reason` of `audit.Entry` is already in the hash, so pkg/audit/chain.go gets no hash-input version and no path for old entries (ADR 380 decision 3); expose the fields on the read paths with their declared actions and objects. Check: GET /api/audit/check with an access token verifies a chain that holds delegation entries and names the first bad sequence number.
-- [ ] 2.3 Document the delegation ID of the agent block and the reason in the audit log guide at docs/guides/audit-log.md. Check: Docs page lists the delegation and reason fields with one copy-paste read command. `make docs-lint` passes on each edited guide.
+- [ ] 2.1 Write the delegation ID into the block and the reason into `Entry.Reason` on each delegated step, in the same transaction as an allowed step. BLOCKED by open question 2 for the block rule. Check: `GET /api/audit/entries` returns both for each delegated step.
+- [ ] 2.2 Cover the field in the chain hash with no version (ADR 380 decision 3). Check: `GET /api/audit/check` verifies a chain that holds delegated entries.
+- [ ] 2.3 SECURITY. Add the hostile tests of the layers table of `design.md`, and for each guard a test that fails when the guard is removed. Check: remove each guard in turn in a local run and see its test fail.
+- [ ] 2.4 Document the fields in `docs/guides/audit-log.md` with one copy-paste read command. Check: `make docs-lint` passes.
 
 ## 3. Side effects (computed from main)
 
 - [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients when an answer changes. Never edit a generated file by hand. Check: the generators leave no diff.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step in the existing file e2e/audit_export_test.go on PostgreSQL through the real binary over TLS that checks each agent step is audited and the chain verifies. The step extends that file and uses the routes GET /api/audit/entries and GET /api/audit/check with an access token. Check: E2e step delegates, runs one agent step with a reason, lists GET /api/audit/entries with an access token and calls GET /api/audit/check with an access token. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Run a usability check of the audit read path. Check: Persona completes the path from the docs page alone and each error names the one command that helps. A person's step.
-- [ ] 4.3 Run the full check gate. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Extend `e2e/audit_export_test.go` on PostgreSQL through the real binary over TLS: delegate, run one agent step, list `GET /api/audit/entries` and call `GET /api/audit/check`. Check: the step passes in CI. BLOCKED by the Dusty run job.
+- [ ] 4.2 Run a usability check of the audit read path. Check: the persona completes the path from the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
