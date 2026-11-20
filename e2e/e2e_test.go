@@ -1294,6 +1294,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	pulumiDiffScenario(t, env, org)
 
+	pulumiMultiLineDescriptionScenario(t, env, org)
+
 	t.Run("unit_without_collection_is_refused", func(t *testing.T) {
 		pulumiUnitWithoutCollectionRefused(t, env)
 	})

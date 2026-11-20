@@ -8,9 +8,12 @@ const (
 	// StackHasResources is a delete without force of a stack that still has
 	// resources.
 	StackHasResources = "stack.has-resources"
-	// StackInvalidName is a project name, a stack name or a set of tags that
-	// is not valid.
+	// StackInvalidName is a project name or a stack name that is not valid.
 	StackInvalidName = "stack.invalid-name"
+	// StackInvalidTags is a set of tags that is not valid: too many tags, a
+	// tag name that is not allowed, or a tag value that is too long, not valid
+	// UTF-8 or holds a hidden character.
+	StackInvalidTags = "stack.invalid-tags"
 	// StackNoState is a stack that has no state, also at the time of a
 	// request for the state at a time.
 	StackNoState = "stack.no-state"
@@ -44,7 +47,12 @@ func stackSpecs() []Spec {
 		},
 		{
 			Code:    StackInvalidName,
-			Meaning: "the project name, the stack name or the tags of the stack are not valid",
+			Meaning: "the project name or the stack name is not valid",
+			Args:    nil,
+		},
+		{
+			Code:    StackInvalidTags,
+			Meaning: "the tags of the stack are not valid: too many tags, a tag name that is not allowed, or a tag value that is too long, not UTF-8 or holds a hidden character",
 			Args:    nil,
 		},
 		{Code: StackNoState, Meaning: "the stack has no state", Args: nil},
