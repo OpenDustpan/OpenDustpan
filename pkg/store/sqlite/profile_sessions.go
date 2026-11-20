@@ -138,6 +138,13 @@ func (p *ProfileSessions) Get(
 			return fmt.Errorf("select open session: %w", err)
 		}
 
+		// Defense in depth: the query holds the namespace. This check stays
+		// so that a row of another namespace never reaches a caller if the
+		// query changes.
+		if row.NamespaceID != nsID {
+			return profile.ErrNotFound
+		}
+
 		return nil
 	})
 	if err != nil {
