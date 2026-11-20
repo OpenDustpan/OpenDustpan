@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -340,13 +339,7 @@ func (b *limitedBody) Close() error {
 
 // loopback reports whether host names the loopback interface.
 func loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-
-	return ip != nil && ip.IsLoopback()
+	return session.LoopbackHost(host)
 }
 
 // providerAlgorithms returns the signature algorithms that both the

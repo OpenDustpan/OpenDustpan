@@ -290,7 +290,7 @@ func (l *ldapFlags) checkSubject() error {
 func ldapRoots(path string) (*x509.CertPool, error) {
 	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
-		return nil, fmt.Errorf("--ldap-ca-file: %w", err)
+		return nil, fmt.Errorf("--ldap-ca-file %q: %w", path, unwrapPathError(err))
 	}
 
 	pem, err := root.ReadFile(filepath.Base(path))
@@ -299,13 +299,23 @@ func ldapRoots(path string) (*x509.CertPool, error) {
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("--ldap-ca-file: %w", err)
+		return nil, fmt.Errorf("--ldap-ca-file %q: %w", path, unwrapPathError(err))
 	}
 
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("--ldap-ca-file %s: %w", path, errNoCertificates)
+		return nil, fmt.Errorf("--ldap-ca-file %q: %w", path, errNoCertificates)
 	}
 
 	return pool, nil
+}
+
+// unwrapPathError returns the cause of a path error. The path error holds
+// only the last element of the path, and the caller names the whole path.
+func unwrapPathError(err error) error {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
+		return pathErr.Err
+	}
+
+	return err
 }

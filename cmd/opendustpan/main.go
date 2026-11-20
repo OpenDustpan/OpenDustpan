@@ -252,6 +252,10 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return err
 	}
 
+	if err := f.checkTLSFiles(); err != nil {
+		return err
+	}
+
 	if err := f.requireDecisions(terminal, os.LookupEnv); err != nil {
 		return err
 	}
@@ -443,7 +447,7 @@ func (f *serveFlags) check() error {
 
 	f.auditSinkRanges = ranges
 
-	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+	return f.checkFlagValues()
 }
 
 // checkNames refuses an incomplete TLS pair, a --listen value that is not host:port and an
@@ -1070,6 +1074,8 @@ func (f *serveFlags) openBlobStores(
 //
 //nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
 func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (blob.Store, error) {
+	f.warnUnusedS3Endpoint(ctx, logger)
+
 	cfg := blobOpenConfig{
 		database: f.database,
 		dir:      f.blobDir,
@@ -1079,6 +1085,20 @@ func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (bl
 	}
 
 	return openBlobs(ctx, cfg, logger)
+}
+
+// warnUnusedS3Endpoint warns when --s3-endpoint is set and neither
+// --blob-store nor --backup-target is an s3:// address. Both flags use the
+// endpoint.
+func (f *serveFlags) warnUnusedS3Endpoint(ctx context.Context, logger *slog.Logger) {
+	if strings.TrimSpace(f.s3Endpoint) == "" ||
+		strings.HasPrefix(strings.TrimSpace(f.blobStore), "s3://") ||
+		strings.HasPrefix(strings.TrimSpace(f.backupTarget), "s3://") {
+		return
+	}
+
+	logger.WarnContext(ctx, "--s3-endpoint has no effect: --blob-store and --backup-target are not s3:// addresses",
+		slog.String("blob_store", blobStoreKind(f.blobStore)))
 }
 
 // closeLiveStore closes the live blob store when it holds a directory
@@ -1864,4 +1884,20 @@ func readKeyFile(path string) ([]byte, error) {
 	}
 
 	return decodeKey(keyFileEnvVar, string(raw))
+}
+
+// blobStoreKind returns the kind of the --blob-store value for a log record:
+// "fs" when the value is empty, "dir" for a dir: address, else "other". It
+// never returns the value, which can hold a key or a control character.
+func blobStoreKind(v string) string {
+	v = strings.TrimSpace(v)
+
+	switch {
+	case v == "":
+		return "fs"
+	case strings.HasPrefix(v, "dir:"):
+		return "dir"
+	default:
+		return "other"
+	}
 }
