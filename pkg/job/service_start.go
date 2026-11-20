@@ -227,6 +227,22 @@ func checkKey(key string) error {
 // names of units.
 const errNoUnit = "the unit does not exist, or you cannot start a job on it"
 
+// checkUnitName returns an error that wraps ErrInvalid when name is not
+// valid UTF-8 or holds a hidden rune.
+//
+// Defense in depth: identity.UnitObject and identity.ParseObject refuse such
+// a name, and the handler of the API checks the name of the unit too. This
+// check stays so that a feature of the server never puts a name with a hidden
+// character in the audit entry of a job, or in a lookup, and it does not rely
+// on those layers.
+func checkUnitName(name string) error {
+	if !utf8.ValidString(name) || ident.HasHidden(name) {
+		return fmt.Errorf("%w: the name of the unit has a character that it cannot have", ErrInvalid)
+	}
+
+	return nil
+}
+
 // unitOf finds the unit. A unit that does not exist gives an error that wraps
 // identity.ErrDenied with the text that a refusal of the actions has, so that
 // the answer is no oracle for the names of units.
@@ -235,12 +251,8 @@ func (s *service) unitOf(ctx context.Context, ref identity.Object) (identity.Obj
 		return identity.Object{}, fmt.Errorf("%w: the object of a job must be a unit", ErrInvalid)
 	}
 
-	// Defense in depth: the handler of the API checks the name of the unit
-	// too. This check stays so that a feature of the server never puts a name
-	// with a hidden character in the audit entry of a job, or in a lookup.
-	if !utf8.ValidString(ref.UnitName()) || ident.HasHidden(ref.UnitName()) {
-		return identity.Object{}, fmt.Errorf("%w: the name of the unit has a character that it cannot have",
-			ErrInvalid)
+	if err := checkUnitName(ref.UnitName()); err != nil {
+		return identity.Object{}, err
 	}
 
 	unit, err := s.units.Unit(ctx, ref)

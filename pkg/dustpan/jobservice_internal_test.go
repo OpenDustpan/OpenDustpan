@@ -598,6 +598,55 @@ func TestPlanStepsPulumi(t *testing.T) {
 	}
 }
 
+// stopsAtUnitObject reports whether identity.UnitObject refuses the name of
+// the case of TestPlanStepsPulumi, so that the name never reaches the step.
+func stopsAtUnitObject(name string) bool {
+	switch name {
+	case "empty stack", "empty project", "tab", "newline in the stack", "carriage return",
+		"NUL in the stack", "NUL in the project":
+		return true
+	default:
+		return false
+	}
+}
+
+// TestValidPulumiNameRefusesHiddenRunes sends each hidden rune and bytes that
+// are not valid UTF-8 directly to the allowlist of the step, as if
+// identity.UnitObject accepted the name.
+func TestValidPulumiNameRefusesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		part string
+	}{
+		{"tab", "pr\tod"},
+		{"line feed", "pr\nod"},
+		{"carriage return", "pr\rod"},
+		{"NUL", "pr\x00od"},
+		{"right-to-left override U+202E", "pr" + string(rune(0x202e)) + "od"},
+		{"left-to-right isolate U+2066", "pr" + string(rune(0x2066)) + "od"},
+		{"line separator U+2028", "pr" + string(rune(0x2028)) + "od"},
+		{"zero width space U+200B", "pr" + string(rune(0x200b)) + "od"},
+		{"invalid UTF-8", "pr\xffod"},
+		{"hidden rune first", "\x00prod"},
+	}
+
+	if !validPulumiName("prod") {
+		t.Fatal(`validPulumiName("prod") = false, want true`)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if validPulumiName(tt.part) {
+				t.Errorf("validPulumiName(%q) = true, want false", tt.part)
+			}
+		})
+	}
+}
+
 // checkPulumiPlanCase plans the Pulumi stack unit. A nil wantArgs means that
 // the step must refuse the name.
 func checkPulumiPlanCase(t *testing.T, name, ref string, wantArgs []string) {
@@ -605,13 +654,19 @@ func checkPulumiPlanCase(t *testing.T, name, ref string, wantArgs []string) {
 
 	unit, err := identity.UnitObject("pulumi", "acme", ref)
 	if err != nil {
-		// Only a name with an empty part stops at identity.UnitObject. Each hostile
-		// name must reach the step, so the test proves the layer of the step alone.
-		if wantArgs != nil || (name != "empty stack" && name != "empty project") {
+		// Only a name with an empty part or a hidden rune stops at
+		// identity.UnitObject. Each other hostile name must reach the step.
+		// TestValidPulumiNameRefusesHiddenRunes sends the hidden runes to the
+		// check of the step directly.
+		if wantArgs != nil || !stopsAtUnitObject(name) {
 			t.Fatalf("UnitObject(%q) = %v: the name must reach the step", ref, err)
 		}
 
 		return
+	}
+
+	if stopsAtUnitObject(name) {
+		t.Fatalf("UnitObject(%q) = nil error, want ErrInvalidObject", ref)
 	}
 
 	steps, err := planSteps(unit)
