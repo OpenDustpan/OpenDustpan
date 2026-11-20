@@ -52,7 +52,10 @@ func TestSessionFromRow(t *testing.T) {
 		owner   profile.SessionOwner
 		wantErr error
 	}{
-		{name: "the row of the key", change: func(*db.ProfileOpenSession) {}, now: rowStart(), owner: rowOwner()},
+		{
+			name: "the row of the key", wantErr: nil,
+			change: func(*db.ProfileOpenSession) {}, now: rowStart(), owner: rowOwner(),
+		},
 		{
 			name: "a row of another namespace", wantErr: profile.ErrNotFound,
 			change: func(r *db.ProfileOpenSession) { r.NamespaceID = "ns-id-b" }, now: rowStart(), owner: rowOwner(),
@@ -98,7 +101,9 @@ func TestSessionFromRow(t *testing.T) {
 			row := validSessionRow(t)
 			tc.change(&row)
 
-			got, err := sessionFromRow("acme", rowNamespace, rowID, tc.owner, tc.now, row)
+			got, err := sessionFromRow(
+				sessionReadKey{ns: "acme", nsID: rowNamespace, id: rowID, owner: tc.owner, now: tc.now}, row,
+			)
 			if tc.wantErr == nil {
 				if err != nil || got.ID() != rowID {
 					t.Fatalf("sessionFromRow = %v, %v, want the session", got.ID(), err)
@@ -157,7 +162,10 @@ func TestGetQueryGuards(t *testing.T) {
 		{"an ID with a wildcard", func(p *db.GetProfileOpenSessionParams) { p.ID = "pos-%" }},
 		{"an ID with SQL text", func(p *db.GetProfileOpenSessionParams) { p.ID = id + "' OR '1'='1" }},
 		{"the end time", func(p *db.GetProfileOpenSessionParams) { p.NowMs = codec.Millis(now.Add(time.Hour)) }},
-		{"after the end time", func(p *db.GetProfileOpenSessionParams) { p.NowMs = codec.Millis(now.Add(24 * time.Hour)) }},
+		{
+			"after the end time",
+			func(p *db.GetProfileOpenSessionParams) { p.NowMs = codec.Millis(now.Add(24 * time.Hour)) },
+		},
 	}
 
 	for _, tc := range tests {

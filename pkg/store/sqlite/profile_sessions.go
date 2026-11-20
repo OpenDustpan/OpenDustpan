@@ -149,30 +149,38 @@ func (p *ProfileSessions) Get(
 		return profile.Session{}, err
 	}
 
-	return sessionFromRow(ns, nsID, id, owner, now, row)
+	return sessionFromRow(sessionReadKey{ns: ns, nsID: nsID, id: id, owner: owner, now: now}, row)
+}
+
+// sessionReadKey is the key of one read of Get: the namespace by name and by
+// stable ID, the ID of the session, the owner and the time of the read.
+type sessionReadKey struct {
+	ns    namespace.Name
+	nsID  string
+	id    string
+	owner profile.SessionOwner
+	now   time.Time
 }
 
 // sessionFromRow decodes the row that the query of Get found, and checks it
 // against the key of the read. A row of another namespace, of another owner or
 // of an ended session is profile.ErrNotFound. A row that fails the rules of
 // profile.NewSession is an error that wraps profile.ErrInvalid.
-func sessionFromRow(
-	ns namespace.Name, nsID, id string, owner profile.SessionOwner, now time.Time, row db.ProfileOpenSession,
-) (profile.Session, error) {
+func sessionFromRow(k sessionReadKey, row db.ProfileOpenSession) (profile.Session, error) {
 	// Defense in depth: the query holds the namespace, the ID, the owner and
 	// the clock. These checks stay so that a row of another namespace, of
 	// another owner or of an ended session never reaches a caller if the
 	// query changes.
-	if row.NamespaceID != nsID {
+	if row.NamespaceID != k.nsID {
 		return profile.Session{}, profile.ErrNotFound
 	}
 
-	sess, err := codec.ProfileSessionFromRow(ns, codec.ProfileOpenSessionRow(row))
+	sess, err := codec.ProfileSessionFromRow(k.ns, codec.ProfileOpenSessionRow(row))
 	if err != nil {
 		return profile.Session{}, err
 	}
 
-	if sess.ID() != id || sess.Owner() != owner || !sess.Live(now) {
+	if sess.ID() != k.id || sess.Owner() != k.owner || !sess.Live(k.now) {
 		return profile.Session{}, profile.ErrNotFound
 	}
 

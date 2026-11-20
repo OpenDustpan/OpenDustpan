@@ -597,8 +597,9 @@ func testSessionPutOtherFence(t *testing.T, s Store) {
 
 	f.wantGone(t, s, firstSessionID, subject)
 
-	if _, err = s.Sessions.Get(t.Context(), other.Name, firstSessionID, profile.PrincipalOwner(subject), epoch()); err == nil {
-		t.Errorf("namespace B holds the session of namespace A")
+	_, err = s.Sessions.Get(t.Context(), other.Name, firstSessionID, profile.PrincipalOwner(subject), epoch())
+	if err == nil {
+		t.Error("namespace B holds the session of namespace A")
 	}
 
 	if after := auditCount(t, s, other.Name); after != before {
@@ -613,7 +614,9 @@ func testSessionDeleteInvalidOwner(t *testing.T, s Store) {
 	f.put(t, s, f.session(t, firstSessionID, subject))
 
 	for _, owner := range []profile.SessionOwner{
-		{Kind: "job", ID: subject}, {Kind: "", ID: subject}, {Kind: profile.OwnerPrincipal, ID: ""},
+		{Kind: "job", ID: subject},
+		{Kind: "", ID: subject},
+		{Kind: profile.OwnerPrincipal, ID: ""},
 		{Kind: profile.OwnerPrincipal, ID: "al\nice"},
 	} {
 		err := s.Sessions.Delete(t.Context(), firstSessionID, owner, f.ns.Fence(), openEntries(f.ns.Name))

@@ -53,7 +53,10 @@ func TestSessionFromRow(t *testing.T) {
 		owner   profile.SessionOwner
 		wantErr error
 	}{
-		{name: "the row of the key", change: func(*db.ProfileOpenSession) {}, now: rowStart(), owner: rowOwner()},
+		{
+			name: "the row of the key", wantErr: nil,
+			change: func(*db.ProfileOpenSession) {}, now: rowStart(), owner: rowOwner(),
+		},
 		{
 			name: "a row of another namespace", wantErr: profile.ErrNotFound,
 			change: func(r *db.ProfileOpenSession) { r.NamespaceID = "ns-id-b" }, now: rowStart(), owner: rowOwner(),
@@ -99,7 +102,9 @@ func TestSessionFromRow(t *testing.T) {
 			row := validSessionRow(t)
 			tc.change(&row)
 
-			got, err := sessionFromRow("acme", rowNamespace, rowID, tc.owner, tc.now, row)
+			got, err := sessionFromRow(
+				sessionReadKey{ns: "acme", nsID: rowNamespace, id: rowID, owner: tc.owner, now: tc.now}, row,
+			)
 			if tc.wantErr == nil {
 				if err != nil || got.ID() != rowID {
 					t.Fatalf("sessionFromRow = %v, %v, want the session", got.ID(), err)
@@ -136,20 +141,14 @@ func sessionNamespaceID(t *testing.T, s *Store, name namespace.Name) string {
 }
 
 // getSessionRow runs the query of Get alone.
-func getSessionRow(t *testing.T, s *Store, p db.GetProfileOpenSessionParams) (db.ProfileOpenSession, error) {
+func getSessionRow(t *testing.T, s *Store, p db.GetProfileOpenSessionParams) error {
 	t.Helper()
 
-	var row db.ProfileOpenSession
-
-	err := s.inSnapshotTx(t.Context(), func(q *db.Queries) error {
-		var err error
-
-		row, err = q.GetProfileOpenSession(t.Context(), p)
+	return s.inSnapshotTx(t.Context(), func(q *db.Queries) error {
+		_, err := q.GetProfileOpenSession(t.Context(), p)
 
 		return err
 	})
-
-	return row, err
 }
 
 // TestGetQueryGuards calls the generated query of Get alone, with no check of
@@ -171,7 +170,7 @@ func TestGetQueryGuards(t *testing.T) {
 		NamespaceID: nsID, ID: id, OwnerKind: string(owner.Kind), OwnerID: owner.ID, NowMs: codec.Millis(now),
 	}
 
-	if _, err := getSessionRow(t, s, key); err != nil {
+	if err := getSessionRow(t, s, key); err != nil {
 		t.Fatalf("query with the right key: %v, want the row", err)
 	}
 
@@ -187,7 +186,10 @@ func TestGetQueryGuards(t *testing.T) {
 		{"an ID with a wildcard", func(p *db.GetProfileOpenSessionParams) { p.ID = "pos-%" }},
 		{"an ID with SQL text", func(p *db.GetProfileOpenSessionParams) { p.ID = id + "' OR '1'='1" }},
 		{"the end time", func(p *db.GetProfileOpenSessionParams) { p.NowMs = codec.Millis(now.Add(time.Hour)) }},
-		{"after the end time", func(p *db.GetProfileOpenSessionParams) { p.NowMs = codec.Millis(now.Add(24 * time.Hour)) }},
+		{
+			"after the end time",
+			func(p *db.GetProfileOpenSessionParams) { p.NowMs = codec.Millis(now.Add(24 * time.Hour)) },
+		},
 	}
 
 	for _, tc := range tests {
@@ -197,7 +199,7 @@ func TestGetQueryGuards(t *testing.T) {
 			p := key
 			tc.change(&p)
 
-			if _, err := getSessionRow(t, s, p); !errors.Is(err, pgx.ErrNoRows) {
+			if err := getSessionRow(t, s, p); !errors.Is(err, pgx.ErrNoRows) {
 				t.Errorf("query with %s: error = %v, want no rows", tc.name, err)
 			}
 		})
