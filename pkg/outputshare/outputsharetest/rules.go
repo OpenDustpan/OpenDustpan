@@ -375,6 +375,7 @@ func ruleCases() []suiteCase {
 			"store: a collection of another namespace made again with the old name matches the rule",
 		},
 		{testRulePurge, "store: the purge of a unit removes the rules that name it in its namespace"},
+		{testRuleCollectionDelete, "store: the delete of a collection removes the rules that name it in its namespace"},
 		{testFindProducerLevels, "store: find matches a rule on the unit, its collection and its namespace"},
 		{
 			testFindConsumerLevels,
@@ -996,6 +997,44 @@ func testRulePurge(t *testing.T, h Harness) {
 	const others = outputshare.MaxRulesPerProducer - 2
 
 	for i := range others {
+		unit, unitErr := identity.UnitObject(ToolOpenTofu, globex, fmt.Sprintf("web-%03d", i))
+		if unitErr != nil {
+			t.Fatalf("unit object: %v", unitErr)
+		}
+
+		r.link(c.Unit, unit)
+	}
+
+	last, err := identity.UnitObject(ToolOpenTofu, globex, "web-last")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	r.link(c.Unit, last)
+}
+
+func testRuleCollectionDelete(t *testing.T, h Harness) {
+	t.Helper()
+	needHook(t, h, "RemakeCollection", "MoveUnit")
+
+	r := newRuleRig(t, h)
+	a, c := r.unit("a", "shared"), r.unit("c", "")
+
+	// The rule that names the collection as consumer, and the rule that has the
+	// collection as producer.
+	r.link(c.Unit, collectionOf(a))
+	r.link(collectionOf(a), c.Unit)
+
+	h.MoveUnit(t, a, "elsewhere")
+	again := h.RemakeCollection(t, r.ns, "shared")
+
+	r.wantIDs(again)
+
+	// The reader leaves out a rule of a collection that is gone, so the count of
+	// the limit shows whether the delete removed it. The producer c holds 99
+	// rules after the loop only when the rule that named the old collection is
+	// gone, and so has room for the last one.
+	for i := range outputshare.MaxRulesPerProducer - 1 {
 		unit, unitErr := identity.UnitObject(ToolOpenTofu, globex, fmt.Sprintf("web-%03d", i))
 		if unitErr != nil {
 			t.Fatalf("unit object: %v", unitErr)

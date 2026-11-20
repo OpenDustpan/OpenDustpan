@@ -111,6 +111,16 @@ func (s *Store) DeleteCollection(
 			return fmt.Errorf("delete manual lock of collection: %w", lockErr)
 		}
 
+		// The rules that name the collection as producer or as consumer in its own
+		// namespace go with it, so that a collection made again with the same
+		// name never matches a stale rule.
+		ruleErr := q.DeleteOutputSharingRulesOfCollection(ctx, db.DeleteOutputSharingRulesOfCollectionParams{
+			Namespace: ref.Namespace.String(), CollectionID: id,
+		})
+		if ruleErr != nil {
+			return fmt.Errorf("delete sharing rules of the collection: %w", ruleErr)
+		}
+
 		removed, gateErr := purgeCollectionGate(ctx, q, ref, audit.MaxChanges-len(e.Changes))
 		if gateErr != nil {
 			return gateErr
@@ -118,9 +128,9 @@ func (s *Store) DeleteCollection(
 
 		e.Changes = append(e.Changes, removed...)
 
-		rules, ruleErr := purgePlacementRules(ctx, q, ref, audit.MaxChanges-len(e.Changes))
-		if ruleErr != nil {
-			return ruleErr
+		rules, placementErr := purgePlacementRules(ctx, q, ref, audit.MaxChanges-len(e.Changes))
+		if placementErr != nil {
+			return placementErr
 		}
 
 		e.Changes = append(e.Changes, rules...)

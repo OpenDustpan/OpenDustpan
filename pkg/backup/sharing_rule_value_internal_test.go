@@ -31,6 +31,9 @@ func TestCheckOutputSharingRuleValueRefusesHostileColumns(t *testing.T) {
 		{"an empty consumer kind", "consumer_kind", "", false},
 		{"a creator", "created_by", "tester", true},
 		{"no creator", "created_by", "", false},
+		{"a consumer namespace", "consumer_namespace", "globex", true},
+		{"a consumer namespace that no namespace can have", "consumer_namespace", "bad name!", false},
+		{"an empty consumer namespace", "consumer_namespace", "", false},
 		{"a name is left to the CHECKs", "consumer_name", "web", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

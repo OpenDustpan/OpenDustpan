@@ -4051,6 +4051,27 @@ func (q *Queries) DeleteOutputSharingRule(ctx context.Context, arg DeleteOutputS
 	return result.RowsAffected()
 }
 
+const deleteOutputSharingRulesOfCollection = `-- name: DeleteOutputSharingRulesOfCollection :exec
+DELETE FROM output_sharing_rules
+WHERE namespace = ?1
+    AND ((producer_kind = 'collection' AND producer_id = ?2)
+        OR (consumer_kind = 'collection' AND consumer_namespace = namespace
+            AND consumer_id = ?2))
+`
+
+type DeleteOutputSharingRulesOfCollectionParams struct {
+	Namespace    string
+	CollectionID string
+}
+
+// Removes the rules that name the collection as producer or as consumer in its
+// own namespace. A rule that names a collection of another namespace by name
+// stays.
+func (q *Queries) DeleteOutputSharingRulesOfCollection(ctx context.Context, arg DeleteOutputSharingRulesOfCollectionParams) error {
+	_, err := q.db.ExecContext(ctx, deleteOutputSharingRulesOfCollection, arg.Namespace, arg.CollectionID)
+	return err
+}
+
 const deleteOutputSharingRulesOfUnit = `-- name: DeleteOutputSharingRulesOfUnit :exec
 DELETE FROM output_sharing_rules
 WHERE namespace = ?1

@@ -18,21 +18,21 @@ import (
 // OutputSharingStore returns the store of the sharing rules and of the output
 // sharing setting. Each write checks the fence of the namespace of the
 // producer and appends its audit entry in one transaction.
-func (s *Store) OutputSharingStore() OutputSharingStore {
-	return OutputSharingStore{outputSharingSettings{s: s}}
+//
+//nolint:ireturn // Store-agnostic wiring takes the port.
+func (s *Store) OutputSharingStore() outputshare.Store {
+	return outputSharingRules{outputSharingSettings{s: s}}
 }
 
-// OutputSharingStore is outputshare.Store over the database of a Store. It is
-// a concrete type, so that the method that returns it needs no interface
-// return.
-type OutputSharingStore struct {
+// outputSharingRules is outputshare.Store over the database of a Store.
+type outputSharingRules struct {
 	outputSharingSettings
 }
 
-var _ outputshare.Store = OutputSharingStore{outputSharingSettings{s: nil}}
+var _ outputshare.Store = outputSharingRules{outputSharingSettings{s: nil}}
 
 // Put implements outputshare.Store.
-func (o OutputSharingStore) Put(ctx context.Context, r outputshare.Rule, fence namespace.Fence, e audit.Entry) error {
+func (o outputSharingRules) Put(ctx context.Context, r outputshare.Rule, fence namespace.Fence, e audit.Entry) error {
 	row, err := outputsharestore.CheckPut(r, fence, e)
 	if err != nil {
 		return err
@@ -44,7 +44,7 @@ func (o OutputSharingStore) Put(ctx context.Context, r outputshare.Rule, fence n
 }
 
 // Get implements outputshare.Store.
-func (o OutputSharingStore) Get(
+func (o outputSharingRules) Get(
 	ctx context.Context, producer identity.Object, id outputshare.ID,
 ) (outputshare.Rule, error) {
 	key, err := outputsharestore.ProducerKey(producer)
@@ -77,7 +77,7 @@ func (o OutputSharingStore) Get(
 }
 
 // List implements outputshare.Store. A row that fails its checks is left out.
-func (o OutputSharingStore) List(ctx context.Context, producer identity.Object) ([]outputshare.Rule, error) {
+func (o outputSharingRules) List(ctx context.Context, producer identity.Object) ([]outputshare.Rule, error) {
 	key, err := outputsharestore.ProducerKey(producer)
 	if err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func (o OutputSharingStore) List(ctx context.Context, producer identity.Object) 
 }
 
 // Delete implements outputshare.Store.
-func (o OutputSharingStore) Delete(
+func (o outputSharingRules) Delete(
 	ctx context.Context, producer identity.Object, id outputshare.ID, fence namespace.Fence, e audit.Entry,
 ) error {
 	key, err := outputsharestore.ProducerKey(producer)
@@ -144,7 +144,7 @@ func (o OutputSharingStore) Delete(
 
 // Find implements outputshare.Store. A row that fails its checks never
 // matches.
-func (o OutputSharingStore) Find(
+func (o outputSharingRules) Find(
 	ctx context.Context, producer, consumer outputshare.Placement,
 ) (outputshare.Rule, error) {
 	args, ns, err := outputsharestore.FindArgs(producer, consumer)
@@ -230,6 +230,14 @@ func (t ruleTx) Count(ctx context.Context, k outputsharestore.Key) (int64, error
 // Insert implements outputsharestore.Lookup.
 func (t ruleTx) Insert(ctx context.Context, row outputsharestore.Insert) (int64, error) {
 	n, err := t.q.InsertOutputSharingRule(ctx, db.InsertOutputSharingRuleParams(row))
+	// Defense in depth: Rule.Validate and the checks of Put refuse the rows that
+	// the CHECK constraints and the foreign key refuse. This mapping stays so
+	// that a refusal of the table reaches the caller as an invalid rule, and
+	// never as a raw driver error.
+	if isCheckViolation(err) || isForeignKeyViolation(err) {
+		return 0, fmt.Errorf("%w: the table refused the rule", outputshare.ErrInvalid)
+	}
+
 	if err != nil {
 		return 0, fmt.Errorf("insert sharing rule: %w", err)
 	}

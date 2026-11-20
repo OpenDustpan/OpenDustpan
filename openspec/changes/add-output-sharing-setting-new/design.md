@@ -35,7 +35,7 @@ The service keeps `outputshare.Store` as its only port, and takes `Authorizer` a
 ## Risks
 
 - A unit made with a setting that fails `Default.Validate` must refuse the create and write nothing (suite case "new unit: a setting that fails Validate refuses the create and writes nothing").
-- A purge that leaves a rule of a purged unit would let a new unit with the same name match a stale rule of another namespace. The purge removes the rules of the unit in the same transaction.
+- A purge that leaves a rule of a purged unit would let a new unit match a stale rule. The purge removes, in the same transaction, only the rules of the namespace of the unit that name the unit by stable ID, as producer or as consumer (`DeleteOutputSharingRulesOfUnit`). A rule of another namespace that names the unit by name stays, and a new unit with the same name matches it, as ADR 273 decision 3 says. Whether that case stays waits on the owner decision of the open question. The delete of a collection removes the rules of its own namespace that name it by stable ID in the same way (`DeleteOutputSharingRulesOfCollection`).
 - Both tool stores and both dialects must seed the same rule. The conformance suite runs the same cases on each.
 
 ## Diagrams

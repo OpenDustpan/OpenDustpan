@@ -89,6 +89,16 @@ DELETE FROM output_sharing_rules
 WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id)
     AND producer_kind = sqlc.arg(producer_kind) AND producer_id = sqlc.arg(producer_id);
 
+-- name: DeleteOutputSharingRulesOfCollection :exec
+-- Removes the rules that name the collection as producer or as consumer in its
+-- own namespace. A rule that names a collection of another namespace by name
+-- stays.
+DELETE FROM output_sharing_rules
+WHERE namespace = sqlc.arg(namespace)
+    AND ((producer_kind = 'collection' AND producer_id = sqlc.arg(collection_id))
+        OR (consumer_kind = 'collection' AND consumer_namespace = namespace
+            AND consumer_id = sqlc.arg(collection_id)));
+
 -- name: DeleteOutputSharingRulesOfUnit :exec
 -- Removes the rules that name the unit as producer or as consumer in its own
 -- namespace. A rule that names a unit of another namespace by name stays.
