@@ -323,7 +323,7 @@ func TestDemoPasswordIsInNoAuditEntry(t *testing.T) {
 	seen := 0
 
 	for _, scope := range scopes {
-		page, listErr := f.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+		page, listErr := f.store.List(t.Context(), scope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 		if listErr != nil {
 			t.Fatalf("list entries of %s: %v", scope, listErr)
 		}
@@ -413,7 +413,7 @@ func TestDemoSeedRevokesAGrantOutsideTheFixedSet(t *testing.T) {
 		t.Fatalf("grants after the second start = %v, want %v", after, before)
 	}
 
-	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

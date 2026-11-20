@@ -491,6 +491,44 @@ func (s *Service) Get(ctx context.Context, id ID) (Record, error) {
 	return record, nil
 }
 
+// RequireSucceeded returns ErrStillRunning for a backup that runs and
+// ErrEndedFailed for a backup that failed. It returns ErrNotFound for an ID
+// that has no row, and nil for a backup that succeeded. A restore and a check
+// use it before they read the target, so that a partial backup is not
+// reported as corrupt.
+func (s *Service) RequireSucceeded(ctx context.Context, id ID) error {
+	record, err := s.registry.GetBackup(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get backup %s: %w", id, err)
+	}
+
+	return record.RequireSucceeded()
+}
+
+// RequireSucceeded returns the refusal for a backup that did not succeed, as
+// Service.RequireSucceeded does, from the record that the caller already
+// holds. A caller that read the record uses it, so that the check needs no
+// second read.
+func (r Record) RequireSucceeded() error {
+	return stateRefusal(r.ID, r.State)
+}
+
+// stateRefusal returns the refusal for a backup in state, or nil for a backup
+// that succeeded. An unknown state fails closed.
+func stateRefusal(id ID, state State) error {
+	switch state {
+	case StateSucceeded:
+		return nil
+	case StateRunning:
+		return fmt.Errorf("backup %s: %w", id, ErrStillRunning)
+	case StateFailed:
+		return fmt.Errorf("backup %s: %w", id, ErrEndedFailed)
+	}
+
+	// Fail closed: an unknown state is not a backup that succeeded.
+	return fmt.Errorf("backup %s: %w", id, ErrEndedFailed)
+}
+
 // Check checks that the configured target holds every object the manifest
 // of backup id names with the recorded size and checksum. It returns nil when
 // the backup is complete, else the first missing, short or changed object by
@@ -721,18 +759,19 @@ func (s *Service) newRunner(cfg Config) (*durable.Runner, error) {
 				{Name: StepFinish, Run: s.stepFinish},
 			},
 		}},
-		Lease:              cfg.Lease,
-		RenewEvery:         0,
-		PollEvery:          0,
-		MaxAttempts:        0,
-		ExpiryLimit:        0,
-		Backoff:            durable.Backoff{Base: 0, Max: 0},
-		ClaimBackoff:       durable.Backoff{Base: 0, Max: 0},
-		WriteTimeout:       0,
-		Deferred:           nil,
-		StopOnRenewalError: false,
-		Logger:             cfg.Logger,
-		Rand:               nil,
+		Lease:                cfg.Lease,
+		RenewEvery:           0,
+		PollEvery:            0,
+		MaxAttempts:          0,
+		ExpiryLimit:          0,
+		DeadlineReleaseLimit: 0,
+		Backoff:              durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff:         durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout:         0,
+		Deferred:             nil,
+		StopOnRenewalError:   false,
+		Logger:               cfg.Logger,
+		Rand:                 nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup runner: %w", err)

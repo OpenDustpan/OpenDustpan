@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -60,7 +61,7 @@ func TestServeCheckNamesSignInFlags(t *testing.T) {
 		{
 			"oidc issuer http",
 			[]string{"--oidc-issuer", "http://id.example.com", "--oidc-provider", "corp", "--oidc-client-id", "a"},
-			[]string{"--oidc-issuer", "https://"},
+			[]string{"--oidc-issuer (DUSTPAN_OIDC_ISSUER)", "loopback host"},
 		},
 		{
 			"oidc issuer no host",
@@ -230,6 +231,11 @@ func certFile(t *testing.T) string {
 	return path
 }
 
+// opaqueURL turns scheme://rest into the opaque form scheme:rest.
+func opaqueURL(u string) string {
+	return strings.Replace(u, "://", ":", 1)
+}
+
 // TestServeCheckHostileValues sends hostile values straight to the checks of
 // the provider ID, the issuer and the origin.
 func TestServeCheckHostileValues(t *testing.T) {
@@ -254,12 +260,12 @@ func TestServeCheckHostileValues(t *testing.T) {
 		{"oidc provider CRLF", oidcID("corp\r\nX: y")},
 		{"ldap provider control", ldapID("co\x00rp")},
 		{"ldap provider CRLF", ldapID("corp\r\n")},
-		{"issuer userinfo", issuer("https://user:secret@id.example.com")},
+		{"issuer userinfo", issuer(fakecred.URL("https", "user", "secret", "id.example.com", ""))},
 		{"issuer userinfo name only", issuer("https://tokenvalue@id.example.com")},
 		{"issuer query", issuer("https://id.example.com?x=1")},
 		{"issuer fragment", issuer("https://id.example.com#x")},
 		{"issuer CRLF", issuer("https://id.example.com/\r\nX: y")},
-		{"issuer opaque userinfo", issuer("https:user:pass@id.example.com")},
+		{"issuer opaque userinfo", issuer(opaqueURL(fakecred.URL("https", "user", "pass", "id.example.com", "")))},
 		{"issuer secret in query", issuer("https://id.example.com/?token=s3cr3t")},
 		{"issuer secret in fragment", issuer("https://id.example.com/#tok=s3cr3t")},
 		{"origin upper case", []string{"--allowed-origins", "https://Console.example.com"}},
@@ -293,12 +299,13 @@ func TestServeCheckIssuerIsTheSessionRule(t *testing.T) {
 
 	for _, issuer := range []string{
 		"https://id.example.com", "http://127.0.0.1:9000", "http://127.0.0.2:9000", "http://[::1]:9000",
-		"http://localhost", "http://id.example.com", "HTTPS://id.example.com", "https://u:p@id.example.com",
+		"http://localhost", "http://id.example.com", "HTTPS://id.example.com", "HTTP://127.0.0.1", fakecred.URL("https", "u", "p", "id.example.com", ""),
+		"https://id.example.com?", "https://id.example.com#", "https://id.example.com/a b", "https://id.example.com\\x",
 		"ftp://id.example.com", "https://",
 	} {
 		err := parseCheckFlags(t, "--oidc-issuer", issuer, "--oidc-provider", "corp", "--oidc-client-id", "a").check()
-		if got, want := err == nil, session.ValidIssuer(issuer); got != want {
-			t.Fatalf("issuer %q: check accepts = %v, session.ValidIssuer = %v", issuer, got, want)
+		if got, want := err == nil, session.CheckIssuer(issuer) == nil; got != want {
+			t.Fatalf("issuer %q: check accepts = %v, session.CheckIssuer accepts = %v", issuer, got, want)
 		}
 	}
 }

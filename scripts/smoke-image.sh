@@ -13,6 +13,9 @@
 #
 # Environment:
 #   IMAGE           image tag to build (default opendustpan:smoke)
+#   IMAGE_VERSION   version that the image binary must print for --version,
+#                   passed as the build argument VERSION (default smoke);
+#                   letters, digits, dot, plus and dash, 1 to 64 characters
 #   CONSOLE_URL     console tarball: file:<repo-relative path> builds a local
 #                   test tarball first (default file:console-smoke.tgz), or an
 #                   https: URL of a console release tarball
@@ -27,6 +30,17 @@ IMAGE="${IMAGE:-opendustpan:smoke}"
 CONSOLE_URL="${CONSOLE_URL:-file:console-smoke.tgz}"
 CONSOLE_SHA256="${CONSOLE_SHA256:-}"
 CONTAINER="opendustpan-smoke-$$"
+
+# The version of the image. It goes into a shell line of the Dockerfile, so the
+# script refuses a value outside the allowlist before any docker call. The
+# check refuses and never edits the value. Defense in depth: the Dockerfile
+# checks VERSION too; this check stays so that no docker call runs for a bad
+# value, and it does not rely on the Dockerfile check.
+IMAGE_VERSION="${IMAGE_VERSION-smoke}"
+if ! (LC_ALL=C; [[ "$IMAGE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$ ]]); then
+  echo "smoke-image: IMAGE_VERSION must be 1 to 64 characters: letters, digits, dot, plus and dash, and it must start with a letter or a digit; for example IMAGE_VERSION=v0.1.0" >&2
+  exit 1
+fi
 STAGED_TARBALL=""
 
 for tool in docker openssl curl tar awk; do
@@ -77,11 +91,42 @@ if [ -n "${EXTRA_CA_FILE:-}" ]; then
   BUILD_SECRETS+=(--secret "id=extra_ca,src=$EXTRA_CA_FILE")
 fi
 docker build -t "$IMAGE" \
-  --build-arg VERSION=smoke \
+  --build-arg VERSION="$IMAGE_VERSION" \
   --build-arg CONSOLE_URL="$CONSOLE_URL" \
   --build-arg CONSOLE_SHA256="$CONSOLE_SHA256" \
   "${BUILD_SECRETS[@]}" \
   "$ROOT"
+
+# Two refusals that run a real build. Each build must fail, and it must fail
+# for the stated reason. They run with the cache of the build above, so each
+# stops at its own check. Defense in depth: they test the Dockerfile with no
+# script in front of it.
+echo "smoke-image: checking that a wrong console checksum stops the build"
+WRONG_SHA="$(printf 'a%.0s' $(seq 1 64))"
+if docker build --progress=plain -t "$IMAGE-refused" \
+  --build-arg VERSION="$IMAGE_VERSION" \
+  --build-arg CONSOLE_URL="$CONSOLE_URL" \
+  --build-arg CONSOLE_SHA256="$WRONG_SHA" \
+  "${BUILD_SECRETS[@]}" \
+  "$ROOT" >"$WORK/wrongsha.out" 2>&1; then
+  docker rmi -f "$IMAGE-refused" >/dev/null 2>&1 || true
+  fail "the build finished with a console checksum that does not match the tarball"
+fi
+grep -Eq ': FAILED$|computed checksum did NOT match' "$WORK/wrongsha.out" \
+  || fail "the build with a wrong console checksum did not stop at the checksum check: $(tail -n 5 "$WORK/wrongsha.out")"
+
+echo "smoke-image: checking that the Dockerfile refuses a bad VERSION"
+if docker build --progress=plain -t "$IMAGE-refused" \
+  --build-arg 'VERSION=$(id)' \
+  --build-arg CONSOLE_URL="$CONSOLE_URL" \
+  --build-arg CONSOLE_SHA256="$CONSOLE_SHA256" \
+  "${BUILD_SECRETS[@]}" \
+  "$ROOT" >"$WORK/badversion.out" 2>&1; then
+  docker rmi -f "$IMAGE-refused" >/dev/null 2>&1 || true
+  fail "the build finished with a VERSION outside the allowlist"
+fi
+grep -Eq '^#[0-9]+ [0-9.]+ Dockerfile: build argument VERSION must be' "$WORK/badversion.out" \
+  || fail "the build with a bad VERSION did not stop at the VERSION check: $(tail -n 5 "$WORK/badversion.out")"
 
 echo "smoke-image: generating a self-signed certificate"
 mkdir -p "$CERT_DIR" "$DATA_DIR"
@@ -182,8 +227,8 @@ if [ "$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER")" != "healthy"
 fi
 
 echo "smoke-image: checking the version stamp"
-if [ "$(docker exec "$CONTAINER" /opendustpan --version)" != "smoke" ]; then
-  fail "--version did not print the stamped version"
+if [ "$(docker exec "$CONTAINER" /opendustpan --version)" != "$IMAGE_VERSION" ]; then
+  fail "--version did not print the stamped version $IMAGE_VERSION"
 fi
 
 echo "smoke-image: checking the process user is not root"

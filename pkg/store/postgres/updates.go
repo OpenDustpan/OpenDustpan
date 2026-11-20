@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -45,7 +46,7 @@ func (s *Store) CreateUpdate(
 	attempt := s.newAttempt(ctx)
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, u.Ref)
+		stackID, err := placedStackIDFor(ctx, q, u.Ref)
 		if err != nil {
 			return err
 		}
@@ -159,6 +160,15 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 		locked, err := lockStack(ctx, q, u.Ref)
 		if err != nil {
 			return err
+		}
+
+		// Defense in depth: the update service refuses to start an update of a
+		// stack in no collection, and the HTTP adapter maps that refusal to 409
+		// and writes the audit entry. This check covers the start of an update
+		// and does not rely on those layers.
+		if !locked.Placed {
+			return fmt.Errorf("start update on stack %s/%s/%s: %w",
+				u.Ref.Namespace, u.Ref.Project, u.Ref.Stack, collection.ErrNoCollection)
 		}
 
 		u.Version = locked.Version
@@ -379,7 +389,7 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 	var known bool
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		stackID, err := stackIDFor(ctx, q, cp.Ref)
+		stackID, err := placedStackIDFor(ctx, q, cp.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
 			return stack.ErrWrongUpdateState
 		}
@@ -1036,6 +1046,8 @@ func stackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, erro
 type lockedStack struct {
 	ID      string
 	Version int64
+	// Placed reports that a collection holds the stack.
+	Placed bool
 }
 
 // lockStack locks the stack row for a start or end of one of its updates and
@@ -1054,7 +1066,42 @@ func lockStack(ctx context.Context, q *db.Queries, ref stack.Ref) (lockedStack, 
 		return lockedStack{}, fmt.Errorf("lock stack: %w", err)
 	}
 
-	return lockedStack{ID: row.ID, Version: row.Version}, nil
+	return lockedStack{ID: row.ID, Version: row.Version, Placed: row.Placed}, nil
+}
+
+// placedStackIDFor is stackIDFor for the writes of the state of a stack: it
+// returns collection.ErrNoCollection when no collection holds the stack. The
+// same statement reads the stack and its membership, so the check costs no
+// round trip and has no gap between the check and the write.
+//
+// Defense in depth: the update service refuses to create and to start an
+// update of a stack in no collection, and the HTTP adapter maps that refusal
+// to 409 and writes the audit entry. This check covers every state write and
+// does not rely on those layers.
+//
+// The plain SELECT relies on one invariant: no API path moves a live unit to
+// no collection. A move upserts, a collection delete needs no live units, a
+// purge deletes the unit, and a restore runs in maintenance mode.
+func placedStackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, error) {
+	row, err := q.GetPlacedStack(ctx, db.GetPlacedStackParams{
+		Namespace: ref.Namespace.String(),
+		Project:   ref.Project.String(),
+		Name:      ref.Stack.String(),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", stack.ErrNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("resolve stack: %w", err)
+	}
+
+	if !row.Placed {
+		return "", fmt.Errorf("write to stack %s/%s/%s: %w",
+			ref.Namespace, ref.Project, ref.Stack, collection.ErrNoCollection)
+	}
+
+	return row.ID, nil
 }
 
 // allocateVersion returns the next version of a stack with no running

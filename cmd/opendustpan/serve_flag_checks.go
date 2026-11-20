@@ -21,10 +21,7 @@ var (
 		"--oidc-client-id (DUSTPAN_OIDC_CLIENT_ID) is empty: set the client ID of the application, " +
 			"because --oidc-issuer is set",
 	)
-	errOIDCIssuer = errors.New(
-		"invalid --oidc-issuer (DUSTPAN_OIDC_ISSUER): use an https:// address, or http:// to a loopback host, " +
-			"with no user name, query or fragment",
-	)
+	errOIDCIssuer     = errors.New("invalid --oidc-issuer (DUSTPAN_OIDC_ISSUER)")
 	errOIDCReservedID = errors.New(
 		"invalid --oidc-provider (DUSTPAN_OIDC_PROVIDER): the ID is reserved for the dev and local sign-in: " +
 			"use another ID",
@@ -116,9 +113,10 @@ func (f *serveFlags) checkOIDCFlags() error {
 	}
 
 	// The issuer is never printed, not even in part: it may hold a user name,
-	// a password, a query or a fragment with a secret.
-	if !session.ValidIssuer(f.oidcIssuer) {
-		return errOIDCIssuer
+	// a password, a query or a fragment with a secret. The text of
+	// session.ErrIssuer names the rule and holds no issuer.
+	if issuerErr := session.CheckIssuer(f.oidcIssuer); issuerErr != nil {
+		return fmt.Errorf("%w: %w", errOIDCIssuer, issuerErr)
 	}
 
 	return nil

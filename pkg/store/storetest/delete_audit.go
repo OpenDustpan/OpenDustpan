@@ -43,8 +43,14 @@ func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 
 	st := mustGetFixtureStack(t, f)
 
+	// The fixture put the stack in a collection, which wrote its own entries.
+	earlier, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Size: audit.MaxPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list audit entries before: %v", err)
+	}
+
 	want := deleteEntry(f.ref.Namespace)
-	err := f.s.DeleteStack(
+	err = f.s.DeleteStack(
 		t.Context(),
 		f.ref,
 		f.fence,
@@ -55,19 +61,25 @@ func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	listing, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), f.ref.Namespace, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	if len(listing.Entries) != 1 {
-		t.Fatalf("audit entries = %+v, want the entry of the delete", listing.Entries)
+	if len(listing.Entries) != len(earlier.Entries)+1 {
+		t.Fatalf("audit entries = %+v, want the entries before and the entry of the delete", listing.Entries)
 	}
 
 	got := listing.Entries[0]
 	if got.Kind != audit.KindChange || got.Object != want.Object || got.Action != want.Action ||
-		!got.At.Equal(want.At) || got.Sequence != 1 || got.ObjectID != st.ID.String() {
-		t.Fatalf("audit entry = %+v, want %+v as sequence 1 with object ID %s", got, want, st.ID)
+		!got.At.Equal(want.At) || got.Sequence != int64(len(earlier.Entries))+1 || got.ObjectID != st.ID.String() {
+		t.Fatalf(
+			"audit entry = %+v, want %+v as sequence %d with object ID %s",
+			got,
+			want,
+			len(earlier.Entries)+1,
+			st.ID,
+		)
 	}
 }
 
@@ -348,7 +360,7 @@ func testDeleteWorkspaceAppendsChangeEntry(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
-	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

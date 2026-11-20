@@ -46,7 +46,7 @@ func TestRestoreSwapResultRoundTrips(t *testing.T) {
 
 	want := backup.KeepAccessResult{DroppedTempAdmins: 3, ExpiredUpdateLeases: 2}
 
-	got, err := backup.DecodeRestoreSwap(backup.EncodeRestoreSwap(want))
+	got, err := backup.DecodeRestoreSwap(backup.EncodeRestoreSwap(want, backup.PlainSwap(false)))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}

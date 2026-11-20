@@ -405,6 +405,9 @@ func newServiceBackedHandlerAt(
 					Method:      redirectMethod(t, stubOIDC{}, testProvider, time.Now),
 					ID:          testProvider,
 					DisplayName: "Corp",
+					Issuer:      "",
+					ClientID:    "",
+					Scopes:      nil,
 					AutoCreate:  true,
 					Stored:      false,
 				},
@@ -921,25 +924,27 @@ func newRouteTestRestores(
 	t.Helper()
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:            st,
-		Operations:      st.DurableOperationsPort(),
-		Backups:         service,
-		Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
-		Blobs:           live,
-		Leases:          st,
-		Target:          target,
-		Key:             nil,
-		Installation:    "test",
-		AfterApply:      nil,
-		Admit:           nil,
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
+		Live:                st,
+		Operations:          st.DurableOperationsPort(),
+		Backups:             service,
+		Maintenance:         storetest.StateMaintenance{State: st, Hold: false},
+		Blobs:               live,
+		Leases:              st,
+		Target:              target,
+		Key:                 nil,
+		Installation:        "test",
+		AfterApply:          nil,
+		Admit:               nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1381,6 +1386,12 @@ func startsInBackground(path string) bool {
 // wantOtherSuccessStatus answers the success status of a route that needs no
 // fresh authentication.
 func wantOtherSuccessStatus(route apiserver.Route) int {
+	if route.Method == http.MethodPost && route.Path == "/api/dustpan/v1/restores" {
+		// The seeded backup failed, so the start refuses it. The refusal
+		// comes after the authorization, so it still proves the route allows.
+		return http.StatusConflict
+	}
+
 	if route.Method == http.MethodPost && startsInBackground(route.Path) {
 		return http.StatusAccepted
 	}

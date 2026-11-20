@@ -105,6 +105,16 @@ func newUnitHandlerWithEntries(
 ) testHandler {
 	t.Helper()
 
+	return newUnitHandlerLogged(t, authz, &memReader{entries: entries, err: nil}, slog.New(slog.DiscardHandler))
+}
+
+// newUnitHandlerLogged is newUnitHandlerWithEntries with the unit reader and
+// the logger of the caller.
+func newUnitHandlerLogged(
+	t *testing.T, authz identity.Authorizer, units coreinventory.Reader, logger *slog.Logger,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Installation: "test-region"},
 	)
@@ -117,6 +127,7 @@ func newUnitHandlerWithEntries(
 	}}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
@@ -124,7 +135,7 @@ func newUnitHandlerWithEntries(
 		Audit:         newTestAudit(), OnAuditFailure: nil, Locks: nil, Moves: nil,
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
-		Units:         &memReader{entries: entries, err: nil},
+		Units:         units,
 		Deleted:       deleted,
 		History:       nil,
 		Lifecycles:    testLifecycles(),
@@ -132,7 +143,7 @@ func newUnitHandlerWithEntries(
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Sessions:      nil,
-		Logger:        slog.New(slog.DiscardHandler),
+		Logger:        logger,
 		Now:           nil,
 		PublicURL:     "https://dustpan.example.com",
 		DenialLimiter: nil,

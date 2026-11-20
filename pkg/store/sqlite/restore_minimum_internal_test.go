@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -119,7 +120,7 @@ func TestRestoreAreaSwapOnBinaryBelowMinimum(t *testing.T) {
 		t.Fatalf("apply the contract migration: %v", err)
 	}
 
-	if _, err := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false); !errors.Is(
+	if _, err := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(false)); !errors.Is(
 		err, schema.ErrBinaryBelowMinimum,
 	) {
 		t.Fatalf("swap of the restore area = %v, want ErrBinaryBelowMinimum", err)

@@ -651,6 +651,8 @@ func noStateWrite() map[string]string {
 		"PUT " + ns + "/lock":                                        manualLock,
 		"DELETE " + ns + "/lock":                                     manualLock,
 		"POST " + ns + "/lock/force-unlock":                          manualLock,
+		"POST " + ns + "/unit-locks/bulk-lock":                       manualLock,
+		"POST " + ns + "/unit-locks/bulk-unlock":                     manualLock,
 		"POST " + ns + "/views":                                      savedView,
 		"DELETE " + ns + "/views/{view_id}":                          savedView,
 		"PUT " + ns + "/output-sharing":                              "writes the output sharing setting of a namespace; it writes no state",

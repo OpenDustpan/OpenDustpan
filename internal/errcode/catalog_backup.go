@@ -4,6 +4,14 @@ package errcode
 // example a manifest that is missing, cut or of another format.
 const BackupCorrupt = "backup.corrupt"
 
+// BackupEndedFailed is a backup that ended with an error. A restore and a
+// check need a backup that succeeded.
+const BackupEndedFailed = "backup.ended-failed"
+
+// BackupStillRunning is a backup that has not ended. A restore and a check
+// need a backup that succeeded, so the caller waits for its end.
+const BackupStillRunning = "backup.still-running"
+
 // BackupTooManyUnverified is a backup whose data names more blobs without a
 // check value than the limit allows. The backup writes no manifest.
 const BackupTooManyUnverified = "backup.too-many-unverified"
@@ -25,6 +33,11 @@ func backupSpecs() []Spec {
 			Args:    []Arg{{Name: "backup", Kind: KindIdentifier}},
 		},
 		{
+			Code:    BackupEndedFailed,
+			Meaning: "the backup ended with an error, so a restore or a check cannot use it",
+			Args:    nil,
+		},
+		{
 			Code: BackupRegistryFilesTooLarge,
 			Meaning: "a registry file, or the registry files of one namespace, are above the limit " +
 				"that a restore applies, so the backup wrote no manifest",
@@ -32,6 +45,11 @@ func backupSpecs() []Spec {
 				{Name: "size", Kind: KindQuantity},
 				{Name: argLimit, Kind: KindQuantity},
 			},
+		},
+		{
+			Code:    BackupStillRunning,
+			Meaning: "the backup has not ended, so a restore or a check cannot use it yet",
+			Args:    nil,
 		},
 		{
 			Code: BackupTooManyUnverified,

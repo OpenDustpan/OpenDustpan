@@ -306,6 +306,7 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 		},
 		Collections:    nil,
 		Locks:          nil,
+		Records:        nil,
 		Moves:          nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
 		Authenticator:  viewCallers{},
@@ -409,7 +410,7 @@ func (f *viewFixture) createView(t *testing.T, token, body string) string {
 func (f *viewFixture) auditEntries(tb testing.TB) []audit.Entry {
 	tb.Helper()
 
-	listing, err := f.store.List(tb.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(tb.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		tb.Fatalf("list audit: %v", err)
 	}

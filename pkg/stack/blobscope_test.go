@@ -506,6 +506,7 @@ func TestJournalAppendWritesUnderTheNamespacePrefix(t *testing.T) {
 // stores of f with the given blob store and recorder.
 func updatesConfigFor(f updatesFixture, blobs blob.Store, refusals scopeaudit.Recorder) stack.UpdatesConfig {
 	return stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		Updates:            f.store,

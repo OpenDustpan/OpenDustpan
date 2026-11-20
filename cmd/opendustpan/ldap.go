@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -211,6 +212,10 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 		mask = parsed
 	}
 
+	if subErr := l.checkSubject(); subErr != nil {
+		return none, subErr
+	}
+
 	// No CA file means the system roots: a nil pool.
 	if strings.TrimSpace(l.caFile) != "" {
 		if roots, err = ldapRoots(l.caFile); err != nil {
@@ -225,6 +230,7 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 
 	return dustpan.LDAPProvider{
 		RootCAs:                   roots,
+		CAFile:                    strings.TrimSpace(l.caFile),
 		AllowedRanges:             ranges,
 		ID:                        l.providerID,
 		DisplayName:               l.displayName,
@@ -251,6 +257,30 @@ func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider
 		SubjectFailureLimit:       int(l.subjectFailureLimit),
 		SubjectFailureLimitSource: limitSource,
 	}, nil
+}
+
+// checkSubject refuses a subject that holds a DN, a user name or an email.
+func (l *ldapFlags) checkSubject() error {
+	// Defense in depth: NewServer and ldapauth.NewMethod check the subject
+	// attribute too. This check stays so that the start stops at the flag,
+	// with the name of the flag. It does not rely on those checks.
+	if l.subject == "" {
+		return nil
+	}
+
+	// Refuse a space around the name. Do not trim it: the allowlist check
+	// runs on the exact value.
+	if l.subject != strings.TrimSpace(l.subject) {
+		return fmt.Errorf("--ldap-subject: %w: the name has a space at its start or its end",
+			ldapauth.ErrSubjectAttribute)
+	}
+
+	taken := []string{l.userNameAttribute, l.emailAttribute, l.nameAttribute}
+	if err := ldapauth.CheckSubjectAttribute(l.subject, taken...); err != nil {
+		return fmt.Errorf("--ldap-subject: %w", err)
+	}
+
+	return nil
 }
 
 // ldapRoots returns the certificate authorities of the file path. It opens

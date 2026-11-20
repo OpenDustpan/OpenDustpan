@@ -203,7 +203,7 @@ func (f *fixture) generation(t *testing.T, id string) uint64 {
 func (f *fixture) entriesWith(t *testing.T, action string) []audit.Entry {
 	t.Helper()
 
-	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 500})
+	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

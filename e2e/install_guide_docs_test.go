@@ -24,7 +24,8 @@ func TestInstallGuideCommands(t *testing.T) {
 		"template", "opendustpan", "../deploy/helm/opendustpan",
 		"--kube-version", "1.35.0",
 		"--set", "database.existingSecret.name=opendustpan-database",
-		"--set", "keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key")
+		"--set", "keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key",
+		"--set", "adminToken.existingSecret.name=opendustpan-admin-token")
 
 	// The arguments of the command are fixed, because gosec refuses an
 	// argument of a process that is not a literal. The check below keeps

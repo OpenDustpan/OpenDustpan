@@ -270,7 +270,7 @@ func TestCreateAuditNamesBundleAndPattern(t *testing.T) {
 	f := newFixture(t)
 
 	in := input()
-	in.SpiffeIDPattern = "spiffe://example.org/ns/acme/*"
+	in.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/deploy"
 	in.Bundle = "trb-0123456789abcdef0123456789abcdef"
 
 	r, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)

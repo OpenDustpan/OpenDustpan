@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -99,6 +100,9 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		Method:      method,
 		ID:          id,
 		DisplayName: p.DisplayName,
+		Issuer:      "",
+		ClientID:    "",
+		Scopes:      nil,
 		AutoCreate:  p.AutoCreate,
 		Stored:      true,
 	}, true, nil
@@ -138,6 +142,17 @@ func newProviderEnv(t *testing.T) providerEnv {
 // newProviderEnvWith builds the env of newProviderEnv with the password
 // providers passwords next to the static provider corp.
 func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) providerEnv {
+	t.Helper()
+
+	return newProviderEnvStore(t, passwords, nil)
+}
+
+// newProviderEnvStore builds the env of newProviderEnvWith. When wrap is not
+// nil, the provider admin reads and writes through wrap(store), so a test can
+// show a stored row that the store would refuse to write.
+func newProviderEnvStore(
+	t *testing.T, passwords []apiserver.PasswordProvider, wrap func(*sqlite.Store) session.ProviderConfigStore,
+) providerEnv {
 	t.Helper()
 
 	static := make([]string, 0, 1+len(passwords))
@@ -180,8 +195,13 @@ func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) pr
 				t.Fatalf("installation secrets: %v", err)
 			}
 
+			var configs session.ProviderConfigStore = st
+			if wrap != nil {
+				configs = wrap(st)
+			}
+
 			admin, err := session.NewProviderAdmin(session.ProviderAdminConfig{
-				Store: st, Binder: st, Secrets: secrets, Now: clock.Now, Static: static,
+				Store: configs, Binder: st, Secrets: secrets, Now: clock.Now, Static: static,
 			})
 			if err != nil {
 				t.Fatalf("provider admin: %v", err)
@@ -229,6 +249,7 @@ type providerDoc struct {
 	Version         int64      `json:"version"`
 	Enabled         bool       `json:"enabled"`
 	ClientSecretSet bool       `json:"clientSecretSet"`
+	IssuerRefused   bool       `json:"issuerRefused"`
 	Mode            string     `json:"mode"`
 	UserinfoURL     string     `json:"userinfoURL"`
 	Claims          *claimsDoc `json:"claims"`
@@ -302,6 +323,11 @@ func checkProviderList(t *testing.T, e providerEnv) {
 	if len(list.Providers) != 2 || list.Providers[0].ID != "corp" || list.Providers[0].Source != "static" ||
 		list.Providers[1].ID != "beta" || list.Providers[1].Source != "api" {
 		t.Fatalf("list = %+v, want corp (static) and beta (api)", list.Providers)
+	}
+
+	if corp := list.Providers[0]; corp.Issuer != "https://idp.example" ||
+		!slices.Equal(corp.Scopes, []string{"profile"}) {
+		t.Fatalf("corp = %+v, want the issuer and the scopes of the configuration", corp)
 	}
 
 	if strings.Contains(rec.Body.String(), betaSecret) {

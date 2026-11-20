@@ -52,9 +52,11 @@ that its group or other users can read. Run `chmod 600` on the file.
 The server keeps each space of the client secret. From the file, it ignores
 one line ending at the end of the file.
 
-The issuer must use HTTPS. It has no user name or password, no query and no
-fragment. The IDs `dev` and `local` are reserved: the server refuses them for
-`--oidc-provider` and `--ldap-provider` at start. The server reads the discovery document of the
+The issuer must use HTTPS. It must have no user information, no query and
+no fragment. The server refuses the start with such an issuer, and it does not
+change the issuer. The IDs `dev` and `local` are reserved: the server refuses
+them for `--oidc-provider` and `--ldap-provider` at start. The server reads the
+discovery document of the
 provider at the first sign-in, not at start. So the server starts while the
 provider is down. When the provider does not answer, the start of a
 sign-in answers 502.
@@ -90,7 +92,11 @@ The rules:
   No answer and no audit entry holds the client secret. An answer has
   `clientSecretSet` only.
 - The list also holds the providers of the flags, with the source
-  `static`. The API cannot change them: change the flags instead.
+  `static`. The API cannot change them: change the flags instead. A static
+  provider shows the effective `issuer`, `clientID` and `scopes` of its flags.
+  The `issuer` has no user information, query or fragment. The list shows the
+  effective issuer of a static provider, because the setting value of
+  `oidc-issuer` stays hidden.
 - A `PATCH` sends `version`, the version that it read. When the provider
   has another version, the change answers 409. Read the provider again
   and send the change again.
@@ -103,6 +109,11 @@ The rules:
 - At a sign-in, the server reads the discovery document from the issuer.
   So only a site administrator may set the issuer: give
   `server:manage-sign-in` to no other person.
+- A stored provider can hold an issuer that the server now refuses, for
+  example from an older version or a restored backup. The answer shows
+  `issuerRefused: true` for it. That provider cannot sign a person in.
+  Disable it with `"enabled": false`, which always works, and make a new
+  provider with a new ID for the issuer.
 - Disable a provider with `"enabled": false`. A disabled provider answers
   404 at the start of a sign-in. The disable also ends every active
   session of a person with a subject of the provider, and its audit entry

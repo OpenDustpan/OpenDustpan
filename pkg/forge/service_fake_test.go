@@ -18,6 +18,11 @@ import (
 
 var errBoom = errors.New("store failed")
 
+// noAccount returns the zero Account of an event.
+func noAccount() forge.Account {
+	return forge.Account{ID: "", Login: "", ExpiresAt: time.Time{}, NoExpiry: false, Scopes: nil}
+}
+
 // memStore is a forge.Store in memory. It checks versions as a SQL store does,
 // and it records every audit entry that a write appends.
 type memStore struct {
@@ -28,12 +33,30 @@ type memStore struct {
 	audits      []audit.Entry
 	// failAssignment makes GetAssignment fail with errBoom.
 	failAssignment bool
+	// getRegErr, when set, makes GetRegistration fail with it. getRegs counts
+	// the calls of GetRegistration.
+	getRegErr error
+	getRegs   int
+	// afterGetReg, when set, runs after each GetRegistration, outside the
+	// lock. A test uses it to write between the read and the put of a caller.
+	afterGetReg func()
+	// putIfVersions records the ifVersion of each PutRegistration.
+	putIfVersions []int64
+	// receipts holds the stored receipts in order. receiptsFull makes
+	// RecordEventReceipt return ErrReceiptsFull, and receiptErr makes it fail.
+	// receiptCalls counts the calls.
+	receipts     []forge.EventReceipt
+	receiptsFull bool
+	receiptErr   error
+	receiptCalls int
 }
 
 func newMemStore() *memStore {
 	return &memStore{
 		mu: sync.Mutex{}, conns: map[string]forge.ConnectionRecord{}, reg: nil,
 		assignments: map[string]forge.Assignment{}, audits: nil, failAssignment: false,
+		getRegErr: nil, getRegs: 0, afterGetReg: nil, putIfVersions: nil,
+		receipts: nil, receiptsFull: false, receiptErr: nil, receiptCalls: 0,
 	}
 }
 
@@ -112,14 +135,12 @@ func (m *memStore) MakeDefault(
 }
 
 func (m *memStore) GetRegistration(_ context.Context, kind forge.Kind) (forge.Registration, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.reg == nil || m.reg.Kind != kind {
-		return forge.Registration{}, forge.ErrNoRegistration
+	reg, hook, err := m.readRegistration(kind)
+	if hook != nil {
+		hook()
 	}
 
-	return *m.reg, nil
+	return reg, err
 }
 
 func (m *memStore) PutRegistration(
@@ -127,6 +148,8 @@ func (m *memStore) PutRegistration(
 ) (forge.Registration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.putIfVersions = append(m.putIfVersions, ifVersion)
 
 	switch {
 	case m.reg == nil && ifVersion > 0:
@@ -230,15 +253,6 @@ func (m *memStore) DeleteAssignment(_ context.Context, id string, _ int64, e aud
 	return nil
 }
 
-// setRegistration replaces the stored registration without the checks of the
-// service, as a hostile writer of the database does.
-func (m *memStore) setRegistration(r forge.Registration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.reg = &r
-}
-
 // memNamespaces is a forge.Namespaces with one namespace per name.
 type memNamespaces map[namespace.Name]namespace.Namespace
 
@@ -268,6 +282,21 @@ func (m memNamespaces) GetNamespace(_ context.Context, name namespace.Name) (nam
 	return n, nil
 }
 
+// WritableHere is GetNamespace for a namespace whose primary installation is
+// this one, "eu-west", and namespace.ErrNotHome for any other.
+func (m memNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	n, err := m.GetNamespace(ctx, name)
+	if err != nil {
+		return namespace.Namespace{}, err
+	}
+
+	if n.PrimaryInstallation != "eu-west" {
+		return namespace.Namespace{}, namespace.ErrNotHome
+	}
+
+	return n, nil
+}
+
 // memAudit is an audit.Store that keeps what it appends.
 type memAudit struct {
 	mu      sync.Mutex
@@ -284,7 +313,7 @@ func (a *memAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (
 }
 
 func (a *memAudit) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil, More: false}, nil
 }
 
 func (a *memAudit) Check(context.Context, namespace.Name) (audit.CheckResult, error) {
@@ -355,6 +384,9 @@ type recorder struct {
 	caps     forge.Capabilities
 	checkErr error
 	openErr  error
+	// events is the verifier that ParseEvent runs. A test sets it to nil to
+	// show that the service fails closed.
+	events forge.Events
 }
 
 type openCall struct {
@@ -363,6 +395,19 @@ type openCall struct {
 }
 
 func (r *recorder) Kind() forge.Kind { return forge.KindGitHub }
+
+// errNoVerifier is the error of a recorder with no verifier.
+var errNoVerifier = errors.New("the recorder has no verifier")
+
+// ParseEvent runs the verifier of r. A recorder with no verifier returns an
+// error that the port does not name, so the service fails closed.
+func (r *recorder) ParseEvent(ctx context.Context, req forge.EventRequest, secrets [][]byte) (forge.Event, error) {
+	if r.events == nil {
+		return forge.Event{}, errNoVerifier
+	}
+
+	return r.events.ParseEvent(ctx, req, secrets)
+}
 
 //nolint:ireturn // The port is the interface: the adapter type stays hidden.
 func (r *recorder) Open(_ context.Context, c forge.Connection, cred forge.Credential) (forge.Forge, error) {
@@ -426,6 +471,7 @@ type rig struct {
 	audit   *memAudit
 	sealer  *memSealer
 	opener  *recorder
+	ns      memNamespaces
 	refused []string
 	mu      sync.Mutex
 	// clock is the time of the service, in milliseconds. Advance moves it.
@@ -451,14 +497,15 @@ func newRig(t *testing.T) *rig {
 			caps:     nil,
 			checkErr: nil,
 			openErr:  nil,
+			events:   newFakeEvents(),
 		},
-		refused: nil, mu: sync.Mutex{},
+		refused: nil, mu: sync.Mutex{}, ns: newNamespaces("acme", "beta"),
 	}
 
 	r.clock.Store(1_700_000_000_000)
 
 	svc, err := forge.NewService(forge.Config{
-		Store: r.store, Namespaces: newNamespaces("acme", "beta"), Secrets: r.sealer, Audit: r.audit,
+		Store: r.store, Namespaces: r.ns, Secrets: r.sealer, Audit: r.audit,
 		Openers: []forge.Opener{r.opener}, CheckURL: testCheckURL, OnAuditFailure: nil, CheckLimits: nil,
 		OnRefused: func(reason string) {
 			r.mu.Lock()
@@ -563,4 +610,170 @@ func (r *rig) registration(t *testing.T) forge.Registration {
 	}
 
 	return reg
+}
+
+// ConfirmRotation clears the old fields. It returns ErrNoRotation with no
+// window and checks the version as a SQL store does.
+func (m *memStore) ConfirmRotation(
+	_ context.Context, kind forge.Kind, ifVersion int64, e audit.Entry,
+) (forge.Registration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch {
+	case m.reg == nil || m.reg.Kind != kind:
+		return forge.Registration{}, forge.ErrNoRegistration
+	case ifVersion > 0 && m.reg.Version != ifVersion:
+		return forge.Registration{}, forge.ErrVersionConflict
+	case m.reg.OldEventSecretEndsAt.IsZero() && m.reg.OldEventSecretSetID == "" && len(m.reg.OldSealedEventSecret) == 0:
+		return forge.Registration{}, forge.ErrNoRotation
+	}
+
+	m.reg.OldEventSecretSetID, m.reg.OldSealedEventSecret, m.reg.OldEventSecretEndsAt = "", nil, time.Time{}
+	m.reg.Version++
+	m.audits = append(m.audits, e)
+
+	return *m.reg, nil
+}
+
+// RecordEventReceipt keeps the receipt under both keys, the delivery ID and
+// the body digest, as the SQL stores do. The bound of 100000 rows is the rule
+// of the store: the fake returns ErrReceiptsFull from a flag.
+func (m *memStore) RecordEventReceipt(_ context.Context, r forge.EventReceipt) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.receiptCalls++
+
+	switch {
+	case m.receiptErr != nil:
+		return false, m.receiptErr
+	case m.receiptsFull:
+		return false, forge.ErrReceiptsFull
+	}
+
+	for i := range m.receipts {
+		if m.receipts[i].DeliveryID == r.DeliveryID || m.receipts[i].BodyDigest == r.BodyDigest {
+			return false, nil
+		}
+	}
+
+	m.receipts = append(m.receipts, r)
+
+	if r.Audit != nil {
+		m.audits = append(m.audits, *r.Audit)
+	}
+
+	return true, nil
+}
+
+// fakeEvents is a forge.Events. A request matches a secret when its header
+// "Sig" holds the secret. The event of a match comes from the headers
+// "Delivery", "Kind" and "Install", or from result when it is set. Secrets
+// shorter than MinEventSecretBytes never match, as in the real verifier.
+type fakeEvents struct {
+	mu    sync.Mutex
+	calls [][][]byte
+	// result, when set, replaces the event that the headers give; resultErr is
+	// returned for a matching request.
+	result    *forge.Event
+	resultErr error
+}
+
+func newFakeEvents() *fakeEvents {
+	return &fakeEvents{mu: sync.Mutex{}, calls: nil, result: nil, resultErr: nil}
+}
+
+func (f *fakeEvents) ParseEvent(_ context.Context, r forge.EventRequest, secrets [][]byte) (forge.Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls = append(f.calls, slices.Clone(secrets))
+
+	sig := ""
+	if v := r.Header["Sig"]; len(v) == 1 {
+		sig = v[0]
+	}
+
+	matched := false
+
+	for _, s := range secrets {
+		if len(s) >= forge.MinEventSecretBytes && string(s) == sig {
+			matched = true
+		}
+	}
+
+	if !matched {
+		return forge.Event{}, forge.ErrSignature
+	}
+
+	if f.resultErr != nil {
+		return forge.Event{}, f.resultErr
+	}
+
+	if f.result != nil {
+		return *f.result, nil
+	}
+
+	first := func(key, def string) string {
+		if v := r.Header[key]; len(v) == 1 {
+			return v[0]
+		}
+
+		return def
+	}
+
+	ev := forge.Event{
+		DeliveryID: first("Delivery", "delivery-1"), Kind: forge.EventKind(first("Kind", string(forge.EventReview))),
+		Repo: "acme/app", ReviewID: "7", InstallationID: first("Install", "101"), Sender: noAccount(),
+	}
+	if ev.Kind == forge.EventPing {
+		ev.Repo, ev.ReviewID, ev.InstallationID = "", "", ""
+	}
+
+	return ev, nil
+}
+
+// secretsOfCalls returns the secrets that each call got, as strings.
+func (f *fakeEvents) secretsOfCalls() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([][]string, 0, len(f.calls))
+
+	for _, c := range f.calls {
+		row := make([]string, 0, len(c))
+		for _, s := range c {
+			row = append(row, string(s))
+		}
+
+		out = append(out, row)
+	}
+
+	return out
+}
+
+func (m *memStore) readRegistration(kind forge.Kind) (forge.Registration, func(), error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.getRegs++
+
+	switch {
+	case m.getRegErr != nil:
+		return forge.Registration{}, nil, m.getRegErr
+	case m.reg == nil || m.reg.Kind != kind:
+		return forge.Registration{}, nil, forge.ErrNoRegistration
+	}
+
+	return *m.reg, m.afterGetReg, nil
+}
+
+// setRegistration replaces the stored registration without the checks of the
+// service, as a hostile writer of the database does.
+func (m *memStore) setRegistration(r forge.Registration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.reg = &r
 }

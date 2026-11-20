@@ -35,7 +35,9 @@ func TestErrorsHaveCodes(t *testing.T) {
 		{"no CSRF header", sessionauth.ErrCSRF, http.StatusForbidden, errcode.SessionCSRF},
 		{"no permission", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied},
 		{"no organization", apiaudit.ErrMissingOrganization, http.StatusBadRequest, errcode.RequestInvalidQuery},
-		{"invalid page", apiaudit.ErrInvalidPage, http.StatusBadRequest, errcode.RequestInvalidQuery},
+		{"removed paging names", apiaudit.ErrRemovedPaging, http.StatusBadRequest, errcode.RequestInvalidQuery},
+		{"page size", apiaudit.ErrPageSize, http.StatusBadRequest, errcode.RequestPageSizeInvalid},
+		{"page token", apiaudit.ErrPageToken, http.StatusBadRequest, errcode.RequestPageTokenInvalid},
 		{"invalid sequence", apiaudit.ErrInvalidSequence, http.StatusBadRequest, errcode.RequestInvalidPath},
 		{
 			"invalid namespace name", fmt.Errorf("parse: %w", namespace.ErrInvalidName),

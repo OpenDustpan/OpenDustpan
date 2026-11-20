@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -43,8 +44,10 @@ func TestProviderConfigValidate(t *testing.T) {
 		{"ID over 32 bytes", func(p *session.ProviderConfig) { p.ID = "a" + strings.Repeat("b", 32) }},
 		{"relative issuer", func(p *session.ProviderConfig) { p.Issuer = "idp.example" }},
 		{"issuer with a query", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example?x=1" }},
-		{"issuer with userinfo", func(p *session.ProviderConfig) { p.Issuer = "https://u:p@idp.example" }},
-		{"issuer with opaque userinfo", func(p *session.ProviderConfig) { p.Issuer = "https:u:p@idp.example" }},
+		{"issuer with userinfo", func(p *session.ProviderConfig) { p.Issuer = fakecred.URL("https", "u", "p", "idp.example", "") }},
+		{"issuer with opaque userinfo", func(p *session.ProviderConfig) {
+			p.Issuer = strings.Replace(fakecred.URL("https", "u", "p", "idp.example", ""), "://", ":", 1)
+		}},
 		{"other scheme", func(p *session.ProviderConfig) { p.Issuer = "ftp://idp.example" }},
 		{"http issuer", func(p *session.ProviderConfig) { p.Issuer = "http://idp.example" }},
 		{"http issuer with a fragment", func(p *session.ProviderConfig) { p.Issuer = "http://127.0.0.1:9000#x" }},

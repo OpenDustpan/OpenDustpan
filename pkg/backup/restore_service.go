@@ -143,6 +143,17 @@ type RestoreConfig struct {
 	RetryBase time.Duration
 	Now       func() time.Time
 	Logger    *slog.Logger
+	// AccessSetting reads the stored text of the restore access setting at
+	// the swap, or is nil when the installation keeps no settings. A nil
+	// reader, a read error and text that is not true or false all keep the
+	// access tables of a restore without server:restore-access.
+	AccessSetting func(ctx context.Context) (string, error)
+	// AccessSettingStatic says whether the static layer (a flag, a variable
+	// or a file) sets the restore access setting, so that a row in the
+	// database does not change its effective value. It is nil when the
+	// installation keeps no settings. A read error counts as not set, so the
+	// audit entry of the restore shows the change instead of dropping it.
+	AccessSettingStatic func(ctx context.Context) (bool, error)
 }
 
 // DefaultCleanupLockWait bounds the wait of each drop of the cleanup step for
@@ -174,6 +185,14 @@ type RestoreService struct {
 	now          func() time.Time
 	logger       *slog.Logger
 	runner       *durable.Runner
+
+	accessSetting func(ctx context.Context) (string, error)
+	// accessSettingStatic is AccessSettingStatic of the config.
+	accessSettingStatic func(ctx context.Context) (bool, error)
+	// decide makes the swap decision. It is nil in production, and the swap
+	// step then uses swapDecision. A test sets it to prove that the step
+	// refuses a decision that ValidateSwapDecision refuses.
+	decide func(ctx context.Context, in restoreInput) SwapDecision
 }
 
 // NewRestoreService returns a RestoreService. Live, Operations, Backups,
@@ -228,6 +247,9 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		now:          now,
 		logger:       cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
 		runner:       nil,
+		decide:       nil,
+
+		accessSetting: cfg.AccessSetting, accessSettingStatic: cfg.AccessSettingStatic,
 	}
 
 	runner, err := s.newRunner(cfg)
@@ -432,11 +454,12 @@ func (s *RestoreService) newRunner(cfg RestoreConfig) (*durable.Runner, error) {
 			MinVersion: RestoreOperationVersion,
 			Steps:      s.steps(),
 		}},
-		Lease:       cfg.Lease,
-		RenewEvery:  0,
-		PollEvery:   0,
-		MaxAttempts: 0,
-		ExpiryLimit: 0,
+		Lease:                cfg.Lease,
+		RenewEvery:           0,
+		PollEvery:            0,
+		MaxAttempts:          0,
+		ExpiryLimit:          0,
+		DeadlineReleaseLimit: 0,
 		Backoff: durable.Backoff{
 			Base: cmp.Or(cfg.RetryBase, durable.DefaultBackoffBase),
 			Max:  durable.DefaultBackoffMax,
@@ -523,12 +546,40 @@ func (s *RestoreService) admitStart(
 		return nil, fmt.Errorf("begin restore %s: %w", id, err)
 	}
 
+	if err := s.requireRestorable(ctx, req.BackupID); err != nil {
+		return nil, fmt.Errorf("begin restore %s: %w", id, err)
+	}
+
 	warnings, err := s.startDevCheck(ctx, req.BackupID)
 	if err != nil {
 		return nil, fmt.Errorf("begin restore %s: %w", id, err)
 	}
 
 	return warnings, nil
+}
+
+// requireRestorable refuses a start for a backup that cannot restore, before
+// the start makes a row. A backup with a row must have succeeded. A backup
+// with no row can come from another installation, so the target decides: it
+// must hold the live pointer of the backup. An ID that the registry and the
+// target both do not know is ErrNotFound. A read error that is not a missing
+// pointer refuses: the start does not make a row.
+func (s *RestoreService) requireRestorable(ctx context.Context, id ID) error {
+	err := s.backups.RequireSucceeded(ctx, id)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
+	_, pointerErr := readLivePointerLimit(ctx, s.target, id, maxLivePointerBytes)
+	if errors.Is(pointerErr, blob.ErrNotFound) {
+		return fmt.Errorf("backup %s: %w", id, ErrNotFound)
+	}
+
+	if pointerErr != nil {
+		return fmt.Errorf("backup %s: %w", id, pointerErr)
+	}
+
+	return nil
 }
 
 // startInput returns the input of the operation of restore id, with a new
@@ -812,6 +863,8 @@ type restoreOutcome struct {
 	state   RestoreState
 	errText string
 	full    error
+	// access is what the swap did to the access tables, from its record.
+	access string
 }
 
 // logObjectPath matches a quoted backup-target object path, for example
@@ -957,10 +1010,7 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 		pre = record.PreBackupID.String()
 	}
 
-	accessMode := "replaced"
-	if out.req.KeepAccessTables {
-		accessMode = "kept"
-	}
+	accessMode := out.access
 
 	attrs := []slog.Attr{
 		slog.String("restore_id", out.id.String()),

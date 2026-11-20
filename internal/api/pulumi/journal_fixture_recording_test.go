@@ -32,6 +32,10 @@ func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore, limit 
 // arrival, and keeps its sequence IDs: the route tests read the answer and
 // the complete check reads the stored sequences, not the rows.
 func (m *memUpdateStore) PutJournalRow(_ context.Context, row stack.JournalRow, _ namespace.Fence) (bool, error) {
+	if err := m.refusePlacement(row.Ref); err != nil {
+		return false, err
+	}
+
 	if _, err := row.Verify(nil, false); err != nil {
 		return false, fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 	}

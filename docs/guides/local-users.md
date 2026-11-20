@@ -80,6 +80,19 @@ changes, so a later change of the user name changes no subject, grant or audit
 reference. No identity provider can use the provider ID `local`, and no other
 principal can have a subject that starts with `local:`.
 
+Each change by an administrator needs a reason: the make of a user, an
+unlock, a reset and the removal of a password. The audit entry records the
+reason. A reason has 1 to 500 characters (Unicode code points, not bytes),
+with no control character, line break or other hidden character. A reason
+that is empty or only spaces, or that holds a control character, answers
+`400` with the error code `local-user.reason-required`. A reason that is
+longer than 500 characters or that holds another hidden character answers
+`400` with the error code `audit.reason-invalid`.
+
+A request body of a local user route has at most 8192 bytes. A longer body
+answers `413` with the error code `request.body-too-large` and the limit in
+`maxBytes`.
+
 Give the set-up code to the person on another channel. The code works once.
 It ends after the reset lifetime, 1 hour by default. The server keeps only a
 SHA-256 digest of the code.
@@ -165,12 +178,16 @@ JSON media type.
 The password budget is separate from the budget of the other sign-ins. The
 budget of one source address (an IPv4 address, or the /64 of an IPv6 address)
 is 30 failures. It gets back one unit each 2 seconds. A request over the
-budget waits 1 second, and then the server handles it. At most 4 requests of
-one source wait at the same time: more answer `429` at once. The
-password sign-in, the use of a set-up or reset code, and the change of the
-own password spend it: a wrong password, a code that is not valid and a
-wrong current password each spend one unit. When the budget of an address is
-empty, these routes answer `429` until it refills.
+budget waits 1 second, and then the server handles it and answers as usual,
+for example `401` for a wrong password. The budget never makes a request in
+a sequence answer `429`. At most 4 requests of one source wait at the same
+time: when more requests of one source arrive at the same time, the extra
+requests answer `429` at once. The password sign-in, the use of a set-up or
+reset code, and the change of the own password spend it: a wrong password, a
+code that is not valid and a wrong current password each spend one unit.
+When the budget of an address is empty, each of these routes makes the
+request wait. It answers `429` only for the requests over the limit of 4 that
+wait at the same time.
 
 ## Lockout by user name
 

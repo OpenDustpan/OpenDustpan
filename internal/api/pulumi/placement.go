@@ -171,3 +171,24 @@ func stackPlacement(r *http.Request, p identity.Principal, ref stack.Ref, at pla
 		Entry:        entry,
 	}, nil
 }
+
+// writeStateError writes the answer for an error of a state write. A write to
+// a stack in no collection also writes an entry of the refusal to the audit
+// log, with the principal that asked: the entry says that the stack is in no
+// collection, so a user can ask why the write failed.
+//
+// The update service and the stores make this refusal. The adapter does not
+// read the collection of the stack again, so the write path pays no extra
+// read. It only maps the refusal and records it.
+func (h *Handler) writeStateError(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, err error,
+) {
+	if errors.Is(err, collection.ErrNoCollection) {
+		h.guard.Record(r.Context(), r, p, refusal.Denial{
+			Action: identity.ActionUnitWrite, Object: obj,
+			Reason: "stack in no collection", ReasonWithin: nil, Window: 0,
+		})
+	}
+
+	h.writeError(r.Context(), w, err)
+}

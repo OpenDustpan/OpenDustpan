@@ -37,7 +37,7 @@ type deniedEntryWire struct {
 func (w *contextWorld) deniedEntries(t *testing.T, scope string) []deniedEntryWire {
 	t.Helper()
 
-	code, body := w.call(t, http.MethodGet, "/api/audit/entries?organization="+scope+"&page[size]=100",
+	code, body := w.call(t, http.MethodGet, "/api/audit/entries?organization="+scope+"&pageSize=100",
 		ctxAdminToken, "")
 	if code != http.StatusOK {
 		t.Fatalf("list %s entries: status = %d: %s", scope, code, body)
@@ -321,7 +321,7 @@ func checkLimiterScopes(t *testing.T, st chainStore) {
 	var aggregate, flushed, missing bool
 
 	for _, scope := range []namespace.Name{"acme", audit.ServerScope} {
-		list, err := st.List(t.Context(), scope, audit.Page{Number: 1, Size: 100})
+		list, err := st.List(t.Context(), scope, audit.Page{Size: 100, Before: 0})
 		if err != nil {
 			t.Fatalf("list %s: %v", scope, err)
 		}
@@ -375,7 +375,7 @@ func TestRunFlushesDenialCountsAtShutdown(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	list, err := w.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: 100})
+	list, err := w.store.List(t.Context(), "acme", audit.Page{Size: 100, Before: 0})
 	if err != nil {
 		t.Fatalf("list acme entries: %v", err)
 	}

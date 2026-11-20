@@ -28,7 +28,7 @@ func (s *Store) PutLock(ctx context.Context, l manuallock.Lock, fence namespace.
 		return fmt.Errorf("%w: %s is not in namespace %q", manuallock.ErrTargetNotFound, l.Target, fence.Namespace)
 	}
 
-	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+	return s.inFencedLockTx(ctx, fence, &e, l, func(q *db.Queries) error {
 		id, err := manualLockObject(ctx, q, l.Target)
 		if err != nil {
 			return err
@@ -62,6 +62,37 @@ func (s *Store) PutLock(ctx context.Context, l manuallock.Lock, fence namespace.
 		e.ObjectID = id
 
 		return nil
+	})
+}
+
+// inFencedLockTx runs fn in the fenced transaction of a lock write, appends the
+// audit entry, and then stores the answer of the idempotency.Completion that
+// ctx carries, if any. The answer is the last step of the transaction, as
+// Completion.Finish requires. result is what the Completion receives: the lock
+// for PutLock and the removed lock for a removal, which fn sets before it
+// returns. result is a pointer for a removal, so the helper reads the lock that
+// fn wrote. A context with no Completion changes nothing.
+func (s *Store) inFencedLockTx(
+	ctx context.Context, fence namespace.Fence, e *audit.Entry, result any, fn func(q *db.Queries) error,
+) error {
+	if err := checkFencedEntry(fence, *e); err != nil {
+		return err
+	}
+
+	return s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+		if err := fn(q); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		if ptr, ok := result.(*manuallock.Lock); ok {
+			return finishCompletion(ctx, q, *ptr)
+		}
+
+		return finishCompletion(ctx, q, result)
 	})
 }
 
@@ -99,7 +130,7 @@ func (s *Store) endLock(
 
 	var removed manuallock.Lock
 
-	err := s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+	err := s.inFencedLockTx(ctx, fence, &e, &removed, func(q *db.Queries) error {
 		id, err := manualLockObject(ctx, q, t)
 		if err != nil {
 			return err

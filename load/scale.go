@@ -225,7 +225,9 @@ func newScaleRun(f harnessFlags, procs []*serverProc) *scaleRun {
 
 // shutdown ends everything the run started, in the order that leaves no
 // goroutine and no idle connection: the health check and the balancer
-// server first, then the idle connections, then the server processes.
+// server first, then the idle connections of the transports that the run
+// owns, then the server processes. It does not touch http.DefaultClient:
+// other senders in this process use its transport.
 func (r *scaleRun) shutdown(ctx context.Context, logger *slog.Logger) {
 	r.stop.Store(true)
 
@@ -249,7 +251,6 @@ func (r *scaleRun) shutdown(ctx context.Context, logger *slog.Logger) {
 		r.transport.CloseIdleConnections()
 	}
 
-	http.DefaultClient.CloseIdleConnections()
 	stopProcs(ctx, logger, r.procs)
 }
 
@@ -330,6 +331,8 @@ func stopProcs(ctx context.Context, logger *slog.Logger, procs []*serverProc) {
 
 	for _, proc := range procs {
 		wait.Go(func() {
+			defer proc.probe.CloseIdleConnections()
+
 			if _, err := proc.stop(); err != nil {
 				logger.ErrorContext(
 					ctx,

@@ -1342,9 +1342,10 @@ func snapshotPath(dir string) (string, error) {
 	return name, nil
 }
 
-// removeSnapshot removes a snapshot file with its WAL sidecars, if present.
+// removeSnapshot removes a snapshot file with its WAL and journal sidecars, if
+// present.
 func removeSnapshot(path string) {
-	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
 		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of scratch files.
 	}
 }
@@ -1356,7 +1357,7 @@ func removeSnapshot(path string) {
 func removeSnapshotErr(path string) error {
 	var errs []error
 
-	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
 		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}

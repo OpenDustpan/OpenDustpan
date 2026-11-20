@@ -244,7 +244,8 @@ func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) 
 	}
 
 	return serverapi.SignInProvider{
-		Method: method, ID: p.ID, DisplayName: p.DisplayName, AutoCreate: p.AutoCreate, Stored: true,
+		Method: method, ID: p.ID, DisplayName: p.DisplayName, Issuer: "", ClientID: "", Scopes: nil,
+		AutoCreate: p.AutoCreate, Stored: true,
 	}, nil
 }
 

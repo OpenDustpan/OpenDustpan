@@ -418,9 +418,9 @@ func pgControlTables() []pgCopyTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries", "failures",
-				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
-				"not_before_ms", "created_at_ms", "updated_at_ms",
+				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries",
+				"deadline_releases", "failures", "last_error", "claim_owner", "claim_token",
+				"claim_expires_at_ms", "cancel_requested", "not_before_ms", "created_at_ms", "updated_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -559,6 +559,14 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TableDurableHeartbeats,
 			columns: []string{pgColOwner, pgColAtMs, "lease_ms"},
 			orderBy: []string{pgColOwner},
+		},
+		{
+			table: backup.TableGitHostEventReceipts,
+			columns: []string{
+				pgColKind, "delivery_id", "body_digest", pgColInstallationID, "event_kind", "repo", "review_id",
+				"received_at_ms",
+			},
+			orderBy: []string{pgColKind, "delivery_id"},
 		},
 		{
 			table:   backup.TableLocalUserResets,
@@ -781,6 +789,37 @@ func pgControlSpec(table string) (pgCopyTable, error) {
 	return pgCopyTable{}, fmt.Errorf("control table %q has no column list: %w", table, backup.ErrCoverage)
 }
 
+// pgEmptiedSpec returns the column list of the table of backup.EmptiedTables.
+// It returns backup.ErrCoverage for a table with no list.
+func pgEmptiedSpec(table string) (pgCopyTable, error) {
+	for _, spec := range pgEmptiedTables() {
+		if spec.table == table {
+			return spec, nil
+		}
+	}
+
+	return pgCopyTable{}, fmt.Errorf("emptied table %q has no column list: %w", table, backup.ErrCoverage)
+}
+
+// checkEmptiedColumns compares the column list of each table of
+// backup.EmptiedTables with the live columns. Every such table needs a list.
+// Without this loop a table with no list would skip its column check, because
+// the check of unknown tables reads the table names only.
+func (s *Store) checkEmptiedColumns(ctx context.Context) error {
+	for _, table := range backup.EmptiedTables {
+		spec, err := pgEmptiedSpec(table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := s.checkColumns(ctx, spec); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	return nil
+}
+
 // CheckCoverage implements backup.Coverage: it compares the COPY column list of
 // each table of backup.Tables and the column list of each table of
 // backup.ControlTables with the columns that the schema holds for the table.
@@ -809,10 +848,8 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		}
 	}
 
-	for _, spec := range pgEmptiedTables() {
-		if err := s.checkColumns(ctx, spec); err != nil {
-			return err
-		}
+	if err := s.checkEmptiedColumns(ctx); err != nil {
+		return err
 	}
 
 	if err := s.checkNoUnknownTables(ctx); err != nil {

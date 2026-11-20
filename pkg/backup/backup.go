@@ -69,7 +69,10 @@ const (
 // block with the lease tables, but a restore keeps its live rows: see
 // ControlTables.
 const (
-	TableDurableHeartbeats    = "durable_heartbeats"
+	TableDurableHeartbeats = "durable_heartbeats"
+	// TableGitHostEventReceipts holds the receipts of the verified deliveries of
+	// the last 24 hours: a hint and not state. A restore leaves it empty.
+	TableGitHostEventReceipts = "git_host_event_receipts"
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
 	TableJobTokens            = "job_tokens"
@@ -385,6 +388,13 @@ var (
 	// ErrCorrupt reports that the backup data is incomplete, or that it does
 	// not match its descriptors, row counts or manifest.
 	ErrCorrupt = errors.New("backup data is corrupt")
+	// ErrStillRunning reports a backup that has not ended. A restore and a
+	// check need a backup that succeeded. The server continues a backup that
+	// a stop interrupted, so the caller waits for its end.
+	ErrStillRunning = errors.New("backup is still running: wait until it ends, then run the command again")
+	// ErrEndedFailed reports a backup that ended with an error. A restore and
+	// a check need a backup that succeeded.
+	ErrEndedFailed = errors.New("backup ended with an error: use a backup that succeeded")
 	// ErrInvalidID reports a backup ID that fails validation: empty,
 	// overlong, without the bkp- prefix, or with characters outside the
 	// identifier set.
