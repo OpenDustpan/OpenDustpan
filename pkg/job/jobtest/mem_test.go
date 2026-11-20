@@ -499,6 +499,25 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	return copyJob(&next), nil
 }
 
+// GetDamaged implements job.Store.
+func (m *memDB) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cur, ok := m.lookup(id)
+	if !ok {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+	}
+
+	reason, damaged := m.damaged[id]
+	if !damaged {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "",
+			fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+	}
+
+	return job.DamagedRow{ID: id, UnitID: cur.Spec.Unit.UnitID(), Reason: reason}, cur.Spec.Unit.Namespace(), nil
+}
+
 // CancelDamaged implements job.Store. It reads no body: a row that a reader
 // cannot decode can still be canceled by its ID.
 func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {

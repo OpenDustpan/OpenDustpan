@@ -25,6 +25,7 @@ Changed by:
   `server:manage-principals`.
 - ADR 372 changes: a wording refinement, the names of the recovery modes in
   "Not decided here".
+- ADR 388 changes decision 6: the server revokes a service token when its maker loses the last act-as path. The flag of the access review stays for decision 2.
 .
 ## Context
 

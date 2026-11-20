@@ -38,6 +38,24 @@ type svcStore struct {
 	jobs     map[job.ID]job.Job
 	// keys holds the job of each idempotency key, as the store contract says.
 	keys map[string]job.Job
+	// damaged holds the rows that Get reports as damaged: the row and the
+	// namespace of the row.
+	damaged map[job.ID]damagedRow
+	// damagedCancels holds the calls of CancelDamaged.
+	damagedCancels []damagedCancel
+	// getDamagedErr fails GetDamaged. cancelDamagedErr fails CancelDamaged.
+	getDamagedErr, cancelDamagedErr error
+}
+
+type damagedRow struct {
+	row job.DamagedRow
+	ns  namespace.Name
+}
+
+type damagedCancel struct {
+	id      job.ID
+	fence   namespace.Fence
+	entries []audit.Entry
 }
 
 type createCall struct {
@@ -49,6 +67,7 @@ type createCall struct {
 
 func newSvcStore() *svcStore {
 	return &svcStore{
+		damaged: nil, damagedCancels: nil, getDamagedErr: nil, cancelDamagedErr: nil,
 		mu:           sync.Mutex{},
 		creates:      nil,
 		applies:      nil,
@@ -108,6 +127,10 @@ func (s *svcStore) Get(_ context.Context, id job.ID) (job.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, ok := s.damaged[id]; ok {
+		return job.Job{}, fmt.Errorf("%w: job %s", job.ErrDamaged, id)
+	}
+
 	j, ok := s.jobs[id]
 	if !ok {
 		return job.Job{}, job.ErrNotFound
@@ -151,8 +174,29 @@ func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, 
 	return nil, nil, nil
 }
 
-func (*svcStore) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
-	return nil
+func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.damagedCancels = append(s.damagedCancels, damagedCancel{id: id, fence: f, entries: e})
+
+	return s.cancelDamagedErr
+}
+
+func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.getDamagedErr != nil {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", s.getDamagedErr
+	}
+
+	d, ok := s.damaged[id]
+	if !ok {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+	}
+
+	return d.row, d.ns, nil
 }
 
 type svcUnits struct {
@@ -160,6 +204,9 @@ type svcUnits struct {
 	err  error
 	// other is returned in place of the unit when it is set.
 	other *identity.Object
+	// byID is returned by UnitByID in place of the unit when it is set, with
+	// no check of the namespace or the unit ID that the caller asked for.
+	byID *identity.Object
 }
 
 func (u svcUnits) Unit(_ context.Context, ref identity.Object) (identity.Object, error) {
@@ -172,6 +219,22 @@ func (u svcUnits) Unit(_ context.Context, ref identity.Object) (identity.Object,
 	}
 
 	if ref.String() != u.unit.String() {
+		return identity.Object{}, job.ErrNotFound
+	}
+
+	return u.unit, nil
+}
+
+func (u svcUnits) UnitByID(_ context.Context, ns namespace.Name, unitID string) (identity.Object, error) {
+	if u.err != nil {
+		return identity.Object{}, u.err
+	}
+
+	if u.byID != nil {
+		return *u.byID, nil
+	}
+
+	if u.unit.Namespace() != ns || u.unit.UnitID() != unitID || unitID == "" {
 		return identity.Object{}, job.ErrNotFound
 	}
 
@@ -401,7 +464,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 	}
 
 	cfg := job.ServiceConfig{
-		Store: r.store, Units: svcUnits{unit: unit, err: nil, other: nil}, Planner: r.planner,
+		Store: r.store, Units: svcUnits{unit: unit, err: nil, other: nil, byID: nil}, Planner: r.planner,
 		Executors:  []job.Executor{svcExecutor{kind: job.ExecutorRunner, err: nil}},
 		Decider:    r.decider,
 		Authorizer: r.authz,
@@ -730,15 +793,15 @@ func TestStartRefusesCallers(t *testing.T) {
 			r.authz.fail[string(job.ActionUnitRunPlan)+" "+r.unit.String()] = errNoRights
 		}},
 		{"resolver fails", "ada", errDriver, 0, nil, func(cfg *job.ServiceConfig, r *rig) {
-			cfg.Units = svcUnits{unit: r.unit, err: errDriver, other: nil}
+			cfg.Units = svcUnits{unit: r.unit, err: errDriver, other: nil, byID: nil}
 		}},
 		{"resolver gives another namespace", "ada", job.ErrInvalid, 0, nil, func(cfg *job.ServiceConfig, r *rig) {
 			v := mustUnit("other", "web").WithUnitID("unt-x")
-			cfg.Units = svcUnits{unit: r.unit, err: nil, other: &v}
+			cfg.Units = svcUnits{unit: r.unit, err: nil, other: &v, byID: nil}
 		}},
 		{"resolver gives no unit ID", "ada", job.ErrInvalid, 0, nil, func(cfg *job.ServiceConfig, r *rig) {
 			u := mustUnit("acme", "web")
-			cfg.Units = svcUnits{unit: r.unit, err: nil, other: &u}
+			cfg.Units = svcUnits{unit: r.unit, err: nil, other: &u, byID: nil}
 		}},
 	})
 }
@@ -1404,7 +1467,7 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 	full := func(r *rig) job.ServiceConfig {
 		return job.ServiceConfig{
 			Store:   r.store,
-			Units:   svcUnits{unit: r.unit, err: nil, other: nil},
+			Units:   svcUnits{unit: r.unit, err: nil, other: nil, byID: nil},
 			Planner: r.planner,
 			Executors: []job.Executor{
 				svcExecutor{kind: job.ExecutorRunner, err: nil},

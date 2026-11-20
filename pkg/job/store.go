@@ -234,6 +234,12 @@ type Store interface {
 	// damaged: a job whose body decodes is canceled through Apply with
 	// EventCancel, which also ends its operation.
 	CancelDamaged(ctx context.Context, id ID, fence namespace.Fence, e []audit.Entry) error
+	// GetDamaged returns the damaged row id and the namespace of its row,
+	// and reads no body: a caller that Get answered with ErrDamaged uses it
+	// to find the unit of the row, so that it can check the rights of a
+	// person before CancelDamaged. It returns ErrNotFound for an unknown
+	// job, and ErrInvalid for a row that decodes.
+	GetDamaged(ctx context.Context, id ID) (DamagedRow, namespace.Name, error)
 	// Apply makes c with Next, and appends e, in one transaction. It returns
 	// ErrNotFound for an unknown job, ErrConflict when the job is not at
 	// c.Version, and the error of Next for an event that the state does not

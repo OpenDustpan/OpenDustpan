@@ -146,6 +146,89 @@ func TestJobUnits(t *testing.T) {
 	}
 }
 
+// wrongEntryInventory answers GetUnit with entry, whatever ID is asked, as a
+// reader that fails to look up by ID.
+type wrongEntryInventory struct {
+	fakeInventory
+
+	entry inventory.Entry
+}
+
+func (f wrongEntryInventory) GetUnit(context.Context, string) (inventory.Entry, error) {
+	return f.entry, nil
+}
+
+// TestJobUnitsByID is the hostile table of UnitByID: each case sends its input
+// straight to the lookup, as if the caller had not checked it.
+func TestJobUnitsByID(t *testing.T) {
+	t.Parallel()
+
+	web := inventoryEntry("web", "ws-1")
+	other := inventoryEntry("web", "ws-1")
+	other.Namespace = "other"
+	longID := strings.Repeat("a", maxJobUnitIDLength+1)
+
+	tests := []struct {
+		name    string
+		reader  inventory.Reader
+		ns      namespace.Name
+		unitID  string
+		wantErr error
+		// wantMiss is true when the answer must be job.ErrNotFound.
+		wantMiss bool
+	}{
+		{"a live unit", inventoryOf(web), "acme", "ws-1", nil, false},
+		{"a unit of another namespace", inventoryOf(other), "acme", "ws-1", nil, true},
+		{"an unknown ID", inventoryOf(web), "acme", "ws-9", nil, true},
+		{"a deleted unit", fakeInventory{entries: nil, err: inventory.ErrUnitNotFound}, "acme", "ws-1", nil, true},
+		{"an empty ID", inventoryOf(web), "acme", "", nil, true},
+		{"an ID with a slash", inventoryOf(web), "acme", "ws-1/../x", nil, true},
+		{"an overlong ID", inventoryOf(web), "acme", longID, nil, true},
+		{"no reader", nil, "acme", "ws-1", nil, true},
+		{"the reader fails", fakeInventory{entries: nil, err: errReaderDown}, "acme", "ws-1", errReaderDown, false},
+		// The reader answers any ID that it is asked, so only the check of the ID can stop these.
+		{
+			"an ID with a slash that the reader answers",
+			wrongEntryInventory{fakeInventory{nil, nil}, inventoryEntry("web", "ws-1/../x")},
+			"acme", "ws-1/../x", nil, true,
+		},
+		{
+			"an overlong ID that the reader answers",
+			wrongEntryInventory{fakeInventory{nil, nil}, inventoryEntry("web", longID)},
+			"acme", longID, nil, true,
+		},
+		{
+			"the reader answers an entry with another ID",
+			wrongEntryInventory{fakeInventory{nil, nil}, inventoryEntry("web", "ws-2")},
+			"acme", "ws-1", nil, true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			u := jobUnits{facts: inventoryFacts{reader: tc.reader, ids: nil, deleted: nil}}
+			got, err := u.UnitByID(t.Context(), tc.ns, tc.unitID)
+
+			switch {
+			case tc.wantMiss:
+				if !errors.Is(err, job.ErrNotFound) {
+					t.Fatalf("UnitByID = %v, %v; want job.ErrNotFound", got, err)
+				}
+			case tc.wantErr != nil:
+				// A failure of the reader is not "no such unit".
+				if !errors.Is(err, tc.wantErr) || errors.Is(err, job.ErrNotFound) {
+					t.Fatalf("UnitByID = %v; want %v and not job.ErrNotFound", err, tc.wantErr)
+				}
+			case err != nil || got.UnitID() != "ws-1" || got.Namespace() != "acme" || got.UnitName() != "web":
+				t.Fatalf("UnitByID = %v, %v; want web with the ID ws-1", got, err)
+			default:
+			}
+		})
+	}
+}
+
 // fakePools serves the pools of every namespace that is asked.
 type fakePools struct {
 	runner.PoolStore
