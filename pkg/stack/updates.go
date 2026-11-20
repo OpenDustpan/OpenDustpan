@@ -318,8 +318,9 @@ type Updates struct {
 // TokenChecker answers whether an access token still works. It is the port of
 // the lease check. accesstoken.Service implements it.
 type TokenChecker interface {
-	// CheckActive returns nil when the token with the ID id is active and its
-	// principal exists. Otherwise it wraps identity.ErrUnauthenticated.
+	// CheckActive returns nil when the token with the ID id is active, its
+	// principal exists and, for a service token, its maker still has the
+	// act-as path. Otherwise it wraps identity.ErrUnauthenticated.
 	CheckActive(ctx context.Context, id string) error
 }
 
