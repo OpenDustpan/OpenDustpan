@@ -28,7 +28,10 @@ func damagedCancelRig(
 	svc := &fakeCanceler{Starter: nil, mu: sync.Mutex{}, calls: nil, job: runningJob(t, testJob), err: nil}
 	store := newFakeJobs()
 	store.damaged = map[job.ID]fakeDamaged{
-		testJob: {row: job.DamagedRow{ID: testJob, UnitID: testUnit, Reason: "the body is not JSON"}, ns: ns},
+		testJob: {
+			row: job.DamagedRow{ID: testJob, UnitID: testUnit, Reason: "the body is not JSON", State: "", Version: 0},
+			ns:  ns,
+		},
 	}
 
 	entries := &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}
@@ -175,8 +178,14 @@ func TestJobActionRoutesCancelADamagedJobFailsClosed(t *testing.T) {
 			store := newFakeJobs()
 			store.damaged = map[job.ID]fakeDamaged{
 				testJob: {
-					row: job.DamagedRow{ID: testJob, UnitID: testUnit, Reason: "the body is not JSON"},
-					ns:  "acme",
+					row: job.DamagedRow{
+						ID:      testJob,
+						UnitID:  testUnit,
+						Reason:  "the body is not JSON",
+						State:   "",
+						Version: 0,
+					},
+					ns: "acme",
 				},
 			}
 			store.getDamagedErr = tc.storeErr

@@ -190,7 +190,7 @@ func (s *Store) GetDamaged(ctx context.Context, id job.ID) (job.DamagedRow, name
 			return fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
 		}
 
-		out = job.DamagedRow{ID: r.ID, UnitID: r.UnitID, Reason: DamageReason(err)}
+		out = job.DamagedRow{ID: r.ID, UnitID: r.UnitID, Reason: DamageReason(err), State: r.State, Version: r.Version}
 		ns = r.Namespace
 
 		return nil
@@ -200,12 +200,16 @@ func (s *Store) GetDamaged(ctx context.Context, id job.ID) (job.DamagedRow, name
 }
 
 // CancelDamaged implements job.Store.
-func (s *Store) CancelDamaged(ctx context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {
+func (s *Store) CancelDamaged(
+	ctx context.Context, id job.ID, fence namespace.Fence, e []audit.Entry,
+) (job.DamagedCancel, error) {
 	if err := checkEntries(e, fence); err != nil {
-		return err
+		return job.DamagedCancel{}, err
 	}
 
-	return s.run.Write(ctx, fence, func(tx Tx) error {
+	var stored job.DamagedCancel
+
+	err := s.run.Write(ctx, fence, func(tx Tx) error {
 		r, ok, err := tx.Job(ctx, id)
 		if err != nil {
 			return err
@@ -230,8 +234,20 @@ func (s *Store) CancelDamaged(ctx context.Context, id job.ID, fence namespace.Fe
 			return fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, r.State)
 		}
 
-		return cancelRow(ctx, tx, &r, e)
+		err = cancelRow(ctx, tx, &r, e)
+		stored = job.DamagedCancel{
+			Version:   r.Version,
+			CreatedAt: time.UnixMilli(r.CreatedMs).UTC(),
+			ChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
+		}
+
+		return err
 	})
+	if err != nil {
+		return job.DamagedCancel{}, err
+	}
+
+	return stored, nil
 }
 
 // cancelRow sets the row r to canceled at the version after its own, updates
@@ -284,6 +300,7 @@ func (s *Store) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.Dam
 
 				damaged = append(damaged, job.DamagedRow{
 					ID: rows[i].Row.ID, UnitID: rows[i].Row.UnitID, Reason: DamageReason(err),
+					State: rows[i].Row.State, Version: rows[i].Row.Version,
 				})
 
 				continue
@@ -671,6 +688,7 @@ func pageOf(rows []Row, limit int) job.Page {
 		if err != nil {
 			out.Damaged = append(out.Damaged, job.DamagedRow{
 				ID: rows[i].ID, UnitID: rows[i].UnitID, Reason: DamageReason(err),
+				State: rows[i].State, Version: rows[i].Version,
 			})
 
 			continue
