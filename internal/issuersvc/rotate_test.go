@@ -529,7 +529,7 @@ func TestAnEmergencyRotationSaysThatItSkippedTheWait(t *testing.T) {
 		t.Fatalf("emergency rotation: %v", err)
 	}
 
-	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Number: 1, Size: 10})
+	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Size: 10, Before: 0})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

@@ -1,55 +1,21 @@
-# Install OpenDustpan v0.1.0
+# Install OpenDustpan from the container image
 
-This page is for operators who install v0.1.0. It shows how to pull the
-v0.1.0 image, what to use in place of a binary archive, and how to install it
-with Helm.
+No release exists yet. The repository has no tag, so no image and no chart
+are published. This page shows how to build the image from a checkout and
+install it with the Helm chart in the checkout.
+The page also shows what to use in place of a binary archive.
 
-## Pull the image
+## Build the image
 
-Pull the pinned tag from the forge container registry:
-
-```sh
-docker pull ghcr.io/opendustpan/opendustpan:v0.1.0
-```
-
-Or pull the same digest from Docker Hub:
+Build the image from the checkout. The script tags it `opendustpan:local`:
 
 ```sh
-docker pull docker.io/opendustpan/opendustpan:v0.1.0
+./scripts/build-image-local.sh
 ```
 
-Both references hold the same digest. Compare them with:
-
-```sh
-docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:v0.1.0
-docker buildx imagetools inspect docker.io/opendustpan/opendustpan:v0.1.0
-```
-
-## Pull by digest
-
-A tag can name another image later. A digest cannot. Name the digest when
-the image of a deployment must stay the same:
-
-```sh
-docker pull ghcr.io/opendustpan/opendustpan@sha256:<digest>
-```
-
-Read the digest of a release in two places:
-
-- The summary of the release workflow run for the tag, on the GitHub
-  Actions page of the repository.
-- The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
-
-## Check the version of the image
-
-The server in the image prints its version. The version is the tag of the
-release:
-
-```sh
-docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version
-```
-
-The output is `v0.1.0`.
+The image holds a one-page placeholder console, because no console release
+exists yet. Push the image to a registry that your cluster can reach, and
+name it in the values below.
 
 ## Install from a binary archive
 
@@ -82,7 +48,88 @@ kubectl create secret generic opendustpan-admin-token \
   --from-literal=admin-token="$(openssl rand -hex 32)"
 ```
 
-Install with the chart default registry:
+Put the image that you pushed in a values file. Set `image.repository` and
+`image.tag` to its name and tag:
+
+```sh
+cat > image-values.yaml <<'EOF'
+image:
+  repository: <registry>/opendustpan
+  tag: <tag>
+EOF
+```
+
+Install from the checkout with the values file:
+
+```sh
+helm install opendustpan deploy/helm/opendustpan \
+  --values image-values.yaml \
+  --set database.existingSecret.name=opendustpan-database \
+  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
+  --set adminToken.existingSecret.name=opendustpan-admin-token
+```
+
+The [Helm guide](kubernetes.md) shows the other Secrets, storage, upgrade
+and rollback steps.
+
+## After the first release
+
+The release workflow publishes the image to the forge container registry and
+to Docker Hub, with one digest. A person publishes the draft release, and
+the chart is an OCI artifact in the registry. The commands below work only
+after the first release.
+
+### Pull the image
+
+Pull the pinned tag from the forge container registry:
+
+```sh
+docker pull ghcr.io/opendustpan/opendustpan:v0.1.0
+```
+
+Or pull the same digest from Docker Hub:
+
+```sh
+docker pull docker.io/opendustpan/opendustpan:v0.1.0
+```
+
+Both references hold the same digest. Compare them with:
+
+```sh
+docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:v0.1.0
+docker buildx imagetools inspect docker.io/opendustpan/opendustpan:v0.1.0
+```
+
+### Pull by digest
+
+A tag can name another image later. A digest cannot. Name the digest when
+the image of a deployment must stay the same:
+
+```sh
+docker pull ghcr.io/opendustpan/opendustpan@sha256:<digest>
+```
+
+Read the digest of a release in two places:
+
+- The summary of the release workflow run for the tag, on the GitHub
+  Actions page of the repository.
+- The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
+
+### Check the version of the image
+
+The server in the image prints its version. The version is the tag of the
+release:
+
+```sh
+docker run --rm ghcr.io/opendustpan/opendustpan:v0.1.0 --version
+```
+
+The output is `v0.1.0`.
+
+### Install the chart from the registry
+
+Make the three Secrets as shown above. Then install with the chart default
+registry:
 
 ```sh
 helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \

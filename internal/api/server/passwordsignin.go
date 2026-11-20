@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -137,6 +138,14 @@ var (
 	errPasswordSignInUnavailable = &codedError{
 		status: http.StatusServiceUnavailable, code: errcode.SignInUnavailable, args: nil,
 		message: "the directory of the sign-in provider does not answer: try again later",
+	}
+	// errPasswordSignInNeedsTLS is the answer when the URL of the directory
+	// has no TLS and the installation does not allow that. A retry does not
+	// help: the text names the change that an administrator makes.
+	errPasswordSignInNeedsTLS = &codedError{
+		status: http.StatusServiceUnavailable, code: errcode.SignInUnavailable, args: nil,
+		message: "the sign-in provider is not set up with TLS: ask an administrator to use ldaps:// " +
+			"or StartTLS for the directory",
 	}
 )
 
@@ -295,6 +304,14 @@ func (h *Handler) answerPasswordError(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
+	if errors.Is(err, ldapauth.ErrPlainRefused) {
+		// The setting of the provider is not valid: the person caused
+		// nothing, so the budget of the address does not change.
+		h.writeError(ctx, w, errPasswordSignInNeedsTLS)
+
+		return
+	}
+
 	if errors.Is(err, session.ErrMethodUnavailable) {
 		// The directory did not answer: the person caused nothing, so the
 		// budget of the address does not change.
@@ -314,10 +331,24 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 	s := &p.LDAP
 
 	return providerResponse{
-		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
-		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: false, Mode: string(session.ModeLDAP), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil,
+		CreatedAt:        nil,
+		UpdatedAt:        nil,
+		ID:               p.ID,
+		Source:           providerSourceStatic,
+		Issuer:           "",
+		DisplayName:      p.DisplayName,
+		ClientID:         "",
+		Scopes:           []string{},
+		Version:          0,
+		AutoCreate:       p.AutoCreate,
+		Enabled:          true,
+		ClientSecretSet:  false,
+		IssuerRefused:    false,
+		Mode:             string(session.ModeLDAP),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
 		LDAP: &providerLDAP{
 			AllowedRanges: nonNilRanges(
 				s.AllowedRanges,

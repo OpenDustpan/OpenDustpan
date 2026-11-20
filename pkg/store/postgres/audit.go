@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -575,52 +576,51 @@ func auditFenceVersion(ctx context.Context, q *db.Queries, scope namespace.Name)
 	return row.FailoverVersion, nil
 }
 
-// List implements audit.Store: one page of the entries of ns, newest first,
-// with the total count. A namespace with no entries reads as an empty list.
+// List implements audit.Store: one page of the entries of ns below the
+// sequence of the page, newest first. It reads one more row than the page
+// holds, so More is known with no second read. A namespace with no entries
+// reads as an empty listing.
 func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
-	p := page.Normalized()
-
-	var (
-		total int64
-		rows  []db.AuditEntry
-	)
-
-	// One snapshot, so the page and the total agree.
-	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
-		var err error
-
-		total, err = q.CountAuditEntries(ctx, ns.String())
-		if err != nil {
-			return fmt.Errorf("count audit entries: %w", err)
-		}
-
-		rows, err = q.ListAuditEntries(ctx, db.ListAuditEntriesParams{
-			Namespace: ns.String(),
-			Limit:     clampInt32(p.Size),
-			Offset:    clampInt32(int(p.Offset())),
-		})
-		if err != nil {
-			return fmt.Errorf("select audit entries: %w", err)
-		}
-
-		return nil
-	})
+	// Defense in depth: the HTTP handler checks the page too; this call
+	// stays so that no caller of the store can skip the check.
+	p, err := page.Normalized()
 	if err != nil {
-		return audit.Listing{}, err
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("list audit entries: %w", err)
 	}
 
-	entries := make([]audit.Entry, 0, len(rows))
+	before := p.Before
+	if before == 0 {
+		before = math.MaxInt64
+	}
+
+	rows, err := s.queries.ListAuditEntriesBefore(ctx, db.ListAuditEntriesBeforeParams{
+		Namespace: ns.String(),
+		Sequence:  before,
+		Limit:     clampInt32(p.Size) + 1,
+	})
+	if err != nil {
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("select audit entries: %w", err)
+	}
+
+	// The extra row, if any, tells that more entries exist. It never
+	// reaches the caller.
+	more := len(rows) > p.Size
+	entries := make([]audit.Entry, 0, min(len(rows), p.Size))
 
 	for i := range rows {
+		if i == p.Size {
+			break
+		}
+
 		e, err := fromAuditRow(rows[i])
 		if err != nil {
-			return audit.Listing{}, err
+			return audit.Listing{Entries: nil, More: false}, err
 		}
 
 		entries = append(entries, e)
 	}
 
-	return audit.Listing{Entries: entries, Total: total}, nil
+	return audit.Listing{Entries: entries, More: more}, nil
 }
 
 // Check implements audit.Store: it walks the chain of ns oldest first in

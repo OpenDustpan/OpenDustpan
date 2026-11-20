@@ -2001,7 +2001,7 @@ func swapRecordWithRunningUpdate(t *testing.T, newStore RestoreFactory, keepAcce
 
 	swap := r.held.Claim.Step(backup.RestoreStepSwap)
 
-	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, keepAccess); err != nil {
+	if _, err := r.staging.ApplyRestoreArea(t.Context(), swap, area, backup.PlainSwap(keepAccess)); err != nil {
 		t.Fatalf("keepAccess=%v: swap: %v", keepAccess, err)
 	}
 

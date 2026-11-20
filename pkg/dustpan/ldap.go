@@ -112,6 +112,10 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 			}
 		}
 
+		if subErr := checkLDAPSubject(p); subErr != nil {
+			return nil, subErr
+		}
+
 		limit, source, limitErr := subjectFailureLimitOf(p)
 		if limitErr != nil {
 			return nil, limitErr
@@ -157,6 +161,30 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 	}
 
 	return out, nil
+}
+
+// checkLDAPSubject refuses a subject attribute that holds a DN, a user name
+// or an email.
+func checkLDAPSubject(p *LDAPProvider) error {
+	// Defense in depth: the flag parser and ldapauth.NewMethod check the
+	// subject attribute too. This check stays so that an embedder cannot
+	// take a DN, a user name or an email as the subject. It does not rely on
+	// those checks.
+	sub := subjectOr(p.Subject)
+
+	// Refuse a space around the name. Do not trim it: the allowlist check
+	// runs on the exact value.
+	if sub != strings.TrimSpace(sub) {
+		return fmt.Errorf("%w: provider %q: %w: the subject has a space at its start or its end",
+			errLDAPSetup, p.ID, ldapauth.ErrSubjectAttribute)
+	}
+
+	taken := []string{p.UserNameAttribute, p.EmailAttribute, p.NameAttribute}
+	if err := ldapauth.CheckSubjectAttribute(sub, taken...); err != nil {
+		return fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, err)
+	}
+
+	return nil
 }
 
 // subjectFailureLimitOf returns the effective limit of the failed sign-ins of
@@ -230,7 +258,7 @@ func ldapConfig(cfg *settings, p *LDAPProvider, settingsSvc *setting.Service) ld
 
 // subjectOr returns the subject setting s, or entryUUID when it is empty.
 func subjectOr(s string) string {
-	if strings.TrimSpace(s) == "" {
+	if s == "" {
 		return string(ldapauth.SubjectEntryUUID)
 	}
 

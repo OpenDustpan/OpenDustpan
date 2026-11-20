@@ -85,7 +85,7 @@ func serveExport(t *testing.T, handler http.Handler, target string) (*httptest.R
 func seededStore(t *testing.T) *memAuditStore {
 	t.Helper()
 
-	store := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
+	store := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0}
 	for _, subject := range []string{"alice", "bob", "carol"} {
 		seedEntry(t, store, "acme", subject)
 	}

@@ -226,8 +226,9 @@ address of the local server.
 1. **The key-encryption key.** A lost key means lost secrets and lost
    OpenTofu state. The server refuses to start without a key, and with a key
    that does not open the wrapped keys in the database. Keep a copy of the
-   key in a different place from the backups. The default key file sits next
-   to the SQLite database, so a copy of that directory also copies the key.
+   key in a different place from the backups. `serve` has no default key file.
+   A key file in the directory of the SQLite database or of the blobs makes
+   `serve` log a warning, because a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
    and the blobs to a backup target. A backup holds OpenTofu state that the server encrypted, so protect the target.
 
@@ -279,15 +280,18 @@ logging with `--log-level` and `--log-format`. Check readiness at
   one database and one object store (see
   [High availability](docs/guides/high-availability.md)). It has no
   replication between installations and no active-active across sites.
-- **You need users, teams or roles.** Every token signs in as an
-  administrator. Single sign-on and scoped tokens do not exist yet.
+- **You need bootstrap tokens with less than full rights.** Each bootstrap
+  admin token signs in as an administrator. Console sign-in with OpenID
+  Connect or LDAP, roles, grants and scoped access tokens exist (see
+  [Roles and grants](docs/guides/roles-and-grants.md)).
 - **You need remote runs.** OpenDustpan stores state. It does not run
   `pulumi up` or `tofu apply` for you.
-- **You need a full audit log, policy checks or drift detection.** The
-  audit log records secret reads and overrides only, and can send a copy
-  of each entry to a file, syslog, a webhook or object storage.
-  Planned: every change and an export. Policy checks and drift
-  detection do not exist yet.
+- **You need a full audit log of every change.** The audit log records
+  secret reads, denials, security events, settings changes and more (see
+  the [audit log guide](docs/guides/audit-log.md)), has an export API, and
+  can send a copy of each entry to a file, syslog, a webhook or object
+  storage. Policy checks (see [Approval rules](docs/guides/approval-rules.md))
+  and drift checks (see [Drift checks](docs/guides/drift-checks.md)) exist.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
   parts. OpenDustpan adds a server, a database and a key to look after.
 
@@ -363,6 +367,8 @@ How-to guides:
   tokens, rotation, inactivity, expiry warnings and the token policy.
 - [Collections and placement rules](docs/guides/collections-and-placement.md): make
   a collection, move a unit into it, and write the rules that place new stacks.
+- [Restore access setting](docs/guides/restore-access-setting.md): let each holder of
+  `server:restore` replace the access tables in a restore.
 - [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
   namespace, read the effective state, and recover from a lock-out.
 - [Runner pools](docs/guides/runner-pools.md): make a pool and a join token, list
@@ -385,12 +391,12 @@ How-to guides:
   connect a Slack incoming webhook to a namespace and send a test message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
-- [Install from the container image](docs/guides/install.md): pull the
-  v0.1.0 image by tag or by digest, make the two Secrets, and install the
-  chart.
+- [Install from the container image](docs/guides/install.md): build the
+  image from a checkout, make the two Secrets, and install the chart. No
+  release exists yet.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
 - [Run several instances](docs/guides/several-instances.md): the settings
-  that each instance shares, for the target design.
+  that each instance shares.
 - [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
   provider.
 - [Sign-in with an LDAP directory](docs/guides/ldap-sign-in.md): the

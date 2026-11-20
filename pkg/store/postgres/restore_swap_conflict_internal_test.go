@@ -67,7 +67,7 @@ func TestRestoreSwapLosesALockConflictOnTheDurableTables(t *testing.T) {
 
 	go func() { conflict <- closeLockCycle(t.Context(), dbURL, tx) }()
 
-	_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false)
+	_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(false))
 
 	if err := <-conflict; err != nil {
 		t.Fatalf("force the conflict: %v", err)
@@ -84,7 +84,7 @@ func TestRestoreSwapLosesALockConflictOnTheDurableTables(t *testing.T) {
 		t.Fatal("the failed swap recorded its step")
 	}
 
-	if _, err := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false); err != nil {
+	if _, err := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, backup.PlainSwap(false)); err != nil {
 		t.Fatalf("swap after the conflict = %v, want nil", err)
 	}
 

@@ -172,7 +172,7 @@ func TestEachSettingsChangeWritesAnAuditEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Number: 1, Size: 10})
+	list, err := h.store.List(t.Context(), h.ns.Name, audit.Page{Size: 10, Before: 0})
 	if err != nil || len(list.Entries) != 1 {
 		t.Fatalf("entries = %v, %v", list, err)
 	}

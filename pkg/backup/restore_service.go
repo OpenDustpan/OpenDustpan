@@ -143,6 +143,17 @@ type RestoreConfig struct {
 	RetryBase time.Duration
 	Now       func() time.Time
 	Logger    *slog.Logger
+	// AccessSetting reads the stored text of the restore access setting at
+	// the swap, or is nil when the installation keeps no settings. A nil
+	// reader, a read error and text that is not true or false all keep the
+	// access tables of a restore without server:restore-access.
+	AccessSetting func(ctx context.Context) (string, error)
+	// AccessSettingStatic says whether the static layer (a flag, a variable
+	// or a file) sets the restore access setting, so that a row in the
+	// database does not change its effective value. It is nil when the
+	// installation keeps no settings. A read error counts as not set, so the
+	// audit entry of the restore shows the change instead of dropping it.
+	AccessSettingStatic func(ctx context.Context) (bool, error)
 }
 
 // DefaultCleanupLockWait bounds the wait of each drop of the cleanup step for
@@ -174,6 +185,14 @@ type RestoreService struct {
 	now          func() time.Time
 	logger       *slog.Logger
 	runner       *durable.Runner
+
+	accessSetting func(ctx context.Context) (string, error)
+	// accessSettingStatic is AccessSettingStatic of the config.
+	accessSettingStatic func(ctx context.Context) (bool, error)
+	// decide makes the swap decision. It is nil in production, and the swap
+	// step then uses swapDecision. A test sets it to prove that the step
+	// refuses a decision that ValidateSwapDecision refuses.
+	decide func(ctx context.Context, in restoreInput) SwapDecision
 }
 
 // NewRestoreService returns a RestoreService. Live, Operations, Backups,
@@ -228,6 +247,9 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		now:          now,
 		logger:       cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
 		runner:       nil,
+		decide:       nil,
+
+		accessSetting: cfg.AccessSetting, accessSettingStatic: cfg.AccessSettingStatic,
 	}
 
 	runner, err := s.newRunner(cfg)
@@ -841,6 +863,8 @@ type restoreOutcome struct {
 	state   RestoreState
 	errText string
 	full    error
+	// access is what the swap did to the access tables, from its record.
+	access string
 }
 
 // logObjectPath matches a quoted backup-target object path, for example
@@ -986,10 +1010,7 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 		pre = record.PreBackupID.String()
 	}
 
-	accessMode := "replaced"
-	if out.req.KeepAccessTables {
-		accessMode = "kept"
-	}
+	accessMode := out.access
 
 	attrs := []slog.Attr{
 		slog.String("restore_id", out.id.String()),

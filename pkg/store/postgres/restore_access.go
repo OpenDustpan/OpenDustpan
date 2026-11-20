@@ -23,7 +23,9 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 		return backup.KeepAccessResult{}, backup.ErrCorrupt
 	}
 
-	plan := swapPlan{staging: s.stagingSchema, previous: "", keepAccess: true, before: nil, after: nil}
+	plan := swapPlan{
+		staging: s.stagingSchema, previous: "", keepAccess: true, keepSettings: nil, before: nil, after: nil,
+	}
 
 	kept, err := s.swapStaging(ctx, plan)
 	if err != nil {

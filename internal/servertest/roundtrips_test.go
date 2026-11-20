@@ -1555,13 +1555,20 @@ func restoreModel() costModel {
 			unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
-			updateLeaseExpireTrips - eventReceiptTrips,
+			updateLeaseExpireTrips + swappedSettingTrips - eventReceiptTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// swappedSettingTrips is the number of round trips of the read of the restore
+// access setting row in the swap transaction: one SELECT after the swap and
+// before the step record, so the record holds the value that the installation
+// uses. A swap that keeps the live row skips it, but the restores of this test
+// take the row from the backup. It does not grow with the units or the tables.
+const swappedSettingTrips = 1
 
 // eventReceiptTrips is the number of round trips that the table of the Git host
 // event receipts takes off the fixed part. A restore leaves the table empty and
