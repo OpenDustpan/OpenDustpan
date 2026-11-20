@@ -349,9 +349,9 @@ The server SHALL give five routes under `/api/dustpan/v1/key-rotations`, and the
 - **WHEN** A person follows the page with a local-user password sign-in, on an installation whose MFA policy asks site administrators for no second factor.
 - **THEN** The session has a CSRF value, and start and finish with the cookie, the CSRF header and `Origin` pass the fresh step.
 
-#### Scenario: No claim under a second-factor rule
-- **WHEN** The installation has a second-factor rule.
-- **THEN** The page and the spec make no claim about a path for a site administrator. Main has no second sign-in step: a password sign-in answers 403 `local-user.second-factor-required` (`docs/guides/local-users.md:45-48`). The path is open question Q-3 in the proposal, and the tasks that depend on it stay blocked.
+#### Scenario: Second-factor rule
+- **WHEN** The installation has a second-factor rule, and a password sign-in answers 403 `local-user.second-factor-required` (`docs/guides/local-users.md:45-48`).
+- **THEN** Start and finish need a console session from a passkey sign-in in a browser. The page documents no `curl` path for that case (owner, Q-3, option (a)).
 
 ### Requirement: Keep blobs in targets
 
