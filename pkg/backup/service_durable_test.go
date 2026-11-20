@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // durableWait is the longest time that a test waits for a state of the

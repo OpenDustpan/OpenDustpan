@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -24,7 +25,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // orderLog records the order of maintenance enter and pre-backup export

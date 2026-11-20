@@ -21,7 +21,7 @@
 # Write the lines with:
 #
 #   for d in sqlite postgres; do
-#     (cd pkg/store/$d/migrations && sha256sum [0-9]*.sql) |
+#     (cd internal/store/$d/migrations && sha256sum [0-9]*.sql) |
 #       awk -v tag=v0.1.0 -v d=$d '{print tag, d, $2, $1}'
 #   done >> internal/releaserecord/shipped.txt
 #
@@ -30,5 +30,5 @@
 # differ from the migration files of the work tree.
 #
 # Never edit or remove a line after its tag. TestTagCopiesHaveTheirLines
-# fails when a tag copy in pkg/store/<dialect>/testdata/tag-migrations has
+# fails when a tag copy in internal/store/<dialect>/testdata/tag-migrations has
 # no lines here.

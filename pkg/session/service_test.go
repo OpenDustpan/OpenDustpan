@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // clock is a clock that a test moves.

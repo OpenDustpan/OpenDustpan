@@ -37,4 +37,4 @@ coverage.out
 !/.repowise/decisions.yaml
 
 # The baseline hash files return at the first tag; the release writes them.
-pkg/store/*/migrations/*.sql.sha256
+internal/store/*/migrations/*.sql.sha256

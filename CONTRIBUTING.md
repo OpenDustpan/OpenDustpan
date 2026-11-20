@@ -28,7 +28,7 @@ A change to the architecture starts as an RFC in `docs/rfc/`.
    `internal/cli/reference.go`. Run `make generate` after a change to either
    file. `TestConfigurationReference` fails on a hand edit of the page.
 6. To change the database schema, edit the baseline of each dialect in
-   `pkg/store/sqlite/migrations/` and `pkg/store/postgres/migrations/`, then
+   `internal/store/sqlite/migrations/` and `internal/store/postgres/migrations/`, then
    run `make generate`. Until the first tag, do not add a numbered migration,
    and do not write code that converts data of an earlier build. Put a new
    table, index or other object in its place in the name order of the
@@ -55,7 +55,7 @@ make check
 versions to install. Set `DUSTPAN_TEST_POSTGRES_URL` to include the
 PostgreSQL tests.
 
-With the race detector, one run of `pkg/store/sqlite` or `pkg/store/postgres`
+With the race detector, one run of `internal/store/sqlite` or `internal/store/postgres`
 takes more than 10 minutes, the default limit of `go test`. `make test` and
 `make test-ci-store` set a longer limit. When you run a store package with
 `go test -race` directly, pass `-timeout 60m`.

@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/issuersvc"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/profile"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (

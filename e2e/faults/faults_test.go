@@ -18,8 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // TestLatencyThroughProxy proves a health request through a proxy with

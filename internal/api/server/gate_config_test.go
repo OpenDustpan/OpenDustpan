@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
@@ -25,7 +26,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

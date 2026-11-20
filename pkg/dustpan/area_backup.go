@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -17,7 +18,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 

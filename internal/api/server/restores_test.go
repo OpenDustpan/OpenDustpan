@@ -16,6 +16,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -24,7 +25,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
-	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
