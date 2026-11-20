@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -175,6 +176,7 @@ func newBackupFixtureWorkers(
 	}
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       stores.registry,
 		Registry:    stores.registry,

@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // Static test errors. The suite injects them as target and export failures.
@@ -651,6 +652,7 @@ func newFixtureKind(
 	target := newMemStore()
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       kinds,
 		Registry:    registry,
@@ -1298,6 +1300,7 @@ func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
 			registry := newFakeRegistry()
 
 			service, err := backup.NewService(backup.Config{
+				Jobs:        jobcheck.Checker{},
 				Exporter:    &openExporter{data: []byte("a part of a table file"), err: tc.err},
 				Kinds:       fixedKind(installation.KindProduction),
 				Registry:    registry,
@@ -1439,6 +1442,7 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 		{name: "no blob store", change: func(cfg *backup.Config) { cfg.Blobs = nil }},
 		{name: "no target", change: func(cfg *backup.Config) { cfg.Target = nil }},
 		{name: "no kind reader", change: func(cfg *backup.Config) { cfg.Kinds = nil }},
+		{name: "no job checker", change: func(cfg *backup.Config) { cfg.Jobs = nil }},
 	}
 
 	for _, tc := range cases {
@@ -1446,6 +1450,7 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 			t.Parallel()
 
 			cfg := backup.Config{
+				Jobs:        jobcheck.Checker{},
 				Exporter:    exporter,
 				Kinds:       fixedKind(installation.KindProduction),
 				Registry:    registry,

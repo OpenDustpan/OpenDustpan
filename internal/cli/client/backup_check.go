@@ -117,7 +117,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	if !answer.Complete {
-		return fmt.Errorf("%w: %s", backup.ErrCorrupt, answer.Error)
+		return checkFailure(answer.Error)
 	}
 
 	if _, err := fmt.Fprintf(stdout, "backup %s is complete\n", id); err != nil {
@@ -187,4 +187,16 @@ func readBackupCheck(
 	}
 
 	return answer, nil
+}
+
+// checkFailure returns the error of a backup that the check does not call
+// complete. The text of a damaged job row gets the help of that row.
+func checkFailure(text string) error {
+	// The server text holds the wrapping of the check before the damaged job
+	// text, so the marker is searched, not matched at the start.
+	if strings.Contains(text, backup.DamagedJobPrefix) {
+		return fmt.Errorf("%w: %s: %s", backup.ErrCorrupt, text, restoreDamagedJobHelp)
+	}
+
+	return fmt.Errorf("%w: %s", backup.ErrCorrupt, text)
 }

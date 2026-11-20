@@ -104,9 +104,8 @@ FROM jobs AS j LEFT JOIN namespaces AS n ON n.id = j.namespace_id`
 			return scanErr
 		}
 
-		if _, jobErr := jobstore.Decode(&row); jobErr != nil {
-			return fmt.Errorf("staged job %s is damaged: %s: %w", row.ID, jobstore.DamageReason(jobErr),
-				backup.ErrCorrupt)
+		if jobErr := jobstore.CheckBackupRow(&row); jobErr != nil {
+			return jobErr
 		}
 	}
 
@@ -140,7 +139,7 @@ func scanStagedJob(rows *sql.Rows) (jobstore.Row, error) {
 	// A job of a namespace that the backup does not hold is corrupt. The
 	// LEFT JOIN keeps such a row in the result, and the NULL name fails it.
 	if !name.Valid {
-		return none, fmt.Errorf("staged job %s has no namespace: %w", row.ID, backup.ErrCorrupt)
+		return none, backup.NewDamagedJobError(string(row.ID), row.UnitID, backup.ReasonJobNoNamespace)
 	}
 
 	row.Namespace = namespace.Name(name.String)

@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -124,6 +125,7 @@ func newRestoreFixtureWorkers(
 	}
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    stores.registry,
 		Kinds:       stores.registry,
 		Registry:    stores.registry,
@@ -1098,6 +1100,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, sett
 	}
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    stores.registry,
 		Kinds:       stores.registry,
 		Registry:    stores.registry,
@@ -1245,6 +1248,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	ctx := t.Context()
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    stores.registry,
 		Kinds:       stores.registry,
 		Registry:    stores.registry,
