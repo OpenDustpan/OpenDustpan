@@ -905,6 +905,7 @@ type updatePaths struct {
 	Checkpoint string
 	Verbatim   string
 	Delta      string
+	Journal    string
 	Complete   string
 	Cancel     string
 	Get        string
@@ -921,6 +922,7 @@ func mintedPaths(id stack.UpdateID) updatePaths {
 		Checkpoint: base + "/checkpoint",
 		Verbatim:   base + "/checkpointverbatim",
 		Delta:      base + "/checkpointdelta",
+		Journal:    base + "/journalentries",
 		Complete:   base + "/complete",
 		Cancel:     base + "/cancel",
 		Get:        base,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -96,6 +97,14 @@ func leaseRequests() []leaseRequest {
 		}},
 		{"events", func(svc *stack.Updates, f updatesFixture, s stack.Started) error {
 			return svc.AppendEvents(ctx, f.ref, s.Update.ID, s.Token, []stack.Event{})
+		}},
+		{"journal entries", func(svc *stack.Updates, f updatesFixture, s stack.Started) error {
+			return svc.AppendJournal(ctx, f.ref, s.Update.ID, s.Token, []byte(`{"entries":[]}`))
+		}},
+		{"checkpoint delta", func(svc *stack.Updates, f updatesFixture, s stack.Started) error {
+			return svc.SaveCheckpointDelta(ctx, f.ref, s.Update.ID, s.Token, stack.DeltaInput{
+				SchemaVersion: 3, Sequence: 2, Hash: strings.Repeat("0", 64), Delta: []byte(`[]`),
+			})
 		}},
 	}
 }

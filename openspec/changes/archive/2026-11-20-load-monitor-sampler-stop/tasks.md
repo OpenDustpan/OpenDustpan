@@ -12,4 +12,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Ticked on the condition that the CI of this pull request runs it green.
