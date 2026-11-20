@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge/connectiontest"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/internal/githoststore"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
@@ -84,10 +85,18 @@ func seedReceipts(t *testing.T, schemaURL string, n int, receivedAt time.Time) {
 
 	const seed = `INSERT INTO git_host_event_receipts
     (kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms)
-SELECT 'github', 'seed-' || i, lpad(to_hex(i), 64, '0'), '101', 'review', 'acme/widgets', '7', $2
+SELECT 'github', 'seed-' || $2::bigint || '-' || i, lpad(to_hex($2::bigint), 32, '0') || lpad(to_hex(i), 32, '0'), '101', 'review', 'acme/widgets', '7', $2
 FROM generate_series(1, $1::int) AS i`
 
 	if _, execErr := conn.Exec(t.Context(), seed, n, receivedAt.UnixMilli()); execErr != nil {
 		t.Fatalf("seed receipts: %v", execErr)
+	}
+
+	// The seed stands for rows that RecordEventReceipt wrote, so the counter holds them too.
+	const count = `INSERT INTO git_host_event_receipt_count (id, receipts, max_receipts) VALUES (TRUE, $1, $2)
+ON CONFLICT (id) DO UPDATE SET receipts = git_host_event_receipt_count.receipts + excluded.receipts`
+
+	if _, execErr := conn.Exec(t.Context(), count, n, githoststore.MaxEventReceipts); execErr != nil {
+		t.Fatalf("seed receipt count: %v", execErr)
 	}
 }

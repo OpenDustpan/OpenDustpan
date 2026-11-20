@@ -369,6 +369,12 @@ type GitHostEventReceipt struct {
 	ReceivedAtMs   int64
 }
 
+type GitHostEventReceiptCount struct {
+	ID          bool
+	Receipts    int64
+	MaxReceipts int64
+}
+
 type GitHostInstallation struct {
 	InstallationID string
 	NamespaceID    string

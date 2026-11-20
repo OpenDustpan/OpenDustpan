@@ -8,6 +8,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/forge/connectiontest"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/internal/githoststore"
 )
 
 // gitHostHarness returns a harness over a fresh store. The namespaces it makes
@@ -70,12 +71,20 @@ func seedReceipts(t *testing.T, path string, n int, receivedAt time.Time) {
 		}
 	}()
 
-	const seed = `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+	const seed = `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
 INSERT INTO git_host_event_receipts
     (kind, delivery_id, body_digest, installation_id, event_kind, repo, review_id, received_at_ms)
-SELECT 'github', 'seed-' || i, lower(printf('%064x', i)), '101', 'review', 'acme/widgets', '7', ? FROM n`
+SELECT 'github', 'seed-' || ?2 || '-' || i, lower(printf('%032x%032x', ?2, i)), '101', 'review', 'acme/widgets', '7', ?2 FROM n`
 
 	if _, execErr := conn.ExecContext(t.Context(), seed, n, receivedAt.UnixMilli()); execErr != nil {
 		t.Fatalf("seed receipts: %v", execErr)
+	}
+
+	// The seed stands for rows that RecordEventReceipt wrote, so the counter holds them too.
+	const count = `INSERT INTO git_host_event_receipt_count (id, receipts, max_receipts) VALUES (1, ?, ?)
+ON CONFLICT (id) DO UPDATE SET receipts = receipts + excluded.receipts`
+
+	if _, execErr := conn.ExecContext(t.Context(), count, n, githoststore.MaxEventReceipts); execErr != nil {
+		t.Fatalf("seed receipt count: %v", execErr)
 	}
 }
