@@ -119,11 +119,17 @@ func TestErrorValueEscapesErrorText(t *testing.T) {
 // fakeTokens is a token source that answers fixed tokens, so a test can
 // send a token that json.Decoder never answers.
 type fakeTokens struct {
+	// err is the error after the last token. Nil means io.EOF.
+	err    error
 	tokens []json.Token
 }
 
 func (f *fakeTokens) Token() (json.Token, error) {
 	if len(f.tokens) == 0 {
+		if f.err != nil {
+			return nil, f.err
+		}
+
 		return nil, io.EOF
 	}
 
@@ -155,7 +161,7 @@ func TestCopyValueRefusesUnknownTokens(t *testing.T) {
 	} {
 		var out bytes.Buffer
 
-		err := copyValue(&out, &fakeTokens{tokens: tokens})
+		err := copyValue(&out, &fakeTokens{err: nil, tokens: tokens})
 		if !errors.Is(err, errToken) {
 			t.Errorf("%s: error %v, want errToken; output %q", name, err, out.String())
 		}
@@ -172,5 +178,48 @@ func TestJSONValueRefusesTooDeepValues(t *testing.T) {
 
 	if got := jsonValue(deep).String(); !strings.HasPrefix(got, "!ERROR:") {
 		t.Errorf("value = %.80q, want !ERROR: text", got)
+	}
+}
+
+// TestCopyValueRefusesAnOpenArray reaches the check of the closing
+// delimiter: an array that the source never closes must fail.
+func TestCopyValueRefusesAnOpenArray(t *testing.T) {
+	t.Parallel()
+
+	for name, tokens := range map[string][]json.Token{
+		"array":  {json.Delim('[')},
+		"object": {json.Delim('{')},
+		"nested": {json.Delim('['), json.Delim('['), json.Delim(']')},
+	} {
+		var out bytes.Buffer
+
+		if err := copyValue(&out, &fakeTokens{err: nil, tokens: tokens}); err == nil {
+			t.Errorf("%s: copyValue = nil error, want an error; output %q", name, out.String())
+		}
+	}
+}
+
+// TestWalkValueEscapesTheWalkError sends a walk error whose text holds raw
+// hidden runes, as a changed decoder could answer. The value must be
+// "!ERROR:" with the visible escape and no hidden rune.
+func TestWalkValueEscapesTheWalkError(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeTokens{
+		err:    walkError("a\u0085b\u202ec\r\nlevel=ERROR msg=forged\x00"),
+		tokens: []json.Token{json.Delim('[')},
+	}
+
+	got := walkValue(src).String()
+	if !strings.HasPrefix(got, "!ERROR:") {
+		t.Fatalf("value = %q, want !ERROR: text", got)
+	}
+
+	if r, found := ident.FirstHidden(got); found {
+		t.Errorf("value holds hidden rune %U: %q", r, got)
+	}
+
+	if want := `a\x85b\u202ec\r\nlevel=ERROR msg=forged\x00`; !strings.Contains(got, want) {
+		t.Errorf("value = %q, want it to hold %q", got, want)
 	}
 }

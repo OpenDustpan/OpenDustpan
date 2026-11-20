@@ -250,7 +250,14 @@ func escapeEncoded(js []byte) slog.Value {
 		return slog.AnyValue(escapedJSON(js))
 	}
 
-	out, err := escapeJSONStrings(js)
+	return walkValue(newTokenSource(js))
+}
+
+// walkValue answers the JSON text that src reads, with Escape run on each
+// string and each object key, or "!ERROR:" and the escaped text of the
+// error of the walk.
+func walkValue(src tokenSource) slog.Value {
+	out, err := escapeTokens(src)
 	if err != nil {
 		// Defense in depth: the encoder checks its own output, and the
 		// decoder and the encoder share one depth limit, so no input that
@@ -276,9 +283,22 @@ var errTrailing = errors.New("JSON text has more after its value")
 // escapeJSONStrings answers the JSON text js with Escape run on each string
 // and each object key. It keeps the order of js.
 func escapeJSONStrings(js []byte) ([]byte, error) {
+	return escapeTokens(newTokenSource(js))
+}
+
+// newTokenSource answers a decoder of js that keeps each number as its
+// text.
+func newTokenSource(js []byte) *json.Decoder {
 	dec := json.NewDecoder(bytes.NewReader(js))
 	dec.UseNumber()
 
+	return dec
+}
+
+// escapeTokens reads one JSON value from dec and answers it with Escape run
+// on each string and each object key. It keeps the order of the value. It
+// fails when dec has more after the value.
+func escapeTokens(dec tokenSource) ([]byte, error) {
 	var out bytes.Buffer
 
 	if err := copyValue(&out, dec); err != nil {

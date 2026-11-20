@@ -108,6 +108,28 @@ func (e *commandError) Is(target error) bool {
 	return target == errUsage
 }
 
+// usageOf answers the message of err when the text of err is the usage
+// text of the program, alone or after the message of a *commandError. The
+// message can hold a value from outside, for example the unknown command
+// name, so the caller escapes it. The usage text is errUsage, which is fixed
+// program text, so the caller writes it as it is. The second result is false
+// for any other error, for example a usage error with more text around it.
+func usageOf(err error) (string, bool) {
+	// The text of err must be all of the text of the *commandError: a
+	// wrapped error adds text that can hold a value from outside.
+	if ce, found := errors.AsType[*commandError](err); found && ce.Error() == err.Error() {
+		return ce.text, true
+	}
+
+	// An error whose text is the fixed usage text holds no value from
+	// outside.
+	if err.Error() == errUsage.Error() {
+		return "", true
+	}
+
+	return "", false
+}
+
 // unknownCommand returns the error for args that match no command. It says
 // if the first word is not a command, or if it is the start of a command that
 // needs more words.

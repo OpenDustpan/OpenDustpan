@@ -1872,19 +1872,35 @@ func readKeyFile(path string) ([]byte, error) {
 	return decodeKey(keyFileEnvVar, string(raw))
 }
 
-// writeErrorLine writes "<prefix>: <error text>" and a newline to w, with
-// each hidden rune of the error text escaped as visible text, for example
-// "\n". It writes a backslash as two, so a reader can tell an escaped line
-// feed from a backslash and an "n". The error text can hold a value from outside the process, such as
-// a path from a flag, so a raw CR or LF could forge a second line.
+// writeErrorLine writes "<prefix>: <error text>" and a newline to w. The
+// error text can hold a value from outside the process, such as a path from
+// a flag, so a raw CR or LF could forge a second line. writeErrorLine
+// escapes each hidden rune of the error text as visible text, for example
+// "\n", and writes a backslash as two, so a reader can tell an escaped line
+// feed from a backslash and an "n".
+//
+// The one exception is the usage text of the program: it is fixed program
+// text, so it keeps its line breaks. When err is the usage error itself
+// (see usageOf), writeErrorLine escapes only its message and then writes
+// the usage text as it is. A wrapped usage error is escaped in full.
 //
 // Defense in depth: each call site quotes its values with %q too; this
 // escape stays so that one call site that does not quote is not enough to
 // forge a line.
+//
 // A failed write of the line is not reported: nothing is left to report it
 // to.
 func writeErrorLine(w io.Writer, prefix string, err error) {
-	if _, werr := fmt.Fprintln(w, prefix+":", logguard.EscapeLine(err.Error())); werr != nil {
+	text := logguard.EscapeLine(err.Error())
+
+	if message, ok := usageOf(err); ok {
+		text = errUsage.Error()
+		if message != "" {
+			text = logguard.EscapeLine(message) + "\n" + text
+		}
+	}
+
+	if _, werr := fmt.Fprintln(w, prefix+":", text); werr != nil {
 		return
 	}
 }
