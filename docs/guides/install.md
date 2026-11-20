@@ -13,6 +13,29 @@ Build the image from the checkout. The script tags it `opendustpan:local`:
 ./scripts/build-image-local.sh
 ```
 
+The script reads these optional environment variables:
+
+- `IMAGE_VERSION`: the version that the server in the image prints for
+  `--version`. The default is `dev`. Use letters, digits, dot, plus and dash,
+  1 to 64 characters, for example `v0.1.0`.
+- `EXTRA_CA_FILE`: the path of a PEM file with one more CA to trust during the
+  build. Set it when a proxy that ends TLS in your network causes the error
+  `tls: failed to verify certificate: x509: certificate signed by unknown authority`.
+
+To set the version of the image, build with:
+
+```sh
+IMAGE_VERSION=v0.1.0 ./scripts/build-image-local.sh
+```
+
+Read the version from the image:
+
+```sh
+docker run --rm opendustpan:local --version
+```
+
+The output is `v0.1.0`.
+
 The image holds a one-page placeholder console, because no console release
 exists yet. Push the image to a registry that your cluster can reach, and
 name it in the values below.
@@ -28,7 +51,8 @@ Use one of these ways today:
 - Build the server from source. The [quickstart](quickstart.md) shows the
   commands, with a key-encryption key, a database and a first start.
 - Build the container image from your checkout with
-  `./scripts/build-image-local.sh`. The quickstart shows how to run it.
+  `./scripts/build-image-local.sh`, as shown in "Build the image". The
+  quickstart shows how to run it.
 
 ## Listen address and TLS
 
