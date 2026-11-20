@@ -73,12 +73,15 @@ func Resolve(s *Settings, d NamespaceDefaults, c Context) Effective {
 	}
 
 	e := Effective{
-		Executor:       Field[job.ExecutorKind]{Value: job.ExecutorWriteBack, Origin: OriginBuiltIn},
-		Pool:           pickDefault(s.Pool, d.Pool, ""),
-		Connection:     pickDefault(s.CodeLocation.Connection, c.DefaultConnection, ""),
-		Repository:     pick(s.CodeLocation.Repository, ""),
-		Ref:            pick(s.CodeLocation.Ref, ""),
-		Directory:      pick(s.CodeLocation.Directory, RootDirectory),
+		Executor:   Field[job.ExecutorKind]{Value: job.ExecutorWriteBack, Origin: OriginBuiltIn},
+		Pool:       pickDefault(s.Pool, d.Pool, ""),
+		Connection: pickDefault(s.CodeLocation.Connection, c.DefaultConnection, ""),
+		Repository: pick(s.CodeLocation.Repository, ""),
+		Ref:        pick(s.CodeLocation.Ref, ""),
+		// Defense in depth: the service, the store and Parse give the stored
+		// form already. This step stays so that RootDirectory never has the
+		// unit origin, which would put it in the location of a job.
+		Directory:      pick(CanonicalDirectory(s.CodeLocation.Directory), RootDirectory),
 		Delivery:       Field[job.Delivery]{Value: job.DeliveryReviewRequest, Origin: OriginBuiltIn},
 		Files:          Field[[]string]{Value: c.DefaultFiles, Origin: OriginBuiltIn},
 		ReviewRequests: Field[bool]{Value: false, Origin: OriginBuiltIn},

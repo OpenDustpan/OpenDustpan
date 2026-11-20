@@ -136,27 +136,14 @@ func freshParam(r *http.Request) (bool, error) {
 	}
 }
 
-// checkTokenFreshness refuses a token change, or a change of the session
-// policy, from a console session whose sign-in is older than the token
-// freshness window of the session policy. A request with no console
-// session, for example one with an access token, returns
-// errFreshStepRequired. A sign-in after now is too old. A window of 0 asks
-// at each step, so no sign-in passes. With no session policy
-// service, the window is session.DefaultTokenFreshness.
-func (h *Handler) checkTokenFreshness(r *http.Request) error {
-	caller, ok := sessionFromRequest(r)
-	if !ok {
-		return errFreshStepRequired
-	}
-
-	if h.signIn == nil {
-		return errNoFreshnessCheck
-	}
-
+// freshnessWindow returns the token freshness window of the session policy.
+// With no session policy service, it is session.DefaultTokenFreshness. It
+// asks no setting, so each check of a sign-in reads the same window.
+func (h *Handler) freshnessWindow(ctx context.Context) freshWindow {
 	set := session.DefaultTokenFreshness
 
 	if h.sessions != nil {
-		policy, err := h.sessions.Policy(r.Context())
+		policy, err := h.sessions.Policy(ctx)
 		if err != nil {
 			// Defense in depth: newFreshWindow refuses a stored window that
 			// is out of range, and sessionauth.Fresh refuses a window of 0
@@ -179,6 +166,28 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 		// refuses like a window of 0.
 		window = freshWindow(0)
 	}
+
+	return window
+}
+
+// checkTokenFreshness refuses a token change, or a change of the session
+// policy, from a console session whose sign-in is older than the token
+// freshness window of the session policy. A request with no console
+// session, for example one with an access token, returns
+// errFreshStepRequired. A sign-in after now is too old. A window of 0 asks
+// at each step, so no sign-in passes. With no session policy
+// service, the window is session.DefaultTokenFreshness.
+func (h *Handler) checkTokenFreshness(r *http.Request) error {
+	caller, ok := sessionFromRequest(r)
+	if !ok {
+		return errFreshStepRequired
+	}
+
+	if h.signIn == nil {
+		return errNoFreshnessCheck
+	}
+
+	window := h.freshnessWindow(r.Context())
 
 	if window.asksEachTime() {
 		// Defense in depth: sessionauth.Fresh refuses a window of 0 at the

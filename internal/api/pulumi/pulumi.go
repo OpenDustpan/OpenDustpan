@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -41,6 +42,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -767,6 +769,12 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
+	if tagErr := checkTagBoundary(req.Tags); tagErr != nil {
+		h.writeTagRefusal(ctx, w, tagErr)
+
+		return
+	}
+
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), req.StackName)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -795,9 +803,90 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 	h.writeJSON(ctx, w, http.StatusOK, createStackResponse{})
 }
 
+// The limits of the tags that the Pulumi CLI sets: at most maxTagCount tags,
+// a name of 1 to maxTagNameBytes bytes of letters, digits and "-", "_", ".",
+// ":", and a value of at most maxTagValueBytes bytes of UTF-8 text. A value
+// may hold a line break: the CLI sends a multi-line description unchanged.
+const (
+	maxTagCount      = 64
+	maxTagNameBytes  = 40
+	maxTagValueBytes = 256
+)
+
+// errTagBoundary starts the message of a refused tag map: "tags: ...".
+var errTagBoundary = errors.New("tags")
+
+// checkTagBoundary refuses tags that break the limits above. The text of the
+// error never holds a rejected name or value.
+//
+// Defense in depth: the stack service and the audit validation check the
+// same tags. This check stays so that a new route or a change in the service
+// cannot let a hostile tag past the HTTP boundary; it does not rely on them.
+func checkTagBoundary(tags map[string]string) error {
+	if len(tags) > maxTagCount {
+		return fmt.Errorf("%w: more than %d tags", errTagBoundary, maxTagCount)
+	}
+
+	for name, value := range tags {
+		if !validTagNameBytes(name) {
+			return fmt.Errorf("%w: a tag name must have 1 to %d bytes of letters, digits, hyphen, "+
+				"underscore, period or colon", errTagBoundary, maxTagNameBytes)
+		}
+
+		if len(value) > maxTagValueBytes || !utf8.ValidString(value) {
+			return fmt.Errorf("%w: the value of a tag must be valid UTF-8 text of at most %d bytes",
+				errTagBoundary, maxTagValueBytes)
+		}
+
+		// A value may hold a line break or a tab, and no other hidden rune:
+		// the same rule as the audit change texts, so that no layer decides
+		// alone what a stored tag value may hold.
+		if strings.IndexFunc(value, func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }) >= 0 {
+			return fmt.Errorf("%w: the value of a tag must not hold a control or hidden character", errTagBoundary)
+		}
+	}
+
+	return nil
+}
+
+// validTagNameBytes reports whether name has 1 to maxTagNameBytes bytes of
+// letters, digits, "-", "_", "." and ":".
+func validTagNameBytes(name string) bool {
+	if name == "" || len(name) > maxTagNameBytes {
+		return false
+	}
+
+	for i := range len(name) {
+		if !tagNameByte(name[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// tagNameByte reports whether c is a letter, a digit or one of "-", "_", "."
+// and ":".
+func tagNameByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+
+	return c == '-' || c == '_' || c == '.' || c == ':'
+}
+
+// writeTagRefusal answers 400 with the message of err in the error shape of
+// the Pulumi Cloud-compatible API.
+func (h *Handler) writeTagRefusal(ctx context.Context, w http.ResponseWriter, err error) {
+	h.writeFailure(ctx, w, coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidTags))
+}
+
 type updateStackTagsResponse struct{}
 
-func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) updateStackTags(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
 	ctx := r.Context()
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
@@ -824,7 +913,20 @@ func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ iden
 		return
 	}
 
-	if _, err := h.stacks.UpdateTags(ctx, ref, tags); err != nil {
+	if err := checkTagBoundary(tags); err != nil {
+		h.writeTagRefusal(ctx, w, err)
+
+		return
+	}
+
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: p,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
+
+	if _, err := h.stacks.UpdateTags(ctx, ref, tags, entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -1291,12 +1393,27 @@ func classifyNamespace(err error) (failure, bool) {
 	return unmatched(), false
 }
 
-// classifyStack maps the errors of the stacks. ok is false for any other
-// error.
-func classifyStack(err error) (failure, bool) {
+// classifyStackInput maps the errors of a name or a tag set that is not valid.
+// ok is false for any other error.
+func classifyStackInput(err error) (failure, bool) {
 	switch {
 	case errors.Is(err, stack.ErrInvalidName):
 		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidName), true
+	case errors.Is(err, stack.ErrInvalidTags):
+		return coded(http.StatusBadRequest, err.Error(), errcode.StackInvalidTags), true
+	}
+
+	return unmatched(), false
+}
+
+// classifyStack maps the errors of the stacks. ok is false for any other
+// error.
+func classifyStack(err error) (failure, bool) {
+	if f, ok := classifyStackInput(err); ok {
+		return f, true
+	}
+
+	switch {
 	case errors.Is(err, stack.ErrNotFound):
 		return coded(http.StatusNotFound, err.Error(), errcode.StackNotFound), true
 	case errors.Is(err, stack.ErrNoState):

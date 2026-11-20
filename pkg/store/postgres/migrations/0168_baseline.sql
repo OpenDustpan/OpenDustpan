@@ -260,6 +260,36 @@ CREATE TABLE durable_steps (
     done_at_ms bigint NOT NULL
 );
 
+CREATE TABLE first_administrator (
+    id integer NOT NULL,
+    principal_id text NOT NULL,
+    grant_id text NOT NULL,
+    session_id text NOT NULL,
+    created_by text NOT NULL,
+    made_at_ms bigint NOT NULL,
+    CONSTRAINT first_administrator_created_by_check CHECK ((created_by <> ''::text)),
+    CONSTRAINT first_administrator_grant_id_check CHECK ((grant_id <> ''::text)),
+    CONSTRAINT first_administrator_id_check CHECK ((id = 1)),
+    CONSTRAINT first_administrator_principal_id_check CHECK ((principal_id <> ''::text)),
+    CONSTRAINT first_administrator_session_id_check CHECK ((session_id <> ''::text))
+);
+
+CREATE TABLE first_administrator_codes (
+    id integer NOT NULL,
+    principal_id text NOT NULL,
+    digest text NOT NULL,
+    created_by text NOT NULL,
+    reason text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    CONSTRAINT first_administrator_codes_check CHECK (((expires_at_ms - created_at_ms) = 600000)),
+    CONSTRAINT first_administrator_codes_created_by_check CHECK ((created_by <> ''::text)),
+    CONSTRAINT first_administrator_codes_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT first_administrator_codes_id_check CHECK ((id = 1)),
+    CONSTRAINT first_administrator_codes_principal_id_check CHECK ((principal_id <> ''::text)),
+    CONSTRAINT first_administrator_codes_reason_check CHECK ((reason <> ''::text))
+);
+
 CREATE TABLE forge_account_links (
     kind text NOT NULL,
     host text NOT NULL,
@@ -1756,6 +1786,12 @@ ALTER TABLE ONLY durable_steps
 
 ALTER TABLE ONLY durable_steps
     ADD CONSTRAINT durable_steps_pkey PRIMARY KEY (operation_id, name);
+
+ALTER TABLE ONLY first_administrator_codes
+    ADD CONSTRAINT first_administrator_codes_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY first_administrator
+    ADD CONSTRAINT first_administrator_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY forge_account_links
     ADD CONSTRAINT forge_account_links_pkey PRIMARY KEY (kind, host, account_id);

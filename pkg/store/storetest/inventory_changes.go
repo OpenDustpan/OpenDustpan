@@ -101,11 +101,17 @@ func testStackChangeLog(t *testing.T, f fixture) {
 	assertKinds(t, historyOf(t, f.s), ns, inventory.ChangeCreated)
 
 	tags := map[string]string{"k": "v"}
-	if err := f.s.UpdateStackTags(t.Context(), f.ref, tags, now().Add(time.Minute), f.fence); err != nil {
+	err := f.s.UpdateStackTags(
+		t.Context(),
+		f.ref,
+		stack.TagUpdate{Tags: tags, UpdatedAt: now().Add(time.Minute), Entry: renameEntry(f.ref.Namespace, f.ref)},
+		f.fence,
+	)
+	if err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "live", f.fence, renameEntry(ns, f.ref)); err != nil {
+	if err = f.s.RenameStack(t.Context(), f.ref, "live", f.fence, renameEntry(ns, f.ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -113,24 +119,24 @@ func testStackChangeLog(t *testing.T, f fixture) {
 	newName := renamed.Project.String() + "/live"
 
 	deletion := inventory.Deletion{Entry: deleteEntry(ns), PurgeAfter: purgeAt()}
-	if err := f.s.DeleteStack(t.Context(), renamed, f.fence, stack.EmptyGuard(), deletion); err != nil {
+	if err = f.s.DeleteStack(t.Context(), renamed, f.fence, stack.EmptyGuard(), deletion); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
 	restoreEntry := lifecycleEntry(ns, "unit:restore")
-	if _, err := f.s.RestoreStack(t.Context(), stack.ID(id), "again", f.fence, restoreEntry); err != nil {
+	if _, err = f.s.RestoreStack(t.Context(), stack.ID(id), "again", f.fence, restoreEntry); err != nil {
 		t.Fatalf("restore stack: %v", err)
 	}
 
 	againName := f.ref.Project.String() + "/again"
 	again := stack.Ref{Namespace: ns, Project: f.ref.Project, Stack: "again"}
 
-	if err := f.s.DeleteStack(t.Context(), again, f.fence, stack.EmptyGuard(), deletion); err != nil {
+	if err = f.s.DeleteStack(t.Context(), again, f.fence, stack.EmptyGuard(), deletion); err != nil {
 		t.Fatalf("delete restored stack: %v", err)
 	}
 
 	purge := lifecycleEntry(ns, "unit:purge")
-	if err := f.s.PurgeStack(t.Context(), stack.ID(id), f.fence, time.Time{}, purge); err != nil {
+	if err = f.s.PurgeStack(t.Context(), stack.ID(id), f.fence, time.Time{}, purge); err != nil {
 		t.Fatalf("purge stack: %v", err)
 	}
 

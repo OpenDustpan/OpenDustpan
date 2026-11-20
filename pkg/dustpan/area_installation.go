@@ -90,43 +90,56 @@ type serverHandlerInputs struct {
 // the upgrade check reads, and the principal service when the store keeps
 // principals.
 func newServerHandler(in *serverHandlerInputs) (http.Handler, error) {
+	firstAdminSvc, firstAdminMounted, err := newFirstAdministrator(in)
+	if err != nil {
+		return nil, err
+	}
+
+	// A nil *Service in the interface would not be a nil interface, so the
+	// interface is set only when the routes are mounted.
+	var firstAdmin serverapi.FirstAdministratorService
+	if firstAdminMounted {
+		firstAdmin = firstAdminSvc
+	}
+
 	handler, err := serverapi.NewHandler(&serverapi.Config{
-		GitHost:          in.forgeService,
-		Idempotency:      in.idempotency,
-		Authenticator:    in.authenticator,
-		Authorizer:       in.authorizer,
-		Logger:           in.logger,
-		Namespaces:       in.namespaces,
-		Backups:          in.backups,
-		Restores:         in.restores,
-		Maintenance:      in.maintenance,
-		Metrics:          in.observed,
-		Version:          in.version,
-		Schema:           schemaReporterOf(in.store),
-		Journal:          journalReporterOf(in.store),
-		Principals:       in.principals,
-		Access:           in.access,
-		Reach:            in.reach,
-		Tokens:           in.tokens,
-		IPAllowlists:     in.extras.allow,
-		Gates:            gatesPort(in.gates),
-		SessionPolicy:    in.policies,
-		Audit:            in.extras.audit,
-		CheckpointEpochs: checkpointEpochsOf(in.chain),
-		OnAuditFailure:   in.observed.IncAuditAppendFailure,
-		DenialLimiter:    in.denialLimiter,
-		DeletedUnits:     in.deleted,
-		TempAdmins:       tempReaderOf(in.store),
-		Now:              in.now,
-		AuditChain:       auditChainPort(in.chain),
-		AuditSinks:       auditSinksOf(in.shipper),
-		Workers:          in.workers,
-		SignIn:           withPasskeys(in.signIn, in.extras.passkeys),
-		Preferences:      newPreferencesService(in.store, in.now),
-		GitHostLinks:     newForgeLinkService(in.store, in.now),
-		LocalUsers:       in.extras.localUsers,
-		Settings:         in.extras.settings,
-		InstallationKind: in.installationKind, StateWriteGates: in.stateWrite,
+		GitHost:            in.forgeService,
+		Idempotency:        in.idempotency,
+		Authenticator:      in.authenticator,
+		Authorizer:         in.authorizer,
+		Logger:             in.logger,
+		Namespaces:         in.namespaces,
+		Backups:            in.backups,
+		Restores:           in.restores,
+		Maintenance:        in.maintenance,
+		Metrics:            in.observed,
+		Version:            in.version,
+		Schema:             schemaReporterOf(in.store),
+		Journal:            journalReporterOf(in.store),
+		Principals:         in.principals,
+		Access:             in.access,
+		Reach:              in.reach,
+		Tokens:             in.tokens,
+		IPAllowlists:       in.extras.allow,
+		Gates:              gatesPort(in.gates),
+		SessionPolicy:      in.policies,
+		Audit:              in.extras.audit,
+		CheckpointEpochs:   checkpointEpochsOf(in.chain),
+		OnAuditFailure:     in.observed.IncAuditAppendFailure,
+		DenialLimiter:      in.denialLimiter,
+		DeletedUnits:       in.deleted,
+		TempAdmins:         tempReaderOf(in.store),
+		Now:                in.now,
+		AuditChain:         auditChainPort(in.chain),
+		AuditSinks:         auditSinksOf(in.shipper),
+		Workers:            in.workers,
+		SignIn:             withPasskeys(in.signIn, in.extras.passkeys),
+		Preferences:        newPreferencesService(in.store, in.now),
+		GitHostLinks:       newForgeLinkService(in.store, in.now),
+		LocalUsers:         in.extras.localUsers,
+		FirstAdministrator: firstAdmin,
+		Settings:           in.extras.settings,
+		InstallationKind:   in.installationKind, StateWriteGates: in.stateWrite,
 		Instances: in.instances, StoreChecks: in.checks, Cursors: in.cursors,
 		ProxyRules: in.proxyRules,
 	})

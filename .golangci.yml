@@ -281,6 +281,7 @@ linters:
             - "**/internal/freeze/**"
             - "**/pkg/breakglass/**"
             - "**/pkg/tempadmin/**"
+            - "**/pkg/firstadmin/**"
             - "**/internal/oncall/**"
             - "**/internal/cost/**"
             - "**/pkg/notify/*.go"

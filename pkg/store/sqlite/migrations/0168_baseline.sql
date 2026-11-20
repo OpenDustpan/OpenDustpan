@@ -1583,6 +1583,36 @@ CREATE TABLE used_tickets (
 
 CREATE INDEX used_tickets_until ON used_tickets (until_ms);
 
+-- The marker "first administrator made": the one fact that closes the route of
+-- the one-time code for good. It holds stable IDs only, never names. The IDs
+-- have no foreign key on purpose: the marker is history that stays when the
+-- person or the grant ends. The table belongs to the backup, so a restore keeps
+-- the route closed together with the grants.
+CREATE TABLE first_administrator (
+    id           INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    principal_id TEXT    NOT NULL CHECK (principal_id <> ''),
+    grant_id     TEXT    NOT NULL CHECK (grant_id <> ''),
+    session_id   TEXT    NOT NULL CHECK (session_id <> ''),
+    created_by   TEXT    NOT NULL CHECK (created_by <> ''),
+    made_at_ms   INTEGER NOT NULL
+) STRICT;
+
+-- The one open code of the first administrator. It holds the SHA-256 digest of
+-- the code and never the code. The table has at most one row, so one code is
+-- valid at a time. The lifetime is 600000 ms, fixed by a CHECK, so a row with
+-- another lifetime cannot exist. A backup leaves the table out and a restore
+-- empties it.
+CREATE TABLE first_administrator_codes (
+    id            INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    principal_id  TEXT    NOT NULL CHECK (principal_id <> ''),
+    digest        TEXT    NOT NULL CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
+    created_by    TEXT    NOT NULL CHECK (created_by <> ''),
+    reason        TEXT    NOT NULL CHECK (reason <> ''),
+    created_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL,
+    CHECK (expires_at_ms - created_at_ms = 600000)
+) STRICT;
+
 -- Links from an account of a Git host to a principal, and the one-time requests
 -- that make them. A link and a request belong to the installation, not to a
 -- namespace: a person has one principal for every namespace. An account is
