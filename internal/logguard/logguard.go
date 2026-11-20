@@ -6,13 +6,21 @@
 // rune, and a raw rune in a log line can forge a second line or hide text.
 //
 // The handler escapes the message, every attribute key, every string value,
-// the text of an error, a fmt.Stringer and an encoding.TextMarshaler, and
-// any other value whose default text holds a hidden rune. It resolves each
-// slog.LogValuer first, and it walks nested groups. It escapes group names
-// and the attributes that WithAttrs adds.
+// and the text of an error, a fmt.Stringer, an encoding.TextMarshaler and a
+// []byte. It resolves each slog.LogValuer first, and it walks nested
+// groups. It escapes group names and the attributes that WithAttrs adds.
+// Any other value, for example a struct, a map, a slice or a pointer,
+// becomes its JSON text, in which the handler escapes each string and each
+// object key. A JSON handler writes that text as JSON, so the structure
+// stays. A value that has no JSON form becomes "!ERROR:" and the escaped
+// text of the encode error, as log/slog writes it.
 //
 // The escape is visible text in the style of Go quoting, for example "\n",
-// "\x1b" or "\u2028", so a reader can see that the rune was there.
+// "\x1b" or "\u2028", so a reader can see that the rune was there. A reader
+// that decodes the JSON of a structured value sees the same visible text.
+//
+// A log call never stops the process: a nil pointer with a method gives
+// "<nil>", and a panic in a method gives "!PANIC" text.
 package logguard
 
 import (
@@ -20,14 +28,16 @@ import (
 	"context"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/logsink"
 )
 
 // Handler escapes hidden runes in each record and passes the record to the
@@ -139,7 +149,7 @@ func escapeAny(x any) slog.Value {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				out = slog.StringValue(Escape(fmt.Sprintf("!PANIC: %v", r)))
+				out = slog.StringValue(Escape(panicText(r)))
 			}
 		}()
 
@@ -153,6 +163,10 @@ func escapeAny(x any) slog.Value {
 // methods. A method can panic: escapeAny recovers.
 func escapeMethods(x any) slog.Value {
 	switch t := x.(type) {
+	case json.RawMessage:
+		// Raw JSON is a value, not text: it goes through the JSON walk. It
+		// comes first, because the type can also have a String method.
+		return jsonValue(t)
 	case error:
 		return slog.StringValue(Escape(t.Error()))
 	case fmt.Stringer:
@@ -171,6 +185,32 @@ func escapeMethods(x any) slog.Value {
 	}
 }
 
+// panicText answers the text of the panic value r. It formats r only when
+// it is a string or an error, and it recovers a second panic in Error: fmt
+// would call a method of r again and stop the process. Any other value
+// gives only its type.
+func panicText(r any) string {
+	text := fmt.Sprintf("!PANIC: %T", r)
+
+	func() {
+		defer func() {
+			if recover() != nil {
+				text = fmt.Sprintf("!PANIC: %T", r)
+			}
+		}()
+
+		switch v := r.(type) {
+		case string:
+			text = "!PANIC: " + v
+		case error:
+			text = "!PANIC: " + v.Error()
+		default:
+		}
+	}()
+
+	return text
+}
+
 // nilText is the text of a nil pointer, as log/slog writes it.
 const nilText = "<nil>"
 
@@ -181,9 +221,11 @@ func isNilPointer(x any) bool {
 	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
-// jsonValue answers the JSON text of x with each hidden rune escaped, as a
-// value that a JSON handler writes as JSON and a text handler writes as
-// text. When x has no JSON form, it answers the escaped default text of x.
+// jsonValue answers the JSON text of x with Escape run on each string and
+// each object key, as a value that a JSON handler writes as JSON and a text
+// handler writes as text. When x has no JSON form, for example a cycle or a
+// channel, it answers "!ERROR:" and the escaped text of the encode error.
+// It never formats x with fmt: the default text of a cycle never ends.
 func jsonValue(x any) slog.Value {
 	var buf bytes.Buffer
 
@@ -191,11 +233,161 @@ func jsonValue(x any) slog.Value {
 	enc.SetEscapeHTML(false)
 
 	if err := enc.Encode(x); err != nil {
-		return slog.StringValue(Escape(fmt.Sprintf("%+v", x)))
+		return slog.StringValue(Escape("!ERROR:" + err.Error()))
 	}
 
 	// Encode appends a newline. A log value holds none.
-	return slog.AnyValue(escapedJSON(logsink.EscapeJSON(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))))
+	js := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+
+	// A string of js can hold a hidden rune only as a raw rune or as a
+	// JSON escape, which starts with a backslash.
+	if !NeedsEscape(string(js)) && bytes.IndexByte(js, '\\') < 0 {
+		return slog.AnyValue(escapedJSON(js))
+	}
+
+	out, err := escapeJSONStrings(js)
+	if err != nil {
+		// Fail closed: text that the walk cannot read does not reach the
+		// handler.
+		return slog.StringValue(Escape("!ERROR:" + err.Error()))
+	}
+
+	return slog.AnyValue(escapedJSON(out))
+}
+
+// errTrailing reports JSON text with more after its first value.
+var errTrailing = errors.New("JSON text has more after its value")
+
+// escapeJSONStrings answers the JSON text js with Escape run on each string
+// and each object key. It keeps the order of js.
+func escapeJSONStrings(js []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(js))
+	dec.UseNumber()
+
+	var out bytes.Buffer
+
+	if err := copyValue(&out, dec); err != nil {
+		return nil, err
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errTrailing
+	}
+
+	return out.Bytes(), nil
+}
+
+// copyValue reads one JSON value from dec and writes it to out, with each
+// string escaped.
+func copyValue(out *bytes.Buffer, dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("read JSON: %w", err)
+	}
+
+	switch t := tok.(type) {
+	case json.Delim:
+		if t == '{' {
+			return copyObject(out, dec)
+		}
+
+		return copyArray(out, dec)
+	case string:
+		return writeJSONString(out, Escape(t))
+	case json.Number:
+		out.WriteString(t.String())
+	case bool:
+		out.WriteString(strconv.FormatBool(t))
+	case nil:
+		out.WriteString("null")
+	default:
+		return fmt.Errorf("%w: %T", errToken, tok)
+	}
+
+	return nil
+}
+
+// errToken reports a JSON token of a type that copyValue does not know.
+var errToken = errors.New("unknown JSON token")
+
+// copyObject writes the members of an object, whose "{" dec has read, with
+// each key and each string escaped.
+func copyObject(out *bytes.Buffer, dec *json.Decoder) error {
+	out.WriteByte('{')
+
+	for i := 0; dec.More(); i++ {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+
+		tok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("read JSON key: %w", err)
+		}
+
+		key, ok := tok.(string)
+		if !ok {
+			return fmt.Errorf("%w: key %T", errToken, tok)
+		}
+
+		if err := writeJSONString(out, Escape(key)); err != nil {
+			return err
+		}
+
+		out.WriteByte(':')
+
+		if err := copyValue(out, dec); err != nil {
+			return err
+		}
+	}
+
+	return closeDelim(out, dec, '}')
+}
+
+// copyArray writes the items of an array, whose "[" dec has read, with each
+// string escaped.
+func copyArray(out *bytes.Buffer, dec *json.Decoder) error {
+	out.WriteByte('[')
+
+	for i := 0; dec.More(); i++ {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+
+		if err := copyValue(out, dec); err != nil {
+			return err
+		}
+	}
+
+	return closeDelim(out, dec, ']')
+}
+
+// closeDelim reads the closing delimiter of an object or an array and
+// writes it.
+func closeDelim(out *bytes.Buffer, dec *json.Decoder, end byte) error {
+	if _, err := dec.Token(); err != nil {
+		return fmt.Errorf("read JSON: %w", err)
+	}
+
+	out.WriteByte(end)
+
+	return nil
+}
+
+// writeJSONString writes s as a JSON string, without HTML escapes.
+func writeJSONString(out *bytes.Buffer, s string) error {
+	var tmp bytes.Buffer
+
+	enc := json.NewEncoder(&tmp)
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(s); err != nil {
+		return fmt.Errorf("write JSON string: %w", err)
+	}
+
+	out.Write(bytes.TrimSuffix(tmp.Bytes(), []byte("\n")))
+
+	return nil
 }
 
 // escapedJSON is JSON text that holds no hidden rune. A JSON handler writes

@@ -40,9 +40,8 @@ func TestLinkedDependencies(t *testing.T) {
 	contract := goList(t, module+"pkg/launcher")
 
 	// The log guard escapes control characters in each log line of the
-	// launcher. Its only internal dependency is internal/ident, which the
-	// contract links already. It also links pkg/logsink, which links the
-	// standard library and internal/ident only.
+	// launcher. It links only the standard library and internal/ident,
+	// which the contract links already.
 	allowed := []string{module + "internal/logguard"}
 
 	for _, dep := range goList(t, module+"cmd/dustpan-launcher") {

@@ -2,6 +2,7 @@ package logguard_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -361,7 +362,7 @@ func TestHandlerKeepsJSONStructure(t *testing.T) {
 
 	slog.New(logguard.New(slog.NewJSONHandler(&b, nil))).Info("m", slog.Any("v", outer{P: &inner{S: "a<b\u0085"}}))
 
-	if want := `"v":{"P":{"S":"a<b` + "\\" + `u0085"}}`; !strings.Contains(b.String(), want) {
+	if want := `"v":{"P":{"S":"a<b\\x85"}}`; !strings.Contains(b.String(), want) {
 		t.Errorf("output = %q, want it to hold %q", b.String(), want)
 	}
 }
@@ -471,6 +472,185 @@ func BenchmarkHandle(b *testing.B) {
 			for b.Loop() {
 				l.Info("request", slog.String("route", "/api/stacks"), slog.Int("status", 200),
 					slog.Any("unit", small{Name: "prod", Count: 3}))
+			}
+		})
+	}
+}
+
+// bad holds hidden runes for the round of structured values: NEL, U+202E,
+// DEL, CR LF and NUL.
+const bad = "a\u0085b\u202ec\x7fd\r\nX\x00"
+
+// checkDecodedStrings decodes the JSON line out and fails when a string or
+// an object key in it holds a hidden rune: a reader that decodes the JSON
+// must see the visible escape, not the rune.
+func checkDecodedStrings(t *testing.T, out string) {
+	t.Helper()
+
+	var v any
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("output is not one JSON value: %v: %q", err, out)
+	}
+
+	for _, text := range decodedStrings(v, nil) {
+		if r, found := ident.FirstHidden(text); found {
+			t.Errorf("decoded string or key holds hidden rune %U: %q", r, text)
+		}
+	}
+}
+
+// decodedStrings appends each string and each object key of the decoded
+// JSON value v to out.
+func decodedStrings(v any, out []string) []string {
+	switch x := v.(type) {
+	case string:
+		return append(out, x)
+	case map[string]any:
+		for k, m := range x {
+			out = decodedStrings(m, append(out, k))
+		}
+	case []any:
+		for _, m := range x {
+			out = decodedStrings(m, out)
+		}
+	default:
+	}
+
+	return out
+}
+
+// TestHandlerEscapesDecodedJSON sends structured values with hidden runes in
+// strings, keys and raw JSON. A reader that decodes the JSON line, for
+// example with jq -r, must see the same visible escape as for a string
+// value.
+func TestHandlerEscapesDecodedJSON(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(map[string]string{bad: bad})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	for name, value := range map[string]any{
+		"struct field": outer{P: &inner{S: bad}},
+		"map key":      map[string]*inner{bad: {S: bad}},
+		"slice":        []any{bad, []string{bad}},
+		"raw JSON":     json.RawMessage(raw),
+		"logsink attr": logsink.Attr{Value: &inner{S: bad}, Key: bad},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var b strings.Builder
+
+			slog.New(logguard.New(slog.NewJSONHandler(&b, nil))).Info("m", slog.Any("v", value))
+
+			checkOneLine(t, name, b.String())
+			checkDecodedStrings(t, b.String())
+
+			if !strings.Contains(b.String(), `a\\x85b\\u202ec\\x7fd\\r\\nX\\x00`) {
+				t.Errorf("output = %q, want the visible escape of the guard", b.String())
+			}
+		})
+	}
+}
+
+// TestHandlerEscapesDecodedJSONForEachRune sends each hostile value alone
+// in a struct field. encoding/json escapes some of them (CR, LF, NUL,
+// U+2028), so the raw output holds no hidden rune, but a reader that
+// decodes the JSON still must not see one.
+func TestHandlerEscapesDecodedJSONForEachRune(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range hostileText() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var b strings.Builder
+
+			slog.New(logguard.New(slog.NewJSONHandler(&b, nil))).Info("m", slog.Any("v", inner{S: value}))
+
+			checkOneLine(t, name, b.String())
+			checkDecodedStrings(t, b.String())
+		})
+	}
+}
+
+// failMarshal fails its JSON encode with an error whose text is the test
+// value.
+type failMarshal struct{ s string }
+
+func (f failMarshal) MarshalJSON() ([]byte, error) { return []byte(f.s), textError(f.s) }
+
+// TestHandlerEscapesEncodeErrors sends values that have no JSON form. The
+// guard writes "!ERROR:" and the escaped text of the encode error.
+func TestHandlerEscapesEncodeErrors(t *testing.T) {
+	t.Parallel()
+
+	self := map[string]any{}
+	self["self"] = self
+
+	loop := []any{nil}
+	loop[0] = loop
+
+	for name, tc := range map[string]struct {
+		value any
+		want  string
+	}{
+		"error text": {value: failMarshal{s: bad}, want: `a\x85b\u202ec\x7fd\r\nX\x00`},
+		"channel": {value: struct {
+			C chan int
+			S string
+		}{C: nil, S: bad}, want: "unsupported type: chan int"},
+		"map cycle":   {value: self, want: "encountered a cycle"},
+		"slice cycle": {value: loop, want: "encountered a cycle"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := newRaw()
+			slog.New(logguard.New(raw)).Info("m", slog.Any("k", tc.value))
+
+			out := raw.text()
+			checkOneLine(t, name, out)
+
+			if !strings.Contains(out, "k=!ERROR:") || !strings.Contains(out, tc.want) {
+				t.Errorf("output = %q, want !ERROR: and %q", out, tc.want)
+			}
+		})
+	}
+}
+
+// bomb panics with itself in its Error method, so a formatter that prints
+// the panic value panics again.
+type bomb struct{}
+
+func (bomb) Error() string { panic(bomb{}) }
+
+type bombStringer struct{}
+
+func (bombStringer) String() string { panic(bomb{}) }
+
+// TestHandlerSurvivesPanicValues sends methods whose panic value panics
+// again when it is printed. The log call must still return.
+func TestHandlerSurvivesPanicValues(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		value any
+		want  string
+	}{
+		"error":    {value: bomb{}, want: "m k=!PANIC: logguard_test.bomb\n"},
+		"stringer": {value: bombStringer{}, want: "m k=!PANIC: logguard_test.bomb\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := newRaw()
+			slog.New(logguard.New(raw)).Info("m", slog.Any("k", tc.value))
+
+			if got := raw.text(); got != tc.want {
+				t.Errorf("output = %q, want %q", got, tc.want)
 			}
 		})
 	}
