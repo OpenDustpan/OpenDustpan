@@ -178,6 +178,7 @@ const (
 	ErrorCodeJobInvalid                            ErrorCode = "job.invalid"
 	ErrorCodeJobLimit                              ErrorCode = "job.limit"
 	ErrorCodeJobLogNotAvailable                    ErrorCode = "job.log-not-available"
+	ErrorCodeJobNoRequirement                      ErrorCode = "job.no-requirement"
 	ErrorCodeJobNotAwaitingApproval                ErrorCode = "job.not-awaiting-approval"
 	ErrorCodeJobNotFound                           ErrorCode = "job.not-found"
 	ErrorCodeJobPlanChanged                        ErrorCode = "job.plan-changed"
