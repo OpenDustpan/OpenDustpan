@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -174,16 +175,19 @@ func (f *serveFlags) checkFlagValues() error {
 }
 
 // openAndClose opens the file at path for reading and closes it, so that the
-// check proves that the server can read the file, not only that it exists.
+// check proves that the server can read the file, not only that it exists. It
+// opens the directory of the file as a root and the file inside it, so a link
+// in the name cannot leave that directory.
 func openAndClose(path string) error {
-	f, err := os.Open(path) //nolint:gosec // The operator names the TLS file with a flag.
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
 
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close: %w", err)
+	f, err := root.Open(filepath.Base(path))
+	if err != nil {
+		return errors.Join(fmt.Errorf("open: %w", err), root.Close())
 	}
 
-	return nil
+	return errors.Join(f.Close(), root.Close())
 }
