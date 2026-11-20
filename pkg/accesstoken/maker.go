@@ -191,9 +191,15 @@ func useCause(t Token) Cause {
 }
 
 // checkMakerAtUse refuses a service token whose maker has no act-as path to
-// its principal, and revokes it with the reason ReasonMakerLostPathAtUse. A
-// check that cannot decide refuses the token and keeps it (fail closed): the
-// next use checks again.
+// its principal, and revokes it with the reason ReasonMakerLostPathAtUse. It
+// is the one check at the use of a service token: the authentication of the
+// token and each lease request of a running update run it.
+//
+// A checker that cannot decide returns its own error, which does not wrap
+// identity.ErrUnauthenticated, so a failure of the store reads as a server
+// error and not as the answer of a revoked token. The token is refused and
+// kept, with no revocation and no audit entry (fail closed): the next use
+// checks again.
 //
 // Defense in depth: a committed change of a grant, a group, a membership, a
 // role or a principal runs RevokeLostMakers too. This check stays so that a
@@ -201,29 +207,6 @@ func useCause(t Token) Cause {
 // change on another instance, or a stop between the change and the run,
 // never lets the token act.
 func (s *Service) checkMakerAtUse(ctx context.Context, t Token) error {
-	if s.makers == nil || t.Kind != KindService {
-		return nil
-	}
-
-	can, err := s.makers.CanActAs(ctx, t.CreatedBy, t.PrincipalID)
-	if err != nil {
-		return fmt.Errorf("%w: check the maker of the access token: %w", identity.ErrUnauthenticated, err)
-	}
-
-	if can {
-		return nil
-	}
-
-	return s.revokeLostMakerAtUse(ctx, t)
-}
-
-// checkMakerOfLease is the check at the use of a service token for the lease
-// requests of a running update. It decides as checkMakerAtUse does, with one
-// difference: a checker that cannot decide returns its own error, which does
-// not wrap identity.ErrUnauthenticated, so a failure of the store ends no
-// update with the answer of a revoked token. The token is refused and kept:
-// the next request checks again (fail closed).
-func (s *Service) checkMakerOfLease(ctx context.Context, t Token) error {
 	if s.makers == nil || t.Kind != KindService {
 		return nil
 	}

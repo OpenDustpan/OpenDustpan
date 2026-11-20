@@ -70,6 +70,9 @@ func (h *makerHarness) requests(lease string) map[string]updateRequest {
 		"events": leaseRequest(http.MethodPost, h.paths.Events, lease, `{"events":[]}`),
 		"checkpoint": leaseRequest(http.MethodPatch, h.paths.Checkpoint, lease,
 			`{"version":3,"deployment":{"resources":[]}}`),
+		"journal entries": leaseRequest(http.MethodPatch, h.paths.Journal, lease, `{"entries":[]}`),
+		"checkpoint delta": leaseRequest(http.MethodPatch, h.paths.Delta, lease,
+			`{"version":3,"sequenceNumber":2,"checkpointHash":"`+strings.Repeat("0", 64)+`","deploymentDelta":[]}`),
 		"complete": leaseRequest(http.MethodPost, h.paths.Complete, lease, `{"status":"succeeded"}`),
 	}
 }

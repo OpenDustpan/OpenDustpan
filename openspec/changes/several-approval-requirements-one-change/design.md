@@ -2,7 +2,7 @@
 
 A job holds one gate for each phase kind, and a gate is one requirement: one count and one list of groups (`pkg/job/gate.go:89`). The decider refuses a unit with more than one requirement (`pkg/gate/jobgate/jobgate.go:168`). This change lets a phase hold up to 3 gates, one for each requirement, and counts approvals with a maximum matching, so that one person fills one slot.
 
-Part A (groups only) is decided by ADR 225 decision 6 and ADR 192 decision 6. Part B (users, unit owners, fresh windows, the refusal of `unless`) follows the owner decisions of 2026-11-20 that the proposal lists. In Part A the decider keeps its refusal for each Part B shape, and Part B removes the refusals one task at a time. One question is open: which kinds of principal may approve. Until the owner answers, this design keeps what main does for the kind of the approver (an agent is refused, no other kind is).
+Part A (groups only) is decided by ADR 225 decision 6 and ADR 192 decision 6. Part B (users, unit owners, fresh windows, the refusal of `unless`) follows the owner decisions of 2026-11-20 that the proposal lists. In Part A the decider keeps its refusal for each Part B shape, and Part B removes the refusals one task at a time. The kind of the approver is not part of this change: the owner decided it on 2026-11-20 (owner decision 7), and the change `machine-approvals` holds it. This design keeps what main does for the kind of the approver (an agent is refused, no other kind is).
 
 The flow on main, which this change keeps:
 
@@ -27,7 +27,7 @@ The flow on main, which this change keeps:
 12. **Unit owners resolve at each approval (owner, 2026-11-20).** A gate with `UnitOwners` set makes `Approve` read the owners of the unit from the context at the scope of the rule or wider, through a reader port in `pkg/job` (`UnitOwners`). `objectcontext.ParseOwner` gives the kind. Only `group:<name>` (the group by name now, then its stable ID, then the same membership check as a group gate) and `principal:<ID>` count. An owner of the kind text counts no one. A read error, no reader or an owner that does not parse refuses the approval with a `*DeniedError` on `job:approve` (fail closed). The result goes into `For`, so the matching never reads the context.
 13. **Each requirement keeps its own fresh window (owner, 2026-11-20).** A requirement with `freshAuthSeconds` becomes a gate with `FreshAuthSeconds` (the pair `Set` and `Seconds` of `gate.FreshAuth`, `pkg/gate/rules.go:83`). `Approve` adds a gate to `For` only when the fresh step of the approver meets the window of that gate. The approval already records the time of the fresh step (`Approval.AuthAt`). An approval that fills no gate because of the windows is refused with `mfa.fresh-step-required`. The window of a gate is never longer than the one window of the installation (ADR 227 decision 4). `freshAuthEnabled` is read at the one place that ADR 385 names, and when it is off no window is enforced and the job response shows the stored value with `"enforced": false`. A person with no fresh step fills only the gates with no window.
 14. **No `unless` on a job (owner, 2026-11-20).** `DefaultRequirements` keeps its refusal. The error text names the requirement and says to remove the `unless` body. The test of the decider fixes it, also when the `unless` default is the second requirement. No evaluation of `unless` is added, so ADR 353 decision 6 has no fact to read.
-15. **The kind of the approver is not changed here.** `checkApprover` refuses an agent and nothing else by kind, as main does. The rule for a service principal, a job token and an access token is the open question. A later task (5.6) adds the check when the owner answers. The design adds no code path that a token approval needs.
+15. **The kind of the approver is not changed here.** `checkApprover` refuses an agent and nothing else by kind, as main does. The rule for a service principal, a job token and an access token is in the change `machine-approvals`, which starts after this change and after the ADR that follows RFC 134. This design adds no code path that a token approval needs, and the matcher reads no credential. A machine approval is not part of any task here, and nothing here counts it.
 
 ## Contract
 
@@ -160,8 +160,7 @@ Hostile cases for the matcher and the service (each is a row in the table tests)
 
 ## Risks
 
-- A service principal, a job token or an access token that holds `job:approve` may approve, as on main. The open question decides it. Until the owner answers, this design does not widen or narrow it.
-
+- A service principal, a job token or an access token that holds `job:approve` may approve, as on main. The change `machine-approvals` narrows it. This design does not widen or narrow it.
 - One approver counted for two requirements lets a change run with too few people. The matcher test and the removal test cover it.
 - A first-fit count refuses a valid set. The matching test with a second approver covers it.
 - A change of the `Decision` type breaks the callers in `pkg/job/jobtest/rules.go:271` and `pkg/store/storetest/devdata_jobs.go:109`. The tasks list each caller.

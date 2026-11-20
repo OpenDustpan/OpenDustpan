@@ -689,7 +689,10 @@ type SwapDecision struct {
 	// rows survive the swap. Each key must be a key that IsKeptSettingKey names.
 	KeepSettingKeys []string
 	// SettingBefore is the effective text of SettingRestoreAccessTables
-	// before the swap. It is empty when the service did not read it.
+	// before the swap: "true" or "false", from EffectiveRestoreAccessSettingText.
+	// It is empty only when the service did not read the live value (no reader,
+	// or a read error). A reader that answers an empty text or a text that the
+	// declaration refuses gives "false", the effective value, and not empty.
 	SettingBefore string
 	// SettingAfter is the text of SettingRestoreAccessTables after the swap,
 	// when the swap took the row from the backup. The store reads it from the
@@ -822,7 +825,15 @@ func parseRestoreSwap(result []byte) (restoreSwapResult, error) {
 	// negative count, because a step record is read from the database, which a
 	// restore of another version or a person can change, and the audit entry of
 	// the restore uses the counts. It does not rely on the encoder or the store.
+	//
+	// Defense in depth: it also allows only "", "true" and "false" for the two
+	// setting texts. The record is read from the database, so a restore of
+	// another version or a person can store any text there, for example one with
+	// a line break, one of 1 MiB, or "unknown". The audit entries and the log
+	// line of the restore use these texts. The check does not rely on the store
+	// that wrote the record, or on the checks of the service that reads it.
 	if err := decoder.Decode(&out); err != nil || out.DroppedTempAdmins < 0 || out.ExpiredUpdateLeases < 0 ||
+		!KnownSettingText(out.SettingBefore) || !KnownSettingText(out.SettingAfter) ||
 		!swapDecisionConsistent(SwapDecision{
 			KeepAccessTables: out.KeepAccessTables, Widened: out.Widened, KeepSettingKeys: out.KeepSettingKeys,
 			SettingBefore: out.SettingBefore, SettingAfter: out.SettingAfter, SettingStatic: out.SettingStatic,
