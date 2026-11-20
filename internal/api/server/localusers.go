@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/internal/textbody"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -204,8 +205,9 @@ func lockRuleBody(r authgate.LockRule) localUserLockRuleBody {
 
 // localUserLockPruneBody is the effective schedule of the prune of the
 // counts of the lockout by name: the time between two runs, the age past the
-// last failure of a count that a run can delete, and the most counts that
-// one run deletes.
+// last failure of a count that a run can delete, the most counts that one
+// batch deletes, the longest time that one run starts new batches, and the
+// pause between two batches.
 //
 // Contract: never remove or rename these fields.
 type localUserLockPruneBody struct {
@@ -213,6 +215,8 @@ type localUserLockPruneBody struct {
 	AgeSeconds      int64 `json:"ageSeconds"`
 	MaxRows         int   `json:"maxRows"`
 	MaxEndedLocks   int   `json:"maxEndedLocks"`
+	MaxRunSeconds   int64 `json:"maxRunSeconds"`
+	BatchPauseMs    int64 `json:"batchPauseMillis"`
 }
 
 // errLocalUsersUnavailable is the answer of a local user route on a server
@@ -365,11 +369,16 @@ func noReferrer(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
-// decodeLocalUserBody decodes the strict JSON body of r into v. A body that
-// is not one JSON object with the fields of v answers errLocalUserBody, and
-// never echoes the body: it may hold a password or a code.
+// decodeLocalUserBody decodes the strict JSON body of r into v. A body over
+// maxLocalUserBody answers 413 with the limit. A body that is not one JSON
+// object with the fields of v answers errLocalUserBody. No answer echoes the
+// body: it may hold a password or a code.
 func decodeLocalUserBody(w http.ResponseWriter, r *http.Request, v any) error {
 	if err := textbody.Decode(w, r, maxLocalUserBody, v); err != nil {
+		if _, tooLarge := errors.AsType[*textbody.TooLargeError](err); tooLarge {
+			return errBodyTooLarge(maxLocalUserBody)
+		}
+
 		return errLocalUserBody
 	}
 
@@ -607,6 +616,7 @@ func (h *Handler) getLocalUserPolicy(w http.ResponseWriter, r *http.Request, _ i
 		LockPrune: localUserLockPruneBody{
 			IntervalSeconds: int64(prune.Interval / time.Second), AgeSeconds: int64(prune.Age / time.Second),
 			MaxRows: prune.MaxRows, MaxEndedLocks: prune.MaxEnded,
+			MaxRunSeconds: int64(prune.MaxRun / time.Second), BatchPauseMs: prune.BatchPause.Milliseconds(),
 		},
 		LockRules: localUserLockRulesBody{
 			Password: lockRuleBody(rules.Password), PasswordName: lockRuleBody(rules.PasswordName),
@@ -873,7 +883,23 @@ func localUserErrors() []localUserMapping {
 				message: "the server is busy: try again in a few seconds",
 			},
 		},
-	}, changeErrors(), credentialErrors())
+	}, changeErrors(), reasonErrors(), credentialErrors())
+}
+
+// reasonErrors returns the answers of the refusals of the reason of an
+// administrator change: no reason, and a reason that the audit log refuses.
+func reasonErrors() []localUserMapping {
+	return []localUserMapping{
+		{localuser.ErrReasonRequired, &codedError{
+			status: http.StatusBadRequest, code: errcode.LocalUserReasonRequired, args: nil,
+			message: "the change needs a reason",
+		}},
+		{audit.ErrInvalidReason, &codedError{
+			status: http.StatusBadRequest, code: errcode.AuditReasonInvalid, args: nil,
+			message: "the reason is not valid: use " + strconv.Itoa(audit.MaxReasonLen) +
+				" characters or fewer, with no control or hidden character",
+		}},
+	}
 }
 
 // changeErrors returns the answers of the refusals of a change that the
@@ -925,10 +951,6 @@ func credentialErrors() []localUserMapping {
 		{localuser.ErrOwnAccount, &codedError{
 			status: http.StatusForbidden, code: errcode.LocalUserOwnAccount, args: nil,
 			message: "an administrator cannot reset or remove the own password: use POST /api/dustpan/v1/me/password",
-		}},
-		{localuser.ErrReasonRequired, &codedError{
-			status: http.StatusBadRequest, code: errcode.LocalUserReasonRequired, args: nil,
-			message: "the change needs a reason",
 		}},
 		{localuser.ErrLastCredential, &codedError{
 			status: http.StatusConflict, code: errcode.LocalUserLastCredential, args: nil,

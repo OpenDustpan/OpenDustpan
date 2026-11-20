@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -119,7 +120,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 
 	return newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: autoCreate, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false, failTempAdminRead: false,
 	})
 }
 
@@ -149,6 +150,10 @@ type signInEnvOptions struct {
 	failPolicyRead func() error
 	// idempotency gives the handler the Idempotency-Key middleware.
 	idempotency bool
+	// failTempAdminRead makes the read of the temporary administrator
+	// records fail in the principal service of the sign-in, as a store that
+	// is down does.
+	failTempAdminRead bool
 }
 
 // keysOf returns the Idempotency-Key middleware over st, or nil when opts
@@ -246,7 +251,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
-	principals := seedRoutePrincipals(t, st)
+	principals := principalsOf(t, st, opts)
 
 	policyRoutes := policies
 	if opts.noPolicyRoutes {
@@ -293,8 +298,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Providers: []apiserver.SignInProvider{
 			{
 				Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
-				DisplayName: "Corp",
-				AutoCreate:  opts.autoCreate, Stored: false,
+				DisplayName: "Corp", Issuer: "https://idp.example", ClientID: "dustpan", Scopes: []string{"profile"},
+				AutoCreate: opts.autoCreate, Stored: false,
 			},
 		},
 	}
@@ -307,47 +312,48 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	accessTokens := newAccessTokens(t, st, clock)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		Cursors:          testCursors(t),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      keys,
-		Workers:          nil,
-		TempAdmins:       nil,
-		Now:              nil,
-		Authenticator:    fallbackAuthenticator{primary: tokenAuthenticator{}, tokens: accessTokens},
-		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           st,
-		Journal:          st,
-		Principals:       principals,
-		Reach:            routeReach(st),
-		Tokens:           seedRouteTokens(t, st),
-		Access:           grants,
-		Audit:            st,
-		OnAuditFailure:   nil,
-		DeletedUnits:     stubSweeper{},
-		AuditSinks:       nil,
-		AuditChain:       newFakeAuditChain(audit.ChainOn),
-		IPAllowlists:     allowlists,
-		Gates:            gates,
-		ProxyRules:       proxyRules,
-		SessionPolicy:    policyRoutes,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		SignIn:           signIn,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		Cursors:            testCursors(t),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        keys,
+		Workers:            nil,
+		TempAdmins:         nil,
+		Now:                nil,
+		Authenticator:      fallbackAuthenticator{primary: tokenAuthenticator{}, tokens: accessTokens},
+		Authorizer:         authz,
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             st,
+		Journal:            st,
+		Principals:         principals,
+		Reach:              routeReach(st),
+		Tokens:             seedRouteTokens(t, st),
+		Access:             grants,
+		Audit:              st,
+		OnAuditFailure:     nil,
+		DeletedUnits:       stubSweeper{},
+		AuditSinks:         nil,
+		AuditChain:         newFakeAuditChain(audit.ChainOn),
+		IPAllowlists:       allowlists,
+		Gates:              gates,
+		ProxyRules:         proxyRules,
+		SessionPolicy:      policyRoutes,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		SignIn:             signIn,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -513,7 +519,7 @@ func (e signInEnv) readSession(t *testing.T, cookie *http.Cookie) (int, sessionB
 func (e signInEnv) serverEntries(t *testing.T) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
@@ -1245,42 +1251,43 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		TempAdmins:       nil,
-		Now:              nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           st,
-		Journal:          st,
-		Principals:       principals,
-		Tokens:           nil,
-		Access:           nil,
-		Audit:            st,
-		OnAuditFailure:   nil,
-		DeletedUnits:     stubSweeper{},
-		AuditSinks:       nil,
-		AuditChain:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    policies,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		TempAdmins:         nil,
+		Now:                nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             st,
+		Journal:            st,
+		Principals:         principals,
+		Tokens:             nil,
+		Access:             nil,
+		Audit:              st,
+		OnAuditFailure:     nil,
+		DeletedUnits:       stubSweeper{},
+		AuditSinks:         nil,
+		AuditChain:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      policies,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		SignIn: &apiserver.SignIn{
 			Service:      newTestSignInService(t, st, sessions, principals),
 			OnDevRefused: nil,
@@ -1294,7 +1301,7 @@ func TestSignInProviderDown(t *testing.T) {
 			Providers: []apiserver.SignInProvider{
 				{
 					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
-					AutoCreate: true, Stored: false,
+					Issuer: "", ClientID: "", Scopes: nil, AutoCreate: true, Stored: false,
 				},
 			},
 		},
@@ -1431,7 +1438,7 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: true, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false, failTempAdminRead: false,
 	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/dustpan/v1/me/tokens", ownTokenBody())
@@ -1834,8 +1841,17 @@ func TestSignInCallbackRefusesAHostileAssertion(t *testing.T) {
 			t.Parallel()
 
 			e := newSignInEnvWith(t, signInEnvOptions{
-				autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
-				namespaces: nil, hostile: tc.change, passwords: nil, failPolicyRead: nil, idempotency: false,
+				autoCreate:        true,
+				noPolicyRoutes:    false,
+				noGateEngine:      false,
+				stored:            nil,
+				authz:             nil,
+				namespaces:        nil,
+				hostile:           tc.change,
+				passwords:         nil,
+				failPolicyRead:    nil,
+				idempotency:       false,
+				failTempAdminRead: false,
 			})
 
 			binding, authURL := e.start(t, "/console/tokens")
@@ -1869,5 +1885,92 @@ func checkHostileRefusal(t *testing.T, e signInEnv, rec *httptest.ResponseRecord
 		if !errors.Is(err, principal.ErrNotFound) {
 			t.Fatalf("principal of %q = %+v, %v, want none", subject, p, err)
 		}
+	}
+}
+
+// principalsOf returns the principal service of the environment: the seeded
+// one, or one whose read of the temporary administrators fails.
+func principalsOf(t *testing.T, st *sqlite.Store, opts signInEnvOptions) *principal.Service {
+	t.Helper()
+
+	seeded := seedRoutePrincipals(t, st)
+
+	if opts.failTempAdminRead {
+		return newFailingTempAdminPrincipals(t, st)
+	}
+
+	return seeded
+}
+
+// failingTempAdminReader is a principal.TempAdmins whose read fails.
+type failingTempAdminReader struct{}
+
+func (failingTempAdminReader) IsTempAdmin(context.Context, string) (bool, error) {
+	return false, tempAdminReadError{}
+}
+
+// newFailingTempAdminPrincipals returns a principal service over st whose read
+// of the temporary administrator records fails.
+func newFailingTempAdminPrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
+	t.Helper()
+
+	svc, err := principal.NewService(principal.Config{
+		TempAdmins: failingTempAdminReader{},
+		Store:      st, Guard: allowAllGuard{}, GroupReach: allowAllReach{}, Namespaces: st, Tokens: nil,
+		Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	return svc
+}
+
+// TestSignInCallbackRefusesAFailedTempAdminRead is the HTTP layer table for a
+// failed read of the temporary administrator records at a sign-in of a person
+// who exists: the callback answers 400 with the sign-in failure text and no
+// driver text, sets no session cookie, and writes one failure entry with the
+// coded reason. It fails when the sign-in service does not map the error.
+func TestSignInCallbackRefusesAFailedTempAdminRead(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
+		namespaces: nil, hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false,
+		failTempAdminRead: true,
+	})
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	existing := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-existing",
+		Subject: "corp:" + alice().Subject, DisplayName: "Alice", Kind: principal.KindPerson,
+		Source: principal.SourceOIDC, Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+
+	seed := storetest.ServerChange(at, "principal:prn-existing")
+
+	err := e.store.CreatePrincipal(t.Context(), existing, seed)
+	if err != nil {
+		t.Fatalf("seed principal: %v", err)
+	}
+
+	binding, authURL := e.start(t, "/console/tokens")
+	rec := e.callback(t, e.authorize(t, authURL), binding)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "sign-in failed") {
+		t.Fatalf("callback = %d %s, want 400 and the sign-in failure", rec.Code, rec.Body.String())
+	}
+
+	if strings.Contains(rec.Body.String(), (tempAdminReadError{}).Error()) {
+		t.Fatalf("the answer holds the text of the failed read: %s", rec.Body.String())
+	}
+
+	if c := cookieOf(rec, apiserver.SessionCookie); c != nil && c.Value != "" {
+		t.Fatal("the callback set a session cookie")
+	}
+
+	reason, outcome := e.refusedReason(t)
+	if reason != signinsvc.ReasonTargetLookup || outcome != audit.OutcomeFailure {
+		t.Fatalf("audit = %q %s, want %q failure", reason, outcome, signinsvc.ReasonTargetLookup)
 	}
 }

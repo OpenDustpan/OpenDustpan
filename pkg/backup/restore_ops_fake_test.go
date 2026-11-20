@@ -427,13 +427,17 @@ func (m applyMode) apply(ctx context.Context, l *restoreServiceLive) (backup.Kee
 		return l.ApplyStagingKeepingAccess(ctx)
 	}
 
-	return backup.KeepAccessResult{DroppedTempAdmins: 0}, l.ApplyStaging(ctx)
+	l.mu.Lock()
+	expired := l.dev.expiredLeases
+	l.mu.Unlock()
+
+	return backup.KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: expired}, l.ApplyStaging(ctx)
 }
 
 // ApplyRestoreArea implements backup.RestoreStaging over the applies of the
 // fake.
 func (l *restoreServiceLive) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
 	if err := l.checkFence(ctx, f, a.Restore); err != nil {
 		return backup.KeepAccessResult{}, err
@@ -443,12 +447,36 @@ func (l *restoreServiceLive) ApplyRestoreArea(
 		return backup.KeepAccessResult{}, fmt.Errorf("swap in state %q: %w", state, maintenance.ErrStateChanged)
 	}
 
-	kept, err := applyMode{keepAccess: keepAccess}.apply(ctx, l)
+	l.mu.Lock()
+	l.swapAttempts++
+	attempt, hook := l.swapAttempts, l.swapHook
+	l.mu.Unlock()
+
+	if hook != nil {
+		if err := hook(attempt); err != nil {
+			return backup.KeepAccessResult{}, err
+		}
+	}
+
+	kept, err := applyMode{keepAccess: d.KeepAccessTables}.apply(ctx, l)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept))
+	// Like a store: the value after the swap is the value of the backup when
+	// the swap kept no setting row. The store records it in the swap step.
+	l.mu.Lock()
+	recorded := d
+
+	recorded.SettingAfter = ""
+	if len(d.KeepSettingKeys) == 0 {
+		recorded.SettingAfter = l.backupSetting
+	}
+
+	l.decisions = append(l.decisions, d)
+	l.mu.Unlock()
+
+	return kept, l.recordFence(ctx, f, a.Restore, backup.EncodeRestoreSwap(kept, recorded))
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging.

@@ -33,6 +33,12 @@ func TestJoinTTL(t *testing.T) {
 		if got != tc.want || !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
 			t.Errorf("JoinTTL(%v) = %v, %v, want %v, %v", tc.in, got, err, tc.want, tc.err)
 		}
+
+		if tc.err != nil {
+			if fe, ok := errors.AsType[*runner.FieldError](err); !ok || fe.Field() != "ttl" {
+				t.Errorf("JoinTTL(%v) error = %v, want a field error of ttl", tc.in, err)
+			}
+		}
 	}
 }
 

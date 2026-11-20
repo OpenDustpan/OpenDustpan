@@ -116,6 +116,15 @@ func (r *Runners) CreatePool(
 		return runner.Pool{}, fmt.Errorf("check pool: %w", err)
 	}
 
+	// Defense in depth: the handler sets the namespace of the pool too; this
+	// check stays so that a new caller cannot create a pool in a namespace
+	// that it did not name. It does not rely on the handler.
+	if p.Namespace != fence.Namespace {
+		return runner.Pool{}, fmt.Errorf(
+			"%w: the pool names namespace %q and the fence is for %q", runner.ErrInvalid, p.Namespace, fence.Namespace,
+		)
+	}
+
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
 
@@ -144,7 +153,7 @@ func (r *Runners) CreatePool(
 			)
 		}
 
-		p.ID, p.Namespace = ident.NewID(runner.PoolIDPrefix), fence.Namespace
+		p.ID = ident.NewID(runner.PoolIDPrefix)
 
 		row, err := codec.PoolToRow(&p)
 		if err != nil {

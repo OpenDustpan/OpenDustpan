@@ -124,6 +124,12 @@ func (f *Fake) sign(hook Hook, ev Event, id string) Delivery {
 // that is not a success is a result, not an error. It returns an error when
 // the call does not reach the receiver.
 func (f *Fake) Send(ctx context.Context, target string, d Delivery) (Sent, error) {
+	return f.SendVia(ctx, f.webhookClient(), target, d)
+}
+
+// SendVia is Send with the client of the caller, for a receiver whose
+// certificate the default client does not trust.
+func (f *Fake) SendVia(ctx context.Context, client *http.Client, target string, d Delivery) (Sent, error) {
 	sent := Sent{Delivery: d, URL: target, Status: 0, Answer: nil}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(d.Body))
@@ -133,7 +139,7 @@ func (f *Fake) Send(ctx context.Context, target string, d Delivery) (Sent, error
 
 	req.Header = d.Header.Clone()
 
-	resp, err := f.webhookClient().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return sent, fmt.Errorf("send the delivery: %w", err)
 	}

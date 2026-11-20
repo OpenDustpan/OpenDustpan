@@ -15,6 +15,20 @@ FROM golang:1.27.4-bookworm AS build
 WORKDIR /src
 ARG TARGETARCH
 ARG VERSION=dev
+# Refuse a VERSION outside the allowlist before any other step: the value goes
+# into the go build line below. The check refuses and never edits the value, and
+# its message does not print the value. Defense in depth: the scripts
+# build-image-local.sh and smoke-image.sh check the value too; this check stays
+# so that a direct docker build cannot skip them, and it does not rely on them.
+RUN case "${VERSION}" in \
+    ''|[!0-9A-Za-z]*|*[!0-9A-Za-z._+-]*) bad=1;; \
+    *) bad=0;; \
+  esac; \
+  if [ "${#VERSION}" -gt 64 ]; then bad=1; fi; \
+  if [ "${bad}" = 1 ]; then \
+    echo "Dockerfile: build argument VERSION must be 1 to 64 characters: letters, digits, dot, plus and dash, and it must start with a letter or a digit; for example --build-arg VERSION=v0.1.0" >&2; \
+    exit 1; \
+  fi
 COPY go.mod go.sum ./
 # Optional BuildKit secret for builds behind a TLS-intercepting proxy: pass
 # --secret id=extra_ca,src=<PEM bundle file> to trust one more CA bundle.
@@ -38,16 +52,24 @@ RUN mkdir -p /out/data
 #
 # No console release exists yet in OpenDustpan/console, so the defaults below
 # are placeholders for its first tag. A build without explicit CONSOLE_URL and
-# CONSOLE_SHA256 fails at the download step. When the first console release
-# lands, pin its tag and SHA-256 here.
+# CONSOLE_SHA256 stops at the first step of this stage and names the pin. When
+# the first console release lands, pin its tag and SHA-256 here.
 FROM golang:1.27.4-bookworm AS console
 ARG CONSOLE_URL=https://github.com/OpenDustpan/console/releases/download/v0.1.0/console.tar.gz
 ARG CONSOLE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 COPY . /src
+# Defense in depth: the placeholder test below is the first step of this RUN,
+# before the download; the sha256sum check after the download stays and does
+# not rely on it.
 # The same optional extra-CA secret as in the Go stage: curl trusts the
 # bundle before it downloads the console tarball.
 RUN --mount=type=secret,id=extra_ca,required=false set -eu; \
   if [ -s /run/secrets/extra_ca ]; then cat /run/secrets/extra_ca >> /etc/ssl/certs/ca-certificates.crt; fi; \
+  case "${CONSOLE_SHA256}" in \
+    0000000000000000000000000000000000000000000000000000000000000000) \
+      echo "Dockerfile: the console pin is the placeholder. Pin the console tag and SHA-256 in the Dockerfile (ARG CONSOLE_URL and ARG CONSOLE_SHA256), or pass --build-arg CONSOLE_URL=<https URL> --build-arg CONSOLE_SHA256=<sha256>" >&2; \
+      exit 1;; \
+  esac; \
   case "${CONSOLE_URL}" in \
     https://*) curl -fsSL --retry 3 -o /tmp/console.tgz "${CONSOLE_URL}";; \
     file:*) cp "/src/${CONSOLE_URL#file:}" /tmp/console.tgz;; \

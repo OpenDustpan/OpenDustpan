@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -530,12 +531,9 @@ func revAuditTotal(t *testing.T, s RevocationStore) int64 {
 func revAuditTotalIn(t *testing.T, s RevocationStore, ns namespace.Name) int64 {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: 1})
-	if err != nil {
-		t.Fatalf("list the audit entries of %q: %v", ns, err)
-	}
+	entries := audittest.All(t, s, ns)
 
-	return listing.Total
+	return int64(len(entries))
 }
 
 // revReplayEntries returns the entries that a restore wrote for the
@@ -545,24 +543,16 @@ func revReplayEntries(t *testing.T, s RevocationStore) []audit.Entry {
 
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
-		if err != nil {
-			t.Fatalf("list the server audit entries: %v", err)
-		}
-
-		for i := range listing.Entries {
-			if listing.Entries[i].Action == maintenance.ActionReplayRevocation {
-				out = append(out, listing.Entries[i])
-			}
-		}
-
-		if len(listing.Entries) < audit.MaxPageSize {
-			slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
-
-			return out
+	entries := audittest.All(t, s, audit.ServerScope)
+	for i := range entries {
+		if entries[i].Action == maintenance.ActionReplayRevocation {
+			out = append(out, entries[i])
 		}
 	}
+
+	slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
+
+	return out
 }
 
 // revSessionEnded fails the test unless the session id has ended with reason.

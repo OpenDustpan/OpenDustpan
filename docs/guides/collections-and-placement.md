@@ -29,7 +29,9 @@ The body holds one field, `name`. Unknown fields are refused. The name rules
 are these:
 
 - 3 to 40 characters.
-- ASCII letters, digits, `-`, `_` and a space between other characters.
+- ASCII letters, digits, `-`, `_` and spaces. A `-`, a `_` or a space is never
+  the first or the last character. The server does not limit how many of
+  them follow each other, so `pay  ments` (two spaces) is a valid name.
 - The first and the last character are a letter or a digit.
 - Names are unique without regard to case. `Payments` and `payments` are the
   same name.
@@ -75,11 +77,14 @@ as a query value, and the new collection in the body:
 curl -s -X PUT -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"collection":"payments"}' \
-  "https://dustpan.example.com/api/inventory/unit-collection?unit=pulumi:acme/payments-api"
+  "https://dustpan.example.com/api/inventory/unit-collection?unit=pulumi:acme/payments/api-prod"
 ```
 
 The unit has the form `<tool>:<namespace>/<name>`. For a Pulumi stack, the tool
-is `pulumi`.
+is `pulumi` and the name is `<project>/<stack>`, so the unit above is the stack
+`api-prod` of the project `payments`. For an OpenTofu workspace, the tool is
+`opentofu` and the name is the name of the workspace. A unit that does not exist
+gets `404` with the code `unit.not-found`.
 
 The caller needs these actions:
 
@@ -97,7 +102,7 @@ Moving a unit out of a collection that holds a manual lock also needs
 The answer holds the unit, the new collection and the previous collection:
 
 ```json
-{"unit":"pulumi:acme/payments-api","collection":"payments","previousCollection":"billing"}
+{"unit":"pulumi:acme/payments/api-prod","collection":"payments","previousCollection":"billing"}
 ```
 
 `previousCollection` is empty when the unit was in no collection. The audit
@@ -129,8 +134,11 @@ CLI sends no collection, and you do not set one.
 - The caller needs `collection:create-unit` on that collection. Without it, the
   answer is `403`, and the server makes no stack.
 - When no rule matches, the server refuses to make the stack. The answer is
-  `422` with the code `placement.no-match`. The message names the placement
-  rules and the route that adds a rule. The server does not use a default
+  `422` with the code `placement.no-match`. The message names the tool, the
+  project and the stack of the Pulumi stack, the namespace, and the command to
+  run, for example `no placement rule matches pulumi stack "payments"/"api-prod"
+  in namespace acme: run opendustpan placement add --tool pulumi`. The route
+  that adds a rule is `POST /api/dustpan/v1/namespaces/{namespace}/placement-rules`. The server does not use a default
   collection. To allow every stack, add a last rule with the patterns `*` and
   `*`.
 - The server makes the stack and its place in the collection in one
@@ -162,16 +170,34 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 The refusals are the same as for a stack. The caller needs
 `collection:create-unit` on the collection (`403` without it). When no rule
 matches, the answer is `422` with the code `placement.no-match`, and the server
-makes no workspace. A server that keeps no placement rules answers `501` with the
+makes no workspace. The message names the tool, the workspace and the namespace, and it shows no
+project, for example `no placement rule matches opentofu workspace "ws1" in
+namespace acme: run opendustpan placement add --tool opentofu`. A server that keeps no placement rules answers `501` with the
 code `placement.unavailable`.
 
 ### A unit in no collection
 
-A stack or a workspace that is in no collection takes no new write. The server
-refuses the first lock and the state write of such a workspace with `409` and
-the code `unit.no-collection`. The message names the command that moves the
-unit into a collection: `PUT /api/inventory/unit-collection`. After the move,
-repeat the request.
+A stack or a workspace that is in no collection takes no new write. This holds
+for a stack from before collections existed, or a stack that came back from an
+old backup. The server refuses these writes with `409` and the code
+`unit.no-collection`:
+
+- For a workspace: the lock and the state write.
+- For a stack: the creation and the start of an update, a checkpoint write, a
+  journal batch, a stack import and a restore.
+
+The message names the command that moves the unit into a collection:
+`PUT /api/inventory/unit-collection`. After the move, repeat the request. Reads
+stay allowed. Each refusal of a request that has a sign-in writes an entry to
+the audit log with the reason "stack in no collection".
+
+The server does not refuse these requests for a stack in no collection, because
+they only manage metadata or the lease of an update that already runs: stack
+tags, stack create, stack delete, stack rename, lease renewal, engine events,
+update completion, update cancel, and the encrypt and decrypt calls of the
+secrets provider. A stack create puts the new stack in a collection, and a
+rename keeps the collection of the stack. A running update cannot start on a
+stack in no collection, and a stack in a collection cannot go back to none.
 
 ### Routes and actions
 

@@ -195,6 +195,38 @@ func (u jobUnits) Unit(ctx context.Context, ref identity.Object) (identity.Objec
 	return bare.WithUnitID(e.UnitID), nil
 }
 
+// UnitByID implements job.UnitResolver. It finds a live unit only.
+func (u jobUnits) UnitByID(ctx context.Context, ns namespace.Name, unitID string) (identity.Object, error) {
+	if u.facts.reader == nil || !ident.Valid(unitID, maxJobUnitIDLength) {
+		return identity.Object{}, job.ErrNotFound
+	}
+
+	e, err := u.facts.reader.GetUnit(ctx, unitID)
+
+	switch {
+	case errors.Is(err, inventory.ErrUnitNotFound):
+		return identity.Object{}, job.ErrNotFound
+	case err != nil:
+		return identity.Object{}, fmt.Errorf("find unit %s: %w", unitID, err)
+	}
+
+	// Defense in depth: the inventory looks a unit up by its ID alone. A
+	// unit of another namespace must not answer under this namespace.
+	if e.Namespace != ns || e.UnitID != unitID {
+		return identity.Object{}, job.ErrNotFound
+	}
+
+	obj, err := identity.UnitObject(e.Tool, ns, e.Name)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("%w: %w", job.ErrInvalid, err)
+	}
+
+	return obj.WithUnitID(e.UnitID), nil
+}
+
+// maxJobUnitIDLength bounds the unit ID that UnitByID looks up.
+const maxJobUnitIDLength = 128
+
 // unitLimits is the identity.Authorizer of the job service: the access limits
 // hold for an action on a unit, and the grants alone decide an action on any
 // other object. The access limits are conditions on the facts of a unit, and

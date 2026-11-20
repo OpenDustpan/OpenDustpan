@@ -35,7 +35,7 @@ A person makes a personal token for itself. The create needs a fresh sign-in
 in the console. A token cannot make another token. The answer is `403` with the
 code `mfa.fresh-step-required`.
 
-Make the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
+Make the token in the console. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the create is:
 
 ```json
 {"name":"laptop-cli","expiresAt":"2027-06-30T00:00:00Z"}
@@ -58,7 +58,9 @@ administrator with `server:read-tokens` lists every token with
 `GET /api/server/principals/{principal}/tokens`.
 
 The own list takes these query values. Any other name, for example `status`,
-`principal`, `limit` or `cursor`, gets `400`.
+`principal`, `limit` or `cursor`, gets `400` with the code `request.invalid-query`.
+A `pageSize` that is not a number from 1 to 200 gets `400` with the code
+`request.page-size-invalid`.
 
 | Query | Meaning |
 | --- | --- |
@@ -101,7 +103,7 @@ An administrator reads one token with `GET /api/server/tokens/{id}`.
 ## Make a service token
 
 A caller with `principal:manage-tokens` on the service principal makes its token in the
-console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the service-token create is:
+console. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the service-token create is:
 
 ```json
 {"principalID":"prn-...","name":"ci-deploy","expiresAt":"2027-06-30T00:00:00Z"}
@@ -155,6 +157,47 @@ and the change does not happen. The refusal names the principal only when the
 caller holds `server:read-principals`. A revoke, and a removal of a member,
 take access away, so they never run this compare.
 
+### A service token ends when its maker loses access
+
+The maker of a service token is the person or principal that made it. The
+maker can act as the service principal through the token. So the server
+revokes a service token when its maker has no path to
+`principal:manage-tokens` on the service principal any more. A path is a
+grant on the service principal or on the installation, to the maker or to a
+group of the maker. A bootstrap admin token always has a path.
+
+The server checks the makers after each of these changes:
+
+- the revoke of a grant, also a grant to a group,
+- the change of a role that drops `principal:manage-tokens`,
+- the removal of a member from a group, and the delete of a group,
+- the disable or the delete of the maker.
+
+The server revokes each service token whose maker lost the last path, before
+it answers the change. Each revocation writes an audit entry in the scope
+`@server` with the subject `@server`, the action `principal:manage-tokens`,
+the object of the token and this reason:
+
+```text
+the maker of the service token has no act-as path to its principal
+```
+
+The entry has three changes: `maker` is the subject of the maker, `cause` is
+the action and the object of the change, and `causedBy` is the subject of the
+caller of the change.
+
+The server also checks the maker each time a service token is used. This
+covers a path that ends in another way, for example a sync of the groups of
+an identity provider. A token whose maker has no path is refused with `401`
+and revoked, with the reason `the maker of the service token has no act-as
+path to its principal at its use`. When the server cannot read the grants of
+the maker, it refuses the token and keeps it.
+
+A credential that must work after a person leaves the team does not depend on
+a person. Use a trust rule instead: a workload gets its token from the
+exchange of its own identity, with no maker. See
+[Workload identity for CI](workload-identity.md).
+
 ## Revoke a token
 
 A revoke answers `204`. The token stops working at once, and its record stays
@@ -167,14 +210,17 @@ for the history.
 | `DELETE /api/server/principals/{principal}/tokens/{id}` | `principal:manage-tokens` on the principal |
 
 A person cannot revoke another person's token on its own routes. The answer is
-`404`. Revoke a token that is already revoked gets `409` with the code
+`404`. `DELETE /api/server/tokens/{id}` checks an ID that does not exist as a
+personal token. A caller who lacks `server:manage-tokens` gets `403` with the
+code `access.denied`, not `404`. The own route `DELETE /api/dustpan/v1/me/tokens/{id}`
+answers `404` with the code `token.not-found` for an unknown ID. Revoke a token that is already revoked gets `409` with the code
 `token.ended`.
 
 ## Rotate a token
 
 A rotation makes a new token, and it sets an end time for the old one.
 
-Rotate the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. Rotation of a service token or a principal token has the same rule.
+Rotate the token in the console. A stored access token gets `403` with `mfa.fresh-step-required`. Rotation of a service token or a principal token has the same rule.
 
 
 The routes are `POST /api/dustpan/v1/me/tokens/{id}/rotate` for a personal token,
@@ -260,7 +306,9 @@ The policy has these fields. A `PATCH` takes any subset of them:
 | `exchangeLifetimeSeconds` | 3600 | 60 to 86400 | The life of a token that a workload gets in an exchange. |
 | `updatedAt` | `null` | Read only | The time of the last change. |
 
-The field `disableBreakGlass` is no longer accepted. A value of `true` gets `400`.
+The field `disableBreakGlass` has no effect. A read of the policy still shows it,
+and the value is always `false`. A `PATCH` accepts only `false`. A value of `true`
+gets `400`.
 
 Change the policy in the console. The change needs a fresh sign-in, so a stored access token
 gets `403`. The body is:
@@ -303,7 +351,11 @@ change is 900 seconds by default. Set the window to `0` to turn the check off.
 | `token.not-found` | `404` | The token is unknown, or it belongs to another person. |
 | `token.ended` | `409` | The token is revoked, replaced or not active. |
 | `token.already-exists` | `409` | The name or the secret is already used. |
+| `token.unknown-kind` | `409` | The stored token has a kind that this version does not know. A read, a revoke or a rotation fails and the token stays as it is. The token never signs in. On the routes for your own tokens, only the owner of the token gets this answer. Any other person gets `token.not-found`. |
 | `token.wrong-kind` | `400` | The route is for the other kind of token. |
-| `request.invalid-query` | `400` | A `status`, `limit` or `cursor` value is not valid. |
+| `request.invalid-query` | `400` | On `GET /api/server/tokens`, a `status` value that is not `active`, `expiring` or `ended`, or a `limit` that is not a number. `limit=0` also gets this code. On the own list, a query name other than `pageSize` and `pageToken`. |
+| `token.invalid` | `400` | On `GET /api/server/tokens`, a `limit` above 1000, or a `cursor` that is not a `nextCursor` of the server. |
+| `request.page-size-invalid` | `400` | On the own list, a `pageSize` that is not a number from 1 to 200. |
+| `access.denied` | `403` | The caller lacks the action of the route. A revoke of an unknown ID on `DELETE /api/server/tokens/{id}` gets this answer when the caller lacks `server:manage-tokens`. |
 | `request.body-invalid` | `400` | The body is not valid, or the policy holds `disableBreakGlass`. |
 | `auth.rate-limited` | `429` | Too many sign-in attempts. |

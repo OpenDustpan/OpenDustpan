@@ -124,18 +124,23 @@ jobs:
             case "$f" in
               .github/*|Makefile|go.mod|go.sum) run_all "$f changed" ;;
             esac
-            # Docs only: docs/, openspec/, .repowise/ and Markdown files at the
-            # root. Go tests read the three docs files below, so they are code.
-            # No Go code reads openspec/.
+            # Docs only: openspec/, .repowise/ and Markdown files at the root.
+            # Go tests read docs/: the route test reads docs/guides and
+            # docs/reference, and the ADR number test walks every .md file
+            # under docs/. So a path under docs/ is code. No Go code reads
+            # openspec/.
             case "$f" in
-              docs/tfe-api.md|docs/reference/configuration.md|docs/reference/helm-values.md) code=true ;;
-              docs/*|openspec/*|.repowise/*) ;;
+              docs/*) code=true ;;
+              openspec/*|.repowise/*) ;;
               */*) code=true ;;
               *.md) ;;
               *) code=true ;;
             esac
             case "$f" in
               e2e/*|internal/api/pulumi/*|internal/api/tfe/*|internal/pulumijournal/*|pkg/dustpan/*|cmd/opendustpan/*|pkg/store/*/migrations/*|scripts/e2e-*|scripts/toxiproxy.sh) e2e=true ;;
+              # The e2e tests read these docs: the page tests, the page lists
+              # and the check of the commands in the pages.
+              docs/guides/*|docs/reference/*|docs/commands-*.txt|README.md) e2e=true ;;
             esac
             case "$f" in
               pkg/store/*|internal/store/*|internal/pgtest/*|pkg/*test/*) store=true ;;
@@ -378,6 +383,29 @@ jobs:
           --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      # The S3-compatible server of the pkg/blob/s3 suite: RustFS 1.0.4. The
+      # digest pins the image, as for postgres above. The access key and the
+      # secret key are fixed test values, not secrets: the container lives
+      # only for this job and holds only test objects. A pull request from a
+      # fork gets no repository secret, so a secret would skip the suite there.
+      rustfs:
+        image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+        env:
+          RUSTFS_ACCESS_KEY: dustpan-test
+          RUSTFS_SECRET_KEY: dustpan-test-secret
+        ports: [ "9000:9000" ]
+        # The image has curl. The steps start only after /health/ready
+        # answers 200.
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9000/health/ready"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    # The four variables turn on TestConformance of pkg/blob/s3. Without them,
+    # the suite skips.
+    env:
+      DUSTPAN_TEST_S3_ENDPOINT: http://localhost:9000
+      DUSTPAN_TEST_S3_BUCKET: dustpan-ci-s3
+      DUSTPAN_TEST_S3_ACCESS_KEY: dustpan-test
+      DUSTPAN_TEST_S3_SECRET_KEY: dustpan-test-secret
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -385,6 +413,22 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
+      # The AWS CLI is on the runner image, so this step needs no action and
+      # no tool in the repository. The suite does not make its bucket: the
+      # store under test has no bucket operation. A bucket that this account
+      # holds already is a pass, so a rerun on the same server passes.
+      - name: Make the bucket of the S3 suite
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.DUSTPAN_TEST_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DUSTPAN_TEST_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          if ! out=$(aws s3api create-bucket --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" --bucket "$DUSTPAN_TEST_S3_BUCKET" 2>&1); then
+            case "$out" in
+              *BucketAlreadyOwnedByYou*) echo "bucket $DUSTPAN_TEST_S3_BUCKET exists" ;;
+              *) echo "$out" >&2; exit 1 ;;
+            esac
+          fi
       # Pushes and pull requests use the test cache. The schedule runs every
       # package again (GO_TEST_COUNT=-count=1). The two store packages run in
       # the store job.
@@ -392,6 +436,15 @@ jobs:
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: make test-ci-other ${{ github.event_name == 'schedule' && 'GO_TEST_COUNT=-count=1' || '' }}
+      # A skipped TestConformance passes the step above. This step runs the
+      # suite again against the server of this job (no test cache) and fails
+      # unless the top test passed. The pending cases of blobtest skip inside
+      # the suite and do not fail it.
+      - name: The S3 suite ran and passed
+        shell: bash
+        run: |
+          go test -count=1 -run '^TestConformance$' -v ./pkg/blob/s3/ | tee "$RUNNER_TEMP/s3-suite.log"
+          grep -q -E -x -- '--- PASS: TestConformance \([0-9.]+s\)' "$RUNNER_TEMP/s3-suite.log"
       - name: Build
         run: go build ./cmd/opendustpan
       - *go-cache-save

@@ -72,6 +72,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Outputs:       outputs,
 		Views:         coverageViews(tb),
 		Locks:         locks,
+		Records:       nil,
 		PublicURL:     "",
 		Moves:         nil,
 		Namespaces:    namespaces,
@@ -425,6 +426,24 @@ func manualLockAllowEntries() []AllowEntry {
 		{Method: http.MethodGet, Path: path, CoveringTest: test, Reason: reason},
 		{Method: http.MethodDelete, Path: path, CoveringTest: test, Reason: reason},
 		{Method: http.MethodPost, Path: path + "/force-unlock", CoveringTest: test, Reason: reason},
+	}
+}
+
+// manualLockBulkAllowEntries returns the bulk lock routes of a namespace. No
+// CLI calls them: the steps of TestManualLockBulk call both with the token of a
+// person and run OpenTofu against a workspace that the bulk call locked.
+func manualLockBulkAllowEntries() []AllowEntry {
+	const (
+		base = "/api/dustpan/v1/namespaces/{namespace}/unit-locks"
+		test = "TestManualLockBulk"
+	)
+
+	reason := "Console and client route: no CLI locks many units. The harness steps of " +
+		test + " call it and run OpenTofu against a workspace that it locked."
+
+	return []AllowEntry{
+		{Method: http.MethodPost, Path: base + "/bulk-lock", CoveringTest: test, Reason: reason},
+		{Method: http.MethodPost, Path: base + "/bulk-unlock", CoveringTest: test, Reason: reason},
 	}
 }
 

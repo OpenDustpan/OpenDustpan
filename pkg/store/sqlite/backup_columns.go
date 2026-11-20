@@ -464,6 +464,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteManualLockBackupTables(),
 		sqlitePreferenceBackupTables(),
 		sqliteForgeLinkBackupTables(),
+		sqliteFirstAdministratorBackupTables(),
 		sqliteLocalUserBackupTables(),
 		sqliteSavedViewBackupTables(),
 		sqliteDriftBackupTables(),
@@ -506,10 +507,10 @@ func sqliteControlTables() []sqliteBackupTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", backupColKind, "input", backupColVersion, "state", "attempt", "expiries", "failures",
-				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
-				"cancel_requested_at_ms",
-				"not_before_ms", "created_at_ms", "updated_at_ms",
+				"id", "start_key", backupColKind, "input", backupColVersion, "state", "attempt", "expiries",
+				"deadline_releases", "failures", "last_error", "claim_owner", "claim_token",
+				"claim_expires_at_ms", "cancel_requested",
+				"cancel_requested_at_ms", "not_before_ms", "created_at_ms", "updated_at_ms",
 			},
 		},
 		{
@@ -654,12 +655,23 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			columns: []string{"owner", backupColAtMs, "lease_ms"},
 		},
 		{
+			table: backup.TableGitHostEventReceipts,
+			columns: []string{
+				"kind", "delivery_id", "body_digest", backupColInstallationID, "event_kind", "repo", "review_id",
+				"received_at_ms",
+			},
+		},
+		{
 			table:   backup.TableLocalUserResets,
 			columns: sqliteLocalUserResetColumns(),
 		},
 		{
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
+		},
+		{
+			table:   backup.TableFirstAdministratorCodes,
+			columns: sqliteFirstAdministratorCodeColumns(),
 		},
 		{
 			table: backup.TableJobTokens,

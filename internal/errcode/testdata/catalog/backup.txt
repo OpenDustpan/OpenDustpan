@@ -1,2 +1,5 @@
 backup.corrupt backup:identifier
+backup.ended-failed
+backup.registry-files-too-large size:quantity limit:quantity
+backup.still-running
 backup.too-many-unverified count:quantity limit:quantity

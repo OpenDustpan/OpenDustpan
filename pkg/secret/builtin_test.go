@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -254,6 +255,10 @@ func TestCheckWrapper(t *testing.T) {
 
 		if err == nil || !strings.Contains(err.Error(), "rewrap") {
 			t.Fatalf("check a half-rotated store: err = %v, want it to name the rewrap command", err)
+		}
+
+		if regexp.MustCompile(`\b(ADR|RFC) \d+`).MatchString(err.Error()) {
+			t.Fatalf("check a half-rotated store: err = %q, want no internal reference", err)
 		}
 	})
 

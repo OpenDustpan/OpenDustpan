@@ -176,27 +176,30 @@ func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); ok {
-			h.writePrincipalResult(w, r, res)
+		if res, err := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); err == nil {
+			h.writePrincipalResult(w, r, res, readResult)
 		}
 	}
 }
 
 // serveAccessChange adapts a change to a route handler. The Service writes
 // the success entry in the transaction of the change. A refused change
-// writes one failure entry here, as well as possible.
+// writes one failure entry here, as well as possible, with the reason of the
+// refusal.
 func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
+		res, err := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
+		if err == nil {
+			h.revokeLostMakers(r, p, action, res.object)
+			h.writePrincipalResult(w, r, res, committedWrite)
 
-		if !ok && res.object != "" && h.access != nil {
-			h.appendObjectChange(r, p, obj, serverChange{
-				at: h.access.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			return
 		}
 
-		if ok {
-			h.writePrincipalResult(w, r, res)
+		if res.object != "" && h.access != nil {
+			h.appendObjectChangeReason(r, p, obj, serverChange{
+				at: h.access.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
+			}, refusalReason(err))
 		}
 	}
 }
@@ -215,15 +218,15 @@ type call struct {
 	e   audit.Entry
 }
 
-// runAccessOp runs op and writes its error. It reports whether op
-// succeeded, with the result in both cases.
-func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, op accessOp) (principalResult, bool) {
+// runAccessOp runs op and writes its error. It answers the result in both
+// cases, and the error of op, or nil when op succeeded.
+func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, op accessOp) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.access == nil {
 		h.writeError(ctx, w, errNoAccessStore)
 
-		return failed(""), false
+		return failed(""), errNoAccessStore
 	}
 
 	res, err := op(w, r, h.access, c)
@@ -234,10 +237,10 @@ func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, o
 		h.recordEscalation(ctx, r, c.p, refused, err)
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // reasonEscalation is the reason of the entry of a grant that gives more than
@@ -659,9 +662,20 @@ const maxRoleIDLength = 64
 func revokeGrant(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
-	g, err := svc.Revoke(r.Context(), c.e, c.p, c.obj, r.PathValue("id"))
+	id := r.PathValue("id")
+
+	// Defense in depth: the service and both store adapters check the shape
+	// of the ID too. This check stays so that the handler never passes a
+	// text that is not a grant ID on, and it does not rely on them. The
+	// refusal is an unknown grant, 404, and the entry of the failure names
+	// "grant:invalid", never the text.
+	if !access.ValidGrantID(id) {
+		return failed(access.GrantIDRef(id)), errUnknownGrant()
+	}
+
+	g, err := svc.Revoke(r.Context(), c.e, c.p, c.obj, id)
 	if err != nil {
-		return failed(access.GrantIDRef(r.PathValue("id"))), err
+		return failed(access.GrantIDRef(id)), err
 	}
 
 	return ok(http.StatusNoContent, nil, access.GrantRef(g)), nil
@@ -736,34 +750,64 @@ func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (id
 
 	id := r.PathValue("id")
 
+	p, ok := principalFromRequest(r)
+	if !ok {
+		return identity.Object{}, fmt.Errorf("revoke grant: %w", identity.ErrUnauthenticated)
+	}
+
+	// Defense in depth: the service and both store adapters check the shape
+	// of the ID too. This check stays so that the resolver never reads a
+	// grant by a text that is not a grant ID, and it does not rely on them.
+	// The refusal answers 404 like an unknown grant, and writes an entry.
+	if !access.ValidGrantID(id) {
+		h.auditGrantRefusal(r, p, id)
+
+		return identity.Object{}, errUnknownGrant()
+	}
+
 	g, err := h.access.GetGrant(r.Context(), id)
 	if errors.Is(err, access.ErrNotFound) {
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+		h.auditGrantRefusal(r, p, id)
+
+		return identity.Object{}, errUnknownGrant()
 	}
 
 	if err != nil {
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return identity.Object{}, fmt.Errorf("revoke grant: %w", err)
 	}
 
 	actions, known := grantAccessActions(g.Object)
 	if !known {
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
-	}
+		h.auditGrantRefusal(r, p, id)
 
-	p, ok := principalFromRequest(r)
-	if !ok {
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, identity.ErrUnauthenticated)
+		return identity.Object{}, errUnknownGrant()
 	}
 
 	if authErr := h.guard.Authorize(r.Context(), r, p, actions.read, g.Object); authErr != nil {
 		if errors.Is(authErr, identity.ErrDenied) {
-			return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+			return identity.Object{}, errUnknownGrant()
 		}
 
 		return identity.Object{}, fmt.Errorf("authorize %s: %w", actions.read, authErr)
 	}
 
 	return g.Object, nil
+}
+
+// errUnknownGrant is the refusal of a grant ID that names no grant: 404. Its
+// text holds no part of the ID, so request text never reaches the error.
+func errUnknownGrant() error {
+	return fmt.Errorf("revoke grant: %w", access.ErrNotFound)
+}
+
+// auditGrantRefusal writes the failure entry of a revoke by ID that found no
+// grant, in the installation scope. The object is "grant:<id>" for a valid
+// ID, and "grant:invalid" for any other text.
+func (h *Handler) auditGrantRefusal(r *http.Request, p identity.Principal, id string) {
+	h.appendServerChange(r, p, serverChange{
+		at: h.access.Now(), action: identity.ActionServerManageAccess, object: access.GrantIDRef(id),
+		outcome: audit.OutcomeFailure,
+	})
 }
 
 // serveRevokeGrantByID serves DELETE /api/server/grants/{id}: it ends any
@@ -788,7 +832,22 @@ func (h *Handler) serveRevokeGrantByID(
 
 	actions, known := grantAccessActions(obj)
 	if !known {
-		h.writeError(ctx, w, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound))
+		// The same refusal and the same failure entry as an ID that is not
+		// a grant ID. The object of the entry is the ID of the request.
+		h.writeError(ctx, w, errUnknownGrant())
+		h.auditGrantRefusal(r, p, id)
+
+		return
+	}
+
+	// Defense in depth: the resolver, the service and both store adapters
+	// check the shape of the ID too. This check does not rely on them.
+	if !access.ValidGrantID(id) {
+		h.writeError(ctx, w, errUnknownGrant())
+		h.appendObjectChange(r, p, obj, serverChange{
+			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),
+			outcome: audit.OutcomeFailure,
+		})
 
 		return
 	}
@@ -799,15 +858,16 @@ func (h *Handler) serveRevokeGrantByID(
 			Action: actions.manage, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
 		}, err)
 		h.writeError(ctx, w, err)
-		h.appendObjectChange(r, p, obj, serverChange{
+		h.appendObjectChangeReason(r, p, obj, serverChange{
 			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),
 			outcome: audit.OutcomeFailure,
-		})
+		}, refusalReason(err))
 
 		return
 	}
 
-	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)))
+	h.revokeLostMakers(r, p, actions.manage, access.GrantRef(revoked))
+	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)), committedWrite)
 }
 
 // classifyAccess maps the role and grant errors to their status and
@@ -817,6 +877,10 @@ func (h *Handler) serveRevokeGrantByID(
 // collection during the request 409, and a store with no access or review port 501.
 func classifyAccess(err error) (failure, bool) {
 	switch {
+	case errors.Is(err, access.ErrLastSiteAdministrator):
+		// The first case, so that an error that also wraps another error of
+		// this list keeps the answer and the code of this refusal.
+		return failCoded(http.StatusConflict, err.Error(), errcode.AccessLastSiteAdministrator), true
 	case errors.Is(err, errCallerQuery), errors.Is(err, errCallerObjectsQuery):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, errCallerPageSize):
@@ -833,7 +897,7 @@ func classifyAccess(err error) (failure, bool) {
 	case errors.Is(err, access.ErrNotFound):
 		return fail(http.StatusNotFound, err.Error()), true
 	case errors.Is(err, access.ErrAlreadyExists), errors.Is(err, access.ErrBuiltIn), errors.Is(err, access.ErrInUse),
-		errors.Is(err, access.ErrUnitMoved), errors.Is(err, access.ErrLastSiteAdministrator):
+		errors.Is(err, access.ErrUnitMoved):
 		return fail(http.StatusConflict, err.Error()), true
 	case errors.Is(err, errNoAccessStore), errors.Is(err, access.ErrNoReview),
 		errors.Is(err, access.ErrCollectionReview):

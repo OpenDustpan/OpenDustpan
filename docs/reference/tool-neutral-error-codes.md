@@ -45,6 +45,7 @@ Each error answer has the header `Cache-Control: no-store`.
 | 409 | `storecheck.no-target` | The server has no store for the target, for example no backup target |
 | 409 | `namespace.fenced` | A failover moved the namespace during the request |
 | 409 | `request.idempotency-key-lost` | A newer request took the `Idempotency-Key` before this request ended |
+| 413 | `stack.state-too-complex`, `state-version.too-complex` | The server refuses the state for a masked read, for one of three causes. The state nests more than 100 levels. The work of the read is more than 128 MiB. A sensitive mark of the state names a value that the server cannot find with one rule. This is a mark of more than 101 tokens, or a mark that goes below a dynamic wrapper in an ambiguous way. The third cause applies to `state-version.too-complex` only: a Pulumi stack has no dynamic wrapper rule. For the third cause, the state is neither too deep nor too large. `stack.state-too-complex` is the code of a Pulumi stack and of the outputs route. `state-version.too-complex` is the code of an OpenTofu state version |
 | 421 | `namespace.not-home` | The namespace has another primary installation |
 | 429 | `auth.rate-limited` | Too many failed sign-ins from this address |
 | 500 | `server.internal` | An error that the server does not classify. The message is `internal error` |
@@ -107,10 +108,22 @@ Each error answer has the header `Cache-Control: no-store`.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
-| 400 | `request.invalid-query` | The `organization` query value is missing, or `page[number]` or `page[size]` is not a positive number |
+| 400 | `request.invalid-query` | The `organization` query value is missing, or the request holds `page[number]` or `page[size]`, which the list no longer reads |
+| 400 | `request.page-size-invalid` | `pageSize` is not a decimal number from 1 to 200, or the request sends it twice |
+| 400 | `request.page-token-invalid` | `pageToken` does not decode, is longer than 4096 bytes, the request sends it twice, or comes from another scope |
 | 400 | `request.invalid-path` | The sequence in the path is not a positive number |
 | 400 | `request.invalid-object` | The object of the request is not valid |
 | 404 | `namespace.not-found` | No namespace with this name |
 | 404 | `audit.entry-not-found` | No entry at this sequence |
 | 501 | `audit.entry-read-unavailable` | The store cannot read one entry: list the entries |
 | 500 | `audit.export-not-recorded` | The server could not write the audit entry of the export, so it sent no entries |
+
+## First administrator API
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `first-administrator.code-invalid` | The code is wrong, used, expired, or for another person. One text covers the four cases. Ask the operator for a new code with `POST /api/server/first-administrator` |
+| 400 | `first-administrator.principal-invalid` | The principal is not an enabled person of the installation, or it is a service, a break-glass person, a temporary administrator, or a `dev:` user |
+| 400 | `first-administrator.reason-invalid` | The reason is blank, has more than 500 characters, is not UTF-8, or has a control or format character |
+| 409 | `first-administrator.already-made` | The server made the first administrator already, so the offer and the redeem do not work. To get an administrator again, run `opendustpan host create-temp-admin` on the server host |
+| 409 | `first-administrator.grant-exists` | The person holds the `site-administrator` role already. The code is not used |

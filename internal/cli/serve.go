@@ -10,6 +10,7 @@ func ServeFlags() []*Setting {
 	return SettingsFor(append([]string{
 		"config",
 		"database",
+		"database-allow-wide-file-mode",
 		"installation",
 		"components",
 		"listen",
@@ -22,6 +23,7 @@ func ServeFlags() []*Setting {
 		"tls-cert",
 		"tls-key",
 		"public-url",
+		AllowPlainHTTPFlag,
 		"issuer-base-url",
 		"trusted-proxies",
 		"trusted-proxy-header",

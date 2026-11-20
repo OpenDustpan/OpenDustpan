@@ -432,22 +432,13 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 		return false, fmt.Errorf("list readable units: %w", err)
 	}
 
-	if scope.CoversEveryObject() {
-		return true, nil
-	}
-
 	// Defense in depth: the check of unit:read on the namespace above allows
 	// ns already. This check of the listed scope stays so that an authorizer
 	// whose Authorize allows ns, but whose scope does not name ns, cannot take
 	// the store path. The count of the store holds every workspace of ns, so
-	// the scope must name all of ns.
-	for i := range scope.Namespaces {
-		if scope.Namespaces[i].Namespace() == ns {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	// the scope must name all of ns: an explicit grant on ns, or a scope of
+	// every object that does not leave ns out.
+	return scope.Contains(identity.NamespaceObject(ns)), nil
 }
 
 // listWorkspacePage writes one page of the workspaces of ns whose name holds

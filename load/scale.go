@@ -49,10 +49,16 @@ const (
 	unlockTries          = 5
 	scaleHTTPTimeout     = 30 * time.Second
 	sampleEvery          = 500 * time.Millisecond
-	keyBytes             = 32
-	kibPerMiB            = 1024
-	perThousand          = 1000
-	scaleInstallation    = loadProject
+	// sampleTimeout bounds one sample query. A query that outlasts it is
+	// canceled, so that a hung query cannot block end. The cancel closes the
+	// connection of the sampler only. The transaction read of end uses
+	// another connection, so the run records the connection counts as missing
+	// after a canceled sample and still measures the transaction rate.
+	sampleTimeout     = 4 * sampleEvery
+	keyBytes          = 32
+	kibPerMiB         = 1024
+	perThousand       = 1000
+	scaleInstallation = loadProject
 )
 
 // Errors of the scale run.
@@ -219,7 +225,9 @@ func newScaleRun(f harnessFlags, procs []*serverProc) *scaleRun {
 
 // shutdown ends everything the run started, in the order that leaves no
 // goroutine and no idle connection: the health check and the balancer
-// server first, then the idle connections, then the server processes.
+// server first, then the idle connections of the transports that the run
+// owns, then the server processes. It does not touch http.DefaultClient:
+// other senders in this process use its transport.
 func (r *scaleRun) shutdown(ctx context.Context, logger *slog.Logger) {
 	r.stop.Store(true)
 
@@ -243,7 +251,6 @@ func (r *scaleRun) shutdown(ctx context.Context, logger *slog.Logger) {
 		r.transport.CloseIdleConnections()
 	}
 
-	http.DefaultClient.CloseIdleConnections()
 	stopProcs(ctx, logger, r.procs)
 }
 
@@ -324,6 +331,8 @@ func stopProcs(ctx context.Context, logger *slog.Logger, procs []*serverProc) {
 
 	for _, proc := range procs {
 		wait.Go(func() {
+			defer proc.probe.CloseIdleConnections()
+
 			if _, err := proc.stop(); err != nil {
 				logger.ErrorContext(
 					ctx,
@@ -654,7 +663,11 @@ func (r *scaleRun) reads(ctx context.Context) {
 
 // monitor samples the database and reads the CPU time of the processes.
 type monitor struct {
-	conn     *pgx.Conn
+	// conn serves the reads of begin and end. No sample query runs on it.
+	conn *pgx.Conn
+	// sampler serves the sample queries only. A canceled query closes it,
+	// and conn stays open.
+	sampler  *pgx.Conn
 	procs    []*serverProc
 	storePID int
 	pgRoot   int
@@ -664,10 +677,25 @@ type monitor struct {
 	txBegin   int64
 	txBeginOK bool
 
-	mu      sync.Mutex
-	counts  []int
-	cancel  context.CancelFunc
-	sampled sync.WaitGroup
+	mu     sync.Mutex
+	counts []int
+	// stop asks the sampler to return at its next tick.
+	stop     chan struct{}
+	stopOnce sync.Once
+	sampled  sync.WaitGroup
+	// sampleTimeout bounds one sample query.
+	sampleTimeout time.Duration
+	// sampleSQL is the query of one sample. It answers one integer.
+	sampleSQL string
+}
+
+// sampleSQLFor answers the query that counts the client connections of the
+// database, without the connection of the sampler and the connection at pid.
+// The pid is an integer, so the text holds no outside value.
+func sampleSQLFor(pid int32) string {
+	return fmt.Sprintf(`SELECT count(*) FROM pg_stat_activity
+	WHERE datname = current_database() AND backend_type = 'client backend'
+	AND pid <> pg_backend_pid() AND pid <> %d`, pid)
 }
 
 // cpuMark is the CPU time of the groups at one moment. Each group has a flag
@@ -678,14 +706,15 @@ type cpuMark struct {
 }
 
 // blankMonitor answers a monitor that has not begun a window.
-func blankMonitor(conn *pgx.Conn, procs []*serverProc, storePID int) *monitor {
+func blankMonitor(conn, sampler *pgx.Conn, procs []*serverProc, storePID int) *monitor {
 	return &monitor{
-		conn: conn, procs: procs, storePID: storePID, pgRoot: 0, startedAt: time.Time{},
+		conn: conn, sampler: sampler, procs: procs, storePID: storePID, pgRoot: 0, startedAt: time.Time{},
 		cpu: cpuMark{
 			instances: 0, postgres: 0, store: 0, harness: 0,
 			instancesOK: false, postgresOK: false, storeOK: false, harnessOK: false,
 		},
-		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, cancel: nil, sampled: sync.WaitGroup{},
+		txBegin: 0, txBeginOK: false, mu: sync.Mutex{}, counts: nil, stop: nil,
+		stopOnce: sync.Once{}, sampled: sync.WaitGroup{}, sampleTimeout: sampleTimeout, sampleSQL: sampleSQLFor(0),
 	}
 }
 
@@ -703,7 +732,21 @@ func newMonitor(ctx context.Context, pgURL string, procs []*serverProc, storePID
 		return nil, fmt.Errorf("connect the sampler: %w", err)
 	}
 
-	mon := blankMonitor(conn, procs, storePID)
+	sampler, err := pgx.ConnectConfig(ctx, poolConfig.ConnConfig)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("connect the sampler: %w", err), conn.Close(context.WithoutCancel(ctx)))
+	}
+
+	var connPID int32
+
+	// A failed read leaves 0: no connection has that PID, so the sample then
+	// counts the connection of the reads too.
+	if pidErr := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&connPID); pidErr != nil {
+		connPID = 0
+	}
+
+	mon := blankMonitor(conn, sampler, procs, storePID)
+	mon.sampleSQL = sampleSQLFor(connPID)
 	mon.pgRoot = postmasterPID(ctx, conn)
 
 	return mon, nil
@@ -795,8 +838,11 @@ func (m *monitor) begin(ctx context.Context) {
 	m.cpu = m.marks()
 	m.txBegin, m.txBeginOK = m.transactions(ctx)
 
-	sampleCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	m.cancel = cancel
+	// The queries run with a context that end never cancels. Each query has
+	// its own bound, so that a hung query cannot block end.
+	queryCtx := context.WithoutCancel(ctx)
+	stop := make(chan struct{})
+	m.stop = stop
 
 	m.sampled.Go(func() {
 		ticker := time.NewTicker(sampleEvery)
@@ -804,14 +850,16 @@ func (m *monitor) begin(ctx context.Context) {
 
 		for {
 			select {
-			case <-sampleCtx.Done():
+			case <-stop:
 				return
 			case <-ticker.C:
 				var count int
 
-				err := m.conn.QueryRow(sampleCtx, `SELECT count(*) FROM pg_stat_activity
-					WHERE datname = current_database() AND backend_type = 'client backend'
-					AND pid <> pg_backend_pid()`).Scan(&count)
+				sampleCtx, cancel := context.WithTimeout(queryCtx, m.sampleTimeout)
+				err := m.sampler.QueryRow(sampleCtx, m.sampleSQL).Scan(&count)
+
+				cancel()
+
 				if err == nil {
 					m.mu.Lock()
 					m.counts = append(m.counts, count)
@@ -824,9 +872,14 @@ func (m *monitor) begin(ctx context.Context) {
 
 // end stops the samples and answers the resources of the window.
 func (m *monitor) end(ctx context.Context, window time.Duration, requests int) ResourceStats {
-	// The sampler and the transaction read share one connection, and a
-	// connection serves one query at a time. Stop the sampler first.
-	m.cancel()
+	// Stop the sampler first, so that end waits for at most one query, and
+	// that query has its own bound. The sampler has its own connection: a
+	// canceled sample does not close the connection of the transaction read.
+	// A second call, or a call before begin, stops nothing and does not panic.
+	if m.stop != nil {
+		m.stopOnce.Do(func() { close(m.stop) })
+	}
+
 	m.sampled.Wait()
 
 	now := m.marks()
@@ -948,8 +1001,18 @@ func costPer1k(requests int, cores *float64, seconds float64) *float64 {
 
 // close ends the database connection.
 func (m *monitor) close(ctx context.Context) error {
-	if err := m.conn.Close(context.WithoutCancel(ctx)); err != nil {
-		return fmt.Errorf("close the sampler connection: %w", err)
+	bg := context.WithoutCancel(ctx)
+
+	var errs []error
+
+	if m.sampler != nil {
+		errs = append(errs, m.sampler.Close(bg))
+	}
+
+	errs = append(errs, m.conn.Close(bg))
+
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("close the sampler connections: %w", err)
 	}
 
 	return nil

@@ -91,6 +91,7 @@ func runRefusalTextCase(t *testing.T, name, method string) {
 		authenticator:  nil,
 		logger:         nil,
 		onAuditFailure: nil,
+		tempAdmins:     nil,
 	})
 
 	status, body := floorCall(t, h, method, floorPath(method, idA), "test-token")

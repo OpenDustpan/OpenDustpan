@@ -130,6 +130,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyManualLockTables()...)
 	tables = append(tables, pgCopyPreferenceTables()...)
 	tables = append(tables, pgCopyForgeLinkTables()...)
+	tables = append(tables, pgCopyFirstAdministratorTables()...)
 	tables = append(tables, pgCopyLocalUserTables()...)
 	tables = append(tables, pgCopySavedViewTables()...)
 	tables = append(tables, pgCopyDriftTables()...)
@@ -418,10 +419,10 @@ func pgControlTables() []pgCopyTable {
 		{
 			table: backup.TableDurableOperations,
 			columns: []string{
-				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries", "failures",
-				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
-				"cancel_requested_at_ms",
-				"not_before_ms", "created_at_ms", "updated_at_ms",
+				"id", "start_key", "kind", "input", pgColVersion, "state", "attempt", "expiries",
+				"deadline_releases", "failures", "last_error", "claim_owner", "claim_token",
+				"claim_expires_at_ms", "cancel_requested",
+				"cancel_requested_at_ms", "not_before_ms", "created_at_ms", "updated_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -562,6 +563,14 @@ func pgEmptiedTables() []pgCopyTable {
 			orderBy: []string{pgColOwner},
 		},
 		{
+			table: backup.TableGitHostEventReceipts,
+			columns: []string{
+				pgColKind, "delivery_id", "body_digest", pgColInstallationID, "event_kind", "repo", "review_id",
+				"received_at_ms",
+			},
+			orderBy: []string{pgColKind, "delivery_id"},
+		},
+		{
 			table:   backup.TableLocalUserResets,
 			columns: pgLocalUserResetColumns(),
 			orderBy: []string{"id"},
@@ -570,6 +579,11 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table:   backup.TableFirstAdministratorCodes,
+			columns: pgFirstAdministratorCodeColumns(),
+			orderBy: []string{"id"},
 		},
 		{
 			table: backup.TableJobTokens,
@@ -782,6 +796,37 @@ func pgControlSpec(table string) (pgCopyTable, error) {
 	return pgCopyTable{}, fmt.Errorf("control table %q has no column list: %w", table, backup.ErrCoverage)
 }
 
+// pgEmptiedSpec returns the column list of the table of backup.EmptiedTables.
+// It returns backup.ErrCoverage for a table with no list.
+func pgEmptiedSpec(table string) (pgCopyTable, error) {
+	for _, spec := range pgEmptiedTables() {
+		if spec.table == table {
+			return spec, nil
+		}
+	}
+
+	return pgCopyTable{}, fmt.Errorf("emptied table %q has no column list: %w", table, backup.ErrCoverage)
+}
+
+// checkEmptiedColumns compares the column list of each table of
+// backup.EmptiedTables with the live columns. Every such table needs a list.
+// Without this loop a table with no list would skip its column check, because
+// the check of unknown tables reads the table names only.
+func (s *Store) checkEmptiedColumns(ctx context.Context) error {
+	for _, table := range backup.EmptiedTables {
+		spec, err := pgEmptiedSpec(table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := s.checkColumns(ctx, spec); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	return nil
+}
+
 // CheckCoverage implements backup.Coverage: it compares the COPY column list of
 // each table of backup.Tables and the column list of each table of
 // backup.ControlTables with the columns that the schema holds for the table.
@@ -810,10 +855,8 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		}
 	}
 
-	for _, spec := range pgEmptiedTables() {
-		if err := s.checkColumns(ctx, spec); err != nil {
-			return err
-		}
+	if err := s.checkEmptiedColumns(ctx); err != nil {
+		return err
 	}
 
 	if err := s.checkNoUnknownTables(ctx); err != nil {
@@ -984,7 +1027,7 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		return pgAttrs{}, fmt.Errorf("select backup blobs: %w", err)
 	}
 
-	blobs := make([]backup.BlobRef, 0, len(rows))
+	rowRefs := make([]backup.BlobRef, 0, len(rows))
 
 	for _, row := range rows {
 		ref, refErr := backupBlobRef(row)
@@ -992,16 +1035,18 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 			return pgAttrs{}, refErr
 		}
 
-		blobs = append(blobs, ref)
+		rowRefs = append(rowRefs, ref)
 	}
 
-	collector := &blobrefs.Collector{}
+	// The collector starts with the references of the rows above, so all
+	// references stay in one slice and the sort below orders it in place.
+	collector := blobrefs.NewCollector(rowRefs)
 	if addErr := addStoredBlobRefs(ctx, qr, pgIdent, collector); addErr != nil {
 		return pgAttrs{}, addErr
 	}
 
 	gathered := collector.BackupRefs()
-	blobs = append(blobs, gathered.Refs...)
+	blobs := gathered.Refs
 	slices.SortFunc(blobs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
 	var version int64
@@ -1131,7 +1176,7 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows, the grants and the
+// sealed state, the namespace IDs, the owned rows, the tag values, the grants and the
 // memberships of principals of a namespace, the removal alert markers and the
 // feature rows. q is the handle of the transaction, so a check can read the
 // clock of the store in it.
@@ -1150,6 +1195,14 @@ func checkStaged(ctx context.Context, q db.DBTX, staging string, restoreAt time.
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if tagsErr := checkStagedStackTags(ctx, q, staging); tagsErr != nil {
+		return tagsErr
+	}
+
+	if idErr := checkStagedGrantIDs(ctx, q, staging); idErr != nil {
+		return idErr
 	}
 
 	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {
@@ -1216,19 +1269,19 @@ func summarizeStagingIn(
 		counts[table] = count
 	}
 
-	blobs, err := stagingBlobRefs(ctx, q, staging)
+	stagedRefs, err := stagingBlobRefs(ctx, q, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
 
 	stagedTable := func(table string) string { return stagingTable(staging, table) }
 
-	collector := &blobrefs.Collector{}
+	collector := blobrefs.NewCollector(stagedRefs)
 	if addErr := addStoredBlobRefs(ctx, q, stagedTable, collector); addErr != nil {
 		return backup.Summary{}, addErr
 	}
 
-	blobs = append(blobs, collector.Refs()...)
+	blobs := collector.Refs()
 
 	version, err := stagingSchemaVersion(ctx, q, staging)
 	if err != nil {

@@ -1161,6 +1161,7 @@ func readOnlyServerGroupCases(t *testing.T, s reachStore, server identity.Object
 		identity.ActionServerReadSettings,
 		identity.ActionServerReadInstances,
 		identity.ActionServerReadGitHost,
+		identity.ActionServerReadFirstAdministrator,
 	}
 
 	out := make([]protectedCase, 0, len(actions))
@@ -1478,11 +1479,12 @@ func testGroupProtected(t *testing.T, s access.Store) {
 	mustCreateSensitiveGrantOn(t, rs, collection, payments)
 
 	// A namespace-wide act-as edge reaches each service principal of the
-	// namespace. One of them holds a sensitive action on the installation,
-	// so the group is protected through the edge alone. A restored backup
-	// can hold such a grant: the suite writes the grant before the
-	// principal, so that the store does not refuse it for the namespace of
-	// the principal.
+	// namespace. One of them holds a planted grant on the installation. The
+	// authorizer honors no such grant of a principal of a namespace, so the
+	// reach drops it too and the group is not protected through the edge. A
+	// restored backup can hold such a grant: the suite writes the grant
+	// before the principal, so that the store does not refuse it for the
+	// namespace of the principal.
 	namespaceWide := mustCreateMemberGroup(t, rs, "grp-namespace-wide", "grp-namespace-wide", "prn-outsider")
 	nsTokens := newRole("rol-namespace-wide", "rol-namespace-wide", identity.ActionNamespaceManagePrincipalTokens)
 	mustCreateRole(t, rs, nsTokens)
@@ -1508,8 +1510,8 @@ func testGroupProtected(t *testing.T, s access.Store) {
 		},
 		{name: "an act-as edge reaches the operator action of the service principal", group: actAs.ID, want: true},
 		{
-			name:  "a namespace-wide act-as edge reaches a service principal that holds a sensitive action",
-			group: namespaceWide.ID, want: true,
+			name:  "a namespace-wide act-as edge does not reach a planted installation grant of a namespace principal",
+			group: namespaceWide.ID, want: false,
 		},
 		{name: "an unknown group is not protected", group: "grp-missing", want: false},
 	}

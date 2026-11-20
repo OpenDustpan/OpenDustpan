@@ -214,7 +214,11 @@ type CheckpointStacks interface {
 
 // UpdatesConfig holds the dependencies of Updates.
 type UpdatesConfig struct {
-	Updates     UpdateStore
+	Updates UpdateStore
+	// Membership answers which collection holds a stack. Required: the create
+	// and the start of an update refuse a stack in no collection, and a nil
+	// port is a construction error.
+	Membership  Membership
 	Checkpoints CheckpointStore
 	Events      EventStore
 	Namespaces  *namespace.Service
@@ -289,6 +293,7 @@ type ManualLocks interface {
 // the stores, and only their digests are persisted.
 type Updates struct {
 	updates        UpdateStore
+	membership     Membership
 	checkpoints    CheckpointStore
 	events         EventStore
 	namespaces     *namespace.Service
@@ -339,6 +344,8 @@ func checkUpdatesConfig(cfg *UpdatesConfig) error {
 	switch {
 	case cfg.Updates == nil:
 		return fmt.Errorf("%w: update store", ErrMissingDependency)
+	case cfg.Membership == nil:
+		return fmt.Errorf("%w: collection membership", ErrMissingDependency)
 	case cfg.Checkpoints == nil:
 		return fmt.Errorf("%w: checkpoint store", ErrMissingDependency)
 	case cfg.Events == nil:
@@ -358,6 +365,7 @@ func checkUpdatesConfig(cfg *UpdatesConfig) error {
 func buildUpdates(cfg *UpdatesConfig, access blobAccess) *Updates {
 	s := &Updates{
 		updates:        cfg.Updates,
+		membership:     cfg.Membership,
 		checkpoints:    cfg.Checkpoints,
 		events:         cfg.Events,
 		namespaces:     cfg.Namespaces,
@@ -416,6 +424,10 @@ type Started struct {
 // asked in CreatedBy and, for a restore, which version it copies in
 // RestoredFrom, both as given in plan.
 func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error) {
+	if err := s.requirePlaced(ctx, ref); err != nil {
+		return Update{}, err
+	}
+
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
 		return Update{}, err
@@ -490,6 +502,10 @@ type StartedBy struct {
 func (s *Updates) StartBy(
 	ctx context.Context, ref Ref, id UpdateID, by StartedBy, journalVersion int64,
 ) (Started, error) {
+	if err := s.requirePlaced(ctx, ref); err != nil {
+		return Started{}, err
+	}
+
 	ns, err := s.writable(ctx, ref)
 	if err != nil {
 		return Started{}, err

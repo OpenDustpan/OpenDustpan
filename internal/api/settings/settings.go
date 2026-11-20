@@ -257,6 +257,9 @@ func classifyBody(err error) (problem.Problem, bool) {
 	}
 
 	switch {
+	case errors.Is(err, textbody.ErrRepeatedKey):
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid,
+			"the body names a key two times: send each key one time"), true
 	case errors.Is(err, errBody), errors.Is(err, textbody.ErrEmpty), errors.Is(err, textbody.ErrText),
 		errors.Is(err, textbody.ErrJSON), errors.Is(err, textbody.ErrUnreadable):
 		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid,

@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -70,6 +71,10 @@ type Config struct {
 	// no lock route, so a namespace store that holds no manual locks keeps the
 	// rest of the API unchanged.
 	Locks *manuallock.Service
+	// Records keeps the replay records of the bulk lock routes: one for each
+	// call and one for each unit of a call. It is optional: nil makes a bulk
+	// request with the Idempotency-Key header answer 400.
+	Records idempotency.Store
 	// OutputSharing serves the routes of the output sharing setting of a
 	// namespace. It is optional: nil serves no such route.
 	OutputSharing *outputsharesvc.Service
@@ -122,6 +127,7 @@ type Handler struct {
 	collections   *collection.Service
 	placements    *collection.PlacementService
 	locks         *manuallock.Service
+	records       idempotency.Store
 	outputSharing *outputsharesvc.Service
 	outputs       *outputsharesvc.Reader
 	moves         MoveChecker
@@ -202,6 +208,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		collections:   cfg.Collections,
 		placements:    cfg.Placements,
 		locks:         cfg.Locks,
+		records:       cfg.Records,
 		outputSharing: cfg.OutputSharing,
 		outputs:       cfg.Outputs,
 		moves:         cfg.Moves,

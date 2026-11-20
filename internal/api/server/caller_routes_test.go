@@ -42,7 +42,8 @@ func newAccessTokens(t *testing.T, st *sqlite.Store, clock *envClock) *accesstok
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Authorizer: nil, TempAdmins: nil,
+		Makers: nil,
+		Store:  st, Principals: st, Freshness: nil, Authorizer: nil, TempAdmins: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
@@ -197,7 +198,7 @@ func TestCallerIdempotency(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true, failTempAdminRead: false,
 	})
 	sess := e.freshSignIn(t)
 
@@ -325,7 +326,7 @@ func TestCallerHostile(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
-		namespaces: nil, hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true,
+		namespaces: nil, hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true, failTempAdminRead: false,
 	})
 	sess := e.freshSignIn(t)
 
@@ -593,9 +594,17 @@ func TestCallerTokenManageOwnRefused(t *testing.T) {
 	t.Parallel()
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil,
-		authz:      selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionTokenManageOwn: true}},
-		namespaces: nil, hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false,
+		autoCreate:        true,
+		noPolicyRoutes:    false,
+		noGateEngine:      false,
+		stored:            nil,
+		authz:             selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionTokenManageOwn: true}},
+		namespaces:        nil,
+		hostile:           nil,
+		passwords:         nil,
+		failPolicyRead:    nil,
+		idempotency:       false,
+		failTempAdminRead: false,
 	})
 	sess := e.freshSignIn(t)
 
@@ -661,8 +670,17 @@ func ownTokenScenarios() map[string]headertest.Scenario {
 			t.Helper()
 
 			e := newSignInEnvWith(t, signInEnvOptions{
-				autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
-				namespaces: nil, hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: true,
+				autoCreate:        true,
+				noPolicyRoutes:    false,
+				noGateEngine:      false,
+				stored:            nil,
+				authz:             nil,
+				namespaces:        nil,
+				hostile:           nil,
+				passwords:         nil,
+				failPolicyRead:    nil,
+				idempotency:       true,
+				failTempAdminRead: false,
 			})
 			sess := e.freshSignIn(t)
 

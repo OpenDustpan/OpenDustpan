@@ -90,8 +90,8 @@ func Run(t *testing.T, newStore Factory) {
 			test: testBreakGlassParallelDelete,
 		},
 		{
-			name: "a break-glass flag on a person with a local password fails with ErrBreakGlassPassword",
-			test: testBreakGlassPasswordRefused,
+			name: "an update does not set or clear the break-glass flag",
+			test: testUpdateKeepsBreakGlassFlag,
 		},
 		{name: "only an active membership counts for IsActiveMemberOfAny", test: testActiveMemberOfAny},
 		{name: "IsActiveMemberOfAny refuses too many group IDs", test: testActiveMemberOfAnyBound},
@@ -1166,7 +1166,7 @@ func testChangeAppendsEntry(t *testing.T, s principal.Store) {
 		t.Fatalf("create: %v", err)
 	}
 
-	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

@@ -555,7 +555,7 @@ func (s *denialAuditStore) AppendServer(_ context.Context, e audit.Entry) (audit
 
 // List implements audit.Store.
 func (*denialAuditStore) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil, More: false}, nil
 }
 
 // Check implements audit.Store.

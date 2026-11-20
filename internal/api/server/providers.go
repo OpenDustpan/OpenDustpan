@@ -14,8 +14,10 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -47,8 +49,8 @@ var (
 
 // providerResponse is one sign-in provider on the wire. Source is "api"
 // for a provider of the API and "static" for a provider of the
-// configuration of the server, which has no issuer, client ID, scopes,
-// version or times in the answer. ClientSecretSet is true when the
+// configuration of the server, which has no version or times in the answer.
+// Its issuer, client ID and scopes are the effective values of the settings. ClientSecretSet is true when the
 // provider has a client secret; no answer holds the secret.
 //
 // Contract: never remove or rename these fields.
@@ -65,6 +67,11 @@ type providerResponse struct {
 	AutoCreate      bool     `json:"autoCreate"`
 	Enabled         bool     `json:"enabled"`
 	ClientSecretSet bool     `json:"clientSecretSet"`
+	// IssuerRefused is true for a stored provider whose issuer the server
+	// now refuses, for example a row from an older version or a restored
+	// backup. Such a provider cannot sign a person in. PATCH it with
+	// {"enabled": false} to disable it.
+	IssuerRefused bool `json:"issuerRefused"`
 	// Mode is "oidc", "oauth" or "ldap". The four fields below are set for
 	// "oauth" only, and LDAP for "ldap" only.
 	Mode             string          `json:"mode"`
@@ -288,6 +295,12 @@ func (h *Handler) createProvider(
 		return none, errProviderCreateBody
 	}
 
+	if mode == session.ModeOIDC {
+		if err := checkProviderIssuer(req.Issuer); err != nil {
+			return none, err
+		}
+	}
+
 	in := session.ProviderInput{
 		ID: *req.ID, Mode: mode, Issuer: valueOr(req.Issuer, ""), DisplayName: valueOr(req.DisplayName, *req.ID),
 		ClientID: *req.ClientID, ClientSecret: *req.ClientSecret, Scopes: valueOr(req.Scopes, []string{}),
@@ -340,6 +353,12 @@ func (h *Handler) changeProvider(
 		return session.ProviderConfig{}, err
 	}
 
+	if req.Mode == nil || session.ProviderMode(*req.Mode) == session.ModeOIDC {
+		if err := checkProviderIssuer(req.Issuer); err != nil {
+			return session.ProviderConfig{}, err
+		}
+	}
+
 	c := session.ProviderChange{
 		Mode: (*session.ProviderMode)(req.Mode), Issuer: req.Issuer, DisplayName: req.DisplayName,
 		ClientID: req.ClientID, ClientSecret: req.ClientSecret, Scopes: req.Scopes, OAuth: req.oauthChange(),
@@ -352,6 +371,25 @@ func (h *Handler) changeProvider(
 	}
 
 	return p, nil
+}
+
+// checkProviderIssuer refuses an issuer of a request body that
+// session.CheckIssuer refuses. It checks nothing for a request with no issuer.
+// The error never holds the issuer, because the issuer can hold a password.
+func checkProviderIssuer(issuer *string) error {
+	// Defense in depth: the session layer checks the issuer of a provider
+	// that it stores, and the sign-in client checks it when it connects. This
+	// check stays so that the handler stops a hostile issuer at the boundary,
+	// before any write and before any audit text. It does not rely on them.
+	if issuer == nil {
+		return nil
+	}
+
+	if err := session.CheckIssuer(*issuer); err != nil {
+		return fmt.Errorf("%w: %w", session.ErrInvalidProvider, err)
+	}
+
+	return nil
 }
 
 // deleteSignInProvider serves DELETE /api/server/sign-in-providers/{id}:
@@ -402,12 +440,30 @@ const invalidProviderRef = "sign-in-provider:?"
 // storedProviderOf returns the wire form of a provider of the API.
 func storedProviderOf(p *session.ProviderConfig) providerResponse {
 	out := providerResponse{
-		CreatedAt: optionalWireTime(p.CreatedAt), UpdatedAt: optionalWireTime(p.UpdatedAt), ID: p.ID,
-		Source: providerSourceAPI, Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
-		Scopes: valueOr(&p.Scopes, []string{}), Version: p.Version, AutoCreate: p.AutoCreate, Enabled: p.Enabled,
-		ClientSecretSet: len(p.SealedSecret) > 0, Mode: string(p.Mode), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil, LDAP: nil,
+		CreatedAt:   optionalWireTime(p.CreatedAt),
+		UpdatedAt:   optionalWireTime(p.UpdatedAt),
+		ID:          p.ID,
+		Source:      providerSourceAPI,
+		Issuer:      p.Issuer,
+		DisplayName: p.DisplayName,
+		ClientID:    p.ClientID,
+		Scopes:      valueOr(&p.Scopes, []string{}),
+		Version:     p.Version,
+		AutoCreate:  p.AutoCreate,
+		Enabled:     p.Enabled,
+		ClientSecretSet: len(
+			p.SealedSecret,
+		) > 0,
+		IssuerRefused:    false,
+		Mode:             string(p.Mode),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
+		LDAP:             nil,
 	}
+
+	out.IssuerRefused = p.Mode == session.ModeOIDC && session.CheckIssuer(p.Issuer) != nil
 
 	if p.Mode == session.ModeOAuth {
 		out.AuthorizationURL, out.TokenURL, out.UserinfoURL = p.OAuth.AuthorizationURL, p.OAuth.TokenURL,
@@ -489,11 +545,48 @@ func (c *providerClaimsChange) email() string {
 // configuration of the server.
 func staticProviderOf(p SignInProvider) providerResponse {
 	return providerResponse{
-		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
-		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: true, Mode: string(session.ModeOIDC), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil, LDAP: nil,
+		CreatedAt:        nil,
+		UpdatedAt:        nil,
+		ID:               p.ID,
+		Source:           providerSourceStatic,
+		Issuer:           publicIssuer(p.Issuer),
+		DisplayName:      p.DisplayName,
+		ClientID:         p.ClientID,
+		Scopes:           nonNilRanges(p.Scopes),
+		Version:          0,
+		AutoCreate:       p.AutoCreate,
+		Enabled:          true,
+		ClientSecretSet:  true,
+		IssuerRefused:    false,
+		Mode:             string(session.ModeOIDC),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
+		LDAP:             nil,
 	}
+}
+
+// publicIssuer returns issuer as the list of the providers shows it: the URL
+// with no user information, query or fragment. Defense in depth: the server
+// refuses an issuer with user information, and this function
+// stays so that a new way to set an issuer cannot put a credential in an
+// answer. An issuer that does not parse, has no host, or has a scheme other
+// than https or http shows as empty. The scheme check does not rely on the
+// check of the CLI (CheckURL) or on the check of the OAuth issuer
+// (validate). The path keeps its escaped form, so that an encoded CR or LF
+// stays encoded in the answer.
+func publicIssuer(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return ""
+	}
+
+	return u.Scheme + "://" + u.Host + u.EscapedPath()
 }
 
 // classifyProviders maps the sign-in provider errors to their status and

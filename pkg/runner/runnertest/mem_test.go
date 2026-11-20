@@ -239,6 +239,10 @@ func (m *mem) CreatePool(
 		return runner.Pool{}, err
 	}
 
+	if p.Namespace != fence.Namespace {
+		return runner.Pool{}, runner.ErrInvalid
+	}
+
 	n := 0
 
 	for k := range m.pools {
@@ -258,7 +262,7 @@ func (m *mem) CreatePool(
 		return runner.Pool{}, runner.ErrLimit
 	}
 
-	p.ID, p.Namespace = nextID(m, runner.PoolIDPrefix), fence.Namespace
+	p.ID = nextID(m, runner.PoolIDPrefix)
 	m.pools[p.ID] = p
 	appendAudit(m, fence, e)
 

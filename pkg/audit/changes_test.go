@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -130,6 +131,15 @@ func TestValidateChecksTheChanges(t *testing.T) {
 			{Key: "region", Old: nil, New: "b", Layer: "env", TakesEffect: ""},
 		}},
 		{"invalid UTF-8", []audit.Change{{Key: "region", Old: nil, New: "\xff", Layer: "file", TakesEffect: ""}}},
+		{"key with CR LF", changeOf("tags.evil\r\nInjected: yes", "set", nil, "", "")},
+		{"key with hidden rune", changeOf("tags.a"+string(rune(0x200b))+"b", "set", nil, "", "")},
+		{"key too long", changeOf(strings.Repeat("k", audit.MaxChangeKeyLen+1), "set", nil, "", "")},
+		{"new with hidden", changeOf("region", "a\rb", nil, "", "")},
+		{"new with zero width", changeOf("region", "a"+string(rune(0x200b)), nil, "", "")},
+		{"new too long", changeOf("region", strings.Repeat("v", audit.MaxChangeValueLen+1), nil, "", "")},
+		{"old with hidden", changeOf("region", "x", new("a"+string(rune(0x202e))+"b"), "", "")},
+		{"layer with line break", changeOf("region", "x", nil, "f\nile", "")},
+		{"takes effect with hidden", changeOf("region", "x", nil, "", "n"+string(rune(0x2028))+"ext")},
 		{"too many", func() []audit.Change {
 			out := make([]audit.Change, 0, audit.MaxChanges+1)
 			for i := range audit.MaxChanges + 1 {
@@ -162,6 +172,13 @@ func TestValidateChecksTheChanges(t *testing.T) {
 		})
 	}
 
+	list := testEntry()
+	list.Changes = changeOf("tokenManagers", "a: x\nb:\ty", new("c: y"), "", "")
+
+	if err := list.Validate(); err != nil {
+		t.Fatalf("Validate of a value with one item on each line: %v", err)
+	}
+
 	ok := testEntry()
 	ok.Changes = changesFixture()
 	ok.Channel = audit.ChannelStartup
@@ -175,4 +192,9 @@ func TestValidateChecksTheChanges(t *testing.T) {
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("Validate of a config-file entry: %v", err)
 	}
+}
+
+// changeOf answers a list of one change with all its fields.
+func changeOf(key, newValue string, old *string, layer, takesEffect string) []audit.Change {
+	return []audit.Change{{Key: key, Old: old, New: newValue, Layer: layer, TakesEffect: takesEffect}}
 }

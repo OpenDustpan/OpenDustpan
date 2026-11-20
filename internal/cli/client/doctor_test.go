@@ -122,9 +122,17 @@ func TestDoctorLocalChecks(t *testing.T) {
 		},
 		{
 			name: "a key in the variable",
-			env:  map[string]string{"DUSTPAN_KEY_ENCRYPTION_KEY": strings.TrimSpace(doctorKey)},
+			env: map[string]string{
+				"DUSTPAN_KEY_ENCRYPTION_KEY": strings.TrimSpace(doctorKey),
+				"DUSTPAN_ADMIN_TOKEN":        doctorToken,
+			},
 			args: func(dir, _ string) []string {
-				return []string{"--database", "sqlite:" + filepath.Join(dir, "dustpan.db")}
+				return []string{
+					"--database",
+					"sqlite:" + filepath.Join(dir, "dustpan.db"),
+					"--listen",
+					"127.0.0.1:8080",
+				}
 			},
 			want:    []string{"pass  key: the key-encryption key is set in DUSTPAN_KEY_ENCRYPTION_KEY"},
 			wantErr: nil,
@@ -149,13 +157,27 @@ func TestDoctorLocalChecks(t *testing.T) {
 			wantErr: client.ErrDoctorFailed,
 		},
 		{
+			name: "no admin token", env: nil, args: goodArgs,
+			want: []string{
+				"fail  admin token: no admin token is set: set DUSTPAN_ADMIN_TOKEN or DUSTPAN_ADMIN_TOKEN_FILE",
+				"openssl rand -hex 32",
+			},
+			wantErr: client.ErrDoctorFailed,
+		},
+		{
 			name: "a short admin token", env: map[string]string{"DUSTPAN_ADMIN_TOKEN": "short-token"}, args: goodArgs,
 			want:    []string{"fail  admin token: an admin token has fewer than 32 bytes"},
 			wantErr: client.ErrDoctorFailed,
 		},
 		{
+			name: "a duplicate admin token",
+			env:  map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken + "," + doctorToken}, args: goodArgs,
+			want:    []string{"fail  admin token: ", "token 2 is a duplicate"},
+			wantErr: client.ErrDoctorFailed,
+		},
+		{
 			name: "no backup target",
-			env:  nil,
+			env:  map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
 			args: func(dir, key string) []string {
 				return []string{
 					"--database", "sqlite:" + filepath.Join(dir, "dustpan.db"),
@@ -164,12 +186,45 @@ func TestDoctorLocalChecks(t *testing.T) {
 			},
 			want: []string{
 				"warn  backup target: no backup target is set",
-				"warn  listen address: :8080 is not a loopback address",
+				`fail  listen address: --listen ":8080" (DUSTPAN_LISTEN) is not a loopback address and has no TLS`,
+				"--allow-plain-http",
+			},
+			wantErr: client.ErrDoctorFailed,
+		},
+		{
+			name: "plain HTTP with an http public URL", env: map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
+			args: func(dir, key string) []string {
+				return append(goodArgs(dir, key), "--listen", ":8080", "--public-url", "http://dustpan.example")
+			},
+			want:    []string{`fail  listen address: --listen ":8080" (DUSTPAN_LISTEN) is not a loopback address`},
+			wantErr: client.ErrDoctorFailed,
+		},
+		{
+			name: "plain HTTP with the opt-in", env: map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
+			args: func(dir, key string) []string {
+				return append(goodArgs(dir, key), "--listen", ":8080", "--allow-plain-http")
+			},
+			want: []string{
+				"warn  listen address: :8080 is not a loopback address and uses plain HTTP, because --allow-plain-http is set",
 			},
 			wantErr: nil,
 		},
 		{
-			name: "TLS on a public address", env: nil,
+			name:    "plain HTTP with the opt-in variable",
+			env:     map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken, "DUSTPAN_ALLOW_PLAIN_HTTP": "true"},
+			args:    func(dir, key string) []string { return append(goodArgs(dir, key), "--listen", ":8080") },
+			want:    []string{"warn  listen address: :8080 is not a loopback address and uses plain HTTP"},
+			wantErr: nil,
+		},
+		{
+			name:    "plain HTTP with a hostile opt-in variable",
+			env:     map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken, "DUSTPAN_ALLOW_PLAIN_HTTP": "yes"},
+			args:    func(dir, key string) []string { return append(goodArgs(dir, key), "--listen", ":8080") },
+			want:    []string{"fail  listen address: "},
+			wantErr: client.ErrDoctorFailed,
+		},
+		{
+			name: "TLS on a public address", env: map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
 			args: func(dir, key string) []string {
 				return append(goodArgs(dir, key), "--listen", ":8443", "--tls-cert", "c.pem", "--tls-key", "k.pem")
 			},
@@ -177,7 +232,8 @@ func TestDoctorLocalChecks(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name: "a proxy with https and no trusted proxies", env: nil,
+			name: "a proxy with https and no trusted proxies",
+			env:  map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
 			args: func(dir, key string) []string {
 				return append(goodArgs(dir, key), "--listen", ":8080", "--public-url", "https://dustpan.example")
 			},
@@ -188,7 +244,7 @@ func TestDoctorLocalChecks(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name: "a proxy with trusted proxies", env: nil,
+			name: "a proxy with trusted proxies", env: map[string]string{"DUSTPAN_ADMIN_TOKEN": doctorToken},
 			args: func(dir, key string) []string {
 				return append(
 					goodArgs(dir, key),

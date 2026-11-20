@@ -172,6 +172,7 @@ spec:
             - "--log-format=json"
             - --console-dir=/console
             - --blob-dir=/data/blobs
+            - "--public-url=https://dustpan.example"
           env:
             - name: DUSTPAN_LISTEN
               value: ":8080"
@@ -185,6 +186,11 @@ spec:
                 secretKeyRef:
                   name: "opendustpan-key-encryption-key"
                   key: "key-encryption-key"
+            - name: DUSTPAN_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: "opendustpan-admin-token"
+                  key: "admin-token"
           ports:
             - name: http
               containerPort: 8080

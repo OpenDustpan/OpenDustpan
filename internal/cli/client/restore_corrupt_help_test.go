@@ -134,6 +134,12 @@ func TestRestoreStoppedAtLiveBlobsNamesTheRepair(t *testing.T) {
 			errText: `restore leaves too few working break-glass accounts: the change leaves too few working ` +
 				`break-glass accounts`,
 		},
+		{
+			name: "a break-glass account with a local password", code: "principal.break-glass-password",
+			help: "restore a backup that holds no break-glass account with a local password",
+			errText: `restore holds 1 break-glass accounts with a local password: break-glass account must have ` +
+				`no local password: remove the password first`,
+		},
 	} {
 		srv := serveCodedRestore(t, tc.errText, tc.code)
 

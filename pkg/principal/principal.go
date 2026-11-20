@@ -51,15 +51,21 @@ var (
 	// ErrManagedByDirectory reports a membership change through the API of
 	// a group that a directory sync keeps (ADR 55). The error names the
 	// directory.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrManagedByDirectory = errors.New("group is managed by a directory")
 	// ErrNotDisabled reports an enable of a principal that is not disabled.
 	ErrNotDisabled = errors.New("principal is not disabled")
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
 	// ErrNoWorkingBreakGlass reports a change that leaves too few working
 	// break-glass accounts. An installation keeps its floors of break-glass
 	// accounts, as an emergency way in.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNoWorkingBreakGlass = errors.New("the change leaves too few working break-glass accounts")
 	// ErrBreakGlassUnavailable reports that the store cannot count the
 	// working break-glass accounts. A caller that cannot count refuses the
@@ -67,14 +73,26 @@ var (
 	ErrBreakGlassUnavailable = errors.New("break-glass account count unavailable")
 	// ErrBreakGlassPassword reports a write that sets the break-glass flag on
 	// a person who has a local password. A break-glass account signs in with
-	// a passkey or a hardware key only, so the password goes first.
+	// a passkey or a hardware key only, so the password goes first. No port
+	// sets the flag on a person that exists. A restore writes the rows of a
+	// backup, so the restore of each store refuses data that holds a
+	// break-glass account with a local password, in the transaction of the
+	// swap.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrBreakGlassPassword = errors.New("break-glass account must have no local password: remove the password first")
 	// ErrDisabled reports a principal that is disabled.
 	ErrDisabled = errors.New("principal is disabled")
 	// ErrNotSignInTarget reports a principal that a sign-in through an
 	// identity provider cannot name: one that is not a person, a principal
 	// of a namespace, a break-glass account, or a temporary administrator.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
+	// ErrTempAdminRead reports a failed read of the temporary administrator
+	// records during a sign-in. The sign-in is refused: the person may be a
+	// temporary administrator.
+	ErrTempAdminRead = errors.New("read of the temporary administrator failed")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )

@@ -1,165 +1,85 @@
 ## ADDED Requirements
 
-### Requirement: Distinct approvers across requirements
+### Requirement: Several group requirements on one job
 
-When a change holds more than one approval requirement, the server SHALL allow the apply only with distinct approvers that satisfy each requirement.
+When the approval defaults of the scopes of one unit give more than one requirement, and each requirement names only groups or no approvers, the server SHALL start the job with one named gate for each requirement and SHALL open the approval wait only when every gate has its count of approvals.
 
-#### Scenario: Two requirements need distinct people
-- **WHEN** a namespace rule needs 2 of group platform and a collection rule needs 1 of any person
-- **THEN** the apply stays in awaiting-approval until both requirements hold with no shared approver
+#### Scenario: Two defaults give two gates
+- **GIVEN** a namespace default of 2 approvals of group `platform` and a collection default of 1 approval with no approvers
+- **WHEN** a person starts a job on a unit of that collection
+- **THEN** the job waits in `awaiting-approval` with two gates named `default/<namespace scope key>` and `default`
+- **AND** `GET .../jobs/{job_id}` lists each gate with its name, its count and its filled slots
 
-#### Scenario: Greedy order still finds a valid set
-- **WHEN** one approver is eligible for both requirements and a second approver is eligible for only one requirement
-- **THEN** the server accepts the set and allows the apply
+#### Scenario: A default that names users, unit owners, a fresh window or an unless body still fails the start
+- **GIVEN** a second default that names users, names unit owners, sets `freshAuthSeconds`, or holds an `unless` body
+- **WHEN** a person starts a job
+- **THEN** the start fails with an error that wraps `gate.ErrUnavailable` and names the requirement
 
-### Requirement: Apply refusal names missing approvers
+#### Scenario: More than 3 gates in a phase
+- **WHEN** a decision gives more than 3 gates for one phase
+- **THEN** the start fails with `ErrInvalid` and the job is not stored
 
-When an apply arrives with an unmet approval requirement, the server SHALL refuse with 403 that names each unmet requirement and the count of missing distinct approvers.
+### Requirement: Distinct people across requirements
 
-#### Scenario: Apply with one requirement unmet
-- **WHEN** an apply arrives with an unmet approval requirement
-- **THEN** the server refuses with 403 that names each unmet requirement and the count of missing distinct approvers
+The server SHALL count each approver for at most one slot of one gate of a phase, and SHALL assign approvers to slots with a maximum matching, so that the order of the approvals never changes the result.
 
-### Requirement: One principal counts once
+#### Scenario: One person holds two groups
+- **GIVEN** gate A of group `platform` needs 1 and gate B of group `dba` needs 1
+- **WHEN** only one person who is in both groups approves
+- **THEN** the job keeps waiting, because that person fills one slot
 
-When one principal submits more than one approval for one change, the server SHALL count that principal once.
+#### Scenario: A greedy assignment would fail
+- **GIVEN** Ann is in groups `platform` and `dba`, and Bo is in `platform` only
+- **WHEN** Bo approves first and Ann approves second
+- **THEN** the job opens, with Bo in gate A and Ann in gate B
+- **AND** the same two approvals in the reverse order give the same result
 
-#### Scenario: Duplicate concurrent approvals
-- **WHEN** one principal submits two approvals for one change at the same time
-- **THEN** the server counts that principal once and still waits for the other distinct approver
+#### Scenario: The same person approves twice
+- **WHEN** one person approves a phase a second time
+- **THEN** the server refuses with `job.already-approved` and the person fills one slot
 
-### Requirement: Concurrent applies allow one winner
+### Requirement: An approver fills only the gates that hold the approver
 
-When 2 applies for one change start at the same time, the server SHALL allow exactly 1 apply through RecheckAtApply.
+When a person approves, the server SHALL check the membership of the person by group ID for each gate of the phase, SHALL record the names of the gates that hold the person on the approval, and SHALL refuse an approval when no gate holds the person.
 
-#### Scenario: RecheckAtApply race
-- **WHEN** 2 applies for one change start within the same 100 milliseconds with RecheckAtApply in the apply transaction
-- **THEN** exactly one of the 2 applies proceeds and the other gets 409 with no double apply
+#### Scenario: A member of one group
+- **WHEN** a member of group A only approves a phase with gates A and B
+- **THEN** the approval is stored with `for` that holds the name of gate A only
 
-### Requirement: Users and unit owners as approvers
+#### Scenario: A person in no group
+- **WHEN** a person in no group of any gate approves
+- **THEN** the server refuses with 403, the answer names the requirements of the phase, and no approval is stored
+- **AND** an audit entry records the refusal
 
-When an approval requirement names users or unit owners, the server SHALL count approvals only from principals whose stable ID is eligible at apply time.
+#### Scenario: Fail closed on a read error
+- **WHEN** the group reader returns an error, or the server has no reader
+- **THEN** the server refuses the approval with 403 and stores nothing
 
-#### Scenario: User and owner approvals count
-- **WHEN** a requirement names users or unit owners as eligible approvers
-- **THEN** the requirement counts each approval once
+#### Scenario: An approval with no gate list
+- **GIVEN** a stored approval whose `for` is empty
+- **THEN** the approval fills no slot
 
-#### Scenario: Eligibility lost before apply
-- **WHEN** an approver leaves the named group, stops owning the unit, or returns under a remade principal with a distinct stable ID
-- **THEN** the earlier approval no longer satisfies the requirement
+### Requirement: The starter fills only the gates that allow the starter
 
-### Requirement: Self approval excluded
+The server SHALL let the person who started the job fill a gate only when that gate sets `AllowSelf`.
 
-When the principal who requested the change or started the apply submits an approval, the server SHALL exclude that approval from every requirement.
+#### Scenario: The starter approves
+- **WHEN** the starter is in the group of a gate that does not set `AllowSelf` and approves
+- **THEN** the server refuses with `job.self-approval`
 
-#### Scenario: Requester approves own change
-- **WHEN** the principal who requested the change or started the apply submits an approval
-- **THEN** that approval does not satisfy any requirement and the apply still waits
+### Requirement: Each approval names its requirements in the audit log
 
-### Requirement: Approvals bind to plan revision
+The server SHALL write the audit entry of each approval with the names of the gates that the approval can fill.
 
-When a new plan revision arrives for a change, the server SHALL invalidate approvals recorded for an earlier revision.
+#### Scenario: Approval entry
+- **WHEN** an approval is recorded
+- **THEN** the audit entry has the change `requirements` with the names of the gates, and the change `event`
 
-#### Scenario: Plan changes after approval
-- **WHEN** a new plan revision arrives after approvals were recorded
-- **THEN** the earlier approvals no longer satisfy any requirement
+### Requirement: Any rejection rejects the job
 
-#### Scenario: Withdrawal races apply
-- **WHEN** a withdrawal lands while the apply transaction runs
-- **THEN** RecheckAtApply sees the withdrawal and refuses the apply
+A rejection by a holder of `job:approve` SHALL reject the job, as before this change.
 
-### Requirement: Withdrawn and late approvals
-
-When an approval is withdrawn before the apply, the server SHALL no longer count that approval.
-
-#### Scenario: Approval withdrawn before apply
-- **WHEN** an approver withdraws an approval before the apply
-- **THEN** that approval no longer satisfies any requirement
-
-#### Scenario: Approval arrives after apply start
-- **WHEN** an approval arrives after the apply started
-- **THEN** the server refuses the approval
-
-### Requirement: Fresh authentication window
-
-When an approval requirement sets freshAuthSeconds, the server SHALL refuse an approval whose sign-in age exceeds that window.
-
-#### Scenario: Old sign-in refused
-- **WHEN** an approval arrives after freshAuthSeconds from the sign-in time
-- **THEN** the server refuses the approval with the window value
-
-#### Scenario: Revoked session refused
-- **WHEN** the actor session was revoked after approval and before apply
-- **THEN** the server refuses the approval even inside the window
-
-#### Scenario: Window expires before apply
-- **WHEN** an approval was fresh at approval time but its sign-in age exceeds freshAuthSeconds at apply time
-- **THEN** the server refuses the apply and names the expired approval
-
-### Requirement: Per requirement fresh window
-
-When one change holds requirements with different freshAuthSeconds values, the server SHALL enforce the window of the assigned requirement for each approval.
-
-#### Scenario: Different windows across requirements
-- **WHEN** one change holds requirements with different freshAuthSeconds values
-- **THEN** the approval counts only toward requirements whose window it meets
-
-### Requirement: Unless exemption
-
-When the unless body of an approval requirement matches, the server SHALL mark that requirement exempt with no approvals needed.
-
-#### Scenario: Exempt change skips that approval
-- **WHEN** the unless body matches the change facts
-- **THEN** the requirement shows exempt with the matched reason and needs no approvals while other unmet requirements still block the apply
-
-### Requirement: All requirements exempt
-
-When the unless body of every requirement matches, the server SHALL allow the apply with no approvals.
-
-#### Scenario: Every requirement exempt
-- **WHEN** the unless body of every requirement matches
-- **THEN** the server allows the apply with no approvals and records each exemption
-
-### Requirement: Unless error is not exempt
-
-If the unless body of an approval requirement errors, then the server SHALL treat that requirement as not exempt.
-
-#### Scenario: Unless body errors
-- **WHEN** the gate engine cannot evaluate the unless body
-- **THEN** the requirement stays unmet and the apply still waits
-
-#### Scenario: Unless body times out or is oversize
-- **WHEN** the unless evaluation exceeds 5 seconds or 64 KB
-- **THEN** the requirement stays unmet and the apply still waits
-
-### Requirement: Unless exemption audit record
-
-When an unless body exempts an approval requirement, the server SHALL write an audit entry that names the requirement, its setter, the matched reason, and the time.
-
-#### Scenario: Exemption is recorded
-- **WHEN** an unless body exempts a requirement
-- **THEN** the audit log holds the requirement, the setter, the matched reason, and the time
-
-### Requirement: Requirement cap
-
-When a setter stores more than 10 approval requirements for one change scope, the server SHALL refuse the set.
-
-#### Scenario: Eleventh requirement refused
-- **WHEN** a setter stores an 11th approval requirement for one change scope
-- **THEN** the server refuses the set with 400 and keeps the stored 10
-
-### Requirement: Empty eligible set stays unmet
-
-When a requirement names an empty eligible approver set, the server SHALL keep that requirement unmet.
-
-#### Scenario: No eligible approver exists
-- **WHEN** a requirement names an empty eligible approver set
-- **THEN** the server refuses the apply with 403 that names the requirement
-
-### Requirement: Gate read shows waiting state
-
-When a developer reads the gate list for a change that waits for approvals, the server SHALL show each unmet requirement with the missing count and the window value.
-
-#### Scenario: Developer reads gates before apply
-- **WHEN** a developer reads the gate list for a change that waits for approvals
-- **THEN** the read names each unmet requirement, the missing distinct-approver count, and the freshAuthSeconds value
+#### Scenario: One rejection among several gates
+- **GIVEN** a phase with two gates, and one gate has its approvals
+- **WHEN** a holder of `job:approve` rejects
+- **THEN** the job is rejected

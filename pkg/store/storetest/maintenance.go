@@ -199,7 +199,16 @@ func maintenanceWrites(ctx context.Context, s Store, ns namespace.Namespace, exi
 		{
 			name: "namespace scope: update tags",
 			run: func() error {
-				return s.UpdateStackTags(ctx, existing.Ref, map[string]string{"team": "other"}, now(), ns.Fence())
+				return s.UpdateStackTags(
+					ctx,
+					existing.Ref,
+					stack.TagUpdate{
+						Tags:      map[string]string{"team": "other"},
+						UpdatedAt: now(),
+						Entry:     renameEntry(existing.Ref.Namespace, existing.Ref),
+					},
+					ns.Fence(),
+				)
 			},
 		},
 		{

@@ -413,6 +413,16 @@ func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 	return nil
 }
 
+// ReleaseAtDeadline implements durable.Store.
+func (d *DurableOperations) ReleaseAtDeadline(ctx context.Context, c durable.Claim) error {
+	err := d.end(ctx, c, deadlineReleaseEnd, d.store.inControlTx)
+	if err != nil {
+		return fmt.Errorf("release durable operation %s at its deadline: %w", c.Operation, err)
+	}
+
+	return nil
+}
+
 // GiveBack implements durable.Store.
 func (d *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error {
 	err := d.end(ctx, c, giveBackEnd, d.store.inControlTx)
@@ -598,6 +608,23 @@ func releaseEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, e
 	return endParams(row, durable.StatePending, row.LastError, now, now), nil
 }
 
+// deadlineReleaseEnd is the rule of durable.Store.ReleaseAtDeadline: the end
+// of Release, with one more deadline release in a row when the operation
+// returns to pending. Every other end of a claim sets the count to 0. A
+// cancel that it finds ends the operation without one.
+func deadlineReleaseEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
+	p, err := releaseEnd(row, now)
+	if err != nil {
+		return p, err
+	}
+
+	if !row.CancelRequested {
+		p.DeadlineReleases = row.DeadlineReleases + 1
+	}
+
+	return p, nil
+}
+
 // giveBackEnd is the rule of durable.Store.GiveBack.
 func giveBackEnd(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
 	if row.CancelRequested {
@@ -613,7 +640,8 @@ func endParams(
 	row db.DurableOperation, state durable.State, lastError string, notBeforeMs, now int64,
 ) db.EndDurableClaimParams {
 	return db.EndDurableClaimParams{
-		State: string(state), LastError: lastError, AddFailures: 0, NotBeforeMs: notBeforeMs, NowMs: now, ID: row.ID,
+		State: string(state), LastError: lastError, AddFailures: 0, DeadlineReleases: 0,
+		NotBeforeMs: notBeforeMs, NowMs: now, ID: row.ID,
 	}
 }
 
@@ -708,7 +736,7 @@ func operationFromRow(row db.DurableOperation, steps []db.DurableStep) durable.O
 		ID: durable.ID(row.ID), Key: row.StartKey, Kind: durable.Kind(row.Kind), Version: int(row.Version),
 		Input: slices.Clone(row.Input),
 		State: durable.State(row.State), Steps: nil, Attempt: int(row.Attempt), Failures: int(row.Failures),
-		Expiries: int(row.Expiries), LastError: row.LastError,
+		Expiries: int(row.Expiries), DeadlineReleases: int(row.DeadlineReleases), LastError: row.LastError,
 		Claim: claimFromRow(row), CancelRequested: row.CancelRequested, NotBefore: codec.FromMillis(row.NotBeforeMs),
 		CreatedAt: codec.FromMillis(row.CreatedAtMs), UpdatedAt: codec.FromMillis(row.UpdatedAtMs),
 	}

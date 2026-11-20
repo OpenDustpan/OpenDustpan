@@ -57,7 +57,7 @@ var errUnknownDurableState = errors.New("durable operation row has an unknown st
 
 // durableColumns selects every column of durable_operations, in the order of
 // db.DurableOperation.
-const durableColumns = `SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, ` +
+const durableColumns = `SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, ` +
 	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, ` +
 	`updated_at_ms`
 
@@ -426,7 +426,6 @@ func (o *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease t
 
 		row.ClaimExpiresAtMs = sql.NullInt64{Int64: now + durationMs(lease), Valid: true}
 		row.UpdatedAtMs = now
-
 		if err := writeDurable(ctx, q, row); err != nil {
 			return err
 		}
@@ -470,6 +469,11 @@ func (o *DurableOperations) Release(ctx context.Context, c durable.Claim) error 
 	return o.store.endAttempt(ctx, c, releaseEnd, o.store.inControlTx)
 }
 
+// ReleaseAtDeadline implements durable.Store.
+func (o *DurableOperations) ReleaseAtDeadline(ctx context.Context, c durable.Claim) error {
+	return o.store.endAttempt(ctx, c, deadlineReleaseEnd, o.store.inControlTx)
+}
+
 // GiveBack implements durable.Store.
 func (o *DurableOperations) GiveBack(ctx context.Context, c durable.Claim) error {
 	return o.store.endAttempt(ctx, c, giveBackEnd, o.store.inControlTx)
@@ -490,6 +494,7 @@ func completeEnd(row db.DurableOperation, now int64) (db.DurableOperation, error
 	}
 
 	row.State = string(durable.StateSucceeded)
+	row.DeadlineReleases = 0
 
 	return clearClaim(row, now), nil
 }
@@ -498,10 +503,14 @@ func completeEnd(row db.DurableOperation, now int64) (db.DurableOperation, error
 func failEnd(f durable.Failure) endRule {
 	return func(row db.DurableOperation, now int64) (db.DurableOperation, error) {
 		if row.CancelRequested {
-			return endCanceled(row, now), nil
+			canceled := endCanceled(row, now)
+			canceled.DeadlineReleases = 0
+
+			return canceled, nil
 		}
 
 		row.Failures++
+		row.DeadlineReleases = 0
 		row.LastError = f.Message
 
 		if f.Final {
@@ -518,13 +527,35 @@ func failEnd(f durable.Failure) endRule {
 // releaseEnd is the rule of durable.Store.Release.
 func releaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
 	if row.CancelRequested {
-		return endCanceled(row, now), nil
+		canceled := endCanceled(row, now)
+		canceled.DeadlineReleases = 0
+
+		return canceled, nil
 	}
 
 	row.State = string(durable.StatePending)
 	row.NotBeforeMs = now
+	row.DeadlineReleases = 0
 
 	return clearClaim(row, now), nil
+}
+
+// deadlineReleaseEnd is the rule of durable.Store.ReleaseAtDeadline: the end
+// of Release, with one more deadline release when the operation returns to
+// pending. A cancel that it finds ends the operation without one.
+func deadlineReleaseEnd(row db.DurableOperation, now int64) (db.DurableOperation, error) {
+	held := row.DeadlineReleases
+
+	row, err := releaseEnd(row, now)
+	if err != nil {
+		return row, err
+	}
+
+	if row.State == string(durable.StatePending) {
+		row.DeadlineReleases = held + 1
+	}
+
+	return row, nil
 }
 
 // giveBackEnd is the rule of durable.Store.GiveBack.
@@ -911,6 +942,7 @@ func writeDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) e
 		ClaimExpiresAtMs:    row.ClaimExpiresAtMs,
 		CancelRequested:     row.CancelRequested,
 		CancelRequestedAtMs: row.CancelRequestedAtMs,
+		DeadlineReleases:    row.DeadlineReleases,
 		NotBeforeMs:         row.NotBeforeMs,
 		UpdatedAtMs:         row.UpdatedAtMs,
 		ID:                  row.ID,
@@ -981,22 +1013,23 @@ func loadDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) (d
 	}
 
 	return durable.Operation{
-		ID:              durable.ID(row.ID),
-		Key:             row.StartKey,
-		Kind:            durable.Kind(row.Kind),
-		Version:         int(row.Version),
-		Input:           input,
-		State:           durable.State(row.State),
-		Steps:           records,
-		Attempt:         int(row.Attempt),
-		Failures:        int(row.Failures),
-		Expiries:        int(row.Expiries),
-		LastError:       row.LastError,
-		Claim:           claimOf(row),
-		CancelRequested: row.CancelRequested,
-		NotBefore:       time.UnixMilli(row.NotBeforeMs).UTC(),
-		CreatedAt:       time.UnixMilli(row.CreatedAtMs).UTC(),
-		UpdatedAt:       time.UnixMilli(row.UpdatedAtMs).UTC(),
+		ID:               durable.ID(row.ID),
+		Key:              row.StartKey,
+		Kind:             durable.Kind(row.Kind),
+		Version:          int(row.Version),
+		Input:            input,
+		State:            durable.State(row.State),
+		Steps:            records,
+		Attempt:          int(row.Attempt),
+		Failures:         int(row.Failures),
+		Expiries:         int(row.Expiries),
+		DeadlineReleases: int(row.DeadlineReleases),
+		LastError:        row.LastError,
+		Claim:            claimOf(row),
+		CancelRequested:  row.CancelRequested,
+		NotBefore:        time.UnixMilli(row.NotBeforeMs).UTC(),
+		CreatedAt:        time.UnixMilli(row.CreatedAtMs).UTC(),
+		UpdatedAt:        time.UnixMilli(row.UpdatedAtMs).UTC(),
 	}, nil
 }
 
@@ -1017,9 +1050,24 @@ func queryDurableRows(ctx context.Context, tx *sql.Tx, query string, args []any)
 		var row db.DurableOperation
 
 		err := rows.Scan(
-			&row.ID, &row.StartKey, &row.Kind, &row.Input, &row.Version, &row.State, &row.Attempt, &row.Expiries,
-			&row.Failures, &row.LastError, &row.ClaimOwner, &row.ClaimToken, &row.ClaimExpiresAtMs,
-			&row.CancelRequested, &row.CancelRequestedAtMs, &row.NotBeforeMs, &row.CreatedAtMs, &row.UpdatedAtMs,
+			&row.ID,
+			&row.StartKey,
+			&row.Kind,
+			&row.Input,
+			&row.Version,
+			&row.State,
+			&row.Attempt,
+			&row.Expiries,
+			&row.DeadlineReleases,
+			&row.Failures,
+			&row.LastError,
+			&row.ClaimOwner,
+			&row.ClaimToken,
+			&row.ClaimExpiresAtMs,
+			&row.CancelRequested, &row.CancelRequestedAtMs,
+			&row.NotBeforeMs,
+			&row.CreatedAtMs,
+			&row.UpdatedAtMs,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("read durable operation: %w", err)

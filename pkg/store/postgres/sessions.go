@@ -167,6 +167,11 @@ func (s *Store) GetSession(ctx context.Context, id string) (session.Session, err
 		return session.Session{}, fmt.Errorf("select session: %w", err)
 	}
 
+	return sessionOfRow(row), nil
+}
+
+// sessionOfRow maps the generated session row to the session.
+func sessionOfRow(row db.GetSessionRow) session.Session {
 	return session.Session{
 		CreatedAt:   codec.FromMillis(row.CreatedAtMs),
 		LastSeenAt:  codec.FromMillis(row.LastSeenAtMs),
@@ -179,7 +184,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (session.Session, err
 		SourceIP:    row.SourceIp,
 		UserAgent:   row.UserAgent,
 		Generation:  generationstore.OfSession(row.Generation),
-	}, nil
+	}
 }
 
 // GetSessionByDigest implements session.Store.

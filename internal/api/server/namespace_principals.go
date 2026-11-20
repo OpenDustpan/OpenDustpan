@@ -113,7 +113,7 @@ func (h *Handler) serveNamespacePrincipalRead(op namespacePrincipalOp) RouteHand
 		var none audit.Entry
 
 		if res, ok := h.runNamespacePrincipalOp(w, r, op, &call{p: p, obj: obj, e: none}); ok {
-			h.writePrincipalResult(w, r, res)
+			h.writePrincipalResult(w, r, res, readResult)
 		}
 	}
 }
@@ -135,7 +135,8 @@ func (h *Handler) serveNamespacePrincipalChange(op namespacePrincipalOp) RouteHa
 		}
 
 		if ok {
-			h.writePrincipalResult(w, r, res)
+			h.revokeLostMakers(r, p, action, res.object)
+			h.writePrincipalResult(w, r, res, committedWrite)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,6 +87,7 @@ func runIPAllowlistOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store)
 	})
 	checkIPAllowlistAdmitsInside(ctx, t, env)
 	checkIPAllowlistLeavesOpenAlone(ctx, t, env)
+	checkIPAllowlistListsLeaveOut(ctx, t, env)
 	checkIPAllowlistDelete(ctx, t, env)
 	checkIPAllowlistInstallationList(ctx, t, env, tofu)
 }
@@ -383,6 +385,83 @@ func checkIPAllowlistLeavesOpenAlone(ctx context.Context, t *testing.T, env *e2e
 	})
 }
 
+// checkIPAllowlistListsLeaveOut lists the namespaces and the caller access
+// of the administrator token, whose scope covers every object, from the
+// default source and from the source inside the list. From the default
+// source, the namespace list leaves out the locked namespace and the caller
+// access names it in excluded.namespaces. From inside, both lists hold it.
+func checkIPAllowlistListsLeaveOut(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	cases := []struct {
+		source       string
+		wantLocked   bool
+		wantExcluded []string
+	}{
+		{source: "", wantLocked: false, wantExcluded: []string{"locked"}},
+		{source: ipAllowlistSource, wantLocked: true, wantExcluded: []string{}},
+	}
+
+	for _, tc := range cases {
+		names := listNamespaceNamesFrom(ctx, t, env, tc.source)
+		if slices.Contains(names, "locked") != tc.wantLocked || !slices.Contains(names, "open") {
+			t.Fatalf("namespaces from %q = %v, want locked listed %t and open listed", tc.source, names, tc.wantLocked)
+		}
+
+		var page e2eAccessObjects
+
+		body := serverGetFrom(ctx, t, env, tc.source, "/api/dustpan/v1/me/access/objects?type=namespace")
+		if err := json.Unmarshal([]byte(body), &page); err != nil {
+			t.Fatalf("decode caller access %s: %v", body, err)
+		}
+
+		if !page.All || !slices.Equal(page.Excluded.Namespaces, tc.wantExcluded) {
+			t.Fatalf("caller access from %q = %s, want all with excluded %v", tc.source, body, tc.wantExcluded)
+		}
+	}
+}
+
+// listNamespaceNamesFrom answers the names of the first page of the
+// namespace list from source, or from the default source when source is
+// empty.
+func listNamespaceNamesFrom(ctx context.Context, t *testing.T, env *e2e.Env, source string) []string {
+	t.Helper()
+
+	var page e2eNamespaceList
+
+	body := serverGetFrom(ctx, t, env, source, "/api/server/namespaces?limit=1000")
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatalf("decode namespace list %s: %v", body, err)
+	}
+
+	names := make([]string, 0, len(page.Namespaces))
+	for i := range page.Namespaces {
+		names = append(names, page.Namespaces[i].Name)
+	}
+
+	return names
+}
+
+// serverGetFrom sends one GET with the administrator token from source, or
+// from the default source when source is empty, and fails unless it answers
+// 200. It answers the body.
+func serverGetFrom(ctx context.Context, t *testing.T, env *e2e.Env, source, path string) string {
+	t.Helper()
+
+	if source == "" {
+		return ipAllowlistCall(ctx, t, env, ipAllowlistStep{
+			step: "read " + path, method: http.MethodGet, path: path, body: "", want: http.StatusOK,
+		})
+	}
+
+	status, body, err := env.ServerAPIStatusFrom(ctx, source, env.TokenA(), http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s from %s answers %d (%s): %v", path, source, status, body, err)
+	}
+
+	return body
+}
+
 // checkIPAllowlistDelete deletes the rule from a source inside the list and
 // reads the locked namespace from the default source again: it passes now.
 func checkIPAllowlistDelete(ctx context.Context, t *testing.T, env *e2e.Env) {
@@ -427,6 +506,8 @@ func checkIPAllowlistInstallationList(ctx context.Context, t *testing.T, env *e2
 // settings with a fresh console session and wants 200.
 func patchInstallationList(ctx context.Context, t *testing.T, env *e2e.Env, body string) {
 	t.Helper()
+
+	env.PrepareFreshAdmin(ctx, t)
 
 	resp, _ := settingsRead(ctx, t, env, settingsRoute)
 

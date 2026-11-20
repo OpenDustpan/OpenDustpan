@@ -107,8 +107,8 @@ A principal has these fields:
 | `disabledAt` | The time of the disable, or `null` when the principal is enabled. |
 | `namespace` | The namespace of a namespace principal. Empty for an installation principal. |
 | `groupCount` | The number of groups the principal is in. |
-| `temporaryAdministrator` | Whether the principal is a temporary administrator. |
-| `temporaryExpiresAt` | The end of the temporary administrator period. |
+| `temporaryAdministrator` | Whether the principal is a temporary administrator. `true` with a `null` `temporaryExpiresAt` means that the server could not read the temporary administrator records after a change, and marked the person to be safe. |
+| `temporaryExpiresAt` | The end of the temporary administrator period. `null` when the principal has no period, or when the server could not read it. |
 
 ## Change a principal
 
@@ -163,6 +163,9 @@ The delete is refused in these cases:
 | The last enabled break-glass account | `409` | `principal.no-working-break-glass` |
 | The last site administrator | `409` | `access.last-site-administrator` |
 | A namespace service subject | `400` | `principal.reserved-subject` |
+
+The refusal of the last site administrator writes an audit entry with the
+outcome `failure` and the reason `access.last-site-administrator`.
 
 ## Groups
 

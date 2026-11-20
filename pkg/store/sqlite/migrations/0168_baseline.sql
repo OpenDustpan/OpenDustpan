@@ -301,7 +301,11 @@ CREATE TABLE roles (
 ) STRICT;
 
 CREATE TABLE grants (
-    id            TEXT    NOT NULL PRIMARY KEY,
+    id            TEXT    NOT NULL PRIMARY KEY CHECK (
+        length(CAST(id AS BLOB)) BETWEEN 5 AND 64 AND length(CAST(id AS BLOB)) = length(id)
+        AND id GLOB 'grt-?*'
+        AND id NOT GLOB '*[^A-Za-z0-9_.-]*'
+    ),
     subject       TEXT    NOT NULL,
     subject_kind  TEXT    NOT NULL,
     subject_id    TEXT    NOT NULL,
@@ -462,6 +466,7 @@ CREATE TABLE durable_operations (
         CHECK (state IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
     attempt             INTEGER NOT NULL,
     expiries            INTEGER NOT NULL DEFAULT 0,
+    deadline_releases   INTEGER NOT NULL DEFAULT 0,
     failures            INTEGER NOT NULL DEFAULT 0,
     last_error          TEXT    NOT NULL,
     claim_owner         TEXT,
@@ -1031,7 +1036,12 @@ CREATE TABLE git_host_app_registrations (
     address_digest             TEXT    NOT NULL,
     version                    INTEGER NOT NULL CHECK (version >= 1),
     created_at_ms              INTEGER NOT NULL,
-    updated_at_ms              INTEGER NOT NULL
+    updated_at_ms              INTEGER NOT NULL,
+    old_event_secret_ends_at_ms INTEGER,
+    old_event_secret_set_id     TEXT,
+    old_sealed_event_secret     BLOB,
+    CHECK ((old_event_secret_ends_at_ms IS NULL) = (old_event_secret_set_id IS NULL)
+       AND (old_event_secret_set_id IS NULL) = (old_sealed_event_secret IS NULL))
 ) STRICT;
 
 CREATE TABLE git_host_installations (
@@ -1055,6 +1065,19 @@ CREATE TABLE git_host_connections (
     created_at_ms   INTEGER NOT NULL,
     updated_at_ms   INTEGER NOT NULL,
     PRIMARY KEY (namespace_id, id)
+) STRICT;
+
+CREATE TABLE git_host_event_receipts (
+    kind            TEXT    NOT NULL,
+    delivery_id     TEXT    NOT NULL,
+    body_digest     TEXT    NOT NULL,
+    installation_id TEXT    NOT NULL,
+    event_kind      TEXT    NOT NULL,
+    repo            TEXT    NOT NULL,
+    review_id       TEXT    NOT NULL,
+    received_at_ms  INTEGER NOT NULL,
+    PRIMARY KEY (kind, delivery_id),
+    UNIQUE (kind, body_digest)
 ) STRICT;
 
 CREATE TABLE item_keys (
@@ -1561,6 +1584,36 @@ CREATE TABLE used_tickets (
 
 CREATE INDEX used_tickets_until ON used_tickets (until_ms);
 
+-- The marker "first administrator made": the one fact that closes the route of
+-- the one-time code for good. It holds stable IDs only, never names. The IDs
+-- have no foreign key on purpose: the marker is history that stays when the
+-- person or the grant ends. The table belongs to the backup, so a restore keeps
+-- the route closed together with the grants.
+CREATE TABLE first_administrator (
+    id           INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    principal_id TEXT    NOT NULL CHECK (principal_id <> ''),
+    grant_id     TEXT    NOT NULL CHECK (grant_id <> ''),
+    session_id   TEXT    NOT NULL CHECK (session_id <> ''),
+    created_by   TEXT    NOT NULL CHECK (created_by <> ''),
+    made_at_ms   INTEGER NOT NULL
+) STRICT;
+
+-- The one open code of the first administrator. It holds the SHA-256 digest of
+-- the code and never the code. The table has at most one row, so one code is
+-- valid at a time. The lifetime is 600000 ms, fixed by a CHECK, so a row with
+-- another lifetime cannot exist. A backup leaves the table out and a restore
+-- empties it.
+CREATE TABLE first_administrator_codes (
+    id            INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+    principal_id  TEXT    NOT NULL CHECK (principal_id <> ''),
+    digest        TEXT    NOT NULL CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
+    created_by    TEXT    NOT NULL CHECK (created_by <> ''),
+    reason        TEXT    NOT NULL CHECK (reason <> ''),
+    created_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL,
+    CHECK (expires_at_ms - created_at_ms = 600000)
+) STRICT;
+
 -- Links from an account of a Git host to a principal, and the one-time requests
 -- that make them. A link and a request belong to the installation, not to a
 -- namespace: a person has one principal for every namespace. An account is
@@ -1665,6 +1718,8 @@ CREATE TABLE unmanaged_scans (
     ended_at_ms   INTEGER NOT NULL,
     UNIQUE (namespace_id, seq)
 ) STRICT;
+
+CREATE INDEX stack_tags_name_value ON stack_tags (name, value, stack_id);
 
 CREATE UNIQUE INDEX stacks_id ON stacks (id);
 
@@ -1803,6 +1858,8 @@ CREATE UNIQUE INDEX git_host_connections_installation ON git_host_connections (n
 
 CREATE UNIQUE INDEX git_host_connections_default ON git_host_connections (namespace_id) WHERE is_default = 1;
 
+CREATE INDEX git_host_event_receipts_received ON git_host_event_receipts (received_at_ms);
+
 CREATE UNIQUE INDEX item_keys_item ON item_keys (namespace_id, scope_id, kind, item);
 
 CREATE INDEX item_keys_scope ON item_keys (namespace_id, scope_id, id);
@@ -1824,6 +1881,12 @@ CREATE INDEX forge_account_links_principal ON forge_account_links (principal_id)
 CREATE INDEX forge_link_requests_principal ON forge_link_requests (principal_id, expires_at_ms);
 
 CREATE INDEX inventory_namespace_unit_id ON inventory (namespace, unit_id);
+
+-- The units that a lock holds, in the order of the unit list. The locked filter
+-- of the unit list reads this index first, so the cost follows the count of
+-- locked units and not the count of units. The predicate is the lock test of
+-- the filter.
+CREATE INDEX inventory_locked ON inventory (namespace, unit_id) WHERE (COALESCE(lock_holder, '') <> '' OR lock_since_ms IS NOT NULL OR COALESCE(lock_operation, '') <> '');
 
 CREATE INDEX inventory_labels_value ON inventory_labels (namespace, label_key, label_value, unit_id);
 

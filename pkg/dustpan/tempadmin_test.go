@@ -316,7 +316,8 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil,
+		Makers: nil,
+		Store:  st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
@@ -413,7 +414,7 @@ func checkTempAdminEnded(t *testing.T, st *sqlite.Store, base time.Time) {
 func checkTempAdminAudit(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

@@ -28,6 +28,11 @@ type UnitResolver interface {
 	// (identity.Object.WithUnitID). It returns ErrNotFound for a unit that
 	// does not exist, and its store errors wrapped.
 	Unit(ctx context.Context, ref identity.Object) (identity.Object, error)
+	// UnitByID returns the live unit with the stable ID unitID of the
+	// namespace ns, as Unit does. It returns ErrNotFound for an unknown
+	// unit and for a unit of another namespace. The service uses it for a
+	// damaged job row, which holds no unit reference that can be read.
+	UnitByID(ctx context.Context, ns namespace.Name, unitID string) (identity.Object, error)
 }
 
 // Planner completes a start request into the spec of a job. It reads the

@@ -41,9 +41,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/principal"
-	"opendustpan.org/opendustpan/pkg/store/schema"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
@@ -346,7 +345,7 @@ func hostResetSessionLimit(ctx context.Context, r hostReset, stdout, stderr io.W
 // hostOpenError says what a person does after the open of the database
 // with no migration failed with err.
 func hostOpenError(err error, database string) error {
-	if errors.Is(err, schema.ErrMigrationsPending) {
+	if errors.Is(err, dustpan.ErrStoreMigrationsPending) {
 		return fmt.Errorf(
 			"%w: database %s has pending migrations: back up the database, "+
 				"start opendustpan serve --database %s with this binary to apply them, then run the command again: %w",
@@ -354,7 +353,7 @@ func hostOpenError(err error, database string) error {
 		)
 	}
 
-	if errors.Is(err, sqlite.ErrInUse) {
+	if errors.Is(err, dustpan.ErrStoreInUse) {
 		return fmt.Errorf(
 			"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
 			database,
@@ -421,9 +420,23 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		return hostMade{}, fmt.Errorf("access token service: %w", err)

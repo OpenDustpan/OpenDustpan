@@ -26,7 +26,7 @@ func (coverageIPAllowlistStore) SetNamespaceList(
 	return nil
 }
 
-func (coverageIPAllowlistStore) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+func (coverageIPAllowlistStore) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
 	return nil, nil
 }
 

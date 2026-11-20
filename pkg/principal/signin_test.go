@@ -69,7 +69,7 @@ func stored(id, subject string) principal.Principal {
 }
 
 func signIn(subject string, create bool, names ...string) principal.SignInInput {
-	return principal.SignInInput{Subject: subject, Source: "", Names: names, Create: create}
+	return principal.SignInInput{Subject: subject, Source: principal.SourceOIDC, Names: names, Create: create}
 }
 
 func TestSignInPrincipalCreates(t *testing.T) {
@@ -118,7 +118,7 @@ func TestSignInPrincipalWritesAudit(t *testing.T) {
 		t.Fatalf("SignInPrincipal: %v", err)
 	}
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 10})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: 10, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

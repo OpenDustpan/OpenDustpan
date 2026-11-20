@@ -13,6 +13,14 @@ import (
 // ErrDisabled reports that IP allowlists are off for this installation.
 var ErrDisabled = errors.New("ipallow: IP allowlists are off for this installation")
 
+// MaxNamespacesWithList is the most namespaces that Store.NamespacesWithList
+// returns. A read of more namespaces with a list fails with ErrTooManyLists.
+const MaxNamespacesWithList = 1000
+
+// ErrTooManyLists reports that more than MaxNamespacesWithList namespaces
+// have a list. A caller fails closed: it does not cover every object.
+var ErrTooManyLists = errors.New("ipallow: too many namespaces have an IP allowlist")
+
 // Store is the persistence port of the lists. It is served by the SQL
 // adapters from the same connection as the other ports.
 type Store interface {
@@ -26,13 +34,23 @@ type Store interface {
 	// closed): the change and the entry commit together or not at all. It
 	// returns namespace.ErrNotFound for an unknown namespace.
 	SetNamespaceList(ctx context.Context, ns namespace.Name, l List, fence namespace.Fence, e audit.Entry) error
-	// NamespacesWithList returns the names of the namespaces that have a
-	// non-zero list, in name order, and an empty slice when no namespace has
-	// a list. It returns namespace.ErrInvalidName (wrapped) when a stored name
-	// is not a valid namespace name, and a wrapped store error when the read
+	// NamespacesWithList returns each namespace that has a non-zero list,
+	// with its list, in name order, and an empty slice when no namespace has
+	// a list. It returns at most MaxNamespacesWithList namespaces; when more
+	// namespaces have a list it returns ErrTooManyLists (wrapped) and no
+	// namespace. It returns namespace.ErrInvalidName (wrapped) when a stored
+	// name is not a valid namespace name, ErrInvalidList (wrapped) when a
+	// stored list does not decode, and a wrapped store error when the read
 	// fails. A caller fails closed on any error: it treats the set of left-out
 	// namespaces as unknown and does not cover every object.
-	NamespacesWithList(ctx context.Context) ([]namespace.Name, error)
+	NamespacesWithList(ctx context.Context) ([]NamedList, error)
+}
+
+// NamedList is the non-zero list of one namespace, as
+// Store.NamespacesWithList returns it.
+type NamedList struct {
+	Namespace namespace.Name
+	List      List
 }
 
 // Config holds the dependencies of a Service.

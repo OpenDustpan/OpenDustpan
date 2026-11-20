@@ -103,6 +103,10 @@ func (h *Handler) lockRoutes() []Route {
 		space(http.MethodGet, namespaceLockPath, identity.ActionNamespaceRead, h.getLock),
 		space(http.MethodDelete, namespaceLockPath, identity.ActionUnitLock, h.deleteLock),
 		space(http.MethodPost, namespaceLockPath+"/force-unlock", identity.ActionUnitManage, h.forceUnlock),
+		// The bulk routes check namespace:read on the namespace of the path.
+		// Each item then checks unit:read and unit:lock on its own unit.
+		space(http.MethodPost, refusal.BulkLockPath, identity.ActionNamespaceRead, h.bulkLock),
+		space(http.MethodPost, refusal.BulkUnlockPath, identity.ActionNamespaceRead, h.bulkUnlock),
 	}
 }
 
@@ -201,14 +205,9 @@ func (h *Handler) putLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 		return
 	}
 
-	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "")
-
-	l, err := h.locks.Lock(ctx, p, lockTarget(obj), reason, entry)
+	l, err := h.lockOne(ctx, r, p, obj, reason)
 	if err != nil {
-		denial := refusal.Denial{
-			Action: identity.ActionUnitLock, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
-		}
-		h.writeLockFailure(w, r, p, denial, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -235,13 +234,8 @@ func (h *Handler) getLock(w http.ResponseWriter, r *http.Request, p identity.Pri
 func (h *Handler) deleteLock(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	entry := lockAuditEntry(r, p, obj, identity.ActionUnitLock, "unlock")
-
-	if err := h.locks.Unlock(ctx, p, lockTarget(obj), entry); err != nil {
-		denial := refusal.Denial{
-			Action: identity.ActionUnitLock, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
-		}
-		h.writeLockFailure(w, r, p, denial, err)
+	if err := h.unlockOne(ctx, r, p, obj); err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -290,6 +284,13 @@ const (
 func (h *Handler) writeLockFailure(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, d refusal.Denial, err error,
 ) {
+	h.recordLockFailure(r, p, d, err)
+	h.writeError(r.Context(), w, err)
+}
+
+// recordLockFailure writes the audit entry of a refusal that the lock service
+// decides, as writeLockFailure describes. It writes no answer.
+func (h *Handler) recordLockFailure(r *http.Request, p identity.Principal, d refusal.Denial, err error) {
 	switch {
 	case errors.Is(err, manuallock.ErrNotHolder):
 		d.Reason = reasonNotHolder
@@ -300,8 +301,6 @@ func (h *Handler) writeLockFailure(
 	default:
 		// State and other errors write no entry.
 	}
-
-	h.writeError(r.Context(), w, err)
 }
 
 // lockAuditEntry returns the audit entry of a lock change. version names the
@@ -371,6 +370,28 @@ func classifyLock(err error) (problem.Problem, bool) {
 	case errors.Is(err, audit.ErrInvalidReason):
 		return problem.New(http.StatusBadRequest, errcode.AuditReasonInvalid, err.Error()), true
 	case errors.Is(err, errLockBody), errors.Is(err, errLockText):
+		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
+	}
+
+	return classifyBulkLock(err)
+}
+
+// classifyBulkLock maps the errors that only the bulk lock routes give: the
+// count, the replay records and the body.
+func classifyBulkLock(err error) (problem.Problem, bool) {
+	if tooLarge, ok := errors.AsType[*textbody.TooLargeError](err); ok && tooLarge != nil {
+		return problem.New(http.StatusRequestEntityTooLarge, errcode.RequestBodyTooLarge, tooLarge.Error(),
+			errcode.Quantity("maxBytes", tooLarge.Limit)), true
+	}
+
+	switch {
+	case errors.Is(err, errBulkSize):
+		return problem.New(http.StatusBadRequest, errcode.LockBulkSize, errBulkSize.Error()), true
+	case errors.Is(err, errBulkKeyUnsupported):
+		return problem.New(http.StatusBadRequest, errcode.RequestIdempotencyKeyUnsupported,
+			errBulkKeyUnsupported.Error()), true
+	case errors.Is(err, textbody.ErrEmpty), errors.Is(err, textbody.ErrText), errors.Is(err, textbody.ErrJSON),
+		errors.Is(err, textbody.ErrUnreadable):
 		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, err.Error()), true
 	}
 

@@ -759,8 +759,8 @@ func (h *Handler) listStateVersions(
 
 // resolveStateVersionID returns the unit of the finalized state version in
 // the state_version_id path value. Unknown IDs and versions that are not
-// finalized fail with absence, which the wrapper answers as 403 for a caller
-// without rights and 404 otherwise, so a pending version is never readable.
+// finalized fail with absence, which the wrapper answers as 404 for every
+// caller, so a pending version is never readable.
 func (h *Handler) resolveStateVersionID(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	return h.resolveStateVersion(r, workspace.StateVersionID(r.PathValue("state_version_id")))
 }
@@ -779,17 +779,19 @@ func (h *Handler) resolveStateOutputID(_ http.ResponseWriter, r *http.Request) (
 
 // resolveStateVersion returns the unit of the finalized state version with
 // id: its workspace resolved through GetByID. Absence fails with the
-// workspace or state version error, which the wrapper answers as 403 for a
-// caller without rights and 404 otherwise.
+// workspace or state version error, which the wrapper answers as 404 for every
+// caller.
 func (h *Handler) resolveStateVersion(
 	r *http.Request, id workspace.StateVersionID,
 ) (identity.Object, error) {
-	sv, err := h.workspaces.ReadState(r.Context(), id)
+	// The lookup opens no output: decryption runs only after the guard
+	// authorizes the unit that this function returns.
+	wsID, err := h.workspaces.StateVersionWorkspace(r.Context(), id)
 	if err != nil {
 		return identity.Object{}, err
 	}
 
-	ws, err := h.workspaces.GetByID(r.Context(), sv.Workspace)
+	ws, err := h.workspaces.GetByID(r.Context(), wsID)
 	if err != nil {
 		return identity.Object{}, err
 	}
@@ -809,7 +811,8 @@ func (h *Handler) rollbackState(
 	if err != nil {
 		// A state over a size limit is a limit and not a fault of the store.
 		// The refusal then has the code gate.limit.
-		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) {
+		if errors.Is(err, workspace.ErrTooManyResources) || errors.Is(err, workspace.ErrTooLarge) ||
+			errors.Is(err, workspace.ErrStateBound) {
 			return nil, fmt.Errorf("%w: read the state change of the restore: %w", gate.ErrLimit, err)
 		}
 

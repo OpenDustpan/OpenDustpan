@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/breakglass"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -58,6 +59,11 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 		{
 			"reach exceeded", accesstoken.ErrReachExceeded, http.StatusForbidden,
 			errcode.TokenReachExceeded, nil, "",
+		},
+		{
+			"token of an unknown kind", fmt.Errorf("%w: %q: tok-secret-row", accesstoken.ErrUnknownKind, "trust"),
+			http.StatusConflict, errcode.TokenUnknownKind, nil,
+			"the access token has a kind that this version does not know",
 		},
 		{"token ended", accesstoken.ErrEnded, http.StatusConflict, errcode.TokenEnded, nil, ""},
 		{"token exists", accesstoken.ErrAlreadyExists, http.StatusConflict, errcode.TokenAlreadyExists, nil, ""},
@@ -110,6 +116,24 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			"The change leaves too few working break-glass accounts. " +
 				"Add or enable a working break-glass account, then try again. " +
 				"See the break-glass accounts guide.",
+		},
+		{
+			"break-glass account with a password", principal.ErrBreakGlassPassword, http.StatusConflict,
+			errcode.PrincipalBreakGlassPassword, nil,
+			"A break-glass account must have no local password. Remove the password first. " +
+				"See the break-glass accounts guide.",
+		},
+		{
+			"break-glass account that is not a person",
+			fmt.Errorf("%w: kind %q", principal.ErrBreakGlassKind, "service"),
+			http.StatusBadRequest,
+			errcode.PrincipalBreakGlassKind,
+			nil,
+			principal.ErrBreakGlassKind.Error(),
+		},
+		{
+			"self review of a break-glass use", breakglass.ErrSelfReview, http.StatusForbidden,
+			errcode.BreakGlassSelfReview, nil, "",
 		},
 		{"principal not found", principal.ErrNotFound, http.StatusNotFound, errcode.PrincipalNotFound, nil, ""},
 		{

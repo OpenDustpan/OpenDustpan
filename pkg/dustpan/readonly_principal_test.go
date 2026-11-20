@@ -229,6 +229,7 @@ func writeTargets(t *testing.T, w *contextWorld) []writeTarget {
 		Audit:          st,
 		OnAuditFailure: nil,
 		Locks:          nil,
+		Records:        nil,
 		PublicURL:      "",
 		Moves:          nil,
 		Namespaces:     namespaces,

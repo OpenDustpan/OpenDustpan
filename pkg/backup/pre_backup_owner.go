@@ -46,13 +46,16 @@ const (
 	// CodeNoWorkingBreakGlass is the code of a restore that stopped because
 	// it would leave too few working break-glass accounts.
 	CodeNoWorkingBreakGlass RestoreErrorCode = "principal.no-working-break-glass"
+	// CodeBreakGlassPassword is the code of a restore that stopped because
+	// the restored data holds a break-glass account with a local password.
+	CodeBreakGlassPassword RestoreErrorCode = "principal.break-glass-password"
 )
 
 // RestoreErrorCodes lists every code that a restore row can hold.
 func RestoreErrorCodes() []RestoreErrorCode {
 	return []RestoreErrorCode{
 		CodeBlobsNotBacked, CodeLiveBlobsDamaged, CodeLiveBlobsMissing, CodePreBackupForeign,
-		CodeNoWorkingBreakGlass,
+		CodeNoWorkingBreakGlass, CodeBreakGlassPassword,
 	}
 }
 
@@ -70,6 +73,8 @@ func restoreErrorCode(err error) RestoreErrorCode {
 		return CodeBlobsNotBacked
 	case errors.Is(err, principal.ErrNoWorkingBreakGlass):
 		return CodeNoWorkingBreakGlass
+	case errors.Is(err, principal.ErrBreakGlassPassword):
+		return CodeBreakGlassPassword
 	default:
 		return ""
 	}

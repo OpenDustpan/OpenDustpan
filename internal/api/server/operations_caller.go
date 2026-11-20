@@ -46,6 +46,7 @@ func callerOperationLabels() map[string]apidesc.Label {
 			)...).
 			WithBodies(apidesc.NoBody, apidesc.Typed[accessObjectsResponse](
 				"ListOwnAccessObjectsResponse", apidesc.Named[accessObjectResponse]("OwnAccessObject"),
+				apidesc.Named[accessExcludedResponse]("OwnAccessExcluded"),
 			)),
 		apidesc.Pattern(http.MethodGet, callerGrantsPath): apidesc.Name("listOwnGrants", tagCaller).
 			On(apidesc.KindCaller).

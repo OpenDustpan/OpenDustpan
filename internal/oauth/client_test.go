@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 )
@@ -546,6 +547,45 @@ func TestNewRefusesConfig(t *testing.T) {
 	}
 }
 
+// TestNewRefusesIssuerSecrets proves that a stored provider row with user
+// information, a query or a fragment in its issuer fails the client, and that
+// the error holds no part of the issuer.
+func TestNewRefusesIssuerSecrets(t *testing.T) {
+	t.Parallel()
+
+	for _, issuer := range []string{
+		fakecred.URL("https", "u53r", "s3cr3t", "idp.example", ""),
+		"https://s3cr3t@idp.example",
+		strings.Replace(fakecred.URL("https", "u53r", "s3cr3t", "idp.example", ""), "://", ":", 1),
+		"https://idp.example/?token=s3cr3t",
+		"https://idp.example/#tok=s3cr3t",
+		"http://127.0.0.1:9000/?token=s3cr3t",
+	} {
+		cfg := oauth.Config{
+			HTTPClient: nil, Now: nil, Issuer: issuer, ClientID: clientID, ClientSecret: clientSecret,
+			RedirectURL: redirectURI, Scopes: nil,
+		}
+
+		for name, build := range map[string]func() error{
+			"New":     func() error { _, err := oauth.New(t.Context(), cfg); return err },
+			"NewLazy": func() error { _, err := oauth.NewLazy(cfg); return err },
+		} {
+			err := build()
+			if !errors.Is(err, oauth.ErrConfig) {
+				t.Errorf("%s with issuer %q: error = %v, want ErrConfig", name, issuer, err)
+
+				continue
+			}
+
+			for _, secret := range []string{"s3cr3t", "u53r", "idp.example"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("%s with issuer %q: error %q holds %q", name, issuer, err, secret)
+				}
+			}
+		}
+	}
+}
+
 func TestNewAllowsHTTPOnLoopback(t *testing.T) {
 	t.Parallel()
 
@@ -1022,5 +1062,90 @@ func TestNewLazyRefusesConfig(t *testing.T) {
 	})
 	if !errors.Is(err, oauth.ErrConfig) {
 		t.Fatalf("NewLazy error = %v, want ErrConfig", err)
+	}
+}
+
+// TestNewRefusesAHostileIssuerForm sends an issuer with user information, a
+// query, a fragment or a space to the client, as if the flag parser and the
+// session layer did not check it. The error never holds the user information.
+func TestNewRefusesAHostileIssuerForm(t *testing.T) {
+	t.Parallel()
+
+	for name, issuer := range map[string]string{
+		"query and fragment": "https://idp.example?x=1#f",
+		"query":              "https://idp.example/?x=1",
+		"fragment":           "https://idp.example#f",
+		"empty query":        "https://idp.example?",
+		"empty fragment":     "https://idp.example#",
+		"user information":   fakecred.URL("https", "user", "pw", "idp.example", ""),
+		"space":              "https://idp.example/a b",
+		"backslash":          "https://idp.example/a\\b",
+		"carriage return":    "https://idp.example/a\rb",
+		"line feed":          "https://idp.example/a\nb",
+		"NUL":                "https://idp.example/a\x00b",
+		"no host":            "https://",
+		"upper-case scheme":  "HTTPS://idp.example",
+		"non-ASCII host":     "https://b\u00fccher.example/",
+		"trailing dot host":  "https://idp.example./",
+		"port over 65535":    "https://idp.example:99999/",
+		"dot-dot segment":    "https://idp.example/a/../b",
+		"dot segment":        "https://idp.example/./x",
+		"right-to-left mark": "https://idp.example/a\u202eb",
+		"over 512 bytes":     "https://idp.example/" + strings.Repeat("a", 600),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := oauth.New(t.Context(), oauth.Config{
+				HTTPClient: nil, Now: nil, Issuer: issuer, ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: redirectURI, Scopes: nil,
+			})
+			if !errors.Is(err, oauth.ErrConfig) {
+				t.Fatalf("New error = %v, want ErrConfig", err)
+			}
+
+			if strings.Contains(err.Error(), "pw@") {
+				t.Fatalf("the error holds the user information: %v", err)
+			}
+		})
+	}
+}
+
+// TestNewNeverEchoesTheIssuerInAnError sends an issuer with a secret in its
+// user information or its query, and with a wrong scheme or a parse error,
+// to both constructors. No error holds the secret.
+func TestNewNeverEchoesTheIssuerInAnError(t *testing.T) {
+	t.Parallel()
+
+	const secret = "s3cr3t"
+
+	for name, issuer := range map[string]string{
+		"user information on http":  "http://user:" + secret + "@idp.example",
+		"user information on ftp":   "ftp://user:" + secret + "@idp",
+		"scheme-relative":           "//user:" + secret + "@idp",
+		"parse error with a query":  "https://idp/%zz?t=" + secret,
+		"user information on https": "https://user:" + secret + "@idp.example",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := oauth.Config{
+				HTTPClient: nil, Now: nil, Issuer: issuer, ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: redirectURI, Scopes: nil,
+			}
+
+			_, errNew := oauth.New(t.Context(), cfg)
+			_, errLazy := oauth.NewLazy(cfg)
+
+			for _, err := range []error{errNew, errLazy} {
+				if !errors.Is(err, oauth.ErrConfig) {
+					t.Fatalf("error = %v, want ErrConfig", err)
+				}
+
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("the error holds the secret: %v", err)
+				}
+			}
+		})
 	}
 }

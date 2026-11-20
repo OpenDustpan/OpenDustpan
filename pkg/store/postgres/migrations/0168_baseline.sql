@@ -231,6 +231,7 @@ CREATE TABLE durable_operations (
     state text NOT NULL,
     attempt bigint NOT NULL,
     expiries bigint DEFAULT 0 NOT NULL,
+    deadline_releases bigint DEFAULT 0 NOT NULL,
     failures bigint DEFAULT 0 NOT NULL,
     last_error text NOT NULL,
     claim_owner text,
@@ -258,6 +259,36 @@ CREATE TABLE durable_steps (
     seq bigint NOT NULL,
     result bytea NOT NULL,
     done_at_ms bigint NOT NULL
+);
+
+CREATE TABLE first_administrator (
+    id integer NOT NULL,
+    principal_id text NOT NULL,
+    grant_id text NOT NULL,
+    session_id text NOT NULL,
+    created_by text NOT NULL,
+    made_at_ms bigint NOT NULL,
+    CONSTRAINT first_administrator_created_by_check CHECK ((created_by <> ''::text)),
+    CONSTRAINT first_administrator_grant_id_check CHECK ((grant_id <> ''::text)),
+    CONSTRAINT first_administrator_id_check CHECK ((id = 1)),
+    CONSTRAINT first_administrator_principal_id_check CHECK ((principal_id <> ''::text)),
+    CONSTRAINT first_administrator_session_id_check CHECK ((session_id <> ''::text))
+);
+
+CREATE TABLE first_administrator_codes (
+    id integer NOT NULL,
+    principal_id text NOT NULL,
+    digest text NOT NULL,
+    created_by text NOT NULL,
+    reason text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    CONSTRAINT first_administrator_codes_check CHECK (((expires_at_ms - created_at_ms) = 600000)),
+    CONSTRAINT first_administrator_codes_created_by_check CHECK ((created_by <> ''::text)),
+    CONSTRAINT first_administrator_codes_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT first_administrator_codes_id_check CHECK ((id = 1)),
+    CONSTRAINT first_administrator_codes_principal_id_check CHECK ((principal_id <> ''::text)),
+    CONSTRAINT first_administrator_codes_reason_check CHECK ((reason <> ''::text))
 );
 
 CREATE TABLE forge_account_links (
@@ -341,6 +372,10 @@ CREATE TABLE git_host_app_registrations (
     version bigint NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
+    old_event_secret_ends_at_ms bigint,
+    old_event_secret_set_id text,
+    old_sealed_event_secret bytea,
+    CONSTRAINT git_host_app_registrations_old_event_secret_check CHECK ((((old_event_secret_ends_at_ms IS NULL) = (old_event_secret_set_id IS NULL)) AND ((old_event_secret_set_id IS NULL) = (old_sealed_event_secret IS NULL)))),
     CONSTRAINT git_host_app_registrations_version_check CHECK ((version >= 1))
 );
 
@@ -357,6 +392,17 @@ CREATE TABLE git_host_connections (
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
     CONSTRAINT git_host_connections_version_check CHECK ((version >= 1))
+);
+
+CREATE TABLE git_host_event_receipts (
+    kind text NOT NULL,
+    delivery_id text NOT NULL,
+    body_digest text NOT NULL,
+    installation_id text NOT NULL,
+    event_kind text NOT NULL,
+    repo text NOT NULL,
+    review_id text NOT NULL,
+    received_at_ms bigint NOT NULL
 );
 
 CREATE TABLE git_host_installations (
@@ -382,7 +428,8 @@ CREATE TABLE grants (
     created_at_ms bigint NOT NULL,
     created_by text DEFAULT ''::text NOT NULL,
     revoked_at_ms bigint,
-    revoked_by text DEFAULT ''::text NOT NULL
+    revoked_by text DEFAULT ''::text NOT NULL,
+    CONSTRAINT grants_id_check CHECK ((id ~ '^grt-[A-Za-z0-9_.-]{1,60}$'::text))
 );
 
 CREATE TABLE group_mappings (
@@ -1741,6 +1788,12 @@ ALTER TABLE ONLY durable_steps
 ALTER TABLE ONLY durable_steps
     ADD CONSTRAINT durable_steps_pkey PRIMARY KEY (operation_id, name);
 
+ALTER TABLE ONLY first_administrator_codes
+    ADD CONSTRAINT first_administrator_codes_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY first_administrator
+    ADD CONSTRAINT first_administrator_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY forge_account_links
     ADD CONSTRAINT forge_account_links_pkey PRIMARY KEY (kind, host, account_id);
 
@@ -1764,6 +1817,12 @@ ALTER TABLE ONLY git_host_app_registrations
 
 ALTER TABLE ONLY git_host_connections
     ADD CONSTRAINT git_host_connections_pkey PRIMARY KEY (namespace_id, id);
+
+ALTER TABLE ONLY git_host_event_receipts
+    ADD CONSTRAINT git_host_event_receipts_kind_body_digest_key UNIQUE (kind, body_digest);
+
+ALTER TABLE ONLY git_host_event_receipts
+    ADD CONSTRAINT git_host_event_receipts_pkey PRIMARY KEY (kind, delivery_id);
 
 ALTER TABLE ONLY git_host_installations
     ADD CONSTRAINT git_host_installations_pkey PRIMARY KEY (installation_id);
@@ -2181,6 +2240,8 @@ CREATE UNIQUE INDEX git_host_connections_default ON git_host_connections USING b
 
 CREATE UNIQUE INDEX git_host_connections_installation ON git_host_connections USING btree (namespace_id, kind, installation_id);
 
+CREATE INDEX git_host_event_receipts_received ON git_host_event_receipts USING btree (received_at_ms);
+
 CREATE INDEX git_host_installations_namespace ON git_host_installations USING btree (namespace_id);
 
 CREATE UNIQUE INDEX grants_current ON grants USING btree (subject, role, target) WHERE (revoked_at_ms IS NULL);
@@ -2210,6 +2271,12 @@ CREATE INDEX inventory_deleted_purge_after ON inventory_deleted USING btree (pur
 CREATE INDEX inventory_labels_namespace ON inventory_labels USING btree (namespace, unit_id);
 
 CREATE INDEX inventory_labels_value ON inventory_labels USING btree (namespace, label_key, label_value, unit_id COLLATE "C");
+
+-- The units that a lock holds, in the order of the unit list. The locked filter
+-- of the unit list reads this index first, so the cost follows the count of
+-- locked units and not the count of units. The predicate is the lock test of
+-- the filter.
+CREATE INDEX inventory_locked ON inventory USING btree (namespace, unit_id COLLATE "C") WHERE (COALESCE(lock_holder, '') <> '' OR lock_since_ms IS NOT NULL OR COALESCE(lock_operation, '') <> '');
 
 CREATE INDEX inventory_namespace_unit_id ON inventory USING btree (namespace, unit_id COLLATE "C");
 
@@ -2308,6 +2375,8 @@ CREATE INDEX sessions_principal ON sessions USING btree (principal_id, created_a
 CREATE INDEX sign_in_failures_window_end ON sign_in_failures USING btree (window_end_ms);
 
 CREATE INDEX sign_in_requests_expiry ON sign_in_requests USING btree (expires_at_ms);
+
+CREATE INDEX stack_tags_name_value ON stack_tags USING btree (name, value, stack_id);
 
 CREATE UNIQUE INDEX stacks_id ON stacks USING btree (id);
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -259,6 +260,26 @@ func (f *fixture) unit(tb testing.TB, obj identity.Object) identity.Object {
 
 // grant stores a grant of role on obj to subject, with no check. A unit
 // gets its stack first.
+// serviceOverGrantStore returns a service like the one of f that reads and writes
+// through store.
+func (f *fixture) serviceOverGrantStore(tb testing.TB, store access.Store) *access.Service {
+	tb.Helper()
+
+	st := f.store
+
+	svc, err := access.NewService(access.ServiceConfig{
+		Store: store, Directory: st, Namespaces: st, Authorizer: f.authz,
+		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
+		Now:   nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
+	})
+	if err != nil {
+		tb.Fatalf("new service: %v", err)
+	}
+
+	return svc
+}
+
 func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj identity.Object) {
 	tb.Helper()
 
@@ -279,7 +300,7 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 
 	err := f.store.CreateGrant(tb.Context(), access.Grant{
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
-		ID:   fmt.Sprintf("grt-%s-%s-%s", subject.ID, role, obj.String()),
+		ID:   accesstest.GrantID(fmt.Sprintf("%s-%s-%s", subject.ID, role, obj.String())),
 		Role: role, CreatedBy: "admin", Subject: subject,
 	}, fence, e, nil)
 	if err != nil {
@@ -500,10 +521,8 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionUnitRunApply,
 		identity.ActionUnitRunDestroy,
 		identity.ActionUnitWriteBack,
-		identity.ActionUnitDefineSteps,
 		identity.ActionNamespaceManageFreezes,
 		identity.ActionNamespaceBreakFreeze,
-		identity.ActionNamespaceManageRunners,
 		identity.ActionRunnerClaim,
 		identity.ActionAgentUse,
 		identity.ActionAgentStartRun,
@@ -513,7 +532,6 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionServerAcceptAgentSecretAccess,
 		identity.ActionCallerManageAgentOptIns,
 		identity.ActionUnitObserve,
-		identity.ActionNamespaceReadRunners,
 		identity.ActionRunnerJoin,
 		identity.ActionNamespaceReadUnmanaged,
 		identity.ActionNamespaceTriageUnmanaged,
@@ -524,6 +542,11 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionBlueprintRead,
 		identity.ActionBlueprintSetContext,
 		identity.ActionUnitRedact,
+		// The offer of the first administrator has a route and still no
+		// family, on purpose: only a principal with Admin passes the
+		// authorizer, and the route also needs the static bootstrap
+		// principal. TestFirstAdministratorActions pins it.
+		identity.ActionServerOfferFirstAdministrator,
 	}
 }
 
@@ -1911,4 +1934,63 @@ func TestOnlyOperatorAndSiteAdministratorHoldStoreCheck(t *testing.T) {
 			{identity.ServerObject(), identity.ActionInstallationStoreCheck, false},
 		})
 	})
+}
+
+// TestFirstAdministratorActions pins the three actions of the first
+// administrator: the offer has no family, so the authorizer allows it to
+// Admin only; the read is in the operator family; the redeem is in the self
+// family, so each signed-in principal reaches the handler.
+func TestFirstAdministratorActions(t *testing.T) {
+	t.Parallel()
+
+	if fam, ok := access.FamilyOf(identity.ActionServerOfferFirstAdministrator); ok {
+		t.Errorf("offer action has the family %q, want none so that only Admin passes", fam)
+	}
+
+	families := []struct {
+		action identity.Action
+		want   access.Family
+	}{
+		{action: identity.ActionServerReadFirstAdministrator, want: access.FamilyOperator},
+		{action: identity.ActionCallerRedeemFirstAdministrator, want: access.FamilySelf},
+	}
+
+	for _, tc := range families {
+		got, ok := access.FamilyOf(tc.action)
+		if !ok || got != tc.want {
+			t.Errorf("FamilyOf(%q) = %q, %t, want %q", tc.action, got, ok, tc.want)
+		}
+	}
+
+	if access.IsSensitive(identity.ActionServerReadFirstAdministrator) {
+		t.Errorf("IsSensitive(%q) = true, want false: a read cannot raise a privilege",
+			identity.ActionServerReadFirstAdministrator)
+	}
+
+	f := newFixture(t)
+	site := f.person(t, "site")
+	operator := f.person(t, "operator")
+	plain := f.person(t, "plain")
+
+	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
+	f.grant(t, prn("operator"), access.RoleInstallationOperator, identity.ServerObject())
+
+	server := identity.ServerObject()
+
+	// Each of the three roles of a person, and the administrator flag.
+	assertChecks(t, f.authz, admin(), []check{
+		{server, identity.ActionServerOfferFirstAdministrator, true},
+		{server, identity.ActionServerReadFirstAdministrator, true},
+		{server, identity.ActionCallerRedeemFirstAdministrator, true},
+	})
+
+	for _, person := range []identity.Principal{site, operator, plain} {
+		assertChecks(t, f.authz, person, []check{
+			{server, identity.ActionServerOfferFirstAdministrator, false},
+			{server, identity.ActionCallerRedeemFirstAdministrator, true},
+		})
+	}
+
+	assertChecks(t, f.authz, operator, []check{{server, identity.ActionServerReadFirstAdministrator, true}})
+	assertChecks(t, f.authz, plain, []check{{server, identity.ActionServerReadFirstAdministrator, false}})
 }

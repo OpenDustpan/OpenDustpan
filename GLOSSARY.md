@@ -191,6 +191,10 @@ _Avoid_: Scrub, sanitize, clean
 A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
 _Avoid_: Whitelist
 
+**Excluded namespace**:
+A namespace that a scope of every object leaves out, for example because its IP allowlist refuses the client address. A list of every object does not show the objects of an excluded namespace. The caller-access API names each one in `excluded.namespaces` next to `all` (ADR 361).
+_Avoid_: Hidden namespace, blocked namespace
+
 **Setting**:
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value
@@ -501,6 +505,18 @@ _Copy says_: "the whole installation".
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
+
+**First administrator**:
+The first person who gets the `site-administrator` role through the one-time code, on an installation where no first administrator is made yet. The bootstrap admin token asks for a code for one person. The person redeems the code in a console session with a fresh sign-in. After that, the route is closed (ADR 339).
+_Avoid_: Root user, owner, super admin
+
+**First administrator code**:
+The one-time code that makes the first administrator: 32 random bytes, valid for 10 minutes, for one use. The server stores only its digest. The code is in the answer of the offer and in the body of the redeem, and nowhere else.
+_Avoid_: Setup token, bootstrap code
+
+**First administrator marker**:
+The stored fact "first administrator made". It has the principal, the grant and the session of the redeem, the creator of the code and the time. It closes the route for good. It travels in a backup, and a restore with `server:restore-access` brings back the marker of the backup (ADR 339).
+_Avoid_: Setup flag, installed flag
 
 **Sign-in**:
 The step in which a sign-in method, such as an identity provider, proves who a person is. The method only proves the identity. The server then issues its own session.
@@ -1228,6 +1244,10 @@ _Avoid_: Dry run, audit mode, advisory (that is a level of a resource policy rep
 **Decision record**:
 The record of one evaluation of one decision point for one change, with the ID prefix `gdr-` (ADR 229). It holds the fact document and each gate with its version, mode, match and outcome. It also holds the requirements, the warnings, `autoApply`, the state of each fixed control and the result. Each refusal, each approval wait and each warning names its record.
 _Avoid_: Decision log, policy result
+
+**Decision record retention**:
+The installation setting `decisionRecords.retentionHours`: how many hours the server keeps decision records. `0` keeps them forever and is the default. A period is a whole number of hours from 24 to 87600. The setting prunes decision records only and never an audit entry.
+_Avoid_: Audit retention (that is the retention of audit entries)
 
 **Fixed control**:
 A control that refuses on its own, outside the gates (ADR 222 decision 4). The fixed controls are the workspace lock, the manual lock, a freeze with its break-glass and the override switches. They are also the module switches, the quota reservation and the quota counts, the source filter, safe delete and the plan staleness check. The agent controls are fixed controls too: the agent mode, the confirmation step and the secret consent. The decision record shows the state of each fixed control that the server checked.

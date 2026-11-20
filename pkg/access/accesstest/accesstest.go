@@ -506,6 +506,18 @@ func testGrantOnCaller(t *testing.T, s access.Store) {
 func testMissingGrant(t *testing.T, s access.Store) {
 	t.Helper()
 
+	// Hostile table of the store layer: a text that is not a grant ID is
+	// refused with ErrInvalid by both calls, whatever the rows hold.
+	for _, id := range HostileGrantIDs() {
+		if _, err := s.GetGrant(t.Context(), id); !errors.Is(err, access.ErrInvalid) {
+			t.Fatalf("get grant %.20q = %v, want ErrInvalid", id, err)
+		}
+
+		if err := revokeGrant(t, s, id, "", entry()); !errors.Is(err, access.ErrInvalid) {
+			t.Fatalf("revoke grant %.20q = %v, want ErrInvalid", id, err)
+		}
+	}
+
 	if _, err := s.GetGrant(t.Context(), "grt-missing"); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("get missing grant = %v, want ErrNotFound", err)
 	}
@@ -694,13 +706,13 @@ func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audi
 	ctx := t.Context()
 	ns := g.Object.Namespace()
 
-	listing, err := log.List(ctx, ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := log.List(ctx, ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of %q: %v", ns, err)
 	}
 
-	if listing.Total != 1 {
-		t.Fatalf("entries of %q = %d, want the grant of its creator", ns, listing.Total)
+	if len(listing.Entries) != 1 {
+		t.Fatalf("entries of %q = %d, want the grant of its creator", ns, len(listing.Entries))
 	}
 
 	first := listing.Entries[len(listing.Entries)-1]
@@ -892,7 +904,7 @@ func testSubjectRevokeKeepsOrigin(t *testing.T, s access.Store) {
 func checkRevokeEntryOrigin(t *testing.T, log audit.Store, want *audit.Origin) {
 	t.Helper()
 
-	listing, err := log.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := log.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of acme: %v", err)
 	}

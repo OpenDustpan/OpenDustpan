@@ -76,7 +76,7 @@ func (s *fakeStore) AppendServer(ctx context.Context, e audit.Entry) (audit.Entr
 }
 
 func (*fakeStore) List(context.Context, namespace.Name, audit.Page) (audit.Listing, error) {
-	return audit.Listing{Entries: nil, Total: 0}, nil
+	return audit.Listing{Entries: nil, More: false}, nil
 }
 
 func (*fakeStore) Check(context.Context, namespace.Name) (audit.CheckResult, error) {

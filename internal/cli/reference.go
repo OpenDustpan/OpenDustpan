@@ -187,6 +187,10 @@ var secretSettings = []*Setting{
 	mustEnv("DUSTPAN_ADMIN_TOKEN_FILE"),
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY"),
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY_FILE"),
+	mustEnv("DUSTPAN_OIDC_CLIENT_SECRET"),
+	mustEnv("DUSTPAN_OIDC_CLIENT_SECRET_FILE"),
+	mustEnv("DUSTPAN_LDAP_BIND_PASSWORD"),
+	mustEnv("DUSTPAN_LDAP_BIND_PASSWORD_FILE"),
 	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET"),
 	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE"),
 	mustEnv("DUSTPAN_LOG_WEBHOOK_SECRET"),
@@ -209,6 +213,27 @@ func mustEnv(name string) *Setting {
 	return setting
 }
 
+// writeClearedEnv writes the paragraph that says which variables serve clears.
+// The names of the external secrets come from ExternalSecretEnvs, so that the
+// text and the clear cannot differ.
+func writeClearedEnv(out *strings.Builder) {
+	names := make([]string, 0, len(ExternalSecretEnvs()))
+
+	for _, name := range ExternalSecretEnvs() {
+		names = append(names, "`"+name+"`")
+	}
+
+	out.WriteString("After the start reads its settings, `serve` clears these variables from its own\n")
+	out.WriteString("environment, so that a child process does not inherit them: each variable in the\n")
+	out.WriteString("table above, each other sensitive setting, and the variables that a library\n")
+	out.WriteString("reads and no setting declares (" + strings.Join(names, ", ") + ").\n")
+	out.WriteString("`serve` logs at Info the count and the names of the variables that it cleared,\n")
+	out.WriteString("never a value. If `serve` cannot clear a variable, it does not start.\n")
+	out.WriteString("`serve` does not clear `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`: the HTTP\n")
+	out.WriteString("client reads them at its first outbound request, which can come after the\n")
+	out.WriteString("clear. Keep a proxy password out of the environment of `serve`.\n")
+}
+
 // writeSecrets writes the secrets section from the secret declarations:
 // values no flag takes, because flags show in process listings.
 func writeSecrets(out *strings.Builder) {
@@ -224,6 +249,8 @@ func writeSecrets(out *strings.Builder) {
 		out.WriteString("| `" + setting.Env + "` | " + setting.Doc + " |\n")
 	}
 
+	out.WriteString("\n")
+	writeClearedEnv(out)
 	out.WriteString("\n")
 	out.WriteString("Make a key-encryption key with this command:\n")
 	out.WriteString("\n")

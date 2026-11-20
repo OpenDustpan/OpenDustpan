@@ -105,7 +105,7 @@ func RevealVersion(
 		}}, nil
 	}
 
-	value, _, err := revealFromOpener(open, sv.SensitiveMarks, path)
+	value, _, err := revealFromOpener(ctx, open, sv.SensitiveMarks, path)
 
 	return value, err
 }
@@ -144,7 +144,31 @@ func (c *warnOnClose) Close() error {
 // stream again (about 3x CPU). A failed open fails as an open state error. A
 // close error does not fail the lookup. The opener logs it.
 func revealFromOpener(
-	open stateOpener, marks SensitiveMarks, path string,
+	ctx context.Context, open stateOpener, marks SensitiveMarks, path string,
+) (any, []string, error) {
+	// One work object covers the whole reveal: every pass spends from its
+	// budget and ends with its context.
+	work := newMaskWork(nil)
+
+	value, masked, err := revealPasses(ctx, work, open, marks, path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Defense in depth: each pass checks the context when it ends. This check
+	// stays so that a context that ends after the last pass never gives a
+	// value.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, fmt.Errorf("reveal: %w", ctxErr)
+	}
+
+	return value, masked, nil
+}
+
+// revealPasses runs the passes of revealFromOpener with the work object of
+// the reveal.
+func revealPasses(
+	ctx context.Context, work *maskWork, open stateOpener, marks SensitiveMarks, path string,
 ) (any, []string, error) {
 	target, shapeOK := parseRevealTarget(path, marks)
 	if !shapeOK {
@@ -153,8 +177,8 @@ func revealFromOpener(
 			masked []string
 		)
 
-		err := withPass(open, func(dec *jsontext.Decoder) error {
-			v, m, rerr := revealStream(dec, marks, path)
+		err := withPass(ctx, open, func(dec *jsontext.Decoder) error {
+			v, m, rerr := revealStream(ctx, work, dec, marks, path)
 			value, masked = v, m
 
 			return rerr
@@ -168,7 +192,7 @@ func revealFromOpener(
 	res := new(walkResult)
 	res.fields = map[string]any{}
 
-	err := withPass(open, func(dec *jsontext.Decoder) error {
+	err := withPass(ctx, open, func(dec *jsontext.Decoder) error {
 		return locateWalk(dec, target, infoVisitor(&info), res)
 	})
 	if err != nil {
@@ -185,19 +209,31 @@ func revealFromOpener(
 		info.size = res.end - res.start
 	}
 
-	address := tofuInstanceAddress(res.fields, map[string]any{"index_key": info.indexKey})
-
 	if len(marks) == 0 {
-		return revealNoMarks(open, target, path)
+		return revealNoMarks(ctx, work, open, target)
 	}
 
-	return revealWithMarks(open, target, path, info, address)
+	return revealWithMarks(ctx, work, open, target, info)
 }
 
 // withPass opens the state, runs fn on its stream, and closes the stream
 // before the next pass starts. A close error does not fail the pass. The
-// opener logs it.
-func withPass(open stateOpener, fn func(*jsontext.Decoder) error) error {
+// opener logs it. A context that has ended when the pass ends fails the pass,
+// so no later pass and no answer builds on a pass that the context cut short.
+func withPass(ctx context.Context, open stateOpener, fn func(*jsontext.Decoder) error) error {
+	if err := runPass(open, fn); err != nil {
+		return err
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("reveal: %w", ctxErr)
+	}
+
+	return nil
+}
+
+// runPass opens the state, runs fn on its stream, and closes the stream.
+func runPass(open stateOpener, fn func(*jsontext.Decoder) error) error {
 	stream, err := open()
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
@@ -213,8 +249,21 @@ func withPass(open stateOpener, fn func(*jsontext.Decoder) error) error {
 // revealNoMarks answers a reveal with no marks from the stream: with no kept
 // marks every leaf of the attributes is masked, so the walk below the
 // attributes is physical, with no dynamic wrapper rule. It answers the leaf
-// at the path, or fails with ErrResourceNotFound.
-func revealNoMarks(open stateOpener, target revealTarget, path string) (any, []string, error) {
+// at the path, or fails with ErrResourceNotFound. A path deeper than
+// MaxStateDepth fails with ErrStateBound before the walk, as the masked read
+// refuses such a state, and the answer spends from the budget of work.
+func revealNoMarks(
+	ctx context.Context, work *maskWork, open stateOpener, target revealTarget,
+) (any, []string, error) {
+	path := target.path
+
+	// Defense in depth: the reader of the leaf stays bounded by the state
+	// machine of the decoder too. This check stays so that a path that no
+	// masked read can produce never starts a walk.
+	if len(target.rest) > MaxStateDepth {
+		return nil, nil, fmt.Errorf("reveal path nests %d levels: %w", len(target.rest), ErrStateBound)
+	}
+
 	base := "/resources/" + strconv.Itoa(target.resource) +
 		"/instances/" + strconv.Itoa(target.position) + "/attributes"
 
@@ -224,7 +273,7 @@ func revealNoMarks(open stateOpener, target revealTarget, path string) (any, []s
 		canonical string
 	)
 
-	err := withPass(open, func(dec *jsontext.Decoder) error {
+	err := withPass(ctx, open, func(dec *jsontext.Decoder) error {
 		_, _, lerr := locateInstance(dec, target, func(dec *jsontext.Decoder, name string) (bool, error) {
 			if name != attributesMemberName {
 				return false, nil
@@ -250,6 +299,10 @@ func revealNoMarks(open stateOpener, target revealTarget, path string) (any, []s
 
 	if !answered || canonical != path {
 		return nil, nil, notFoundState(path)
+	}
+
+	if workErr := checkValueWork(work, answer, canonical); workErr != nil {
+		return nil, nil, workErr
 	}
 
 	return answer, []string{path}, nil
@@ -447,23 +500,27 @@ func revealNoMarksElement(dec *jsontext.Decoder, index int) (bool, error) {
 // revealWithMarks answers a reveal with marks from the stream when the
 // pointer layout is not entangled, else with the full decode.
 func revealWithMarks(
-	open stateOpener, target revealTarget, path string, info instanceInfo, address string,
+	ctx context.Context, work *maskWork, open stateOpener, target revealTarget, info instanceInfo,
 ) (any, []string, error) {
+	path := target.path
+
+	address := tofuInstanceAddress(info.fields, map[string]any{"index_key": info.indexKey})
+
 	pointers := instancePointers(info, address, target.marks)
 	if len(pointers) == 0 || !isAttributesContainer(info) {
 		return nil, nil, notFoundState(path)
 	}
 
-	scan, err := revealPointerScan(open, target, pointers)
+	scan, err := revealPointerScan(ctx, open, target, pointers)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if scan.entangled {
-		return revealFullDecode(open, target.marks, path, info)
+		return revealFullDecode(ctx, work, open, target, info)
 	}
 
-	return revealStreamedAnswer(open, target, path, scan)
+	return revealStreamedAnswer(ctx, work, open, target, scan)
 }
 
 // isAttributesContainer reports whether the attributes value can hold a
@@ -474,11 +531,11 @@ func isAttributesContainer(info instanceInfo) bool {
 
 // revealPointerScan runs pass A of the marks lookup.
 func revealPointerScan(
-	open stateOpener, target revealTarget, pointers []revealPointer,
+	ctx context.Context, open stateOpener, target revealTarget, pointers []revealPointer,
 ) (pointerScan, error) {
 	var scan pointerScan
 
-	err := withPass(open, func(dec *jsontext.Decoder) error {
+	err := withPass(ctx, open, func(dec *jsontext.Decoder) error {
 		_, _, lerr := locateInstance(dec, target, pointerVisitor(pointers, &scan))
 
 		return lerr
@@ -490,10 +547,21 @@ func revealPointerScan(
 	return scan, nil
 }
 
-// revealStreamedAnswer runs pass B of the marks lookup and answers it.
+// revealStreamedAnswer runs pass B of the marks lookup and answers it. A path
+// deeper than MaxStateDepth fails with ErrStateBound before the pass, and the
+// decoded answer spends from the budget of work.
 func revealStreamedAnswer(
-	open stateOpener, target revealTarget, path string, scan pointerScan,
+	ctx context.Context, work *maskWork, open stateOpener, target revealTarget, scan pointerScan,
 ) (any, []string, error) {
+	path := target.path
+
+	// Defense in depth: the masked read refuses such a state, and the
+	// callers check the path too. This check stays so that the streamed
+	// answer never trusts them.
+	if len(target.rest) > MaxStateDepth {
+		return nil, nil, fmt.Errorf("reveal path nests %d levels: %w", len(target.rest), ErrStateBound)
+	}
+
 	base := revealBase(target)
 	secrets := revealSecrets(scan.applied)
 
@@ -501,7 +569,7 @@ func revealStreamedAnswer(
 		return nil, nil, notFoundState(path)
 	}
 
-	res, err := revealTargetScan(open, target, secrets)
+	res, err := revealTargetScan(ctx, open, target, secrets)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -517,6 +585,10 @@ func revealStreamedAnswer(
 
 	if !ok {
 		return nil, nil, notFoundState(path)
+	}
+
+	if workErr := checkValueWork(work, value, path); workErr != nil {
+		return nil, nil, workErr
 	}
 
 	return value, []string{path}, nil
@@ -543,11 +615,11 @@ func revealSecrets(applied []appliedPointer) map[digest]struct{} {
 
 // revealTargetScan runs pass B of the marks lookup.
 func revealTargetScan(
-	open stateOpener, target revealTarget, secrets map[digest]struct{},
+	ctx context.Context, open stateOpener, target revealTarget, secrets map[digest]struct{},
 ) (targetResult, error) {
 	var res targetResult
 
-	err := withPass(open, func(dec *jsontext.Decoder) error {
+	err := withPass(ctx, open, func(dec *jsontext.Decoder) error {
 		_, _, lerr := locateInstance(dec, target, targetVisitor(target.rest, secrets, len(secrets) > 0, &res))
 
 		return lerr
@@ -563,8 +635,10 @@ func revealTargetScan(
 // the target instance in full, as before. It refuses an instance over the
 // fallback limit.
 func revealFullDecode(
-	open stateOpener, marks SensitiveMarks, path string, info instanceInfo,
+	ctx context.Context, work *maskWork, open stateOpener, target revealTarget, info instanceInfo,
 ) (any, []string, error) {
+	marks, path := target.marks, target.path
+
 	if info.size > revealFallbackLimit {
 		return nil, nil, fmt.Errorf(
 			"instance holds %d bytes, over the limit of %d bytes for a reveal that needs the full instance: %w",
@@ -579,8 +653,8 @@ func revealFullDecode(
 		masked []string
 	)
 
-	err := withPass(open, func(dec *jsontext.Decoder) error {
-		v, m, rerr := revealStream(dec, marks, path)
+	err := withPass(ctx, open, func(dec *jsontext.Decoder) error {
+		v, m, rerr := revealStream(ctx, work, dec, marks, path)
 		value, masked = v, m
 
 		return rerr
@@ -723,7 +797,7 @@ func drainStreamedArray(dec *jsontext.Decoder) error {
 // wherever the envelope sits. A path outside the masked set fails with
 // ErrResourceNotFound.
 func revealStream(
-	dec *jsontext.Decoder, marks SensitiveMarks, path string,
+	ctx context.Context, work *maskWork, dec *jsontext.Decoder, marks SensitiveMarks, path string,
 ) (any, []string, error) {
 	target, shapeOK := parseRevealTarget(path, marks)
 
@@ -756,7 +830,7 @@ func revealStream(
 			break
 		}
 
-		value, ok, err := revealStreamedMember(dec, want, name)
+		value, ok, err := revealStreamedMember(ctx, work, dec, want, name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -781,7 +855,7 @@ func revealStream(
 // 409 whatever the path is. The encrypted envelope fails the lookup, so no
 // value of a client-encrypted state ever answers.
 func revealStreamedMember(
-	dec *jsontext.Decoder, target *revealTarget, name string,
+	ctx context.Context, work *maskWork, dec *jsontext.Decoder, target *revealTarget, name string,
 ) (any, bool, error) {
 	switch name {
 	case encryptedStateKey:
@@ -791,7 +865,7 @@ func revealStreamedMember(
 			return nil, false, skipStreamed(dec)
 		}
 
-		return revealFromResources(dec, *target)
+		return revealFromResources(ctx, work, dec, *target)
 	default:
 		return nil, false, skipStreamed(dec)
 	}
@@ -823,7 +897,12 @@ func streamArrayAt(dec *jsontext.Decoder, index int) (bool, error) {
 // revealFromResources walks the streamed resources array that dec streams to
 // the value of target. It reports whether the walk found the value. Values
 // off the path are skipped without building them.
-func revealFromResources(dec *jsontext.Decoder, target revealTarget) (any, bool, error) {
+func revealFromResources(
+	ctx context.Context,
+	work *maskWork,
+	dec *jsontext.Decoder,
+	target revealTarget,
+) (any, bool, error) {
 	open, err := openStreamedArray(dec)
 	if err != nil {
 		return nil, false, err
@@ -842,7 +921,7 @@ func revealFromResources(dec *jsontext.Decoder, target revealTarget) (any, bool,
 		return nil, false, nil
 	}
 
-	value, ok, err := revealFromResource(dec, target)
+	value, ok, err := revealFromResource(ctx, work, dec, target)
 	if err != nil {
 		return nil, false, err
 	}
@@ -860,7 +939,12 @@ func revealFromResources(dec *jsontext.Decoder, target revealTarget) (any, bool,
 // the value of target. The resource fields may sit before or after the
 // instances array. It reports whether the walk found a masked value at the
 // path.
-func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, error) {
+func revealFromResource(
+	ctx context.Context,
+	work *maskWork,
+	dec *jsontext.Decoder,
+	target revealTarget,
+) (any, bool, error) {
 	side, err := streamedResource(dec, target.position)
 	if err != nil {
 		return nil, false, err
@@ -878,11 +962,9 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 
 	address := tofuInstanceAddress(side.fields, side.instance)
 
-	attributes, _ := side.instance["attributes"]
-
-	plain, ok := lookupTokens(attributes, target.rest)
-	if !ok {
-		return nil, false, nil
+	plain, ok, lookupErr := lookupRevealed(work, side.instance, target)
+	if lookupErr != nil || !ok {
+		return nil, false, lookupErr
 	}
 
 	// A marker never answers: the plain state holds the plain value at a
@@ -891,10 +973,35 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 		return nil, false, nil
 	}
 
-	// The value travels through JSON, so numbers keep their exact encoding.
+	out, err := copyThroughJSON(plain)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if workErr := checkInstanceWork(ctx, work, side.instance, target.resource, target.position); workErr != nil {
+		return nil, false, workErr
+	}
+
+	site := instanceSite{resource: target.resource, position: target.position, address: address}
+
+	_, masked, maskErr := maskTofuInstance(ctx, work, side.instance, site, target.marks)
+	if maskErr != nil {
+		return nil, false, maskErr
+	}
+
+	if !slices.Contains(masked, target.path) {
+		return nil, false, nil
+	}
+
+	return out, true, nil
+}
+
+// copyThroughJSON copies a value through JSON, so numbers keep their exact
+// encoding.
+func copyThroughJSON(plain any) (any, error) {
 	raw, err := json.Marshal(plain)
 	if err != nil {
-		return nil, false, fmt.Errorf("encode revealed value: %w", err)
+		return nil, fmt.Errorf("encode revealed value: %w", err)
 	}
 
 	outDec := json.NewDecoder(bytes.NewReader(raw))
@@ -903,15 +1010,24 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 	var out any
 
 	if err := outDec.Decode(&out); err != nil {
-		return nil, false, fmt.Errorf("decode revealed value: %w", err)
+		return nil, fmt.Errorf("decode revealed value: %w", err)
 	}
 
-	_, masked := maskTofuInstance(side.instance, target.resource, target.position, address, target.marks)
-	if !slices.Contains(masked, target.path) {
-		return nil, false, nil
+	return out, nil
+}
+
+// lookupRevealed returns the plain value at the path of target under the
+// attributes of the decoded instance. The reveal reads a decoded instance, so
+// it refuses an instance that nests deeper than the masked read walks, with
+// the same bound, and it resolves the path once, as the mask does.
+func lookupRevealed(work *maskWork, instance map[string]any, target revealTarget) (any, bool, error) {
+	if !withinDepth(instance, 0) {
+		return nil, false, fmt.Errorf("decode state: %w", ErrStateBound)
 	}
 
-	return out, true, nil
+	attributes := instance["attributes"]
+
+	return lookupTokens(work, attributes, target.rest)
 }
 
 // fieldText reads one identity field of a streamed resource, or "" when the

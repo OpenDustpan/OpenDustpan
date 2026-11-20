@@ -524,7 +524,7 @@ func testChangeAppendsEntry(t *testing.T, s Store) {
 		t.Fatalf("end: %v", err)
 	}
 
-	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
@@ -1213,7 +1213,7 @@ func policyEntries(t *testing.T, s Store) (int, bool) {
 		return 0, false
 	}
 
-	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

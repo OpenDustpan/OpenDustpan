@@ -37,12 +37,30 @@ LEFT JOIN (
 ) AS nl ON TRUE
 WHERE `
 
-// unitLockedFilter keeps the units that have the locked state: a lock, as
-// inventoryLock reads it, or a manual lock on the unit, its collection or its
-// namespace.
-const unitLockedFilter = ` AND (COALESCE(i.lock_holder, '') <> '' OR i.lock_since_ms IS NOT NULL
-    OR COALESCE(i.lock_operation, '') <> ''
-    OR ul.holder IS NOT NULL OR cl.holder IS NOT NULL OR nl.holder IS NOT NULL)`
+// namespaceLockedQuery reads whether a manual lock covers the namespace, so
+// that each unit of it has the locked state.
+const namespaceLockedQuery = `SELECT EXISTS (
+    SELECT 1 FROM manual_locks AS l JOIN namespaces AS n ON l.kind = 'namespace' AND l.object_id = n.id
+    WHERE n.name = $1)`
+
+// unitLockedFilter keeps the units that have the locked state when no manual
+// lock covers the namespace: a lock, as inventoryLock reads it, or a manual
+// lock on the unit or on its collection. It reads the sources of the lock
+// first, so the cost follows the count of locked units and not the count of
+// units. The partial index inventory_locked serves the first source. Its
+// predicate is the lock test of the first source.
+const unitLockedFilter = ` AND i.unit_id IN (
+    SELECT li.unit_id FROM inventory AS li
+    WHERE li.namespace = $1
+      AND (COALESCE(li.lock_holder, '') <> '' OR li.lock_since_ms IS NOT NULL OR COALESCE(li.lock_operation, '') <> '')
+    UNION
+    SELECT ul2.object_id FROM manual_locks AS ul2 WHERE ul2.namespace = $1 AND ul2.kind = 'unit'
+    UNION
+    SELECT cm.unit_id
+    FROM manual_locks AS cl2
+    JOIN collections AS cc ON cc.id = cl2.object_id
+    JOIN collection_members AS cm ON cm.namespace = cc.namespace AND cm.collection_key = cc.name_key
+    WHERE cl2.namespace = $1 AND cl2.kind = 'collection')`
 
 // QueryUnits implements inventory.UnitQuerier with one page query and one
 // label query for the units of the page. The filters are in the WHERE clause,
@@ -53,13 +71,28 @@ func (s *Store) QueryUnits(ctx context.Context, q inventory.UnitQuery) ([]invent
 		return []inventory.Entry{}, nil
 	}
 
-	query, args := unitPageQuery(q)
-
 	var page []inventory.Entry
 
 	// One snapshot, so that a restore swap between the two statements cannot
 	// give the units of one state with the labels of another.
 	err := s.inSnapshotConn(ctx, func(tx pgx.Tx) error {
+		var nsLocked bool
+
+		if q.LockedOnly() {
+			err := tx.QueryRow(ctx, namespaceLockedQuery, q.Namespace.String()).Scan(&nsLocked)
+			if err != nil {
+				return fmt.Errorf("select namespace manual lock: %w", err)
+			}
+		}
+
+		// A manual lock on the namespace locks each unit, so the locked
+		// filter keeps them all and needs no source.
+		if nsLocked {
+			q.RestrictStates = false
+		}
+
+		query, args := unitPageQuery(q)
+
 		var err error
 
 		page, err = queryUnitPage(ctx, s.queries.WithTx(tx), tx, query, args)

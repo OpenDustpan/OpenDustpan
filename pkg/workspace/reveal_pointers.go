@@ -249,9 +249,15 @@ func (o *objectWalk) note(name string) {
 }
 
 // wrapperEntangled reports whether the object is a dynamic wrapper in the
-// path of a pointer.
+// path of a pointer. The attributes object is checked like any other object:
+// the masked read applies the wrapper rule to it too, and it refuses a mark
+// that two readings of the wrapper both fit. The stream cannot decide that,
+// so the full decode, which shares the decision with the masked read, does.
+// Defense in depth: the masked read refuses such a state on its own, and this
+// check stays so that the streamed reveal never answers a member that the
+// masked read refuses.
 func (o *objectWalk) wrapperEntangled(conts []pointerState) bool {
-	return o.count == 2 && o.hasValue && o.hasType && hasDeepState(conts)
+	return o.count == 2 && o.hasValue && o.hasType && len(conts) > 0
 }
 
 // groupContsByName sorts continuing states by the member name they step to.
@@ -340,17 +346,6 @@ func (w *pointerWalk) walkObjectMember(dec *jsontext.Decoder, name string, deriv
 	w.route = w.route[:len(w.route)-1]
 
 	return err
-}
-
-// hasDeepState reports whether a state already stepped below the attributes.
-func hasDeepState(conts []pointerState) bool {
-	for _, state := range conts {
-		if state.next >= 1 {
-			return true
-		}
-	}
-
-	return false
 }
 
 // walkArray reads one array value with the states that arrive at it.

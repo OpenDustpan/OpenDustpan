@@ -61,6 +61,7 @@ func TestBearerOfOldKindTokenAnswers401(t *testing.T) {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{

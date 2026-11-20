@@ -275,6 +275,7 @@ func newBehaviorHandlerWith(
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,
@@ -977,6 +978,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
+		Records:       nil,
 		Placements:    nil,
 		OutputSharing: nil,
 		Outputs:       nil,

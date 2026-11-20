@@ -129,3 +129,10 @@ installation, directly or through a group. The restore stops with the code
 `principal.no-working-break-glass` when it lowers this count and leaves fewer
 than two working accounts. A restore that does not lower the count continues,
 also when the count is below two.
+
+A break-glass account has no password, and no request of the API can give
+it one. A restore writes the rows of the backup, so it checks this rule too.
+The restore stops with the code `principal.break-glass-password` and changes
+nothing when the restored data holds a break-glass account with a local
+password. The command `opendustpan restore` then asks for a backup that
+holds no such account.

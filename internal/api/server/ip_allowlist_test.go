@@ -98,47 +98,48 @@ func newIPAllowHandler(
 	signIn, sessions := signInOf(t, st)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    cfg.authn,
-		Authorizer:       cfg.authz,
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       nss,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           st,
-		Journal:          nil,
-		Principals:       sessions.principals,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            newTestAudit(),
-		OnAuditFailure:   nil,
-		IPAllowlists:     svc,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		SignIn:           signIn,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      cfg.authn,
+		Authorizer:         cfg.authz,
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         nss,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             st,
+		Journal:            nil,
+		Principals:         sessions.principals,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              newTestAudit(),
+		OnAuditFailure:     nil,
+		IPAllowlists:       svc,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		SignIn:             signIn,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -500,7 +501,7 @@ func TestIPAllowlistDelete(t *testing.T) {
 func listNamespaceEntries(t *testing.T, st *sqlite.Store, ns namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), ns, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -531,7 +532,7 @@ func (s refusalStore) SetNamespaceList(
 }
 
 // NamespacesWithList implements ipallow.Store.
-func (s refusalStore) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+func (s refusalStore) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
 	s.t.Errorf("denied request reached the store")
 
 	return nil, namespace.ErrNotFound
@@ -682,7 +683,7 @@ func (s failWriteStore) SetNamespaceList(
 }
 
 // NamespacesWithList implements ipallow.Store.
-func (s failWriteStore) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
+func (s failWriteStore) NamespacesWithList(ctx context.Context) ([]ipallow.NamedList, error) {
 	return s.inner.NamespacesWithList(ctx)
 }
 

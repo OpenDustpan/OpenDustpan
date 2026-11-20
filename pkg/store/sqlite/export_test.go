@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -258,4 +259,20 @@ func JobWrite(ctx context.Context, s *Store, fence namespace.Fence, fn func(jobs
 // JobRead runs fn in one read transaction of the job stores of s.
 func JobRead(ctx context.Context, s *Store, fn func(jobstore.Tx) error) error {
 	return jobRunner{s: s}.Read(ctx, fn)
+}
+
+// MarkBreakGlassForTest sets the break-glass flag of the principal
+// principalID with direct SQL, as a restored row of a backup can hold it. No
+// port sets the flag on a principal that exists.
+func (s *Store) MarkBreakGlassForTest(t *testing.T, principalID string) {
+	t.Helper()
+
+	res, err := s.conn.ExecContext(t.Context(), `UPDATE principals SET break_glass = 1 WHERE id = ?`, principalID)
+	if err != nil {
+		t.Fatalf("mark %s as a break-glass account: %v", principalID, err)
+	}
+
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("mark %s as a break-glass account: %d rows, %v; want 1 row", principalID, n, err)
+	}
 }

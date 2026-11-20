@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -162,7 +164,7 @@ func (h *Handler) buildRoutes() []Route {
 			Method: http.MethodPost, Path: cancelPath, Scope: ScopeAuthorized,
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobCancel},
 			Filters: nil, Writes: nil,
-			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.cancelJob,
+			IdempotencyKey: false, ETag: true, Resolve: h.resolveJobOrDamaged, Serve: h.cancelJob,
 		}, Route{
 			// The start action of the job depends on its operation and executor, so
 			// the service picks it after it read the job. It checks job:read and
@@ -278,26 +280,66 @@ func (h *Handler) resolveNamespace(r *http.Request) (target, error) {
 // An invalid name or ID, an unknown namespace, an unknown job and a job of
 // another namespace answer errNotFound alike.
 func (h *Handler) resolveJob(r *http.Request) (target, error) {
+	ns, id, err := h.pathJob(r)
+	if err != nil {
+		return target{}, err
+	}
+
+	return h.loadTarget(r.Context(), ns, id)
+}
+
+// resolveJobOrDamaged is resolveJob for the route that cancels a job. A job
+// whose stored body does not decode resolves to its unit, so that an operator
+// can cancel it by its ID. Every other route answers the damaged job with the
+// error of the store.
+func (h *Handler) resolveJobOrDamaged(r *http.Request) (target, error) {
+	ns, id, err := h.pathJob(r)
+	if err != nil {
+		return target{}, err
+	}
+
+	t, err := h.loadTarget(r.Context(), ns, id)
+	if errors.Is(err, job.ErrDamaged) {
+		return h.damagedTarget(r.Context(), ns, id)
+	}
+
+	return t, err
+}
+
+// pathJob finds the namespace and the job ID of the path.
+func (h *Handler) pathJob(r *http.Request) (namespace.Namespace, job.ID, error) {
 	name, err := namespace.ParseName(r.PathValue("namespace"))
 	if err != nil {
-		return target{}, errNotFound
+		return namespace.Namespace{}, "", errNotFound
 	}
 
 	ns, err := h.namespaces.Get(r.Context(), name)
+	// Defense in depth: writeError maps the raw namespace.ErrNotFound to the
+	// same 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, namespace.ErrNotFound) {
-		return target{}, errNotFound
+		return namespace.Namespace{}, "", errNotFound
 	}
 
 	if err != nil {
-		return target{}, fmt.Errorf("get namespace: %w", err)
+		return namespace.Namespace{}, "", fmt.Errorf("get namespace: %w", err)
 	}
 
 	raw := r.PathValue("job_id")
 	if !strings.HasPrefix(raw, job.IDPrefix) || !ident.Valid(raw, maxIDLength) {
-		return target{}, errNotFound
+		return namespace.Namespace{}, "", errNotFound
 	}
 
-	j, err := h.jobs.Get(r.Context(), job.ID(raw))
+	return ns, job.ID(raw), nil
+}
+
+// loadTarget reads the job id and checks that it belongs to ns. A damaged job
+// gives an error that wraps job.ErrDamaged.
+func (h *Handler) loadTarget(ctx context.Context, ns namespace.Namespace, id job.ID) (target, error) {
+	j, err := h.jobs.Get(ctx, id)
+	// Defense in depth: writeError maps the raw job.ErrNotFound to the same
+	// 404. This mapping stays so that this resolver does not rely on that
+	// error-writer mapping.
 	if errors.Is(err, job.ErrNotFound) {
 		return target{}, errNotFound
 	}
@@ -308,12 +350,72 @@ func (h *Handler) resolveJob(r *http.Request) (target, error) {
 
 	// Defense in depth: the store looks a job up by its ID alone. A job of
 	// another namespace must not answer under this namespace, whatever the
-	// caller may read there.
+	// caller may read there. The IsUnit clause is a defense-in-depth layer that no
+	// stored job reaches today: the UnitID clause also refuses an object that is
+	// not a unit, and this clause does not rely on it.
 	if j.Spec.Unit.Namespace() != ns.Name || !j.Spec.Unit.IsUnit() || j.Spec.Unit.UnitID() == "" {
 		return target{}, errNotFound
 	}
 
 	return target{ns: ns, job: j, obj: j.Spec.Unit}, nil
+}
+
+// errRepaired is the answer when the row of a job was repaired between the
+// read that reported it as damaged and the read of the row. It is a
+// job.ErrConflict. The text is fixed and holds no text of the store.
+var errRepaired = fmt.Errorf(
+	"%w: the stored job was repaired while it was canceled; send the request again",
+	job.ErrConflict,
+)
+
+// damagedTarget finds the unit of the damaged job id from the unit ID of its
+// row. The target holds the ID and the unit, and nothing else of the job.
+func (h *Handler) damagedTarget(ctx context.Context, ns namespace.Namespace, id job.ID) (target, error) {
+	row, rowNs, err := h.jobs.GetDamaged(ctx, id)
+	if errors.Is(err, job.ErrNotFound) {
+		return target{}, errNotFound
+	}
+
+	// The row was repaired between the read that reported it as damaged and
+	// this read. The answer is a conflict with fixed text, the same as the
+	// job service gives, and not a 400 that blames the request.
+	if errors.Is(err, job.ErrInvalid) {
+		return target{}, errRepaired
+	}
+
+	if err != nil {
+		return target{}, fmt.Errorf("get damaged job: %w", err)
+	}
+
+	// Defense in depth: the store looks a job up by its ID alone. A job of
+	// another namespace must not answer under this namespace.
+	if rowNs != ns.Name {
+		return target{}, errNotFound
+	}
+
+	unit, err := h.unitRef(ctx, ns.Name, row.UnitID)
+
+	switch {
+	case errors.Is(err, errUnitUnresolved), errors.Is(err, inventory.ErrUnitNotFound):
+		// An unknown unit answers as an unknown job: the caller learns
+		// nothing about the row.
+		return target{}, errNotFound
+	case err != nil:
+		// A failure of the inventory is not "no such job". The log holds a
+		// fixed message and the cause class. It holds no text of the error,
+		// because the text of an adapter error can hold connection details,
+		// and no content of the row.
+		faultlog.LogFault(ctx, h.logger, "find the unit of a damaged job failed",
+			faultlog.Cause(err), "jobs.damaged_unit")
+
+		return target{}, fmt.Errorf("find unit of damaged job: %w", err)
+	}
+
+	var stub job.Job
+
+	stub.ID, stub.Spec.Unit = id, unit
+
+	return target{ns: ns, job: stub, obj: unit}, nil
 }
 
 // enforce wraps one route table row: it authenticates, finds the object,

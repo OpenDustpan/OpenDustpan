@@ -761,6 +761,15 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 // already copied the control tables into the staged file, so the rename
 // keeps the live control rows with no further copy.
 func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
+	// Defense in depth: snapshotPath makes the staged file with mode 0600 and
+	// openDatabase checks the live file after the move. This check stays so
+	// that a staged file with a wider mode never becomes the live database.
+	// It runs before the connection closes, so a refused swap leaves the live
+	// connection untouched.
+	if err := checkPrivateFiles(databaseFiles(temp)...); err != nil {
+		return err
+	}
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -779,13 +788,16 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 		return errors.Join(renameErr, reopenErr)
 	}
 
-	conn, err := openDatabase(ctx, s.path, nil)
+	conn, wide, err := openDatabase(ctx, s.path, nil, s.widePolicy())
 	if err != nil {
 		return err
 	}
 
 	s.conn = conn
 	s.queries = db.New(conn)
+
+	// The reopened files get a mode again, so warn again for each wide file.
+	s.warnWideFiles(ctx, wide)
 
 	return nil
 }
@@ -794,13 +806,16 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 // before the rename. Restore runs offline, so the destination stays usable.
 // The caller holds the store lock.
 func (s *Store) reopenDatabase(ctx context.Context) error {
-	conn, err := openDatabase(ctx, s.path, nil)
+	conn, wide, err := openDatabase(ctx, s.path, nil, s.widePolicy())
 	if err != nil {
 		return err
 	}
 
 	s.conn = conn
 	s.queries = db.New(conn)
+
+	// The reopened files get a mode again, so warn again for each wide file.
+	s.warnWideFiles(ctx, wide)
 
 	return nil
 }
@@ -934,7 +949,7 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 }
 
 // checkStagedRows checks the rows of the staged database with the rules of
-// the store: the namespace IDs, the owned rows, the grants and the
+// the store: the namespace IDs, the owned rows, the tag values, the grants and the
 // memberships of principals of a namespace, and the feature rows.
 func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) error {
 	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
@@ -943,6 +958,14 @@ func checkStagedRows(ctx context.Context, conn *sql.DB, restoreAt time.Time) err
 
 	if ownedErr := checkStagedOwnedRows(ctx, conn, restoreAt); ownedErr != nil {
 		return ownedErr
+	}
+
+	if tagsErr := checkStagedStackTags(ctx, conn); tagsErr != nil {
+		return tagsErr
+	}
+
+	if idErr := checkStagedGrantIDs(ctx, conn); idErr != nil {
+		return idErr
 	}
 
 	if grantErr := checkStagedNamespacePrincipalGrants(ctx, conn); grantErr != nil {
@@ -1303,21 +1326,25 @@ func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 		return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", iterErr)
 	}
 
-	collector := &blobrefs.Collector{}
+	// The collector starts with the references of the query above, so all
+	// references stay in one slice and the sort below orders it in place.
+	collector := blobrefs.NewCollector(out)
 	if addErr := addStoredBlobRefs(ctx, conn, collector); addErr != nil {
 		return blobrefs.BackupRefs{}, addErr
 	}
 
 	gathered := collector.BackupRefs()
-	gathered.Refs = append(out, gathered.Refs...)
 	slices.SortFunc(gathered.Refs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
 	return gathered, nil
 }
 
-// snapshotPath reserves a new file name for a VACUUM INTO target in dir: it
-// creates and removes a temp file, because VACUUM INTO refuses a target that
-// exists.
+// snapshotPath reserves a new file in dir for a VACUUM INTO target or a staged
+// database and returns its path. It makes an empty file with mode 0600 and
+// keeps it: VACUUM INTO accepts an empty target, and SQLite gives the -wal and
+// -shm files of a database the mode of the database file. A name with no file
+// would get the default mode of the process, which the umask often leaves at
+// 0644.
 func snapshotPath(dir string) (string, error) {
 	f, err := os.CreateTemp(dir, "dustpan-backup-*.db")
 	if err != nil {
@@ -1326,20 +1353,24 @@ func snapshotPath(dir string) (string, error) {
 
 	name := f.Name()
 
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, os.Remove(name)))
+	// CreateTemp makes the file with mode 0600. The explicit change keeps that
+	// true if the standard library changes, and it checks the mode after the
+	// create.
+	if err := f.Chmod(databaseFileMode); err != nil {
+		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, f.Close(), os.Remove(name)))
 	}
 
-	if err := os.Remove(name); err != nil {
-		return "", fmt.Errorf("reserve snapshot file: %w", err)
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, os.Remove(name)))
 	}
 
 	return name, nil
 }
 
-// removeSnapshot removes a snapshot file with its WAL sidecars, if present.
+// removeSnapshot removes a snapshot file with its WAL and journal sidecars, if
+// present.
 func removeSnapshot(path string) {
-	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
 		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of scratch files.
 	}
 }
@@ -1351,7 +1382,7 @@ func removeSnapshot(path string) {
 func removeSnapshotErr(path string) error {
 	var errs []error
 
-	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
 		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
