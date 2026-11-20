@@ -48,6 +48,10 @@ When a principal holds a grant on a collection or a unit in a namespace, the org
 - **WHEN** the grant ends and the same principal sends the next discovery request
 - **THEN** the server answers 404
 
+#### Scenario: Unit grant without namespace read in the user route
+- **WHEN** a principal holds a unit-read grant in the namespace but no `namespace:read` grant, and reads `/api/user`
+- **THEN** the server does not list the namespace in the answer
+
 ### Requirement: Access-review export
 
 When a caller with the read-access action asks for the access-review export, the server SHALL answer each grant with holder, role, object, creator and time.
