@@ -51,6 +51,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/internal/logguard"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -185,7 +186,7 @@ func main() {
 	stop()
 
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "opendustpan:", err)
+		writeErrorLine(os.Stderr, "opendustpan", err)
 		os.Exit(1)
 	}
 }
@@ -351,8 +352,12 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
-	auditChain              string
-	softDeleteRetention     string
+
+	// databaseAllowWideFileMode lets serve start on a SQLite database file
+	// that group or other users can access. The default is off.
+	databaseAllowWideFileMode bool
+	auditChain                string
+	softDeleteRetention       string
 	// retention is softDeleteRetention after the check.
 	retention time.Duration
 	// planRetention and jobLogRetention are the retention flags. jobRetention is
@@ -493,6 +498,7 @@ func checkProxyFlags(list, header string) error {
 func (f *serveFlags) register(fs *flag.FlagSet) {
 	cli.ByFlag("config").String(fs, &f.config)
 	f.common.register(fs)
+	cli.ByFlag("database-allow-wide-file-mode").Bool(fs, &f.databaseAllowWideFileMode)
 	f.registerNet(fs)
 	f.registerLimits(fs)
 	f.registerStorage(fs)
@@ -668,7 +674,9 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		f.warnKeyNextToData(logger, path)
 	}
 
-	opened, storeErr := openStore(ctx, f.database, logger, openMigrate, installation.KindProduction)
+	opened, storeErr := openStore(
+		ctx, f.database, logger, openMigrate, installation.KindProduction, f.databaseStoreOptions()...,
+	)
 	if storeErr != nil {
 		return storeErr
 	}
@@ -720,6 +728,16 @@ func (f *serveFlags) beforeServe(
 
 		return nil
 	}
+}
+
+// databaseStoreOptions returns the options of the database open that the
+// serve flags set.
+func (f *serveFlags) databaseStoreOptions() []dustpan.StoreOption {
+	if !f.databaseAllowWideFileMode {
+		return nil
+	}
+
+	return []dustpan.StoreOption{dustpan.WithStoreAllowWideFileMode()}
 }
 
 // checkDatabaseFlag rejects a --database value with an unknown form before
@@ -1631,8 +1649,7 @@ func normalizeLogLevel(s string) string {
 // closing, so a failure goes to stderr.
 func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
 	if err := app.close(ctx); err != nil {
-		//nolint:errcheck // Nothing is left to report a failed write of stderr to.
-		fmt.Fprintln(stderr, "opendustpan: close log sinks:", err)
+		writeErrorLine(stderr, "opendustpan: close log sinks", err)
 	}
 }
 
@@ -1678,8 +1695,14 @@ type openedStore struct {
 // close closes the store and writes a warning when the close fails.
 func (s openedStore) close() {
 	if err := s.Close(); err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Warn("close database", slog.String("error", err.Error()))
+		warnCloseDatabase(os.Stderr, err)
 	}
+}
+
+// warnCloseDatabase writes the warning of a failed close of the database
+// to w, through the guard that escapes hidden runes.
+func warnCloseDatabase(w io.Writer, err error) {
+	slog.New(logguard.New(slog.NewTextHandler(w, nil))).Warn("close database", slog.String("error", err.Error()))
 }
 
 // builtin answers the handle that the server options need.
@@ -1712,12 +1735,13 @@ const (
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
 var openStore = func(
 	ctx context.Context, database string, logger *slog.Logger, mode openMode, kind installation.Kind,
+	extra ...dustpan.StoreOption,
 ) (store, error) {
-	opts := []dustpan.StoreOption{
+	opts := append([]dustpan.StoreOption{
 		dustpan.WithStoreLogger(logger),
 		dustpan.WithStoreBinaryVersion(version),
 		dustpan.WithStoreInstallationKind(kind),
-	}
+	}, extra...)
 	if mode == openNoMigrate {
 		opts = append(opts, dustpan.WithoutStoreMigrate())
 	}
@@ -1884,6 +1908,111 @@ func readKeyFile(path string) ([]byte, error) {
 	}
 
 	return decodeKey(keyFileEnvVar, string(raw))
+}
+
+// writeErrorLine writes "<prefix>: <error text>" and a newline to w. The
+// error text can hold a value from outside the process, such as a path from
+// a flag, so a raw CR or LF could forge a second line. writeErrorLine
+// escapes each hidden rune of the error text as visible text, for example
+// "\n", and writes a backslash as two, so a reader can tell an escaped line
+// feed from a backslash and an "n".
+//
+// Two kinds of error keep line breaks that the program makes:
+//
+//   - The usage error (see usageOf): writeErrorLine escapes only its
+//     message and then writes the usage text, which is fixed program text,
+//     as it is.
+//   - An errors.Join result (see joinParts): writeErrorLine writes each part
+//     on its own line, and escapes each part. Each line starts with
+//     "<prefix>: ", which is fixed program text, so a part whose text starts
+//     like a log record cannot make a line that reads as one. It does this
+//     for nested joins too, to a depth of maxJoinDepth.
+//
+// Any other error, a wrapped usage error or a wrapped join included, is one
+// escaped line. A part of a join that is the usage error is escaped too.
+//
+// Defense in depth: each call site quotes its values with %q too; this
+// escape stays so that one call site that does not quote is not enough to
+// forge a line.
+//
+// A failed write of the line is not reported: nothing is left to report it
+// to.
+func writeErrorLine(w io.Writer, prefix string, err error) {
+	// Each line starts with the prefix: a part cannot start a line with
+	// text from outside.
+	text := strings.Join(errorLines(err, 0), "\n"+prefix+": ")
+
+	if message, ok := usageOf(err); ok {
+		text = errUsage.Error()
+		if message != "" {
+			text = logguard.EscapeLine(message) + "\n" + text
+		}
+	}
+
+	if _, werr := fmt.Fprintln(w, prefix+":", text); werr != nil {
+		return
+	}
+}
+
+// maxJoinDepth bounds the nested joins that writeErrorLine writes as lines.
+// A deeper join is one escaped line.
+const maxJoinDepth = 8
+
+// errorLines answers the lines of err: one escaped line for each part of a
+// join (see joinParts), else one escaped line for all of err.
+func errorLines(err error, depth int) []string {
+	if depth < maxJoinDepth {
+		if parts, ok := joinParts(err); ok {
+			lines := make([]string, 0, len(parts))
+
+			for _, part := range parts {
+				lines = append(lines, errorLines(part, depth+1)...)
+			}
+
+			return lines
+		}
+	}
+
+	return []string{logguard.EscapeLine(err.Error())}
+}
+
+// joinError is the error that errors.Join makes: it has the parts.
+type joinError interface {
+	error
+	Unwrap() []error
+}
+
+// joinParts answers the parts of err when err is a join of errors that no
+// other error wraps: the text of err must be the texts of its parts with a
+// line feed between each two. A wrapped join adds text that can hold a
+// value from outside, so it answers false for it, and for any other error.
+func joinParts(err error) ([]error, bool) {
+	join, found := errors.AsType[joinError](err)
+	if !found {
+		return nil, false
+	}
+
+	parts := join.Unwrap()
+	texts := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		// A custom error can answer a nil part, and its Error method would
+		// panic in the printer: such an error is one escaped line.
+		if part == nil {
+			return nil, false
+		}
+
+		texts = append(texts, part.Error())
+	}
+
+	// Defense in depth: errors.Join answers nil for no parts, so no join
+	// with no parts reaches this check today. The check stays so that a
+	// custom error with no parts and an empty text is never split.
+	if len(parts) == 0 || strings.Join(texts, "\n") != err.Error() {
+		return nil, false
+	}
+
+	return parts, true
 }
 
 // blobStoreKind returns the kind of the --blob-store value for a log record:

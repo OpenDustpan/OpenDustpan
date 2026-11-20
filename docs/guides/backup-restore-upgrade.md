@@ -517,6 +517,13 @@ The command prints the binary version, the schema version of the database and th
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
 
+`serve` and `dev` refuse a SQLite database file that the group or others can access. They check the database file, `<path>-wal` and `<path>-shm`. A database that an earlier build made can have mode 0644, for example the file `/data/dustpan.db` of the container image. The server never changes a mode itself. Stop the server and use one of these fixes:
+
+1. Run `chmod 600` on each of the three files that exist, for example `chmod 600 /data/dustpan.db /data/dustpan.db-wal /data/dustpan.db-shm`.
+2. Change the mount permissions of the volume (Docker or Kubernetes) so that only the owner can access the files.
+
+If you accepted the risk and cannot change the mode, start `serve` with `--database-allow-wide-file-mode` (`DUSTPAN_DATABASE_ALLOW_WIDE_FILE_MODE=true`). The flag is off by default. At each start, the server then writes one warning for each such file, with its path and its mode. The start log shows the setting. The flag does not change the other checks. The server still makes a new file with mode 0600. It still refuses a file that is not a regular file. It still refuses a link in place of the `-wal` or `-shm` file. It still refuses a staged restore file with a wider mode. The flag does not apply to `dev` or to the host command. See [`--database-allow-wide-file-mode`](../reference/configuration.md).
+
 `serve` refuses a database that records a schema version below 168, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
 
 The database records the SHA-256 of each migration. Until the first tag, a change to the schema edits the baseline in place. A build with another version of the baseline refuses the database at start, and names both values. `serve` says to restore a backup of the same build, or to set `--database` to a new database. It never offers a reset. An untagged build has no upgrade path. The upgrade check cannot see an edit of the baseline, because the name of the file does not change. For a dev data directory, run `opendustpan dev reset`, as the [dev server guide](dev-server.md#start-again-after-a-schema-change) shows.

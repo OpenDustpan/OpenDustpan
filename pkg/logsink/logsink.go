@@ -178,7 +178,8 @@ func MarshalJSON(r Record) ([]byte, error) {
 const TimeFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // writeJSONValue appends the JSON form of v. It does not escape HTML
-// characters, so a reader sees "<" and ">" as they are.
+// characters, so a reader sees "<" and ">" as they are. It escapes each
+// hidden rune, so the line holds no raw control character.
 func writeJSONValue(buf *bytes.Buffer, v any) error {
 	var tmp bytes.Buffer
 
@@ -190,7 +191,13 @@ func writeJSONValue(buf *bytes.Buffer, v any) error {
 	}
 
 	// Encode appends a newline. A record line holds none.
-	buf.Write(bytes.TrimSuffix(tmp.Bytes(), []byte("\n")))
+	//
+	// Defense in depth: the logger escapes hidden runes before a record
+	// reaches a sink, and each call site quotes its values; this escape
+	// stays so that a record from another writer of the port, or a value
+	// that the logger did not escape, cannot forge a line in a file, a
+	// syslog message, a webhook body or an object.
+	buf.Write(EscapeJSON(bytes.TrimSuffix(tmp.Bytes(), []byte("\n"))))
 
 	return nil
 }

@@ -164,7 +164,7 @@ func StoredKind(ctx context.Context, path string) (installation.Kind, error) {
 		return "", err
 	}
 
-	conn, err := openDatabase(ctx, resolved, url.Values{dsnModeKey: {"ro"}})
+	conn, _, err := openDatabase(ctx, resolved, url.Values{dsnModeKey: {"ro"}}, refuseWide)
 	if err != nil {
 		return "", errors.Join(err, guard.release())
 	}
