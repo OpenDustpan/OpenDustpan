@@ -77,7 +77,7 @@ func newMakerFixture(t *testing.T, makers accesstoken.MakerChecker) makerFixture
 }
 
 // revoked reports whether the token id is revoked.
-func (f makerFixture) revoked(t *testing.T, id string) bool {
+func (f *makerFixture) revoked(t *testing.T, id string) bool {
 	t.Helper()
 
 	tok, err := f.svc.Get(t.Context(), id)
@@ -91,7 +91,7 @@ func (f makerFixture) revoked(t *testing.T, id string) bool {
 // revocationEntry returns the one audit entry of @server of the revocation
 // of the token id with the subject accesstoken.MakerSubject, and fails the
 // test unless there is exactly one.
-func (f makerFixture) revocationEntry(t *testing.T, id string) audit.Entry {
+func (f *makerFixture) revocationEntry(t *testing.T, id string) audit.Entry {
 	t.Helper()
 
 	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
@@ -126,6 +126,19 @@ func changeOf(e audit.Entry, key string) string {
 	return ""
 }
 
+// wantLostMakerEntry fails the test unless e is the entry of a revocation
+// after the change server:manage-access grant:grt-1 of root.
+func wantLostMakerEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Reason != accesstoken.ReasonMakerLostPath || e.Outcome != audit.OutcomeSuccess ||
+		e.Action != string(identity.ActionPrincipalManageTokens) ||
+		changeOf(e, "maker") != "admin" || changeOf(e, "cause") != "server:manage-access grant:grt-1" ||
+		changeOf(e, "causedBy") != "root" {
+		t.Fatalf("revocation entry = %+v, want the reason, the maker, the cause and its caller", e)
+	}
+}
+
 // TestRevokeLostMakersRevokesTheServiceToken proves that a change after which
 // the maker has no act-as path revokes the service token, keeps the personal
 // token, and writes one entry that names the maker, the change and its
@@ -150,13 +163,7 @@ func TestRevokeLostMakersRevokesTheServiceToken(t *testing.T) {
 		t.Fatal("want the service token revoked and the personal token kept")
 	}
 
-	e := f.revocationEntry(t, f.token.ID)
-	if e.Reason != accesstoken.ReasonMakerLostPath || e.Outcome != audit.OutcomeSuccess ||
-		e.Action != string(identity.ActionPrincipalManageTokens) ||
-		changeOf(e, "maker") != "admin" || changeOf(e, "cause") != "server:manage-access grant:grt-1" ||
-		changeOf(e, "causedBy") != "root" {
-		t.Fatalf("revocation entry = %+v, want the reason, the maker, the cause and its caller", e)
-	}
+	wantLostMakerEntry(t, f.revocationEntry(t, f.token.ID))
 
 	// A second run finds no active token of the maker and writes nothing.
 	again, err := f.checked.RevokeLostMakers(t.Context(), cause)
@@ -204,8 +211,9 @@ func TestLostMakerCheckFailsClosed(t *testing.T) {
 		t.Fatalf("revoke lost makers = %v, want the error of the checker", err)
 	}
 
-	if _, err := f.checked.AuthenticateToken(t.Context(), f.secret.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
-		t.Fatalf("authenticate with a checker that cannot decide = %v, want ErrUnauthenticated", err)
+	_, authErr := f.checked.AuthenticateToken(t.Context(), f.secret.Reveal())
+	if !errors.Is(authErr, identity.ErrUnauthenticated) {
+		t.Fatalf("authenticate with a checker that cannot decide = %v, want ErrUnauthenticated", authErr)
 	}
 
 	if f.revoked(t, f.token.ID) {
@@ -225,8 +233,9 @@ func TestLostMakerIsRevokedAtUse(t *testing.T) {
 
 	f := newMakerFixture(t, fakeMakers{can: map[string]bool{}, err: nil})
 
-	if _, err := f.checked.AuthenticateToken(t.Context(), f.secret.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
-		t.Fatalf("authenticate = %v, want ErrUnauthenticated", err)
+	_, authErr := f.checked.AuthenticateToken(t.Context(), f.secret.Reveal())
+	if !errors.Is(authErr, identity.ErrUnauthenticated) {
+		t.Fatalf("authenticate = %v, want ErrUnauthenticated", authErr)
 	}
 
 	if !f.revoked(t, f.token.ID) {

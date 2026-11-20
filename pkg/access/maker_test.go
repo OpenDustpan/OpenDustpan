@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -43,14 +44,16 @@ func TestCanActAs(t *testing.T) {
 	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-dora"}, access.RoleTokenManager, ci)
 	f.grant(t, f.group(t, "former", "lena"), access.RoleTokenManager, ci)
 
-	if err := f.store.DisablePrincipal(t.Context(), "prn-dora",
-		storetest.ServerChange(time.Unix(1, 0), "principal:prn-dora")); err != nil {
-		t.Fatalf("disable dora: %v", err)
+	disableErr := f.store.DisablePrincipal(t.Context(), "prn-dora",
+		storetest.ServerChange(time.Unix(1, 0), "principal:prn-dora"))
+	if disableErr != nil {
+		t.Fatalf("disable dora: %v", disableErr)
 	}
 
-	if err := f.store.RemoveMember(t.Context(), "grp-former", "prn-lena",
-		storetest.ServerChange(time.Unix(1, 0), "group:grp-former")); err != nil {
-		t.Fatalf("remove lena: %v", err)
+	removeErr := f.store.RemoveMember(t.Context(), "grp-former", "prn-lena",
+		storetest.ServerChange(time.Unix(1, 0), "group:grp-former"))
+	if removeErr != nil {
+		t.Fatalf("remove lena: %v", removeErr)
 	}
 
 	tests := []struct {
@@ -68,7 +71,6 @@ func TestCanActAs(t *testing.T) {
 		{"an ended membership", "lena", "prn-ci", false},
 		{"a maker that is not a principal", "ghost", "prn-ci", false},
 		{"an empty maker", "", "prn-ci", false},
-		{"a principal ID that does not parse", "tina", "../prn-ci", false},
 	}
 
 	for _, tc := range tests {
@@ -84,5 +86,11 @@ func TestCanActAs(t *testing.T) {
 				t.Fatalf("CanActAs(%q, %q) = %t, want %t", tc.maker, tc.principalID, got, tc.want)
 			}
 		})
+	}
+
+	// A principal ID that does not parse cannot be decided: the caller keeps
+	// the token and refuses its use.
+	if got, err := f.svc.CanActAs(t.Context(), "tina", "../prn-ci"); got || !errors.Is(err, access.ErrInvalid) {
+		t.Fatalf("CanActAs with a bad principal ID = %t, %v; want false and ErrInvalid", got, err)
 	}
 }

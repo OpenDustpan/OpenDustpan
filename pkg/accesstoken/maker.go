@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -208,7 +209,7 @@ func (s *Service) checkMakerAtUse(ctx context.Context, t Token) error {
 	revokeErr := s.store.RevokeToken(ctx, t.ID, lostMakerEntry(s.Now(), t, useCause(t), ReasonMakerLostPathAtUse))
 	if revokeErr != nil && !errors.Is(revokeErr, ErrEnded) {
 		s.logger.WarnContext(ctx, "revoke of an access token whose maker has no act-as path failed",
-			"token_id", t.ID)
+			slog.String("token_id", t.ID))
 	}
 
 	return fmt.Errorf("%w: the maker of the access token has no act-as path to its principal",

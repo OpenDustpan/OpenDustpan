@@ -19,10 +19,19 @@ import (
 // lostMakerToken is the ID of the service token that tina made for ci.
 const lostMakerToken = "tok-ci-tina"
 
+// makerPath is how tina holds token-manager on ci: through a direct grant or
+// through the group grp-deployers.
+type makerPath int
+
+const (
+	pathDirect makerPath = iota
+	pathGroup
+)
+
 // seedLostMaker stores the service principal prn-ci, the person tina with the
 // role token-manager on it through grant (direct or through the group
 // grp-deployers), and the service token lostMakerToken that tina made.
-func seedLostMaker(t *testing.T, f accessFixture, throughGroup bool) {
+func seedLostMaker(t *testing.T, f accessFixture, path makerPath) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -42,11 +51,14 @@ func seedLostMaker(t *testing.T, f accessFixture, throughGroup bool) {
 		t.Fatalf("parse the principal object: %v", err)
 	}
 
-	if !throughGroup {
-		f.seed(t, "tina", access.RoleTokenManager, obj)
-	} else {
+	switch path {
+	case pathGroup:
 		f.seed(t, "tina", "", identity.Object{})
 		seedDeployers(t, f, obj, at)
+	case pathDirect:
+		f.seed(t, "tina", access.RoleTokenManager, obj)
+	default:
+		t.Fatalf("unknown maker path %d", path)
 	}
 
 	tok := accesstoken.Token{
@@ -54,9 +66,10 @@ func seedLostMaker(t *testing.T, f accessFixture, throughGroup bool) {
 		DisabledAt: time.Time{}, ID: lostMakerToken, PrincipalID: "prn-ci", Name: "deploy",
 		Kind: accesstoken.KindService, ReplacedBy: "", CreatedBy: "tina",
 	}
-	if err := f.store.CreateToken(ctx, tok, sha256.Sum256([]byte(lostMakerToken)),
-		storetest.ServerChange(at, "token:"+lostMakerToken)); err != nil {
-		t.Fatalf("create the token: %v", err)
+	created := f.store.CreateToken(ctx, tok, sha256.Sum256([]byte(lostMakerToken)),
+		storetest.ServerChange(at, "token:"+lostMakerToken))
+	if created != nil {
+		t.Fatalf("create the token: %v", created)
 	}
 }
 
@@ -95,8 +108,8 @@ func seedDeployers(t *testing.T, f accessFixture, obj identity.Object, at time.T
 }
 
 // lostMakerRevocation returns the audit entry of the revocation of
-// lostMakerToken, or false when the token is active and no entry exists.
-func lostMakerRevocation(t *testing.T, f accessFixture) (audit.Entry, bool) {
+// lostMakerToken, or nil when the token is active and no entry exists.
+func lostMakerRevocation(t *testing.T, f accessFixture) *audit.Entry {
 	t.Helper()
 
 	tok, err := f.store.GetToken(t.Context(), lostMakerToken)
@@ -120,18 +133,18 @@ func lostMakerRevocation(t *testing.T, f accessFixture) (audit.Entry, bool) {
 
 	switch {
 	case tok.RevokedAt.IsZero() && len(found) == 0:
-		return audit.Entry{}, false
+		return nil
 	case !tok.RevokedAt.IsZero() && len(found) == 1:
-		return found[0], true
+		return &found[0]
 	default:
 		t.Fatalf("token revoked at %v with the revocation entries %+v, want both or neither", tok.RevokedAt, found)
 
-		return audit.Entry{}, false
+		return nil
 	}
 }
 
 // causeOf returns the change "cause" of e.
-func causeOf(e audit.Entry) string {
+func causeOf(e *audit.Entry) string {
 	for _, c := range e.Changes {
 		if c.Key == "cause" {
 			return c.New
@@ -148,38 +161,38 @@ func TestTokenEndsWhenItsMakerLosesTheActAsPath(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		throughGroup bool
-		change       apiCall
-		cause        string
+		name   string
+		path   makerPath
+		change apiCall
+		cause  string
 	}{
 		{
-			"revoke of the grant of the maker", false,
+			"revoke of the grant of the maker", pathDirect,
 			apiCall{http.MethodDelete, "/api/server/grants/grt-seed-tina", "", http.StatusNoContent},
 			"server:manage-access grant:grt-seed-tina",
 		},
 		{
-			"revoke of the grant of the group of the maker", true,
+			"revoke of the grant of the group of the maker", pathGroup,
 			apiCall{http.MethodDelete, "/api/server/grants/grt-deployers", "", http.StatusNoContent},
 			"server:manage-access grant:grt-deployers",
 		},
 		{
-			"removal of the maker from the group", true,
+			"removal of the maker from the group", pathGroup,
 			apiCall{http.MethodDelete, "/api/server/groups/grp-deployers/members/prn-tina", "", http.StatusNoContent},
 			"server:manage-groups group:grp-deployers",
 		},
 		{
-			"delete of the group", true,
+			"delete of the group", pathGroup,
 			apiCall{http.MethodDelete, "/api/server/groups/grp-deployers", "", http.StatusNoContent},
 			"server:manage-groups group:grp-deployers",
 		},
 		{
-			"delete of the maker", false,
+			"delete of the maker", pathDirect,
 			apiCall{http.MethodDelete, "/api/server/principals/prn-tina", "", http.StatusNoContent},
 			"server:manage-principals principal:prn-tina",
 		},
 		{
-			"disable of the maker", false,
+			"disable of the maker", pathDirect,
 			apiCall{http.MethodPost, "/api/server/principals/prn-tina/disable", "", http.StatusOK},
 			"server:manage-principals principal:prn-tina",
 		},
@@ -190,17 +203,17 @@ func TestTokenEndsWhenItsMakerLosesTheActAsPath(t *testing.T) {
 			t.Parallel()
 
 			f := newAccessFixture(t)
-			seedLostMaker(t, f, tc.throughGroup)
+			seedLostMaker(t, f, tc.path)
 
 			f.as(t, "admin", tc.change, nil)
 
-			e, revoked := lostMakerRevocation(t, f)
-			if !revoked {
+			e := lostMakerRevocation(t, f)
+			if e == nil {
 				t.Fatal("the token of a maker with no act-as path is still active")
 			}
 
 			if !strings.HasPrefix(causeOf(e), tc.cause) || e.Reason != accesstoken.ReasonMakerLostPath {
-				t.Fatalf("revocation entry = %+v, want the cause %q and the reason", e, tc.cause)
+				t.Fatalf("revocation entry = %+v, want the cause %q and the reason", *e, tc.cause)
 			}
 		})
 	}
@@ -213,7 +226,7 @@ func TestTokenEndsWhenTheRoleOfItsMakerLosesTheAction(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixture(t)
-	seedLostMaker(t, f, false)
+	seedLostMaker(t, f, pathDirect)
 
 	var role struct {
 		ID string `json:"id"`
@@ -232,7 +245,7 @@ func TestTokenEndsWhenTheRoleOfItsMakerLosesTheAction(t *testing.T) {
 	// the token.
 	f.as(t, "admin", apiCall{http.MethodDelete, "/api/server/grants/grt-seed-tina", "", http.StatusNoContent}, nil)
 
-	if _, revoked := lostMakerRevocation(t, f); revoked {
+	if lostMakerRevocation(t, f) != nil {
 		t.Fatal("the token of a maker who keeps a path through another role was revoked")
 	}
 
@@ -240,8 +253,8 @@ func TestTokenEndsWhenTheRoleOfItsMakerLosesTheAction(t *testing.T) {
 		http.MethodPatch, "/api/server/roles/" + role.ID, `{"actions":["server:read-principals"]}`, http.StatusOK,
 	}, nil)
 
-	e, revoked := lostMakerRevocation(t, f)
-	if !revoked {
+	e := lostMakerRevocation(t, f)
+	if e == nil {
 		t.Fatal("the token of a maker whose role lost the action is still active")
 	}
 
@@ -256,7 +269,7 @@ func TestTokenStaysWhileItsMakerKeepsAPath(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixture(t)
-	seedLostMaker(t, f, false)
+	seedLostMaker(t, f, pathDirect)
 
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
@@ -266,14 +279,15 @@ func TestTokenStaysWhileItsMakerKeepsAPath(t *testing.T) {
 		Role: access.RoleViewer, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
 	}
-	if err := f.store.CreateGrant(t.Context(), other, fence, storetest.ServerChange(at, "grant:grt-other"), nil); err != nil {
-		t.Fatalf("create the other grant: %v", err)
+	granted := f.store.CreateGrant(t.Context(), other, fence, storetest.ServerChange(at, "grant:grt-other"), nil)
+	if granted != nil {
+		t.Fatalf("create the other grant: %v", granted)
 	}
 
 	f.as(t, "admin", apiCall{http.MethodDelete, "/api/server/grants/grt-other", "", http.StatusNoContent}, nil)
 	f.as(t, "admin", apiCall{http.MethodPost, "/api/server/principals/prn-bob/disable", "", http.StatusOK}, nil)
 
-	if _, revoked := lostMakerRevocation(t, f); revoked {
+	if lostMakerRevocation(t, f) != nil {
 		t.Fatal("a change that leaves the maker a path revoked the token")
 	}
 }

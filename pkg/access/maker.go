@@ -16,9 +16,10 @@ import (
 // principal, through a grant on the principal or on an object that holds it,
 // directly or through a group. The subject of a bootstrap admin token holds
 // every action by a code rule, so it has a path. A maker that is not a
-// principal any more, that is disabled, and a principal ID that does not
-// parse have no path. accesstoken.Service reads it to revoke a service token
-// whose maker lost the last path.
+// principal any more and a maker that is disabled have no path. accesstoken.Service reads it to revoke a service token
+// whose maker lost the last path. A principal ID that does not parse
+// returns ErrInvalid: the caller cannot decide, so it keeps the token and
+// refuses its use.
 func (s *Service) CanActAs(ctx context.Context, maker, principalID string) (bool, error) {
 	if slices.Contains(s.bootstrap, maker) {
 		return true, nil
@@ -26,7 +27,7 @@ func (s *Service) CanActAs(ctx context.Context, maker, principalID string) (bool
 
 	obj, err := identity.ParsePrincipalObject(principalID)
 	if err != nil {
-		return false, nil //nolint:nilerr // An ID that does not parse names no principal, so no path leads to it.
+		return false, fmt.Errorf("%w: principal %q: %w", ErrInvalid, principalID, err)
 	}
 
 	p, err := s.directory.GetPrincipalBySubject(ctx, maker)
