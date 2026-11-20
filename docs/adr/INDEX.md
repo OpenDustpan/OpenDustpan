@@ -219,7 +219,7 @@ that the named part applies, and the later ADR adds to it.
 | [250](0250-defense-in-depth-for-security-code.md) | Defense in depth for security code | accepted | - | ADR 382 extends decision 3 | this ADR, with ADR 382 |
 | [251](0251-copy-rules-for-user-facing-text.md) | Copy rules for user-facing text | accepted | extends ADR 14; extends ADR 66 | - | this ADR |
 | [252](0252-the-dev-sign-in-person-and-the-reserved-dev-prefix.md) | The dev sign-in person and the reserved dev prefix | accepted | changes ADR 237 decision 12 | ADR 253 extends decision 7 | this ADR, with ADR 253 |
-| [253](0253-dev-data-does-not-reach-a-production-installation.md) | Dev data does not reach a production installation | accepted | changes ADR 42 decision 4; extends ADR 252 decision 7 | - | this ADR |
+| [253](0253-dev-data-does-not-reach-a-production-installation.md) | Dev data does not reach a production installation | accepted | changes ADR 42 decision 4; extends ADR 252 decision 7 | ADR 389 changes decision 6 | this ADR, with ADR 389 |
 | [254](0254-speculative-remote-plans-for-opentofu-first.md) | Remote execution for OpenTofu starts with speculative plans on runners | accepted | changes ADR 25 decisions 1 and 3 | ADR 300 changes decision 6; ADR 310 extends decision 4; ADR 310 extends decision 5; ADR 350 changes decision 4 | this ADR, with ADR 300, 310, 350 |
 | [255](0255-client-encrypted-opentofu-state-stays-unread.md) | Client-encrypted OpenTofu state stays unread, and the server holds no key for it | accepted | - | - | this ADR |
 | [256](0256-pulumi-policy-packs-are-not-served-to-the-cli.md) | The server enforces resource policy, and the Pulumi adapter serves no required policy packs | accepted | - | - | this ADR |
@@ -354,3 +354,4 @@ that the named part applies, and the later ADR adds to it.
 | [386](0386-the-job-token-is-made-when-the-launcher-asks.md) | The server makes the job token when the launcher asks for step credentials | accepted | changes ADR 100 decision 20; extends ADR 133 decisions 12 and 13 | - | this ADR |
 | [387](0387-serve-refuses-plain-http-off-loopback.md) | `serve` refuses plain HTTP on an address that is not loopback | accepted | changes ADR 27 decision 3; changes ADR 238 decision 6; changes ADR 238 decision 10; changes ADR 246 decision 21 | - | this ADR |
 | [388](0388-a-service-token-ends-when-its-maker-loses-the-right.md) | A service token ends when its maker loses the right | accepted | changes ADR 70 decision 6 | - | this ADR |
+| [389](0389-a-restore-that-keeps-the-access-tables-keeps-temp-admins.md) | A restore that keeps the access tables keeps the temporary administrators | accepted | changes ADR 253 decision 6 | - | this ADR |
