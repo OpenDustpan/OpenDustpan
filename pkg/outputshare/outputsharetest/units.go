@@ -25,18 +25,35 @@ const (
 	ToolPulumi = "pulumi"
 )
 
-// UnitStore is the part of a SQL store that the unit hooks use to make, move,
-// rename, delete and purge units and collections.
-type UnitStore interface {
+// WorkspaceUnits is the part of a SQL store that makes, deletes and purges
+// workspaces.
+type WorkspaceUnits interface {
 	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
 	DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence, d inventory.Deletion) error
 	PurgeWorkspace(ctx context.Context, id workspace.ID, fence namespace.Fence, dueBy time.Time, e audit.Entry) error
+}
+
+// StackUnits is the part of a SQL store that makes and renames stacks.
+type StackUnits interface {
 	CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error
 	RenameStack(ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry) error
+}
+
+// CollectionUnits is the part of a SQL store that makes collections and puts
+// units in them.
+type CollectionUnits interface {
 	CreateCollection(ctx context.Context, c collection.Collection, fence namespace.Fence, e audit.Entry) error
 	DeleteCollection(ctx context.Context, ref collection.Ref, fence namespace.Fence, e audit.Entry) error
 	GetCollection(ctx context.Context, ref collection.Ref) (collection.Collection, error)
 	SetUnitCollection(ctx context.Context, m collection.Move, fence namespace.Fence, e audit.Entry) error
+}
+
+// UnitStore is the part of a SQL store that the unit hooks use to make, move,
+// rename, delete and purge units and collections.
+type UnitStore interface {
+	WorkspaceUnits
+	StackUnits
+	CollectionUnits
 }
 
 // WithUnits returns h with the hooks that make and change units and
@@ -81,68 +98,21 @@ func (u unitHooks) unit(
 	t.Helper()
 
 	fence := u.namespace(t, ns.String())
-	at := time.UnixMilli(settingAtMs).UTC()
 
-	var (
-		obj identity.Object
-		id  string
-		err error
-	)
+	var id string
 
 	switch tool {
 	case ToolOpenTofu:
-		wn, parseErr := workspace.ParseName(name)
-		if parseErr != nil {
-			t.Fatalf("workspace name %q: %v", name, parseErr)
-		}
-
-		w := workspace.Workspace{
-			NamespaceID: "",
-			CreatedAt:   at,
-			UpdatedAt:   at,
-			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			LastRelease: workspace.NoRelease(),
-			ID:          workspace.ID(ident.NewID("ws-")),
-			Ref:         workspace.Ref{Namespace: ns, Name: wn},
-			Revision:    1,
-			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-			Origin:      identity.StateOrigin{Job: "", Commit: ""},
-		}
-		id = w.ID.String()
-
-		err = u.s.CreateWorkspace(t.Context(), w, fence)
-		if err == nil {
-			obj, err = identity.UnitObject(tool, ns, name)
-		}
+		id = u.makeWorkspace(t, ns, name, fence)
 	case ToolPulumi:
-		project, stackName, _ := strings.Cut(name, "/")
-
-		ref, refErr := stack.ParseRef(ns.String(), project, stackName)
-		if refErr != nil {
-			t.Fatalf("stack name %q: %v", name, refErr)
-		}
-
-		st := stack.Stack{
-			CreatedAt:   at,
-			UpdatedAt:   at,
-			Tags:        nil,
-			Ref:         ref,
-			ID:          stack.ID(ident.NewID("stk-")),
-			NamespaceID: "",
-			Version:     0,
-		}
-		id = st.ID.String()
-
-		err = u.s.CreateStack(t.Context(), st, fence)
-		if err == nil {
-			obj, err = identity.UnitObject(tool, ns, name)
-		}
+		id = u.makeStack(t, ns, name, fence)
 	default:
 		t.Fatalf("unit hook: unknown tool %q", tool)
 	}
 
+	obj, err := identity.UnitObject(tool, ns, name)
 	if err != nil {
-		t.Fatalf("make unit %s:%s/%s: %v", tool, ns, name, err)
+		t.Fatalf("unit object %s:%s/%s: %v", tool, ns, name, err)
 	}
 
 	p := outputshare.Placement{Unit: obj.WithUnitID(id), Collection: identity.Object{}}
@@ -152,6 +122,66 @@ func (u unitHooks) unit(
 	}
 
 	return p
+}
+
+// makeWorkspace makes the workspace and returns its stable ID.
+func (u unitHooks) makeWorkspace(t *testing.T, ns namespace.Name, name string, fence namespace.Fence) string {
+	t.Helper()
+
+	at := time.UnixMilli(settingAtMs).UTC()
+
+	wn, err := workspace.ParseName(name)
+	if err != nil {
+		t.Fatalf("workspace name %q: %v", name, err)
+	}
+
+	w := workspace.Workspace{
+		NamespaceID: "",
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(),
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: ns, Name: wn},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:      identity.StateOrigin{Job: "", Commit: ""},
+	}
+
+	if err = u.s.CreateWorkspace(t.Context(), w, fence); err != nil {
+		t.Fatalf("make workspace %s/%s: %v", ns, name, err)
+	}
+
+	return w.ID.String()
+}
+
+// makeStack makes the stack "project/stack" and returns its stable ID.
+func (u unitHooks) makeStack(t *testing.T, ns namespace.Name, name string, fence namespace.Fence) string {
+	t.Helper()
+
+	at := time.UnixMilli(settingAtMs).UTC()
+	project, stackName, _ := strings.Cut(name, "/")
+
+	ref, err := stack.ParseRef(ns.String(), project, stackName)
+	if err != nil {
+		t.Fatalf("stack name %q: %v", name, err)
+	}
+
+	st := stack.Stack{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		Tags:        nil,
+		Ref:         ref,
+		ID:          stack.ID(ident.NewID("stk-")),
+		NamespaceID: "",
+		Version:     0,
+	}
+
+	if err = u.s.CreateStack(t.Context(), st, fence); err != nil {
+		t.Fatalf("make stack %s/%s: %v", ns, name, err)
+	}
+
+	return st.ID.String()
 }
 
 // place makes the collection to when it does not exist, moves the unit from
@@ -222,7 +252,12 @@ func (u unitHooks) remove(t *testing.T, p outputshare.Placement) {
 	var err error
 
 	if p.Unit.Tool() == ToolOpenTofu {
-		err = u.s.DeleteWorkspace(t.Context(), workspace.Ref{Namespace: ns, Name: workspace.Name(p.Unit.UnitName())}, fence, d)
+		err = u.s.DeleteWorkspace(
+			t.Context(),
+			workspace.Ref{Namespace: ns, Name: workspace.Name(p.Unit.UnitName())},
+			fence,
+			d,
+		)
 	} else {
 		t.Fatalf("remove unit: the hook removes a workspace only, got %q", p.Unit.Tool())
 	}
@@ -244,7 +279,13 @@ func (u unitHooks) purge(t *testing.T, p outputshare.Placement) {
 		t.Fatalf("purge unit: the hook purges a workspace only, got %q", p.Unit.Tool())
 	}
 
-	err := u.s.PurgeWorkspace(t.Context(), workspace.ID(p.Unit.UnitID()), fence, time.Time{}, hookEntry(ns, p.Unit.String()))
+	err := u.s.PurgeWorkspace(
+		t.Context(),
+		workspace.ID(p.Unit.UnitID()),
+		fence,
+		time.Time{},
+		hookEntry(ns, p.Unit.String()),
+	)
 	if err != nil {
 		t.Fatalf("purge %s: %v", p.Unit, err)
 	}

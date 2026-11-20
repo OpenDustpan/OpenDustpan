@@ -221,8 +221,6 @@ func checkPortableValue(table, column string, value any) error {
 		return checkOutputSharingDefault(value)
 	case table == portTableNamespaces && column == portColSourceFilter:
 		return checkSourceFilter(value)
-	case table == TableOutputSharingRules:
-		return checkOutputSharingRuleValue(column, value)
 	case table == portTableManualLocks && column == portColReason:
 		return checkManualLockReason(value)
 	case table == TablePersonPreferences && column == portColDocument:
@@ -238,6 +236,10 @@ func checkPortableValue(table, column string, value any) error {
 func checkOtherValue(table, column string, value any) error {
 	if table == TableLocalUsers {
 		return checkLocalUserValue(column, value)
+	}
+
+	if table == TableOutputSharingRules {
+		return checkOutputSharingRuleValue(column, value)
 	}
 
 	if (table == portTableWorkspaces || table == portTableInventory) && column == portColLastReleaseKind {
@@ -544,7 +546,7 @@ func checkOutputSharingRuleValue(column string, value any) error {
 	var err error
 
 	switch column {
-	case "id", "producer_kind", "consumer_kind", "created_by":
+	case "id", "producer_kind", "consumer_kind", portColCreatedBy:
 		err = checkRuleText(column, value)
 	default:
 		// The other columns hold names, stable IDs and the time. The table
@@ -569,7 +571,7 @@ func checkRuleText(column string, value any) error {
 	switch column {
 	case "id":
 		return outputshare.ID(text).Validate()
-	case "created_by":
+	case portColCreatedBy:
 		if text == "" {
 			return fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
 		}

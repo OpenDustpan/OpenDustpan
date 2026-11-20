@@ -52,7 +52,7 @@ func TestPortableBackupKeepsSharingRules(t *testing.T) {
 		Consumer:  mustUnit(t, "globex", "web"),
 	}
 
-	_, err = s.conn.ExecContext(t.Context(), outputsharetest.RawRuleInsert(false), outputsharetest.RawRuleRow(rule)...)
+	_, err = s.conn.ExecContext(t.Context(), outputsharetest.RawRuleInsertSQLite(), outputsharetest.RawRuleRow(rule)...)
 	if err != nil {
 		t.Fatalf("insert the rule: %v", err)
 	}

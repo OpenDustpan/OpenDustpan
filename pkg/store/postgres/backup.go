@@ -117,6 +117,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyUpdateTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyCollectionTables()...)
+	tables = append(tables, pgCopyOutputSharingTables()...)
 	tables = append(tables, pgCopyGateTables()...)
 	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
@@ -292,6 +293,20 @@ func pgCopyScopeTables() []pgCopyTable {
 	}
 }
 
+// pgCopyOutputSharingTables holds the COPY columns of the sharing rules.
+func pgCopyOutputSharingTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableOutputSharingRules,
+			columns: []string{
+				pgColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
+				"consumer_id", "consumer_tool", "consumer_name", "created_by", pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, "id"},
+		},
+	}
+}
+
 // pgCopyCollectionTables holds the COPY columns of the collection, context and
 // blob purge tables, in foreign-key order.
 func pgCopyCollectionTables() []pgCopyTable {
@@ -317,14 +332,6 @@ func pgCopyCollectionTables() []pgCopyTable {
 				"created_by", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColPosition, "id"},
-		},
-		{
-			table: backup.TableOutputSharingRules,
-			columns: []string{
-				pgColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
-				"consumer_id", "consumer_tool", "consumer_name", "created_by", pgColCreatedAtMs,
-			},
-			orderBy: []string{pgColNamespace, "id"},
 		},
 		{
 			table: "object_context",

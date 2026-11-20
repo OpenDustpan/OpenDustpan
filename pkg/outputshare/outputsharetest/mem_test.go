@@ -101,7 +101,8 @@ func (m *memSettings) harness() outputsharetest.Harness {
 		SaveOutputs:  nil,
 		DeleteUnit:   nil,
 		DeleteOnRead: nil,
-		Settings:     m,
+		RemoveUnit:   nil, PurgeUnit: nil, RenameUnit: nil, MoveUnit: nil, RemakeCollection: nil,
+		Settings: m,
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 

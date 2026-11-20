@@ -43,6 +43,8 @@ func TestCheckOutputSharingRuleValueRefusesHostileColumns(t *testing.T) {
 				t.Fatalf("check %s = %v, want no error", tc.column, err)
 			case !tc.ok && (!errors.Is(err, ErrCorrupt) || !errors.Is(err, outputshare.ErrInvalid)):
 				t.Fatalf("check %s = %v, want ErrCorrupt with outputshare.ErrInvalid", tc.column, err)
+			default:
+				// The value is accepted or refused as the case says.
 			}
 		})
 	}

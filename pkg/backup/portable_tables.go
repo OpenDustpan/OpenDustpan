@@ -352,7 +352,7 @@ func portableSpec() []PortableTable {
 				{Name: "consumer_id", Kind: KindText},
 				{Name: "consumer_tool", Kind: KindText},
 				{Name: "consumer_name", Kind: KindText},
-				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
 		},

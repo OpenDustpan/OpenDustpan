@@ -56,7 +56,8 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 		SaveOutputs:  nil,
 		DeleteUnit:   nil,
 		DeleteOnRead: nil,
-		Settings:     s.OutputSharingSettings(),
+		RemoveUnit:   nil, PurgeUnit: nil, RenameUnit: nil, MoveUnit: nil, RemakeCollection: nil,
+		Settings: s.OutputSharingSettings(),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 
@@ -110,7 +111,9 @@ func plantRuleRow(t *testing.T, path string, r outputshare.Rule) {
 		t.Fatalf("ignore check constraints: %v", err)
 	}
 
-	if _, err := conn.ExecContext(t.Context(), outputsharetest.RawRuleInsert(false), outputsharetest.RawRuleRow(r)...); err != nil {
+	insert := outputsharetest.RawRuleInsertSQLite()
+
+	if _, err := conn.ExecContext(t.Context(), insert, outputsharetest.RawRuleRow(r)...); err != nil {
 		t.Fatalf("plant the sharing rule %q: %v", r.ID, err)
 	}
 }
@@ -461,7 +464,7 @@ func TestSharingRuleTableRefusesAnotherKind(t *testing.T) {
 			s, path := openOutputShare(t)
 			ensureNamespace(t, s, "acme")
 
-			_, err := rawSettingDB(t, path).ExecContext(t.Context(), outputsharetest.RawRuleInsert(false),
+			_, err := rawSettingDB(t, path).ExecContext(t.Context(), outputsharetest.RawRuleInsertSQLite(),
 				tc.Row[0], tc.Row[1], tc.Row[2], tc.Row[3], tc.Row[4], tc.Row[5], tc.Row[6], tc.Row[7],
 				tc.Row[8], tc.Row[9], int64(1))
 
@@ -470,6 +473,8 @@ func TestSharingRuleTableRefusesAnotherKind(t *testing.T) {
 				t.Fatalf("insert %s: %v", tc.Name, err)
 			case !tc.OK && (err == nil || !strings.Contains(err.Error(), "CHECK")):
 				t.Fatalf("insert %s = %v, want the refusal of a CHECK", tc.Name, err)
+			default:
+				// The row is accepted or refused as the case says.
 			}
 		})
 	}
