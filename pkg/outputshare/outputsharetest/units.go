@@ -136,16 +136,17 @@ func (u unitHooks) makeWorkspace(t *testing.T, ns namespace.Name, name string, f
 	}
 
 	w := workspace.Workspace{
-		NamespaceID: "",
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(ident.NewID("ws-")),
-		Ref:         workspace.Ref{Namespace: ns, Name: wn},
-		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Origin:      identity.StateOrigin{Job: "", Commit: ""},
+		NamespaceID:  "",
+		InCollection: false,
+		CreatedAt:    at,
+		UpdatedAt:    at,
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		ID:           workspace.ID(ident.NewID("ws-")),
+		Ref:          workspace.Ref{Namespace: ns, Name: wn},
+		Revision:     1,
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err = u.s.CreateWorkspace(t.Context(), w, fence); err != nil {
