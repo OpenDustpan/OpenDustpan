@@ -515,7 +515,7 @@ func (f faFixture) setWindow(t *testing.T, window time.Duration) {
 func (f faFixture) serverEntries(t *testing.T, action string) []audit.Entry {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

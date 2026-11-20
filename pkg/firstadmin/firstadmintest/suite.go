@@ -327,7 +327,7 @@ func wantErr(t *testing.T, what string, err, want error) {
 func serverEntries(t *testing.T, h Harness) int {
 	t.Helper()
 
-	listing, err := h.Store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := h.Store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -1479,7 +1479,7 @@ func testRedeemEntryReasonFromCodeRow(t *testing.T, h Harness) {
 func redeemEntry(t *testing.T, h Harness) audit.Entry {
 	t.Helper()
 
-	listing, err := h.Store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := h.Store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
