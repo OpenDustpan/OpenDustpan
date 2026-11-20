@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1366,6 +1367,164 @@ func TestGateRoutesInstallationWrites(t *testing.T) {
 	t.Run("audit entry", func(t *testing.T) { t.Parallel(); installationWriteAudit(t) })
 	t.Run("limit", func(t *testing.T) { t.Parallel(); installationWriteLimit(t) })
 	t.Run("no approval default", func(t *testing.T) { t.Parallel(); installationNoApprovalDefault(t) })
+	t.Run("ids reach no store call", func(t *testing.T) { t.Parallel(); installationIDsReachNoStore(t) })
+	t.Run("scope of the path", func(t *testing.T) { t.Parallel(); installationScopeOfThePath(t) })
+}
+
+// recordingGates is a gate configuration port that records the scope of each
+// call and finds no object. A test proves with it that a request that a guard
+// refuses reaches no store call.
+type recordingGates struct {
+	apiserver.GateConfig
+
+	mu     sync.Mutex
+	scopes []gate.Scope
+}
+
+func (r *recordingGates) record(scope gate.Scope) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.scopes = append(r.scopes, scope)
+}
+
+func (r *recordingGates) calls() []gate.Scope {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]gate.Scope(nil), r.scopes...)
+}
+
+func (r *recordingGates) Gate(_ context.Context, scope gate.Scope, _ gate.ID) (gate.Gate, error) {
+	r.record(scope)
+
+	return gate.Gate{}, gate.ErrNotFound
+}
+
+func (r *recordingGates) AccessLimit(_ context.Context, scope gate.Scope, _ gate.ID) (gate.AccessLimit, error) {
+	r.record(scope)
+
+	return gate.AccessLimit{}, gate.ErrNotFound
+}
+
+func (r *recordingGates) ApprovalRule(_ context.Context, scope gate.Scope, _ gate.ID) (gate.ApprovalRule, error) {
+	r.record(scope)
+
+	return gate.ApprovalRule{}, gate.ErrNotFound
+}
+
+func (r *recordingGates) ApprovalDefault(_ context.Context, scope gate.Scope) (gate.ApprovalDefault, error) {
+	r.record(scope)
+
+	return gate.ApprovalDefault{}, gate.ErrNotFound
+}
+
+func (r *recordingGates) ApprovalRules(_ context.Context, scope gate.Scope) ([]gate.ApprovalRule, error) {
+	r.record(scope)
+
+	return nil, nil
+}
+
+// installationIDsReachNoStore sends an ID with a capital letter, a slash and a
+// control character to each kind, and a path that names no collection or no
+// unit. The handler answers 400 or 422, and the port gets no call. A valid ID
+// reaches the port with the scope of the path.
+func installationIDsReachNoStore(t *testing.T) {
+	t.Helper()
+
+	st, nss := openIPAllowFixture(t)
+	port := &recordingGates{GateConfig: nil, mu: sync.Mutex{}, scopes: nil}
+	authz := gateAuthorizer{allow: map[identity.Action]namespace.Name{
+		identity.ActionInstallationReadGates: "", identity.ActionNamespaceReadGates: "acme",
+	}}
+	h := gateHandler(t, st, nss, authz, port)
+
+	for _, k := range installationKinds {
+		for _, id := range []string{"Bad", "a%2Fb", "a%07b", "a%0Ab"} {
+			rec := serveGate(t, h, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/" + id, "", ""})
+			if rec.Code != http.StatusBadRequest && rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("GET %s/%s = %d %s, want 400 or 422", k.segment, id, rec.Code, rec.Body.String())
+			}
+		}
+	}
+
+	for _, target := range []string{
+		gateBase + "acme/collections/ab/approval-rules/x",
+		gateBase + "acme/collections/pay%2Fments/approval-default",
+		gateBase + "acme/units/by-name/pulumi/web%07/approval-rules/x",
+		gateBase + "acme/approval-rules/Bad",
+	} {
+		rec := serveGate(t, h, gateCall{http.MethodGet, target, "", ""})
+		if rec.Code != http.StatusBadRequest && rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("GET %s = %d %s, want 400 or 422", target, rec.Code, rec.Body.String())
+		}
+	}
+
+	if got := port.calls(); len(got) != 0 {
+		t.Fatalf("refused requests made the store calls %v, want none", got)
+	}
+
+	// The control: a valid request reaches the port with the scope of its path.
+	for _, k := range installationKinds {
+		wantStatus(
+			t, serveGate(t, h, gateCall{http.MethodGet, installationBase + "/" + k.segment + "/ok", "", ""}),
+			http.StatusNotFound,
+		)
+	}
+
+	wantStatus(
+		t, serveGate(t, h, gateCall{http.MethodGet, gateBase + "acme/collections/payments/approval-default", "", ""}),
+		http.StatusNotFound,
+	)
+
+	want := []gate.Scope{
+		gate.InstallationScope(), gate.InstallationScope(), gate.InstallationScope(),
+		gate.CollectionScope("acme", "payments"),
+	}
+
+	got := port.calls()
+	if len(got) != len(want) {
+		t.Fatalf("valid requests made %d store calls, want %d", len(got), len(want))
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("store call %d had the scope %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+// installationScopeOfThePath checks gateScopeOf alone, as if no route table
+// stood in front of it: the installation object gives the installation scope,
+// a path that names a collection or a unit with the installation object is
+// refused, and a namespace object never gives the installation scope.
+func installationScopeOfThePath(t *testing.T) {
+	t.Helper()
+
+	req := func(collection, tool, name string) *http.Request {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", http.NoBody)
+		r.SetPathValue("collection", collection)
+		r.SetPathValue("tool", tool)
+		r.SetPathValue("name", name)
+
+		return r
+	}
+
+	got, err := apiserver.GateScopeOfForTest(req("", "", ""), identity.ServerObject())
+	if err != nil || got != gate.InstallationScope() {
+		t.Fatalf("scope of the installation object = %v, %v; want the installation scope", got, err)
+	}
+
+	for _, r := range []*http.Request{req("payments", "", ""), req("", "pulumi", "web%2Fprod")} {
+		if got, err = apiserver.GateScopeOfForTest(r, identity.ServerObject()); err == nil {
+			t.Fatalf("scope of the installation object with a collection or a unit in the path = %v, want an error", got)
+		}
+	}
+
+	got, err = apiserver.GateScopeOfForTest(req("", "", ""), identity.NamespaceObject("acme"))
+	if err != nil || got != gate.NamespaceScope("acme") {
+		t.Fatalf("scope of a namespace object = %v, %v; want the scope of acme", got, err)
+	}
 }
 
 // installationWriteAuthorization sends each write as a caller that lacks

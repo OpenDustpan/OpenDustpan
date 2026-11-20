@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -243,3 +244,9 @@ func FlagsOfBodiesForTest(bodies []any) []bool {
 // FirstAdminErrorForTest maps an error of the first administrator to the
 // answer of the route, as the handlers do.
 func FirstAdminErrorForTest(err error) error { return firstAdminError(err) }
+
+// GateScopeOfForTest is gateScopeOf, for the tests of the black-box package
+// server_test.
+func GateScopeOfForTest(r *http.Request, obj identity.Object) (gate.Scope, error) {
+	return gateScopeOf(r, obj)
+}
