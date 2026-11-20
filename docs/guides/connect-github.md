@@ -80,6 +80,40 @@ write-back (the name starts with `dustpan/`) in the repository of the base. It
 only deletes such a branch, and never the default branch, a protected branch, or
 a branch that an open review request has as its head or its base.
 
+## What you need
+
+The commands in this guide use these values:
+
+- `$SERVER`: the public URL of the server, for example `https://dustpan.example`.
+- `$TOKEN`: an access token with the action in each step.
+- A console session of a person who holds the role installation operator, for
+  the writes of Step 1, Step 2 and "Rotate the event secret".
+
+The writes of the operator need a console session with a recent sign-in. An
+access token gets 403 with the error code `mfa.fresh-step-required` for them.
+You need no console for this: a local user can sign in over the API. To make
+the first administrator and a local user, see
+[Make the first administrator](first-administrator.md) and
+[Local users with a password](local-users.md).
+
+Sign in. The command keeps the session cookie in the file `session.txt`:
+
+```sh
+curl -c session.txt -X POST -H "Content-Type: application/json" \
+  -d '{"userName":"alice","password":"<password>"}' \
+  "$SERVER/api/dustpan/v1/sign-in/password"
+```
+
+Read the CSRF value of the session. It is the field `csrfToken`:
+
+```sh
+curl -b session.txt "$SERVER/api/server/session"
+```
+
+Put the value in `$CSRF`. Each write of the operator in this guide sends the
+cookie, the header `X-Dustpan-Csrf` and the header `Origin` with the value of
+`$SERVER`. The server refuses a write without them.
+
 ## Step 1: the operator registers the app
 
 Make a GitHub App in GitHub. Download its private key (a `.pem` file) and note
@@ -90,11 +124,14 @@ openssl rand -hex 32
 ```
 
 The caller needs the action `server:manage-git-host` on the installation. The
-role installation operator has it.
+role installation operator has it. The caller also needs a console session with
+a recent sign-in (see "What you need"). A request with an access token gets 403
+with the error code `mfa.fresh-step-required`.
 
 ```sh
-curl -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -b session.txt -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
+  -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+  -H "Content-Type: application/json" \
   -d "$(jq -n --rawfile key app.pem --arg secret "$EVENT_SECRET" \
         '{appID:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
 ```
@@ -123,7 +160,8 @@ Rules for the registration:
   app ID or the address, send all four fields again. Send `If-Match` with the
   version that you read to make sure that no one else changed it. To change the
   event secret with no lost delivery, follow "Rotate the event secret".
-- A console session needs a recent sign-in for this change.
+- A console session needs a recent sign-in for this change. An access token gets
+403 with the error code `mfa.fresh-step-required`.
 
 The server stores the key and the event secret sealed with a key of the
 installation. A backup holds them sealed.
@@ -134,8 +172,9 @@ Install the app in a GitHub organization or account. GitHub gives the
 installation an ID. Give it to a namespace:
 
 ```sh
-curl -X PUT "$SERVER/api/dustpan/v1/git-host-installations/67890" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -b session.txt -X PUT "$SERVER/api/dustpan/v1/git-host-installations/67890" \
+  -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+  -H "Content-Type: application/json" \
   -d '{"namespace":"acme"}'
 ```
 
@@ -271,7 +310,11 @@ of the registration (see Step 1). In the settings of the GitHub App:
 
 The route needs no sign-in. The signature of the delivery is its credential:
 the server checks the header `X-Hub-Signature-256` against the event secret of
-the registration. The server never reads the older header `X-Hub-Signature`.
+the registration. The value of the header is `sha256=` and the hex form of the
+HMAC-SHA256 of the raw body, with the event secret as the key. The server never
+reads the older header `X-Hub-Signature`. A delivery also needs the header
+`X-GitHub-Event` with the event name, and the header `X-GitHub-Delivery` with a
+UUID. GitHub sets all three headers.
 
 ### The answer
 
@@ -302,7 +345,7 @@ The reasons are:
 | `no-registration` | The server has no registration | `GET /api/dustpan/v1/git-host-apps/github` |
 | `signature` | The signature matches no event secret that is valid now | Compare `eventSecret.setID` and `oldSecretEndsAt` with the secret in GitHub |
 | `too-large` | The body is more than 2 MiB | Not a delivery of GitHub |
-| `malformed` | The body is not valid, or has no installation, repository, pull request number or sender | Open the delivery in GitHub and read the body |
+| `malformed` | The body is not valid, or has no installation, repository, pull request number or sender. Or the header `X-GitHub-Delivery` is not a UUID | Open the delivery in GitHub and read the body |
 | `unsupported` | The event or its action is not one that the server uses. The server uses `ping` and the pull request actions `opened`, `reopened`, `synchronize` and `closed` | Subscribe to "Pull requests" only |
 | `duplicate` | The delivery ID, or the body, came in the last 24 hours | None: GitHub sent a retry, or someone sent the same body again |
 | `not-assigned` | No installation of the map owns the installation of the event | `PUT /api/dustpan/v1/git-host-installations/{installation_id}` |
@@ -343,8 +386,9 @@ and the new one for up to 7 days. Do these steps in order:
    fields.
 
    ```sh
-   curl -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
-     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+   curl -b session.txt -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
+     -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+     -H "Content-Type: application/json" \
      -d "$(jq -n --rawfile key app.pem --arg secret "$NEW_EVENT_SECRET" \
            '{appID:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
    ```
@@ -352,15 +396,18 @@ and the new one for up to 7 days. Do these steps in order:
    The answer has the field `oldSecretEndsAt`: the end of the window, in Unix
    milliseconds. The field is not in the answer when no window is open.
 3. Set the new secret in the webhook settings of the GitHub App.
-4. Send a delivery from GitHub, for example a redelivery in "Recent
-   Deliveries". A delivery that the new secret signs writes no extra entry.
-   Each delivery that the old secret signs writes the audit entry
+4. Cause a new event in GitHub, for example open a pull request. Do not use a
+   redelivery in "Recent Deliveries": the server drops a delivery ID or a body
+   that it saw in the last 24 hours as `duplicate`, and writes no entry for
+   the secret. A delivery that the new secret signs writes no extra entry.
+   Each new delivery that the old secret signs writes the audit entry
    `git-host-app:event-accepted-old-secret`.
 5. When no entry of the old secret is new, end the window:
 
    ```sh
-   curl -X POST "$SERVER/api/dustpan/v1/git-host-apps/github/confirm-rotation" \
-     -H "Authorization: Bearer $TOKEN"
+   curl -b session.txt -X POST \
+     -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+     "$SERVER/api/dustpan/v1/git-host-apps/github/confirm-rotation"
    ```
 
    The answer is 200 with the registration, and it has no `oldSecretEndsAt`. It
