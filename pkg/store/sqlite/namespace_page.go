@@ -13,17 +13,23 @@ import (
 var _ namespace.Pager = (*Store)(nil)
 
 // PageNamespaces implements namespace.Pager. The filter and the page run
-// in SQL: with All set it reads past After, otherwise it keeps only the
-// names in the query. The names travel as one JSON array, so the query
-// stays fixed.
+// in SQL: for every namespace it reads past After and leaves out the
+// left-out names in the query, otherwise it keeps only the names in the
+// query. The names travel as one JSON array, so the query stays fixed.
 func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]namespace.Namespace, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if q.Filter.All {
+	if leftOut, every := q.Filter.Every(); every {
+		raw, err := json.Marshal(pageNameStrings(leftOut))
+		if err != nil {
+			return nil, fmt.Errorf("encode left-out namespace names: %w", err)
+		}
+
 		rows, err := s.queries.PageNamespaces(ctx, db.PageNamespacesParams{
-			After: q.After.String(),
-			Lim:   int64(q.Limit),
+			After:   q.After.String(),
+			LeftOut: string(raw),
+			Lim:     int64(q.Limit),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("select namespaces page: %w", err)
@@ -32,7 +38,7 @@ func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]na
 		return pageRows(rows), nil
 	}
 
-	raw, err := json.Marshal(pageNameStrings(q.Filter.Names))
+	raw, err := json.Marshal(pageNameStrings(q.Filter.Names()))
 	if err != nil {
 		return nil, fmt.Errorf("encode namespace names: %w", err)
 	}
@@ -55,13 +61,18 @@ func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]na
 }
 
 // CountNamespaces implements namespace.Pager. It counts under the same
-// filter as PageNamespaces.
+// filter as PageNamespaces, with the left-out names left out in the query.
 func (s *Store) CountNamespaces(ctx context.Context, f namespace.Filter) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if f.All {
-		total, err := s.queries.CountNamespaces(ctx)
+	if leftOut, every := f.Every(); every {
+		raw, err := json.Marshal(pageNameStrings(leftOut))
+		if err != nil {
+			return 0, fmt.Errorf("encode left-out namespace names: %w", err)
+		}
+
+		total, err := s.queries.CountNamespaces(ctx, string(raw))
 		if err != nil {
 			return 0, fmt.Errorf("count namespaces: %w", err)
 		}
@@ -69,7 +80,7 @@ func (s *Store) CountNamespaces(ctx context.Context, f namespace.Filter) (int64,
 		return total, nil
 	}
 
-	raw, err := json.Marshal(pageNameStrings(f.Names))
+	raw, err := json.Marshal(pageNameStrings(f.Names()))
 	if err != nil {
 		return 0, fmt.Errorf("encode namespace names: %w", err)
 	}

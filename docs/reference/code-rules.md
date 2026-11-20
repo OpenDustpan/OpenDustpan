@@ -330,14 +330,14 @@ suffix" for each reason that gets this text.
 
 ## IP allowlists
 
-- Once a list request calls the read, the server reads the namespaces that have
-  an IP allowlist for a list request of a principal whose scope covers every
-  object. The read returns at most 1000 namespaces. When more than 1000
-  namespaces have a list, the read fails with the error
-  `ipallow: too many namespaces have an IP allowlist`, and the server does not
-  cover every object. No setting changes the limit. Then the server refuses a
-  principal whose scope covers every object on every list until the number of
-  namespaces with a list is 1000 or fewer
+- For each list request of a principal whose scope covers every object, the
+  server reads the namespaces that have an IP allowlist, to leave out the
+  namespaces that refuse the client address. The read returns at most 1000
+  namespaces. When more than 1000 namespaces have a list, the read fails with
+  the error `ipallow: too many namespaces have an IP allowlist`, and the server
+  does not cover every object. No setting changes the limit. Then the server
+  refuses each list request of a principal whose scope covers every object
+  until the number of namespaces with a list is 1000 or fewer
   ([Limits](../guides/ip-allowlists.md#limits)).
 
 ## Background operations

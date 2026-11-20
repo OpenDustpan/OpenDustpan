@@ -14,9 +14,10 @@ FROM namespaces
 ORDER BY name;
 
 -- name: PageNamespaces :many
+-- Pages every namespace except the left-out ones.
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
-WHERE name > sqlc.arg('after')
+WHERE name > sqlc.arg('after') AND name NOT IN (SELECT value FROM json_each(sqlc.arg('left_out')))
 ORDER BY name
 LIMIT sqlc.arg('lim');
 
@@ -28,8 +29,10 @@ ORDER BY name
 LIMIT sqlc.arg('lim');
 
 -- name: CountNamespaces :one
+-- Counts every namespace except the left-out ones.
 SELECT COUNT(*)
-FROM namespaces;
+FROM namespaces
+WHERE name NOT IN (SELECT value FROM json_each(sqlc.arg('left_out')));
 
 -- name: CountNamespacesByNames :one
 SELECT COUNT(*)
@@ -48,8 +51,8 @@ FROM namespaces
 WHERE name = ?;
 
 -- name: NamespacesWithList :many
--- Lists the namespaces that have an IP allowlist, at most lim of them.
-SELECT name
+-- Lists the namespaces that have an IP allowlist, with the list, at most lim of them.
+SELECT name, ip_allowlist
 FROM namespaces
 WHERE ip_allowlist <> ''
 ORDER BY name

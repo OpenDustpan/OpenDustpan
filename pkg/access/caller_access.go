@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -28,12 +29,17 @@ type ObjectsRequest struct {
 
 // ObjectsPage is one page of the objects that grants name for an action.
 // All is true, with no objects, when a grant on the installation covers
-// every object. Each object is of the kind of the request, or a container
-// of that kind: a namespace or a collection covers each unit inside it.
+// every object. Excluded then names the namespaces whose objects All does
+// not cover, for example a namespace whose IP allowlist refuses the client
+// address, in name order. Excluded is empty when All is false and for the
+// principal kind, whose objects are in no namespace. Each object is of the
+// kind of the request, or a container of that kind: a namespace or a
+// collection covers each unit inside it.
 type ObjectsPage struct {
 	Action     identity.Action
 	NextCursor string
 	Objects    []identity.Object
+	Excluded   []namespace.Name
 	Total      int64
 	All        bool
 }
@@ -60,9 +66,21 @@ func (s *Service) Access(ctx context.Context, p identity.Principal, obj identity
 }
 
 // Objects answers one page of the objects where p can do the action of req,
-// as grants name them, in the order of their text form.
-func (s *Service) Objects(ctx context.Context, p identity.Principal, req ObjectsRequest) (ObjectsPage, error) {
-	page := ObjectsPage{Action: req.Action, NextCursor: "", Objects: nil, Total: 0, All: false}
+// as grants name them, in the order of their text form. lister is the
+// authorizer of the routes: the page lists its scope, so that each check
+// that it adds to the grants, such as the IP allowlist of each namespace,
+// applies to the page as it applies to a request. A nil lister fails with
+// ErrMissingDependency.
+func (s *Service) Objects(
+	ctx context.Context, lister identity.Authorizer, p identity.Principal, req ObjectsRequest,
+) (ObjectsPage, error) {
+	page := ObjectsPage{
+		Action: req.Action, NextCursor: "", Objects: nil, Excluded: []namespace.Name{}, Total: 0, All: false,
+	}
+
+	if lister == nil {
+		return page, fmt.Errorf("%w: lister", ErrMissingDependency)
+	}
 
 	read, ok := readActions[req.Kind]
 	if !ok {
@@ -91,13 +109,19 @@ func (s *Service) Objects(ctx context.Context, p identity.Principal, req Objects
 		return page, err
 	}
 
-	scope, err := s.authz.ListObjects(ctx, p, page.Action)
+	scope, err := lister.ListObjects(ctx, p, page.Action)
 	if err != nil {
-		return page, err
+		return page, fmt.Errorf("list objects: %w", err)
 	}
 
-	if scope.CoversEveryObject() {
+	// The scope gives the every-object case only with its left-out
+	// namespaces, so all=true never reaches the answer without them.
+	if excluded, every := scope.EveryObjectExcept(); every {
 		page.All = true
+
+		if req.Kind != ObjectPrincipal {
+			page.Excluded = append(page.Excluded, excluded...)
+		}
 
 		return page, nil
 	}

@@ -90,8 +90,9 @@ func storeGrant(t *testing.T, st *sqlite.Store, subject, role string, obj identi
 	}
 }
 
-// newIPAllowlistAccessServer opens a store with a namespace acme, a principal
-// nsadmin holding the admin role on acme only, and a principal instadmin
+// newIPAllowlistAccessServer opens a store with the namespaces acme and
+// beta, a principal nsadmin holding the admin role on acme only, and a
+// principal instadmin
 // holding the account-administrator role on the installation, and returns a
 // server over it with IP allowlists on. The server uses the real access
 // authorizer over the store.
@@ -130,6 +131,13 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 	}
 
 	if nsErr := st.CreateNamespace(t.Context(), acme); nsErr != nil {
+		t.Fatalf("create namespace: %v", nsErr)
+	}
+
+	beta := acme
+	beta.ID, beta.Name = namespace.NewID(), "beta"
+
+	if nsErr := st.CreateNamespace(t.Context(), beta); nsErr != nil {
 		t.Fatalf("create namespace: %v", nsErr)
 	}
 
@@ -314,6 +322,129 @@ func TestNamespaceListFollowsIPAllowlist(t *testing.T) {
 	if got := listNamespacesFrom(t, srv, nsAdminToken, "192.0.2.10:1234"); len(got) != 0 {
 		t.Fatalf("namespaces outside the list = %v, want none", got)
 	}
+}
+
+// TestEveryObjectListFollowsIPAllowlist proves that a principal whose scope
+// covers every object, through a grant on the installation and not as the
+// bootstrap administrator, does not list a namespace whose IP allowlist does
+// not contain the client address: the namespace list leaves it out, with a
+// total that leaves it out too, and the caller-access list answers all=true
+// with the namespace in excluded.namespaces. From an address inside the list
+// the namespace is back, and nothing is excluded.
+func TestEveryObjectListFollowsIPAllowlist(t *testing.T) {
+	t.Parallel()
+
+	srv := newIPAllowlistAccessServer(t)
+
+	if code, body := serveIPAllowlistAccess(t, srv, http.MethodPut, instAdminToken); code != http.StatusOK {
+		t.Fatalf("set the list of acme answers %d: %s", code, body)
+	}
+
+	cases := []struct {
+		name         string
+		remote       string
+		wantNames    []string
+		wantExcluded []string
+	}{
+		{
+			name:         "outside the list",
+			remote:       "192.0.2.10:1234",
+			wantNames:    []string{"beta"},
+			wantExcluded: []string{"acme"},
+		},
+		{
+			name:         "inside the list",
+			remote:       "198.51.100.7:1234",
+			wantNames:    []string{"acme", "beta"},
+			wantExcluded: []string{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := listNamespacesFrom(t, srv, instAdminToken, tc.remote); !slices.Equal(got, tc.wantNames) {
+				t.Fatalf("namespaces = %v, want %v", got, tc.wantNames)
+			}
+
+			if total := namespaceTotalFrom(t, srv, instAdminToken, tc.remote); total != int64(len(tc.wantNames)) {
+				t.Fatalf("namespace total = %d, want %d", total, len(tc.wantNames))
+			}
+
+			all, excluded := callerAccessFrom(t, srv, instAdminToken, tc.remote)
+			if !all || !slices.Equal(excluded, tc.wantExcluded) {
+				t.Fatalf(
+					"caller access = all %t excluded %v, want all true excluded %v",
+					all,
+					excluded,
+					tc.wantExcluded,
+				)
+			}
+		})
+	}
+}
+
+// namespaceTotalFrom answers the total of the first page of GET
+// /api/server/namespaces for token from the client address remote.
+func namespaceTotalFrom(t *testing.T, srv *dustpan.Server, token, remote string) int64 {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/namespaces", nil)
+	req.RemoteAddr = remote
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	startedHandler(t, srv).ServeHTTP(rec, req)
+
+	var page struct {
+		Total *int64 `json:"total"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || page.Total == nil {
+		t.Fatalf("decode the total of %s: %v", rec.Body.String(), err)
+	}
+
+	return *page.Total
+}
+
+// excludedWire is the excluded part of a caller-access page.
+type excludedWire struct {
+	Namespaces []string `json:"namespaces"`
+}
+
+// callerAccessWire is the part of a caller-access page that the test reads.
+type callerAccessWire struct {
+	Excluded *excludedWire `json:"excluded"`
+	All      bool          `json:"all"`
+}
+
+// callerAccessFrom answers all and excluded.namespaces of GET
+// /api/dustpan/v1/me/access/objects?type=namespace for token from the client
+// address remote.
+func callerAccessFrom(t *testing.T, srv *dustpan.Server, token, remote string) (bool, []string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/dustpan/v1/me/access/objects?type=namespace", nil,
+	)
+	req.RemoteAddr = remote
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	startedHandler(t, srv).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("caller access from %s answers %d: %s", remote, rec.Code, rec.Body.String())
+	}
+
+	var page callerAccessWire
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || page.Excluded == nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+
+	return page.All, page.Excluded.Namespaces
 }
 
 // storePrincipalOfKind stores a principal of one kind with no namespace.
