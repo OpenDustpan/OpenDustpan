@@ -57,7 +57,7 @@ Each fact names its file and line on main. This section was checked on main at c
 - NEW action `installation:manage-gates` (owner, 2026-11-20), in the operator family. The installation operator and the site administrator hold it.
 - NEW write routes at the installation scope: PUT and DELETE of one gate, access limit or approval rule. They declare `installation:manage-gates`, need a fresh authentication and write audit entries with the actions `installation:set-gate`, `installation:delete-gate`, `installation:set-access-limit`, `installation:delete-access-limit`, `installation:set-approval-rule` and `installation:delete-approval-rule`.
 - Docs: the rows of the new routes in `docs/reference/gate-config-api.md` and `docs/guides/approval-rules.md`, and the row of the new action in the sensitive-action table of `docs/guides/principals-and-groups.md`.
-- ADR records: the "Changed by" item for ADR 299 in ADR 230, the reverse "Changes:" item in ADR 299, a `## Changelog` entry in each, and the regenerated `docs/adr/INDEX.md` (task 3.4).
+- ADR records: none to change. The "Changed by" item for ADR 299 in ADR 230, the reverse item in ADR 299 and the changelog entries are on main (task 3.4 verifies them).
 - Regenerated API description and clients, and the e2e rows.
 
 No route for the signature carry-over setting (owner, 2026-11-20). ADR 299 decision 12 (owner) deletes the setting and replaces it with the binding level. The rows of ADR 230 decisions 2 and 3 that name the setting are not built. The binding level gets its own routes in the review-request change.
@@ -96,7 +96,7 @@ Where the path still costs the person time or surprises them:
 Decided by the owner on 20 November 2026. This change records them as facts. No question is open.
 
 - **Q1 (owner, 2026-11-20): `installation:manage-gates` is in the operator family.** The installation operator and the site administrator hold it. The reasons are in the ADRs: `installation:read-gates` is in the operator family (`pkg/access/access.go:128`), and ADR 216 decision 2 says "An action has operator scope when it changes how the whole installation runs, or when it reads or writes data of more than one namespace." An installation gate, access limit or approval rule acts on every namespace. The audit action names of the installation writes follow the names of main: `installation:<verb>-<kind>`, as `namespace:<verb>-<kind>` is for the namespace (`pkg/gate/config_objects.go:15-18`, `pkg/gate/config.go:114-117`).
-- **Q2 (owner, 2026-11-20): build no signature carry-over route.** ADR 299 decision 12 replaces the setting. ADR 230 gets the "Changed by" item for ADR 299, with the reverse item in ADR 299 and a changelog entry in each (task 3.4). The words of every owner decision stay as they are.
+- **Q2 (owner, 2026-11-20): build no signature carry-over route.** ADR 299 decision 12 replaces the setting. ADR 230 has the "Changed by" item for ADR 299, with the reverse item in ADR 299 and a changelog entry in each (on main; task 3.4 verifies it). The words of every owner decision stay as they are.
 - **ADR 216 decision 1 (owner, 18 Oct 2026):** "Operator scope and namespace scope (owner)." Q1 follows it.
 - **ADR 299 decision 12 (owner, 1 Nov 2026):** "The binding level takes over signature carry-over (owner. Details by the PM)." Q2 follows it.
 - **ADR 335 decision 5 (owner, 7 Nov 2026):** "A save needs a flag when locks are held". This change does not build it (see "Out of scope").
@@ -108,7 +108,7 @@ Each quote is copied from the file in `docs/adr/`. Owner tags and "Changed by" c
 **ADR 230: Gate configuration: actions, routes, errors and audit entries** (owner-tagged: decision 1; decision 3 is marked "(PM)").
 
 - Decisions that apply: 1, 2, 3 (amended by ADR 268 and ADR 355), 4 (extended by ADR 335 and ADR 355), 5 and 6.
-- Changed by: ADR 268 changes decision 3; ADR 286 changes; ADR 335 extends decision 4; ADR 355 changes decision 3; ADR 355 changes decision 4; ADR 299 changes decisions 1, 2, 3 and 7 (not on main yet: task 3.4 adds the item). Chain to the end: ADR 268, ADR 286, ADR 299, ADR 335, ADR 355. ADR 299 has later items from ADR 328, 359 and 368. None of them touches decision 12.
+- Changed by: ADR 268 changes decision 3; ADR 286 changes; ADR 335 extends decision 4; ADR 355 changes decision 3; ADR 355 changes decision 4; ADR 299 changes decisions 1, 2, 3 and 7 (on main since commit 3e4e918; task 3.4 verifies it). Chain to the end: ADR 268, ADR 286, ADR 299, ADR 335, ADR 355. ADR 299 has later items from ADR 328, 359 and 368. None of them touches decision 12.
 - Current rule: this ADR, with ADR 268, 286, 299, 335, 355.
 - Quote (decision 1): "In the server, through the API (owner). Gates, access limits, approval rules, approval defaults, ownership rules, path sets and the signature carry-over setting are stored in the server."
 - Quote (decision 2): "`installation:manage-gates` | the installation | gates, access limits, approval rules, ownership rules, path sets and the signature carry-over setting of the installation".
@@ -118,7 +118,7 @@ Each quote is copied from the file in `docs/adr/`. Owner tags and "Changed by" c
 - Quote (decision 3): "A list route gives the objects stored at that scope, not the objects of wider scopes. A `PUT` names no scope in its body, and refuses an unknown field."
 - Quote (decision 6): "A scope holds at most 256 gates, 64 access limits, 64 approval rules, 256 ownership rules and 64 path sets. A condition holds at most 4 KiB."
 - Effect: The change serves the missing rows of decision 3 for approval rules and approval defaults, and the installation read rows. The installation write rows follow owner decision Q1 (owner, 2026-11-20): the action `installation:manage-gates` is in the operator family. The carry-over rows are not built (owner, 2026-11-20, Q2). Decision 2 asks for a fresh authentication for the change of an approval rule, an approval default, an access limit and an enforce gate. Main already asks for it for every write of these objects, and the change keeps main. The ADR sets a minimum, so this is not a conflict.
-- Conflict: ADR 230 decisions 2 and 3 name the signature carry-over setting. ADR 299 decision 12 (owner) deletes it, and ADR 230 has no "Changed by" item for ADR 299. The owner decided on 20 November 2026 that this change builds no carry-over row, and task 3.4 adds the item. The words of ADR 230 stay as they are.
+- Conflict: ADR 230 decisions 2 and 3 name the signature carry-over setting. ADR 299 decision 12 (owner) deletes it, and ADR 230 has the "Changed by" item for ADR 299 on main. The owner decided on 20 November 2026 that this change builds no carry-over row, and task 3.4 verifies the item. The words of ADR 230 stay as they are.
 
 **ADR 268: Approval-default reset route and gate read roles** (decided by the PM under the owner's delegation of 20 October 2026; not owner-tagged).
 
@@ -168,7 +168,7 @@ Each quote is copied from the file in `docs/adr/`. Owner tags and "Changed by" c
 - Quote: "The setting `signatureCarryOver` has no users and no stored data. It is deleted with no conversion."
 - Quote (consequences): "The code of `signatureCarryOver` is deleted in its own pull request."
 - Effect: Carry-over routes would serve a setting that this decision deletes. The change builds none (owner, 2026-11-20).
-- Conflict: with ADR 225 decision 12 and ADR 230 decisions 2 and 3 for the carry-over rows. The "Changed by" chain of ADR 225 lists ADR 299 decision 12 as a change, so ADR 225 is already changed. ADR 230 is not marked.
+- Conflict: with ADR 225 decision 12 and ADR 230 decisions 2 and 3 for the carry-over rows. The "Changed by" chain of ADR 225 lists ADR 299 decision 12 as a change, so ADR 225 is already changed. ADR 230 is marked on main.
 
 **ADR 214: A user-facing feature needs its docs page in the same pull request** (not owner-tagged).
 
