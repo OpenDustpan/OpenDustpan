@@ -252,9 +252,10 @@ func TestObjectConstructors(t *testing.T) {
 }
 
 // TestUnitNameRefusesHiddenRunes proves that a unit name with a control
-// character, a format character or a line separator is refused by both
-// entry points: UnitObject and ParseObject. A name without such a character,
-// with a letter that is not ASCII too, is accepted.
+// character, a format character, a line separator or bytes that are not
+// valid UTF-8 is refused by both entry points: UnitObject and ParseObject. A
+// name without such a character, with a letter that is not ASCII too, is
+// accepted.
 func TestUnitNameRefusesHiddenRunes(t *testing.T) {
 	t.Parallel()
 
@@ -270,6 +271,11 @@ func TestUnitNameRefusesHiddenRunes(t *testing.T) {
 		{"line separator U+2028", "web/a\u2028b", true},
 		{"zero width space U+200B", "web/a\u200bb", true},
 		{"bell U+0007", "web/a\x07b", true},
+		{"tab", "web/a\tb", true},
+		{"line feed", "web/a\nb", true},
+		{"carriage return", "web/a\rb", true},
+		{"NUL", "web/a\x00b", true},
+		{"invalid UTF-8", "web/a\xffb", true},
 	}
 
 	ns := mustName(t, "acme")
