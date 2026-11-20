@@ -10853,6 +10853,384 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/dustpan/v1/access-limits": {
+      "get": {
+        "operationId": "listInstallationAccessLimits",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAccessLimitsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "access-limits"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:read-gates",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/access-limits/{id}": {
+      "delete": {
+        "operationId": "deleteInstallationAccessLimit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "access-limits"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:manage-gates",
+            "object": "server"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getInstallationAccessLimit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessLimit"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "access-limits"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:read-gates",
+            "object": "server"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setInstallationAccessLimit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessLimit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessLimit"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "access-limits"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:manage-gates",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/approval-rules": {
+      "get": {
+        "operationId": "listInstallationApprovalRules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListApprovalRulesResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:read-gates",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/approval-rules/{id}": {
+      "delete": {
+        "operationId": "deleteInstallationApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:manage-gates",
+            "object": "server"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getInstallationApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRule"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:read-gates",
+            "object": "server"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setInstallationApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRule"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:manage-gates",
+            "object": "server"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/audit/chain": {
       "get": {
         "operationId": "getAuditChain",
@@ -11234,6 +11612,204 @@
         "x-dustpan-actions": [
           {
             "action": "server:maintenance",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/gates": {
+      "get": {
+        "operationId": "listInstallationGates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListGatesResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "gates"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:read-gates",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/gates/{id}": {
+      "delete": {
+        "operationId": "deleteInstallationGate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Why a final gate is deleted. A final gate needs a reason to be deleted.",
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "gates"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:manage-gates",
+            "object": "server"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getInstallationGate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Gate"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "gates"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:read-gates",
+            "object": "server"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setInstallationGate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Gate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Gate"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "gates"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "installation:manage-gates",
             "object": "server"
           }
         ]
@@ -13863,6 +14439,438 @@
         },
         "tags": [
           "access-limits"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/approval-default": {
+      "delete": {
+        "operationId": "deleteCollectionApprovalDefault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getCollectionApprovalDefault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDefault"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setCollectionApprovalDefault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDefault"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDefault"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/approval-rules": {
+      "get": {
+        "operationId": "listCollectionApprovalRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListApprovalRulesResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/approval-rules/{id}": {
+      "delete": {
+        "operationId": "deleteCollectionApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getCollectionApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRule"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setCollectionApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRule"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
         ],
         "x-dustpan-actions": [
           {
@@ -21106,6 +22114,494 @@
         },
         "tags": [
           "access-limits"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}/approval-default": {
+      "delete": {
+        "operationId": "deleteUnitApprovalDefault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getUnitApprovalDefault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDefault"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setUnitApprovalDefault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDefault"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDefault"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}/approval-rules": {
+      "get": {
+        "operationId": "listUnitApprovalRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListApprovalRulesResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}/approval-rules/{id}": {
+      "delete": {
+        "operationId": "deleteUnitApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getUnitApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRule"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-gates",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setUnitApprovalRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRule"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "approvals"
         ],
         "x-dustpan-actions": [
           {
