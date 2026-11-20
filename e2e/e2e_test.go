@@ -11345,6 +11345,13 @@ func divergedSQLiteCopy(ctx context.Context, t *testing.T, path string) string {
 		}
 	}()
 
+	// The server refuses a database file that group or other users can
+	// access, and VACUUM INTO makes a file with the default mode. Make the
+	// empty file with mode 0600 first: VACUUM INTO accepts an empty file.
+	if err := os.WriteFile(copyPath, nil, 0o600); err != nil {
+		t.Fatalf("make the database copy: %v", err)
+	}
+
 	// VACUUM INTO writes a complete copy through SQLite, so the copy holds
 	// every committed row of the stopped server.
 	if _, err := source.ExecContext(ctx, `VACUUM INTO ?`, copyPath); err != nil {

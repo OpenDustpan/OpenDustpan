@@ -761,6 +761,15 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 // already copied the control tables into the staged file, so the rename
 // keeps the live control rows with no further copy.
 func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
+	// Defense in depth: snapshotPath makes the staged file with mode 0600 and
+	// openDatabase checks the live file after the move. This check stays so
+	// that a staged file with a wider mode never becomes the live database.
+	// It runs before the connection closes, so a refused swap leaves the live
+	// connection untouched.
+	if err := checkPrivateFiles(databaseFiles(temp)...); err != nil {
+		return err
+	}
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -779,13 +788,16 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 		return errors.Join(renameErr, reopenErr)
 	}
 
-	conn, err := openDatabase(ctx, s.path, nil)
+	conn, wide, err := openDatabase(ctx, s.path, nil, s.widePolicy())
 	if err != nil {
 		return err
 	}
 
 	s.conn = conn
 	s.queries = db.New(conn)
+
+	// The reopened files get a mode again, so warn again for each wide file.
+	s.warnWideFiles(ctx, wide)
 
 	return nil
 }
@@ -794,13 +806,16 @@ func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 // before the rename. Restore runs offline, so the destination stays usable.
 // The caller holds the store lock.
 func (s *Store) reopenDatabase(ctx context.Context) error {
-	conn, err := openDatabase(ctx, s.path, nil)
+	conn, wide, err := openDatabase(ctx, s.path, nil, s.widePolicy())
 	if err != nil {
 		return err
 	}
 
 	s.conn = conn
 	s.queries = db.New(conn)
+
+	// The reopened files get a mode again, so warn again for each wide file.
+	s.warnWideFiles(ctx, wide)
 
 	return nil
 }
@@ -1324,9 +1339,12 @@ func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 	return gathered, nil
 }
 
-// snapshotPath reserves a new file name for a VACUUM INTO target in dir: it
-// creates and removes a temp file, because VACUUM INTO refuses a target that
-// exists.
+// snapshotPath reserves a new file in dir for a VACUUM INTO target or a staged
+// database and returns its path. It makes an empty file with mode 0600 and
+// keeps it: VACUUM INTO accepts an empty target, and SQLite gives the -wal and
+// -shm files of a database the mode of the database file. A name with no file
+// would get the default mode of the process, which the umask often leaves at
+// 0644.
 func snapshotPath(dir string) (string, error) {
 	f, err := os.CreateTemp(dir, "dustpan-backup-*.db")
 	if err != nil {
@@ -1335,12 +1353,15 @@ func snapshotPath(dir string) (string, error) {
 
 	name := f.Name()
 
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, os.Remove(name)))
+	// CreateTemp makes the file with mode 0600. The explicit change keeps that
+	// true if the standard library changes, and it checks the mode after the
+	// create.
+	if err := f.Chmod(databaseFileMode); err != nil {
+		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, f.Close(), os.Remove(name)))
 	}
 
-	if err := os.Remove(name); err != nil {
-		return "", fmt.Errorf("reserve snapshot file: %w", err)
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("reserve snapshot file: %w", errors.Join(err, os.Remove(name)))
 	}
 
 	return name, nil

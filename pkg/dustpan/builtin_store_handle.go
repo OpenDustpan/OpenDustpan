@@ -190,6 +190,16 @@ func postgresDSNForm(dsn string) bool {
 
 // openSQLiteStore opens the SQLite store at path.
 func openSQLiteStore(ctx context.Context, path string, config storeConfig) (*BuiltinStore, error) {
+	// Defense in depth: sqlite.Open makes the file with mode 0600, refuses a
+	// wider mode, and checks the files again after it connects. This check
+	// stays so that a start fails here, before the store touches the file,
+	// and does not rely on those checks. With the operator opt-out, a wider
+	// mode passes here and sqlite.Open logs it. A file that is not regular
+	// still fails.
+	if err := checkStartupFiles(path, config); err != nil {
+		return nil, fmt.Errorf("check sqlite database file: %w", err)
+	}
+
 	st, err := sqlite.Open(ctx, path, config.sqliteOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite store: %w", err)
@@ -313,3 +323,21 @@ func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings post
 // builtinStoreOpenTimeout bounds the open of a built-in store that NewServer
 // opens. NewServer has no context, so the open gets its own bound.
 const builtinStoreOpenTimeout = 30 * time.Second
+
+// checkStartupFiles runs the startup check of the database files at path.
+// With the opt-out it accepts a wider mode: sqlite.Open logs each wide file.
+func checkStartupFiles(path string, config storeConfig) error {
+	if config.allowWideFileMode {
+		if _, err := sqlite.CheckFileModeAllowWide(path); err != nil {
+			return fmt.Errorf("check database file mode: %w", err)
+		}
+
+		return nil
+	}
+
+	if err := sqlite.CheckFileMode(path); err != nil {
+		return fmt.Errorf("check database file mode: %w", err)
+	}
+
+	return nil
+}
