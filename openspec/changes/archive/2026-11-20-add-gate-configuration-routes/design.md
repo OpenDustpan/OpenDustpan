@@ -2,7 +2,7 @@
 
 Gate configuration is security code. A write needs an action check, a scope check, a fresh authentication, limits, a version check and an audit entry. Main has all of these for gates and access limits at three scopes, and for approval rules and approval defaults at the namespace scope. The store already holds every object kind at the installation scope. This change adds the missing routes and the missing scope checks. It adds no new check for a write that main serves already.
 
-The owner decided two points on 20 November 2026. The action `installation:manage-gates` is in the operator family (Q1), so this change builds the write routes of the installation. This change builds no route for the signature carry-over setting, because ADR 299 decision 12 replaces it (Q2). Task 3.4 records Q2 in ADR 230 and ADR 299.
+The owner decided two points on 20 November 2026. The action `installation:manage-gates` is in the operator family (Q1), so this change builds the write routes of the installation. This change builds no route for the signature carry-over setting, because ADR 299 decision 12 replaces it (Q2). Task 3.4 verifies that ADR 230 and ADR 299 record Q2.
 
 ## Decisions
 
