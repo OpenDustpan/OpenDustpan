@@ -1124,6 +1124,22 @@ func testSessionRenewAfterCancelBound(t *testing.T, h Harness) {
 	wantErr(t, "SessionRenew after the bound, again", err, runner.ErrClaimLost)
 }
 
+// testSessionRenewCancelWithoutTime proves that a renewal fails closed when a
+// cancel is requested and the store holds no time for it.
+func testSessionRenewCancelWithoutTime(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	s := sessionOf(t, h, &l)
+
+	if err := h.Canceler.CancelUntimed(t.Context(), l.c); err != nil {
+		t.Fatalf("CancelUntimed: %v", err)
+	}
+
+	_, err := h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
+	wantErr(t, "SessionRenew of a cancel with no time", err, runner.ErrClaimLost)
+}
+
 // sessionRenewRefusal returns a case: setup changes the state of the claim of
 // the session, and SessionRenew with the lease d then fails with want. The id
 // that setup returns replaces the ID of the session.

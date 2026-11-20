@@ -172,14 +172,24 @@ func GraceFor(s *job.Step) time.Duration {
 const SessionCancelBound = GraceChanges + ReportTime
 
 // CheckSessionRenew checks a renewal of the claim of a job session at now.
-// cancelRequestedAt is the time of the cancel on the clock of the store, and
-// the zero Time when no cancel is requested. It returns ErrClaimLost when
-// the cancel is older than SessionCancelBound. A renewal at exactly
+// canceled is true when a cancel is requested, and cancelRequestedAt is the
+// time of the cancel on the clock of the store. It returns nil when no cancel
+// is requested. It returns ErrClaimLost when the cancel is older than
+// SessionCancelBound, and also when a cancel is requested but its time is the
+// zero Time: a cancel with no time is not a young cancel. A renewal at exactly
 // SessionCancelBound after the cancel passes. A cancel that is later than now
 // (clock skew between instances) counts as a cancel at now.
-func CheckSessionRenew(cancelRequestedAt, now time.Time) error {
-	if cancelRequestedAt.IsZero() {
+func CheckSessionRenew(canceled bool, cancelRequestedAt, now time.Time) error {
+	if !canceled {
 		return nil
+	}
+
+	// Defense in depth: the subtraction below also refuses the zero Time,
+	// because the age of a cancel at the year 1 is far over the bound. This
+	// check stays so that a change of the arithmetic cannot make a cancel
+	// with no time a young cancel. It does not rely on the store adapters.
+	if cancelRequestedAt.IsZero() {
+		return fmt.Errorf("%w: the cancel has no time", ErrClaimLost)
 	}
 
 	if now.Sub(cancelRequestedAt) > SessionCancelBound {

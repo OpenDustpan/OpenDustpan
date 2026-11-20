@@ -129,8 +129,20 @@ func (d *runnerDomain) CancelAged(ctx context.Context, c durable.Claim, age time
 		return err
 	}
 
-	if err := d.s.AgeCancel(ctx, c.Operation, time.Now().Add(-age)); err != nil {
+	if err := d.s.AgeCancel(ctx, c.Operation, age); err != nil {
 		return fmt.Errorf("age cancel: %w", err)
+	}
+
+	return nil
+}
+
+func (d *runnerDomain) CancelUntimed(ctx context.Context, c durable.Claim) error {
+	if err := d.Cancel(ctx, c); err != nil {
+		return err
+	}
+
+	if err := d.s.ClearCancelTime(ctx, c.Operation); err != nil {
+		return fmt.Errorf("clear cancel time: %w", err)
 	}
 
 	return nil

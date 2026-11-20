@@ -1358,12 +1358,7 @@ func (r *Runners) SessionRenew(
 		// A renewal during a cancel is allowed, because the launcher still
 		// needs its claim for its last writes, but only for
 		// runner.SessionCancelBound after the cancel.
-		cancelAt := time.Time{}
-		if op.CancelRequested {
-			cancelAt = codec.RunnerTime(op.CancelRequestedAtMs)
-		}
-
-		err = runner.CheckSessionRenew(cancelAt, codec.RunnerTime(dbNow))
+		err = runner.CheckSessionRenew(op.CancelRequested, codec.RunnerTime(op.CancelRequestedAtMs), codec.RunnerTime(dbNow))
 		if err != nil {
 			return fmt.Errorf("renew session claim: %w", err)
 		}

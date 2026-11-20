@@ -51,6 +51,10 @@ type Canceler interface {
 	// clock of the store, so a case reaches the bound of a renewal without a
 	// wait.
 	CancelAged(ctx context.Context, c durable.Claim, age time.Duration) error
+	// CancelUntimed is Cancel with the time of the cancel unset, as a row
+	// that a server of another version wrote has it: a cancel is requested
+	// and the store holds no time for it.
+	CancelUntimed(ctx context.Context, c durable.Claim) error
 }
 
 // Domain makes the rows that the stores need and that other ports own,
@@ -128,6 +132,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a renewal of a session with a stale fence changes nothing", testSessionRenewStaleFence},
 		{"a renewal shortly before the bound after a cancel is accepted", testSessionRenewBeforeCancelBound},
 		{"a renewal after the bound after a cancel is refused", testSessionRenewAfterCancelBound},
+		{"a renewal after a cancel with no time is refused", testSessionRenewCancelWithoutTime},
 		{"a session opens up to the session wait limit", testSessionNearWaitLimit},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
 		{"a recorded claim keeps the database time, the job and the phase", testRecordClaim},

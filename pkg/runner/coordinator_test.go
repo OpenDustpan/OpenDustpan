@@ -247,32 +247,35 @@ func TestCheckSessionRenew(t *testing.T) {
 	canceled := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name string
-		at   time.Time
-		now  time.Time
-		want error
+		name     string
+		canceled bool
+		at       time.Time
+		now      time.Time
+		want     error
 	}{
-		{"no cancel", time.Time{}, canceled.Add(24 * time.Hour), nil},
-		{"right after the cancel", canceled, canceled.Add(time.Second), nil},
-		{"at the bound", canceled, canceled.Add(runner.SessionCancelBound), nil},
-		{"after the bound", canceled, canceled.Add(runner.SessionCancelBound + time.Millisecond), runner.ErrClaimLost},
-		{"a day after the cancel", canceled, canceled.Add(24 * time.Hour), runner.ErrClaimLost},
-		{"a cancel later than now", canceled, canceled.Add(-time.Hour), nil},
+		{"no cancel", false, time.Time{}, canceled.Add(24 * time.Hour), nil},
+		{"no cancel, a stale time", false, canceled, canceled.Add(24 * time.Hour), nil},
+		{"right after the cancel", true, canceled, canceled.Add(time.Second), nil},
+		{"at the bound", true, canceled, canceled.Add(runner.SessionCancelBound), nil},
+		{"after the bound", true, canceled, canceled.Add(runner.SessionCancelBound + time.Millisecond), runner.ErrClaimLost},
+		{"a day after the cancel", true, canceled, canceled.Add(24 * time.Hour), runner.ErrClaimLost},
+		{"a cancel later than now", true, canceled, canceled.Add(-time.Hour), nil},
+		{"a cancel with no time", true, time.Time{}, canceled, runner.ErrClaimLost},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := runner.CheckSessionRenew(tc.at, tc.now); !errors.Is(err, tc.want) {
+			if err := runner.CheckSessionRenew(tc.canceled, tc.at, tc.now); !errors.Is(err, tc.want) {
 				t.Fatalf("CheckSessionRenew = %v, want %v", err, tc.want)
 			}
 		})
 	}
 
-	if runner.SessionCancelBound < runner.GraceChanges+runner.ReportTime {
-		t.Fatalf("SessionCancelBound = %v, want at least the longest grace period and the report time",
-			runner.SessionCancelBound)
+	if runner.SessionCancelBound != runner.GraceChanges+runner.ReportTime {
+		t.Fatalf("SessionCancelBound = %v, want the longest grace period plus the report time (%v)",
+			runner.SessionCancelBound, runner.GraceChanges+runner.ReportTime)
 	}
 }
 

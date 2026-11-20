@@ -175,6 +175,21 @@ func (m *mem) Cancel(ctx context.Context, c durable.Claim) error {
 	return m.CancelAged(ctx, c, 0)
 }
 
+func (m *mem) CancelUntimed(ctx context.Context, c durable.Claim) error {
+	if err := m.Cancel(ctx, c); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	o := m.ops[c.Operation]
+	o.canceledAt = time.Time{}
+	m.ops[c.Operation] = o
+
+	return nil
+}
+
 func (m *mem) CancelAged(_ context.Context, c durable.Claim, age time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -965,7 +980,7 @@ func (m *mem) SessionRenew(
 	// its log and its finish, until the bound.
 	o := m.ops[c.Operation]
 	if o.canceled {
-		if err := runner.CheckSessionRenew(o.canceledAt, time.Now()); err != nil {
+		if err := runner.CheckSessionRenew(true, o.canceledAt, time.Now()); err != nil {
 			return durable.Claim{}, err
 		}
 	}
