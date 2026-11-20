@@ -80,7 +80,9 @@ func runFreshWindowZero(t *testing.T, env *e2e.Env) {
 		want(t, "redeem", http.StatusOK, "")
 
 	// The default window of 15 minutes lets this new sign-in set the window to 0.
-	set := c.send(t, http.MethodPatch, "/api/server/session-policy", `{"tokenFreshnessSeconds":0}`, asBrowser(alice.csrf))
+	set := c.send(
+		t, http.MethodPatch, "/api/server/session-policy", `{"tokenFreshnessSeconds":0}`, asBrowser(alice.csrf),
+	)
 	set.want(t, "set the window to 0", http.StatusOK, "")
 
 	if !strings.Contains(set.body, `"tokenFreshnessSeconds":0`) {
@@ -115,8 +117,11 @@ func runFreshWindowZero(t *testing.T, env *e2e.Env) {
 			Reauthenticate string `json:"reauthenticate"`
 		}
 
-		if err := json.Unmarshal([]byte(refused.body), &answer); err != nil || answer.Reauthenticate != freshZeroLocalSignIn {
-			t.Fatalf("refusal after the %s = %s (%v), want reauthenticate %s", step, refused.body, err, freshZeroLocalSignIn)
+		err := json.Unmarshal([]byte(refused.body), &answer)
+		if err != nil || answer.Reauthenticate != freshZeroLocalSignIn {
+			t.Fatalf(
+				"refusal after the %s = %s (%v), want reauthenticate %s", step, refused.body, err, freshZeroLocalSignIn,
+			)
 		}
 
 		if !strings.Contains(refused.body, freshZeroLocalSignIn) {
