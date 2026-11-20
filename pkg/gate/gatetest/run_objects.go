@@ -451,20 +451,18 @@ func caseInstallationLimit(t *testing.T, e *env, k kindOps) {
 func caseHostileID(t *testing.T, e *env, k kindOps) {
 	t.Helper()
 
+	// A write refuses an ID that is not valid. A read with the same text
+	// reaches the store as it is: it finds no object, and it never matches the
+	// object of another ID.
 	hostile := gate.ID("a'; DROP TABLE gate_objects; --")
 
 	_, err := k.put(e, e.fx.installation, hostile, "one", 0)
-	stored := err == nil
-
-	if !stored {
-		wantErr(t, "Put(SQL text as an ID)", err, gate.ErrInvalid)
-	}
+	wantErr(t, "Put(SQL text as an ID)", err, gate.ErrInvalid)
 
 	_, err = k.put(e, e.fx.installation, "b", "one", 0)
 	mustNil(t, "Put(an ordinary ID after the hostile one)", err)
 
-	// The text matches no other ID: not its first letter, not a pattern.
-	for _, id := range []gate.ID{"a", "%", "a'", "b' OR '1'='1"} {
+	for _, id := range []gate.ID{hostile, "a", "%", "b%", "b' OR '1'='1", "b'; --"} {
 		_, err = k.get(e, e.fx.installation, id)
 		wantErr(t, "Get("+string(id)+")", err, gate.ErrNotFound)
 	}
@@ -472,19 +470,11 @@ func caseHostileID(t *testing.T, e *env, k kindOps) {
 	got, err := k.list(e, e.fx.installation)
 	mustNil(t, "List()", err)
 
-	want := 1
-	if stored {
-		want = 2
+	if len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("List() = %d objects, want only b", len(got))
 	}
 
-	if len(got) != want {
-		t.Fatalf("List() = %d objects, want %d", len(got), want)
-	}
-
-	if stored {
-		_, err = k.get(e, e.fx.installation, hostile)
-		mustNil(t, "Get(SQL text as an ID)", err)
-	}
+	e.wantEntries(audit.ServerScope, 1)
 }
 
 func caseStaleFence(t *testing.T, e *env, k kindOps) {

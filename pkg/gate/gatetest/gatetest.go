@@ -340,8 +340,8 @@ func objectCases(fx *fixtures) []StoreCase {
 			Kinds:    nil,
 			Scopes:   []gate.Scope{fx.installation},
 			Policies: nil,
-			Want:     nil,
-			Checks:   "An ID that holds SQL text is stored as text or refused with ErrInvalid. It matches no other ID, and the other objects stay.",
+			Want:     gate.ErrInvalid,
+			Checks:   "A Put with an ID that holds SQL text returns ErrInvalid and stores nothing. A Get with the same text, and with text that would match another ID, returns ErrNotFound, and the other objects stay.",
 		},
 		{
 			Name:     "stale-fence-changes-nothing",
