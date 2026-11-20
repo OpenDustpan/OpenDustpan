@@ -13,9 +13,9 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // writeConfig writes text to a configuration file in a new directory and

@@ -64,7 +64,7 @@ The `bench` target adds about 2 seconds.
 It runs each benchmark once with `-benchtime 1x`:
 
 ```sh
-go test -run '^$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
+go test -run '^$' -bench . -benchtime 1x ./pkg/stack/ ./internal/store/sqlite/
 ```
 
 The benchmarks cover delta apply, gzip at the configured level, and the checkpoint store path.

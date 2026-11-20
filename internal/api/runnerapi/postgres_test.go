@@ -13,7 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // postgresEnv names the variable with the URL of a PostgreSQL server for the

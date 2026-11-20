@@ -18,12 +18,14 @@ The move also comes before the store rework (ADR 274, one shared copy of the
 store logic and one table list for backup) and before the namespace ID change
 (ADR 220 decisions 1 to 3), by the owner's order (ADR 362 decision 2, ADR 363).
 
-### Evidence (main 3ee554a)
+### Evidence (main ac41a29)
 
-- 28 packages under `pkg/store/` other than `storetest`.
-- 260 Go files import a store adapter path. Most are in the adapters
-  themselves (about 350 import lines), then `pkg/dustpan` (65 files),
-  `internal/api/server` (32), `e2e` (19) and `cmd/opendustpan` (12).
+- 30 packages under `pkg/store/` other than `storetest`: `sqlite`, `postgres`,
+  `schema` and 27 under `pkg/store/internal/`.
+- 698 Go files import a store adapter path (989 import lines). Most are in the
+  adapters themselves. Outside `pkg/store`, 218 Go files in 43 package
+  directories import one: `pkg/dustpan` (80 files), `internal/api/server`
+  (42), `e2e` (11) and `cmd/opendustpan` (7).
 - `pkg/dustpan` has no constructor for a built-in store. Today an embedder
   imports `pkg/store/sqlite` and passes the store to 23 `With...Store`
   options one by one. `cmd/opendustpan` does the same wiring in its own code.
@@ -52,7 +54,7 @@ with the SDK; add to the persona table of `openspec/project.md`).
 ### Fix boundary
 
 - IN (PR B): `scripts/move-store.sh` rewrites the import path in every tracked Go file that imports a moved package, tests and e2e included; no other edit in those files.
-- IN (PR B): move the 28 packages to `internal/store/...` with the same names; keep
+- IN (PR B): move the 30 packages to `internal/store/...` with the same names; keep
   `pkg/store/storetest` (a conformance suite, SDK by ADR 272 decision 4); (PR A) add
   `dustpan.OpenStore`, `dustpan.BuiltinStore`, `dustpan.StorePorts` and
   `dustpan.WithBuiltinStore`, built on the store wiring that `cmd/opendustpan`

@@ -18,6 +18,15 @@ const (
 	AuditDeleteAccessLimit = "namespace:delete-access-limit"
 )
 
+// Audit actions of the writes of gates and access limits at the installation
+// scope. They name the entry only.
+const (
+	AuditInstallationSetGate           = "installation:set-gate"
+	AuditInstallationDeleteGate        = "installation:delete-gate"
+	AuditInstallationSetAccessLimit    = "installation:set-access-limit"
+	AuditInstallationDeleteAccessLimit = "installation:delete-access-limit"
+)
+
 // MaxMessageBytes bounds the message of a gate.
 const MaxMessageBytes = 1024
 
@@ -28,7 +37,7 @@ const MaxReasonBytes = 1024
 // a wider scope. The State of each gate is empty: the state is computed when
 // the server evaluates the gate.
 func (s *ConfigService) Gates(ctx context.Context, scope Scope) ([]Gate, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useRead); err != nil {
 		return nil, err
 	}
 
@@ -42,7 +51,7 @@ func (s *ConfigService) Gates(ctx context.Context, scope Scope) ([]Gate, error) 
 
 // Gate returns the gate id of scope, or ErrNotFound.
 func (s *ConfigService) Gate(ctx context.Context, scope Scope, id ID) (Gate, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useRead); err != nil {
 		return Gate{}, err
 	}
 
@@ -67,7 +76,7 @@ func (s *ConfigService) Gate(ctx context.Context, scope Scope, id ID) (Gate, err
 // version, ErrUnavailable when the service has no engine or the engine does
 // not answer, and the fence errors of Objects.
 func (s *ConfigService) PutGate(ctx context.Context, g Gate, prev int64, reason string, e audit.Entry) (Gate, error) {
-	if err := requireNamespaceScope(g.Scope); err != nil {
+	if err := requireScope(g.Scope, useWrite); err != nil {
 		return Gate{}, err
 	}
 
@@ -88,7 +97,7 @@ func (s *ConfigService) PutGate(ctx context.Context, g Gate, prev int64, reason 
 
 	object := g.Scope.Key() + "/gates/" + string(g.ID)
 
-	fence, entry, err := s.prepare(ctx, g.Scope, e, object, AuditSetGate)
+	fence, entry, err := s.prepare(ctx, g.Scope, e, object, writeSetGate)
 	if err != nil {
 		return Gate{}, err
 	}
@@ -139,7 +148,7 @@ func (s *ConfigService) DeleteGate(ctx context.Context, ref ObjectRef, reason st
 	changes := withReason(deleteChanges("gate/"+string(ref.ID), ref.Version), reason)
 
 	return s.deleteObject(ctx, ref, e, deleteSpec{
-		segment: "gates", action: AuditDeleteGate, noun: "gate", changes: changes,
+		segment: "gates", action: writeDeleteGate, noun: "gate", changes: changes,
 		remove: func(fence namespace.Fence, entry audit.Entry) error {
 			return s.store.Gates().Delete(ctx, ref, fence, entry)
 		},
@@ -149,7 +158,7 @@ func (s *ConfigService) DeleteGate(ctx context.Context, ref ObjectRef, reason st
 // AccessLimits returns the access limits stored at scope, ordered by ID. It
 // returns none of a wider scope.
 func (s *ConfigService) AccessLimits(ctx context.Context, scope Scope) ([]AccessLimit, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useRead); err != nil {
 		return nil, err
 	}
 
@@ -163,7 +172,7 @@ func (s *ConfigService) AccessLimits(ctx context.Context, scope Scope) ([]Access
 
 // AccessLimit returns the access limit id of scope, or ErrNotFound.
 func (s *ConfigService) AccessLimit(ctx context.Context, scope Scope, id ID) (AccessLimit, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useRead); err != nil {
 		return AccessLimit{}, err
 	}
 
@@ -182,7 +191,7 @@ func (s *ConfigService) AccessLimit(ctx context.Context, scope Scope, id ID) (Ac
 func (s *ConfigService) PutAccessLimit(
 	ctx context.Context, l AccessLimit, prev int64, e audit.Entry,
 ) (AccessLimit, error) {
-	if err := requireNamespaceScope(l.Scope); err != nil {
+	if err := requireScope(l.Scope, useWrite); err != nil {
 		return AccessLimit{}, err
 	}
 
@@ -196,7 +205,7 @@ func (s *ConfigService) PutAccessLimit(
 
 	object := l.Scope.Key() + "/access-limits/" + string(l.ID)
 
-	fence, entry, err := s.prepare(ctx, l.Scope, e, object, AuditSetAccessLimit)
+	fence, entry, err := s.prepare(ctx, l.Scope, e, object, writeSetAccessLimit)
 	if err != nil {
 		return AccessLimit{}, err
 	}
@@ -218,7 +227,7 @@ func (s *ConfigService) PutAccessLimit(
 // ErrConflict for another version.
 func (s *ConfigService) DeleteAccessLimit(ctx context.Context, ref ObjectRef, e audit.Entry) error {
 	return s.deleteObject(ctx, ref, e, deleteSpec{
-		segment: "access-limits", action: AuditDeleteAccessLimit, noun: "access limit",
+		segment: "access-limits", action: writeDeleteAccessLimit, noun: "access limit",
 		changes: deleteChanges("access-limit/"+string(ref.ID), ref.Version),
 		remove: func(fence namespace.Fence, entry audit.Entry) error {
 			return s.store.AccessLimits().Delete(ctx, ref, fence, entry)
@@ -230,7 +239,7 @@ func (s *ConfigService) DeleteAccessLimit(ctx context.Context, ref ObjectRef, e 
 type deleteSpec struct {
 	// segment is the path segment of the kind in the object of the entry.
 	segment string
-	action  string
+	action  auditWrite
 	noun    string
 	changes []audit.Change
 	remove  func(namespace.Fence, audit.Entry) error
@@ -239,7 +248,7 @@ type deleteSpec struct {
 // deleteObject completes the audit entry of the delete of ref and removes the
 // object with spec.remove, in the namespace of the scope of ref.
 func (s *ConfigService) deleteObject(ctx context.Context, ref ObjectRef, e audit.Entry, spec deleteSpec) error {
-	if err := requireNamespaceScope(ref.Scope); err != nil {
+	if err := requireScope(ref.Scope, useWrite); err != nil {
 		return err
 	}
 

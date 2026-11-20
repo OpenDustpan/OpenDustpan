@@ -137,7 +137,7 @@ jobs:
               *) code=true ;;
             esac
             case "$f" in
-              e2e/*|internal/api/pulumi/*|internal/api/tfe/*|internal/pulumijournal/*|pkg/dustpan/*|cmd/opendustpan/*|pkg/store/*/migrations/*|scripts/e2e-*|scripts/toxiproxy.sh) e2e=true ;;
+              e2e/*|internal/api/pulumi/*|internal/api/tfe/*|internal/pulumijournal/*|pkg/dustpan/*|cmd/opendustpan/*|internal/store/*/migrations/*|scripts/e2e-*|scripts/toxiproxy.sh) e2e=true ;;
               # The e2e tests read these docs: the page tests, the page lists
               # and the check of the commands in the pages.
               docs/guides/*|docs/reference/*|docs/commands-*.txt|README.md) e2e=true ;;
@@ -146,7 +146,7 @@ jobs:
               pkg/store/*|internal/store/*|internal/pgtest/*|pkg/*test/*) store=true ;;
             esac
             case "$f" in
-              pkg/stack/*|pkg/store/sqlite/*) bench=true ;;
+              pkg/stack/*|internal/store/sqlite/*) bench=true ;;
             esac
             case "$f" in
               internal/api/pulumi/*|internal/pulumijournal/*|pkg/dustpan/*|pkg/stack/*) journal=true ;;

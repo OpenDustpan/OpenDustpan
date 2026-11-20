@@ -218,6 +218,7 @@ These actions are sensitive:
 
 | Action | Why it is sensitive |
 | --- | --- |
+| `installation:manage-gates` | Saves and deletes the gates, the access limits and the approval rules that act on every namespace. |
 | `installation:store-check` | Runs the deep check of the blob store, and writes throwaway objects in it. |
 | `server:backup` | Starts a backup, and reads the data of the installation. |
 | `server:delete-instance` | Deletes the version row of a server process. |

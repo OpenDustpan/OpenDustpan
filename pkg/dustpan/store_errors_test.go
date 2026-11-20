@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/schema"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/schema"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // TestStoreErrorsMatchOpenFailures proves that an error of OpenStore matches

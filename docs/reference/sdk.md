@@ -5,28 +5,84 @@
 cancels the context. `Close` then closes the built-in store that `WithSQLite`
 or `WithPostgreSQL` opened.
 
+This program starts a server on `127.0.0.1:18080` with one store option. Make a
+token with `openssl rand -hex 32` and set it in `EXAMPLE_TOKEN`. Run the
+program with one argument, a directory that exists:
+`EXAMPLE_TOKEN=<token> go run . /var/lib/example`. Stop it with Ctrl-C. A
+request to `/api/user` with the header `Authorization: token <token>` shows the
+administrator. A token shorter than 32 bytes fails at start with the command
+that makes one.
+
 ```go
-store, err := dustpan.OpenStore(ctx, "sqlite:/var/lib/opendustpan/dustpan.db")
-if err != nil {
-	return err
-}
+package main
 
-defer store.Close()
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"os"
+	"os/signal"
 
-server, err := dustpan.NewServer(
-	dustpan.WithBuiltinStore(store),
-	dustpan.WithInstallation("eu-west"),
-	dustpan.WithBlobStore(blobs),
-	dustpan.WithAuthenticator(authn),
-	dustpan.WithSecretWrapper(wrapper),
+	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
-if err != nil {
-	return err
+
+func run(ctx context.Context, dir string) error {
+	store, err := dustpan.OpenStore(ctx, "sqlite:"+dir+"/dustpan.db")
+	if err != nil {
+		return err
+	}
+
+	defer store.Close()
+
+	blobs, err := fs.Open(dir + "/blobs")
+	if err != nil {
+		return err
+	}
+
+	authn, err := identity.NewStaticToken("admin", os.Getenv("EXAMPLE_TOKEN"))
+	if err != nil {
+		return err
+	}
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return err
+	}
+
+	wrapper, err := secret.NewBuiltinWrapper(key)
+	if err != nil {
+		return err
+	}
+
+	server, err := dustpan.NewServer(
+		dustpan.WithBuiltinStore(store),
+		dustpan.WithInstallation("eu-west"),
+		dustpan.WithBlobStore(blobs),
+		dustpan.WithAuthenticator(authn),
+		dustpan.WithSecretWrapper(wrapper),
+		dustpan.WithListenAddr("127.0.0.1:18080"),
+	)
+	if err != nil {
+		return err
+	}
+
+	defer server.Close()
+
+	return server.Run(ctx)
 }
 
-defer server.Close()
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
-return server.Run(ctx)
+	if err := run(ctx, os.Args[1]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 ```
 
 `OpenStore` opens the built-in SQLite or PostgreSQL store and answers a

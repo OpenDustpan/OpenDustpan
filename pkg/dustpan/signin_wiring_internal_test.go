@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -21,7 +22,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // lockedLog is a log buffer that the server and the test share.

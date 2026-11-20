@@ -47,8 +47,8 @@ GENERATED=(
 	internal/api/apidesc/openapi.json
 	internal/clientgen/golang/testdata/golden/
 	internal/clientgen/typescript/testdata/golden/
-	pkg/store/postgres/internal/db/
-	pkg/store/sqlite/internal/db/
+	internal/store/postgres/internal/db/
+	internal/store/sqlite/internal/db/
 	pkg/preferences/zones_gen.go
 	internal/pulumijournal/entry_gen.go
 	internal/pulumijournal/internal/gen/testdata/journal.go

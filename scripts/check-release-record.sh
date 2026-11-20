@@ -45,7 +45,7 @@ if ! LC_ALL=C tr -d '\000\r' < "$record" | cmp -s - "$record"; then
 fi
 
 for dialect in sqlite postgres; do
-  dir="$root/pkg/store/$dialect/migrations"
+  dir="$root/internal/store/$dialect/migrations"
   want="$(cd "$dir" && sha256sum -- [0-9]*.sql | awk '{print $2, $1}' | sort)"
   got="$(awk -v v="$version" -v d="$dialect" '$1 == v && $2 == d {print $3, $4}' "$record" | sort)"
 
@@ -55,7 +55,7 @@ for dialect in sqlite postgres; do
   fi
 
   if [[ "$got" != "$want" ]]; then
-    echo "check-release-record: the $dialect lines of $version in internal/releaserecord/shipped.txt differ from pkg/store/$dialect/migrations:" >&2
+    echo "check-release-record: the $dialect lines of $version in internal/releaserecord/shipped.txt differ from internal/store/$dialect/migrations:" >&2
     diff <(printf '%s\n' "$got") <(printf '%s\n' "$want") >&2 || true
     exit 1
   fi

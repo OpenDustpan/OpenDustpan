@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/setting"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 // newBoundsSettingsEnv builds a handler with the declarations of the bounds
