@@ -33,7 +33,7 @@ func TestPortableBackupKeepsSharingRules(t *testing.T) {
 
 	seed := namespace.Namespace{
 		ID:                  namespace.NewID(),
-		CreatedAt:           time.Now().UTC(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
 		Name:                "acme",
 		PrimaryInstallation: "eu-west",
 		FailoverVersion:     1,
