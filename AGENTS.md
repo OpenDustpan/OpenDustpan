@@ -260,10 +260,8 @@ skill (ADR 14):
   for a change are in `openspec/project.md`. A bug fix, a flaky test, a test
   fake or fixture, tooling, CI, lint and a refactor with no change of behavior
   need no change. Put the evidence in the pull request body instead.
-- Each proposal and each design checks the existing ADRs. It lists the ADRs
-  that it touches, quotes their decision lines, follows the "Changed by" chain
-  and marks the owner-tagged decisions. A conflict with an owner-tagged ADR
-  stops the change until the owner decides.
+- Each proposal and each design has an ADR check (`openspec/project.md`). A
+  conflict with an owner-tagged ADR stops the change until the owner decides.
 - Prefer a code structure that makes a class of bug impossible over an added
   check or an added tool.
 - Prefer unexported fields with a constructor that checks the invariants. Put
@@ -318,18 +316,9 @@ output was clearly expected, contradicting its exit code, or garbled.
 
 ## Decisions
 
-For a question about a decision, for example "what did we decide" or "which rule applies
-now", do these steps before you use other tools:
-
-1. Read `docs/adr/INDEX.md`. Find the ADR and the ADRs in its "Current rule" column.
-2. Run `rg` over `docs/adr` and `docs/rfc` for the subject of the question.
-3. Read each ADR in the "Current rule" column. A later ADR can change an earlier ADR.
-
-Do not use Repowise as the source for a decision.
-
-When a new ADR changes an earlier ADR, write the item in the "Changes:" list of the new ADR
-and the reverse item in the "Changed by:" list of the earlier ADR. Then run
-`make adr-index`. ADR 296 gives the form of the items.
+For a question about a decision, or before you write an ADR or an RFC, use the
+`adr` skill (`.agents/skills/adr/SKILL.md`). Do not use Repowise as the source
+for a decision.
 
 ## Repowise
 
@@ -344,5 +333,4 @@ The Repowise MCP server indexes pushed commits only. The checkout is the truth.
 - Read the file again when `_meta.stale_warning` is present, when `confidence`
   is `low`, or when a hit has `search_method: bm25`.
 - Use `rg` to find every call site for a rename.
-- For a decision, do the steps in "Decisions", also before you use a Repowise
-  skill.
+- For a decision, use the `adr` skill, also before you use a Repowise skill.
