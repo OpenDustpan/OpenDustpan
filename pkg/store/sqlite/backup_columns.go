@@ -464,6 +464,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteManualLockBackupTables(),
 		sqlitePreferenceBackupTables(),
 		sqliteForgeLinkBackupTables(),
+		sqliteFirstAdministratorBackupTables(),
 		sqliteLocalUserBackupTables(),
 		sqliteSavedViewBackupTables(),
 		sqliteDriftBackupTables(),
@@ -666,6 +667,10 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
+		},
+		{
+			table:   backup.TableFirstAdministratorCodes,
+			columns: sqliteFirstAdministratorCodeColumns(),
 		},
 		{
 			table: backup.TableJobTokens,

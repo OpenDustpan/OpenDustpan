@@ -15,6 +15,7 @@ docs/guides/deleted-units.md
 docs/guides/dev-server.md
 docs/guides/doctor.md
 docs/guides/faults.md
+docs/guides/first-administrator.md
 docs/guides/host-recovery.md
 docs/guides/import.md
 docs/guides/install.md

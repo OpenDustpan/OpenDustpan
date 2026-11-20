@@ -248,6 +248,25 @@ type DurableStep struct {
 	DoneAtMs    int64
 }
 
+type FirstAdministrator struct {
+	ID          int64
+	PrincipalID string
+	GrantID     string
+	SessionID   string
+	CreatedBy   string
+	MadeAtMs    int64
+}
+
+type FirstAdministratorCode struct {
+	ID          int64
+	PrincipalID string
+	Digest      string
+	CreatedBy   string
+	Reason      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
 type ForgeAccountLink struct {
 	Kind        string
 	Host        string

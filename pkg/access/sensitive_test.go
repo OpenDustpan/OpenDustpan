@@ -20,6 +20,7 @@ func readOnlyServer() []identity.Action {
 		identity.ActionServerReadSettings,
 		identity.ActionServerReadInstances,
 		identity.ActionServerReadGitHost,
+		identity.ActionServerReadFirstAdministrator,
 	}
 }
 

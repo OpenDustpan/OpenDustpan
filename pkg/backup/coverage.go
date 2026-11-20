@@ -73,13 +73,16 @@ var ControlTables = []string{
 // would answer for state that the restore removed. A restored job token would
 // let a runner of an old job authenticate again. A state version names the
 // state that an installation holds now, so a restore derives it from the
-// restored rows and brings no stored value back. The schema holds these
+// restored rows and brings no stored value back. The code of the first
+// administrator is a secret that lives 10 minutes: a restore never brings
+// it back, and its marker table travels. The schema holds these
 // tables and the tables of Tables and ControlTables, and no other table.
 // Treat the list as a constant and never mutate it.
 //
 //nolint:gochecknoglobals // A shared frozen table list, as Tables is.
 var EmptiedTables = []string{
 	TableDurableHeartbeats,
+	TableFirstAdministratorCodes,
 	TableGitHostEventReceipts,
 	TableIdempotencyRecords,
 	TableIdempotencyServerKey,

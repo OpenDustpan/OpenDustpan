@@ -662,6 +662,21 @@ const (
 	// signing keys of a namespace, and listing them. Its object is the
 	// namespace that holds the registry.
 	ActionRegistryManageKeys Action = "registry:manage-keys"
+	// ActionServerOfferFirstAdministrator allows asking for the one-time code
+	// that makes the first administrator of the installation. No family
+	// classifies it, so only a principal with Admin passes the authorizer. The
+	// route also needs the static bootstrap principal. Its object is the
+	// installation.
+	ActionServerOfferFirstAdministrator Action = "server:offer-first-administrator"
+	// ActionServerReadFirstAdministrator allows reading the marker "first
+	// administrator made" and the open offer, never the code. Its object is
+	// the installation.
+	ActionServerReadFirstAdministrator Action = "server:read-first-administrator"
+	// ActionCallerRedeemFirstAdministrator allows a signed-in person to send
+	// the one-time code of the first administrator. The code, the principal
+	// of the session and the marker decide the result. Its object is the
+	// installation.
+	ActionCallerRedeemFirstAdministrator Action = "caller:redeem-first-administrator"
 )
 
 // Actions returns every action that the core knows, sorted. The catalog
@@ -711,7 +726,8 @@ func Actions() []Action {
 		ActionNamespaceReadGitHostConnections, ActionNamespaceManageGitHostConnections,
 		ActionNamespaceUseGitHostConnection, ActionServerReadGitHost, ActionServerManageGitHost,
 		ActionRegistryRead, ActionRegistryPublish, ActionNamespaceManageIssuer,
-		ActionRegistryManageKeys,
+		ActionRegistryManageKeys, ActionServerOfferFirstAdministrator,
+		ActionServerReadFirstAdministrator, ActionCallerRedeemFirstAdministrator,
 	}
 	slices.Sort(catalog)
 

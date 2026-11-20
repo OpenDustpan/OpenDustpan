@@ -92,7 +92,7 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) ([]byte, error) {
 
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 
-	if err := textbody.Unmarshal(raw, v); err != nil {
+	if err := textbody.Unmarshal(raw, v, textbody.Object()); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBody, err)
 	}
 

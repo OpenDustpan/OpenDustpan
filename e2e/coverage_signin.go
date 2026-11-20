@@ -59,7 +59,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{
-		ProxyRules:     nil,
+		ProxyRules: nil, FirstAdministrator: nil,
 		LocalUsers:     coverageLocalUsers(tb, st, principals),
 		Preferences:    nil,
 		GitHostLinks:   nil,
