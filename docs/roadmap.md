@@ -783,9 +783,11 @@ names.
    the agent, the delegation and the reason. The hash chain of the namespace
    verifies.
 5. **A revoke stops the work.** The person revokes the delegation while Dusty
-   has running and scheduled work. Pass: all running work of the delegation
-   stops, no scheduled work of it starts, and the next request of the agent
-   is denied and written to the audit log.
+   has running and scheduled work. Pass: a phase that a person confirmed
+   finishes, and no new phase starts ([ADR 354](adr/0354-agent-principals-delegation-and-the-kind-agent.md)).
+   Each phase that no person confirmed stops at its next call. No scheduled
+   work of the delegation starts, and the next request of the agent is denied
+   and written to the audit log.
 
 ## Accepted designs that wait for adapters
 

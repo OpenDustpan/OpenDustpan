@@ -28,6 +28,7 @@ func rotationCases() []suiteCase {
 		{"two puts with one read version: one wins and one is a conflict", testRotationTwoPutsOneVersion},
 		{"confirm clears the old fields, bumps the version and writes one entry", testConfirmClears},
 		{"confirm with no open window is no rotation and writes nothing", testConfirmNoWindow},
+		{"confirm at or after the end of the window is no rotation and writes nothing", testConfirmAfterEnd},
 		{"confirm with another version is a conflict and keeps the window", testConfirmVersion},
 		{"confirm of a missing registration is not found", testConfirmMissing},
 		{"confirm with an entry of a namespace changes nothing", testConfirmEntryScope},
@@ -323,6 +324,48 @@ func testConfirmNoWindow(t *testing.T, h Harness) {
 
 	if n := count(t, h, audit.ServerScope); n != 1 {
 		t.Fatalf("%d entries, want 1 (the put)", n)
+	}
+}
+
+// testConfirmAfterEnd proves that a window is closed at its end: a confirm
+// with an entry at the end, or after it, answers ErrNoRotation, whatever the
+// version, and changes nothing. A confirm just before the end still works.
+func testConfirmAfterEnd(t *testing.T, h Harness) {
+	t.Helper()
+
+	first := mustPutRotating(t, h, rotating(newRegistration(secretKeyA)))
+	ends := first.OldEventSecretEndsAt
+
+	for _, tc := range []struct {
+		name      string
+		at        time.Time
+		ifVersion int64
+	}{
+		{"at the end", ends, 0},
+		{"one millisecond after the end", ends.Add(time.Millisecond), 0},
+		{"a week after the end", ends.Add(7 * 24 * time.Hour), 0},
+		{"after the end with the version", ends.Add(time.Millisecond), first.Version},
+	} {
+		e := entry(audit.ServerScope, actionConfirmRotation)
+		e.At = tc.at
+
+		_, err := h.Store.ConfirmRotation(t.Context(), forge.KindGitHub, tc.ifVersion, e)
+		if !errors.Is(err, forge.ErrNoRotation) {
+			t.Fatalf("confirm %s = %v, want ErrNoRotation", tc.name, err)
+		}
+
+		assertUnchanged(t, h, &first)
+
+		if n := count(t, h, audit.ServerScope); n != 1 {
+			t.Fatalf("confirm %s left %d entries, want 1 (the put)", tc.name, n)
+		}
+	}
+
+	e := entry(audit.ServerScope, actionConfirmRotation)
+	e.At = ends.Add(-time.Millisecond)
+
+	if _, err := h.Store.ConfirmRotation(t.Context(), forge.KindGitHub, first.Version, e); err != nil {
+		t.Fatalf("confirm one millisecond before the end: %v", err)
 	}
 }
 

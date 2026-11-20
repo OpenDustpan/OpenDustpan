@@ -88,6 +88,14 @@ type ProcessAdapter struct {
 	// the ID of its group, can belong to another process: a later kill sends
 	// no signal.
 	groupEnded atomic.Bool
+	// groupMu makes the check of groupEnded and signaled one step with the
+	// signal, and with the mark of groupEnded. Without it, a kill could pass
+	// the check, and the post-exit step and Wait could then end the group and
+	// reap the adapter before the signal goes out.
+	groupMu sync.Mutex
+	// signaled says that kill has sent its signal. A second signal adds
+	// nothing: the first one is SIGKILL for the whole group.
+	signaled bool
 	// killProcess stops the process group of the adapter. It is killGroup; a
 	// test replaces it to count the calls.
 	killProcess func(p *os.Process) error
@@ -277,12 +285,8 @@ func (a *ProcessAdapter) kill() {
 		// Wait reaped the adapter. Its process ID, and so the ID of its
 		// group, can now belong to another process: send no signal.
 	default:
-		// The post-exit step may have ended the group while Wait still runs.
-		// A signal then could reach a group ID that another process owns.
-		if a.cmd.Process != nil && !a.groupEnded.Load() {
-			if err := a.killProcess(a.cmd.Process); err != nil {
-				a.stderr.note(err)
-			}
+		if err := a.signalGroup(); err != nil {
+			a.stderr.note(err)
 		}
 	}
 
@@ -291,6 +295,24 @@ func (a *ProcessAdapter) kill() {
 	if err := a.stdin.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 		a.stderr.note(err)
 	}
+}
+
+// signalGroup sends the kill signal to the group of the adapter once. A later
+// call sends nothing. It sends nothing after the post-exit step has ended the
+// group, because Wait can then reap the adapter, and a signal could reach a
+// group ID that another process owns. The check and the signal are one step
+// under groupMu, so the post-exit step cannot end the group between them.
+func (a *ProcessAdapter) signalGroup() error {
+	a.groupMu.Lock()
+	defer a.groupMu.Unlock()
+
+	if a.cmd.Process == nil || a.signaled || a.groupEnded.Load() {
+		return nil
+	}
+
+	a.signaled = true
+
+	return a.killProcess(a.cmd.Process)
 }
 
 // response is a JSON-RPC 2.0 answer.

@@ -35,6 +35,51 @@ curl -H "Authorization: Bearer $TOKEN" "$SERVER/api/dustpan/v1/namespaces/{names
 A caller with `job:read` but without `job:cancel` gets 403 with the code
 `access.denied`, and the server records the denial.
 
+## Damaged jobs
+
+A damaged job is a stored job row that this version of the server cannot
+read: the body of the row does not decode. The server never dispatches,
+expires or closes a damaged job. It stays as it is until a person cancels it.
+
+| Route | Answer for a damaged job |
+| --- | --- |
+| `GET .../jobs` | The job is not in `jobs`. The field `damaged` counts the damaged rows that the page read, for units that the caller may list. The count has no ID and no reason. A row that sits between the jobs of two pages can be in the count of both. |
+| `GET .../jobs/{job_id}` and `GET .../jobs/{job_id}/logs/{phase}` | 409 with the code `job.damaged`. |
+| `POST .../jobs/{job_id}/approvals`, `confirmations` and `log-redactions` | 409 with the code `job.damaged`. |
+| `POST .../jobs/{job_id}/cancel` | Cancels the job. See below. |
+
+The 409 has the same text each time. The text names the cancel route. It holds
+no content of the row. A caller without `job:read` on the unit of the job, a damaged job of
+another namespace, and a damaged job whose unit the server cannot find get the
+same 404 as for an unknown job, so these answers never tell that the row
+exists.
+
+The list shows the number of damaged rows, not their IDs. When the artifact
+sweep skips a damaged row, the server log has the message "sweep job artifact
+blobs skipped a damaged job row" with the job ID.
+
+To cancel a damaged job, send the same request as for any job:
+
+```
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"reason":"damaged"}' \
+  "$SERVER/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel"
+```
+
+The server finds the unit of the job from the unit ID column of the row, not
+from the body. The caller needs `job:read` and `job:cancel` on that unit. A
+row whose unit the server cannot find, a row of another namespace, and a
+caller without `job:read` get the same 404 as for an unknown job. The server
+changes the state of the row to `canceled` and writes the audit entry
+`job:cancel` with the reason of the caller and the change `damaged`. It ends no
+durable operation for the row. The answer holds the ID, the unit and the state
+`canceled`. It holds no other stored value, because the server cannot read the
+body of the row.
+
+A second cancel of the same job answers 409 with the code `job.wrong-state`.
+If the row was repaired while the server canceled it, the answer is 409 with
+the code `job.conflict`. Send the request again.
+
 ## Approve a job
 
 Send a JSON body with these fields:

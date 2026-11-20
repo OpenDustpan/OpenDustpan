@@ -401,8 +401,8 @@ type RegistrationStore interface {
 	// ConfirmRotation clears the old event secret of the registration of kind
 	// and gives it the next version, in one write with the audit entry e. It
 	// returns ErrNoRegistration, ErrVersionConflict, and ErrNoRotation when
-	// the registration holds no old event secret. It returns the stored
-	// registration.
+	// the registration holds no old event secret, or when its window ended
+	// at or before e.At. It returns the stored registration.
 	ConfirmRotation(ctx context.Context, kind Kind, ifVersion int64, e audit.Entry) (Registration, error)
 }
 

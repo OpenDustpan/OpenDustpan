@@ -368,7 +368,7 @@ linters:
               desc: Client commands read schema state through the API, never through a store adapter.
             - pkg: opendustpan.org/opendustpan/internal/store/postgres
               desc: Client commands read schema state through the API, never through a store adapter.
-            - pkg: opendustpan.org/opendustpan/pkg/store/internal
+            - pkg: opendustpan.org/opendustpan/internal/store/internal
               desc: Client commands share the neutral internal/store/schema list, never the adapter internals.
             - pkg: opendustpan.org/opendustpan/pkg/blob/fs
               desc: Only the server reads a backup target or blob directory.

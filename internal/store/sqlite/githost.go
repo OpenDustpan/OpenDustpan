@@ -729,13 +729,16 @@ func (g gitHost) ConfirmRotation(
 			return forge.ErrVersionConflict
 		}
 
-		if current.OldEventSecretEndsAt.IsZero() {
+		// A window that ended at or before the time of the entry is closed, as
+		// the view and the receive path treat it. The zero time is never after.
+		if !current.OldEventSecretEndsAt.After(e.At) {
 			return forge.ErrNoRotation
 		}
 
-		// Defense in depth: the reads above refuse a missing window and another
-		// version. The query refuses both too, so a write that the read did not
-		// see cannot be lost. Each layer stays and does not rely on the other.
+		// Defense in depth: the reads above refuse a missing window, a closed
+		// window and another version. The query refuses all three too, so a
+		// write that the read did not see cannot be lost. Each layer stays and
+		// does not rely on the other.
 		n, upErr := q.ConfirmGitHostRotation(ctx, db.ConfirmGitHostRotationParams{
 			UpdatedAtMs: codec.Millis(e.At), Kind: string(kind), IfVersion: ifVersion,
 		})

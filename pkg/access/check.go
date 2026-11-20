@@ -129,7 +129,7 @@ func (s *Service) within(
 	w.store = st
 	w.authz = authz
 
-	return &w, withoutRequestCache(ctx)
+	return &w, WithoutRequestCache(ctx)
 }
 
 // grantCheck returns the check that a grant of the role with the ID role
