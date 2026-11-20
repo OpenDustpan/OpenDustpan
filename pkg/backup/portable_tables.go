@@ -348,7 +348,7 @@ func portableSpec() []PortableTable {
 				{Name: "producer_kind", Kind: KindText},
 				{Name: "producer_id", Kind: KindText},
 				{Name: "consumer_kind", Kind: KindText},
-				{Name: "consumer_namespace", Kind: KindText},
+				{Name: portColConsumerNamespace, Kind: KindText},
 				{Name: "consumer_id", Kind: KindText},
 				{Name: "consumer_tool", Kind: KindText},
 				{Name: "consumer_name", Kind: KindText},
@@ -870,3 +870,7 @@ func portableProxyRuleTables() []PortableTable {
 		},
 	}
 }
+
+// portColConsumerNamespace is the column of the namespace of the consumer of a
+// sharing rule.
+const portColConsumerNamespace = "consumer_namespace"

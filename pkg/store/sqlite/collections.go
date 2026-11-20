@@ -115,21 +115,8 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
-		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
-			Kind: string(manuallock.KindCollection), ObjectID: id,
-		})
-		if lockErr != nil {
-			return fmt.Errorf("delete manual lock of collection: %w", lockErr)
-		}
-
-		// The rules that name the collection as producer or as consumer in its own
-		// namespace go with it, so that a collection made again with the same
-		// name never matches a stale rule.
-		ruleErr := q.DeleteOutputSharingRulesOfCollection(ctx, db.DeleteOutputSharingRulesOfCollectionParams{
-			Namespace: ref.Namespace.String(), CollectionID: id,
-		})
-		if ruleErr != nil {
-			return fmt.Errorf("delete sharing rules of the collection: %w", ruleErr)
+		if rowsErr := deleteCollectionOwnRows(ctx, q, ref.Namespace, id); rowsErr != nil {
+			return rowsErr
 		}
 
 		removed, gateErr := purgeCollectionGate(ctx, q, ref, audit.MaxChanges-len(e.Changes))
@@ -447,4 +434,26 @@ func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection
 	}
 
 	return collection.ErrMoveOutOfLockedCollection
+}
+
+// deleteCollectionOwnRows removes the manual lock of the collection id, and the
+// sharing rules that name it as producer or as consumer in its own namespace,
+// so that a collection made again with the same name never matches a stale
+// rule.
+func deleteCollectionOwnRows(ctx context.Context, q *db.Queries, ns namespace.Name, id string) error {
+	lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+		Kind: string(manuallock.KindCollection), ObjectID: id,
+	})
+	if lockErr != nil {
+		return fmt.Errorf("delete manual lock of collection: %w", lockErr)
+	}
+
+	err := q.DeleteOutputSharingRulesOfCollection(ctx, db.DeleteOutputSharingRulesOfCollectionParams{
+		Namespace: ns.String(), CollectionID: id,
+	})
+	if err != nil {
+		return fmt.Errorf("delete sharing rules of the collection: %w", err)
+	}
+
+	return nil
 }

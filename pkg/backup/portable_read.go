@@ -546,7 +546,7 @@ func checkOutputSharingRuleValue(column string, value any) error {
 	var err error
 
 	switch column {
-	case "id", "producer_kind", "consumer_kind", portColCreatedBy, "consumer_namespace":
+	case "id", "producer_kind", "consumer_kind", portColCreatedBy, portColConsumerNamespace:
 		err = checkRuleText(column, value)
 	default:
 		// The other columns hold names, stable IDs and the time. The table
@@ -575,7 +575,7 @@ func checkRuleText(column string, value any) error {
 		if text == "" {
 			return fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
 		}
-	case "consumer_namespace":
+	case portColConsumerNamespace:
 		if _, err := namespace.ParseName(text); err != nil {
 			return fmt.Errorf("%w: the namespace of the consumer", outputshare.ErrInvalid)
 		}
