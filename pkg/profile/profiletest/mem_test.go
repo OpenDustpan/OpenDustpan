@@ -430,11 +430,13 @@ func (s memSessions) Put(ctx context.Context, sess profile.Session, f namespace.
 		return err
 	}
 
-	if s.m.sessions[sess.Namespace()] == nil {
-		s.m.sessions[sess.Namespace()] = map[string]*profile.Session{}
+	byID, ok := s.m.sessions[sess.Namespace()]
+	if !ok {
+		byID = map[string]*profile.Session{}
+		s.m.sessions[sess.Namespace()] = byID
 	}
 
-	s.m.sessions[sess.Namespace()][sess.ID()] = &sess
+	byID[sess.ID()] = &sess
 	s.m.entries[f.Namespace] = append(s.m.entries[f.Namespace], es...)
 
 	return nil
