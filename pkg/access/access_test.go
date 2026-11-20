@@ -1936,6 +1936,113 @@ func TestOnlyOperatorAndSiteAdministratorHoldStoreCheck(t *testing.T) {
 	})
 }
 
+// TestOnlyOperatorAndSiteAdministratorHoldManageGates checks that the action
+// that saves and deletes the gates of the installation belongs to the operator
+// family alone: the installation operator and the site administrator hold it,
+// and no other built-in role does. It also checks the hostile cases: a holder
+// of the namespace action only, a holder of the installation read action
+// only, a grant on a namespace object only, and a custom role with the action
+// that is granted outside the installation.
+func TestOnlyOperatorAndSiteAdministratorHoldManageGates(t *testing.T) {
+	t.Parallel()
+
+	manage := identity.ActionInstallationManageGates
+
+	if fam, ok := access.FamilyOf(manage); !ok || fam != access.FamilyOperator {
+		t.Fatalf("FamilyOf(%s) = %v, %t; want the operator family", manage, fam, ok)
+	}
+
+	roles := []struct {
+		role string
+		want bool
+	}{
+		{access.RoleInstallationOperator, true},
+		{access.RoleSiteAdministrator, true},
+		{access.RoleAccountAdministrator, false},
+		{access.RoleAdmin, false},
+		{access.RoleMaintainer, false},
+		{access.RoleWriter, false},
+		{access.RoleViewer, false},
+		{access.RoleAuditor, false},
+		{access.RoleSecretViewer, false},
+		{access.RoleTokenManager, false},
+	}
+
+	for _, tc := range roles {
+		t.Run(tc.role, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			holder := f.person(t, "holder")
+			f.grant(t, prn("holder"), tc.role, identity.ServerObject())
+
+			assertChecks(t, f.authz, holder, []check{{identity.ServerObject(), manage, tc.want}})
+		})
+	}
+
+	hostile := []struct {
+		name string
+		role string
+		obj  identity.Object
+	}{
+		{"viewer on the installation", access.RoleViewer, identity.ServerObject()},
+		{"namespace administrator on its namespace", access.RoleAdmin, identity.NamespaceObject("acme")},
+		{"installation operator on a namespace", access.RoleInstallationOperator, identity.NamespaceObject("acme")},
+	}
+
+	for _, tc := range hostile {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			holder := f.person(t, "holder")
+			f.grant(t, prn("holder"), tc.role, tc.obj)
+
+			assertChecks(t, f.authz, holder, []check{{identity.ServerObject(), manage, false}})
+		})
+	}
+
+	t.Run("a custom role that holds only the namespace action", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+
+		r, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
+			Name: "ns-gates", Description: "",
+			Actions: []identity.Action{identity.ActionNamespaceManageGates, identity.ActionInstallationReadGates},
+		})
+		if err != nil {
+			t.Fatalf("CreateRole() = %v", err)
+		}
+
+		holder := f.person(t, "holder")
+		f.grant(t, prn("holder"), r.ID, identity.ServerObject())
+
+		assertChecks(t, f.authz, holder, []check{{identity.ServerObject(), manage, false}})
+	})
+
+	t.Run("a custom role with the action, granted on a namespace", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+
+		r, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
+			Name: "inst-gates", Description: "", Actions: []identity.Action{manage},
+		})
+		if err != nil {
+			t.Fatalf("CreateRole() = %v", err)
+		}
+
+		holder := f.person(t, "holder")
+		f.grant(t, prn("holder"), r.ID, identity.NamespaceObject("acme"))
+
+		assertChecks(t, f.authz, holder, []check{
+			{identity.ServerObject(), manage, false},
+			{identity.NamespaceObject("acme"), manage, false},
+		})
+	})
+}
+
 // TestFirstAdministratorActions pins the three actions of the first
 // administrator: the offer has no family, so the authorizer allows it to
 // Admin only; the read is in the operator family; the redeem is in the self

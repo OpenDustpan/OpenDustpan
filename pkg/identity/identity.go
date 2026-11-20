@@ -264,6 +264,11 @@ const (
 	// the approval rules, the ownership rules, the path sets and the decision
 	// records of the installation. Its object is ServerObject.
 	ActionInstallationReadGates Action = "installation:read-gates"
+	// ActionInstallationManageGates allows saving and deleting the gates, the
+	// access limits and the approval rules of the installation. They act on
+	// every namespace. Its object is ServerObject. The audit entry of a write
+	// has the action installation:set-<kind> or installation:delete-<kind>.
+	ActionInstallationManageGates Action = "installation:manage-gates"
 	// ActionServerManageSettings allows changing the installation settings
 	// through the settings resource. Its object is ServerObject. The audit
 	// entries of the settings name it: the start entry and the entry of a
@@ -695,7 +700,8 @@ func Actions() []Action {
 		ActionUnitReadOutputs, ActionUnitManageSharing, ActionCallerRead,
 		ActionServerBackup, ActionServerObserve, ActionServerReadInstances, ActionServerDeleteInstance,
 		ActionServerReadAudit, ActionServerMaintenance, ActionServerRestore, ActionServerReadSettings,
-		ActionInstallationStoreCheck, ActionInstallationReadGates, ActionServerManageSettings,
+		ActionInstallationStoreCheck, ActionInstallationReadGates, ActionInstallationManageGates,
+		ActionServerManageSettings,
 		ActionNamespaceReadSettings, ActionNamespaceManageSettings,
 		ActionServerSetAuditChain, ActionServerDisableAuditChain,
 		ActionServerReadPrincipals, ActionServerManagePrincipals, ActionServerManageGroups,
