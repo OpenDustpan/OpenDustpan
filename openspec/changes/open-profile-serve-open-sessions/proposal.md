@@ -1,17 +1,17 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #1010, #1014, #1144.
 
 ## Why
 
-**Persona: developer.** A developer keeps one set of config and secrets in a profile and opens it from a workstation or a tool. Today the open, the session read, and the docs are missing, so each tool keeps its own copy.
+**Persona: developer.** A developer keeps one set of config and secrets in a profile and opens it from a workstation or a tool. Main has the profile, its revisions, its reveal route and its document rules. It has no open: no merge of imports, no session, no route to read a merged result. So each tool keeps its own copy.
 
 The user path this change must make work:
 
-1. **API.** Open a profile with paths, consumer, mode, and duration through the NEW route POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open. Replay with the same Idempotency-Key.
-2. **API.** Read the session values or one path with the same credential through the NEW route GET /api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session}.
+1. **API.** Open a static profile with paths, the consumer `api`, `console` or `pulumi`, and a duration through the NEW route POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open. The answer holds the session ID and its end time, never a value. Repeat the call with the same Idempotency-Key.
+2. **API.** Read the values, or one path, with the same principal through the NEW route GET /api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session}.
 3. **Docs page.** Follow docs/reference/profiles-api.md to open and read a session.
 4. **E2e.** Run the e2e profiles step against the real server over HTTP with a personal access token of a person, on the NEW open route and the NEW session read route.
 
@@ -19,47 +19,68 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The caller lacks profile:open on the root or an imported profile | 403 that names the first unreadable profile. A session read after revoke answers 403 and deletes the session. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` |
-| The open reaches a provider block before the provider port lands | 422 profile.ErrProvider naming the block. An open of a static profile with no blocks succeeds. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` |
-| The open of mode data asks a never-store leaf | 400 naming the path and the ephemeral resource. | `POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open` (NEW route) with mode ephemeral |
+| The caller lacks profile:open on the namespace, on the open or on a later read of the session | 403. A read after the grant ended also deletes the session. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` |
+| The open reaches a provider block | 422 with the NEW code profile.provider and the name of the block. An open of a static profile with no blocks succeeds. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` |
+| The open asks a value that is marked never store | 422 with the NEW code profile.never-store and the path. | `POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open` (NEW route) with a `paths` list that leaves the path out |
+| The principal has 100 live sessions | 422 with the code profile.limit. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` (the person reads the revision, and waits for a session to end) |
 
-Evidence for the claims above:
+Evidence for the claims above (each one checked on main at the line):
 
-- Profiles slice 1 exists with service, store, routes, and reference docs. Proof: pkg/profile, internal/api/profile, docs/reference/profiles-api.md
-- Main has no Service.Open for profiles. Proof: rg -n -F --glob '!*_test.go' 'Service.Open' pkg internal cmd gives 0 matches in the code facts of the pack, and the only Service.Open is the forge one in pkg/forge/service.go:332
-- The slice 1 neverStore rule is in the profile document check. Proof: pkg/profile/document_check.go
-- The audit file is the place of the audit kinds that an open needs. Proof: pkg/audit/audit.go
+- Main has no open of a profile. Proof: `rg -n 'func \(s \*Service\) Open' pkg/profile` gives 0 matches. The only secret read is `Service.reveal` (`pkg/profile/service.go:542`), which opens the secrets of one revision.
+- Main has no port for profile sessions and no route for them. Proof: `rg -n 'profile-sessions|ErrProvider|ErrNeverStore|ErrFinal' pkg internal --glob '!*_test.go' --glob '!pkg/gate/**' --glob '!pkg/session/**'` gives 0 matches.
+- The never-store rule of the document check already exists and a test pins it. Proof: `pkg/profile/document_check.go:271-273` refuses `$neverStore` without `$secret` or `$sealed`, the table of `TestParseDocument` has the case "never store on a plain value" (`pkg/profile/document_test.go:57-61`), and `docs/reference/profiles-api.md:60` documents it.
+- The audit kind `access` exists. Proof: `pkg/audit/audit.go:66` (`KindAccess`), and `pkg/audit/audit.go:560` lists it as a known kind.
 
 ## What Changes
 
-- Service.Open for documents with no provider blocks, with import merge, $final, checks, pinned Expr values, and mark propagation with $neverStore on any value
-- Sessions port with Put, Get, Sweep in both dialects, sealed with the root data key, with limits, Sweep, backup exclusion
-- NEW route POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open with profile:open and Idempotency-Key replay holding only the session ID
-- NEW route GET /api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session} with action recheck and delete on refusal
-- One audit entry of kind access (NEW kind in pkg/audit/audit.go) for each open and each refused open, with no value
-- Docs page for open and sessions
+- NEW `profile.Service.Open` in NEW file `pkg/profile/open.go`: checks `profile:open` on the namespace of the root profile, reads each revision that the open reaches once, merges the imports in list order (a later item wins, a map merges key by key, a list or a scalar replaces, a `null` removes), keeps every `$final` value, evaluates `${ }` values, carries the secret and never-store marks, and refuses a provider block with NEW `profile.ErrProvider`.
+- NEW sentinels in `pkg/profile`: `ErrProvider`, `ErrNeverStore`, `ErrFinal`, `ErrReference` and `ErrImportCycle`, each with its own NEW error code and HTTP 422 in `internal/errcode/catalog_profile.go` and `internal/api/profile/profile.go`.
+- NEW port `profile.Sessions` with `Put`, `Get`, `Delete` and `Sweep` (the shape of the stopped builder branch, `origin/builder/open-profile-serve-open-sessions`, `pkg/profile/sessions.go`, with the principal owner only), its conformance cases in NEW file `pkg/profile/profiletest/sessions.go`, and one adapter for each dialect. The service seals the result with the data key of the root profile before `Put`, so the store holds only the ciphertext.
+- NEW table `profile_open_sessions` in the one baseline of each dialect, edited in place. The table is in `backup.EmptiedTables`, so no backup holds a session.
+- NEW route POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open with `profile:open` and the Idempotency-Key header. The record holds only the session ID.
+- NEW route GET /api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session}, for the principal that opened the session.
+- One audit entry of the existing kind `access` for each open and each refused open, with no value.
+- A NEW port `profile.Evaluator` with one method that computes a `${ }` value of any type, and its adapter in `internal/expr`, because the Evaluator of `internal/expr` today answers only a boolean or a string.
+- Docs: the open, the session read, the errors and the session limits in `docs/reference/profiles-api.md`.
 
 Out of scope:
 
-- Provider blocks, provider port, rotators, and login blocks
-- OpenTofu provider build, Pulumi env routes, job-token pin rules, and login leaves
-- Job opens, attachments, launcher delivery, and gates at profile.open
+- Provider blocks, the provider port and its adapters, rotators and login blocks. The change `add-profile-provider-port-its` lists this change under "Depends on", so this change lands first and that change replaces the `ErrProvider` refusal in `Service.Open` with the call of the registry. `Service.Open` must not import `pkg/profile/provider`, because that package imports `pkg/profile` (`pkg/profile/provider/run.go:15`).
+- The consumers `run`, `opentofu`, `launcher` and `observe`, exports, and the job open with a job token. `Service.Open` refuses a job token and a consumer other than `api`, `console` and `pulumi`.
+- The `checks` of a profile. They move to gates at the open (see "Open questions"). `Service.Open` refuses a profile that holds a rule in `checks`.
+- Expr names other than `values` in an expression (`providers`, `imports`, `profiles`, `context`). `Service.Open` refuses them with `ErrReference`.
+- A fresh sign-in for an open (see "Open questions").
+- Gates and access requests at the open, attachments, and the console.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- A refused path names the first unreadable profile.
-- A provider block names itself.
-- A never-store refusal names the path and the ephemeral resource.
+- A provider block names itself in the error.
+- A never-store refusal names the path.
+- A final refusal names the path and both profiles.
+- A session that ended answers 404, and the open answer holds its end time, so a script knows when to open again.
 
 ## What main already does
 
-Each fact names its file, line and function on main. The change specifies only the difference.
+Each fact names its file and line on main. The change specifies only the difference.
 
-- pkg/profile holds the profile domain (`pkg/profile/service.go:542`)
-- The Sessions type in main is the console session (`pkg/session/service.go:64`)
-- Backup has an emptied tables list (`pkg/backup/coverage.go:76`)
+- `Service.reveal` opens the secrets of one revision and writes one audit entry of the kind `reveal`. It does not merge imports. It needs a console session with a recent sign-in on the route. (`pkg/profile/service.go:542`, `docs/reference/profiles-api.md:155-158`)
+- `Service.require` checks an action on the namespace object. No grant on a single profile exists, so `profile:open` on the namespace covers the root profile and each import, which are all in one namespace. (`pkg/profile/service.go:363-368`, `internal/api/profile/routes.go:110-112`)
+- `Sealer` seals under the data key of a scope, and `scopeOf` makes the scope of a profile from its namespace and ID. So a data key of the root profile exists. (`pkg/profile/service.go:22-25`, `pkg/profile/service.go:679`)
+- `Service.recordRefused` writes the audit entry of a refused read. (`pkg/profile/service.go:517`)
+- The document parser keeps the marks of each entry: `Secret`, `Final`, `NeverStore`. `checkImports` checks only the shape of the import list. `checkChecks` checks only that each rule is present. `refsIn` finds the paths of `values` that an expression reads. (`pkg/profile/document.go:54-67`, `pkg/profile/document_check.go:90`, `pkg/profile/document_check.go:159`)
+- The never-store rule of the save exists: `$neverStore` needs `$secret` or `$sealed`. (`pkg/profile/document_check.go:271-273`)
+- `pkg/profile` has the sentinels `ErrInvalid`, `ErrNotFound`, `ErrConflict`, `ErrSchemaVersion`, `ErrLimit` and `ErrFreshRequired`. It has no `ErrProvider`, `ErrNeverStore`, `ErrFinal`, `ErrReference` or `ErrImportCycle`. (`pkg/profile/profile.go:25-39`)
+- The only consumers in `pkg/profile` are `launcher` and `job-proxy`. (`pkg/profile/exports.go:24-34`)
+- `identity.ActionProfileOpen` exists. `audit.KindAccess` exists. (`pkg/identity/identity.go:603`, `pkg/audit/audit.go:66`)
+- The route table of `internal/api/profile/routes.go` has the flag `IdempotencyKey`, the keyed rows for the writes, and `serveKeyed`, which runs after the action check. `Call.SecretAnswer` makes the record hold an object ID in place of the answer, but `serveKeyed` passes nil. (`internal/api/profile/routes.go:35`, `internal/api/profile/routes.go:56-63`, `internal/api/profile/routes.go:147`)
+- The replay record is keyed by principal, method, path and key. A replay of a secret answer is 409 with the code `request.idempotency-key-replayed-secret` and the object ID. The same key with another body is 422 `request.idempotency-key-reused`. A record lives 24 hours. (`internal/api/idempotent/idempotent.go:240`, `internal/api/idempotent/idempotent.go:253-263`, `internal/api/idempotent/idempotent.go:269-273`)
+- `profileErrors` maps the profile sentinels to HTTP, and the codes of the area are in `internal/errcode/catalog_profile.go:1-37`. (`internal/api/profile/profile.go:140-155`, `internal/errcode/catalog_profile.go:1-37`)
+- The sqlite baseline already has a table `sessions`, which holds console sessions, and the SDK has the type `session.Sessions`. The new table is `profile_open_sessions` and the new port is `profile.Sessions`, in another package, so no name clashes. (`pkg/store/sqlite/migrations/0168_baseline.sql:368`, `pkg/session/service.go:64`)
+- `backup.EmptiedTables` lists tables that a restore empties and a backup leaves out, and `backup.ControlTables` lists tables that a restore keeps. The schema holds the tables of `Tables`, `ControlTables` and `EmptiedTables`, and no other. Each table has a column list in both adapters. (`pkg/backup/coverage.go:81`, `pkg/backup/coverage.go:38`, `pkg/store/sqlite/backup_columns.go:641`)
+- `pkg/profile/provider` exists with a registry and a `Run`. It imports `pkg/profile`. (`pkg/profile/provider/registry.go:23`, `pkg/profile/provider/run.go:141`)
+- The Evaluator of `internal/expr` has `Compile`, `Bool` and `String`. The result kinds are `bool` and `string`. (`internal/expr/expr.go:119-141`, `internal/selfservice/check.go:129-136`)
 
 ## ADR check
 
@@ -67,32 +88,39 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 200: Profiles: config, secrets and credentials for every tool** (owner-tagged: decision 1).
 
-- Decisions that apply: 1 (current).
+- Decisions that apply: 1 (current), the error table of the port (ErrNeverStore).
 - Changed by: ADR 210 changes decision 9; ADR 222 changes decision 3; ADR 224 changes decision 3; ADR 225 changes decision 3; ADR 286 changes; ADR 347 extends decision 10. Chain to the end: ADR 210, ADR 222, ADR 224, ADR 225, ADR 286, ADR 347, ADR 247, ADR 335, ADR 351, ADR 354, ADR 241, ADR 313, ADR 317, ADR 342, ADR 353, ADR 299, ADR 248, ADR 343, ADR 319, ADR 365, ADR 328, ADR 359, ADR 368.
 - Current rule: this ADR, with ADR 210, 222, 224, 225, 286, 347.
 - Quote: "A domain package `pkg/profile` (owner). The package is tool-neutral. It imports no tool package, no store adapter and no transport. No tool package imports it."
-- Effect: Open and Sessions live in pkg/profile as tool-neutral code.
+- Quote: "A value marked never store for a consumer that stores it."
+- Effect: Open and the Sessions port live in pkg/profile as tool-neutral code. A session stores its result, so a consumer of a session is a consumer that stores. The open refuses a never-store value for it with ErrNeverStore.
 - Conflict: none.
 
-**ADR 201: The profile document, imports and expressions** (not owner-tagged).
+**ADR 201: The profile document, imports and expressions** (not owner-tagged in its decisions).
 
-- Decisions that apply: 4 (changed), 12 (current).
+- Decisions that apply: 3 (current), 4 (changed in part by ADR 228), 6 (current), 12 (current), 13 (current). Decision 11 is superseded by ADR 224 and is NOT implemented here.
 - Changed by: ADR 222 changes decisions 4, 8 and 11; ADR 224 supersedes decision 11; ADR 226 changes decision 5; ADR 228 changes decisions 4 and 8; ADR 241 extends decision 7; ADR 286 changes. Chain to the end: ADR 222, ADR 224, ADR 226, ADR 228, ADR 241, ADR 286, ADR 335, ADR 351, ADR 354, ADR 313, ADR 317, ADR 342, ADR 353, ADR 240, ADR 258, ADR 263, ADR 248, ADR 343, ADR 319, ADR 365, ADR 297, ADR 358, ADR 366, ADR 301, ADR 333.
 - Current rule: this ADR, with ADR 222, 224, 226, 228, 241, 286.
+- Quote: "wins. Maps of `values` and `exports` merge key by key, as JSON Merge"
 - Quote: "- **never store**: from `$neverStore` or a block with `neverStore: true`."
-- Quote: "Expressions are Expr. A string that is exactly `${ <expression> }` gives the value of the expression, of any type."
-- Effect: The open evaluates ${ } and propagates marks. $neverStore stands on any value.
-- Conflict: none.
+- Quote: "also a secret. ADR 209 decision 3 gives what each consumer does with"
+- Quote: "An entry holds exactly one of `$value`, `$secret` and `$sealed`. A map"
+- Effect: The merge, `$final`, `${ }` of the own tree and the marks are specified. Because an entry holds exactly one of `$value`, `$secret` and `$sealed`, and the save already refuses `$neverStore` on a plain value (`pkg/profile/document_check.go:271-273`), a never-store value is a secret and always comes from `$secret` or `$sealed`. The old draft changed that rule. This version keeps it.
+- Conflict: none. The run of `checks` (decision 11) is superseded, see ADR 224.
 
 **ADR 203: Opening a profile: sessions, attachments, delivery, actions and audit** (not owner-tagged).
 
-- Decisions that apply: 1 (extended), 3 (current), 9 (current).
+- Decisions that apply: 1 (extended), 2 (current, without the provider call), 3 (current), 4 (current, direct open only), 9 (current), 11 (current).
 - Changed by: ADR 210 changes decision 12; ADR 222 changes decision 5; ADR 225 changes decision 5; ADR 241 extends decision 1; ADR 286 changes; ADR 300 changes decision 5; ADR 353 extends decision 1. Chain to the end: ADR 210, ADR 222, ADR 225, ADR 241, ADR 286, ADR 300, ADR 353, ADR 247, ADR 335, ADR 351, ADR 354, ADR 299, ADR 248, ADR 313, ADR 343, ADR 328, ADR 359, ADR 368.
 - Current rule: this ADR, with ADR 210, 222, 225, 241, 286, 300, 353.
-- Quote: "Open sessions. An open with the consumer `api`, `console` or `pulumi` stores its result as an **open session** with an ID of the prefix `pos-`."
-- Quote: "The audit entry of an open. Each open writes one audit entry of the kind `access`, with the action `profile:open` and the consumer:"
-- Effect: The change implements the open request, open sessions for api, console and pulumi, and one audit entry of kind access with no value.
-- Conflict: none.
+- Quote: "An open with the consumer `api`, `console` or"
+- Quote: "The store seals the result with the data key of the root profile. A"
+- Quote: "- Only the credential that opened a session reads it: the same"
+- Quote: "fails with `identity.ErrDenied`, and the server deletes the session."
+- Quote: "- Sessions are not in a backup, because they hold credentials that end"
+- Quote: "A refused open writes an entry too. A read of a session writes no entry,"
+- Effect: The change implements the open for the three session consumers, the seal with the key of the root profile, the owner rule (the same principal), the recheck at each read, the exclusion from backups, and one audit entry of kind access for each open and each refused open. Sessions are for a principal. The rule for a job (at most 100 for each job) belongs to the job open, which is out of scope.
+- Conflict: none. The old draft added a request field `mode`. Decision 1 has no such field, so this version drops it.
 
 **ADR 209: How each tool reads a profile** (owner-tagged: decision 3).
 
@@ -100,19 +128,52 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "It is the only way for OpenTofu to read a value marked never store."
-- Effect: The server refuses never-store leaves for data delivery.
+- Effect: A session consumer stores the value, so the open refuses it. The ephemeral resource of OpenTofu is out of scope.
 - Conflict: none.
+
+**ADR 210: The tool-neutral API prefix, paths, actions, versions and style** (decision 6 is owner-tagged).
+
+- Decisions that apply: 6 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "the first request made (for example a token ID or an open-session ID)"
+- Quote: "`request.idempotency-key-replayed-secret` and that ID, and never"
+- Effect: The open route declares that its replay record holds the session ID. A replay answers 409 with the code request.idempotency-key-replayed-secret and the session ID, as main does for a token (`internal/api/idempotent/idempotent.go:253-263`).
+- Conflict: none.
+
+**ADR 224: Gates replace checks and rules** (part of ADR 222, which holds owner decisions).
+
+- Decisions that apply: 5 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "A profile `check`"
+- Effect: A profile check becomes a gate at the open. This change does not run `checks` and builds no gate. See "Open questions".
+- Conflict: ADR 201 decision 11 (the open runs each check) is superseded by this ADR.
+
+**ADR 228: One Expr package, values only** (decision 1 is owner-tagged).
+
+- Decisions that apply: 1 (current), 2 (current), 5 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "Expr never decides whether a change"
+- Quote: "package imports `github.com/expr-lang/expr`. depguard holds this rule."
+- Effect: `${ }` computes values in the open. `internal/expr` stays the only importer of the library, so the profile reaches Expr through the port `profile.Evaluator`. An Expr value that fails to compute fails the open with `profile.ErrReference` and is never an empty value.
+- Conflict: none. The old draft ran `checks` through Expr in the open, which this ADR forbids.
 
 ## Open questions
 
-none
+Parts that depend on an open point are parked. The rest of the change does not depend on them.
+
+1. **What does an open do with a profile that holds `checks`?** ADR 201 decision 11 ran them in the open. ADR 224 decision 5 moves each profile check to a gate at the open, and ADR 228 decision 1 says that Expr never decides whether a change goes on. The gate slice is not on main, and the save still accepts `checks` (`pkg/profile/document_check.go:159`). To run no rule silently, this change refuses an open of any profile that holds a rule in `checks`, with `ErrInvalid` that names the profile. That choice is provisional and parked in task 2.5. The owner decides whether the open refuses, ignores, or waits for the gate slice.
+2. **Does an open with a personal token need the fresh sign-in that a reveal needs?** The reveal route answers plain secrets only for a console session with a recent sign-in (`docs/reference/profiles-api.md:155-158`). ADR 203 decision 11 gives the open route only `profile:open`, so an open and a session read with a personal token answer plain secrets with no fresh sign-in. This change follows ADR 203. If the owner wants the same step-up, the open route and the session read change. Parked in task 2.6.
+3. **May a job own a session?** The stopped builder branch has an owner kind `job` with a job-token owner. ADR 203 decision 3 says that a job has at most 100 sessions and only the same job reads them, but decision 4 ties a job open to attachment authority, which is not built. Who may read a session of a job is a security choice that this change does not make. This change takes the owner kind `principal` only, refuses a job token, and drops `job` from the table check. The owner decides when the job open is specified.
 
 Questions considered and answered:
 
-- Which audit kind does an open write? Kind access, per ADR 203 decision 9: "Each open writes one audit entry of the kind `access`, with the action `profile:open` and the consumer:". ADR 240 covers state downloads only.
-- Does this slice evaluate ${ }? Yes. ADR 201 decision 4: "Expressions are Expr. A string that is exactly `${ <expression> }` gives the value of the expression, of any type." ADR 228 decision 1 limits Expr to values.
-- Does neverStore need secret or sealed? No. ADR 201 decision 12 allows it on any value. The slice 1 rule in pkg/profile/document_check.go is corrected.
-- Who refuses never-store for the data source? The server, through a NEW mode field in the open request, so an old provider build cannot skip it (ADR 209 decision 3).
-- Can expressions decide access? No. ADR 228 decision 1: "Expr never decides whether a change may go on."
+- Which audit kind does an open write? Kind access, per ADR 203 decision 9, and the kind exists on main (`pkg/audit/audit.go:66`). The old draft called it a NEW kind.
+- Does an open bind a session to a token or to a principal? To the principal. ADR 203 decision 3: "- Only the credential that opened a session reads it: the same" principal. A second token of the same principal reads the session. Reveal binds nothing, so this is the narrowest rule that the ADR gives for a person.
+- Does a key of the root profile exist? Yes: `Sealer` seals under the data key of a scope, and `scopeOf(namespace, profile ID)` makes the scope (`pkg/profile/service.go:22-25`, `pkg/profile/service.go:679`).
+- Does `$neverStore` on a plain value save? No. Main refuses it on purpose, a test pins it, and the docs say so. The old task that changed the rule is removed.
+- Does the 101st open of a job count? Jobs are out of scope. The limit of 100 live sessions is for each principal.
 
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs, and rewritten against main by the PM. Every quote, path and ADR citation was checked by code.
