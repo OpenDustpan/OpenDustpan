@@ -136,6 +136,7 @@ The `errorCode` is a stable code for a program.
 | 403 | `gate.limited` | An access limit forbids the start |
 | 403 | `gate.rule-failed` | An access limit failed to evaluate, so the start is refused |
 | 403 | `job.policy-denied` | The policy refused the start. A job token cannot start a job, even when it holds the start grants. |
+| 503 | `gate.unavailable` | An approval default of the unit needs more than a job enforces: it names users or unit owners, sets `freshAuthSeconds`, or holds an `unless` body. The message names the requirement. Change the default, and start the job again |
 | 403 | `job.agent-denied` | The agent mode does not allow the start |
 | 403 | `job.gate-enforced` | An enforced gate at `change.propose` or `state.write` covers the workspace, or the server cannot read the gates |
 | 404 | | The namespace does not exist, or the caller cannot read it |
@@ -194,7 +195,7 @@ can reject, also a caller who is not in the groups of the gate, because a reject
 stops the change. Each verdict adds one entry of the kind `change` to the audit log of the namespace. The
 entry has the caller, the verdict, the phase, the comment and the event that followed.
 
-A refusal with the code `access.denied`, `job.agent-denied`, `job.self-approval`,
+A refusal with the code `access.denied`, `job.no-requirement`, `job.agent-denied`, `job.self-approval`,
 `job.already-approved`, `mfa.fresh-step-required`, `job.plan-changed` or `job.plan-stale` adds one entry with the outcome
 `denied` to the audit log. A request that is not valid, a job that does not wait, and a
 version conflict add none.
@@ -227,7 +228,8 @@ The answer is the job document with status 201 and the header `ETag`.
 | --- | --- | --- |
 | 400 | `request.body-invalid` | The body is not one JSON object, has an unknown field, or has an `Idempotency-Key` header |
 | 401 | `auth.unauthenticated` | The caller did not sign in |
-| 403 | `access.denied` | The caller lacks `job:approve` on the unit, or is not a member of a group of the gate |
+| 403 | `access.denied` | The caller lacks `job:approve` on the unit |
+| 403 | `job.no-requirement` | The caller is a member of no group of any requirement of the phase. The message names the requirements |
 | 403 | `job.agent-denied` | An agent tried to approve |
 | 403 | `job.self-approval` | The person who started the job tried to approve it |
 | 403 | `mfa.fresh-step-required` | The approval of a destroy has no fresh MFA step |

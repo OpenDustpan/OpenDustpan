@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -530,6 +531,16 @@ func TestStartMapsTheErrorsOfTheService(t *testing.T) {
 			"plans are off",
 		},
 		{fmt.Errorf("%w: no agents", job.ErrAgentDenied), http.StatusForbidden, "job.agent-denied", "no agents"},
+		{
+			fmt.Errorf(
+				"policy: %w: the requirement default/collection/acme/prod names users or unit owners, and a job "+
+					"enforces groups only; name groups instead",
+				gate.ErrUnavailable,
+			),
+			http.StatusServiceUnavailable,
+			"gate.unavailable",
+			"default/collection/acme/prod names users",
+		},
 		{job.ErrFrozen, http.StatusConflict, "job.frozen", "freeze"},
 		{job.ErrLimit, http.StatusTooManyRequests, "job.limit", "too many"},
 		{job.ErrKeyConflict, http.StatusUnprocessableEntity, "request.idempotency-key-reused", "key"},
@@ -618,7 +629,7 @@ func checkErrorBody(t *testing.T, body, wantCode, wantText string) {
 func TestStartDeniedWritesTheAuditEntry(t *testing.T) {
 	t.Parallel()
 
-	gate := &job.GateError{Gates: []job.EnforcedGate{
+	enforced := &job.GateError{Gates: []job.EnforcedGate{
 		{Scope: "unit/acme/opentofu/net", ID: "no-plans", Point: "state.write"},
 	}}
 
@@ -654,10 +665,15 @@ func TestStartDeniedWritesTheAuditEntry(t *testing.T) {
 		},
 		{"a freeze", job.ErrFrozen, http.StatusConflict, "a change freeze is active"},
 		{"the limit", job.ErrLimit, http.StatusTooManyRequests, "too many open jobs"},
-		{"an enforced gate", gate, http.StatusForbidden, "an enforced gate covers the unit: no-plans"},
+		{"an enforced gate", enforced, http.StatusForbidden, "an enforced gate covers the unit: no-plans"},
 		{
 			"a gate that cannot be read", fmt.Errorf("%w: unreadable", job.ErrGateEnforced), http.StatusForbidden,
 			"an enforced gate covers the unit",
+		},
+		{
+			"the approval defaults need more than a job enforces",
+			fmt.Errorf("policy: %w: the requirement default names users or unit owners", gate.ErrUnavailable),
+			http.StatusServiceUnavailable, "the approval defaults need more than a job enforces",
 		},
 		{
 			"zero pools or two pools", fmt.Errorf("%w: no default pool", job.ErrUnsupported),

@@ -2617,6 +2617,7 @@
           "job.invalid",
           "job.limit",
           "job.log-not-available",
+          "job.no-requirement",
           "job.not-awaiting-approval",
           "job.not-found",
           "job.plan-changed",
@@ -3802,6 +3803,12 @@
           "comment": {
             "type": "string"
           },
+          "for": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "gate": {
             "type": "string"
           },
@@ -3894,11 +3901,18 @@
           "bindPlan": {
             "type": "boolean"
           },
+          "filled": {
+            "format": "int64",
+            "type": "integer"
+          },
           "groups": {
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "name": {
+            "type": "string"
           },
           "type": {
             "type": "string"
@@ -3908,6 +3922,8 @@
           "allowSelf",
           "approvals",
           "bindPlan",
+          "filled",
+          "name",
           "type"
         ],
         "type": "object"

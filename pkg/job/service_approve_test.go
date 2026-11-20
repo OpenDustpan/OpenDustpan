@@ -73,7 +73,7 @@ func partOf(kind job.OutputKind, hash string) job.PlanPart {
 // twoApprovals is the gate of the seeded job: two approvals, bound to the plan.
 func twoApprovals() job.Gate {
 	return job.Gate{
-		Type: job.GateApproval, Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		Type: job.GateApproval, Name: "", Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
 		BindPlan: true,
 	}
 }
@@ -131,8 +131,16 @@ func (r *rig) binding() job.PlanBinding {
 
 func approvedBy(subject string) job.Approval {
 	return job.Approval{
-		Gate: job.GateApproval, Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
-		At: time.Time{}, Auth: "", AuthAt: time.Time{},
+		Gate:    job.GateApproval,
+		For:     []string{""},
+		Subject: subject,
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      time.Time{},
+		Auth:    "",
+		AuthAt:  time.Time{},
 	}
 }
 

@@ -126,6 +126,7 @@ type planBody struct {
 
 type gateBody struct {
 	Type         string   `json:"type"`
+	Name         string   `json:"name"`
 	Approvals    int      `json:"approvals"`
 	Groups       []string `json:"groups"`
 	GroupIDs     []string `json:"groupIds"`
@@ -143,6 +144,7 @@ type bindingBody struct {
 
 type approvalBody struct {
 	Gate    string       `json:"gate"`
+	For     []string     `json:"for"`
 	Subject string       `json:"subject"`
 	Agent   string       `json:"agent"`
 	Verdict string       `json:"verdict"`
@@ -407,7 +409,7 @@ func encodePhase(p *job.Phase) phaseBody {
 
 	for _, g := range p.Gates {
 		out.Gates = append(out.Gates, gateBody{
-			Type: string(g.Type), Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
+			Type: string(g.Type), Name: g.Name, Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
 			AllowSelf: g.AllowSelf, TimeoutNanos: int64(g.Timeout), BindPlan: g.BindPlan,
 		})
 	}
@@ -415,7 +417,7 @@ func encodePhase(p *job.Phase) phaseBody {
 	for i := range p.Approvals {
 		a := &p.Approvals[i]
 		out.Approvals = append(out.Approvals, approvalBody{
-			Gate: string(a.Gate), Subject: a.Subject, Agent: a.Agent, Verdict: string(a.Verdict),
+			Gate: string(a.Gate), For: a.For, Subject: a.Subject, Agent: a.Agent, Verdict: string(a.Verdict),
 			Comment: a.Comment, Plan: encodeBinding(a.Plan), At: a.At, Auth: string(a.Auth), AuthAt: a.AuthAt,
 		})
 	}
@@ -440,7 +442,7 @@ func decodePhase(b *phaseBody) job.Phase {
 
 	for _, g := range b.Gates {
 		out.Gates = append(out.Gates, job.Gate{
-			Type: job.GateType(g.Type), Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
+			Type: job.GateType(g.Type), Name: g.Name, Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
 			AllowSelf: g.AllowSelf, Timeout: time.Duration(g.TimeoutNanos), BindPlan: g.BindPlan,
 		})
 	}
@@ -448,7 +450,7 @@ func decodePhase(b *phaseBody) job.Phase {
 	for i := range b.Approvals {
 		a := &b.Approvals[i]
 		out.Approvals = append(out.Approvals, job.Approval{
-			Gate: job.GateType(a.Gate), Subject: a.Subject, Agent: a.Agent, Verdict: job.Verdict(a.Verdict),
+			Gate: job.GateType(a.Gate), For: a.For, Subject: a.Subject, Agent: a.Agent, Verdict: job.Verdict(a.Verdict),
 			Comment: a.Comment, Plan: decodeBinding(a.Plan), At: a.At, Auth: job.ConfirmAuth(a.Auth),
 			AuthAt: a.AuthAt,
 		})

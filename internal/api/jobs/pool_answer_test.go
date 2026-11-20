@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -56,6 +57,7 @@ func newPoolHandler(
 		Artifacts:      nil,
 		Logs:           nil,
 		Cursors:        nil,
+		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        starter,
 		Workers:        nil,
 		Pools:          pools,

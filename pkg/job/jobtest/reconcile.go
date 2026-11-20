@@ -32,6 +32,20 @@ func reconcileCases() []suiteCase {
 		{"the reconcile dispatches a queued job when the unit is free again", testReconcileUnitBusy},
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
+		{
+			"the reconcile keeps a job with two gates and two people waiting",
+			func(t *testing.T, h Harness) {
+				t.Helper()
+				testReconcileSeveralGates(t, h, "cy", "di")
+			},
+		},
+		{
+			"the reconcile dispatches a job with two gates after the third person",
+			func(t *testing.T, h Harness) {
+				t.Helper()
+				testReconcileSeveralGates(t, h, "cy", "di", "ed")
+			},
+		},
 		{"the reconcile fails a queued job whose plan phase stored no plan, and never replans it", testReconcileNoPlan},
 		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
 		{"the reconcile expires nothing before a timeout", testReconcileNotYet},
@@ -248,7 +262,7 @@ func testReconcileGate(t *testing.T, h Harness) {
 	f := setUp(t, h)
 	j := newJob(f.unit, job.OperationRefresh, "")
 	j.Phases[0].Gates = []job.Gate{{
-		Type: job.GateApproval, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
 		BindPlan: false,
 	}}
 	queued := create(t, h, f, j, nil)
@@ -266,13 +280,23 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 	f := setUp(t, h)
 	j := newJob(f.unit, job.OperationRefresh, "")
 	j.Phases[0].Gates = []job.Gate{{
-		Type: job.GateApproval, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
 		BindPlan: false,
 	}}
-	j.Phases[0].Approvals = []job.Approval{{
-		Gate: job.GateApproval, Subject: "bo", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
-		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
-	}}
+	j.Phases[0].Approvals = []job.Approval{
+		{
+			Gate:    job.GateApproval,
+			For:     []string{""},
+			Subject: "bo",
+			Agent:   "",
+			Verdict: job.VerdictApprove,
+			Comment: "",
+			Plan:    nil,
+			At:      time.Now().UTC(),
+			Auth:    "",
+			AuthAt:  time.Time{},
+		},
+	}
 	queued := create(t, h, f, j, nil)
 
 	// An approved job goes back to queued, and the reconcile dispatches it. It
@@ -282,6 +306,53 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 	}
 
 	assertState(t, h, queued.ID, job.StateDispatched)
+}
+
+// allApprovers is the number of people that fill the three places of the two
+// gates of testReconcileSeveralGates.
+const allApprovers = 3
+
+// testReconcileSeveralGates stores a queued job with a gate of two approvals
+// and a gate of one, and the approvals of people, in this order: cy fills
+// either gate, di only the first, and ed only the second. The job dispatches
+// only when three distinct people fill the three slots.
+func testReconcileSeveralGates(t *testing.T, h Harness, people ...string) {
+	t.Helper()
+
+	const first, second = "default/namespace/acme", "default"
+
+	forOf := map[string][]string{"cy": {first, second}, "di": {first}, "ed": {second}}
+
+	f := setUp(t, h)
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Phases[0].Gates = severalGates()
+
+	for _, who := range people {
+		j.Phases[0].Approvals = append(j.Phases[0].Approvals, job.Approval{
+			Gate: job.GateApproval, For: forOf[who], Subject: who, Agent: "", Verdict: job.VerdictApprove,
+			Comment: "", Plan: nil, At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
+		})
+	}
+
+	queued := create(t, h, f, j, nil)
+	open := len(people) == allApprovers
+
+	res := runReconcile(t, h, 0)
+	if open && (res.Dispatched != 1 || res.Gated != 0) {
+		t.Fatalf("reconcile with three people = %+v; want one dispatch", res)
+	}
+
+	if !open && (res.Dispatched != 0 || res.Gated != 1) {
+		t.Fatalf("reconcile with %d people = %+v; want one gated job and no dispatch", len(people), res)
+	}
+
+	if open {
+		assertState(t, h, queued.ID, job.StateDispatched)
+
+		return
+	}
+
+	assertState(t, h, queued.ID, job.StateAwaitingApproval)
 }
 
 func testReconcileStalePlan(t *testing.T, h Harness) {

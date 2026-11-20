@@ -21,6 +21,7 @@ import (
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -357,6 +358,7 @@ func newLoggedWorkerHandler(
 		Artifacts:      deps.artifacts,
 		Logs:           deps.logs,
 		Cursors:        deps.cursors,
+		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        deps.starter,
 		Workers:        workers,
 		Pools:          nil,
@@ -484,6 +486,7 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 				Gates: []job.Gate{
 					{
 						Type:      job.GateApproval,
+						Name:      "",
 						Approvals: 1,
 						Groups:    []string{"ops"},
 						GroupIDs:  nil,
@@ -497,10 +500,20 @@ func runningJob(t *testing.T, id job.ID) job.Job {
 			{
 				Kind: job.PhaseApply, Operation: "dop-internal-operation-2", Claims: 0, Executor: "", Steps: nil,
 				StateVersion: "", Plan: nil, Gates: nil,
-				Approvals: []job.Approval{{
-					Gate: job.GateApproval, Subject: "bo", Agent: "", Verdict: job.VerdictApprove, Comment: "ok",
-					Plan: nil, At: at, Auth: "", AuthAt: time.Time{},
-				}},
+				Approvals: []job.Approval{
+					{
+						Gate:    job.GateApproval,
+						For:     nil,
+						Subject: "bo",
+						Agent:   "",
+						Verdict: job.VerdictApprove,
+						Comment: "ok",
+						Plan:    nil,
+						At:      at,
+						Auth:    "",
+						AuthAt:  time.Time{},
+					},
+				},
 				StartedAt: time.Time{}, FinishedAt: time.Time{},
 			},
 		},
@@ -887,6 +900,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Artifacts:      nil,
 		Logs:           nil,
 		Cursors:        nil,
+		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        nil,
 		Workers:        nil,
 		Pools:          nil,
