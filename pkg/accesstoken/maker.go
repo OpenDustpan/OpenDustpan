@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -76,6 +77,13 @@ func (s *Service) RevokeLostMakers(ctx context.Context, cause Cause) (RevokeResu
 	if s.makers == nil {
 		return out, nil
 	}
+
+	// The check runs after a committed change. A request cache in ctx holds
+	// the groups and the roles that the route check of the same request read
+	// before the change. No caller may pass it: the service drops it here,
+	// whatever the MakerChecker does. Defense in depth: access.Service.CanActAs
+	// drops it too, and this guard does not rely on that.
+	ctx = access.WithoutRequestCache(ctx)
 
 	decided := map[makerKey]bool{}
 

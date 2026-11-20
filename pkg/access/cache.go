@@ -32,11 +32,16 @@ func WithRequestCache(ctx context.Context) context.Context {
 	})
 }
 
-// withoutRequestCache returns a context that keeps no reads, under a
-// context that may keep them: the checks in the transaction of a write read
-// the current state, not the state that the request read.
-func withoutRequestCache(ctx context.Context) context.Context {
+// WithoutRequestCache returns a context that keeps no reads, under a
+// context that may keep them: a check after a write reads the current state,
+// not the state that the request read before the write.
+func WithoutRequestCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, requestCacheKey{}, (*requestCache)(nil))
+}
+
+// HasRequestCache reports whether decisions made with ctx keep their reads.
+func HasRequestCache(ctx context.Context) bool {
+	return cacheOf(ctx) != nil
 }
 
 // cacheOf returns the request cache of ctx, or nil when ctx has none. Each
