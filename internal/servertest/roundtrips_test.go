@@ -1555,7 +1555,7 @@ func restoreModel() costModel {
 			unitStateTrips +
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
-			updateLeaseExpireTrips + swappedSettingTrips - eventReceiptTrips + firstAdministratorTrips,
+			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips + firstAdministratorTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1569,6 +1569,14 @@ func restoreModel() costModel {
 // uses. A swap that keeps the live row skips it, but the restores of this test
 // take the row from the backup. It does not grow with the units or the tables.
 const swappedSettingTrips = 1
+
+// settingChangeEntryTrips is the number of round trips of the audit entry that
+// records the restore access setting after a swap that takes the row from the
+// backup. The restores of this test have no reader of the live value, so the
+// old value is unknown and the restore writes the entry, which it did not write
+// before. It was measured at 3 and at 30 units: the count does not grow with the
+// units or the tables.
+const settingChangeEntryTrips = 2
 
 // eventReceiptTrips is the number of round trips that the two tables of the Git
 // host event receipts take off the fixed part: the receipts and their counter.

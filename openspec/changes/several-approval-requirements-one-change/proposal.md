@@ -1,8 +1,10 @@
 ---
-version: 8
+version: 9
 ---
 
 Issue: #1158.
+
+The question of which kinds of principal may approve a job (owner decision 7, 2026-11-20) is split out into the change `machine-approvals`. This change keeps the rule of main and the words of ADR 225 decision 7 for the kind of the approver, and it has no open question.
 
 ## Why
 
@@ -35,7 +37,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-The change has two parts. Part A is buildable now, because ADR 225 decision 6 and ADR 192 decision 6 decide it. Part B is decided by the owner (2026-11-20, see "Owner decisions folded in"), except the one shape that waits for the open question.
+The change has two parts. Part A is buildable now, because ADR 225 decision 6 and ADR 192 decision 6 decide it. Part B is decided by the owner (2026-11-20, see "Owner decisions folded in").
 
 **Part A: several group requirements on one job, with distinct people.**
 
@@ -59,7 +61,7 @@ The change has two parts. Part A is buildable now, because ADR 225 decision 6 an
 
 Out of scope:
 
-- Who may approve by kind of principal: a service principal, a job token and an access token. This is the open question. Until the owner answers, the job code keeps what main does: it refuses an agent and no other kind.
+- Who may approve by kind of principal: a service principal, a job token and an access token. The owner decided it on 2026-11-20 (owner decision 7), and the follow-up change `machine-approvals` holds it. This change does not change the kind of the approver: the job code keeps what main does, and it refuses an agent and no other kind.
 - Withdrawal of an approval. No ADR gives a withdrawal verdict, and the route `POST .../approvals` accepts only `approve` and `reject` (`internal/api/jobs/approve.go`). A withdrawal needs an ADR for the verdict, who may withdraw, and what the audit entry says. It is a new capability and gets its own change.
 - A recheck of the group membership at dispatch. The owner decided that an approval counts as of the approval time, and that a recheck is a separate, later change. It would change every job, also with one requirement.
 - A cap of 10 requirements and a 429 refusal. The cap has no counting point: the defaults give at most 3 requirements, so the structure bounds the count. The check of 3 in the start is the guard.
@@ -70,6 +72,8 @@ Out of scope:
 
 Depends on: none for Part A and for Part B except the fresh window.
 
+Follow-up: the change `machine-approvals` depends on this change. It adds the machine approvers (a service principal, or the access token of a person, named by stable ID in the rule) and needs RFC 134 and a new ADR first.
+
 The fresh window (task 5.4) starts after the changes session-fresh-cookie, fresh-auth-enabled-setting and fix-destroy-approval-fresh-auth are on main: they give the fresh-authentication fact.
 
 Not a dependency: the change approval-defaults-take-effect-live. Its premise (the decider is wired nowhere) is false on main: (read only) `pkg/dustpan/jobservice.go:45` builds `jobgate.New`. Mark that change stale in its own pull request.
@@ -77,7 +81,7 @@ Not a dependency: the change approval-defaults-take-effect-live. Its premise (th
 
 ## Owner decisions folded in
 
-The owner answered four of the five first questions and decided that the fifth stays out. Each answer needs a repository record the same day (an ADR or an ADR amendment). Task 5.7 makes it.
+The owner answered four of the five first questions and decided that the fifth stays out. The fifth (who may approve by kind of principal) is owner decision 7 of the same day, and it is in the change `machine-approvals`. Each answer needs a repository record the same day (an ADR or an ADR amendment). Task 5.7 makes it for the five decisions of the table.
 
 | First question | Owner decision (2026-11-20) | Effect in this change |
 | --- | --- | --- |
@@ -123,9 +127,9 @@ Each quote is copied from the file in (read only) `docs/adr/` on main at `65b843
 - Quote (decision 4, owner): "Defaults that name no approvers merge into one requirement named `default`, with the highest count and the shortest fresh window. A default that names approvers is its own requirement, `default/<scope>`."
 - Quote (decision 7): "An eligible approver of a requirement holds the approve action of the object (`changeorder:approve`, `job:approve` or `profile:approve`) and is in the `approvers` of its rule. An author is eligible only when `authorMayApprove` is `true`. An approver is a person in a session. A service principal, a job token and an access token never approve, also when they hold the approve action. An agent never approves (ADR 128 decision 10 stays)."
 - Quote (decision 8): "A rejection by an eligible approver of any requirement rejects the change."
-- Effect: Part A applies decision 6 to jobs. Decision 6 already names jobs, so no new decision is needed for the matching. Decision 7 on the kind of the approver is the open question.
+- Effect: Part A applies decision 6 to jobs. Decision 6 already names jobs, so no new decision is needed for the matching. This change does not touch the sentences of decision 7 on the kind of the approver. Owner decision 7 of 2026-11-20 changes them for a job approval, and the change `machine-approvals` holds it (RFC 134, then a new ADR).
 - Conflict, answered: decision 8 says "eligible approver", and main lets any holder of `job:approve` reject ((read only) `pkg/job/service_approve.go:251`). The owner decided that any `job:approve` holder may reject (2026-11-20). Task 5.7 records an amendment of the words of decision 8 for jobs.
-- Conflict, open: decision 7 says an access token never approves, and ADR 385 decision 2 says the opposite for a `destroy` with the setting off. See the open question.
+- Conflict: none for this change. Decision 7 says an access token never approves, and ADR 385 decision 2 says the opposite for a `destroy` with the setting off. The owner decided it on 2026-11-20, and the change `machine-approvals` records it. This change adds no code for it.
 
 **ADR 192: Reviews: approve, request changes, and reject and close** (decision 6 is cited by ADR 225 decision 6).
 
@@ -155,7 +159,7 @@ Each quote is copied from the file in (read only) `docs/adr/` on main at `65b843
 - Quote (decision 3): "An access token never gives one."
 - Quote (decision 7): "ADR 354 stays: an agent never has a fresh authentication, and an agent holds no right that a person has. The setting removes the step for a person. It gives an agent no new action."
 - Effect: task 5.4 reads `freshAuthEnabled` at the one place that ADR 385 names. A requirement with `freshAuthSeconds` asks for a step only when the setting is on, and the job response shows the stored value as not enforced when the setting is off.
-- Conflict, open: the sentence of decision 2 about an access token against decision 7 of ADR 225. See the open question.
+- Conflict: none for this change. The sentence of decision 2 about an access token against decision 7 of ADR 225 is in the change `machine-approvals`.
 
 **ADR 353: Gates at every step of a plan that runs untrusted code: every control is an opt-in setting** (owner-tagged: all decisions).
 
@@ -181,19 +185,17 @@ Security change: each pull request of this change needs the Opus security review
 
 ## Open questions
 
-Open questions: 1, parked
+Open questions: none
 
-Part A and the other tasks of Part B do not depend on the question. Only task 5.6 does. The change stays parked until the PM lifts the park, and the owner decides the question. The answer needs a repository record the same day (an ADR or an ADR amendment).
+The owner answered the first question (owner decision 7, 2026-11-20). The answer changes owner-tagged ADR words, so it is a separate change, `machine-approvals`, with RFC 134 and a new ADR. No task of this change depends on it.
 
-1. **May a service principal, a job token or an access token approve a job?** ADR 225 decision 7 says "A service principal, a job token and an access token never approve, also when they hold the approve action." ADR 385 decision 2 (owner, 2026-11-15) says "With the setting off, an access token that holds the grant may approve a `destroy`." Main follows neither fully: `checkApprover` refuses an agent only, and the route lets any holder of `job:approve` approve, with any credential ((read only) `pkg/job/service_approve.go:208`, `pkg/identity/identity.go:136`). The two ADRs cannot both hold for a `destroy` approval.
-   - Option A: ADR 225 decision 7 holds for every approval. Only a person in a session approves. The job code refuses a service principal, a job token and an access token, with `identity.Principal.ActsAsPerson` and the credential kind, and writes the refusal to the audit log. Cost: an automation that approves with an access token stops working, and the sentence of ADR 385 decision 2 about an access token and a `destroy` changes (an owner-tagged decision, so it needs the owner's word). A `destroy` approval then always has a person, with or without a fresh step.
-   - Option B: ADR 385 decision 2 holds. An access token of a person that holds `job:approve` approves, and a service principal, a job token and an agent never approve. Cost: a stolen token approves a change, and the approver is the token holder, not a person at a screen. The audit entry names the token ID. Four-eyes holds only as far as the token holders are different people.
-   - Option C: the narrowest reading of both. An access token of a person may approve a `destroy` only, and only when the setting `freshAuthEnabled` is off. Every other approval needs a person in a session. Cost: two rules for one action, and a second path to test in every layer.
-   - Recommendation: option A (lead recommendation: ADR 225 decision 7 wins). Four-eyes needs two people who each decide at a screen. ADR 385 decision 7 says that the setting "removes the step for a person" and gives no new right to anything else, so the sentence about an access token in decision 2 can be read as the grant check only. ADR 299 decision 35 says "Agents never approve, on either side (owner)", and option A keeps one rule for all approvers. Option A also needs no second code path.
-   - 3 a.m. summary: when a script holds an access token with the approve right, may it approve a job, or must a person click approve?
+The question and its answer:
+
+1. **May a service principal, a job token or an access token approve a job?** Answered (owner, 2026-11-20): a service principal, or the access token of a person, may approve a job approval when the approval rule names it by stable ID, never approves a job that it started or authored, cannot meet a requirement that sets a fresh window, and has its approval marked in the audit entry and the decision record. A job token, a trust token and an agent stay refused. Until the new ADR is on main, the job code keeps what main does for the kind of the approver, and this change adds no code path for a token approval.
 
 Questions considered and answered:
 
+- May a service principal or an access token approve a job? Yes, when a rule names it by stable ID, under four conditions. Owner, 2026-11-20. The change `machine-approvals` holds it.
 - Does the change force approvals on teams that set no default? No. ADR 225 decision 4 says "With none set, the default is off". The decider reads stored defaults only.
 - Is the matching a decision of the owner? Yes, and it is made: ADR 225 decision 6 is tagged "(owner)" and names jobs.
 - May one approver fill two requirements? No. ADR 192 decision 6: "One approver who is a member of two groups meets one requirement, not both."

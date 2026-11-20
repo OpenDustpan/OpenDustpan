@@ -1220,7 +1220,7 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		{
 			name: "replaces with restore-access", deny: map[identity.Action]bool{},
 			want: "access tables replaced; setting restore.replace-access-tables " +
-				"taken from the backup (the live value was not read before the swap)",
+				"taken from the backup (the live value was not read before the swap, the new value is false)",
 		},
 		{
 			name: "keeps without restore-access",

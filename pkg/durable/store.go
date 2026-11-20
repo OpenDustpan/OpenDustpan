@@ -103,7 +103,8 @@ type Store interface {
 
 	// ReleaseAtDeadline releases the operation of c as Release does, and adds
 	// 1 to DeadlineReleases, unless a cancel is requested: then the operation
-	// ends canceled and the count stays. A holder calls it when it stops its
+	// ends canceled and the count is set to 0, as every other end of a claim
+	// sets it. A holder calls it when it stops its
 	// work because it could not renew the claim in time. It returns
 	// ErrClaimLost when c is not the live claim, and then changes nothing.
 	ReleaseAtDeadline(ctx context.Context, c Claim) error
