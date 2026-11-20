@@ -24,7 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // scheduleTestEvery is the tick of the schedule tests: short enough for a

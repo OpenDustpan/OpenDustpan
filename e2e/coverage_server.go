@@ -14,7 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/firstadminsvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/firstadmin"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // firstAdministratorCoveringTest names the test that covers the three routes

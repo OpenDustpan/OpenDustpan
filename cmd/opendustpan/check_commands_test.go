@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // checkBearer is the Bearer credential the fake check servers expect.
@@ -593,14 +593,14 @@ var clientSourceFiles = []string{
 }
 
 // clientBannedImports holds the import prefixes no client source file may
-// use. pkg/store/schema stays allowed: it is the neutral migration list both
+// use. internal/store/schema stays allowed: it is the neutral migration list both
 // dialects and the clients share, with no driver in it.
 //
 //nolint:gochecknoglobals // The gate test reads one fixed prefix list; passing it as a parameter adds nothing.
 var clientBannedImports = []string{
-	"opendustpan.org/opendustpan/pkg/store/sqlite",
-	"opendustpan.org/opendustpan/pkg/store/postgres",
-	"opendustpan.org/opendustpan/pkg/store/internal",
+	"opendustpan.org/opendustpan/internal/store/sqlite",
+	"opendustpan.org/opendustpan/internal/store/postgres",
+	"opendustpan.org/opendustpan/internal/store/internal",
 	"opendustpan.org/opendustpan/pkg/blob/fs",
 	"opendustpan.org/opendustpan/pkg/blob/s3",
 	"opendustpan.org/opendustpan/pkg/secret",
@@ -637,9 +637,9 @@ func checkClientFileImports(t *testing.T, file string) {
 			}
 		}
 
-		if strings.HasPrefix(path, "opendustpan.org/opendustpan/pkg/store/") &&
-			path != "opendustpan.org/opendustpan/pkg/store/schema" {
-			t.Errorf("client file %s imports %s, want only pkg/store/schema", file, path)
+		if strings.HasPrefix(path, "opendustpan.org/opendustpan/internal/store/") &&
+			path != "opendustpan.org/opendustpan/internal/store/schema" {
+			t.Errorf("client file %s imports %s, want only internal/store/schema", file, path)
 		}
 	}
 }

@@ -41,7 +41,7 @@ import subprocess
 import sys
 
 STORE_PREFIX = "pkg/store/"
-STORE_DIRS = ("pkg/store/sqlite", "pkg/store/postgres")
+STORE_DIRS = ("internal/store/sqlite", "internal/store/postgres")
 
 
 def note(text):
@@ -253,7 +253,7 @@ def selftest():
          "Deps": [f"{mod}/b", f"{mod}/a"]},
         {"ImportPath": f"{mod}/c.test", "Dir": "/r/c", "Deps": [f"{mod}/a"]},
         {"ImportPath": f"{mod}/tagged", "Dir": "/r/tagged", "Error": {"Err": "build constraints"}},
-        {"ImportPath": f"{mod}/pkg/store/sqlite", "Dir": "/r/pkg/store/sqlite",
+        {"ImportPath": f"{mod}/internal/store/sqlite", "Dir": "/r/internal/store/sqlite",
          "GoFiles": ["s.go"], "Deps": [f"{mod}/a"]},
         {"ImportPath": f"{mod}/pkg/store/storetest", "Dir": "/r/pkg/store/storetest",
          "GoFiles": ["t.go"]},
@@ -271,7 +271,7 @@ def selftest():
         (["b/testdata/x.json"], ["b"], ["b", "c"]),
         # A change under pkg/store/ keeps the store suites.
         (["a/a.go", "pkg/store/storetest/t.go"], ["a", "pkg/store/storetest"],
-         ["a", "b", "c", "pkg/store/sqlite", "pkg/store/storetest"]),
+         ["a", "b", "c", "internal/store/sqlite", "pkg/store/storetest"]),
         # Files outside any package, deleted packages and tagged packages select nothing.
         (["README.md", "docs/x.md", "gone/g.go", "tagged/t.go"], [], []),
         ([], [], []),

@@ -11,7 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/storefault"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // The two gauges that report the blob purge backlog.

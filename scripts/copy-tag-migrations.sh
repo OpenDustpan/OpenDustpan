@@ -23,7 +23,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 
-git -C "$root" archive "$tag" pkg/store/sqlite/migrations pkg/store/postgres/migrations | tar -x -C "$staging"
+git -C "$root" archive "$tag" internal/store/sqlite/migrations internal/store/postgres/migrations | tar -x -C "$staging"
 
 for dialect in sqlite postgres; do
   src="$staging/pkg/store/$dialect/migrations"

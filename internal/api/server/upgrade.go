@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // upgradeCheckPath is the path of the upgrade check route of the

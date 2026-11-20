@@ -1,0 +1,1012 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+)
+
+var (
+	_ backup.RestoreOperations    = (*Store)(nil)
+	_ backup.RestoreStaging       = (*Store)(nil)
+	_ backup.Applier              = (*Store)(nil)
+	_ backup.AccessKeepingApplier = (*Store)(nil)
+	_ backup.Fencer               = (*Store)(nil)
+)
+
+// GetRestore implements backup.RestoreOperations.
+func (s *Store) GetRestore(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.fetchRestore(ctx, id)
+}
+
+// fetchRestore reads one restore row. The caller holds the store lock.
+func (s *Store) fetchRestore(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	row, err := s.queries.GetRestore(ctx, id.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
+	}
+
+	if err != nil {
+		return backup.RestoreRecord{}, fmt.Errorf("select restore: %w", err)
+	}
+
+	return restoreFromRow(row)
+}
+
+// ListRestores implements backup.RestoreOperations: every restore row, newest
+// first.
+func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListRestores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select restores: %w", err)
+	}
+
+	out := make([]backup.RestoreRecord, 0, len(rows))
+
+	for i := range rows {
+		r, err := restoreFromRow(db.GetRestoreRow(rows[i]))
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, r)
+	}
+
+	return out, nil
+}
+
+// restoreFromRow converts a restore row into a domain record. Unknown states
+// report a corrupt row: every writer validates the state first.
+func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
+	return codec.FromRestoreRow(codec.RestoreRow{
+		ID:          row.ID,
+		State:       row.State,
+		BackupID:    row.BackupID,
+		PreBackupID: row.PreBackupID,
+		RequestedBy: row.RequestedBy,
+		Error:       row.Error,
+		StartedAtMs: row.StartedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
+		DevReport:   row.DevReport,
+	})
+}
+
+// ApplyStaging implements backup.Applier: it fences the staged file, copies
+// the control tables of the live database into it, and swaps it live with
+// one file rename. The staged file passed every check in StagePortable, so
+// the rename cannot mix two installations. With no staged file it reports
+// ErrCorrupt and changes nothing. The fence transaction holds the store lock
+// exclusive, so concurrent readers wait out the copy and the rename instead
+// of reading a closed handle, and a durable claim cannot land between the
+// copy and the swap. Fencing the staged image before the rename means the
+// atomic rename carries fenced versions: a crash after the rename cannot
+// leave restored data with old failover versions. The staging path clears
+// only after a successful swap, so a failed apply keeps the staged file for
+// DiscardStaging.
+func (s *Store) ApplyStaging(ctx context.Context) error {
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingPath == "" {
+		return backup.ErrCorrupt
+	}
+
+	plan := swapPlan{staged: s.stagingPath, keepAccess: false, keepSettings: nil, before: nil, after: nil}
+	if _, err := s.swapStaged(ctx, plan); err != nil {
+		return err
+	}
+
+	s.stagingPath = ""
+
+	return nil
+}
+
+// swapPlan is one swap of a staged file into the live database.
+type swapPlan struct {
+	// staged is the path of the staged file.
+	staged string
+	// keepAccess keeps the current rows of the access tables.
+	keepAccess bool
+	// keepSettings lists the keys of the installation settings whose live rows
+	// replace the staged rows, with or without keepAccess.
+	keepSettings []string
+	// before runs under the store write lock, before the first change to
+	// the staged file: the check of the step fence on the live database.
+	before func(ctx context.Context) error
+	// after runs in the fence transaction of the staged file, after the copy
+	// of the control tables: the record of the step in the staged file, so
+	// the rename makes it live with the restored data.
+	// kept holds the count of the dropped temp_admins rows and the count of
+	// the update leases that the fence expired.
+	after func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error
+}
+
+// swapStaged fences the staged file of plan, copies the control tables of
+// the live database into it, and swaps it live with one file rename. With
+// plan.keepAccess it keeps the current rows of the access tables first. The
+// fence transaction holds the store lock exclusive, so concurrent readers
+// wait out the copy and the rename instead of reading a closed handle, and a
+// durable claim cannot land between the copy and the swap. Fencing the staged
+// image before the rename means the atomic rename carries fenced versions: a
+// crash after the rename cannot leave restored data with old failover
+// versions. It returns the count of the dropped temp_admins rows of a swap
+// that keeps the access tables, and the count of the update leases that the
+// fence expired.
+func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAccessResult, error) {
+	// The audit chain record is bookkeeping of this installation: the
+	// staged file takes the value of the live database. The control tables
+	// stay across the swap with the live rows, so the running restore row
+	// stays readable during the swap. Read the chain before the write lock,
+	// because the read takes the read lock.
+	keep, err := s.liveBookkeeping(ctx)
+	if err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
+	// Hold the write lock from the fence through the swap, so a durable
+	// claim, a control write or a revoke cannot land between the copy and
+	// the rename. Lock order is stagingMu before mu.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if plan.before != nil {
+		if beforeErr := plan.before(ctx); beforeErr != nil {
+			return backup.KeepAccessResult{}, beforeErr
+		}
+	}
+
+	// A binary below the minimum of the live database must not swap in a
+	// file that it built.
+	if minErr := s.checkSwapMinimumLocked(ctx); minErr != nil {
+		return backup.KeepAccessResult{}, minErr
+	}
+
+	// The check covers the whole staging area, also the access tables that
+	// a swap that keeps them does not take, and runs before any write to the
+	// staged file.
+	if checkErr := s.checkSwapDevLocked(ctx, plan.staged); checkErr != nil {
+		return backup.KeepAccessResult{}, checkErr
+	}
+
+	// A swap that keeps live rows works on a copy of the staged file, made
+	// for this attempt alone. The keeps commit to the file that they change, so
+	// a retry that decides another way must start from the staged file as the
+	// backup made it, not from the keeps of the failed attempt.
+	work, dropped, err := s.keepOnWorkCopy(ctx, plan)
+	if work != plan.staged {
+		// After a successful rename the name is free and the call removes nothing.
+		defer removeSnapshot(work)
+	}
+
+	if err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
+	var after func(context.Context, *sql.Tx, int64) error
+
+	if plan.after != nil {
+		after = func(ctx context.Context, tx *sql.Tx, expired int64) error {
+			return plan.after(
+				ctx,
+				tx,
+				backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired},
+			)
+		}
+	}
+
+	expired, err := s.fenceStagedFile(ctx, work, s.path, keep, after)
+	if err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
+	if err := s.swapDatabaseLocked(ctx, work); err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
+	if work != plan.staged {
+		// The copy is live now. The staged file has no more use.
+		removeSnapshot(plan.staged)
+	}
+
+	return backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired}, nil
+}
+
+// keepOnWorkCopy makes the file that one swap attempt changes, keeps the live
+// rows of plan in it, and runs the hook of the test. It returns the path of
+// the file, which the caller removes when it is not plan.staged, and the count
+// of the dropped temp_admins rows.
+func (s *Store) keepOnWorkCopy(ctx context.Context, plan swapPlan) (string, int64, error) {
+	work, err := s.workCopy(ctx, plan)
+	if err != nil {
+		return plan.staged, 0, err
+	}
+
+	dropped, err := s.keepLive(ctx, work, plan)
+	if err != nil {
+		return work, 0, err
+	}
+
+	if s.swapAfterKeepHook != nil {
+		if hookErr := s.swapAfterKeepHook(ctx); hookErr != nil {
+			return work, 0, hookErr
+		}
+	}
+
+	return work, dropped, nil
+}
+
+// workCopy returns the path of the file that one swap attempt changes. A plan
+// that keeps no live row changes no data of the staged file before the fence,
+// so it uses the staged file itself. A plan that keeps rows gets a new copy of
+// the staged file, made with VACUUM INTO, that the caller removes.
+func (s *Store) workCopy(ctx context.Context, plan swapPlan) (string, error) {
+	if !plan.keepAccess && len(plan.keepSettings) == 0 {
+		return plan.staged, nil
+	}
+
+	conn, err := openStagedAccess(ctx, plan.staged)
+	if err != nil {
+		return "", err
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr // Best-effort close of the staging handle.
+		}
+	}()
+
+	work, err := workCopyPath(plan.staged)
+	if err != nil {
+		return "", err
+	}
+
+	// A stop between VACUUM INTO and the rename leaves the copy. The name is
+	// fixed for the staged file, so a retry removes the stale copy here and
+	// CleanRestoreAreas removes it with the area. VACUUM INTO refuses a target
+	// that exists.
+	if clearErr := clearStaleWorkCopy(work); clearErr != nil {
+		return "", clearErr
+	}
+
+	if _, execErr := conn.ExecContext(ctx, `VACUUM INTO ?`, work); execErr != nil {
+		removeSnapshot(work)
+
+		return "", fmt.Errorf("copy staged file for the swap: %w", backup.ErrExportRead)
+	}
+
+	if checkErr := checkWorkCopy(work); checkErr != nil {
+		removeSnapshot(work)
+
+		return "", checkErr
+	}
+
+	return work, nil
+}
+
+// workCopyMode is the mode of the work copy: only the owner reads or writes
+// it, whatever the umask of the process.
+const workCopyMode os.FileMode = 0o600
+
+// checkWorkCopy checks the file that VACUUM INTO made at path and sets its
+// mode. It refuses a file that is not a regular file, such as a symbolic link
+// that another process put at the name after the clear, and a file with more
+// than one hard link, so the data of the restore cannot reach a file that
+// another name holds. The swap renames the file over the live database, so it
+// must be the file that this swap made.
+//
+// Defense in depth: clearStaleWorkCopy refuses the same kinds of file before
+// VACUUM INTO. This check stays because another process can put a link at
+// the name between that clear and the copy. It does not rely on that clear.
+func checkWorkCopy(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("check work copy: %w", backup.ErrExportRead)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("work copy is not a regular file: %w", backup.ErrCorrupt)
+	}
+
+	// Defense in depth: the Lstat check above refuses a link at the name, and
+	// O_NOFOLLOW refuses it again when the file opens, so a link that another
+	// process puts at the name after the Lstat cannot take the mode change.
+	// The checks on the open descriptor do not rely on the Lstat.
+	return chmodWorkCopy(path, info)
+}
+
+// openWorkCopyNoFollow opens the file at path read-only and refuses a link at
+// the last name. The directory is a root, so the name cannot leave it.
+func openWorkCopyNoFollow(path string) (*os.File, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("open work copy directory: %w", backup.ErrExportRead)
+	}
+
+	f, openErr := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	closeErr := root.Close() // An open file stays valid after its root closes.
+
+	switch {
+	case openErr != nil:
+		return nil, fmt.Errorf("open work copy: %w", backup.ErrCorrupt)
+	case closeErr != nil:
+		return nil, errors.Join(
+			fmt.Errorf("close work copy directory: %w", backup.ErrExportRead), f.Close(),
+		)
+	default:
+		return f, nil
+	}
+}
+
+// chmodWorkCopy sets the mode of the work copy on an open descriptor. info is
+// the Lstat of path. The checks run on the descriptor, so a link that another
+// process puts at the name after the Lstat cannot take the mode change.
+func chmodWorkCopy(path string, info os.FileInfo) (result error) {
+	f, err := openWorkCopyNoFollow(path)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && result == nil {
+			result = fmt.Errorf("close work copy: %w", backup.ErrExportRead)
+		}
+	}()
+
+	fdInfo, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("check work copy: %w", backup.ErrExportRead)
+	}
+
+	if !fdInfo.Mode().IsRegular() || !os.SameFile(info, fdInfo) {
+		return fmt.Errorf("work copy is not the file that was checked: %w", backup.ErrCorrupt)
+	}
+
+	stat, ok := fdInfo.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return fmt.Errorf("work copy has more than one hard link: %w", backup.ErrCorrupt)
+	}
+
+	if chmodErr := f.Chmod(workCopyMode); chmodErr != nil {
+		return fmt.Errorf("set mode of work copy: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// keepLive keeps the live rows that plan names in the staged file: first the
+// rows of the settings keys, then, with plan.keepAccess, the access tables.
+// It returns the count of the dropped temp_admins rows.
+func (s *Store) keepLive(ctx context.Context, path string, plan swapPlan) (int64, error) {
+	// Defense in depth: the service and the restore route decide which keys a
+	// caller may take from a backup; this layer keeps the live row of each
+	// named key itself and refuses a key that is not on the list.
+	if err := s.keepLiveSettings(ctx, path, plan.keepSettings); err != nil {
+		return 0, err
+	}
+
+	if !plan.keepAccess {
+		return 0, nil
+	}
+
+	if err := s.keepLiveAccessTables(ctx, path); err != nil {
+		return 0, err
+	}
+
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals, so a staged row can name a principal that the live
+	// principals table does not hold.
+	return dropDanglingTempAdmins(ctx, path)
+}
+
+// fenceStagedFile fences the staged file at path, copies the control tables
+// of the live database at live into it, and writes the bookkeeping row keep
+// of the live database into it, in one transaction. The caller holds the
+// store write lock, so the copy has the last committed control rows. It
+// opens the file in rollback-journal mode, so no write-ahead-log sidecar
+// survives the fence to leak beside the renamed database. It returns the
+// count of the update leases that the fence expired.
+func (s *Store) fenceStagedFile(
+	ctx context.Context, path, live string, keep bookkeeping, after func(context.Context, *sql.Tx, int64) error,
+) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	conn, err := openFencedStaged(path)
+	if err != nil {
+		return 0, err
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	if attachErr := attachLiveDatabase(ctx, conn, live); attachErr != nil {
+		return 0, attachErr
+	}
+
+	return applyStagedFence(ctx, conn, s.logger, keep, after)
+}
+
+// openFencedStaged opens the staged file at path in rollback-journal mode
+// with one pooled connection, so ATTACH holds for the fence.
+func openFencedStaged(path string) (*sql.DB, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	query := url.Values{}
+	query.Set("_txlock", "immediate")
+	query.Add("_pragma", "busy_timeout(10000)")
+	query.Add("_pragma", "journal_mode(delete)")
+	query.Add("_pragma", "foreign_keys(on)")
+
+	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
+
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	// ATTACH holds for one connection, so the pool keeps one.
+	conn.SetMaxOpenConns(1)
+
+	return conn, nil
+}
+
+// attachLiveDatabase attaches the live database at live as live and pings
+// the staged connection.
+func attachLiveDatabase(ctx context.Context, conn *sql.DB, live string) error {
+	liveAbs, err := filepath.Abs(live)
+	if err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	if _, execErr := conn.ExecContext(ctx, `ATTACH DATABASE ? AS live`, liveAbs); execErr != nil {
+		return fmt.Errorf("fence staged namespaces: attach the live database: %w", execErr)
+	}
+
+	if pingErr := conn.PingContext(ctx); pingErr != nil {
+		return fmt.Errorf("fence staged namespaces: %w", pingErr)
+	}
+
+	return nil
+}
+
+// applyStagedFence fences the staged namespaces, writes the bookkeeping row,
+// resets the runtime rows, copies the control tables and applies the journaled
+// revocations again, in one transaction. It returns the count of the update
+// leases that it expired.
+func applyStagedFence(
+	ctx context.Context, conn *sql.DB, logger *slog.Logger, keep bookkeeping,
+	after func(context.Context, *sql.Tx, int64) error,
+) (int64, error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	const fence = `UPDATE main.namespaces SET failover_version = failover_version + 1`
+
+	if _, execErr := tx.ExecContext(ctx, fence); execErr != nil {
+		return 0, errors.Join(fmt.Errorf("fence staged namespaces: %w", execErr), tx.Rollback())
+	}
+
+	expired, err := releaseStagedLeases(ctx, tx)
+	if err != nil {
+		return 0, errors.Join(err, tx.Rollback())
+	}
+
+	if err := writeStagedBookkeeping(ctx, tx, keep); err != nil {
+		return 0, errors.Join(err, tx.Rollback())
+	}
+
+	if err := resetStagedRuntimeRows(ctx, tx); err != nil {
+		return 0, errors.Join(err, tx.Rollback())
+	}
+
+	if err := copyControlTables(ctx, tx); err != nil {
+		return 0, errors.Join(err, tx.Rollback())
+	}
+
+	// The staged access tables come from the backup. Apply again the
+	// revocations that ran in this stay in maintenance mode, so the swap does not
+	// bring back a session or a token that an operator ended. The swap must
+	// not lower the working break-glass count below the floor.
+	if err := replayStagedRevocations(ctx, tx); err != nil {
+		return 0, errors.Join(err, tx.Rollback())
+	}
+
+	if err := deriveUnitState(ctx, tx, logger); err != nil {
+		return 0, errors.Join(err, tx.Rollback())
+	}
+
+	if after != nil {
+		if err := after(ctx, tx, expired); err != nil {
+			return 0, errors.Join(err, tx.Rollback())
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	return expired, nil
+}
+
+// releaseStagedLeases releases the locks of the workspaces and expires the
+// leases of the running updates that the staged file holds from before the
+// restore, in tx. It returns the count of the expired update leases.
+func releaseStagedLeases(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if err := releaseStagedWorkspaceLocks(ctx, tx); err != nil {
+		return 0, err
+	}
+
+	return expireStagedUpdateLeases(ctx, tx)
+}
+
+// releaseStagedWorkspaceLocks releases every workspace lock of the staged
+// file, in tx, and clears the lock on the inventory entry of each workspace.
+// The client picks the lock ID, so the ID alone cannot tell a lock from before
+// the restore from a lock after it. A client that holds a lock from before
+// the restore must take a new lock and read the restored state first.
+func releaseStagedWorkspaceLocks(ctx context.Context, tx *sql.Tx) error {
+	const release = `UPDATE main.workspaces
+SET lock_id = '', lock_holder = '', lock_reason = '', locked_at_ms = 0
+WHERE lock_id <> ''`
+
+	if _, err := tx.ExecContext(ctx, release); err != nil {
+		return fmt.Errorf("release staged workspace locks: %w", err)
+	}
+
+	const clearInventory = `UPDATE main.inventory
+SET lock_holder = NULL, lock_since_ms = NULL, lock_operation = NULL
+WHERE tool = ?`
+
+	if _, err := tx.ExecContext(ctx, clearInventory, workspaceInventoryTool); err != nil {
+		return fmt.Errorf("clear staged workspace inventory locks: %w", err)
+	}
+
+	return nil
+}
+
+// expireStagedUpdateLeases expires the lease of every running update of the
+// staged file, in tx, and returns the count of the expired leases. The backup
+// holds the lease columns of an update that ran when the backup was made, and
+// the restore writes them back. Without this step the CLI that holds the lease
+// token from before the restore could save checkpoints and renew its lease
+// again. The update stays running and keeps its stack locked, as for any
+// update whose lease ran out: an operator ends it with a cancel, which builds
+// the journal. The digest stays, so a retried completion still finds its
+// record.
+func expireStagedUpdateLeases(ctx context.Context, tx *sql.Tx) (int64, error) {
+	const expire = `UPDATE main.updates
+SET lease_expires_at_ms = 0, revision = revision + 1
+WHERE status = ?`
+
+	res, err := tx.ExecContext(ctx, expire, string(stack.StatusRunning))
+	if err != nil {
+		return 0, fmt.Errorf("expire staged update leases: %w", err)
+	}
+
+	expired, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count staged update leases: %w", err)
+	}
+
+	return expired, nil
+}
+
+// resetStagedRuntimeRows clears the audit sink cursors and leases of the
+// staged file, in tx: the restored log can reuse sequences that a sink
+// already holds, and a restored cursor can point past the restored entries.
+// A reset makes every sink receive the restored log again from its first
+// entry. A restored lease could block that reship, so the reset releases
+// every lease too. The control tables stay across the swap with the live
+// rows, so no running backup or restore row needs failing.
+func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM main.audit_sink_cursors`); err != nil {
+		return fmt.Errorf("reset staged audit sink cursors: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM main.audit_sink_leases`); err != nil {
+		return fmt.Errorf("reset staged audit sink leases: %w", err)
+	}
+
+	return nil
+}
+
+// deriveUnitState records the state version of every unit of the staged file
+// in unit_state, in tx: a restore derives the version from the restored rows
+// and brings no stored version back. A workspace takes the state version that
+// its row makes current, a stack the digest of its last checkpoint.
+//
+// A restored version is not final: it predates the delivery of any waiting
+// job, so the final fields stay empty and a write-back job that waits for a
+// state version keeps waiting. The write is one statement for the workspaces
+// and one for the stacks, through the one writer of unit_state.
+func deriveUnitState(ctx context.Context, tx *sql.Tx, logger *slog.Logger) error {
+	return publishUnitState(ctx, db.New(tx), unitStateWrite{
+		kind: unitStateWriteRestore, nsName: "", unitID: "", version: "", final: false,
+		origin: identity.StateOrigin{Job: "", Commit: ""}, atMs: 0, exec: tx, logger: logger,
+	})
+}
+
+// writeStagedBookkeeping writes the bookkeeping row keep of the live
+// database into the staged file, in tx.
+func writeStagedBookkeeping(ctx context.Context, tx *sql.Tx, keep bookkeeping) error {
+	// The swap replaces the log, so the copy of the record sets
+	// log_replaced: the server compares the restored log with the state,
+	// also after a crash. The copy keeps no migration: a new approval
+	// starts it again. The copy keeps entered_maintenance false: the chain
+	// enters maintenance mode again when it still waits.
+	const keepChain = `INSERT INTO main.audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+    VALUES (1, ?, ?, ?, ?, 0, 1, 0)
+    ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
+        changed_by = excluded.changed_by, pending = excluded.pending, entered_maintenance = 0,
+        log_replaced = 1, migrating_at_ms = 0`
+
+	chain := keep.chain
+
+	_, err := tx.ExecContext(ctx, keepChain, string(chain.State), codec.Millis(chain.ChangedAt), chain.ChangedBy,
+		chain.Pending)
+	if err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
+	}
+
+	return nil
+}
+
+// BumpFailoverVersions implements backup.Fencer: it increments the failover
+// version of every namespace by one (ADR 38 decision 7) and returns the count
+// of namespaces bumped, so leases and locks from before the restore stop
+// working.
+func (s *Store) BumpFailoverVersions(ctx context.Context) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n, err := s.queries.BumpFailoverVersions(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("bump failover versions: %w", err)
+	}
+
+	return n, nil
+}
+
+// bookkeeping holds the row of the live database that a swap keeps: the
+// audit chain record. The control tables stay across the swap with the live
+// rows, so the installation state needs no separate copy.
+type bookkeeping struct {
+	chain audit.ChainRecord
+}
+
+// liveBookkeeping reads the row of the live database that a swap keeps.
+func (s *Store) liveBookkeeping(ctx context.Context) (bookkeeping, error) {
+	chain, err := s.ChainRecord(ctx)
+	if err != nil {
+		return bookkeeping{}, err
+	}
+
+	return bookkeeping{chain: chain}, nil
+}
+
+// durableOperationColumns lists the columns of durable_operations.
+const durableOperationColumns = `id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, ` +
+	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, ` +
+	`updated_at_ms`
+
+// durableScheduleColumns lists every column of durable_schedules, for the
+// copy of the control tables.
+const durableScheduleColumns = `name, interval_ms, next_run_at_ms, last_claimed_at_ms`
+
+// backupColumns lists the columns of backups, for the copy of the control
+// tables.
+const backupColumns = `id, state, started_at_ms, ended_at_ms, target, error, attempt`
+
+// restoreColumns lists the columns of restores, for the copy of the control
+// tables.
+const restoreColumns = `id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error, dev_report, ` +
+	`maintenance_entered, audit_events`
+
+// keepControlStatements replace the rows of each table of
+// backup.ControlTables in the staged file (main) with the rows of the live
+// database (live): the deletes run children first, the copies parents
+// first. A restore keeps the control tables of the live database: the claim
+// tokens of durable operations only grow, and the installation, backups and
+// restores rows describe this installation, so the running restore stays
+// readable during the swap.
+//
+//nolint:gochecknoglobals // A fixed list of SQL statements: Go has no constant slices.
+var keepControlStatements = []string{
+	`DELETE FROM main.durable_steps`,
+	`DELETE FROM main.durable_operations`,
+	`DELETE FROM main.durable_schedules`,
+	`DELETE FROM main.sign_in_failures`,
+	`DELETE FROM main.audit_chain_check`,
+	`DELETE FROM main.audit_chain_mark`,
+	`DELETE FROM main.backups`,
+	`DELETE FROM main.restores`,
+	`DELETE FROM main.installation`,
+	`DELETE FROM main.runner_claims`,
+	`DELETE FROM main.runner_handoff_tokens`,
+	`DELETE FROM main.runner_sessions`,
+	`DELETE FROM main.runner_nonces`,
+	`DELETE FROM main.maintenance_revocations`,
+	`DELETE FROM main.instance_versions`,
+	`DELETE FROM main.store_checks`,
+	`DELETE FROM main.blob_delete_leases`,
+	`DELETE FROM main.name_locks`,
+	`DELETE FROM main.name_lock_key`,
+	`DELETE FROM main.used_tickets`,
+	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
+		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
+	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
+		`SELECT operation_id, name, seq, result, done_at_ms FROM live.durable_steps`,
+	`INSERT INTO main.durable_schedules (` + durableScheduleColumns + `) ` +
+		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
+	`INSERT INTO main.sign_in_failures (` + signInFailureColumns + `) ` +
+		`SELECT ` + signInFailureColumns + ` FROM live.sign_in_failures`,
+	`INSERT INTO main.audit_chain_check (` + auditChainCheckColumns + `) ` +
+		`SELECT ` + auditChainCheckColumns + ` FROM live.audit_chain_check`,
+	`INSERT INTO main.audit_chain_mark (` + auditChainMarkColumns + `) ` +
+		`SELECT ` + auditChainMarkColumns + ` FROM live.audit_chain_mark`,
+	`INSERT INTO main.backups (` + backupColumns + `) ` +
+		`SELECT ` + backupColumns + ` FROM live.backups`,
+	`INSERT INTO main.restores (` + restoreColumns + `) ` +
+		`SELECT ` + restoreColumns + ` FROM live.restores`,
+	`INSERT INTO main.installation (id, state, kind) SELECT id, state, kind FROM live.installation`,
+	`INSERT INTO main.runner_claims (` + runnerClaimColumns + `) ` +
+		`SELECT ` + runnerClaimColumns + ` FROM live.runner_claims`,
+	// A handoff token and a job session name the runner of the claim of a
+	// live durable operation. The restored data can predate that runner, so
+	// the copy keeps the credential only while the staged file holds its
+	// runner: a credential of a runner that the restored data does not hold
+	// names no runner, and a later use must fail as unknown, never with a
+	// store error.
+	`INSERT INTO main.runner_handoff_tokens (` + runnerHandoffColumns + `) ` +
+		`SELECT ` + runnerHandoffColumns + ` FROM live.runner_handoff_tokens t ` +
+		`WHERE EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`,
+	`INSERT INTO main.runner_sessions (` + runnerSessionColumns + `) ` +
+		`SELECT ` + runnerSessionColumns + ` FROM live.runner_sessions t ` +
+		`WHERE EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`,
+	`INSERT INTO main.runner_nonces (` + runnerNonceColumns + `) ` +
+		`SELECT ` + runnerNonceColumns + ` FROM live.runner_nonces`,
+	`INSERT INTO main.maintenance_revocations (` + revocationColumns + `) ` +
+		`SELECT ` + revocationColumns + ` FROM live.maintenance_revocations`,
+	`INSERT INTO main.instance_versions (id, binary_version, started_at_ms) ` +
+		`SELECT id, binary_version, started_at_ms FROM live.instance_versions`,
+	`INSERT INTO main.store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report) ` +
+		`SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report FROM live.store_checks`,
+	`INSERT INTO main.blob_delete_leases (holder, expires_at_ms) ` +
+		`SELECT holder, expires_at_ms FROM live.blob_delete_leases`,
+	`INSERT INTO main.name_locks (` + nameLockColumns + `) SELECT ` + nameLockColumns + ` FROM live.name_locks`,
+	`INSERT INTO main.name_lock_key (id, key) SELECT id, key FROM live.name_lock_key`,
+	`INSERT INTO main.used_tickets (provider_id, ticket_digest, until_ms) ` +
+		`SELECT provider_id, ticket_digest, until_ms FROM live.used_tickets`,
+}
+
+// nameLockColumns lists every column of name_locks, for the copy of the
+// control tables. A restore keeps the live counts and the live key of their
+// names, so a restore never ends a lock and never changes the digests of the
+// names.
+const nameLockColumns = `scope, name, sub, failures, locked_until_ms, level, last_failure_ms, ` +
+	`last_lock_end_ms, reset_after_ms`
+
+// The columns of the control tables of the runner protocol, for the copy of
+// the control tables. A restore keeps the live handoff tokens and job
+// sessions, because they name the claims of the live durable operations, and
+// drops the ones whose runner the restored data does not hold.
+const (
+	runnerClaimColumns   = `operation_id, token, claimed_at_ms, job_id, phase`
+	runnerHandoffColumns = `sha256, operation_id, token, runner_id, kind, issued_at_ms, expires_at_ms, used_at_ms`
+	runnerSessionColumns = `id, operation_id, token, runner_id, kind, key_public, key_created_at_ms, created_at_ms`
+	runnerNonceColumns   = `subject, nonce, expires_at_ms`
+)
+
+// revocationColumns lists every column of maintenance_revocations, for the
+// copy of the control tables.
+const revocationColumns = `id, kind, target, end_reason, actor, object, at_ms`
+
+// signInFailureColumns lists every column of sign_in_failures, for the copy
+// of the control tables.
+const signInFailureColumns = `source, window_end_ms, count`
+
+// auditChainCheckColumns lists every column of audit_chain_check, for the
+// copy of the control tables.
+const auditChainCheckColumns = `id, checked_at_ms, invalid`
+
+// auditChainMarkColumns lists every column of audit_chain_mark, for the copy
+// of the control tables.
+const auditChainMarkColumns = `scope, epoch, sequence, marked_at_ms`
+
+// copyControlTables runs keepControlStatements in tx, which holds the live
+// database attached as live, and records the runner credentials that the
+// copy does not keep. It reads them before the copy: the copy drops them, so
+// this read is the only record of them.
+func copyControlTables(ctx context.Context, tx *sql.Tx) error {
+	dropped, err := droppedRunnerCredentials(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	for _, stmt := range keepControlStatements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("keep control tables: %w", err)
+		}
+	}
+
+	return appendDroppedRunnerCredentials(ctx, tx, dropped)
+}
+
+// droppedRunnerCredentials returns the live handoff tokens and job sessions
+// whose runner the staged file does not hold. It reads them in tx, which
+// holds the live database attached as live, before the copy replaces the
+// tables. The runner IDs come back sorted and with no repetition.
+func droppedRunnerCredentials(ctx context.Context, tx *sql.Tx) (backup.DroppedRunnerCredentials, error) {
+	const tokens = `SELECT t.runner_id FROM live.runner_handoff_tokens t
+WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
+
+	const sessions = `SELECT t.runner_id FROM live.runner_sessions t
+WHERE NOT EXISTS (SELECT 1 FROM main.runners r WHERE r.id = t.runner_id)`
+
+	tokenRunners, err := runnerIDsOf(ctx, tx, tokens)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	sessionRunners, err := runnerIDsOf(ctx, tx, sessions)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	return backup.NewDroppedRunnerCredentials(
+		int64(len(tokenRunners)), int64(len(sessionRunners)), append(tokenRunners, sessionRunners...),
+	), nil
+}
+
+// runnerIDsOf runs query in tx and returns the runner_id of every row.
+func runnerIDsOf(ctx context.Context, tx *sql.Tx, query string) ([]string, error) {
+	var out []string
+
+	if err := readRunnerIDs(ctx, tx, query, &out); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// readRunnerIDs runs query in tx and appends the runner_id of every row to
+// out. It returns the close error of the rows too.
+func readRunnerIDs(ctx context.Context, tx *sql.Tx, query string, out *[]string) (err error) {
+	rows, queryErr := tx.QueryContext(ctx, query)
+	if queryErr != nil {
+		return fmt.Errorf("read dropped runner credentials: %w", queryErr)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close dropped runner credentials: %w", closeErr))
+		}
+	}()
+
+	for rows.Next() {
+		var id string
+
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("read dropped runner credentials: %w", scanErr)
+		}
+
+		*out = append(*out, id)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read dropped runner credentials: %w", rowsErr)
+	}
+
+	return nil
+}
+
+// appendDroppedRunnerCredentials appends the audit entry of the dropped
+// runner credentials in tx, which holds the staged file, after the copy
+// replaced the rows of the staged file. It writes no entry when the copy
+// dropped nothing. The entry follows the chain state that the swap kept.
+func appendDroppedRunnerCredentials(
+	ctx context.Context, tx *sql.Tx, dropped backup.DroppedRunnerCredentials,
+) error {
+	if dropped.Empty() {
+		return nil
+	}
+
+	q := db.New(tx)
+
+	nowMs, err := storeNow(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
+		return fmt.Errorf("append dropped runner credentials entry: %w", err)
+	}
+
+	return nil
+}
+
+// workCopySuffix joins the name of a staged file and the name of its work copy.
+// The name does not match the name of a staging area, so no listing takes the
+// copy for an area.
+const workCopySuffix = "-swap"
+
+// workCopyPath returns the path of the work copy of the staged file at staged:
+// the same name with workCopySuffix, in the same directory.
+func workCopyPath(staged string) (string, error) {
+	dir := filepath.Dir(staged)
+	name := filepath.Base(staged) + workCopySuffix
+	path := filepath.Join(dir, name)
+
+	// Defense in depth: the name of the staged file holds no separator, so the
+	// copy stays in the directory of the live database. This check stays so
+	// that a change of the name rule cannot leave that directory. It does not
+	// rely on areaPath.
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel != name || strings.ContainsRune(rel, filepath.Separator) {
+		return "", fmt.Errorf("work copy of %q: %w", filepath.Base(staged), backup.ErrInvalidRestoreID)
+	}
+
+	return path, nil
+}
+
+// clearStaleWorkCopy removes a work copy that an earlier attempt left. It
+// refuses a symbolic link or any file that is not a regular file, so a link
+// that another process put at the name cannot make the swap remove or write
+// the file that the link names.
+func clearStaleWorkCopy(path string) error {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		info, err := os.Lstat(name)
+
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return fmt.Errorf("check stale work copy: %w", backup.ErrExportRead)
+		case !info.Mode().IsRegular():
+			return fmt.Errorf("stale work copy is not a regular file: %w", backup.ErrCorrupt)
+		default:
+		}
+
+		if rmErr := os.Remove(name); rmErr != nil {
+			return fmt.Errorf("remove stale work copy: %w", backup.ErrExportRead)
+		}
+	}
+
+	return nil
+}

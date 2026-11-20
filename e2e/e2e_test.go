@@ -40,7 +40,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	dbschema "opendustpan.org/opendustpan/pkg/store/schema"
+	dbschema "opendustpan.org/opendustpan/internal/store/schema"
 )
 
 const (

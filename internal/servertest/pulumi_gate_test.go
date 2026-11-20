@@ -12,7 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 )
 
 // recordInMessage finds the ID of the decision record that a refusal names.

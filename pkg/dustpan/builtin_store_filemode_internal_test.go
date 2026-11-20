@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // The startup layer: openSQLiteStore refuses a wide database file with its own

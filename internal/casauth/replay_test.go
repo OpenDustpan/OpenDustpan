@@ -10,7 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/casauth"
 	"opendustpan.org/opendustpan/internal/castest"
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // TestFinishRefusesAReplayAcrossReplicasAndRestarts is layer 3 of the store:

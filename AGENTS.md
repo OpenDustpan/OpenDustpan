@@ -116,7 +116,7 @@ pkg/                   the public SDK: dustpan, the port packages and the confor
   source/              domain: the source filter of a namespace: the filter, its port, URL patterns, the one parser of repository URLs; source/sourcetest holds its suite
   forge/               domain: the Forge port, forge connections and their errors; forge/forgetest holds the conformance suite
   forge/github/        adapter: the forge for GitHub
-  store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite (the adapters move to internal/store/)
+  store/               the storetest/ conformance suite; the SQL adapters are in internal/store/
   <domain>/<domain>test/ the conformance suite of a port (for example stack/stacktest)
 internal/              code that is not part of the SDK
   <domain>svc/         the service of each split domain package (for example outputsharesvc); the ports stay in pkg/<domain>
@@ -127,8 +127,9 @@ internal/              code that is not part of the SDK
   expr/                the built-in Expr engine (selfservice.Evaluator); the only package that imports the Expr library
   registry/            the registry service (service/), the release check (releasecheck/) and the signature fixture (pgpfixture/)
   egress/egresshttp/   the HTTP client that applies the egress rules
-  breakglass/, graph/, history/, store/, blob/, notify/
-                       test helpers (breakglasstest, graphtest, historytest, storefault, blobfault) and notify/chat
+  store/               the built-in SQL adapters (sqlite/, postgres/, schema/) and their helper packages; dustpan.OpenStore opens them; storefault is a test helper
+  breakglass/, graph/, history/, blob/, notify/
+                       test helpers (breakglasstest, graphtest, historytest, blobfault) and notify/chat
   authgate/, errcode/, oauth/, sessionauth/, token/, ident/, ...
                        helpers shared across packages (sign-in failure windows, error codes, OAuth, tokens, identifiers)
   textbody/            the read and the strict decode of a JSON request body, with the check of its text
@@ -196,7 +197,7 @@ The platform must be observable and intuitive. A user must be able to see and ex
   `objectcontext`, `graph`, `drift`, `trigger`, `outputshare`, `savedview`, `unitsettings`, `registry`, `preferences`,
   `gate`, `forge`, and the ones in `internal/` that the rule lists, for example `agent`, `dependency`,
   `launcher`, `source`, `stepup`, `unmanaged`, `unitimport`) never import
-  `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
+  `net/http`, `database/sql`, drivers, `internal/store/...` or `internal/api/...`. depguard enforces this.
 - Define each port in the `pkg/` package of its domain. Put the service that
   uses the port in `internal/<domain>svc`. Keep ports small, and document them
   with the errors they return.
@@ -207,13 +208,13 @@ The platform must be observable and intuitive. A user must be able to see and ex
   conflicts) into domain sentinels. Never return driver errors to callers.
 - Writes inside a namespace carry a `namespace.Fence` and the store checks it in
   the same transaction. Never add a write path that skips the fence.
-- SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
+- SQL: hand-written per dialect. Put fixed queries in `internal/store/<dialect>/queries.sql`
   and generate them with sqlc. Put a new query block in its place in the name
   order of `queries.sql`, never at the end of the file: next to the queries of
   its area, in the name order of those queries. Do not sort the existing
   blocks. Dynamic queries are hand-written in the adapter.
   Until the first tag, each dialect has one migration file, the baseline in
-  `pkg/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
+  `internal/store/<dialect>/migrations/` (ADR 322). To change the schema, edit the
   baseline of each dialect in place. Put a new object in its place in the
   name order of the baseline, not at the end, so that parallel changes edit
   different lines. An edit of a comment changes the SHA-256 too, and forces

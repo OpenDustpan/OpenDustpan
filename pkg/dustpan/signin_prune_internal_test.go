@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/session"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // TestPruneSignInRequestsOnce proves that the server deletes the sign-in

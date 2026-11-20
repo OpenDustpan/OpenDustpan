@@ -1,0 +1,156 @@
+package sqlite_test
+
+import (
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/savedview"
+	"opendustpan.org/opendustpan/pkg/savedview/savedviewtest"
+	"opendustpan.org/opendustpan/internal/store/viewstore"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
+)
+
+// savedViewHarness returns a harness over a fresh store. The namespaces it
+// makes have failover version 1.
+func savedViewHarness(t *testing.T) savedviewtest.Harness {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s := openPath(t, path)
+
+	return savedviewtest.Harness{
+		Seed: func(t *testing.T, views []savedview.View) {
+			t.Helper()
+
+			seedSavedViews(t, path, views)
+		},
+		Store: s.SavedViews(),
+		Namespace: func(t *testing.T, name string) namespace.Fence {
+			t.Helper()
+
+			return ensureNamespace(t, s, namespace.Name(name))
+		},
+		Audit: func(t *testing.T, ns string) []audit.Entry {
+			t.Helper()
+
+			return allAuditEntries(t, s, namespace.Name(ns))
+		},
+	}
+}
+
+// seedSavedViews inserts views into the database file at path through a
+// second handle, in one transaction, with the query encoding of the store.
+// It is a test-only back door for the limit cases: it writes with no fence,
+// no audit entry and no limit check. Every write of the store under test
+// still goes through Store.Create, with its fence check.
+func seedSavedViews(t *testing.T, path string, views []savedview.View) {
+	t.Helper()
+
+	raw, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("seed saved views: %v", err)
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			t.Errorf("close the seed handle: %v", closeErr)
+		}
+	}()
+
+	tx, err := raw.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("seed saved views: begin: %v", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback() //nolint:errcheck // A rollback after the commit has nothing to undo.
+	}()
+
+	const insert = `INSERT INTO saved_views (id, namespace_id, owner, name, query_json, created_at_ms)
+		VALUES (?, (SELECT id FROM namespaces WHERE name = ?), ?, ?, ?, ?)`
+
+	for i := range views {
+		v := &views[i]
+
+		query, encodeErr := viewstore.EncodeQuery(v.Query)
+		if encodeErr != nil {
+			t.Fatalf("seed saved views: encode the query: %v", encodeErr)
+		}
+
+		_, execErr := tx.ExecContext(
+			t.Context(), insert, string(v.ID), v.Namespace.String(), v.Owner, v.Name, query, v.CreatedAt.UnixMilli(),
+		)
+		if execErr != nil {
+			t.Fatalf("seed saved views: insert %q of %s: %v", v.Name, v.Owner, execErr)
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatalf("seed saved views: commit: %v", commitErr)
+	}
+}
+
+// ensureNamespace makes the namespace name when it does not exist, and returns
+// its current fence.
+func ensureNamespace(t *testing.T, s *sqlite.Store, name namespace.Name) namespace.Fence {
+	t.Helper()
+
+	if existing, err := s.GetNamespace(t.Context(), name); err == nil {
+		return existing.Fence()
+	}
+
+	ns := namespace.Namespace{
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.UnixMilli(1_700_000_000_000).UTC(),
+		Name:                name,
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+	}
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace %s: %v", name, err)
+	}
+
+	return ns.Fence()
+}
+
+// allAuditEntries returns every audit entry of ns, oldest first.
+func allAuditEntries(t *testing.T, s *sqlite.Store, ns namespace.Name) []audit.Entry {
+	t.Helper()
+
+	var out []audit.Entry
+
+	for before := int64(0); ; {
+		listing, err := s.List(t.Context(), ns, audit.Page{Size: audit.MaxPageSize, Before: before})
+		if err != nil {
+			t.Fatalf("list audit of %s: %v", ns, err)
+		}
+
+		out = append(out, listing.Entries...)
+
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
+			break
+		}
+	}
+
+	slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
+
+	return out
+}
+
+func TestSavedViewConformance(t *testing.T) {
+	t.Parallel()
+
+	savedviewtest.Run(t, savedViewHarness)
+}

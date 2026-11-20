@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 )
 
 // plainNamespaceStore is a namespace store that holds no passkeys: the

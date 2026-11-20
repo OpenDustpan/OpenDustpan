@@ -357,19 +357,19 @@ linters:
           # they never open the database, a blob adapter, a backup target or
           # the key-encryption key (ADR 39 decision 4). Only the serve wiring
           # in cmd/opendustpan may import them. The globs match the absolute
-          # path of a file. pkg/store/schema stays allowed: it is the neutral
+          # path of a file. internal/store/schema stays allowed: it is the neutral
           # migration list both dialects and the clients share, with no driver
           # in it.
           files:
             - "**/internal/cli/client/**"
             - "!**/*_test.go"
           deny:
-            - pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+            - pkg: opendustpan.org/opendustpan/internal/store/sqlite
               desc: Client commands read schema state through the API, never through a store adapter.
-            - pkg: opendustpan.org/opendustpan/pkg/store/postgres
+            - pkg: opendustpan.org/opendustpan/internal/store/postgres
               desc: Client commands read schema state through the API, never through a store adapter.
             - pkg: opendustpan.org/opendustpan/pkg/store/internal
-              desc: Client commands share the neutral pkg/store/schema list, never the adapter internals.
+              desc: Client commands share the neutral internal/store/schema list, never the adapter internals.
             - pkg: opendustpan.org/opendustpan/pkg/blob/fs
               desc: Only the server reads a backup target or blob directory.
             - pkg: opendustpan.org/opendustpan/pkg/blob/s3
