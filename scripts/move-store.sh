@@ -120,7 +120,7 @@ format_imports() {
   local file
   while IFS= read -r -d '' file; do
     files+=("$file")
-  done < <(git diff --name-only -z HEAD -- '*.go')
+  done < <(git diff -M --name-only --diff-filter=d -z HEAD -- '*.go')
   [ "${#files[@]}" -gt 0 ] || return 0
   golangci-lint fmt "${files[@]}"
 }
