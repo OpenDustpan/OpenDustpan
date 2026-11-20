@@ -31,10 +31,17 @@ func main() {
 	os.Exit(int(launch(os.Args, os.Stderr)))
 }
 
+// newLogger answers the logger of the launcher: text on stderr, through the
+// guard that escapes hidden runes, because argv and errors can hold values
+// from outside.
+func newLogger(stderr io.Writer) *slog.Logger {
+	return slog.New(logguard.New(slog.NewTextHandler(stderr, nil))).With(slog.String("program", launcher.Binary))
+}
+
 // launch runs one start of the binary and returns its exit code. Its
 // messages go to stderr; they never hold a secret.
 func launch(argv []string, stderr io.Writer) launcher.ExitCode {
-	log := slog.New(logguard.New(slog.NewTextHandler(stderr, nil))).With(slog.String("program", launcher.Binary))
+	log := newLogger(stderr)
 
 	if err := harden(); err != nil {
 		log.Error("protect the launcher process", slog.Any("error", err))

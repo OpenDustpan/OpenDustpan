@@ -1639,9 +1639,14 @@ type openedStore struct {
 // close closes the store and writes a warning when the close fails.
 func (s openedStore) close() {
 	if err := s.Close(); err != nil {
-		slog.New(logguard.New(slog.NewTextHandler(os.Stderr, nil))).
-			Warn("close database", slog.String("error", err.Error()))
+		warnCloseDatabase(os.Stderr, err)
 	}
+}
+
+// warnCloseDatabase writes the warning of a failed close of the database
+// to w, through the guard that escapes hidden runes.
+func warnCloseDatabase(w io.Writer, err error) {
+	slog.New(logguard.New(slog.NewTextHandler(w, nil))).Warn("close database", slog.String("error", err.Error()))
 }
 
 // builtin answers the handle that the server options need.
@@ -1850,7 +1855,8 @@ func readKeyFile(path string) ([]byte, error) {
 
 // writeErrorLine writes "<prefix>: <error text>" and a newline to w, with
 // each hidden rune of the error text escaped as visible text, for example
-// "\n". The error text can hold a value from outside the process, such as
+// "\n". It writes a backslash as two, so a reader can tell an escaped line
+// feed from a backslash and an "n". The error text can hold a value from outside the process, such as
 // a path from a flag, so a raw CR or LF could forge a second line.
 //
 // Defense in depth: each call site quotes its values with %q too; this
@@ -1859,7 +1865,7 @@ func readKeyFile(path string) ([]byte, error) {
 // A failed write of the line is not reported: nothing is left to report it
 // to.
 func writeErrorLine(w io.Writer, prefix string, err error) {
-	if _, werr := fmt.Fprintln(w, prefix+":", logguard.Escape(err.Error())); werr != nil {
+	if _, werr := fmt.Fprintln(w, prefix+":", logguard.EscapeLine(err.Error())); werr != nil {
 		return
 	}
 }

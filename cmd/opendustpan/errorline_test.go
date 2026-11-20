@@ -76,4 +76,33 @@ func TestWriteErrorLineKeepsPlainText(t *testing.T) {
 	if got, want := b.String(), `opendustpan: a\nb`+"\n"; got != want {
 		t.Errorf("output = %q, want %q", got, want)
 	}
+
+	// A backslash and an "n" is two backslashes and an "n", so a reader can
+	// tell it from an escaped line feed.
+	b.Reset()
+	writeErrorLine(&b, "opendustpan", lineError(`a\nb`))
+
+	if got, want := b.String(), `opendustpan: a\\nb`+"\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+// TestWarnCloseDatabaseEscapesHiddenRunes is the guard on the warning of a
+// failed close of the database. The text handler alone quotes the value,
+// so the unquoted form shows that the guard ran.
+func TestWarnCloseDatabaseEscapesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+
+	warnCloseDatabase(&b, lineError("a\r\nX"))
+
+	out := b.String()
+	if r, found := ident.FirstHidden(strings.TrimSuffix(out, "\n")); found {
+		t.Errorf("output holds hidden rune %U: %q", r, out)
+	}
+
+	if want := `error=a\r\nX`; !strings.Contains(out, want) {
+		t.Errorf("output = %q, want it to hold %q", out, want)
+	}
 }

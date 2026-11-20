@@ -16,14 +16,18 @@
 package logguard
 
 import (
+	"bytes"
 	"context"
 	"encoding"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/logsink"
 )
 
 // Handler escapes hidden runes in each record and passes the record to the
@@ -111,14 +115,44 @@ func escapeValue(v slog.Value) slog.Value {
 }
 
 // escapeAny answers the value of an Any attribute. An error, a
-// fmt.Stringer and an encoding.TextMarshaler become their escaped text,
-// because a handler writes them as text. Any other value stays as it is
-// when its default text holds no hidden rune, so a handler can still write
-// its structure. Else it becomes its escaped default text.
+// fmt.Stringer, an encoding.TextMarshaler and a []byte become their escaped
+// text, because a handler writes them as text. Any other value becomes its
+// JSON text with each hidden rune written as a JSON escape, so a JSON
+// handler still writes its structure. The default text of such a value is
+// not checked: it shows only the address of a value behind a pointer, and
+// a handler can still write the value it points to.
+//
+// A log call must never stop the process: a nil pointer whose method has a
+// pointer receiver becomes "<nil>", as log/slog writes it, and a panic in a
+// method becomes "!PANIC" text, as fmt writes it.
 func escapeAny(x any) slog.Value {
-	switch t := x.(type) {
-	case nil:
+	if x == nil {
 		return slog.AnyValue(nil)
+	}
+
+	if isNilPointer(x) {
+		return slog.StringValue(nilText)
+	}
+
+	var out slog.Value
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				out = slog.StringValue(Escape(fmt.Sprintf("!PANIC: %v", r)))
+			}
+		}()
+
+		out = escapeMethods(x)
+	}()
+
+	return out
+}
+
+// escapeMethods answers the value of x, which is not nil, through its
+// methods. A method can panic: escapeAny recovers.
+func escapeMethods(x any) slog.Value {
+	switch t := x.(type) {
 	case error:
 		return slog.StringValue(Escape(t.Error()))
 	case fmt.Stringer:
@@ -133,14 +167,49 @@ func escapeAny(x any) slog.Value {
 	case []byte:
 		return slog.StringValue(Escape(string(t)))
 	default:
-		text := fmt.Sprintf("%+v", t)
-		if !NeedsEscape(text) {
-			return slog.AnyValue(t)
-		}
-
-		return slog.StringValue(Escape(text))
+		return jsonValue(t)
 	}
 }
+
+// nilText is the text of a nil pointer, as log/slog writes it.
+const nilText = "<nil>"
+
+// isNilPointer reports whether x holds a nil pointer.
+func isNilPointer(x any) bool {
+	v := reflect.ValueOf(x)
+
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
+// jsonValue answers the JSON text of x with each hidden rune escaped, as a
+// value that a JSON handler writes as JSON and a text handler writes as
+// text. When x has no JSON form, it answers the escaped default text of x.
+func jsonValue(x any) slog.Value {
+	var buf bytes.Buffer
+
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(x); err != nil {
+		return slog.StringValue(Escape(fmt.Sprintf("%+v", x)))
+	}
+
+	// Encode appends a newline. A log value holds none.
+	return slog.AnyValue(escapedJSON(logsink.EscapeJSON(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))))
+}
+
+// escapedJSON is JSON text that holds no hidden rune. A JSON handler writes
+// it as JSON, a text handler and fmt write it as text.
+type escapedJSON []byte
+
+// MarshalJSON implements json.Marshaler.
+func (j escapedJSON) MarshalJSON() ([]byte, error) { return j, nil }
+
+// MarshalText implements encoding.TextMarshaler.
+func (j escapedJSON) MarshalText() ([]byte, error) { return j, nil }
+
+// String implements fmt.Stringer.
+func (j escapedJSON) String() string { return string(j) }
 
 // NeedsEscape reports whether s holds a hidden rune or an invalid UTF-8
 // byte.
@@ -161,7 +230,11 @@ func NeedsEscape(s string) bool {
 // replaced by visible text in the style of Go quoting: "\n", "\r", "\t",
 // "\x00" to "\xff" for a rune or byte below 256, "\uXXXX" or "\UXXXXXXXX"
 // for a higher rune. Other text stays as it is. The result holds no hidden
-// rune.
+// rune. A backslash stays as it is: the JSON handler escapes it, so a
+// reader can tell the two apart there. The text handler writes a backslash
+// as it is when the value needs no quotes, so in text output an escaped
+// line feed and a backslash with an "n" look the same. Use EscapeLine for
+// text that no handler writes.
 func Escape(s string) string {
 	if !NeedsEscape(s) {
 		return s
@@ -187,6 +260,16 @@ func Escape(s string) string {
 	}
 
 	return b.String()
+}
+
+// EscapeLine answers s as Escape does, and also writes each backslash as
+// two. Use it for a line that no handler quotes, for example an error line
+// on stderr: a reader can then tell an escaped line feed ("\n") from a
+// backslash and an "n" ("\\n").
+func EscapeLine(s string) string {
+	// The backslashes of s are doubled first, so each backslash that Escape
+	// adds stays single.
+	return Escape(strings.ReplaceAll(s, `\`, `\\`))
 }
 
 // Limits of the short escape forms, and the room that Escape adds to its

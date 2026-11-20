@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/logguard"
+	"opendustpan.org/opendustpan/pkg/logsink"
 )
 
 // hostileText answers the values that each layer must escape. The forged
@@ -218,7 +219,7 @@ func TestHandlerKeepsCleanValues(t *testing.T) {
 	raw := newRaw()
 	slog.New(logguard.New(raw)).Info("plain ü 日本", slog.Any("k", plain{"x"}), slog.Int("n", 3))
 
-	if got, want := raw.text(), "plain ü 日本 k={x} n=3\n"; got != want {
+	if got, want := raw.text(), `plain ü 日本 k={"Name":"x"} n=3`+"\n"; got != want {
 		t.Errorf("output = %q, want %q", got, want)
 	}
 }
@@ -291,5 +292,186 @@ func TestEscape(t *testing.T) {
 		if got := logguard.Escape(in); got != want {
 			t.Errorf("Escape(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+type inner struct{ S string }
+
+type outer struct{ P *inner }
+
+// TestHandlerEscapesValuesBehindPointers sends values that hold a hidden
+// rune behind a pointer. Their default text is only an address, so the
+// guard must not trust it.
+func TestHandlerEscapesValuesBehindPointers(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]func(l *slog.Logger, v string){
+		"struct field": func(l *slog.Logger, v string) { l.Info("m", slog.Any("v", outer{P: &inner{S: v}})) },
+		"pointer":      func(l *slog.Logger, v string) { l.Info("m", slog.Any("v", &inner{S: v})) },
+		"map": func(l *slog.Logger, v string) {
+			l.Info("m", slog.Any("v", map[string]*inner{"k": {S: v}}))
+		},
+		"slice": func(l *slog.Logger, v string) { l.Info("m", slog.Any("v", []*inner{{S: v}})) },
+		"logsink attr": func(l *slog.Logger, v string) {
+			l.Info("m", slog.Any("v", logsink.Attr{Value: &inner{S: v}, Key: "k"}))
+		},
+		"with": func(l *slog.Logger, v string) { l.With(slog.Any("v", outer{P: &inner{S: v}})).Info("m") },
+		"group": func(l *slog.Logger, v string) {
+			l.Info("m", slog.Group("g", slog.Any("v", []*inner{{S: v}})))
+		},
+	}
+
+	for _, format := range []string{"json", "text", "raw"} {
+		for site, log := range cases {
+			for name, value := range hostileText() {
+				t.Run(format+"/"+site+"/"+name, func(t *testing.T) {
+					t.Parallel()
+
+					checkOneLine(t, format+" "+site, logThrough(format, func(l *slog.Logger) { log(l, value) }))
+				})
+			}
+		}
+	}
+}
+
+// logThrough runs log on a logger with the guard in front of the handler
+// named by format (json, text or raw) and answers the output.
+func logThrough(format string, log func(l *slog.Logger)) string {
+	var b strings.Builder
+
+	switch format {
+	case "json":
+		log(slog.New(logguard.New(slog.NewJSONHandler(&b, nil))))
+	case "text":
+		log(slog.New(logguard.New(slog.NewTextHandler(&b, nil))))
+	default:
+		raw := newRaw()
+		log(slog.New(logguard.New(raw)))
+
+		return raw.text()
+	}
+
+	return b.String()
+}
+
+func TestHandlerKeepsJSONStructure(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+
+	slog.New(logguard.New(slog.NewJSONHandler(&b, nil))).Info("m", slog.Any("v", outer{P: &inner{S: "a<b\u0085"}}))
+
+	if want := `"v":{"P":{"S":"a<b` + "\\" + `u0085"}}`; !strings.Contains(b.String(), want) {
+		t.Errorf("output = %q, want it to hold %q", b.String(), want)
+	}
+}
+
+type ptrStringer struct{ s string }
+
+func (p *ptrStringer) String() string { return p.s }
+
+type ptrError struct{ s string }
+
+func (p *ptrError) Error() string { return p.s }
+
+// ptrTexter has a value receiver, so a nil *ptrTexter panics when Go
+// copies the value for the call.
+type ptrTexter struct {
+	err error
+	s   string
+}
+
+func (p ptrTexter) MarshalText() ([]byte, error) { return []byte(p.s), p.err }
+
+type panicStringer struct{}
+
+func (panicStringer) String() string { panic("a\nforged") }
+
+type panicJSON struct{}
+
+func (panicJSON) MarshalJSON() ([]byte, error) { panic("a\nforged") }
+
+// TestHandlerNeverPanics sends values whose methods fail: a log call must
+// not stop the process.
+func TestHandlerNeverPanics(t *testing.T) {
+	t.Parallel()
+
+	var (
+		nilStringer *ptrStringer
+		nilError    *ptrError
+		nilTexter   *ptrTexter
+	)
+
+	for name, tc := range map[string]struct {
+		value any
+		want  string
+	}{
+		"typed-nil stringer":   {value: nilStringer, want: "<nil>"},
+		"typed-nil error":      {value: nilError, want: "<nil>"},
+		"typed-nil text":       {value: nilTexter, want: "<nil>"},
+		"text error":           {value: ptrTexter{err: textError("a\nb"), s: ""}, want: `!ERROR:a\nb`},
+		"panic in String":      {value: panicStringer{}, want: `!PANIC: a\nforged`},
+		"panic in MarshalJSON": {value: panicJSON{}, want: `!PANIC: a\nforged`},
+		"nil error interface":  {value: error(nil), want: "<nil>"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := newRaw()
+			slog.New(logguard.New(raw)).Info("m", slog.Any("k", tc.value))
+
+			want := "m k=" + tc.want + "\n"
+			if got := raw.text(); got != want {
+				t.Errorf("output = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestEscapeLine(t *testing.T) {
+	t.Parallel()
+
+	for in, want := range map[string]string{
+		"plain":           "plain",
+		"a\nb":            `a\nb`,
+		`a\nb`:            `a\\nb`,
+		`C:\x`:            `C:\\x`,
+		"ok\nlevel=ERROR": `ok\nlevel=ERROR`,
+		"a\x00\u2028":     `a\x00\u2028`,
+	} {
+		if got := logguard.EscapeLine(in); got != want {
+			t.Errorf("EscapeLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// discard is a writer that drops its input, so the benchmark measures the
+// work of the handler and not a write.
+type discard struct{}
+
+func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// BenchmarkHandle compares a JSON handler with and without the guard, for
+// a record with three attributes, one of them a small struct.
+func BenchmarkHandle(b *testing.B) {
+	type small struct {
+		Name  string
+		Count int
+	}
+
+	for name, h := range map[string]slog.Handler{
+		"plain": slog.NewJSONHandler(discard{}, nil),
+		"guard": logguard.New(slog.NewJSONHandler(discard{}, nil)),
+	} {
+		b.Run(name, func(b *testing.B) {
+			l := slog.New(h)
+
+			b.ReportAllocs()
+
+			for b.Loop() {
+				l.Info("request", slog.String("route", "/api/stacks"), slog.Int("status", 200),
+					slog.Any("unit", small{Name: "prod", Count: 3}))
+			}
+		})
 	}
 }

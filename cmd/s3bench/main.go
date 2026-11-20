@@ -42,10 +42,16 @@ const (
 	defaultPGPort     = 18477
 )
 
+// newLogger answers the logger of the benchmark: text on w, through the
+// guard that escapes hidden runes.
+func newLogger(w io.Writer) *slog.Logger {
+	return slog.New(logguard.New(slog.NewTextHandler(w, nil)))
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	logger := slog.New(logguard.New(slog.NewTextHandler(os.Stderr, nil)))
+	logger := newLogger(os.Stderr)
 	err := run(ctx, logger, os.Args[1:], os.Stdout)
 
 	stop()
