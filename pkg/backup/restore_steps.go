@@ -277,7 +277,7 @@ func (s *RestoreService) failRestore(ctx context.Context, sc durable.StepContext
 
 		s.logRestore(ctx, restoreOutcome{
 			id: in.ID, req: in.request(), state: RestoreFailed, errText: text,
-			full: cause,
+			full: cause, access: accessModeText(sc.Operation),
 		})
 
 		return durable.Permanent(cause)
@@ -1090,8 +1090,41 @@ func (s *RestoreService) stepSwap(ctx context.Context, sc durable.StepContext, i
 		return nil, err
 	}
 
-	if _, err := s.live.ApplyRestoreArea(ctx, sc.Fence, area, in.KeepAccessTables); err != nil {
-		return nil, fmt.Errorf("apply staged data for restore %s: %w", in.ID, err)
+	// The decision is made once, here, and the store records it in the swap
+	// transaction. Nothing is stored before that, so a retry of this step
+	// decides again and the record cannot differ from the action. Only a
+	// restore that would keep the access tables can widen, so the setting
+	// never gives a caller a right that the route did not check
+	// (server:restore).
+	decide := s.swapDecision
+	if s.decide != nil {
+		decide = s.decide
+	}
+
+	d := decide(ctx, in)
+
+	// Defense in depth: the store and the decoder of the swap record check the
+	// decision too; this check stays so that a decision that keeps or widens
+	// the access tables without the live row of each kept setting never leaves
+	// the service. It does not rely on the store. The error is permanent: a
+	// retry makes the same decision, so the restore fails and writes its
+	// failure entry.
+	if err := ValidateSwapDecision(d); err != nil {
+		return nil, durable.Permanent(fmt.Errorf("swap decision of restore %s: %w", in.ID, err))
+	}
+
+	if _, err := s.live.ApplyRestoreArea(ctx, sc.Fence, area, d); err != nil {
+		wrapped := fmt.Errorf("apply staged data for restore %s: %w", in.ID, err)
+
+		// The store returns ErrCorrupt when it refuses a widened swap (the
+		// live setting row does not say true). A retry decides the same way,
+		// so this step makes the error permanent: the restore fails at once
+		// and writes its failure entry.
+		if errors.Is(err, ErrCorrupt) {
+			return nil, durable.Permanent(wrapped)
+		}
+
+		return nil, wrapped
 	}
 
 	return nil, nil
@@ -1194,12 +1227,16 @@ func (s *RestoreService) afterApplyEntries(
 		return nil, fmt.Errorf("read the audit events of restore %s: %w", in.ID, err)
 	}
 
-	own := s.restoreAuditEntry(in, s.restoreAuditObject(in, end))
+	own := s.restoreAuditEntry(in, s.restoreAuditObject(in, end, accessModeText(op)))
 	if end == swappedFailed {
 		own.Outcome = audit.OutcomeFailure
 	}
 
 	entries := []audit.Entry{own}
+
+	if settingEntry, ok := s.settingAuditEntry(op, in); ok {
+		entries = append(entries, settingEntry)
+	}
 
 	for _, object := range events {
 		entries = append(entries, s.restoreAuditEntry(in, object))
@@ -1389,7 +1426,10 @@ func (s *RestoreService) stepFinish(ctx context.Context, sc durable.StepContext,
 		return nil, fmt.Errorf("finish restore %s: %w", in.ID, err)
 	}
 
-	s.logRestore(ctx, restoreOutcome{id: in.ID, req: in.request(), state: RestoreSucceeded, errText: "", full: nil})
+	s.logRestore(ctx, restoreOutcome{
+		id: in.ID, req: in.request(), state: RestoreSucceeded, errText: "", full: nil,
+		access: accessModeText(sc.Operation),
+	})
 
 	return nil, nil
 }
@@ -1569,14 +1609,9 @@ func endBeforeSwapAuditObject(in restoreInput, end string) string {
 }
 
 // restoreAuditObject names one restore that swapped for its audit entry, with
-// whether the access tables were replaced or kept, and, when end is swappedFailed,
+// what the swap did to the access tables (mode, from the recorded decision), and, when end is swappedFailed,
 // that the restore failed after the swap.
-func (s *RestoreService) restoreAuditObject(in restoreInput, end swappedEnd) string {
-	mode := "replaced"
-	if in.KeepAccessTables {
-		mode = "kept"
-	}
-
+func (s *RestoreService) restoreAuditObject(in restoreInput, end swappedEnd, mode string) string {
 	verb := ""
 	if end == swappedFailed {
 		verb = " failed after the swap"

@@ -70,6 +70,11 @@ const (
 // ControlTables.
 const (
 	TableDurableHeartbeats = "durable_heartbeats"
+	// TableFirstAdministratorCodes holds the digest of the one open code of
+	// the first administrator. A backup leaves it out and a restore empties
+	// it: the code lives 10 minutes and names a person of the installation
+	// that made it. The marker table, TableFirstAdministrator, travels.
+	TableFirstAdministratorCodes = "first_administrator_codes"
 	// TableGitHostEventReceipts holds the receipts of the verified deliveries of
 	// the last 24 hours: a hint and not state. A restore leaves it empty.
 	TableGitHostEventReceipts = "git_host_event_receipts"
@@ -192,6 +197,7 @@ var Tables = []string{
 	TablePersonPreferences,
 	TableForgeAccountLinks,
 	TableForgeLinkRequests,
+	TableFirstAdministrator,
 	TableLocalUsers,
 	TableSessionGenerations,
 	TablePasskeys,

@@ -41,3 +41,16 @@ that the first release notes must hold.
   each break.
 - The Pulumi Cloud-compatible API, the TFE-compatible API and the OpenTofu
   HTTP backend do not change.
+
+### The audit list pages with a token
+
+- `GET /api/audit/entries` no longer reads `page[number]` and `page[size]`, and
+  its answer no longer holds `total`. A request with an old name answers 400
+  with `request.invalid-query`.
+- The list reads `pageSize` (1 to 200, 50 by default) and `pageToken`. The
+  answer holds `entries`, `nextPageToken` and `pageSize`. `nextPageToken` is the
+  empty string on the last page.
+- A page costs the same at any depth: the server runs no count and no offset.
+- What to do: page with `nextPageToken` until it is empty. For a count of the
+  entries, use the chain check, `GET /api/audit/check`, which reports the
+  number of entries that it checked.

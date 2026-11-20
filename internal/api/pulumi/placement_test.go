@@ -48,7 +48,7 @@ func TestPlacementRefusalsAreAudited(t *testing.T) {
 			h, stores := newPlacingHandler(t, selectiveAuthorizer{deny: nil}, log,
 				stategate.Off("the test keeps no gates"), tc.placer.placer())
 			postStack(t, h, tc.project, unknownStackName)
-			entries, err := log.List(t.Context(), "acme", audit.Page{Number: 0, Size: 0})
+			entries, err := log.List(t.Context(), "acme", audit.Page{Size: 0, Before: 0})
 			if err != nil || len(entries.Entries) != 1 {
 				t.Fatalf("refusal audit has %d entries, %v, want 1", len(entries.Entries), err)
 			}

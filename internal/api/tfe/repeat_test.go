@@ -311,7 +311,7 @@ func (e tfeRepeatEnv) snapshot(t *testing.T) tfeRepeatSnapshot {
 		t.Fatalf("get workspace: %v", err)
 	}
 
-	listing, err := e.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

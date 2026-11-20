@@ -542,6 +542,11 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionBlueprintRead,
 		identity.ActionBlueprintSetContext,
 		identity.ActionUnitRedact,
+		// The offer of the first administrator has a route and still no
+		// family, on purpose: only a principal with Admin passes the
+		// authorizer, and the route also needs the static bootstrap
+		// principal. TestFirstAdministratorActions pins it.
+		identity.ActionServerOfferFirstAdministrator,
 	}
 }
 
@@ -1929,4 +1934,63 @@ func TestOnlyOperatorAndSiteAdministratorHoldStoreCheck(t *testing.T) {
 			{identity.ServerObject(), identity.ActionInstallationStoreCheck, false},
 		})
 	})
+}
+
+// TestFirstAdministratorActions pins the three actions of the first
+// administrator: the offer has no family, so the authorizer allows it to
+// Admin only; the read is in the operator family; the redeem is in the self
+// family, so each signed-in principal reaches the handler.
+func TestFirstAdministratorActions(t *testing.T) {
+	t.Parallel()
+
+	if fam, ok := access.FamilyOf(identity.ActionServerOfferFirstAdministrator); ok {
+		t.Errorf("offer action has the family %q, want none so that only Admin passes", fam)
+	}
+
+	families := []struct {
+		action identity.Action
+		want   access.Family
+	}{
+		{action: identity.ActionServerReadFirstAdministrator, want: access.FamilyOperator},
+		{action: identity.ActionCallerRedeemFirstAdministrator, want: access.FamilySelf},
+	}
+
+	for _, tc := range families {
+		got, ok := access.FamilyOf(tc.action)
+		if !ok || got != tc.want {
+			t.Errorf("FamilyOf(%q) = %q, %t, want %q", tc.action, got, ok, tc.want)
+		}
+	}
+
+	if access.IsSensitive(identity.ActionServerReadFirstAdministrator) {
+		t.Errorf("IsSensitive(%q) = true, want false: a read cannot raise a privilege",
+			identity.ActionServerReadFirstAdministrator)
+	}
+
+	f := newFixture(t)
+	site := f.person(t, "site")
+	operator := f.person(t, "operator")
+	plain := f.person(t, "plain")
+
+	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
+	f.grant(t, prn("operator"), access.RoleInstallationOperator, identity.ServerObject())
+
+	server := identity.ServerObject()
+
+	// Each of the three roles of a person, and the administrator flag.
+	assertChecks(t, f.authz, admin(), []check{
+		{server, identity.ActionServerOfferFirstAdministrator, true},
+		{server, identity.ActionServerReadFirstAdministrator, true},
+		{server, identity.ActionCallerRedeemFirstAdministrator, true},
+	})
+
+	for _, person := range []identity.Principal{site, operator, plain} {
+		assertChecks(t, f.authz, person, []check{
+			{server, identity.ActionServerOfferFirstAdministrator, false},
+			{server, identity.ActionCallerRedeemFirstAdministrator, true},
+		})
+	}
+
+	assertChecks(t, f.authz, operator, []check{{server, identity.ActionServerReadFirstAdministrator, true}})
+	assertChecks(t, f.authz, plain, []check{{server, identity.ActionServerReadFirstAdministrator, false}})
 }

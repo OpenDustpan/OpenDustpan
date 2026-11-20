@@ -169,6 +169,36 @@ func TestPutStampsTheEntryAndTheFence(t *testing.T) {
 	}
 }
 
+// TestPutStoresTheRootInItsStoredForm proves that the service accepts the
+// root directory as a read shows it, and gives the store the empty directory.
+// The fake store keeps what it gets, so the test does not rely on the store.
+func TestPutStoresTheRootInItsStoredForm(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, true)
+	s := settingsFor(r.unit)
+	s.CodeLocation.Directory = unitsettings.RootDirectory
+
+	view, err := r.svc.Put(t.Context(), &s, 0, entry())
+	if err != nil {
+		t.Fatalf("Put of the root directory = %v, want nil", err)
+	}
+
+	if got := r.store.records[r.unit.UnitID()].CodeLocation.Directory; got != "" {
+		t.Fatalf("stored directory = %q, want empty", got)
+	}
+
+	if view.Settings.CodeLocation.Directory != "" || view.Effective.Directory.Value != unitsettings.RootDirectory ||
+		view.Effective.Directory.Origin != unitsettings.OriginBuiltIn {
+		t.Fatalf("view = %+v, %+v; want the empty directory and the root from the built-in default",
+			view.Settings.CodeLocation, view.Effective.Directory)
+	}
+
+	if s.CodeLocation.Directory != unitsettings.RootDirectory {
+		t.Fatalf("Put changed the settings of the caller to %q", s.CodeLocation.Directory)
+	}
+}
+
 func TestPutRefusesWhatThePlannerCouldNotUse(t *testing.T) {
 	t.Parallel()
 

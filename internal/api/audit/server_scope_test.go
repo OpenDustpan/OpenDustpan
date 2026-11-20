@@ -154,7 +154,7 @@ func TestServerScopeListsItsEntries(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 
-	if got.Total != 1 || len(got.Entries) != 1 || got.Entries[0].Subject != "ops" {
+	if len(got.Entries) != 1 || got.Entries[0].Subject != "ops" {
 		t.Fatalf("@server list = %+v, want the one entry of ops", got)
 	}
 }

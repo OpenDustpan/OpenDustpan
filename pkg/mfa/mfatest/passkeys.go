@@ -313,7 +313,7 @@ func mustAdd(t *testing.T, s PasskeyStore, n int, personID string) mfa.Passkey {
 func entries(t *testing.T, s PasskeyStore, prefix string) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

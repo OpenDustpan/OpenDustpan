@@ -450,7 +450,7 @@ func (e *mtlsEnv) tokenCount(id string) int {
 func (e *mtlsEnv) exchangeEntries(ns namespace.Name) []audit.Entry {
 	e.t.Helper()
 
-	l, err := e.store.List(e.t.Context(), ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	l, err := e.store.List(e.t.Context(), ns, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		e.t.Fatalf("list audit: %v", err)
 	}

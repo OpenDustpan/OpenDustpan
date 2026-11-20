@@ -331,10 +331,24 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 	s := &p.LDAP
 
 	return providerResponse{
-		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
-		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: false, Mode: string(session.ModeLDAP), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil,
+		CreatedAt:        nil,
+		UpdatedAt:        nil,
+		ID:               p.ID,
+		Source:           providerSourceStatic,
+		Issuer:           "",
+		DisplayName:      p.DisplayName,
+		ClientID:         "",
+		Scopes:           []string{},
+		Version:          0,
+		AutoCreate:       p.AutoCreate,
+		Enabled:          true,
+		ClientSecretSet:  false,
+		IssuerRefused:    false,
+		Mode:             string(session.ModeLDAP),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
 		LDAP: &providerLDAP{
 			AllowedRanges: nonNilRanges(
 				s.AllowedRanges,

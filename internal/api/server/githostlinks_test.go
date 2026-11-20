@@ -705,8 +705,12 @@ func serverLinkEntries(t *testing.T, f accessFixture) []string {
 
 	var out []string
 
-	for page := 1; ; page++ {
-		listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: page, Size: audit.MaxPageSize})
+	for before := int64(0); ; {
+		listing, err := f.store.List(
+			t.Context(),
+			audit.ServerScope,
+			audit.Page{Size: audit.MaxPageSize, Before: before},
+		)
 		if err != nil {
 			t.Fatalf("list audit: %v", err)
 		}
@@ -718,7 +722,11 @@ func serverLinkEntries(t *testing.T, f accessFixture) []string {
 			}
 		}
 
-		if len(listing.Entries) < audit.MaxPageSize {
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
 			return out
 		}
 	}

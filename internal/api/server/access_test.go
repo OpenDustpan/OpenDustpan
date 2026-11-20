@@ -339,47 +339,48 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		LocalUsers:       newRouteLocalUsers(t, st),
-		Preferences:      nil,
-		GitHostLinks:     links(st),
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    subjectAuthenticator{},
-		Authorizer:       authz,
-		Logger:           logger,
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       principals,
-		Tokens:           tokens,
-		Access:           grants,
-		Audit:            parts.entries(st),
-		OnAuditFailure:   nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		SignIn:           consoleOf(parts, signIn),
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
-		Reach:            routeReach(st),
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		LocalUsers:         newRouteLocalUsers(t, st),
+		Preferences:        nil,
+		GitHostLinks:       links(st),
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      subjectAuthenticator{},
+		Authorizer:         authz,
+		Logger:             logger,
+		Namespaces:         namespaces,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         principals,
+		Tokens:             tokens,
+		Access:             grants,
+		Audit:              parts.entries(st),
+		OnAuditFailure:     nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		SignIn:             consoleOf(parts, signIn),
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
+		Reach:              routeReach(st),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -789,7 +790,7 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 		t.Fatalf("delta grants = %+v, want none", list.Grants)
 	}
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list server entries: %v", err)
 	}
@@ -844,7 +845,7 @@ func TestGrantChangesWriteAuditEntries(t *testing.T) {
 
 	// A grant on a namespace writes its entries in that namespace, so the
 	// auditor of the namespace sees them.
-	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := f.store.List(t.Context(), "acme", audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list acme entries: %v", err)
 	}
@@ -1152,7 +1153,7 @@ func TestEscalationRefusalIsAudited(t *testing.T) {
 		http.StatusForbidden,
 	}, nil)
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

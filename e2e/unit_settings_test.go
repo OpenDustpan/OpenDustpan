@@ -136,6 +136,7 @@ func runUnitSettingsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	fx.linksManyUnits(ctx, t)
 	fx.repeatsAKeyedWrite(ctx, t)
 	fx.resetsAndAudits(ctx, t)
+	fx.roundTripsTheRootDirectory(ctx, t)
 }
 
 // unitSettingsFixture holds the tokens, the unit IDs and the pool of the
@@ -523,4 +524,58 @@ func (fx *unitSettingsFixture) resetsAndAudits(ctx context.Context, t *testing.T
 		t.Fatalf("the audit log holds %d changes, %d resets and %d default changes, want at least 2, 1 and 1",
 			changed, reset, defaults)
 	}
+}
+
+// roundTripsTheRootDirectory writes the effective directory that a read shows,
+// ".", into the reset unit web. The write stores the empty directory, so the
+// directory keeps its built-in origin. A body of null and a body with a
+// repeated key then fail with 400 and change nothing.
+func (fx *unitSettingsFixture) roundTripsTheRootDirectory(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	path := fx.settings(fx.webID)
+
+	var root any
+
+	fx.run(ctx, t, fx.admin, readStep("read the effective directory of a unit with no record", path,
+		http.StatusOK, func(body string) error {
+			var doc unitSettingsDoc
+			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Effect["directory"].Value != "." {
+				return fmt.Errorf("%w: want the effective directory \".\": %s", errUnitSettingsDoc, body)
+			}
+
+			root = doc.Effect["directory"].Value
+
+			return nil
+		}))
+
+	body := fmt.Sprintf(`{"codeLocation":{"repository":"acme/infra","ref":"main","directory":%q}}`, root)
+
+	fx.run(
+		ctx,
+		t,
+		fx.admin,
+		readStep(
+			"store the effective directory that the read showed",
+			path,
+			http.StatusOK,
+			checkOrigins(1, map[string]string{"directory": "built-in-default", "repository": "unit"}),
+		).sending(http.MethodPut, body, `"0"`),
+	)
+
+	for name, bad := range map[string]string{
+		"a body of null":              `null`,
+		"a body with a key two times": `{"codeLocation":{"repository":"acme/infra","repository":"acme/other"}}`,
+	} {
+		fx.run(
+			ctx,
+			t,
+			fx.admin,
+			readStep("refuse "+name, path, http.StatusBadRequest, inDoc("request.body-invalid")).
+				sending(http.MethodPut, bad, `"1"`),
+		)
+	}
+
+	fx.run(ctx, t, fx.admin, readStep("read the settings after the refused bodies", path, http.StatusOK,
+		checkOrigins(1, map[string]string{"directory": "built-in-default", "repository": "unit"})))
 }

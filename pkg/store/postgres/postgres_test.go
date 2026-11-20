@@ -1046,8 +1046,15 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		keep bool
 		want string
 	}{
-		{name: "replaces access tables", keep: false, want: "access tables replaced"},
-		{name: "keeps access tables", keep: true, want: "access tables kept"},
+		{
+			name: "replaces access tables", keep: false,
+			want: "access tables replaced; setting restore.replace-access-tables " +
+				"taken from the backup (the live value was not read before the swap)",
+		},
+		{
+			name: "keeps access tables", keep: true,
+			want: "access tables kept; setting restore.replace-access-tables kept (the live value was not read)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1175,14 +1182,16 @@ func newRestoreAuditServices(
 		AfterApply:   nil,
 		Admit:        nil,
 
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1240,7 +1249,7 @@ func assertRestoreAuditEntry(
 	t.Helper()
 
 	listing, err := st.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0},
 	)
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
@@ -1611,12 +1620,12 @@ func (s *sqlUpdatesStore) Inner() any {
 func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
-		return audit.Listing{}, errNoAuditList
+		return audit.Listing{Entries: nil, More: false}, errNoAuditList
 	}
 
 	listing, err := lister.List(ctx, ns, page)
 	if err != nil {
-		return audit.Listing{}, fmt.Errorf("list audit entries: %w", err)
+		return audit.Listing{Entries: nil, More: false}, fmt.Errorf("list audit entries: %w", err)
 	}
 
 	return listing, nil

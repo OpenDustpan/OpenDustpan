@@ -39,8 +39,9 @@ func (f *serveFlags) checkPlainHTTP() error {
 // the rule of checkPlainHTTP. With --allow-plain-http on an address that is
 // not loopback, it logs a warning that names the flag.
 func (f *serveFlags) listenChecked(ctx context.Context, logger *slog.Logger) (net.Listener, error) {
-	//nolint:exhaustruct_v5 // The server listens with defaults; only the network and address matter.
-	lc := &net.ListenConfig{}
+	// The zero value listens with the defaults: only the network and the
+	// address matter.
+	var lc net.ListenConfig
 
 	ln, err := lc.Listen(ctx, "tcp", f.listen)
 	if err != nil {

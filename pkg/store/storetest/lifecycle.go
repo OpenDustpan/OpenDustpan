@@ -124,7 +124,7 @@ func checkRestoreEntry(t *testing.T, s any, ns namespace.Name, wantObject, id st
 		return
 	}
 
-	listing, err := lister.List(t.Context(), ns, audit.Page{Number: 1, Size: 1})
+	listing, err := lister.List(t.Context(), ns, audit.Page{Size: 1, Before: 0})
 	if err != nil || len(listing.Entries) != 1 {
 		t.Fatalf("list audit entries: %+v, %v", listing, err)
 	}

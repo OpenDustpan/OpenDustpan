@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -104,7 +105,7 @@ func checkBreakGlassCountFails(
 	removeLiveOnlyFromStaged(t, s, staging, kept)
 	breakCount(t, s, staging)
 
-	if _, applyErr := s.ApplyRestoreArea(ctx, staged.Swap, staged.Area, false); !errors.Is(
+	if _, applyErr := s.ApplyRestoreArea(ctx, staged.Swap, staged.Area, backup.PlainSwap(false)); !errors.Is(
 		applyErr, principal.ErrBreakGlassUnavailable,
 	) {
 		t.Fatalf("apply with a failed count = %v, want an error that matches %v",

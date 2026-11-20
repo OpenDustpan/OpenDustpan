@@ -333,7 +333,7 @@ func testProviderChangeAppendsEntry(t *testing.T, s Store) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
