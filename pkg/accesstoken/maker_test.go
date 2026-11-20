@@ -94,7 +94,7 @@ func (f makerFixture) revoked(t *testing.T, id string) bool {
 func (f makerFixture) revocationEntry(t *testing.T, id string) audit.Entry {
 	t.Helper()
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
