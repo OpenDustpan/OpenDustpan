@@ -139,6 +139,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 			name: "a restore that keeps access takes no temporary administrator from the backup",
 			test: testRestoreKeepAccessIgnoresBackupTempAdmins,
 		},
+		{
+			name: "a restore that replaces access takes the temporary administrators of the backup",
+			test: testRestoreReplaceAccessTakesBackupTempAdmins,
+		},
 		{name: "a restore brings back the old event secret of a registration", test: testRestoreKeepsOldEventSecret},
 		{
 			name: "a restore keeps a principal created after the backup with its child rows",

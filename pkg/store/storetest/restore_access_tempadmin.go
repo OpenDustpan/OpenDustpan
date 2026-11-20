@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -30,8 +31,6 @@ const (
 func testRestoreKeepAccessIgnoresBackupTempAdmins(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	t.Skip("known defect: a restore that keeps the access tables takes temp_admins from the backup")
-
 	s := newStore(t)
 	ports := keepAccessStores(t, s)
 
@@ -43,20 +42,9 @@ func testRestoreKeepAccessIgnoresBackupTempAdmins(t *testing.T, newStore Restore
 	seedBackupStore(t, s)
 	createKeepTempAdmin(t, ports)
 
-	files, sum, descs := PortableFiles(t, ports.stager)
+	expired := keepTempAdminExpiry()
 
-	expired := time.Date(2026, time.October, 9, 0, 0, 0, 0, time.UTC)
-	row := DevTempAdminRow(keepTempAdminID, "subject-"+keepTempAdminID)
-	row["expires_at_ms"] = expired.UnixMilli()
-	row["created_at_ms"] = now().UnixMilli()
-
-	files, descs, sum = AddPortableRows(t, files, descs, sum, "temp_admins", row)
-
-	opts := StageAs(t, ports.stager)
-
-	if _, err := ports.stager.StagePortable(t.Context(), PortableOpener(files), sum, descs, opts); err != nil {
-		t.Fatalf("stage the backup with a temp_admins row: %v", err)
-	}
+	stageKeepTempAdminBackup(t, ports)
 
 	if _, err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
 		t.Fatalf("apply keeping the access tables: %v", err)
@@ -147,5 +135,87 @@ func checkKeepAdminIntact(t *testing.T, ports keepAccessPorts, swept []string) {
 
 	if !tok.RevokedAt.IsZero() {
 		t.Errorf("token %q is revoked at %v after the sweep, want it active", keepTempAdminToken, tok.RevokedAt)
+	}
+}
+
+// keepTempAdminExpiry is the expiry of the staged temp_admins row: it is in the
+// past of the sweep clock of the cases.
+func keepTempAdminExpiry() time.Time {
+	return time.Date(2026, time.October, 9, 0, 0, 0, 0, time.UTC)
+}
+
+// stageKeepTempAdminBackup exports the store of ports, adds a temp_admins row
+// for the live administrator with an expiry in the past and no end time, and
+// stages the result.
+func stageKeepTempAdminBackup(t *testing.T, ports keepAccessPorts) {
+	t.Helper()
+
+	files, sum, descs := keepTempAdminBackup(t, ports.stager)
+	opts := StageAs(t, ports.stager)
+
+	if _, err := ports.stager.StagePortable(t.Context(), PortableOpener(files), sum, descs, opts); err != nil {
+		t.Fatalf("stage the backup with a temp_admins row: %v", err)
+	}
+}
+
+// keepTempAdminBackup exports s and adds the temp_admins row of the case.
+func keepTempAdminBackup(
+	t *testing.T, s PortableRestoreStore,
+) (map[string][]byte, backup.Summary, []backup.PortableFile) {
+	t.Helper()
+
+	files, sum, descs := PortableFiles(t, s)
+
+	row := DevTempAdminRow(keepTempAdminID, "subject-"+keepTempAdminID)
+	row["expires_at_ms"] = keepTempAdminExpiry().UnixMilli()
+	row["created_at_ms"] = now().UnixMilli()
+
+	files, descs, sum = AddPortableRows(t, files, descs, sum, "temp_admins", row)
+
+	return files, sum, descs
+}
+
+// testRestoreReplaceAccessTakesBackupTempAdmins proves that a restore that
+// replaces the access tables brings the temp_admins rows of the backup with
+// the principals that the rows name.
+func testRestoreReplaceAccessTakesBackupTempAdmins(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	srcPorts := keepAccessStores(t, src)
+
+	if _, ok := src.(tempadmin.Store); !ok {
+		t.Skip("the store keeps no temporary administrators")
+	}
+
+	seedBackupStore(t, src)
+	createKeepTempAdmin(t, srcPorts)
+
+	files, sum, descs := keepTempAdminBackup(t, srcPorts.stager)
+
+	dst := newStore(t)
+	dstPorts := keepAccessStores(t, dst)
+
+	if _, err := dstPorts.stager.StagePortable(
+		t.Context(), PortableOpener(files), sum, descs, StageAs(t, dstPorts.stager),
+	); err != nil {
+		t.Fatalf("stage the backup: %v", err)
+	}
+
+	if err := dst.ApplyStaging(t.Context()); err != nil {
+		t.Fatalf("apply replacing the access tables: %v", err)
+	}
+
+	record, err := dst.(tempadmin.Store).GetTempAdmin(t.Context(), keepTempAdminID)
+	if err != nil {
+		t.Fatalf("get the temporary administrator of the backup: %v", err)
+	}
+
+	if !record.EndedAt.IsZero() || !record.ExpiresAt.Equal(keepTempAdminExpiry()) {
+		t.Errorf("record = ended %v, expires %v, want the row of the backup", record.EndedAt, record.ExpiresAt)
+	}
+
+	if _, err := dstPorts.principals.GetPrincipal(t.Context(), keepTempAdminID); err != nil {
+		t.Errorf("get the principal of the temp_admins row: %v, want it restored with the row", err)
 	}
 }

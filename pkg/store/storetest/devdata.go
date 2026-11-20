@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -66,8 +67,8 @@ func RunDevData(t *testing.T, newStore DevDataFactory) {
 		{name: "the swap of a dev installation takes dev data", test: testDevSwapDevInstallation},
 		{name: "the swap refuses when it cannot read the live kind", test: testDevSwapUnreadableKind},
 		{
-			name: "a swap that keeps access drops temp admins that dangle against the live principals",
-			test: testDevKeepDropsTempAdmins,
+			name: "a swap that keeps access keeps the live temp admins and takes no staged row",
+			test: testDevKeepKeepsLiveTempAdmins,
 		},
 		{name: "the strip and the swap cover the whole staging area on the keep path", test: testDevKeepWholeArea},
 		{name: "the report is stored in the restore record", test: testDevRecordReport},
@@ -1287,26 +1288,36 @@ func testDevSwapUnreadableKind(t *testing.T, env *devEnv) {
 	}
 }
 
-// testDevKeepDropsTempAdmins checks the swap that keeps the access tables: it
-// drops the staged temp admins that name a principal that the live principals
-// do not hold, counts them, and keeps the rows of live principals. The strip
-// removes the row with a dev subject.
-func testDevKeepDropsTempAdmins(t *testing.T, env *devEnv) {
+// testDevKeepKeepsLiveTempAdmins checks the swap that keeps the access tables: the
+// live temp_admins rows stay as they were, and no staged row arrives. The
+// staged table holds three rows: one with a dev subject, one for a principal
+// that the live principals do not hold, and one for a live principal. The
+// strip removes the row with the dev subject. The swap does not take the other
+// two, because temp_admins is an access table.
+func testDevKeepKeepsLiveTempAdmins(t *testing.T, env *devEnv) {
 	t.Helper()
 
 	dst := env.newStore(t, installation.KindProduction)
 
-	// Give the live data a principal: a swap of a first backup brings it.
-	// Both backups come from one export, so they name the same namespaces: the
-	// kept installation rows of the live data name a namespace that the second
-	// backup holds.
+	// Give the live data a principal and a temp_admins row: a swap of a first
+	// backup brings them. Both backups come from one export, so they name the
+	// same namespaces: the kept installation rows of the live data name a
+	// namespace that the second backup holds.
+	liveRow := DevTempAdminRow("prn-live", "alice")
+	liveRow["reason"] = "live original"
+	liveRow["expires_at_ms"] = int64(3_000_000_000_000)
+
 	base := env.export(t)
-	first := base.with(t, "principals", DevPrincipalRow("prn-live", "alice"))
+	first := base.
+		with(t, "principals", DevPrincipalRow("prn-live", "alice")).
+		with(t, "temp_admins", liveRow)
 	first.mustStage(t, dst)
 
 	if err := dst.ApplyStaging(t.Context()); err != nil {
 		t.Fatalf("apply the first backup: %v", err)
 	}
+
+	before := tableRows(t, dst, "temp_admins")
 
 	second := base.
 		with(t, "principals", DevPrincipalRow("prn-live", "alice")).
@@ -1326,18 +1337,17 @@ func testDevKeepDropsTempAdmins(t *testing.T, env *devEnv) {
 		t.Fatalf("strip removed %d temp admins, want 1 (the dev subject)", got)
 	}
 
-	result, err := dst.ApplyStagingKeepingAccess(t.Context())
-	if err != nil {
+	if _, err := dst.ApplyStagingKeepingAccess(t.Context()); err != nil {
 		t.Fatalf("apply keeping access: %v", err)
 	}
 
-	if result.DroppedTempAdmins != 1 {
-		t.Fatalf("dropped temp admins = %d, want 1 (the row of prn-absent)", result.DroppedTempAdmins)
+	after := tableRows(t, dst, "temp_admins")
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("temp admins after the swap = %v, want the live rows %v unchanged", after, before)
 	}
 
-	got := column(tableRows(t, dst, "temp_admins"), "principal_id")
-	if !slices.Equal(got, []string{"prn-live"}) {
-		t.Fatalf("temp admins after the swap = %q, want only prn-live", got)
+	if got := column(after, "principal_id"); !slices.Equal(got, []string{"prn-live"}) {
+		t.Fatalf("temp admins after the swap = %q, want only the live row of prn-live", got)
 	}
 }
 
