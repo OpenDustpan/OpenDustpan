@@ -1905,8 +1905,10 @@ func readKeyFile(path string) ([]byte, error) {
 //     message and then writes the usage text, which is fixed program text,
 //     as it is.
 //   - An errors.Join result (see joinParts): writeErrorLine writes each part
-//     on its own line, and escapes each part. It does this for nested joins
-//     too, to a depth of maxJoinDepth.
+//     on its own line, and escapes each part. Each line starts with
+//     "<prefix>: ", which is fixed program text, so a part whose text starts
+//     like a log record cannot make a line that reads as one. It does this
+//     for nested joins too, to a depth of maxJoinDepth.
 //
 // Any other error, a wrapped usage error or a wrapped join included, is one
 // escaped line. A part of a join that is the usage error is escaped too.
@@ -1918,7 +1920,9 @@ func readKeyFile(path string) ([]byte, error) {
 // A failed write of the line is not reported: nothing is left to report it
 // to.
 func writeErrorLine(w io.Writer, prefix string, err error) {
-	text := strings.Join(errorLines(err, 0), "\n")
+	// Each line starts with the prefix: a part cannot start a line with
+	// text from outside.
+	text := strings.Join(errorLines(err, 0), "\n"+prefix+": ")
 
 	if message, ok := usageOf(err); ok {
 		text = errUsage.Error()
@@ -1974,6 +1978,8 @@ func joinParts(err error) ([]error, bool) {
 	texts := make([]string, 0, len(parts))
 
 	for _, part := range parts {
+		// A custom error can answer a nil part, and its Error method would
+		// panic in the printer: such an error is one escaped line.
 		if part == nil {
 			return nil, false
 		}
@@ -1981,6 +1987,9 @@ func joinParts(err error) ([]error, bool) {
 		texts = append(texts, part.Error())
 	}
 
+	// Defense in depth: errors.Join answers nil for no parts, so no join
+	// with no parts reaches this check today. The check stays so that a
+	// custom error with no parts and an empty text is never split.
 	if len(parts) == 0 || strings.Join(texts, "\n") != err.Error() {
 		return nil, false
 	}

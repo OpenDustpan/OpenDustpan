@@ -231,19 +231,32 @@ func TestWriteErrorLineWritesJoinPartsOnLines(t *testing.T) {
 	}{
 		"three parts": {
 			err:  errors.Join(lineError("first"), lineError("second"), lineError("third")),
-			want: []string{"opendustpan: first", "second", "third"},
+			want: []string{"opendustpan: first", "opendustpan: second", "opendustpan: third"},
 		},
 		"hostile part": {
 			err:  errors.Join(lineError("first"), hostile),
-			want: []string{"opendustpan: first", `open a\r\nlevel=ERROR msg=forged\x85\u202eb`},
+			want: []string{"opendustpan: first", `opendustpan: open a\r\nlevel=ERROR msg=forged\x85\u202eb`},
 		},
 		"nested join": {
-			err:  errors.Join(lineError("a"), errors.Join(lineError("b"), hostile), lineError("c")),
-			want: []string{"opendustpan: a", "b", `open a\r\nlevel=ERROR msg=forged\x85\u202eb`, "c"},
+			err: errors.Join(lineError("a"), errors.Join(lineError("b"), hostile), lineError("c")),
+			want: []string{
+				"opendustpan: a", "opendustpan: b",
+				`opendustpan: open a\r\nlevel=ERROR msg=forged\x85\u202eb`, "opendustpan: c",
+			},
+		},
+		"part like a record": {
+			err:  errors.Join(lineError("first"), lineError("level=ERROR msg=forged")),
+			want: []string{"opendustpan: first", "opendustpan: level=ERROR msg=forged"},
+		},
+		"part like a timed record": {
+			err: errors.Join(lineError("first"), lineError("time=2026-11-20T00:00:00Z level=ERROR msg=forged")),
+			want: []string{
+				"opendustpan: first", "opendustpan: time=2026-11-20T00:00:00Z level=ERROR msg=forged",
+			},
 		},
 		"usage part": {
 			err:  errors.Join(lineError("a"), errUsage),
-			want: []string{"opendustpan: a", logguard.EscapeLine(errUsage.Error())},
+			want: []string{"opendustpan: a", "opendustpan: " + logguard.EscapeLine(errUsage.Error())},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -258,16 +271,24 @@ func TestWriteErrorLineWritesJoinPartsOnLines(t *testing.T) {
 				t.Fatalf("lines =\n%q\nwant\n%q", got, tc.want)
 			}
 
-			for _, line := range got {
-				if r, hidden := ident.FirstHidden(line); hidden {
-					t.Errorf("line holds hidden rune %U: %q", r, line)
-				}
-
-				if strings.HasPrefix(line, "level=ERROR") {
-					t.Errorf("the forged line is its own line: %q", line)
-				}
-			}
+			checkPrefixedLines(t, got)
 		})
+	}
+}
+
+// checkPrefixedLines fails when a line does not start with the fixed
+// prefix or holds a hidden rune: no line may start with outside text.
+func checkPrefixedLines(t *testing.T, lines []string) {
+	t.Helper()
+
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "opendustpan: ") {
+			t.Errorf("line does not start with the prefix: %q", line)
+		}
+
+		if r, hidden := ident.FirstHidden(line); hidden {
+			t.Errorf("line holds hidden rune %U: %q", r, line)
+		}
 	}
 }
 
@@ -306,4 +327,26 @@ func deepJoin(depth int) error {
 	}
 
 	return err
+}
+
+// nilPartError is a custom join whose parts hold a nil error.
+type nilPartError struct{}
+
+func (nilPartError) Error() string { return "a" }
+
+func (nilPartError) Unwrap() []error { return []error{lineError("a"), nil} }
+
+// TestWriteErrorLineRefusesNilJoinParts sends a join with a nil part. The
+// printer must not call a method of the nil part: the error is one escaped
+// line.
+func TestWriteErrorLineRefusesNilJoinParts(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+
+	writeErrorLine(&b, "opendustpan", nilPartError{})
+
+	if got, want := b.String(), "opendustpan: a\n"; got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
 }
