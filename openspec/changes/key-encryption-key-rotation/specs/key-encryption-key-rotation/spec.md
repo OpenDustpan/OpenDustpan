@@ -44,6 +44,10 @@ Each process SHALL write the wrapper IDs that it holds in the same transaction a
 - **WHEN** An instance row holds one ID only and the caller starts a rotation.
 - **THEN** The start fails with `ErrInstanceLacksKey` (409 `key-rotation.instance-lacks-key`), the answer names the instance ID, and no row is written.
 
+#### Scenario: A refused process leaves no instance row
+- **WHEN** The start-up checks of the table refuse a process.
+- **THEN** The process wrote no instance row, because `registerInstance` runs after the checks.
+
 #### Scenario: Refuse finish while an instance lacks a key
 - **WHEN** The rewrap is complete and an instance row lacks an ID.
 - **THEN** The finish fails with `ErrInstanceLacksKey` and the rotation stays started.
@@ -64,9 +68,41 @@ While a rotation is active, the server SHALL open each directly wrapped record u
 - **WHEN** A write creates a data key or an item key while a rotation is started.
 - **THEN** The new record holds the new wrapper ID and the rewrap skips it.
 
-#### Scenario: Write fence refuses an old ID after the start
-- **WHEN** A write wrapped a record under the old key, and the start of a rotation commits before the write transaction.
+#### Scenario: Write fence refuses a stale generation
+- **WHEN** A write wrapped a record under generation 0, and a start commits (generation 1) before the write transaction commits.
 - **THEN** The write fails once with NEW `ErrRotationFence`, writes nothing, and the service wraps again under the new key and writes again.
+
+#### Scenario: Fence with no rotation row
+- **WHEN** No rotation row exists, or the latest row is finished, and a stamped write meets a start and a finish between its wrap and its commit.
+- **THEN** The singleton row exists in both cases, the write sees generation 2 and fails with `ErrRotationFence`, and no record holds the old ID after the finish count.
+
+#### Scenario: PostgreSQL writer holds its fence read across start and finish
+- **WHEN** A PostgreSQL writer holds its `FOR SHARE` read of the singleton row, a start runs, and the writer then commits.
+- **THEN** The start waits for the writer, and a writer that read the row before a start and a finish and commits after both fails with `ErrRotationFence`.
+
+#### Scenario: Concurrent instance write or backup begin against a start
+- **WHEN** An instance row write or a backup begin runs at the same time as a start.
+- **THEN** Either the start reads that row or that backup and refuses, or the write or the begin waits for the start and fails its own check. No start commits next to a row or a backup that it did not read.
+
+#### Scenario: Fence applies only while a rotation is started
+- **WHEN** A rotation A to B is finished, a backup that holds only A IDs is restored, and a plain A process starts (row 9 of the table).
+- **THEN** The process writes new records under A with no refusal, because no rotation is started and a plain wrapper gives no stamp.
+
+#### Scenario: Wrap fails closed on a state read error
+- **WHEN** The read of the rotation state fails during `Wrap`.
+- **THEN** `Wrap` returns the error, wraps nothing, and does not fall back to the old key.
+
+#### Scenario: Wrap fails closed on an unheld new key
+- **WHEN** The latest row names a new wrapper ID that the process does not hold.
+- **THEN** `Wrap` returns `ErrWrapperMismatch` and wraps nothing.
+
+#### Scenario: Page cursors work while both keys are staged
+- **WHEN** A list route seals a page cursor and opens it while the process holds a `Rotating` wrapper.
+- **THEN** The cursor carries the wrapper ID, opens by that ID, and the list continues. A cursor with an ID that the wrapper does not hold, with a length byte of 0, or sealed for another AAD fails with the invalid cursor answer.
+
+#### Scenario: Cursor of the old key after finish
+- **WHEN** A cursor was sealed under the old key and the rotation is finished.
+- **THEN** The open fails with the invalid cursor answer and the caller lists again.
 
 #### Scenario: Read during rotation
 - **WHEN** A tool reads a secret, an item or the idempotency key while a rotation is active.
@@ -190,7 +226,7 @@ The server SHALL decide at start-up from the latest rotation row, the wrapper of
 
 #### Scenario: Idempotency key with an unheld ID
 - **WHEN** The idempotency key row holds an ID that the wrapper does not hold.
-- **THEN** The start fails at the table and never reaches the reset path. A held ID that fails to open (damage) returns an error and does not reset the key while a rotation is started or finished.
+- **THEN** The start fails at the table and never reaches the reset path. A held ID that fails to open (damage) returns an error and does not reset the key while a rotation is started. After the rotation is finished the reset path works as on main.
 
 ### Requirement: Restore across a rotation
 
@@ -222,7 +258,7 @@ The server SHALL refuse a backup while a rotation is started, and SHALL refuse a
 
 #### Scenario: Backup that ends after a start
 - **WHEN** A rotation starts after a backup started and before it writes its manifest.
-- **THEN** The backup fails and writes no manifest.
+- **THEN** The generation of the singleton row is not the generation that the backup stored at its begin, the backup fails and writes no manifest. The check compares the generation, not a wall clock.
 
 ### Requirement: Authorize a rotation
 
@@ -265,8 +301,12 @@ The process SHALL read the old key from `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` or `DUS
 - **THEN** The decoded bytes and the raw text are zeroed after use.
 
 #### Scenario: Strict file open
-- **WHEN** The old key file is a symbolic link, is not a regular file, or has a mode bit for group or others.
-- **THEN** The start fails and names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`. The file is opened with `O_NOFOLLOW` and the mode is read from the open descriptor.
+- **WHEN** The old key file is not a regular file, has a mode bit for group or others, or is a link that leads outside its directory (a link to a path outside the directory, or an absolute link).
+- **THEN** The start fails and names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`. The file opens through `os.OpenRoot` of its directory and `root.Open` of its name, and the mode and the file type are read from the open descriptor.
+
+#### Scenario: Kubernetes Secret volume
+- **WHEN** The old key file is a relative link such as `key` to `..data/key` and `..data` is a link to a directory, all inside the one directory, and the file has mode 0400.
+- **THEN** The file opens and the key loads.
 
 #### Scenario: Bad value
 - **WHEN** The value is not base64, or does not decode to 32 bytes, or its wrapper ID equals the ID of the new key.
@@ -293,7 +333,7 @@ The server SHALL give five routes under `/api/dustpan/v1/key-rotations`, and the
 - **THEN** The command sends no request and prints the documented path (password sign-in as a local user, read of the CSRF value, the call with the cookie, the CSRF header and `Origin`) and the page `docs/guides/key-rotation.md`.
 
 #### Scenario: Documented API path
-- **WHEN** A person follows the page with a local-user password sign-in.
+- **WHEN** A person follows the page with a local-user password sign-in, on an installation whose MFA policy asks site administrators for no second factor. Whether the path also works under a policy that asks for one is an open owner question (see the proposal) and this change does not claim it.
 - **THEN** The session has a CSRF value, and start and finish with the cookie, the CSRF header and `Origin` pass the fresh step.
 
 ### Requirement: Keep blobs in targets

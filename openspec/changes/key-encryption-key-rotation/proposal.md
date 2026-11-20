@@ -1,5 +1,5 @@
 ---
-version: 9
+version: 10
 ---
 
 Issue: none. The PM directed this change; no issue exists.
@@ -47,7 +47,8 @@ Specified now (every part is decided; owner decisions are marked "(owner, 2026-1
 
 - NEW rotation record in SQL, one row for each rotation, with the states `started` and `finished`, in the baseline of each dialect. NEW table of the pending blob deletes of a rotation. NEW table of the wrapper IDs of each instance row.
 - NEW `secret.Rotating`: a `Wrapper` that wraps under one key by a rule of the stored rotation state and opens a record by its stored wrapper ID, and NEW function `secret.Holds(wrapper, id)`, used by the places that compare a stored wrapper ID with the ID of the wrapper (the data key open, the two start checks, the idempotency key open and the restore check).
-- NEW write fence: each write of a wrapped record checks, in its own transaction, that the wrapper ID of the record is the new ID while a rotation is started or finished (reviewer-prescribed).
+- NEW singleton row `key_rotation_state` (always present, with a generation) and NEW write fence: each write of a wrapped record reads that row in its own transaction (`FOR SHARE` on PostgreSQL, the write lock on SQLite) and fails when its generation is stale, or when its wrapper ID is not the new ID while a rotation is started; start and finish take the row `FOR UPDATE` (reviewer-prescribed; round 3).
+- NEW page cursors that carry the wrapper ID, so the list routes keep working while both keys are staged (round 3).
 - NEW rewrap of the four families that the key-encryption key wraps directly: the data keys (`secret_keys`), the installation data keys (`installation_secret_keys`, which hold the sign-in secrets and the other values of `@server`), the item keys (`item_keys` and their blobs) and the idempotency server key. Run as a durable operation. The old item key blob is deleted from a stored list of pending deletes, so a crash leaves no blob behind (reviewer-prescribed).
 - NEW start-up check with a table of cases (design decision 10): both keys while a rotation is active, the new key alone after finish, a refusal when the old key is still staged after finish, and a count of the wrapper IDs of the item keys and of the idempotency key.
 - NEW audit entries of kind `change` in the scope `@server` for start, resume, finish and for each record that the rewrap cannot open, with the actor and the wrapper IDs.
@@ -78,7 +79,7 @@ Where the path still costs the person time or surprises them:
 
 - The server names the rotation state and both wrapper IDs in each start refusal, so the operator sees which key is missing.
 - Finish says plainly that the old key is safe to remove only after it succeeds. Before that, both keys are needed. After finish, a process that still holds the old key does not start, and the text names the variable to remove.
-- The fresh authentication step is a cost. An access token never gives it, so start and finish answer 403 `mfa.fresh-step-required` for a CLI that holds a token alone. The person signs in over the API: `POST /api/dustpan/v1/sign-in/password` answers a session cookie, `GET /api/server/session` answers the CSRF value, and each call to start or finish sends the cookie, the `X-Dustpan-Csrf` header and an `Origin` header that equals the public URL (owner, 2026-11-20, round 2). The docs page shows each request, in the form of `docs/guides/connect-github.md` and its section "What you need". The commands `key-rotation start` and `key-rotation finish` send no request and print this path and the docs page. The commands `status` and `resume` call the API.
+- The fresh authentication step is a cost. An access token never gives it, so start and finish answer 403 `mfa.fresh-step-required` for a CLI that holds a token alone. The person signs in over the API: `POST /api/dustpan/v1/sign-in/password` answers a session cookie, `GET /api/server/session` answers the CSRF value, and each call to start or finish sends the cookie, the `X-Dustpan-Csrf` header and an `Origin` header that equals the public URL (owner, 2026-11-20, round 2). The docs page shows each request, in the form of `docs/guides/console-sign-in.md` (section "What you need", line 8) and `docs/guides/first-administrator.md` (line 72, the CSRF read); `docs/guides/connect-github.md` has no such section. The commands `key-rotation start` and `key-rotation finish` send no request and print this path and the docs page. The commands `status` and `resume` call the API.
 - A backup and a restore stop while a rotation is active. The window is the time of the rewrap. The docs page says to make a backup before the start and another after the finish.
 - Old wraps stay in the database history (dead tuples, free pages, the write-ahead log) and in each backup. The docs page says this, so the operator does not treat a rotation as the end of a leaked key. A leaked old key still opens a copy of the database made before the finish.
 
@@ -100,10 +101,10 @@ Each fact names its file, line and function on main. The change specifies only t
 - The server clears the variables of the settings that are marked sensitive, and each secret variable that no setting declares. (`cmd/opendustpan/envclear.go:22 (func clearSensitiveEnv)`, `internal/cli/setting.go:363 (func SensitiveEnvs)`; the setting `DUSTPAN_KEY_ENCRYPTION_KEY` is in `internal/cli/settings.go`)
 - A restore proves that the one wrapper names one of the wrapper IDs of the manifest. A manifest with two IDs passes when the wrapper holds only one of them. (`pkg/backup/staging.go:295 (method run of backupKeyCheck)`, the comparison at line 306)
 - A backup starts in `begin`, and a restore starts in `Start` with `admitStart`. Neither reads a rotation state. (`pkg/backup/service.go:689 (method begin)`, `pkg/backup/service.go:368 (method Start)`, `pkg/backup/restore_service.go:519 (method admitStart)`)
-- The instance version row holds the ID, the binary version and the start time. It is no liveness lease: a process that dies leaves its row, and an administrator removes it with `DELETE /api/server/instances/{id}`. (`pkg/installation/instances.go:34 (type Instance)`, `pkg/dustpan/instances.go:66 (method registerInstance)`, `internal/api/server/instances.go:32`)
+- The instance version row holds the ID, the binary version and the start time. It is no liveness lease: a process that dies leaves its row, and an administrator removes it with `DELETE /api/server/instances/{id}`. (`pkg/installation/instances.go:29 (type Instance, doc "leaves its row")`, `pkg/dustpan/instances.go:66 (method registerInstance)`, `internal/api/server/instances.go:32`)
 - Durable operations with a claim, ordered steps and resume exist. (`pkg/durable/durable.go:1 (package durable)`, `pkg/backup/restore_operation.go:253 (const RestoreOperationKind)`)
 - The server audit scope takes an entry through `AppendServer`, and the kind `change` exists. `AppendServer` of SQLite opens its own transaction. The method `inAuditedTx` writes a change and its entry in one transaction. (`pkg/audit/audit.go:815 (method AppendServer)`, `pkg/audit/audit.go:54 (const KindChange)`, `pkg/store/sqlite/audit.go:61 (method AppendServer)`, `pkg/store/sqlite/audit.go:86 (method inAuditedTx)`, `pkg/store/postgres/audit.go:125 (method inAuditedTx)`)
-- A service can take the caller and the authorizer, check the action at the point of use and return a sentinel for a denial. (`internal/trustrulesvc/service.go:467 (method authorizeCreate)`, `pkg/identity/identity.go:1138 (type Authorizer)`)
+- A service can take the caller and the authorizer, check the action at the point of use and return a sentinel for a denial. (`internal/trustrulesvc/service.go:471 (method authorizeCreate)`, `pkg/identity/identity.go:1138 (type Authorizer)`)
 - The installation actions are `server:*`, with `installation:store-check` and `installation:read-gates` as the two `installation:*` constants. No action for the key-encryption key exists. (`pkg/identity/identity.go:262 (const ActionInstallationStoreCheck)`, `pkg/identity/identity.go:266 (const ActionInstallationReadGates)`)
 - Only the site administrator holds the actions in `siteOnlyActions`, which are in the administration family and are removed from the account administrator. (`pkg/access/roles.go:150 (func siteOnlyActions)`, `pkg/access/access.go:165` for the family of `server:manage-sign-in`)
 - A write that needs a fresh authentication is wrapped by `Handler.fresh`. A request with an access token answers 403 `mfa.fresh-step-required`. (`internal/api/server/freshness.go:221 (method fresh)`, `internal/api/server/freshness.go:112 (func requireFresh)`; first use: `internal/api/server/audit_chain.go:92`)
@@ -120,7 +121,7 @@ Differences from the earlier text of this change: the earlier draft rewrapped "n
 - **Question 2: the old key (owner, 2026-11-20).** `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`, with the same format, file mode rule and clear rule as ADR 23 decision 1. The process builds `Rotating` when it holds the old key, with the new key as the writer and the old key as the reader only.
 - **Question 3: API and CLI (owner, 2026-11-20).** A REST API and a CLI command. The command is a client of the API (ADR 17, ADR 39).
 - **Question 4: backup targets (owner, 2026-11-20).** The rewrap does not delete old item key blobs in a backup target. A restore of an older backup needs the old key (ADR 217 decision 21), and retention removes old backups.
-- **Round 2, reach without the console (owner, 2026-11-20, "Yes as recommended").** Document the API path: a local-user password sign-in gives a console session with a CSRF value, and the call to start or finish sends the cookie, the CSRF header and `Origin`, as in `docs/guides/connect-github.md` "What you need". No new CLI flow for a fresh step. The CLI `start` and `finish` print that path and the docs page. The console screen comes later and is not a dependency.
+- **Round 2, reach without the console (owner, 2026-11-20, "Yes as recommended").** Document the API path: a local-user password sign-in gives a console session with a CSRF value, and the call to start or finish sends the cookie, the CSRF header and `Origin`, as in `docs/guides/console-sign-in.md` "What you need" and `docs/guides/first-administrator.md`. No new CLI flow for a fresh step. The CLI `start` and `finish` print that path and the docs page. The console screen comes later and is not a dependency.
 - **Round 2, abort (owner, 2026-11-20, "Yes as recommended").** Remove abort. A rotation only moves forward: start, resume, finish. To go back, finish, then start a rotation in the other direction.
 - **Round 2, old key held after finish (owner, 2026-11-20, "Yes as recommended").** The server refuses to start. The error names the variable to remove and one command. There is no warning.
 
@@ -206,7 +207,24 @@ Each quote is copied from the file in `docs/adr/`. The "Changed by" chain and th
 
 ## Open questions
 
-Open questions: none.
+Status: parked until the owner answers the two questions below (round 3, PM direction). Do not start the implementation.
+
+Open questions: 2.
+
+**B-c. Restore of a pre-rotation backup after a finish.** After a finished rotation A to B, an operator restores a backup made before it, and the database holds only A IDs. The server then runs with a `Rotating` (A, B), because the staged old key is A, and row 11 of the start-up table refuses it with `ErrOldKeyHeld`, although the data needs A.
+
+- Option 1: keep row 11 as written (the owner decision of 2026-11-20, round 2). The operator removes the old key variable, so a plain B process meets A records and row 10 refuses it. A restore of a pre-rotation backup then needs a new rotation in the other direction, which needs the old key staged, which row 11 refuses. The path is closed. Cost: such a backup cannot be used after the finish.
+- Option 2 (recommended): row 11 refuses only when S holds no `R.old` ID. A process with the old key staged starts when the stored IDs include the old ID, and refuses when none does (the case that the owner answered). Cost: one more condition and one more test row; a stale old key staged after a clean finish still refuses.
+- Recommendation: option 2. It keeps the answer that the owner gave (a clean finish refuses a held old key) and opens the one path that a restore needs. Plain 3 a.m. summary: after a restore of an old backup, the server needs the old key again. Option 2 lets it start with that key, and only then.
+
+**Q-1. The API path when the MFA policy asks site administrators for a second factor.** The documented path is a local-user password sign-in. When the policy asks a second factor, the password sign-in answers a step that the documented calls do not show, and the fresh step may need the second factor again.
+
+- Option 1: document the path for installations without a second-factor policy and say so on the page; an installation with the policy waits for the console screen. Cost: no operator path under the policy until the console screen exists.
+- Option 2 (recommended): document the second step too (the sign-in with the factor, the same CSRF read, the same calls), after one check on main of the exact sign-in route and its answers, so that the page needs no console. Cost: one more section and one e2e step with the factor.
+- Option 3: add a CLI sign-in flow. The owner ruled this out in round 2 ("No new CLI fresh flow").
+- Recommendation: option 2. Plain 3 a.m. summary: the rotation must work for an administrator who has a second factor. The page shows both sign-ins.
+
+Until the answers come, this change documents the path for a policy with no second factor, and makes no claim about the other case.
 
 The four questions of the first round and the three questions of the second round are answered by the owner on 2026-11-20 (section "Owner decisions"):
 
