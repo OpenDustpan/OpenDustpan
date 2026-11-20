@@ -1,5 +1,5 @@
 ---
-version: 8
+version: 9
 ---
 
 Issue: #1010, #1014, #1144.
@@ -46,10 +46,10 @@ Evidence for the claims above (each one checked on main at the line):
 Out of scope:
 
 - Provider blocks, the provider port and its adapters, rotators and login blocks. The change `add-profile-provider-port-its` lists this change under "Depends on", so this change lands first and that change replaces the `ErrProvider` refusal in `Service.Open` with the call of the registry. `Service.Open` must not import `pkg/profile/provider`, because that package imports `pkg/profile` (`pkg/profile/provider/run.go:15`).
-- The consumers `run`, `opentofu`, `launcher` and `observe`, exports, and the job open with a job token. `Service.Open` refuses a job token and a consumer other than `api`, `console` and `pulumi`.
-- The `checks` of a profile. They move to gates at the open (see "Open questions"). `Service.Open` refuses a profile that holds a rule in `checks`.
+- The consumers `run`, `opentofu`, `launcher` and `observe`, exports, and the job open with a job token (owner, 2026-11-20: a session belongs to a principal only, and job sessions wait until job opens are specified). `Service.Open` refuses a job token, with a denial and one denied audit entry, and a consumer other than `api`, `console` and `pulumi`.
+- The `checks` of a profile (owner, 2026-11-20). They move to gates at the decision point profile.open (ADR 224 decision 5). That gate slice is not built, and no change in `openspec/changes` holds it (proof: `rg -n 'profile[.]open' openspec/changes --glob '*/tasks.md'` finds no task that builds the gate of the decision point). It needs its own change. Until it lands, `Service.Open` refuses a profile that holds a rule in `checks`.
 - Expr names other than `values` in an expression (`providers`, `imports`, `profiles`, `context`). `Service.Open` refuses them with `ErrReference`.
-- A fresh sign-in for an open (see "Open questions").
+- A fresh sign-in for an open (owner, 2026-11-20). An open and a session read need `profile:open` only (ADR 203 decision 11).
 - Gates and access requests at the open, attachments, and the console.
 
 ## Usability
@@ -119,6 +119,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "fails with `identity.ErrDenied`, and the server deletes the session."
 - Quote: "- Sessions are not in a backup, because they hold credentials that end"
 - Quote: "A refused open writes an entry too. A read of a session writes no entry,"
+- Quote (decision 11, actions table): "`profile:open` | the profile | Open, read the static secrets of a document, a diff with secrets." The row names no fresh sign-in. So an open and a session read with a personal token need `profile:open` only (owner, 2026-11-20). The reveal differs: it needs a console session with a recent sign-in (`docs/reference/profiles-api.md:155-158`, `pkg/profile/service.go:479-499`). This change keeps the reveal as it is.
 - Effect: The change implements the open for the three session consumers, the seal with the key of the root profile, the owner rule (the same principal), the recheck at each read, the exclusion from backups, and one audit entry of kind access for each open and each refused open. Sessions are for a principal. The rule for a job (at most 100 for each job) belongs to the job open, which is out of scope.
 - Conflict: none. The old draft added a request field `mode`. Decision 1 has no such field, so this version drops it.
 
@@ -144,10 +145,11 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 224: Gates replace checks and rules** (part of ADR 222, which holds owner decisions).
 
 - Decisions that apply: 5 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 241 extends decision 16; ADR 286 changes; ADR 313 extends decision 1; ADR 317 changes decision 1; ADR 335 extends decisions 9 and 13 and changes decision 16; ADR 342 changes decision 16; ADR 353 extends decision 2 and changes decision 14; ADR 354 extends; ADR 377 changes decision 8 and extends decision 9. None of them changes decision 5. Chain to the end: the same ADRs.
+- Current rule: this ADR, with ADR 241, 286, 313, 317, 335, 342, 353, 354, 377.
 - Quote: "A profile `check`"
-- Effect: A profile check becomes a gate at the open. This change does not run `checks` and builds no gate. See "Open questions".
+- Quote: "becomes a gate of the profile at `profile.open`."
+- Effect: A profile check becomes a gate at the open. This change does not run `checks` and builds no gate. The open refuses a profile that holds a rule in `checks` (owner, 2026-11-20) until the gate slice for `profile.open` lands.
 - Conflict: ADR 201 decision 11 (the open runs each check) is superseded by this ADR.
 
 **ADR 228: One Expr package, values only** (decision 1 is owner-tagged).
@@ -162,11 +164,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Parts that depend on an open point are parked. The rest of the change does not depend on them.
+None. Open questions: none. The three questions of the first draft have the owner's answers below.
 
-1. **What does an open do with a profile that holds `checks`?** ADR 201 decision 11 ran them in the open. ADR 224 decision 5 moves each profile check to a gate at the open, and ADR 228 decision 1 says that Expr never decides whether a change goes on. The gate slice is not on main, and the save still accepts `checks` (`pkg/profile/document_check.go:159`). To run no rule silently, this change refuses an open of any profile that holds a rule in `checks`, with `ErrInvalid` that names the profile. That choice is provisional and parked in task 2.5. The owner decides whether the open refuses, ignores, or waits for the gate slice.
-2. **Does an open with a personal token need the fresh sign-in that a reveal needs?** The reveal route answers plain secrets only for a console session with a recent sign-in (`docs/reference/profiles-api.md:155-158`). ADR 203 decision 11 gives the open route only `profile:open`, so an open and a session read with a personal token answer plain secrets with no fresh sign-in. This change follows ADR 203. If the owner wants the same step-up, the open route and the session read change. Parked in task 2.6.
-3. **May a job own a session?** The stopped builder branch has an owner kind `job` with a job-token owner. ADR 203 decision 3 says that a job has at most 100 sessions and only the same job reads them, but decision 4 ties a job open to attachment authority, which is not built. Who may read a session of a job is a security choice that this change does not make. This change takes the owner kind `principal` only, refuses a job token, and drops `job` from the table check. The owner decides when the job open is specified.
+Decisions (owner, 2026-11-20):
+
+1. **A profile that holds `checks` (owner, 2026-11-20).** The open refuses it with `ErrInvalid` that names the profile, until the gate slice for the decision point profile.open lands (ADR 224 decision 5). No change in `openspec/changes` builds that gate today, so the slice needs its own change. The hostile test "Rule in checks" in NEW TestOpen (pkg/profile/open_test.go) fails when the guard goes (task 2.5).
+2. **No fresh sign-in for an open with a personal token (owner, 2026-11-20).** ADR 203 decision 11 gives `profile:open` only. The reveal keeps its fresh sign-in. The docs page states the difference (task 4.2).
+3. **Owner kind `principal` only (owner, 2026-11-20).** A job session is out of scope until job opens are specified. A job token is refused: fail closed, one denied audit entry, no read, no store.
 
 Questions considered and answered:
 

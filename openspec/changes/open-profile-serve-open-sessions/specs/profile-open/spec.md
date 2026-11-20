@@ -34,7 +34,7 @@ If the caller lacks profile:open on the namespace, then the server SHALL answer 
 
 #### Scenario: Job token
 - **WHEN** a caller with a job token opens a profile
-- **THEN** the server answers 403 and stores nothing, because the job open is not built
+- **THEN** the server answers 403, stores nothing and writes one denied audit entry, because the job open is not built (owner, 2026-11-20)
 
 ### Requirement: Refuse never-store
 
@@ -58,7 +58,7 @@ If the open reaches a provider block, a rule in checks, a consumer other than ap
 
 #### Scenario: Rule in checks
 - **WHEN** a profile that the open reaches holds a rule in checks
-- **THEN** the open fails with profile.ErrInvalid that names the profile (parked: see Open questions in the proposal)
+- **THEN** the open fails with profile.ErrInvalid that names the profile, until the gate slice for the decision point profile.open lands (owner, 2026-11-20)
 
 #### Scenario: Other consumer
 - **WHEN** the consumer is run, opentofu, launcher or observe
