@@ -328,7 +328,7 @@ cover: ## Fast coverage pass for the packages of test-ci-other, without -race: w
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
-	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -parallel $(STORE_TEST_PARALLEL) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
+	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -parallel $(STORE_TEST_PARALLEL) -timeout $(STORE_TEST_TIMEOUT) ./internal/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)

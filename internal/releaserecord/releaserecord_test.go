@@ -780,7 +780,7 @@ func writeMigrations(t *testing.T, dir string, extra map[string]string) {
 
 	files := map[string]string{}
 	for _, dialect := range releaserecord.Dialects() {
-		files["pkg/store/"+dialect+"/migrations/"+baseline] = "base"
+		files["internal/store/"+dialect+"/migrations/"+baseline] = "base"
 	}
 
 	maps.Copy(files, extra)

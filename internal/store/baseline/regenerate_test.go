@@ -13,7 +13,7 @@ import (
 func committedMigrations(t *testing.T, dialect string) []migrate.Migration {
 	t.Helper()
 
-	all, err := migrate.Load(os.DirFS(filepath.Join("..", "..", dialect)), "migrations")
+	all, err := migrate.Load(os.DirFS(filepath.Join("..", dialect)), "migrations")
 	if err != nil {
 		t.Fatalf("load the %s migrations: %v", dialect, err)
 	}

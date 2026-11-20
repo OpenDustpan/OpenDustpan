@@ -21,7 +21,7 @@ A changed file is a file that differs between the merge base with the base
 ref and the working tree, or an untracked file. A file belongs to the
 package of its directory, or of the nearest parent directory that is a
 package. The test step leaves out the two store packages, because their
-suites are slow, unless a changed file is under pkg/store/.
+suites are slow, unless a changed file is under pkg/store/ or internal/store/.
 
 The script fails open. When it cannot find the changed files or the
 packages, or a tool is not installed, it writes a note and skips that step.
@@ -40,7 +40,7 @@ import shutil
 import subprocess
 import sys
 
-STORE_PREFIX = "pkg/store/"
+STORE_PREFIXES = ("pkg/store/", "internal/store/")
 STORE_DIRS = ("internal/store/sqlite", "internal/store/postgres")
 
 
@@ -124,7 +124,7 @@ def select(files, dirs, graph):
     paths = {p for p in (owning_package(f, dirs) for f in files) if p}
     by_path = {p: d for d, p in dirs.items()}
     tested = {p for p, deps in graph.items() if p in paths or paths & deps}
-    if not any(f.startswith(STORE_PREFIX) for f in files):
+    if not any(f.startswith(STORE_PREFIXES) for f in files):
         tested -= {dirs[d] for d in STORE_DIRS if d in dirs}
     lint_dirs = sorted(by_path[p] for p in paths if p in by_path)
     test_dirs = sorted(by_path[p] for p in tested if p in by_path)
@@ -269,7 +269,7 @@ def selftest():
         (["c/c_test.go"], ["c"], ["c"]),
         # A file in testdata belongs to the package above it.
         (["b/testdata/x.json"], ["b"], ["b", "c"]),
-        # A change under pkg/store/ keeps the store suites.
+        # A change under pkg/store/ or internal/store/ keeps the store suites.
         (["a/a.go", "pkg/store/storetest/t.go"], ["a", "pkg/store/storetest"],
          ["a", "b", "c", "internal/store/sqlite", "pkg/store/storetest"]),
         # Files outside any package, deleted packages and tagged packages select nothing.

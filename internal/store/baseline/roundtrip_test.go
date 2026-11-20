@@ -36,7 +36,7 @@ func currentRecord(t *testing.T) releaserecord.Record {
 func committedBaseline(t *testing.T, dialect string) baselineFile {
 	t.Helper()
 
-	path := filepath.Join("..", "..", dialect, "migrations", schema.BaselineName)
+	path := filepath.Join("..", dialect, "migrations", schema.BaselineName)
 
 	//nolint:gosec // The path is the baseline file of a fixed dialect in this repository.
 	data, err := os.ReadFile(path)

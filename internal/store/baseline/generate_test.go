@@ -3,7 +3,7 @@
 //
 // The write tests run only when DUSTPAN_TEST_BASELINE_IN names a directory
 // that holds the numbered migrations to collapse, in
-// pkg/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up
+// internal/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up
 // and runs them. For each dialect a write test applies every input
 // migration in order to an empty database. When the input holds no baseline
 // yet, it then applies the statements of testdata/after-<dialect>.sql. It
@@ -174,7 +174,7 @@ func dirs(t *testing.T) paths {
 }
 
 // taggedDirs returns the tag directories under
-// pkg/store/<dialect>/testdata/tag-migrations of the repository at root. A
+// internal/store/<dialect>/testdata/tag-migrations of the repository at root. A
 // released tag has one, and a collapse of the migrations would break the
 // upgrade from it.
 func taggedDirs(t *testing.T, root string) []string {
@@ -183,7 +183,7 @@ func taggedDirs(t *testing.T, root string) []string {
 	var found []string
 
 	for _, dialect := range dialects {
-		dir := filepath.Join(root, "pkg", "store", dialect, "testdata", "tag-migrations")
+		dir := filepath.Join(root, "internal", "store", dialect, "testdata", "tag-migrations")
 
 		entries, err := os.ReadDir(dir)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -212,7 +212,7 @@ var dialects = []string{"sqlite", "postgres"} //nolint:gochecknoglobals // A fix
 func inputMigrations(t *testing.T, in, dialect string) []migrate.Migration {
 	t.Helper()
 
-	all, err := migrate.Load(os.DirFS(filepath.Join(in, "pkg", "store", dialect)), "migrations")
+	all, err := migrate.Load(os.DirFS(filepath.Join(in, "internal", "store", dialect)), "migrations")
 	if err != nil {
 		t.Fatalf("load %s migrations: %v", dialect, err)
 	}
@@ -303,7 +303,7 @@ type target struct {
 func writeBaseline(t *testing.T, out string, to target, content string) {
 	t.Helper()
 
-	path := filepath.Join(out, "pkg", "store", to.dialect, "migrations", to.name)
+	path := filepath.Join(out, "internal", "store", to.dialect, "migrations", to.name)
 
 	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -1222,7 +1222,7 @@ func TestTaggedDirsRefuseTheCollapse(t *testing.T) {
 		t.Fatalf("tag directories of an empty repository = %v, want none", got)
 	}
 
-	base := filepath.Join(root, "pkg", "store", "postgres", "testdata", "tag-migrations")
+	base := filepath.Join(root, "internal", "store", "postgres", "testdata", "tag-migrations")
 	if err := os.MkdirAll(base, 0o750); err != nil {
 		t.Fatalf("make %s: %v", base, err)
 	}

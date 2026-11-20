@@ -32,8 +32,16 @@ func TestLinkedDependencies(t *testing.T) {
 	const module = "opendustpan.org/opendustpan/"
 
 	forbidden := []string{
-		"database/sql", "github.com/jackc/pgx", "modernc.org/sqlite", "github.com/mattn/go-sqlite3",
-		"github.com/lib/pq", module + "pkg/forge", module + "pkg/store", module + "internal/api", "runtime/cgo",
+		"database/sql",
+		"github.com/jackc/pgx",
+		"modernc.org/sqlite",
+		"github.com/mattn/go-sqlite3",
+		"github.com/lib/pq",
+		module + "pkg/forge",
+		module + "pkg/store",
+		module + "internal/store",
+		module + "internal/api",
+		"runtime/cgo",
 		module + "pkg/dustpan",
 	}
 

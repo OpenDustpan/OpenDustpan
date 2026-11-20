@@ -62,7 +62,7 @@ fi
 : "${DUSTPAN_TEST_POSTGRES_URL:?set DUSTPAN_TEST_POSTGRES_URL to a PostgreSQL database}"
 
 for dialect in sqlite postgres; do
-	if [ -n "$(find "$ROOT/pkg/store/$dialect/testdata/tag-migrations" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
+	if [ -n "$(find "$ROOT/internal/store/$dialect/testdata/tag-migrations" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)" ]; then
 		echo "regenerate-baseline: tagged migrations exist; collapse only above the last tag is not implemented" >&2
 		exit 1
 	fi
@@ -91,12 +91,12 @@ DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" \
 BASELINE=""
 for dialect in sqlite postgres; do
 	newest=""
-	for file in "$ROOT/pkg/store/$dialect/migrations/"[0-9]*_baseline.sql; do
+	for file in "$ROOT/internal/store/$dialect/migrations/"[0-9]*_baseline.sql; do
 		[ -e "$file" ] || continue
 		newest="$(basename "$file")"
 	done
 	if [ -z "$newest" ]; then
-		echo "regenerate-baseline: no baseline file in pkg/store/$dialect/migrations" >&2
+		echo "regenerate-baseline: no baseline file in internal/store/$dialect/migrations" >&2
 		exit 1
 	fi
 	if [ -n "$BASELINE" ] && [ "$newest" != "$BASELINE" ]; then
@@ -111,7 +111,7 @@ VERSION="$(printf '%s' "$BASELINE" | cut -d_ -f1 | sed 's/^0*//')"
 # shared list in internal/store/schema/migrations holds name-only stubs and no
 # hash files.
 for dialect in sqlite postgres schema; do
-	for file in "$ROOT/pkg/store/$dialect/migrations/"*.sql "$ROOT/pkg/store/$dialect/migrations/"*.sql.sha256; do
+	for file in "$ROOT/internal/store/$dialect/migrations/"*.sql "$ROOT/internal/store/$dialect/migrations/"*.sql.sha256; do
 		[ -e "$file" ] || continue
 		name="$(basename "$file" .sha256)"
 		version="$(printf '%s' "$name" | cut -d_ -f1 | sed 's/^0*//')"
@@ -137,9 +137,9 @@ sql_names() {
 
 sqlite_names="$(sql_names "$ROOT/internal/store/sqlite/migrations")"
 for dir in postgres schema; do
-	names="$(sql_names "$ROOT/pkg/store/$dir/migrations")"
+	names="$(sql_names "$ROOT/internal/store/$dir/migrations")"
 	if [ "$names" != "$sqlite_names" ]; then
-		echo "regenerate-baseline: pkg/store/$dir/migrations holds other file names than internal/store/sqlite/migrations" >&2
+		echo "regenerate-baseline: internal/store/$dir/migrations holds other file names than internal/store/sqlite/migrations" >&2
 		exit 1
 	fi
 done
