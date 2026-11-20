@@ -119,6 +119,19 @@ func checkUsageLines(t *testing.T, out string) {
 	}
 }
 
+// runError answers the error of a run with args. It fails the test when the
+// run answers no error.
+func runError(t *testing.T, args ...string) error {
+	t.Helper()
+
+	err := run(t.Context(), args, &strings.Builder{}, &strings.Builder{})
+	if err == nil {
+		t.Fatalf("run %q: no error, want the usage error", args)
+	}
+
+	return err
+}
+
 // TestWriteErrorLineKeepsUsageLines is the stderr layer for the usage error:
 // the message, which can hold an unknown command name, is escaped on one
 // line, and the fixed usage text after it keeps its line breaks.
@@ -129,7 +142,7 @@ func TestWriteErrorLineKeepsUsageLines(t *testing.T) {
 
 	for name, err := range map[string]error{
 		"command error": &commandError{text: "unknown command " + hostile},
-		"from run":      run(t.Context(), []string{hostile}, &strings.Builder{}, &strings.Builder{}),
+		"from run":      runError(t, hostile),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -167,7 +180,7 @@ func TestWriteErrorLineKeepsBareUsageLines(t *testing.T) {
 
 	var b strings.Builder
 
-	writeErrorLine(&b, "opendustpan", run(t.Context(), nil, &strings.Builder{}, &strings.Builder{}))
+	writeErrorLine(&b, "opendustpan", runError(t))
 
 	if out := b.String(); !strings.HasPrefix(out, "opendustpan: usage: opendustpan <command>") {
 		t.Errorf("output = %q, want the usage", out)
