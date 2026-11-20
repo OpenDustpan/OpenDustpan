@@ -17,11 +17,11 @@ func TestDecodeRestoreSwapRefusesHostileResults(t *testing.T) {
 		name   string
 		result string
 	}{
-		{name: "negative expired update leases", result: `{"droppedTempAdmins":0,"expiredUpdateLeases":-1}`},
-		{name: "negative dropped temp admins", result: `{"droppedTempAdmins":-1,"expiredUpdateLeases":0}`},
-		{name: "unknown field", result: `{"droppedTempAdmins":0,"expiredUpdateLeases":1,"extra":1}`},
+		{name: "negative expired update leases", result: `{"expiredUpdateLeases":-1}`},
+		{name: "removed dropped temp admins count", result: `{"droppedTempAdmins":0,"expiredUpdateLeases":0}`},
+		{name: "unknown field", result: `{"expiredUpdateLeases":1,"extra":1}`},
 		{name: "unknown field only", result: `{"expiredLeases":3}`},
-		{name: "text for a count", result: `{"droppedTempAdmins":0,"expiredUpdateLeases":"1"}`},
+		{name: "text for a count", result: `{"expiredUpdateLeases":"1"}`},
 		{name: "not an object", result: `[1,2]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,7 +32,7 @@ func TestDecodeRestoreSwapRefusesHostileResults(t *testing.T) {
 				t.Fatalf("decode %s: error = %v, want ErrCorrupt", tc.result, err)
 			}
 
-			if got != (backup.KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}) {
+			if got != (backup.KeepAccessResult{ExpiredUpdateLeases: 0}) {
 				t.Errorf("decode %s: result = %+v, want the zero result", tc.result, got)
 			}
 		})
@@ -44,7 +44,7 @@ func TestDecodeRestoreSwapRefusesHostileResults(t *testing.T) {
 func TestRestoreSwapResultRoundTrips(t *testing.T) {
 	t.Parallel()
 
-	want := backup.KeepAccessResult{DroppedTempAdmins: 3, ExpiredUpdateLeases: 2}
+	want := backup.KeepAccessResult{ExpiredUpdateLeases: 2}
 
 	got, err := backup.DecodeRestoreSwap(backup.EncodeRestoreSwap(want, backup.PlainSwap(false)))
 	if err != nil {

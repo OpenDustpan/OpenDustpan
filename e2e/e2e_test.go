@@ -12561,6 +12561,14 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 		"operator restore keeps a revoked token revoked",
 		"installation-operator restore kept the access tables",
 	)
+
+	if checkOperatorRestoreKeepsTempAdmin(ctx, t, env, store) {
+		env.NoteStep(
+			t,
+			"operator restore keeps a temporary administrator",
+			"installation-operator restore kept the live temporary administrator, its grant and its expiry",
+		)
+	}
 }
 
 // writeExitTestState writes the checked state with both CLIs: a Pulumi stack

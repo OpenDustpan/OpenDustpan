@@ -30,7 +30,7 @@ func oneEntry(name string, result []byte, wantOld, want string) entryCase {
 // takenRecord returns the record of a swap that took the row of the setting
 // from the backup, with the live value before and the value after.
 func takenRecord(before, after string, static bool) []byte {
-	return EncodeRestoreSwap(KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}, SwapDecision{
+	return EncodeRestoreSwap(KeepAccessResult{ExpiredUpdateLeases: 0}, SwapDecision{
 		KeepAccessTables: false, Widened: false, KeepSettingKeys: nil,
 		SettingBefore: before, SettingAfter: after, SettingStatic: static,
 	})

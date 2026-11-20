@@ -26,7 +26,7 @@ func (a *applyRecorder) ApplyRestoreArea(
 ) (KeepAccessResult, error) {
 	a.applied++
 
-	return KeepAccessResult{DroppedTempAdmins: 0, ExpiredUpdateLeases: 0}, a.err
+	return KeepAccessResult{ExpiredUpdateLeases: 0}, a.err
 }
 
 // TestStepSwapRefusesAnInvalidDecision proves that the swap step checks the
