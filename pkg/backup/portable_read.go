@@ -541,31 +541,42 @@ func portableFileOf(files []PortableFile, table string) (PortableFile, bool) {
 // read. This check stays so that a restored backup fails before it reaches the
 // database.
 func checkOutputSharingRuleValue(column string, value any) error {
-	text, isText := value.(string)
-	if !isText {
-		return fmt.Errorf("sharing rule row has a %s that is not text: %w: %w", column, outputshare.ErrInvalid, ErrCorrupt)
-	}
-
 	var err error
 
 	switch column {
-	case "id":
-		err = outputshare.ID(text).Validate()
-	case "producer_kind", "consumer_kind":
-		if text != "unit" && text != "collection" && text != "namespace" {
-			err = fmt.Errorf("%w: kind of object", outputshare.ErrInvalid)
-		}
-	case "created_by":
-		if text == "" {
-			err = fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
-		}
+	case "id", "producer_kind", "consumer_kind", "created_by":
+		err = checkRuleText(column, value)
 	default:
-		// The other columns hold names and stable IDs. The table CHECKs and
-		// the store read check their shape.
+		// The other columns hold names, stable IDs and the time. The table
+		// CHECKs and the store read check their shape.
 	}
 
 	if err != nil {
 		return fmt.Errorf("sharing rule row has an invalid %s: %w: %w", column, err, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkRuleText checks the text of one column of a sharing rule row that the
+// restore must not take as it is.
+func checkRuleText(column string, value any) error {
+	text, isText := value.(string)
+	if !isText {
+		return fmt.Errorf("%w: not text", outputshare.ErrInvalid)
+	}
+
+	switch column {
+	case "id":
+		return outputshare.ID(text).Validate()
+	case "created_by":
+		if text == "" {
+			return fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
+		}
+	default:
+		if text != "unit" && text != "collection" && text != "namespace" {
+			return fmt.Errorf("%w: kind of object", outputshare.ErrInvalid)
+		}
 	}
 
 	return nil
