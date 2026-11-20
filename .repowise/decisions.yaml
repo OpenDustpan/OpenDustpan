@@ -4403,3 +4403,15 @@ decisions:
   accepted_artifact: "docs/adr/0390-fresh-window-zero-passes-once-and-never-locks-out.md"
   evidence:
   - "docs/adr/0390-fresh-window-zero-passes-once-and-never-locks-out.md"
+- id: "adr-0391"
+  title: "ADR 391: A stored reference to a unit or a collection is its stable ID"
+  decision: "1. **A stored reference is the stable ID (owner, 2026-11-20).** A sharing rule can name a unit or a collection of another namespace as its consumer. The rule stores the stable ID of that unit or collection. It stores no name for a match. A rename changes no rule. A unit or collection that someone deletes and makes again has a new ID. It does not match the old rule. This changes the bullet of ADR 273 decision 3 that begins \"So the store keeps the reference of such a consumer\". It changes nothing else in that decision.\n2. **No entity has a name key (owner, 2026-11-20).** Each stored reference to an entity uses the stable ID of the entity. This holds when a user can rename the entity. It also holds when a user can delete the entity and make it again. A name is a label for people. The store may keep a name next to the ID for display. A name never decides a match, a grant or a rule. This is ADR 362 decision 1. This ADR does not change ADR 362.\n3. **The other words of ADR 273 decision 3 stay.** The producer decides alone. The rule needs no acceptance by the other namespace. The write of the rule carries the fence of the producer namespace only. A denial of a read by a job of another namespace answers 404. Its audit entry goes to the audit log of the producer namespace only.\n\nLater changes, from the status line of ADR 391: Decided by the project owner (owner, 2026-11-20). The owner chose ADR 362 decision 1. The name match of ADR 273 decision 3 ends."
+  reason: "Review of the first pull request of output sharing found a conflict. ADR 273 decision 3 lets a sharing rule name a unit or a collection of another namespace as its consumer. It also says: > So the store keeps the reference of such a consumer, and matches it at each read. A rename in the other namespace ends the match. A new unit or a new collection with the old name matches."
+  scope:
+  - "docs/adr/0391-a-stored-reference-to-an-entity-is-its-stable-id.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-20"
+  accepted_artifact: "docs/adr/0391-a-stored-reference-to-an-entity-is-its-stable-id.md"
+  evidence:
+  - "docs/adr/0391-a-stored-reference-to-an-entity-is-its-stable-id.md"

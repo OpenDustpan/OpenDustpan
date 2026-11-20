@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 391 changes decision 3: a stored reference to a consumer unit or
+  consumer collection of another namespace is its stable ID, never its name.
 
 ## Context
 
