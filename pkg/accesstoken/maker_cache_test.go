@@ -50,8 +50,17 @@ func TestRevokeLostMakersReadsTheGroupsAfterTheChange(t *testing.T) {
 	authz := rf.authorizerOf(t)
 
 	// The token of member for the service principal ops.
-	made, _, err := rf.tokens.Create(t.Context(), as(rf.member), caller(), accesstoken.ScopeService,
-		accesstoken.Input{ExpiresAt: rf.clock.Now().Add(accesstoken.DefaultLifetime), PrincipalID: rf.ops.ID, Name: "ci"})
+	made, _, err := rf.tokens.Create(
+		t.Context(),
+		as(rf.member),
+		caller(),
+		accesstoken.ScopeService,
+		accesstoken.Input{
+			ExpiresAt:   rf.clock.Now().Add(accesstoken.DefaultLifetime),
+			PrincipalID: rf.ops.ID,
+			Name:        "ci",
+		},
+	)
 	if err != nil {
 		t.Fatalf("create the token of the maker: %v", err)
 	}
@@ -80,7 +89,11 @@ func TestRevokeLostMakersReadsTheGroupsAfterTheChange(t *testing.T) {
 		t.Fatalf("remove the maker from the group: %v", err)
 	}
 
-	cause := accesstoken.Cause{Subject: rf.member.Subject, Action: "server:manage-groups", Object: "group:" + rf.group.ID}
+	cause := accesstoken.Cause{
+		Subject: rf.member.Subject,
+		Action:  "server:manage-groups",
+		Object:  "group:" + rf.group.ID,
+	}
 
 	got, err := checked.RevokeLostMakers(ctx, cause)
 	if err != nil {
@@ -90,5 +103,4 @@ func TestRevokeLostMakersReadsTheGroupsAfterTheChange(t *testing.T) {
 	if len(got.Revoked) != 1 || got.Revoked[0] != made.ID {
 		t.Fatalf("revoked = %v, want the token %s of the maker who left the group", got.Revoked, made.ID)
 	}
-
 }
