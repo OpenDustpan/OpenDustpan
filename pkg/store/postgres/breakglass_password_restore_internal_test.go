@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -83,7 +84,7 @@ func breakGlassPasswordCase(t *testing.T, breakGlass bool, hash string, want err
 	removeLiveOnlyFromStaged(t, s, staging, kept)
 	stageLocalPerson(t, s, staging, breakGlass, hash)
 
-	_, applyErr := s.ApplyRestoreArea(ctx, staged.Swap, staged.Area, false)
+	_, applyErr := s.ApplyRestoreArea(ctx, staged.Swap, staged.Area, backup.PlainSwap(false))
 
 	if want == nil {
 		if errors.Is(applyErr, principal.ErrBreakGlassPassword) {
