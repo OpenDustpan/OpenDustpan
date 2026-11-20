@@ -17,10 +17,16 @@ func TestProcessAdapterKillSkipsAnEndedGroup(t *testing.T) {
 	tests := []struct {
 		name       string
 		groupEnded bool
+		calls      int
 		wantKills  int64
 	}{
-		{name: "the group has ended", groupEnded: true, wantKills: 0},
-		{name: "the group has not ended", groupEnded: false, wantKills: 1},
+		{name: "the group has ended", groupEnded: true, calls: 1, wantKills: 0},
+		{name: "the group has not ended", groupEnded: false, calls: 1, wantKills: 1},
+		// Close can call kill again while Wait still runs, for example when
+		// the shutdown request times out after an earlier kill.
+		{name: "a second kill before Wait ends", groupEnded: false, calls: 2, wantKills: 1},
+		{name: "many kills before Wait ends", groupEnded: false, calls: 5, wantKills: 1},
+		{name: "kills after the group has ended", groupEnded: true, calls: 3, wantKills: 0},
 	}
 
 	for _, tt := range tests {
@@ -29,7 +35,9 @@ func TestProcessAdapterKillSkipsAnEndedGroup(t *testing.T) {
 
 			a, kills := conformance.NewKillAdapter(t, tt.groupEnded)
 
-			conformance.Kill(a)
+			for range tt.calls {
+				conformance.Kill(a)
+			}
 
 			if got := kills.Load(); got != tt.wantKills {
 				t.Errorf("kill sent %d signals to the process group, want %d", got, tt.wantKills)

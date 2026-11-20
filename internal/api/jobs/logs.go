@@ -98,6 +98,10 @@ type logStream struct {
 func (h *Handler) getLog(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
+	if h.refuseDamaged(ctx, w, t) {
+		return
+	}
+
 	after, err := parseAfter(r)
 	if err != nil {
 		h.writeError(ctx, w, err)

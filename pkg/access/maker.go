@@ -21,6 +21,13 @@ import (
 // returns ErrInvalid: the caller cannot decide, so it keeps the token and
 // refuses its use.
 func (s *Service) CanActAs(ctx context.Context, maker, principalID string) (bool, error) {
+	// Defense in depth: accesstoken.Service.RevokeLostMakers strips the
+	// request cache too. This guard stays so that no caller, also not the
+	// check at the use of a token, can decide on the subjects or the custom
+	// roles that an earlier decision of the same request cached before a
+	// change.
+	ctx = WithoutRequestCache(ctx)
+
 	if slices.Contains(s.bootstrap, maker) {
 		return true, nil
 	}

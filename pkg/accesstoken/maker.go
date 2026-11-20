@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -76,6 +77,13 @@ func (s *Service) RevokeLostMakers(ctx context.Context, cause Cause) (RevokeResu
 	if s.makers == nil {
 		return out, nil
 	}
+
+	// The check runs after a committed change. A request cache in ctx holds
+	// the groups and the roles that the route check of the same request read
+	// before the change. No caller may pass it: the service drops it here,
+	// whatever the MakerChecker does. Defense in depth: access.Service.CanActAs
+	// drops it too, and this guard does not rely on that.
+	ctx = access.WithoutRequestCache(ctx)
 
 	decided := map[makerKey]bool{}
 
@@ -206,6 +214,35 @@ func (s *Service) checkMakerAtUse(ctx context.Context, t Token) error {
 		return nil
 	}
 
+	return s.revokeLostMakerAtUse(ctx, t)
+}
+
+// checkMakerOfLease is the check at the use of a service token for the lease
+// requests of a running update. It decides as checkMakerAtUse does, with one
+// difference: a checker that cannot decide returns its own error, which does
+// not wrap identity.ErrUnauthenticated, so a failure of the store ends no
+// update with the answer of a revoked token. The token is refused and kept:
+// the next request checks again (fail closed).
+func (s *Service) checkMakerOfLease(ctx context.Context, t Token) error {
+	if s.makers == nil || t.Kind != KindService {
+		return nil
+	}
+
+	can, err := s.makers.CanActAs(ctx, t.CreatedBy, t.PrincipalID)
+	if err != nil {
+		return fmt.Errorf("check the maker of access token %q: %w", t.ID, err)
+	}
+
+	if can {
+		return nil
+	}
+
+	return s.revokeLostMakerAtUse(ctx, t)
+}
+
+// revokeLostMakerAtUse revokes t with the reason ReasonMakerLostPathAtUse and
+// returns the refusal of a token whose maker has no act-as path.
+func (s *Service) revokeLostMakerAtUse(ctx context.Context, t Token) error {
 	revokeErr := s.store.RevokeToken(ctx, t.ID, lostMakerEntry(s.Now(), t, useCause(t), ReasonMakerLostPathAtUse))
 	if revokeErr != nil && !errors.Is(revokeErr, ErrEnded) {
 		s.logger.WarnContext(ctx, "revoke of an access token whose maker has no act-as path failed",
