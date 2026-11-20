@@ -126,7 +126,8 @@ entry for each window. The answer of a refusal keeps its own status.
   `stack.state-too-complex` or `state-version.too-complex`. The work of a value
   is the length of its path plus a fixed cost for its marker. One budget covers
   the whole read. The server decides this before it builds the path of any
-  marker. A state with many markers under these limits is read in pages.
+  marker. The server answers a state with many markers under these limits in
+  pages.
 - The server refuses an OpenTofu state that it cannot read, with 500 and no
   content. A reader can then tell this answer from a state with no secrets.
   Examples are a state that the client encrypted, a `resources` value that is

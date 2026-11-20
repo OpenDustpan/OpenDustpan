@@ -480,43 +480,15 @@ func maskedStatePaths(ctx context.Context, state []byte, marks SensitiveMarks) (
 // from one budget, and the scan ends before the masking builds the first
 // marker.
 func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks) ([]string, error) {
-	encrypted, err := IsClientEncrypted(state)
-	if err != nil || encrypted {
-		return nil, fmt.Errorf("%w: the state is encrypted by the client or not an object", ErrUnreadableState)
-	}
-
-	doc, err := decodeBoundedState(state)
+	entries, err := maskedResourceEntries(ctx, state)
 	if err != nil {
-		if errors.Is(err, ErrStateBound) {
-			return nil, err
-		}
-
-		// The text of a decode error can quote the state, so the answer carries
-		// a fixed text.
-		return nil, fmt.Errorf("%w: the state is not valid JSON", ErrUnreadableState)
-	}
-
-	if ctx.Err() != nil {
-		return nil, ErrReadDeadline
-	}
-
-	entries, skipped := tofuStateResources(doc)
-	if skipped {
-		return nil, fmt.Errorf("%w: resources has an entry that the server cannot read", ErrUnreadableState)
+		return nil, err
 	}
 
 	work := newMaskWork(nil)
 
-	for _, entry := range entries {
-		if shapeErr := checkTofuInstanceShapes(entry.obj, marks); shapeErr != nil {
-			return nil, shapeErr
-		}
-
-		for i, instance := range tofuInstances(entry.obj) {
-			if scanErr := checkInstanceWork(ctx, work, instance, entry.index, i); scanErr != nil {
-				return nil, scanErr
-			}
-		}
+	if scanErr := scanMaskedEntries(ctx, work, entries, marks); scanErr != nil {
+		return nil, scanErr
 	}
 
 	masked := []string{}
@@ -535,6 +507,57 @@ func maskedResourcePaths(ctx context.Context, state []byte, marks SensitiveMarks
 	}
 
 	return masked, nil
+}
+
+// maskedResourceEntries decodes state and returns its resources. It refuses a
+// state that the client encrypted, a document that is no valid JSON object, and
+// a resources value that it cannot read with ErrUnreadableState, and a state
+// that nests deeper than MaxStateDepth with ErrStateBound. The answers carry
+// fixed texts, as the text of a decode error can quote the state.
+func maskedResourceEntries(ctx context.Context, state []byte) ([]tofuResourceEntry, error) {
+	encrypted, err := IsClientEncrypted(state)
+	if err != nil || encrypted {
+		return nil, fmt.Errorf("%w: the state is encrypted by the client or not an object", ErrUnreadableState)
+	}
+
+	doc, err := decodeBoundedState(state)
+	if err != nil {
+		if errors.Is(err, ErrStateBound) {
+			return nil, err
+		}
+
+		return nil, fmt.Errorf("%w: the state is not valid JSON", ErrUnreadableState)
+	}
+
+	if ctx.Err() != nil {
+		return nil, ErrReadDeadline
+	}
+
+	entries, skipped := tofuStateResources(doc)
+	if skipped {
+		return nil, fmt.Errorf("%w: resources has an entry that the server cannot read", ErrUnreadableState)
+	}
+
+	return entries, nil
+}
+
+// scanMaskedEntries checks the shape of each resource and charges every
+// instance to the budget of work. It builds no path, so a state over the bound
+// ends here with ErrStateBound before the masking builds the first marker.
+func scanMaskedEntries(ctx context.Context, work *maskWork, entries []tofuResourceEntry, marks SensitiveMarks) error {
+	for _, entry := range entries {
+		if err := checkTofuInstanceShapes(entry.obj, marks); err != nil {
+			return err
+		}
+
+		for i, instance := range tofuInstances(entry.obj) {
+			if err := checkInstanceWork(ctx, work, instance, entry.index, i); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // maskedOutputPaths returns the value path of each sensitive output of state.
