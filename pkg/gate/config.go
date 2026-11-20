@@ -117,11 +117,78 @@ const (
 	AuditDeleteApprovalRule    = "namespace:delete-approval-rule"
 )
 
+// Audit actions of the writes at the installation scope. They name the entry
+// only. The authorization action of the route is a different value.
+const (
+	AuditInstallationSetApprovalRule    = "installation:set-approval-rule"
+	AuditInstallationDeleteApprovalRule = "installation:delete-approval-rule"
+)
+
+// auditWrite names one write of the service. It picks the audit action in
+// prepare, from the level of the scope: auditNames holds the action of each
+// level, so a write at a level has no name of another level.
+type auditWrite int
+
+const (
+	writeSetApprovalDefault auditWrite = iota + 1
+	writeDeleteApprovalDefault
+	writeSetApprovalRule
+	writeDeleteApprovalRule
+	writeSetGate
+	writeDeleteGate
+	writeSetAccessLimit
+	writeDeleteAccessLimit
+)
+
+// auditNames holds the audit action of one write for each level of scope. An
+// empty installation name means that the installation holds no such write.
+type auditNames struct {
+	namespace    string
+	installation string
+}
+
+// names returns the audit actions of the write w. An unknown write has no
+// action at any level, so prepare refuses it.
+func (w auditWrite) names() auditNames {
+	switch w {
+	case writeSetApprovalDefault:
+		return auditNames{namespace: AuditSetApprovalDefault, installation: ""}
+	case writeDeleteApprovalDefault:
+		return auditNames{namespace: AuditDeleteApprovalDefault, installation: ""}
+	case writeSetApprovalRule:
+		return auditNames{namespace: AuditSetApprovalRule, installation: AuditInstallationSetApprovalRule}
+	case writeDeleteApprovalRule:
+		return auditNames{namespace: AuditDeleteApprovalRule, installation: AuditInstallationDeleteApprovalRule}
+	case writeSetGate:
+		return auditNames{namespace: AuditSetGate, installation: AuditInstallationSetGate}
+	case writeDeleteGate:
+		return auditNames{namespace: AuditDeleteGate, installation: AuditInstallationDeleteGate}
+	case writeSetAccessLimit:
+		return auditNames{namespace: AuditSetAccessLimit, installation: AuditInstallationSetAccessLimit}
+	case writeDeleteAccessLimit:
+		return auditNames{namespace: AuditDeleteAccessLimit, installation: AuditInstallationDeleteAccessLimit}
+	default:
+		return auditNames{namespace: "", installation: ""}
+	}
+}
+
+// scopeUse says what a method does with a scope.
+type scopeUse int
+
+const (
+	// useRead reads a gate, an access limit or an approval rule.
+	useRead scopeUse = iota + 1
+	// useWrite saves or deletes a gate, an access limit or an approval rule.
+	useWrite
+	// useApprovalDefault reads, saves or deletes an approval default.
+	useApprovalDefault
+)
+
 // ApprovalDefault returns the approval default of scope. It returns
 // ErrNotFound when scope sets none. It returns namespace.ErrNotFound when no
 // namespace has the name of scope.
 func (s *ConfigService) ApprovalDefault(ctx context.Context, scope Scope) (ApprovalDefault, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useApprovalDefault); err != nil {
 		return ApprovalDefault{}, err
 	}
 
@@ -150,7 +217,7 @@ func (s *ConfigService) ApprovalDefault(ctx context.Context, scope Scope) (Appro
 func (s *ConfigService) PutApprovalDefault(
 	ctx context.Context, d ApprovalDefault, prev int64, e audit.Entry,
 ) (ApprovalDefault, error) {
-	if err := requireNamespaceScope(d.Scope); err != nil {
+	if err := requireScope(d.Scope, useApprovalDefault); err != nil {
 		return ApprovalDefault{}, err
 	}
 
@@ -165,7 +232,7 @@ func (s *ConfigService) PutApprovalDefault(
 
 	d.Approvers = approvers
 
-	fence, entry, err := s.prepare(ctx, d.Scope, e, d.Scope.Key()+"/approval-default", AuditSetApprovalDefault)
+	fence, entry, err := s.prepare(ctx, d.Scope, e, d.Scope.Key()+"/approval-default", writeSetApprovalDefault)
 	if err != nil {
 		return ApprovalDefault{}, err
 	}
@@ -188,11 +255,11 @@ func (s *ConfigService) PutApprovalDefault(
 func (s *ConfigService) DeleteApprovalDefault(
 	ctx context.Context, scope Scope, prev int64, e audit.Entry,
 ) error {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useApprovalDefault); err != nil {
 		return err
 	}
 
-	fence, entry, err := s.prepare(ctx, scope, e, scope.Key()+"/approval-default", AuditDeleteApprovalDefault)
+	fence, entry, err := s.prepare(ctx, scope, e, scope.Key()+"/approval-default", writeDeleteApprovalDefault)
 	if err != nil {
 		return err
 	}
@@ -210,7 +277,7 @@ func (s *ConfigService) DeleteApprovalDefault(
 // It returns none of a wider scope. It returns namespace.ErrNotFound when no
 // namespace has the name of scope.
 func (s *ConfigService) ApprovalRules(ctx context.Context, scope Scope) ([]ApprovalRule, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useRead); err != nil {
 		return nil, err
 	}
 
@@ -235,7 +302,7 @@ func (s *ConfigService) ApprovalRules(ctx context.Context, scope Scope) ([]Appro
 // ApprovalRule returns the approval rule id of scope, or ErrNotFound. It
 // returns namespace.ErrNotFound when no namespace has the name of scope.
 func (s *ConfigService) ApprovalRule(ctx context.Context, scope Scope, id ID) (ApprovalRule, error) {
-	if err := requireNamespaceScope(scope); err != nil {
+	if err := requireScope(scope, useRead); err != nil {
 		return ApprovalRule{}, err
 	}
 
@@ -262,7 +329,7 @@ func (s *ConfigService) ApprovalRule(ctx context.Context, scope Scope, id ID) (A
 func (s *ConfigService) PutApprovalRule(
 	ctx context.Context, r ApprovalRule, prev int64, e audit.Entry,
 ) (ApprovalRule, error) {
-	if err := requireNamespaceScope(r.Scope); err != nil {
+	if err := requireScope(r.Scope, useWrite); err != nil {
 		return ApprovalRule{}, err
 	}
 
@@ -279,7 +346,7 @@ func (s *ConfigService) PutApprovalRule(
 
 	object := r.Scope.Key() + "/approval-rules/" + string(r.ID)
 
-	fence, entry, err := s.prepare(ctx, r.Scope, e, object, AuditSetApprovalRule)
+	fence, entry, err := s.prepare(ctx, r.Scope, e, object, writeSetApprovalRule)
 	if err != nil {
 		return ApprovalRule{}, err
 	}
@@ -300,13 +367,13 @@ func (s *ConfigService) PutApprovalRule(
 // ref.Version. It returns ErrNotFound for an unknown rule, ErrConflict for
 // another version, and ErrInvalid when a stored gate names the rule.
 func (s *ConfigService) DeleteApprovalRule(ctx context.Context, ref ObjectRef, e audit.Entry) error {
-	if err := requireNamespaceScope(ref.Scope); err != nil {
+	if err := requireScope(ref.Scope, useWrite); err != nil {
 		return err
 	}
 
 	object := ref.Scope.Key() + "/approval-rules/" + string(ref.ID)
 
-	fence, entry, err := s.prepare(ctx, ref.Scope, e, object, AuditDeleteApprovalRule)
+	fence, entry, err := s.prepare(ctx, ref.Scope, e, object, writeDeleteApprovalRule)
 	if err != nil {
 		return err
 	}
@@ -320,17 +387,29 @@ func (s *ConfigService) DeleteApprovalRule(ctx context.Context, ref ObjectRef, e
 	return nil
 }
 
-// requireNamespaceScope refuses a scope that has no namespace, or that no
-// configuration route serves in this version. Defense in depth: the store
-// refuses a scope that holds no configuration too, and the route builds the
-// scope from the namespace of its path only.
-func requireNamespaceScope(scope Scope) error {
+// requireScope refuses a scope that the use does not allow. A namespace, a
+// collection and a unit pass for each use. The installation passes for the
+// read and the write of a gate, an access limit and an approval rule, and
+// fails for an approval default, which the installation holds none of. A
+// blueprint, a profile, the empty scope and an unknown use fail. Defense in
+// depth: the store refuses a scope that holds no configuration too, and the
+// route builds the scope from its path only.
+func requireScope(scope Scope, use scopeUse) error {
 	switch scope.Level() {
 	case LevelNamespace, LevelCollection, LevelUnit:
-		return nil
-	case LevelInstallation, LevelBlueprint, LevelProfile:
-		return fmt.Errorf("%w: a %s scope holds no approval rule or approval default through this service",
-			ErrInvalid, scope.Level())
+		if use == useRead || use == useWrite || use == useApprovalDefault {
+			return nil
+		}
+
+		return fmt.Errorf("%w: the use of the scope is not known", ErrInvalid)
+	case LevelInstallation:
+		if use == useRead || use == useWrite {
+			return nil
+		}
+
+		return fmt.Errorf("%w: the installation holds no approval default", ErrInvalid)
+	case LevelBlueprint, LevelProfile:
+		return fmt.Errorf("%w: a %s scope holds no configuration through this service", ErrInvalid, scope.Level())
 	default:
 		return fmt.Errorf("%w: the scope is empty", ErrInvalid)
 	}
@@ -341,6 +420,11 @@ func requireNamespaceScope(scope Scope) error {
 // exist then answers as a write does, not as a namespace with no
 // configuration.
 func (s *ConfigService) requireNamespace(ctx context.Context, scope Scope) error {
+	if scope.Level() == LevelInstallation {
+		// The installation belongs to no namespace.
+		return nil
+	}
+
 	if _, err := s.ns.Get(ctx, scope.Namespace()); err != nil {
 		return fmt.Errorf("read the namespace %q: %w", scope.Namespace(), err)
 	}
@@ -348,24 +432,57 @@ func (s *ConfigService) requireNamespace(ctx context.Context, scope Scope) error
 	return nil
 }
 
-// prepare reads the fence of the namespace of scope and completes e.
+// prepare completes e for a write at scope and returns the fence of the
+// write. A namespace, a collection and a unit take the fence of the
+// namespace, and the entry has its namespace. The installation reads no
+// namespace, takes the zero fence and writes the entry in audit.ServerScope.
+// The action comes from the level of the scope, so a write at one level never
+// has the name of another level. A level with no name for the write fails
+// with ErrInvalid.
 func (s *ConfigService) prepare(
-	ctx context.Context, scope Scope, e audit.Entry, object, action string,
+	ctx context.Context, scope Scope, e audit.Entry, object string, write auditWrite,
 ) (namespace.Fence, audit.Entry, error) {
-	ns, err := s.ns.Get(ctx, scope.Namespace())
-	if err != nil {
-		return namespace.Fence{}, audit.Entry{}, fmt.Errorf("read the namespace %q: %w", scope.Namespace(), err)
+	names := write.names()
+
+	var (
+		fence  namespace.Fence
+		ns     namespace.Name
+		action string
+	)
+
+	switch scope.Level() {
+	case LevelInstallation:
+		fence, ns, action = namespace.Fence{Namespace: "", FailoverVersion: 0}, audit.ServerScope, names.installation
+	case LevelNamespace, LevelCollection, LevelUnit:
+		n, err := s.ns.Get(ctx, scope.Namespace())
+		if err != nil {
+			return namespace.Fence{}, audit.Entry{}, fmt.Errorf("read the namespace %q: %w", scope.Namespace(), err)
+		}
+
+		fence, ns, action = n.Fence(), n.Name, names.namespace
+	case LevelBlueprint, LevelProfile:
+		return namespace.Fence{}, audit.Entry{}, fmt.Errorf("%w: a %s scope takes no write", ErrInvalid, scope.Level())
+	default:
+		return namespace.Fence{}, audit.Entry{}, fmt.Errorf("%w: the scope is empty", ErrInvalid)
+	}
+
+	if action == "" {
+		return namespace.Fence{}, audit.Entry{}, fmt.Errorf(
+			"%w: a %s scope takes no such write",
+			ErrInvalid,
+			scope.Level(),
+		)
 	}
 
 	e.At = s.now()
-	e.Namespace = ns.Name
+	e.Namespace = ns
 	e.Object = object
 	e.Action = action
 	e.Kind = audit.KindChange
 	e.Outcome = audit.OutcomeSuccess
 	e.Changes = nil
 
-	return ns.Fence(), e, nil
+	return fence, e, nil
 }
 
 // putChanges returns the audit changes of a write from version prev to the

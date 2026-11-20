@@ -179,3 +179,4 @@ both together.
 | [130](0130-break-glass-mode-2-review-and-authentication.md) | Break-glass mode 2 over the network: its review and its authentication | accepted (ADR 372) |
 | [131](0131-generated-files-and-merge-conflicts.md) | Generated files and merge conflicts | accepted (ADR 383) |
 | [134](0134-machine-approvers-for-job-approvals.md) | Machine approvers for job approvals | discussing; the owner decided on 2026-11-20, the ADR follows |
+| [135](0135-a-rate-limit-on-profile-opens.md) | A rate limit on profile opens | discussing; the owner decided on 2026-11-20 that a rate limit replaces the cap of 100 open sessions (ADR 392), its form is open |

@@ -24,38 +24,6 @@ const (
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
-	apidesc.Pattern(http.MethodGet, approvalDefaultPath): apidesc.Name("getApprovalDefault", tagApprovals).
-		WithETag().
-		On(apidesc.KindNamespace).
-		WithBodies(apidesc.NoBody, approvalDefaultSchema),
-	apidesc.Pattern(http.MethodPut, approvalDefaultPath): apidesc.Name("setApprovalDefault", tagApprovals).
-		WithIfMatch().
-		WithETag().
-		On(apidesc.KindNamespace).
-		WithBodies(approvalDefaultSchema, approvalDefaultSchema),
-	apidesc.Pattern(http.MethodDelete, approvalDefaultPath): apidesc.Name("deleteApprovalDefault", tagApprovals).
-		WithIfMatch().
-		On(apidesc.KindNamespace).
-		WithBodies(apidesc.NoBody, apidesc.NoBody),
-	apidesc.Pattern(http.MethodGet, approvalRulesPath): apidesc.Name("listApprovalRules", tagApprovals).
-		On(apidesc.KindNamespace).
-		WithBodies(apidesc.NoBody, apidesc.Typed[approvalRuleListBody](
-			"ListApprovalRulesResponse", apidesc.Named[approvalRuleBody]("ApprovalRule"),
-			apidesc.Named[approversBody]("Approvers"),
-		)),
-	apidesc.Pattern(http.MethodGet, approvalRuleItemPath): apidesc.Name("getApprovalRule", tagApprovals).
-		WithETag().
-		On(apidesc.KindNamespace).
-		WithBodies(apidesc.NoBody, approvalRuleSchema),
-	apidesc.Pattern(http.MethodPut, approvalRuleItemPath): apidesc.Name("setApprovalRule", tagApprovals).
-		WithIfMatch().
-		WithETag().
-		On(apidesc.KindNamespace).
-		WithBodies(approvalRuleSchema, approvalRuleSchema),
-	apidesc.Pattern(http.MethodDelete, approvalRuleItemPath): apidesc.Name("deleteApprovalRule", tagApprovals).
-		WithIfMatch().
-		On(apidesc.KindNamespace).
-		WithBodies(apidesc.NoBody, apidesc.NoBody),
 	apidesc.Pattern(http.MethodGet, capabilitiesPath): apidesc.Name("getCapabilities", "capabilities").
 		WithBodies(apidesc.NoBody, apidesc.Typed[capabilitiesResponse]("Capabilities",
 			apidesc.Named[stateWriteGatesBody]("StateWriteGates"),
@@ -144,7 +112,12 @@ var (
 		apidesc.Named[approversBody]("Approvers"),
 	)
 	approvalRuleSchema = apidesc.Typed[approvalRuleBody]("ApprovalRule", apidesc.Named[approversBody]("Approvers"))
-	preferencesSchema  = apidesc.Typed[preferencesResponse](
+	// approvalRuleListSchema is the answer of the list of approval rules.
+	approvalRuleListSchema = apidesc.Typed[approvalRuleListBody](
+		"ListApprovalRulesResponse", apidesc.Named[approvalRuleBody]("ApprovalRule"),
+		apidesc.Named[approversBody]("Approvers"),
+	)
+	preferencesSchema = apidesc.Typed[preferencesResponse](
 		"Preferences", apidesc.Named[terminalSchemesResponse]("TerminalSchemes"),
 	)
 	settingsSchema = apidesc.Typed[settingsBody](
