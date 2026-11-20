@@ -102,8 +102,31 @@ type CodeLocation struct {
 	// of a review request.
 	Ref string `json:"ref,omitempty"`
 	// Directory is the working directory: a clean relative path, or empty
-	// for the root of the repository.
+	// for the root of the repository. A write accepts RootDirectory for the
+	// root too, and stores it as empty (see CanonicalDirectory).
 	Directory string `json:"directory,omitempty"`
+}
+
+// CanonicalDirectory returns the stored form of the directory dir: empty for
+// RootDirectory, and dir for every other value. The root has one stored form,
+// so a record that names the root and a record that names no directory are
+// equal, and the effective value of both is RootDirectory with the built-in
+// origin. A GET answer shows RootDirectory, so a client can send it back.
+func CanonicalDirectory(dir string) string {
+	if dir == RootDirectory {
+		return ""
+	}
+
+	return dir
+}
+
+// Canonical returns a copy of s in its stored form: the directory is
+// CanonicalDirectory of the directory of s.
+func (s *Settings) Canonical() Settings {
+	c := *s
+	c.CodeLocation.Directory = CanonicalDirectory(s.CodeLocation.Directory)
+
+	return c
 }
 
 // WriteBack holds the options of the write-back executor.

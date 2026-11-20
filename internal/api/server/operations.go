@@ -183,8 +183,8 @@ var allLabels = joinLabels()
 // joinLabels returns one table with the labels of operationLabels, of
 // gitHostOperationLabels, of the gate and access limit routes, of
 // storeCheckOperationLabels, of the local user routes, of the passkey routes,
-// of the backup and restore routes, of the maintenance routes and of the
-// directory sign-in routes.
+// of the first administrator routes, of the backup and restore routes, of the
+// maintenance routes and of the directory sign-in routes.
 func joinLabels() map[string]apidesc.Label {
 	labels := maps.Clone(operationLabels)
 	maps.Copy(labels, gitHostOperationLabels)
@@ -192,6 +192,7 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, storeCheckOperationLabels())
 	maps.Copy(labels, localUserOperationLabels())
 	maps.Copy(labels, passkeyOperationLabels())
+	maps.Copy(labels, firstAdministratorOperationLabels())
 	maps.Copy(labels, callerOperationLabels())
 	maps.Copy(labels, backupOperationLabels())
 	maps.Copy(labels, auditChainOperationLabels())

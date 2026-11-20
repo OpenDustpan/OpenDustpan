@@ -274,6 +274,13 @@ against its size and MD5. It loads the table files into a staging area. The
 stage checks the staged data against the row counts, the blob references and
 the foreign keys of the manifest. A failed check leaves the live data unchanged.
 
+The stage also checks each saved view with the rules of a new view, and with
+the limits of a create: 100 saved views for one owner in one namespace, and
+10000 saved views in one namespace. A backup over a limit is corrupt. The
+restore stops and leaves the live data unchanged. The error names the owner or
+the namespace, the number of saved views and the limit, for example `namespace
+"acme" has 10001 saved views, the limit is 10000`.
+
 The command refuses a backup with no manifest or with an unknown format
 number. The refusal does not change the live data.
 

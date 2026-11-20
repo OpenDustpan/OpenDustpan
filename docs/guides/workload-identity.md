@@ -89,7 +89,9 @@ for a token that names an unknown key.
    The grant needs a console session with a recent sign-in. An access token,
    also the bootstrap admin token, gets 403 with the error code
    `mfa.fresh-step-required`. Sign in to the console first, as a person who
-   already holds a role that can give grants. See
+   already holds a role that can give grants. A new installation has no person
+   who holds a role: make the first administrator with
+   [Make the first administrator](first-administrator.md). See also
    [Console sign-in](console-sign-in.md#tokens-from-a-console-session).
 
 2. Make a trust rule for it. You need `namespace:manage-trust-rules` on the
