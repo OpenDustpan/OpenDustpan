@@ -8,6 +8,10 @@ While the worker component runs on a server with a durable store, the server SHA
 - **WHEN** a `state.write` decision record is older than the retention period and the schedule fires
 - **THEN** the prune deletes the record and writes one audit entry for each batch with the count of the deleted records
 
+#### Scenario: The entry names the namespace
+- **WHEN** the prune deletes a batch of records of one namespace
+- **THEN** the audit entry of the batch names that namespace and the count of the deleted records
+
 #### Scenario: Record that is not expired
 - **WHEN** a record is newer than the retention period, or is at another decision point, or is in another namespace than the batch
 - **THEN** the prune keeps the record

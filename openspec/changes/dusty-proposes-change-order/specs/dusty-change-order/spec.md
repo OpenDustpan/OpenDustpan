@@ -1,33 +1,37 @@
 ## ADDED Requirements
 
-### Requirement: dusty-proposed-order-after-confirm-draft
+### Requirement: dusty-writes-a-draft-under-a-delegation
 
-When the delegating person confirms the draft of an agent under a live delegation, the server SHALL create the change order in state proposed with the person as proposer and the agent and the delegation named.
+When Dusty acts under a live delegation that covers the unit, the server SHALL store a draft that names the person, the agent and the delegation, and SHALL NOT treat the draft as a change order.
 
-#### Scenario: Draft then confirm-draft
-- **WHEN** Dusty writes a draft and the delegating person confirms the draft
-- **THEN** The change order is in state proposed and names the person, the agent and the delegation.
+#### Scenario: draft-under-a-live-delegation
+- **WHEN** Dusty writes a draft for a unit that the delegation covers
+- **THEN** the draft names the person, the agent and the delegation, and no change order exists
 
-### Requirement: dusty-draft-scope
+### Requirement: ended-or-uncovering-delegation-refuses-the-draft
 
-If the delegation is expired, revoked or does not cover the unit, then the server SHALL deny the draft.
+If the delegation has ended or does not cover the unit, then the server SHALL refuse the draft and SHALL store nothing.
 
-#### Scenario: Expired delegation
-- **WHEN** Dusty drafts after the delegation expired
-- **THEN** The server denies the draft and stores nothing.
+#### Scenario: ended-delegation
+- **WHEN** Dusty drafts after the delegation ended
+- **THEN** the server refuses the draft with `delegation.ended` and stores nothing
 
-### Requirement: dusty-draft-once
+#### Scenario: unit-not-covered
+- **WHEN** Dusty drafts for a unit that the delegation does not cover
+- **THEN** the server refuses the draft and stores nothing
 
-When the agent repeats a draft write with the same run, turn and call index key, the server SHALL return the first draft without storing a second draft.
+### Requirement: draft-once-for-one-key
 
-#### Scenario: Repeat with same key
-- **WHEN** Dusty repeats a draft write with the same run, turn and call index key
-- **THEN** The server answers the first draft without storing a second draft.
+When Dusty repeats a draft write with the same run, turn and call index key, the server SHALL return the first draft and SHALL NOT store a second draft.
 
-### Requirement: dusty-confirm-draft-window
+#### Scenario: repeat-with-the-same-key
+- **WHEN** Dusty repeats a draft write with the same key
+- **THEN** the server answers the first draft and stores no second draft
 
-If the delegation ends between the draft and the confirm-draft, then the server SHALL refuse the confirm-draft.
+### Requirement: draft-records-no-approval
 
-#### Scenario: Revoke before confirm-draft
-- **WHEN** The person revokes the delegation before the confirm-draft
-- **THEN** The server refuses the confirm-draft and creates no order.
+The server SHALL NOT record an approval from a draft or from an agent.
+
+#### Scenario: no-approval
+- **WHEN** Dusty writes a draft
+- **THEN** the draft holds no approval

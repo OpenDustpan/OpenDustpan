@@ -62,7 +62,8 @@ const (
 
 // TestJobsAPI starts a plan job through the API on a server of each store,
 // and reads it back. The workspace comes from the TFE-compatible API and the
-// runner pool from the runner management API: no step writes to the store.
+// runner pool from the runner management API: no step writes to the store,
+// except the last one, which damages the row of the job.
 // It proves the answer for the person who may start the job, a start with the
 // same Idempotency-Key, the refusals of a start that is not valid, a person
 // who may not start it, and a job that does not exist or belongs to another
@@ -177,6 +178,44 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 	approvalsRefuseWhatDoesNotWait(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
 	aGateStopsAClaim(ctx, t, env)
+	aDamagedJobIsRefusedAndCanceled(ctx, t, env, started)
+}
+
+// aDamagedJobIsRefusedAndCanceled damages the stored body of the started job.
+// Each route that reads or changes the job then answers 409 with the code
+// job.damaged, the same job under another namespace answers 404, and the
+// cancel route clears the job. This step comes last: it ends the job.
+func aDamagedJobIsRefusedAndCanceled(ctx context.Context, t *testing.T, env *e2e.Env, started jobDoc) {
+	t.Helper()
+
+	env.DamageJob(ctx, t, started.ID)
+
+	for _, step := range []struct {
+		name, method, path, body string
+	}{
+		{"read a damaged job", http.MethodGet, jobPath(e2e.Namespace, started.ID), ""},
+		{"approve a damaged job", http.MethodPost, approvalsRoute(e2e.Namespace, started.ID), `{"verdict":"reject"}`},
+		{
+			"confirm a damaged job", http.MethodPost, jobPath(e2e.Namespace, started.ID) + "/confirmations",
+			`{"verdict":"reject"}`,
+		},
+	} {
+		env.APIStepA(ctx, t, e2e.APIStepSpec{
+			UserAgent: jobsAgent, Name: step.name, Method: step.method, Path: step.path, Body: step.body,
+			Want: http.StatusConflict, Scheme: "token", Check: codeCheck("job.damaged"),
+		})
+	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "read a damaged job under another namespace", Method: http.MethodGet,
+		Path: jobPath("elsewhere", started.ID), Body: "", Want: http.StatusNotFound, Scheme: "token",
+		Check: codeCheck("job.not-found"),
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "cancel a damaged job", Method: http.MethodPost,
+		Path: jobPath(e2e.Namespace, started.ID) + "/cancel", Body: `{"reason":"damaged"}`,
+		Want: http.StatusOK, Scheme: "token", Check: nil,
+	})
 }
 
 // approvalsRoute returns the route that records the verdicts of the job id.

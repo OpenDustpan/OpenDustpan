@@ -132,9 +132,10 @@ type RunnerConfig struct {
 	ExpiryLimit int
 	// DeadlineReleaseLimit is the number of releases in a row that a holder
 	// may make because it could not renew its claim in time. A renewal that
-	// succeeds resets the count. At a claim that reaches the limit, the
-	// runner ends the operation failed with ErrDeadlineReleaseLimit. The
-	// default is DefaultDeadlineReleaseLimit.
+	// succeeds does not reset the count: only another end of a claim sets it
+	// to 0 (Complete, Fail, Release, GiveBack, or an end by a cancel). At a
+	// claim that reaches the limit, the runner ends the operation failed with
+	// ErrDeadlineReleaseLimit. The default is DefaultDeadlineReleaseLimit.
 	DeadlineReleaseLimit int
 	// Backoff is the delay before the retry of a failed attempt.
 	Backoff Backoff

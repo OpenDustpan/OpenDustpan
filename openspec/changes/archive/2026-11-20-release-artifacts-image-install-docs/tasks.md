@@ -25,5 +25,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run the usability check of the install page: a person who has only the page installs from the image, builds with `IMAGE_VERSION=v0.1.0 ./scripts/build-image-local.sh`, reads `v0.1.0` from `--version`, and finds in the archive section the two ways that work today. Check: the pull request body records the `--version` output of the image. A person's step.
-- [ ] 4.2 Run the fast checks and fix the findings. Check: `make test-changed` passes with zero findings; paste its output in the pull request body. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.1 Run the usability check of the install page: a person who has only the page installs from the image, builds with `IMAGE_VERSION=v0.1.0 ./scripts/build-image-local.sh`, reads `v0.1.0` from `--version`, and finds in the archive section the two ways that work today. Check: the pull request body records the `--version` output of the image. A person's step.
+- [x] 4.2 Run the fast checks and fix the findings. Check: `make test-changed` passes with zero findings; paste its output in the pull request body. Confirmed by: CI (the agent runs the fast checks only).

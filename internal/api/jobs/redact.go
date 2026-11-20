@@ -55,6 +55,10 @@ type redactResponse struct {
 func (h *Handler) redactLog(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
+	if h.refuseDamaged(ctx, w, t) {
+		return
+	}
+
 	if len(apidesc.HeaderValues(r, idempotencyHeader)) > 0 {
 		h.writeError(ctx, w, fmt.Errorf("%w: this route takes no Idempotency-Key", idempotency.ErrInvalidKey))
 

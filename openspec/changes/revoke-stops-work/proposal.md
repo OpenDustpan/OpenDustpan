@@ -2,116 +2,150 @@ Roadmap: `docs/roadmap.md:782` (A revoke stops the work).
 
 ## Why
 
-**Persona: developer.** A Developer delegates work to Dusty and later must stop it at once. The Developer revokes the delegation, checks that running and scheduled work stopped, and reads the audit record that proves the next request was denied.
+**Persona: developer.** A developer delegates work to Dusty and later must stop it. The developer revokes the delegation, checks that the work of the delegation stopped, and reads the audit entries that prove that the next request was refused.
 
 The user path this change must make work:
 
-1. **API.** Revoke the delegation to Dusty through the route of person-delegates-dusty and confirm the revoke record with holder, scope, creator, and time.
-2. **CLI.** Watch live runs end and scheduled starts refuse; send one more agent request and read the denial.
-3. **Docs page.** Read the revoke page and run the verify command as written.
-4. **Console.** Read the revoke entry and each denied entry with agent, delegation, and reason.
+1. **API.** Revoke the delegation with the route of `person-delegates-dusty`. The answer shows the end time and the cause `revoked`.
+2. **API.** Read the work of the delegation: a queued job is canceled, a trigger or a schedule is disabled, and each carries the stop reason `delegation-ended`.
+3. **API.** Send one more agent request under the delegation and read the refusal.
+4. **Docs page.** Read the revoke section of the audit log guide and run the verify command as written.
+5. **Console.** Read the end entry and each refusal entry with the agent, the delegation and the cause. The console pages are in the console repository.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Agent request after revocation is denied | 403 with the NEW error code delegation.revoked. The text names the revoked delegation id and no secret. Read the audit entries to confirm the denied entry. | `GET /api/audit/entries` |
+| A request of the agent under an ended delegation | 403 with the NEW error code `delegation.ended`. The text names the delegation ID and the cause of the end, and no secret. | `GET /api/audit/entries` |
+| The store cannot resolve the delegation | The request is refused. During a database gap the answer is 503 with `Retry-After: 5` (ADR 298 decision 2). | `GET /api/audit/check` |
 
 Evidence for the claims above:
 
-- No e2e test covers Dusty on main. Proof: Keyword Dusty in the pack has e2e_count 0 and e2e [].
-- The audit log has read and export routes and guides on main. Proof: Routes ANY /api/audit/entries and ANY /api/audit/export with guides docs/guides/audit-log.md and e2e/audit_export_test.go.
+- No stop reason `delegation-ended` exists on main. Proof: `rg -n 'delegation-ended' -g '*.go' .` prints nothing.
+- No code on main resolves a delegation, because no delegation exists. Proof: `rg -n 'type Delegation(Record)? ' -g '*.go' .` prints nothing. The record and `Resolve` are in the change `person-delegates-dusty`.
+- The audit log has read and export routes and guides on main. Proof: `internal/api/audit/routes.go:49` (`/api/audit/entries`), `e2e/audit_export_test.go` and `docs/guides/audit-log.md`.
+- The stop reasons of an agent run are not in code on main. Proof: `rg -n 'credential-ended' -g '*.go' .` prints nothing. The run loop of Dusty has ports and no adapter yet (`docs/roadmap.md`, "Accepted designs that wait for adapters").
 
 ## What Changes
 
-- Every later use resolves the delegation row again and denies with the NEW error code delegation.revoked when revoked time is set.
-- Live runs of the delegation end with the NEW stop reason revoked and live durable claims cancel at the next write boundary.
-- No scheduled or queued work of a revoked delegation starts.
-- Each denial after revoke writes an audit entry in the shape of every-step-audited that names the agent, the delegation, and the reason.
+- Every use of a delegation resolves it again, through `Resolve` of `person-delegates-dusty`, and refuses the request with the NEW error code `delegation.ended` when the delegation has ended (RFC 121 decisions 16 and 31). The server holds no cache of an allow verdict.
+- A job that waits, or that has not started a phase that changes, is canceled with the stop reason `delegation-ended` (RFC 121 decision 33).
+- A running phase gets the refusal at its next call with the job token, with the rule of ADR 354 decision 2: a phase that the person confirmed finishes, no new phase starts, and every phase that the person did not confirm stops at its next call. An installation setting holds this behavior, with that behavior as the default. The API shows the effective value (open question 1 asks for the shape).
+- A run trigger, a drift schedule and a scheduled change of the delegation are disabled with the stop reason `delegation-ended`. A job that a trigger would start from a write of an ended delegation does not start (RFC 121 decisions 33 and 34).
+- A Dusty run that names an ended delegation ends at its next step or before its next tool call with the stop reason `delegation-ended` (RFC 121 decision 9: the run resolves the delegation "at each step and before each tool call").
+- Each refusal writes one audit entry that names the agent, the delegation and the cause (RFC 121 decision 51). The shape of the entry is the one of `every-step-audited`.
+- An agent never revokes a delegation: the action has the agent class `never` (RFC 121 decision 20 (e)). A revoke request of an agent is refused and written as a denial.
+- Add the stop reason `delegation-ended` to the GLOSSARY entry "Stop reason" (done in this pull request).
 
 Out of scope:
 
-- Delegation create, list, revoke route, revoke action, revoked time storage, unknown id, repeat revoke, and no restore of person-delegates-dusty.
-- Live and scheduled Dusty run work of dusty-proposes-change-order.
-- Agent audit entry shape and hash-chain verification of every-step-audited.
+- The delegation record, the create, list and revoke routes, the end causes and the audit entries of the ends. They are in `person-delegates-dusty`.
+- The agent audit entry shape and the chain check. They are in `every-step-audited`.
+- Drafting and confirming a change order. They are in `dusty-proposes-change-order` and `person-confirms`.
+- The held requests of RFC 121 decision 23, and the rule "A confirmed, unused held request of an ended delegation is never used". They are RFC 121 slice 4.
+- The suspension of a delegation after a burst of refusals (RFC 121 decisions 5 and 19).
+- The notices before the expiry (RFC 121 decision 15).
 
 Depends on:
 
-- person-delegates-dusty
-- dusty-proposes-change-order
-- every-step-audited
+- `person-delegates-dusty` (the record, `Resolve` and the end causes).
+- `every-step-audited` (the shape of the refusal entry).
+- A change that makes a job, a trigger, a schedule and a Dusty run carry the delegation (RFC 121 decisions 9 and 31, slices 3 and 6). No such change is in `openspec/changes/` on 20 November 2026. It is a dependency to be written. The changes `give-dusty-tools-comment-propose` and `benchmark-dusty-runs-wait-approval` are not that change.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- Revocation must confirm which delegation was revoked and what stopped, or the person cannot tell live work from queued work.
-- A denied agent call must name the revoke and the one command that lists the delegation.
+- The revoke answer says which delegation ended and the cause, and the work list shows what stopped and what finished. A confirmed phase that finishes shows as such, so the person does not read it as a failure of the revoke.
+- A refused agent call names the cause of the end and the one command that lists the delegation.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main checks revocation against the object in the access service. (`pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)`)
-- Main restricts a grant on a principal to delegation actions only. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
-- Main walks the audit hash chain from a start sequence. (`pkg/audit/chain_test.go:258 (TestChainWalkStart)`)
+- Revoke checks the object before it revokes. (`pkg/access/access_test.go:1163 (TestRevokeChecksTheObject)`)
+- Grants on a principal take act-as actions only in a pin test. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
+- The audit hash chain walks from a start sequence. (`pkg/audit/chain_test.go:259 (TestChainWalkStart)`)
+- The audit entries have a read route and a check route. (`internal/api/audit/routes.go:49`)
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed by" chain and the "Current rule" come from `docs/adr/INDEX.md`.
+
+**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged: "Decided by the project owner on 7 November 2026").
+
+- Decisions that apply: 2 and 6 (current). Changed by: -. Chain to the end: none. Current rule: this ADR.
+- Quote, decision 2: "A phase that the person confirmed finishes, because the person saw and allowed that exact plan. No new phase starts. Every phase that was not confirmed stops at its next call. This is configurable: an installation setting holds the behavior, with the recommended value as the default. The API shows the effective value."
+- Effect: the stop of running work follows decision 2. The roadmap text "all running work of the delegation stops" differs from it for a confirmed phase (open question 5).
+- Conflict: none with the ADR. See open question 5 for the roadmap.
+
+**RFC 121, accepted by ADR 354 decision 6 (owner, 2026-11-07).**
+
+- Decision 16: "A delegation and its work stop at the next resolve when any of these happens: the person revokes it, it expires, the agent is disabled or deleted, or the person is disabled, deleted, removed by SCIM or terminated by the identity provider".
+- Decision 33: "a job that waits, or has not started a phase that changes, is canceled with the stop reason `delegation-ended`" and "a trigger or a schedule is disabled with the same reason".
+- Decision 31: "At each later evaluation (`change.planned`, `change.apply`, `state.write` and each call with the job token), the server resolves the delegation and runs both parts."
+- Decision 20 (e): an action that "creates, renews, widens or revokes a delegation" has the agent class `never`.
+- Decision 51: "Each delegation create, renew, use, revoke, expiry and end ... writes an entry."
+- Effect: the stop reason is `delegation-ended`, not `revoked`. The refusal is at the next resolve. The agent cannot revoke.
+- Conflict: none.
 
 **ADR 120: Dusty, the built-in agent, runs on durable operations** (not owner-tagged).
 
-- Decisions that apply: 14 (changed), 19 (current).
-- Changed by: ADR 128 changes decision 22; ADR 129 changes decisions 3, 7 and 20; ADR 129 extends; ADR 210 changes; ADR 297 changes decisions 13 and 14; ADR 311 extends; ADR 314 extends; ADR 354 changes decisions 13, 14, 15 and 16. Chain to the end: ADR 128, ADR 129, ADR 210, ADR 297, ADR 311, ADR 314, ADR 354, ADR 190, ADR 222, ADR 227, ADR 286, ADR 247, ADR 301, ADR 333, ADR 357, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 335, ADR 351, ADR 320, ADR 339, ADR 328, ADR 359, ADR 332.
-- Current rule: this ADR, with ADR 128, 129, 210, 297, 311, 314, 354.
-- Quote: "A cancel stops the run at the next write. The person of a run, or a holder of `namespace:manage-agent-runs`, cancels it with the cancel route. The server records the request on the run, and cancels the durable operation"
-- Quote: "A run acts as its person, at the time of each call. A run records the subject of the person and the ID of the credential that started it: the console session or the access token. It never stores the credential, and never"
-- Effect: Revocation reuses the cancel boundary of decision 19 and adds one NEW stop reason revoked alongside the credential stop reason of decision 14.
+- Decisions that apply: 14 (changed by ADR 354) and 19 (current). Changed by: ADR 128, 129, 210, 297, 311, 314, 354, 367. Chain to the end: ADR 128, 129, 210, 297, 311, 314, 354, 367, 190, 222, 227, 286, 247, 301, 333, 357, 225, 299, 300, 344, 365, 335, 351, 320, 339, 373, 385, 372, 328, 359, 368, 377, 332, 376. Current rule: this ADR, with ADR 128, 129, 210, 297, 311, 314, 354, 367.
+- Quote, decision 19: "The holder of the turn gets the cancel at its next write. Its step context ends, so a model call in flight stops."
+- Quote, decision 19: "A cancel never undoes a change that a job applied."
+- Effect: a run of an ended delegation ends at its next write boundary, as a cancel does. A change that a job applied stands.
 - Conflict: none.
 
-**ADR 129: The operator sets every field of the model connection** (not owner-tagged).
+**ADR 385: A fresh step is opt-in** (owner-tagged) and **ADR 227: One fresh-authentication window** (decisions 2 and 3 are owner-tagged).
 
-- Decisions that apply: the ADR as a whole.
-- Changed by: ADR 210 changes. Chain to the end: ADR 210, ADR 247, ADR 286.
-- Current rule: this ADR, with ADR 210.
-- Quote: "No default model, no default provider, no preset. The server fills no field of a connection with a value for a provider. The defaults are empty values, the `userAgent` of the release (decision 12) and the `retry-after` h"
-- Effect: The NEW stop reason revoked follows the stop-reason extension that ADR 129 adds to ADR 120. No model connection field changes.
-- Conflict: none.
+- ADR 385: current rule this ADR; changed by -. ADR 227: current rule this ADR, with ADR 301, 320, 339, 354, 373, 385.
+- Quote, ADR 385 decision 7: "ADR 354 stays: an agent never has a fresh authentication, and an agent holds no right that a person has."
+- Effect: whether a revoke needs a fresh step is open question 2. No ADR line names a revoke.
+- Conflict: none known.
 
-**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged (all decisions)).
+**ADR 298: PostgreSQL failover readiness** (not owner-tagged).
 
-- Decisions that apply: 1 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "The person who delegated may confirm (owner, 2026-11-07). Question 1. The person who delegated (Alice) may confirm a change that her own agent proposed, by default. This is the confirmation step of ADR 125 and ADR 128. Four-eyes comes from an approval rule that counts Alice as the author: with `authorMayApprove: false` on the namespace, a second person must approve. A one-person installation keeps working."
-- Effect: Revocation keeps the delegation model of person-delegates-dusty: each later step resolves the delegation row again and stops when revoked time is set.
+- Decisions that apply: 2 (current). Changed by: ADR 337 changes decision 9. Chain to the end: ADR 337. Current rule: this ADR, with ADR 337.
+- Quote, decision 2: "Requests fail fast with 503."
+- Effect: a refusal that needs the database during a gap answers 503.
 - Conflict: none.
 
 ## Open questions
 
-none
+Open questions: 5, parked
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+The questions below are not decided. No ADR line and no RFC line settles them. The owner decides each one. This change is not spec-ready until each one has an answer in a repository record.
 
-1. Does the revoke route need a fresh authentication?
-   - Options: Require a fresh authentication for revoke; Allow revoke with any valid session or token.
-   - Provisional decision (owner review 14 Nov): Require a fresh authentication for revoke
-   - Reason: Revoke is a sensitive security cut like a credential revoke, so a fresh step matches account practice. Benchmark: Google requires a fresh sign-in for a sensitive security change and names revoke of a delegation as sensitive.
-   - Persona impact: A fresh step costs the person one MFA check at revoke time and upsets no persona when the docs page states it. Escape hatch: A holder without a fresh step asks another holder with a fresh step to revoke.
-   - Owner-tagged ADRs involved: ADR 227, ADR 301 (their words do not change).
-2. May an agent token call the revoke route for its own delegation?
-   - Options: An agent token never holds delegation:revoke; An agent token may hold delegation:revoke.
-   - Provisional decision (owner review 14 Nov): An agent token never holds delegation:revoke
-   - Reason: Self-revoke by the agent blurs the person-confirms boundary, so only the person or a revoke holder revokes. Benchmark: AWS denies a revoked principal from acting on its own revocation and requires the person or an administrator to revoke.
-   - Persona impact: Denying the agent its own revoke upsets no persona because the person revokes in the console. Escape hatch: An agent that needs revocation asks the person through a held request.
-   - Owner-tagged ADRs involved: ADR 354 (their words do not change).
+1. **What is the shape and the name of the setting of ADR 354 decision 2?** The ADR says "an installation setting holds the behavior" and gives the recommended behavior as the default. Options:
+   - (a) A boolean `agent.finishConfirmedPhase`, default true. Cost: two behaviors only. A third behavior, such as "stop at once, also a confirmed phase", is the value false and nothing else.
+   - (b) An enum with the values `finish-confirmed` and `stop-now`, default `finish-confirmed`. Cost: one more word to document. A later third value does not break a stored value.
+   - (c) A part of the installation agent policy of RFC 121 decision 19 when its slice lands. Cost: this change has no setting until then, and the behavior is fixed in code, which ADR 354 decision 2 forbids.
+   - Decides: the owner.
+2. **Does a revoke need a fresh step?** RFC 121 decision 14 names create, renew and widen. Decision 17 names list and revoke and no step. ADR 385 decision 2 does not list a revoke. Options:
+   - (a) No step on revoke, in any setting. Cost: a stolen console session can revoke a delegation, which stops work and makes no new right. The cut is the fast path in an emergency.
+   - (b) A step when `freshAuthEnabled` is on. Cost: a person with no factor, with the setting on, cannot revoke their own delegation (ADR 301 decision 4: "No factor, no fresh step"). An administrator with `server:manage-access` can.
+   - (c) A step always. Cost: the same as (b) with the setting off, and it contradicts "off means no step" (ADR 385 decision 2).
+   - Decides: the owner. The old provisional answer of this change was (c). It is withdrawn.
+3. **Does an ended delegation end idle and queued work at once, or at the next resolve?** RFC 121 decision 16 says "at the next resolve". A queued job that no claim picks up, a trigger that does not fire and an idle run never resolve. Options:
+   - (a) Only the next resolve. Cost: a queued job stays "queued" in the list until a claim reads it, so the list may show a job that will be canceled.
+   - (b) The revoke transaction cancels the queued work of the delegation, and a sweep covers the other ends. Cost: a write of many rows inside the revoke, and a sweep with a fence, as open question 5 of `person-delegates-dusty` says.
+   - Decides: the owner.
+4. **Does each refusal write its own entry when a trigger refuses again and again?** RFC 121 decision 51 says that each refusal writes an entry. A schedule that fires every minute writes 1440 entries a day for one ended delegation. Options:
+   - (a) One entry for each refusal. Cost: the log grows with the schedule, until the trigger is disabled. Decision 33 disables a trigger or a schedule at the end, so the number is one for each trigger after the first refusal.
+   - (b) One entry for each delegation and cause in a period that a setting holds. Cost: one more setting, and the chain does not show each refusal.
+   - Decides: the owner.
+5. **The roadmap step 5 differs from ADR 354 decision 2.** The step says: "all running work of the delegation stops". ADR 354 decision 2 says that a confirmed phase finishes by default. The ADR "Consequences" changed step 3 of the exit test and did not name step 5. Options:
+   - (a) Change the text of step 5 in `docs/roadmap.md` to name the confirmed phase and the setting. Cost: a roadmap edit that the owner approves.
+   - (b) Keep the text and make the default of the setting `stop-now`. Cost: this contradicts the recommended default that ADR 354 decision 2 gives.
+   - Decides: the owner. This change does not edit `docs/roadmap.md`.
 
 Questions considered and answered:
 
-- Does a revoked delegation end running Dusty work or only block new work? ADR 120 decision 19 answers it: a cancel stops the run at the next write. Revocation records cancel requests on live runs and ends each run with the NEW stop reason revoked, so no step writes after the boundary. A tool call that already finished before revocation stands; a change order proposed before revocation stays proposed and still needs a person confirmation.
-- Does scheduled work of the delegation still start after revocation? The RFC excerpt in the pack answers it: the server resolves that delegation again at each later step, and when the person revokes it the work stops. No scheduled turn, plan job, or queued step of the delegation starts after revocation.
-- What stops a race between revocation commit and a scheduler or claim takeover? The revoke commits the revoked time and the cancel requests on live runs in one transaction. A sweeper owned by the worker component retries any cancel that did not land every 30 seconds under a 30 second fenced lease claim, so only one sweeper acts. Each sweeper retry writes no new audit entry unless it lands a cancel. If a cancel never lands within 5 minutes the run stays denied at each write boundary and the next claim ends it with stop reason revoked.
-- Who may revoke, and what happens on unknown, repeat, or restore? Person-delegates-dusty owns who may revoke, unknown and repeat revoke, and no restore. This change only reads the revoked time that that change stores and specifies the denial, the stop, and the block that follow it.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+- May an agent revoke its own delegation? No. RFC 121 decision 20 (e).
+- Does a revoke undo a finished tool call? No. ADR 120 decision 19: "A cancel never undoes a change that a job applied."
+- What happens to a draft change order of the ended delegation? The change `dusty-proposes-change-order` owns it (its open question 3).
+- What is the stop reason? `delegation-ended` (RFC 121 decision 33). The earlier draft of this change used `revoked`. That word is only the cause of an end.
+- Does a sweeper with a 30 second period and a fenced lease belong to this change? No line asks for it. Open question 3 asks whether any sweep exists. The earlier draft named the numbers without a source, and they are removed.
+- What if the store cannot resolve the delegation? The request is refused (fail closed). During a database gap the answer is 503 (ADR 298 decision 2).
+- Who may revoke, and what happens on unknown ID, repeat and restore? `person-delegates-dusty` owns it. A delegation has no restore: a new delegation has a new ID.
