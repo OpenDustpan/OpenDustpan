@@ -2617,6 +2617,7 @@
           "job.invalid",
           "job.limit",
           "job.log-not-available",
+          "job.no-requirement",
           "job.not-awaiting-approval",
           "job.not-found",
           "job.plan-changed",
@@ -2861,6 +2862,8 @@
           "state-version.too-complex",
           "state-version.too-large",
           "state-version.upload-denied",
+          "state.bad-path",
+          "state.read-timeout",
           "store.failover-setting-invalid",
           "store.server-version-unsupported",
           "storecheck.cooldown",
@@ -2907,6 +2910,7 @@
           "unit-settings.pool-unknown",
           "unit.client-encrypted",
           "unit.deleted-not-found",
+          "unit.forbidden",
           "unit.history-unavailable",
           "unit.invalid-name",
           "unit.name-taken",
@@ -3799,6 +3803,12 @@
           "comment": {
             "type": "string"
           },
+          "for": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "gate": {
             "type": "string"
           },
@@ -3891,11 +3901,18 @@
           "bindPlan": {
             "type": "boolean"
           },
+          "filled": {
+            "format": "int64",
+            "type": "integer"
+          },
           "groups": {
             "items": {
               "type": "string"
             },
             "type": "array"
+          },
+          "name": {
+            "type": "string"
           },
           "type": {
             "type": "string"
@@ -3905,6 +3922,8 @@
           "allowSelf",
           "approvals",
           "bindPlan",
+          "filled",
+          "name",
           "type"
         ],
         "type": "object"
@@ -5126,6 +5145,21 @@
           "object",
           "reason",
           "since"
+        ],
+        "type": "object"
+      },
+      "MaskedStateMarker": {
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "secret"
         ],
         "type": "object"
       },
@@ -10332,6 +10366,39 @@
         "required": [
           "since",
           "state"
+        ],
+        "type": "object"
+      },
+      "UnitStatePage": {
+        "properties": {
+          "markers": {
+            "items": {
+              "$ref": "#/components/schemas/MaskedStateMarker"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "valuePaths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "markers",
+          "nextCursor",
+          "unit",
+          "valuePaths",
+          "version"
         ],
         "type": "object"
       },
@@ -25457,6 +25524,74 @@
         ]
       }
     },
+    "/api/dustpan/v1/units/{ref}/state": {
+      "get": {
+        "operationId": "getUnitState",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The cursor of the next page, from the nextCursor of an earlier page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The version of the state: the number of a Pulumi update, or the ID of an OpenTofu state version. Without it, the read answers the current version.",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitStatePage"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "state"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "unit:read",
+            "object": "unit"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/upgrade-check": {
       "get": {
         "operationId": "getUpgradeCheck",
@@ -25649,6 +25784,9 @@
     },
     {
       "name": "source-filter"
+    },
+    {
+      "name": "state"
     },
     {
       "name": "store-checks"

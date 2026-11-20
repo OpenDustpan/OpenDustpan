@@ -47,6 +47,12 @@ type svcStore struct {
 	getDamagedErr, cancelDamagedErr error
 }
 
+// damagedCreatedAt and damagedChangedAt are the times that the fake store
+// gives for a canceled damaged row.
+func damagedCreatedAt() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) }
+
+func damagedChangedAt() time.Time { return time.Date(2026, 1, 9, 3, 4, 5, 0, time.UTC) }
+
 type damagedRow struct {
 	row job.DamagedRow
 	ns  namespace.Name
@@ -174,13 +180,20 @@ func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, 
 	return nil, nil, nil
 }
 
-func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry) error {
+func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry,
+) (job.DamagedCancel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.damagedCancels = append(s.damagedCancels, damagedCancel{id: id, fence: f, entries: e})
 
-	return s.cancelDamagedErr
+	if s.cancelDamagedErr != nil {
+		return job.DamagedCancel{}, s.cancelDamagedErr
+	}
+
+	return job.DamagedCancel{
+		Version: s.damaged[id].row.Version + 1, CreatedAt: damagedCreatedAt(), ChangedAt: damagedChangedAt(),
+	}, nil
 }
 
 func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
@@ -188,12 +201,12 @@ func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, nam
 	defer s.mu.Unlock()
 
 	if s.getDamagedErr != nil {
-		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", s.getDamagedErr
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", s.getDamagedErr
 	}
 
 	d, ok := s.damaged[id]
 	if !ok {
-		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", job.ErrNotFound
 	}
 
 	return d.row, d.ns, nil
@@ -968,16 +981,16 @@ func TestStartGateOnFirstPhase(t *testing.T) {
 			Allow:         true,
 			Reason:        "",
 			PolicyVersion: "v1",
-			Gates: map[job.PhaseKind]job.Gate{
-				job.PhasePlan: {
-					Type:      "",
+			Gates: map[job.PhaseKind][]job.Gate{
+				job.PhasePlan: {{
+					Type: "", Name: "",
 					Approvals: 1,
 					Groups:    nil,
 					GroupIDs:  nil,
 					AllowSelf: false,
 					Timeout:   0,
 					BindPlan:  false,
-				},
+				}},
 			},
 		}
 	})
@@ -1639,16 +1652,16 @@ func TestStartIsAtomicAtTheFirstGate(t *testing.T) {
 	gated := func(_ *job.ServiceConfig, r *rig) {
 		r.decider.decision = job.Decision{
 			Allow: true, Reason: "", PolicyVersion: "v1",
-			Gates: map[job.PhaseKind]job.Gate{
-				job.PhasePlan: {
-					Type:      "",
+			Gates: map[job.PhaseKind][]job.Gate{
+				job.PhasePlan: {{
+					Type: "", Name: "",
 					Approvals: 1,
 					Groups:    nil,
 					GroupIDs:  nil,
 					AllowSelf: false,
 					Timeout:   0,
 					BindPlan:  false,
-				},
+				}},
 			},
 		}
 	}

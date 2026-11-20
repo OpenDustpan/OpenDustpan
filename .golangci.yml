@@ -162,6 +162,8 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
               desc: The job proxy depends on ports, never on store adapters.
+            - pkg: opendustpan.org/opendustpan/internal/store
+              desc: The job proxy depends on ports, never on store adapters.
             - pkg: opendustpan.org/opendustpan/internal/api
               desc: The job proxy must not import transport adapters.
             - pkg: opendustpan.org/opendustpan/pkg/blob/
@@ -310,6 +312,8 @@ linters:
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
               desc: Domain code depends on ports, never on store adapters.
+            - pkg: opendustpan.org/opendustpan/internal/store
+              desc: Domain code depends on ports, never on store adapters.
             - pkg: opendustpan.org/opendustpan/internal/api
               desc: Domain code must not import transport adapters.
             - pkg: opendustpan.org/opendustpan/pkg/blob/
@@ -357,19 +361,19 @@ linters:
           # they never open the database, a blob adapter, a backup target or
           # the key-encryption key (ADR 39 decision 4). Only the serve wiring
           # in cmd/opendustpan may import them. The globs match the absolute
-          # path of a file. pkg/store/schema stays allowed: it is the neutral
+          # path of a file. internal/store/schema stays allowed: it is the neutral
           # migration list both dialects and the clients share, with no driver
           # in it.
           files:
             - "**/internal/cli/client/**"
             - "!**/*_test.go"
           deny:
-            - pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+            - pkg: opendustpan.org/opendustpan/internal/store/sqlite
               desc: Client commands read schema state through the API, never through a store adapter.
-            - pkg: opendustpan.org/opendustpan/pkg/store/postgres
+            - pkg: opendustpan.org/opendustpan/internal/store/postgres
               desc: Client commands read schema state through the API, never through a store adapter.
-            - pkg: opendustpan.org/opendustpan/pkg/store/internal
-              desc: Client commands share the neutral pkg/store/schema list, never the adapter internals.
+            - pkg: opendustpan.org/opendustpan/internal/store/internal
+              desc: Client commands share the neutral internal/store/schema list, never the adapter internals.
             - pkg: opendustpan.org/opendustpan/pkg/blob/fs
               desc: Only the server reads a backup target or blob directory.
             - pkg: opendustpan.org/opendustpan/pkg/blob/s3
@@ -392,6 +396,8 @@ linters:
             - "!**/*_test.go"
           deny:
             - pkg: opendustpan.org/opendustpan/pkg/store
+              desc: The binary opens the store through pkg/dustpan, never through a store package.
+            - pkg: opendustpan.org/opendustpan/internal/store
               desc: The binary opens the store through pkg/dustpan, never through a store package.
 
         runnerdeps:
@@ -740,7 +746,7 @@ linters:
       # adapters of the tool-neutral REST API and the helpers that they call.
       # The tool-compatible APIs and the runner protocol keep their own wire
       # formats, and apidesc is the one place that reads the raw request.
-      - path-except: ^(internal/api/(audit|decisionrecord|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|runnerpools|selfservice|server|settings|sourcefilter|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
+      - path-except: ^(internal/api/(audit|decisionrecord|drift|idempotent|inventory|issuer|jobs|notifications|objectcontext|profile|refusal|registry|route|runnerpools|selfservice|server|settings|sourcefilter|state|triggers|trustrules)/|internal/(sessionauth|clientip)/|pkg/dustpan/web\.go$)
         linters:
           - forbidigo
         text: through apidesc

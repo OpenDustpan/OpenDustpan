@@ -3,6 +3,7 @@ job.conflict
 job.damaged
 job.finished
 job.log-not-available
+job.no-requirement
 job.not-awaiting-approval
 job.not-found
 job.plan-changed

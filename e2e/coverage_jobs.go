@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -24,6 +25,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Artifacts:      struct{ job.ArtifactReader }{nil},
 		Logs:           nil,
 		Cursors:        nil,
+		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        struct{ job.Starter }{nil},
 		Pools:          nil,
 		Authenticator:  coverageAuthenticator{},

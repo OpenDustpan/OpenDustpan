@@ -99,7 +99,7 @@ func (coverageWorkspaces) Query(ctx context.Context, q workspace.ListQuery) (wor
 	return workspace.PageWorkspaces(all, q), nil
 }
 
-func (coverageWorkspaces) LockForJob(
+func (coverageWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	var none workspace.Workspace
@@ -206,7 +206,7 @@ func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.
 	return nil, workspace.ErrStateVersionNotFound
 }
 
-func (coverageWorkspaces) BeginState(
+func (coverageWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	var none workspace.PendingState
@@ -249,6 +249,22 @@ func tfeRefs(routes []tfeapi.Route) []RouteRef {
 	}
 
 	return out
+}
+
+// unitsStateAllowEntries returns the tool-neutral route of the masked read of
+// the state of a unit, which no CLI calls. The harness steps of the OpenTofu
+// reading scenario drive it after a real apply.
+func unitsStateAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/units/{ref}/state",
+			CoveringTest: "TestCLIs (tofuReadingStateScenario)",
+			Reason: "Console and client route: no CLI reads the masked state. " +
+				"The harness steps read it after a real apply for the current version and a version by ID, " +
+				"check that no secret value appears, and check the refusals of a malformed version, " +
+				"an unknown version and a malformed cursor.",
+		},
+	}
 }
 
 // tofuStateAtAllowEntries returns the OpenTofu console route of the state at a

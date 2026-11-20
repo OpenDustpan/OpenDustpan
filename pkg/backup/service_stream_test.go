@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -106,6 +107,7 @@ func newStreamFixture(
 	target := newMemStore()
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,
@@ -173,6 +175,7 @@ func restoreStreamedBackup(
 	live := newRestoreServiceLive(liveChecks, regs)
 	live.maint = maint
 	backups, err := backup.NewService(backup.Config{
+		Jobs: jobcheck.Checker{},
 		Exporter: &stubBackupExporter{
 			sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
 		},

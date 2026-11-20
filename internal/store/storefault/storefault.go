@@ -755,6 +755,18 @@ func (s *Store) GetStateVersion(
 	return s.inner.GetStateVersion(ctx, id)
 }
 
+// GetWorkspaceStateVersion returns the state version of one workspace, unless
+// a fault fires first.
+func (s *Store) GetWorkspaceStateVersion(
+	ctx context.Context, ns namespace.Name, ws workspace.ID, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	if err := s.before(ctx, "GetWorkspaceStateVersion"); err != nil {
+		return workspace.StateVersion{}, err
+	}
+
+	return s.inner.GetWorkspaceStateVersion(ctx, ns, ws, id)
+}
+
 // FinalizeStateVersion saves the finalized version and makes it current,
 // unless a fault fires first.
 func (s *Store) FinalizeStateVersion(

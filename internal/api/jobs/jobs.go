@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -83,6 +84,10 @@ type Config struct {
 	// no sealer, the job list reads every job to the end of the list, and the
 	// token holds the ID of a job that the caller can read.
 	Cursors secret.Wrapper
+	// Approvers decides which subjects fill a slot of an approval gate, as the
+	// job service does, so that the filled slots in the answer are the ones that
+	// the matching counts. The zero value is the policy of a dev installation.
+	Approvers gate.ApproverPolicy
 }
 
 // Handler serves the jobs API under /api/dustpan/v1/.
@@ -95,6 +100,7 @@ type Handler struct {
 	logs       LogOptions
 	streams    *streamLimiter
 	cursors    secret.Wrapper
+	approvers  gate.ApproverPolicy
 	starter    job.Starter
 	workers    admit.Source
 	pools      runner.PoolReader
@@ -138,6 +144,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logs:       logLimits(cfg.Logs),
 		streams:    nil,
 		cursors:    cfg.Cursors,
+		approvers:  cfg.Approvers,
 		starter:    cfg.Starter,
 		workers:    cfg.Workers,
 		pools:      cfg.Pools,
@@ -225,7 +232,20 @@ func (h *Handler) refuseDamaged(ctx context.Context, w http.ResponseWriter, t *t
 // classifier of this API answers the errors of a job, and package problem
 // answers the rest.
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
-	problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classify}.Write(ctx, w, err)
+	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: classify}.Write(ctx, w, err)
+}
+
+// keepDenied answers the denial of an approval by a person that no requirement
+// of the phase holds. It names the requirements, so that the person knows what
+// to ask for. The names are in the job that the person may read. Every other
+// denial is the standard answer of package problem.
+func keepDenied(err error) (problem.Problem, bool) {
+	if errors.Is(err, job.ErrNoRequirement) {
+		return problem.RefusedText(problem.Detail(err, job.ErrNoRequirement),
+			http.StatusForbidden, errcode.JobNoRequirement), true
+	}
+
+	return problem.Pass()
 }
 
 // classify returns the answer to an error of the jobs API, and false for an
@@ -276,6 +296,11 @@ func classifyJobRefusal(err error) (problem.Problem, bool) {
 	case errors.Is(err, job.ErrUnsupported):
 		return problem.RefusedText(problem.Detail(err, job.ErrUnsupported),
 			http.StatusUnprocessableEntity, errcode.JobUnsupported), true
+	case errors.Is(err, gate.ErrUnavailable):
+		// The approval defaults of the unit need more than a job enforces. The
+		// start fails closed, and the text names the requirement to change.
+		return problem.RefusedText(problem.Detail(err, gate.ErrUnavailable),
+			http.StatusServiceUnavailable, errcode.GateUnavailable), true
 	case errors.Is(err, job.ErrPolicyDenied):
 		return problem.Refused(err, http.StatusForbidden, errcode.JobPolicyDenied), true
 	case errors.Is(err, job.ErrGateEnforced):

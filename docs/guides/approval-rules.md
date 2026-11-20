@@ -28,13 +28,22 @@ first version of that gate:
 - A default that names no approvers lets any holder of the approve action, who is
   not the author, approve.
 - A default that names groups lets only members of those groups approve.
-- One requirement only. If two defaults give two requirements (for example, a
-  default with groups in the namespace and a default with no approvers in a
-  collection), the start of the job fails with an error that names both. Set the
-  default in one scope.
-- A default that names users or unit owners, or that sets `freshAuthSeconds`,
-  also makes the start of the job fail. The job approval does not enforce these
-  yet.
+- Each default is one requirement. If two defaults apply to one unit (for
+  example, a default with 2 approvers of group `platform` in the namespace and a
+  default with no approvers in a collection), the job gets one gate for each
+  requirement. A unit has at most 3 requirements: one for the namespace, one for
+  the collection and one for the unit. The gates have the names `default` (the
+  defaults with no approvers, merged) and `default/<scope>` (a default that names
+  groups).
+- The approvers of all the gates of a job are distinct people. One person fills
+  one place of one gate, also when that person is a member of the groups of two
+  gates. In the example above, the job needs 3 people: 2 members of `platform`
+  and 1 other person. The order of the approvals does not change the result.
+- A default that names users or unit owners, that sets `freshAuthSeconds`, or
+  that holds an `unless` body still makes the start of the job fail, also when it
+  is the second requirement. The job approval does not enforce these yet. The
+  start answers 503 with the code `gate.unavailable`, and the message names the
+  requirement to change.
 
 ## A plan whose state changed
 

@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
@@ -260,6 +261,7 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 	}
 
 	r.backups, err = backup.NewService(backup.Config{
+		Jobs:     jobcheck.Checker{},
 		Exporter: r.store, Kinds: r.store, Registry: r.store, Blobs: r.gate, StateOpener: r.workspaces,
 		Target: r.target, TargetName: "dir:test", Now: nil, Version: "test", MaxSQLBytes: 0,
 		Operations: r.store.DurableOperationsPort(), Owner: "", Lease: backupLongLease, Logger: nil,

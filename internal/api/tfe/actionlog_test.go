@@ -149,7 +149,8 @@ func (lockedActionWorkspaces) GetByID(_ context.Context, id workspace.ID) (works
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}, nil
 }
 

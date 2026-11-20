@@ -610,6 +610,42 @@ func tofuInstances(obj map[string]any) []map[string]any {
 	return out
 }
 
+// checkTofuInstanceShapes refuses a resource whose instances the masking
+// cannot read as it is: an instances value that is no array, an instance that
+// is no object, or attributes that are no object while kept marks or
+// sensitive_attributes name paths in them. It fails closed with
+// ErrUnreadableState. The text names no resource, key or value.
+func checkTofuInstanceShapes(obj map[string]any, marks SensitiveMarks) error {
+	raw, present := obj["instances"]
+	if !present {
+		return nil
+	}
+
+	list, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("%w: instances is not an array", ErrUnreadableState)
+	}
+
+	for _, elem := range list {
+		instance, ok := elem.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: an instance is not an object", ErrUnreadableState)
+		}
+
+		attributes := instance["attributes"]
+		if _, isObject := attributes.(map[string]any); isObject || attributes == nil {
+			continue
+		}
+
+		_, hasSensitive := instance["sensitive_attributes"]
+		if len(marks) > 0 || hasSensitive {
+			return fmt.Errorf("%w: attributes is not an object", ErrUnreadableState)
+		}
+	}
+
+	return nil
+}
+
 // tofuFingerprint returns the comparison shape of one resource instance: the
 // raw attributes as encoded. A changed secret still reads changed: the
 // comparison never leaks a value, only the changed flag of the list.
@@ -1557,20 +1593,26 @@ func (p *duplicatePass) maskDuplicateList(ctx context.Context, work *maskWork, l
 }
 
 // maskAllLeaves replaces each leaf value under v with a marker for its path,
-// and appends each marker path to masked. Containers keep their shape.
-func maskAllLeaves(v any, base string, masked *[]string) any {
+// and appends each marker path to masked. Containers keep their shape. A value
+// at a route of skip already holds its marker, so the walk leaves it as it is
+// and no key below it reaches a marker path. A nil skip skips nothing.
+func maskAllLeaves(v any, base string, masked *[]string, skip *routeNode) any {
+	if skip != nil && skip.applied {
+		return v
+	}
+
 	switch typed := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for key, elem := range typed {
-			out[key] = maskAllLeaves(elem, base+"/"+escapeTofuPointerToken(key), masked)
+			out[key] = maskAllLeaves(elem, base+"/"+escapeTofuPointerToken(key), masked, skip.child(key))
 		}
 
 		return out
 	case []any:
 		out := make([]any, len(typed))
 		for i, elem := range typed {
-			out[i] = maskAllLeaves(elem, base+"/"+strconv.Itoa(i), masked)
+			out[i] = maskAllLeaves(elem, base+"/"+strconv.Itoa(i), masked, skip.child(strconv.Itoa(i)))
 		}
 
 		return out
@@ -1579,6 +1621,45 @@ func maskAllLeaves(v any, base string, masked *[]string) any {
 
 		return newTofuMarker(base)
 	}
+}
+
+// child returns the node of token below n, or nil. A nil node has no child.
+func (n *routeNode) child(token string) *routeNode {
+	if n == nil {
+		return nil
+	}
+
+	return n.children[token]
+}
+
+// maskUnmarkedInstance masks one instance with no kept marks for its version:
+// each path of sensitive_attributes answers as one marker, and every other
+// attribute value answers as a marker of its own. No key below a path of
+// sensitive_attributes reaches a marker path, as the whole value is secret.
+// The pointers spend from the budget of work as the pointers of a marked
+// instance do.
+func maskUnmarkedInstance(
+	ctx context.Context, work *maskWork, instance map[string]any, attributes any, base string,
+) (any, []string, error) {
+	var masked []string
+
+	var secrets []any
+
+	applied := &routeSet{root: routeNode{applied: false, children: nil}}
+	out := maskCollectors{seen: map[string]bool{}, masked: &masked, secrets: &secrets, applied: applied}
+
+	// Only sensitive_attributes names a pointer here: there are no kept marks.
+	pointers := tofuSensitivePointers(instance, "", "", nil)
+	if err := maskPointers(ctx, work, attributes, pointerList{base: base, pointers: pointers}, &out); err != nil {
+		return nil, nil, err
+	}
+
+	leaves := maskAllLeaves(attributes, base, &masked, &applied.root)
+	if masked == nil {
+		masked = []string{}
+	}
+
+	return leaves, masked, nil
 }
 
 // maskCollectors carries the collectors of maskTofuInstance across one
@@ -1706,14 +1787,7 @@ func maskTofuInstance(
 	}
 
 	if len(marks) == 0 {
-		var masked []string
-
-		out := maskAllLeaves(attributes, base, &masked)
-		if masked == nil {
-			masked = []string{}
-		}
-
-		return out, masked, nil
+		return maskUnmarkedInstance(ctx, work, instance, attributes, base)
 	}
 
 	seen := map[string]bool{}
@@ -1826,6 +1900,10 @@ func ReadStateResource(
 	position, obj, err := findTofuResource(doc, address)
 	if err != nil {
 		return StateDetail{}, err
+	}
+
+	if shapeErr := checkTofuInstanceShapes(obj, marks); shapeErr != nil {
+		return StateDetail{}, shapeErr
 	}
 
 	base := tofuResourceBase(obj)

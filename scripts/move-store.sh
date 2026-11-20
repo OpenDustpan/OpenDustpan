@@ -56,7 +56,7 @@ done
 # root, one for each line. pkg/store/storetest is not in the list: the
 # conformance suite stays in the SDK.
 moved_packages() {
-  printf '%s\n' pkg/store/sqlite pkg/store/postgres pkg/store/schema
+  printf '%s\n' pkg/store/sqlite pkg/store/postgres pkg/store/schema pkg/store/jobcheck
   find pkg/store/internal -mindepth 1 -maxdepth 1 -type d -print | sort
 }
 
@@ -112,6 +112,19 @@ move_packages() {
   done < <(moved_packages)
 }
 
+# format_imports sorts the import lines of each Go file that the move changed.
+# The new paths sort in other places than the old ones, so the import groups
+# need a new order. The formatter changes only import lines in these files.
+format_imports() {
+  local files=()
+  local file
+  while IFS= read -r -d '' file; do
+    files+=("$file")
+  done < <(git diff -M --name-only --diff-filter=d -z HEAD -- '*.go')
+  [ "${#files[@]}" -gt 0 ] || return 0
+  golangci-lint fmt "${files[@]}"
+}
+
 # branch_mode merges the base into the branch and applies the move again.
 branch_mode() {
   if [ -n "$(git status --porcelain)" ]; then
@@ -139,6 +152,8 @@ case "$mode" in
   branch) branch_mode ;;
   tree) tree_mode ;;
 esac
+
+format_imports
 
 if ! make generate; then
   echo "move-store: the move is done, but make generate failed; run it by hand" >&2

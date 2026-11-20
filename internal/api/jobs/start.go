@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -193,6 +194,7 @@ const (
 	reasonLimit        = "too many open jobs"
 	reasonGate         = "an enforced gate covers the unit"
 	reasonUnsupported  = "the server cannot start this job"
+	reasonUnavailable  = "the approval defaults need more than a job enforces"
 )
 
 // refusalReason returns the reason for the audit entry of err, and false for
@@ -223,6 +225,9 @@ func refusalReason(err error) (string, bool) {
 		return reasonLimit, true
 	case errors.Is(err, job.ErrUnsupported):
 		return reasonUnsupported, true
+	case errors.Is(err, gate.ErrUnavailable):
+		// The start fails closed, so the denial is in the audit log.
+		return reasonUnavailable, true
 	default:
 		return "", false
 	}

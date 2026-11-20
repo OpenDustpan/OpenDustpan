@@ -15,13 +15,14 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // pollTimeout bounds a backup or restore poll when the test binary runs with
@@ -89,6 +90,9 @@ type backupStores struct {
 	registry *sqlite.Store
 	live     *blobfs.Store
 	target   *blobfs.Store
+	// path is the database file of registry, for a test that writes a row
+	// that no route writes.
+	path string
 }
 
 // openBackupDeps opens the stores for one backup test. The registry store
@@ -98,7 +102,8 @@ type backupStores struct {
 func openBackupDeps(t *testing.T) backupStores {
 	t.Helper()
 
-	registry := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	registry := openServerTemplateStore(t, path)
 
 	// A server claims its installation kind at start. The backup and the
 	// restore read it, so the stores of these tests hold one.
@@ -128,7 +133,7 @@ func openBackupDeps(t *testing.T) backupStores {
 		}
 	})
 
-	return backupStores{registry: registry, live: live, target: target}
+	return backupStores{registry: registry, live: live, target: target, path: path}
 }
 
 // newBackupFixture builds a Handler with a backup service over stores: the
@@ -175,6 +180,7 @@ func newBackupFixtureWorkers(
 	}
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       stores.registry,
 		Registry:    stores.registry,

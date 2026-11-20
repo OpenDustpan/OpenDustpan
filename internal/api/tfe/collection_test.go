@@ -1,6 +1,7 @@
 package tfe_test
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,11 +12,13 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // newPlacedHandler returns a production Handler over stubWorkspaces whose
-// Placer is placer.
-func newPlacedHandler(t *testing.T, placer *tofuunit.Placer) *tfe.Handler {
+// Placer is placer and whose workspace service is workspaces.
+func newPlacedHandler(t *testing.T, placer *tofuunit.Placer, workspaces tfe.WorkspaceService) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
@@ -25,7 +28,7 @@ func newPlacedHandler(t *testing.T, placer *tofuunit.Placer) *tfe.Handler {
 		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
-		Workspaces:     stubWorkspaces{},
+		Workspaces:     workspaces,
 		OutputChecker:  nil,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          newTestAudit(),
@@ -43,6 +46,24 @@ func newPlacedHandler(t *testing.T, placer *tofuunit.Placer) *tfe.Handler {
 	}
 
 	return handler
+}
+
+// noCollectionWorkspaces is stubWorkspaces with the answer of the real service
+// for a workspace in no collection: a lock and a declare return
+// collection.ErrNoCollection. The service tests prove that the service gives
+// that answer; this stub proves that the handler maps it.
+type noCollectionWorkspaces struct{ stubWorkspaces }
+
+func (noCollectionWorkspaces) LockForJobInCollection(
+	_ context.Context, _ workspace.ID, _, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, collection.ErrNoCollection
+}
+
+func (noCollectionWorkspaces) BeginStateInCollection(
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
+) (workspace.PendingState, error) {
+	return workspace.PendingState{}, collection.ErrNoCollection
 }
 
 // TestWriteToAWorkspaceInNoCollectionIsRefused proves that a lock and a state
@@ -89,7 +110,11 @@ func TestWriteToAWorkspaceInNoCollectionIsRefused(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer test-token")
 
 				rec := httptest.NewRecorder()
-				newPlacedHandler(t, tc.placer).ServeHTTP(rec, req)
+				newPlacedHandler(
+					t,
+					tc.placer,
+					noCollectionWorkspaces{stubWorkspaces: stubWorkspaces{}},
+				).ServeHTTP(rec, req)
 
 				if rec.Code != tc.wantStatus || !strings.Contains(rec.Body.String(), tc.wantText) {
 					t.Fatalf(
@@ -107,5 +132,68 @@ func TestWriteToAWorkspaceInNoCollectionIsRefused(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// acceptingWorkspaces is stubWorkspaces with a service that lets every lock and
+// every declare through, and whose GetByID reports a workspace that no
+// collection holds. Only the handler can refuse a write to it.
+type acceptingWorkspaces struct{ stubWorkspaces }
+
+func (acceptingWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	w, err := stubWorkspaces{}.GetByID(ctx, id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	w.InCollection = false
+
+	return w, nil
+}
+
+func (acceptingWorkspaces) LockForJobInCollection(
+	ctx context.Context, id workspace.ID, holder, reason, jobID string,
+) (workspace.Workspace, error) {
+	return stubWorkspaces{}.LockForJobInCollection(ctx, id, holder, reason, jobID)
+}
+
+// TestHandlerRefusesAWorkspaceInNoCollectionWhenTheServiceDoesNot proves the
+// handler layer alone: the service accepts the write, the read of the workspace
+// reports no collection, and the handler answers 409 with unit.no-collection.
+func TestHandlerRefusesAWorkspaceInNoCollectionWhenTheServiceDoesNot(t *testing.T) {
+	t.Parallel()
+
+	placer := &tofuunit.Placer{
+		Rules: fixedRules{none: false}, Collections: fixedCollections{missing: false},
+	}
+
+	requests := []struct {
+		name   string
+		target string
+		body   string
+	}{
+		{"lock", "/api/v2/workspaces/ws-test123/actions/lock", `{"data":{}}`},
+		{
+			"state version create", "/api/v2/workspaces/ws-test123/state-versions",
+			stateCreateBody(4, stateCreateOutputs()),
+		},
+	}
+
+	for _, rq := range requests {
+		t.Run(rq.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(
+				t.Context(), http.MethodPost, rq.target, strings.NewReader(rq.body),
+			)
+			req.Header.Set("Authorization", "Bearer test-token")
+
+			rec := httptest.NewRecorder()
+			newPlacedHandler(t, placer, acceptingWorkspaces{stubWorkspaces: stubWorkspaces{}}).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "unit.no-collection") {
+				t.Fatalf("%s = %d %s, want 409 with unit.no-collection", rq.name, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

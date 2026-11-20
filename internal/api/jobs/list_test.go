@@ -348,8 +348,20 @@ func TestListJobsCountsDamagedRows(t *testing.T) {
 		return job.Page{
 			Jobs: []job.Job{good},
 			Damaged: []job.DamagedRow{
-				{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "unt-a", Reason: "the body is not JSON"},
-				{ID: "job-cccccccccccccccccccc", UnitID: "unt-a", Reason: "the body names an unknown source"},
+				{
+					ID:      "job-bbbbbbbbbbbbbbbbbbbb",
+					UnitID:  "unt-a",
+					Reason:  "the body is not JSON",
+					State:   "",
+					Version: 0,
+				},
+				{
+					ID:      "job-cccccccccccccccccccc",
+					UnitID:  "unt-a",
+					Reason:  "the body names an unknown source",
+					State:   "",
+					Version: 0,
+				},
 			},
 			After: "",
 		}
@@ -371,8 +383,8 @@ func TestListJobsDamagedRowsFollowTheReadableUnits(t *testing.T) {
 	t.Parallel()
 
 	rows := []job.DamagedRow{
-		{ID: "job-aaaaaaaaaaaaaaaaaaaa", UnitID: "unt-a", Reason: "the body is not JSON"},
-		{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "unt-b", Reason: "the body is not JSON"},
+		{ID: "job-aaaaaaaaaaaaaaaaaaaa", UnitID: "unt-a", Reason: "the body is not JSON", State: "", Version: 0},
+		{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "unt-b", Reason: "the body is not JSON", State: "", Version: 0},
 	}
 
 	tests := []struct {
@@ -425,8 +437,20 @@ func TestListJobsDamagedRowsFollowTheReadableUnits(t *testing.T) {
 			newAuthorizer(readsUnits("unt-a", "unt-b")...),
 			unitsWithInvalidID("unt-a", "unt-b"),
 			[]job.DamagedRow{
-				{ID: "job-aaaaaaaaaaaaaaaaaaaa", UnitID: "-unt-a", Reason: "the body is not JSON"},
-				{ID: "job-bbbbbbbbbbbbbbbbbbbb", UnitID: "-unt-b", Reason: "the body is not JSON"},
+				{
+					ID:      "job-aaaaaaaaaaaaaaaaaaaa",
+					UnitID:  "-unt-a",
+					Reason:  "the body is not JSON",
+					State:   "",
+					Version: 0,
+				},
+				{
+					ID:      "job-bbbbbbbbbbbbbbbbbbbb",
+					UnitID:  "-unt-b",
+					Reason:  "the body is not JSON",
+					State:   "",
+					Version: 0,
+				},
 			},
 			0,
 		},

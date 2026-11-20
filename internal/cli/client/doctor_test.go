@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli/client"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // doctorToken is a bootstrap admin token of 40 bytes. The tests prove that no

@@ -18,7 +18,7 @@ package client
 // adapter, backup-target code or key-encryption key code (ADR 39 decision 4).
 // The depguard rule for internal/cli/client and the gate test in
 // cmd/opendustpan fail the build when it does. The shared migration list
-// lives in pkg/store/schema, which both dialects and this client import.
+// lives in internal/store/schema, which both dialects and this client import.
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/cli"
-	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/internal/store/schema"
 )
 
 // ErrUpgradeVersionMismatch reports a server answer whose schema version the

@@ -210,6 +210,13 @@ func revealPasses(
 	}
 
 	if len(marks) == 0 {
+		// An instance that names sensitive_attributes masks those paths as whole
+		// values, so the leaf walk does not apply: the full decode masks the
+		// instance as the masked read does, and the path must be in that set.
+		if len(info.sensitive) > 0 {
+			return revealFullDecode(ctx, work, open, target, info)
+		}
+
 		return revealNoMarks(ctx, work, open, target)
 	}
 

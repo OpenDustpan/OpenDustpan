@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -47,6 +48,7 @@ func restoreSetupOver(t *testing.T, state *backup.State) *restoreServiceSetup {
 		}
 
 		service, err := backup.NewService(backup.Config{
+			Jobs:     jobcheck.Checker{},
 			Exporter: exporter, Kinds: fixedKind(installation.KindProduction), Registry: reg,
 			Operations: reg.ops, Blobs: newMemStore(), StateOpener: nil, Target: cfg.Target,
 			TargetName: "mem:target", Now: nil, Version: "test-1.0", MaxSQLBytes: 0, Owner: "", Lease: 0, Logger: nil,

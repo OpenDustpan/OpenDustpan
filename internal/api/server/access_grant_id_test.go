@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // grantServerEntries returns the entries of the installation scope.
@@ -313,7 +313,7 @@ func TestRevokeGrantReadFailureDoesNotEchoTheID(t *testing.T) {
 				entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
 				links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil}, now: nil,
 				logger: nil, noSignIn: false,
-				getGrantErr: readErr,
+				getGrantErr: readErr, afterRevoke: nil, tokenList: nil,
 			})
 
 			for _, path := range []string{"/api/server/grants/", "/api/server/namespaces/acme/grants/"} {

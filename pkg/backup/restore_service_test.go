@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -152,8 +153,6 @@ type devLiveState struct {
 	detect   backup.DevStripReport
 	remove   backup.DevStripReport
 	stripErr map[backup.DevStripMode]error
-	// dropped is the count that the keeping swap reports.
-	dropped int64
 	// expiredLeases is the count of update leases that each swap reports.
 	expiredLeases int64
 	// order, when set, logs "strip-detect", "strip-remove", "record" and
@@ -258,10 +257,10 @@ func (l *restoreServiceLive) ApplyStagingKeepingAccess(ctx context.Context) (bac
 	}
 
 	l.mu.Lock()
-	dropped, expired := l.dev.dropped, l.dev.expiredLeases
+	expired := l.dev.expiredLeases
 	l.mu.Unlock()
 
-	return backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired}, l.ApplyStaging(ctx)
+	return backup.KeepAccessResult{ExpiredUpdateLeases: expired}, l.ApplyStaging(ctx)
 }
 
 func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, error) {
@@ -695,6 +694,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
 	}
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
@@ -1365,6 +1365,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	live.maint = maint
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs: jobcheck.Checker{},
 		Exporter: &stubBackupExporter{
 			sum: testSummary(), data: []byte("pre-backup-sql"), order: nil, hook: atomic.Pointer[func()]{},
 		},
@@ -2053,7 +2054,7 @@ func newRestoreServiceLive(checks *checkLiveStore, regs *restoreServiceRegistry)
 		decisions:     nil,
 		dev: devLiveState{
 			kind: installation.KindProduction, kindErr: nil, detect: emptyReport(), remove: emptyReport(),
-			stripErr: map[backup.DevStripMode]error{}, dropped: 0, expiredLeases: 0, order: nil, appendErr: nil,
+			stripErr: map[backup.DevStripMode]error{}, expiredLeases: 0, order: nil, appendErr: nil,
 			stageOpts: nil, strips: nil, records: nil, appends: nil, discards: 0,
 		},
 		ops:        durabletest.NewMem().Store(),

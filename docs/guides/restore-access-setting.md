@@ -3,8 +3,8 @@
 This guide shows how to let each holder of `server:restore` replace the access
 tables in a restore, how to read the value, and how to turn it off again.
 
-The access tables hold principals, roles, grants, tokens and sign-in
-providers. A restore replaces them only when the caller holds
+The access tables hold principals, temporary administrators, roles, grants,
+tokens and sign-in providers. A restore replaces them only when the caller holds
 `server:restore-access`, which only the site administrator holds. Any other
 restore keeps the current access tables. The setting `restore.replace-access-tables`
 changes this. The default is `false`. When the value is `true`, each holder of

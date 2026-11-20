@@ -48,6 +48,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{name: "sourcefilter", handler: a.sourceFilter, label: metrics.AdapterServer},
 		{name: "trustrules", handler: a.trustRules, label: metrics.AdapterServer},
 		{name: "selfservice", handler: a.selfService, label: metrics.AdapterServer},
+		{name: "state", handler: a.state, label: metrics.AdapterServer},
 		{name: "pulumi", handler: a.pulumi, label: metrics.AdapterPulumi},
 		{name: "tfe", handler: a.tfe, label: metrics.AdapterOpenTofu},
 		{name: "tofuhttp", handler: a.tofuHTTP, label: metrics.AdapterOpenTofu},

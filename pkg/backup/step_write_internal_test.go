@@ -308,7 +308,7 @@ func stepService(target blob.Store, reg *stepRegistry, ops *stepOps) *Service {
 	reg.mu.Unlock()
 
 	return &Service{
-		exporter: stepExporter{}, kinds: stepKinds{}, registry: reg,
+		jobs: nil, exporter: stepExporter{}, kinds: stepKinds{}, registry: reg,
 		source: newStepTarget(), opener: nil, target: target, targetName: "test",
 		now: time.Now, version: "test", maxSQL: 0, maxUnverified: 0, runner: nil,
 		operations: ops, lease: 0, logger: slog.New(slog.DiscardHandler),

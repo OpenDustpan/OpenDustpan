@@ -8,8 +8,8 @@ that the first release notes must hold.
 ### One baseline migration for each database
 
 - The 64 numbered migrations of each store dialect are now one baseline
-  migration, `0168_baseline.sql`, in `pkg/store/sqlite/migrations/` and
-  `pkg/store/postgres/migrations/`.
+  migration, `0168_baseline.sql`, in `internal/store/sqlite/migrations/` and
+  `internal/store/postgres/migrations/`.
 - Until the first tag, a change to the schema edits the baseline in place.
 - The server records the SHA-256 of each migration. It refuses at start a
   database that records another SHA-256 or another name for the same

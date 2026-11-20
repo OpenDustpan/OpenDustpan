@@ -97,20 +97,20 @@ func (p ciStateProbe) History(
 	return p.WorkspaceService.History(ctx, id, page)
 }
 
-func (p ciStateProbe) LockForJob(
+func (p ciStateProbe) LockForJobInCollection(
 	ctx context.Context, id workspace.ID, holder, reason, jobID string,
 ) (workspace.Workspace, error) {
 	p.record(p.locks, id.String())
 
-	return p.WorkspaceService.LockForJob(ctx, id, holder, reason, jobID)
+	return p.WorkspaceService.LockForJobInCollection(ctx, id, holder, reason, jobID)
 }
 
-func (p ciStateProbe) BeginState(
+func (p ciStateProbe) BeginStateInCollection(
 	ctx context.Context, id workspace.ID, holder string, in workspace.NewState, auth workspace.Authority,
 ) (workspace.PendingState, error) {
 	p.record(p.writes, "begin "+id.String())
 
-	return p.WorkspaceService.BeginState(ctx, id, holder, in, auth)
+	return p.WorkspaceService.BeginStateInCollection(ctx, id, holder, in, auth)
 }
 
 func (p ciStateProbe) Upload(
