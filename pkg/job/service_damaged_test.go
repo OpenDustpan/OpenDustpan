@@ -75,6 +75,13 @@ func TestServiceCancelsADamagedJob(t *testing.T) {
 		t.Errorf("Cancel answers version %d, want 8: the version after the stored row", got.Version)
 	}
 
+	// The answer holds the stored times, not the zero time.
+	if !got.CreatedAt.Equal(damagedCreatedAt()) || !got.UpdatedAt.Equal(damagedChangedAt()) ||
+		!got.StateChangedAt.Equal(damagedChangedAt()) {
+		t.Errorf("Cancel answers times %v, %v, %v; want %v, %v, %v", got.CreatedAt, got.UpdatedAt,
+			got.StateChangedAt, damagedCreatedAt(), damagedChangedAt(), damagedChangedAt())
+	}
+
 	if len(r.store.damagedCancels) != 1 {
 		t.Fatalf("CancelDamaged was called %d times, want 1", len(r.store.damagedCancels))
 	}

@@ -524,17 +524,18 @@ func (m *memDB) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namesp
 
 // CancelDamaged implements job.Store. It reads no body: a row that a reader
 // cannot decode can still be canceled by its ID.
-func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) (int64, error) {
+func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry,
+) (job.DamagedCancel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkFence(fence); err != nil {
-		return 0, err
+		return job.DamagedCancel{}, err
 	}
 
 	cur, ok := m.lookup(id)
 	if !ok || cur.Spec.Unit.Namespace() != fence.Namespace {
-		return 0, job.ErrNotFound
+		return job.DamagedCancel{}, job.ErrNotFound
 	}
 
 	// A cancel through this path does not stop the durable operation of
@@ -543,15 +544,15 @@ func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fenc
 	// this check stays so that a new caller cannot cancel a readable
 	// job here.
 	if _, damaged := m.damaged[id]; !damaged {
-		return 0, fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+		return job.DamagedCancel{}, fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
 	}
 
 	if cur.State.Terminal() {
-		return 0, fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, cur.State)
+		return job.DamagedCancel{}, fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, cur.State)
 	}
 
 	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
-		return 0, err
+		return job.DamagedCancel{}, err
 	}
 
 	next := copyJob(cur)
@@ -562,7 +563,7 @@ func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fenc
 	m.jobs[id] = &next
 	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
 
-	return next.Version, nil
+	return job.DamagedCancel{Version: next.Version, CreatedAt: next.CreatedAt, ChangedAt: now}, nil
 }
 
 // settle sets the state, the version, the wait reason and the reason of next

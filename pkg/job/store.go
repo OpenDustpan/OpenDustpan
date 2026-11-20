@@ -167,6 +167,19 @@ type DamagedRow struct {
 	Version int64
 }
 
+// DamagedCancel is what Store.CancelDamaged stored for a damaged row. It holds
+// the values that the cancel answer needs and that the row columns keep, as
+// the body did not decode.
+type DamagedCancel struct {
+	// Version is the version that the cancel stored for the row.
+	Version int64
+	// CreatedAt is the creation time of the row, from its created column.
+	CreatedAt time.Time
+	// ChangedAt is the time of the cancel: the update time of the row and the
+	// time of its last state change.
+	ChangedAt time.Time
+}
+
 // Page is one page of Store.List: the jobs that decoded, the damaged rows
 // that did not, and the cursor of the next page.
 type Page struct {
@@ -238,8 +251,8 @@ type Store interface {
 	// caller uses it only for a row that List or Orphans reported as
 	// damaged: a job whose body decodes is canceled through Apply with
 	// EventCancel, which also ends its operation. It returns the version
-	// that the cancel stored for the row.
-	CancelDamaged(ctx context.Context, id ID, fence namespace.Fence, e []audit.Entry) (int64, error)
+	// and the times that the cancel stored for the row.
+	CancelDamaged(ctx context.Context, id ID, fence namespace.Fence, e []audit.Entry) (DamagedCancel, error)
 	// GetDamaged returns the damaged row id and the namespace of its row,
 	// and reads no body: a caller that Get answered with ErrDamaged uses it
 	// to find the unit of the row, so that it can check the rights of a

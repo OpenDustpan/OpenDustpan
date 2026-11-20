@@ -47,6 +47,12 @@ type svcStore struct {
 	getDamagedErr, cancelDamagedErr error
 }
 
+// damagedCreatedAt and damagedChangedAt are the times that the fake store
+// gives for a canceled damaged row.
+func damagedCreatedAt() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) }
+
+func damagedChangedAt() time.Time { return time.Date(2026, 1, 9, 3, 4, 5, 0, time.UTC) }
+
 type damagedRow struct {
 	row job.DamagedRow
 	ns  namespace.Name
@@ -174,17 +180,20 @@ func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, 
 	return nil, nil, nil
 }
 
-func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry) (int64, error) {
+func (s *svcStore) CancelDamaged(_ context.Context, id job.ID, f namespace.Fence, e []audit.Entry,
+) (job.DamagedCancel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.damagedCancels = append(s.damagedCancels, damagedCancel{id: id, fence: f, entries: e})
 
 	if s.cancelDamagedErr != nil {
-		return 0, s.cancelDamagedErr
+		return job.DamagedCancel{}, s.cancelDamagedErr
 	}
 
-	return s.damaged[id].row.Version + 1, nil
+	return job.DamagedCancel{
+		Version: s.damaged[id].row.Version + 1, CreatedAt: damagedCreatedAt(), ChangedAt: damagedChangedAt(),
+	}, nil
 }
 
 func (s *svcStore) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {

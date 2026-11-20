@@ -87,7 +87,7 @@ func (s *service) Cancel(ctx context.Context, a Actor, id ID, reason string) (Jo
 // is ErrNotFound, and no caller learns more. The store ends no durable
 // operation for such a row: the job stays stopped and holds no body to read.
 // It returns a Job that holds only what the row proves: the ID, the unit, the
-// state canceled and the version that the store wrote.
+// state canceled, and the version and the times that the store wrote.
 func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason string) (Job, error) {
 	row, unit, err := s.damagedUnit(ctx, id)
 	if err != nil {
@@ -129,7 +129,7 @@ func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason stri
 		Key: "damaged", Old: nil, New: row.Reason, Layer: "", TakesEffect: "",
 	})
 
-	version, err := s.store.CancelDamaged(ctx, id, fence, []audit.Entry{entry})
+	stored, err := s.store.CancelDamaged(ctx, id, fence, []audit.Entry{entry})
 	if errors.Is(err, ErrInvalid) {
 		return Job{}, errRepaired
 	}
@@ -138,7 +138,8 @@ func (s *service) cancelDamaged(ctx context.Context, a Actor, id ID, reason stri
 		return Job{}, fmt.Errorf("cancel damaged job: %w", err)
 	}
 
-	j.State, j.Wait, j.Version = StateCanceled, WaitNone, version
+	j.State, j.Wait, j.Version = StateCanceled, WaitNone, stored.Version
+	j.CreatedAt, j.UpdatedAt, j.StateChangedAt = stored.CreatedAt, stored.ChangedAt, stored.ChangedAt
 
 	return j, nil
 }

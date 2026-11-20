@@ -190,10 +190,12 @@ func (f *fakeJobs) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, nam
 	return d.row, d.ns, nil
 }
 
-func (f *fakeJobs) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) (int64, error) {
+func (f *fakeJobs) CancelDamaged(
+	context.Context, job.ID, namespace.Fence, []audit.Entry,
+) (job.DamagedCancel, error) {
 	f.note("CancelDamaged")
 
-	return 0, errUnexpected
+	return job.DamagedCancel{}, errUnexpected
 }
 
 // set stores j, so a running stream finds the new record at its next read.

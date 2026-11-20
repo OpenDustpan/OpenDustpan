@@ -67,9 +67,20 @@ func testDamagedList(t *testing.T, h Harness) {
 
 	cancel := entry(f.unit, job.ActionJobCancel)
 
-	version, err := h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel})
+	stored, err := h.Jobs.CancelDamaged(t.Context(), bad.ID, f.fence, []audit.Entry{cancel})
 	if err != nil {
 		t.Fatalf("CancelDamaged = %v", err)
+	}
+
+	version := stored.Version
+
+	// The cancel answers the times of the row: the creation time of the job,
+	// and a change time that is not before it.
+	if !stored.CreatedAt.Truncate(time.Millisecond).Equal(bad.CreatedAt.Truncate(time.Millisecond)) ||
+		stored.ChangedAt.Before(stored.CreatedAt) ||
+		stored.ChangedAt.IsZero() {
+		t.Fatalf("CancelDamaged stored times %v and %v, want the creation time %v and a later change time",
+			stored.CreatedAt, stored.ChangedAt, bad.CreatedAt)
 	}
 
 	// The cancel answers the version that it stored: the row version after

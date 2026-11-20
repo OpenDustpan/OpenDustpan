@@ -202,12 +202,12 @@ func (s *Store) GetDamaged(ctx context.Context, id job.ID) (job.DamagedRow, name
 // CancelDamaged implements job.Store.
 func (s *Store) CancelDamaged(
 	ctx context.Context, id job.ID, fence namespace.Fence, e []audit.Entry,
-) (int64, error) {
+) (job.DamagedCancel, error) {
 	if err := checkEntries(e, fence); err != nil {
-		return 0, err
+		return job.DamagedCancel{}, err
 	}
 
-	var version int64
+	var stored job.DamagedCancel
 
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
 		r, ok, err := tx.Job(ctx, id)
@@ -235,15 +235,19 @@ func (s *Store) CancelDamaged(
 		}
 
 		err = cancelRow(ctx, tx, &r, e)
-		version = r.Version
+		stored = job.DamagedCancel{
+			Version:   r.Version,
+			CreatedAt: time.UnixMilli(r.CreatedMs).UTC(),
+			ChangedAt: time.UnixMilli(r.StateChangedMs).UTC(),
+		}
 
 		return err
 	})
 	if err != nil {
-		return 0, err
+		return job.DamagedCancel{}, err
 	}
 
-	return version, nil
+	return stored, nil
 }
 
 // cancelRow sets the row r to canceled at the version after its own, updates
