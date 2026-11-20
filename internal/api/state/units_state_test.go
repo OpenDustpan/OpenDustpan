@@ -252,7 +252,7 @@ func failingUnits(err error) *units {
 }
 
 // TestReadMapsTheRefusalsOfTheTools proves the answer of each refusal of the
-// domain packages: a bad path answers 400, an oversized version 413, a read
+// domain packages: a bad path answers 400, an oversized version and a state past the work bound 413, a read
 // past its deadline 504, an unknown version 404, and an error that no class
 // knows 500. No answer holds a byte of the error text.
 func TestReadMapsTheRefusalsOfTheTools(t *testing.T) {
@@ -268,6 +268,11 @@ func TestReadMapsTheRefusalsOfTheTools(t *testing.T) {
 		{"workspace bad path", workspace.ErrBadPath, http.StatusBadRequest, errcode.StateBadPath},
 		{"stack too large", stack.ErrTooLarge, http.StatusRequestEntityTooLarge, errcode.StateVersionTooLarge},
 		{"workspace too large", workspace.ErrTooLarge, http.StatusRequestEntityTooLarge, errcode.StateVersionTooLarge},
+		{"stack too complex", stack.ErrStateBound, http.StatusRequestEntityTooLarge, errcode.StackStateTooComplex},
+		{
+			"workspace too complex", workspace.ErrStateBound,
+			http.StatusRequestEntityTooLarge, errcode.StateVersionTooComplex,
+		},
 		{"stack deadline", stack.ErrReadDeadline, http.StatusGatewayTimeout, errcode.StateReadTimeout},
 		{"workspace deadline", workspace.ErrReadDeadline, http.StatusGatewayTimeout, errcode.StateReadTimeout},
 		{"context deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, errcode.StateReadTimeout},
