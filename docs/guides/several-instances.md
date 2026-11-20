@@ -51,6 +51,8 @@ Give each instance the same sign-in providers and client secrets. The browser re
 ## The public URL
 
 Every instance serves the same public URL (`--public-url`).
+A process that listens on an address that is not loopback with plain HTTP needs an `https` `--public-url`, `--tls-cert` and `--tls-key`, or `--allow-plain-http`. Else `serve` refuses to start.
+The check reads `--public-url` for each component, also for a process that runs `worker` without `api`.
 
 The Pulumi CLI records the server URL in the secrets-manager configuration of each stack when the stack is made. A stack cannot read its secrets through a different URL.
 

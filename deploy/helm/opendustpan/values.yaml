@@ -206,8 +206,14 @@ console:
 server:
   # The external base URL, for example https://dustpan.example. Set it when
   # an ingress or a load balancer is in front of the server. Console sign-in
-  # needs it.
+  # needs it. An https URL says that the ingress or the load balancer ends
+  # TLS. The chart needs an https publicURL, tls.existingSecret or
+  # allowPlainHTTP.
   publicURL: ""
+  # true lets the server listen with plain HTTP on the pod address with no
+  # TLS and no https publicURL. Tokens and state then go over the network
+  # with no encryption. The server logs a warning at each start.
+  allowPlainHTTP: false
   # The addresses (CIDRs) of the proxies that may set the client address
   # header, for example the pod CIDR of the ingress controller.
   trustedProxies: []

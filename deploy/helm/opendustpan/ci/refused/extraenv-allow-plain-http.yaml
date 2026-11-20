@@ -1,0 +1,16 @@
+# Refused: the chart sets DUSTPAN_ALLOW_PLAIN_HTTP from server.allowPlainHTTP.
+# want: at '/server/extraEnv/0/name'
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
+server:
+  publicURL: https://dustpan.example
+  extraEnv:
+    - name: DUSTPAN_ALLOW_PLAIN_HTTP
+      value: "true"
