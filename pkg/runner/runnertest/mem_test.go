@@ -980,7 +980,9 @@ func (m *mem) SessionRenew(
 	// its log and its finish, until the bound.
 	o := m.ops[c.Operation]
 	if o.canceled {
-		if err := runner.CheckSessionRenew(true, o.canceledAt, time.Now()); err != nil {
+		cancel := runner.SessionCancel{Requested: true, At: o.canceledAt}
+
+		if err := runner.CheckSessionRenew(cancel, time.Now()); err != nil {
 			return durable.Claim{}, err
 		}
 	}

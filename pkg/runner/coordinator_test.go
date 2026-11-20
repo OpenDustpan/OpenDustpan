@@ -257,7 +257,10 @@ func TestCheckSessionRenew(t *testing.T) {
 		{"no cancel, a stale time", false, canceled, canceled.Add(24 * time.Hour), nil},
 		{"right after the cancel", true, canceled, canceled.Add(time.Second), nil},
 		{"at the bound", true, canceled, canceled.Add(runner.SessionCancelBound), nil},
-		{"after the bound", true, canceled, canceled.Add(runner.SessionCancelBound + time.Millisecond), runner.ErrClaimLost},
+		{
+			"after the bound", true, canceled,
+			canceled.Add(runner.SessionCancelBound + time.Millisecond), runner.ErrClaimLost,
+		},
 		{"a day after the cancel", true, canceled, canceled.Add(24 * time.Hour), runner.ErrClaimLost},
 		{"a cancel later than now", true, canceled, canceled.Add(-time.Hour), nil},
 		{"a cancel with no time", true, time.Time{}, canceled, runner.ErrClaimLost},
@@ -267,7 +270,9 @@ func TestCheckSessionRenew(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := runner.CheckSessionRenew(tc.canceled, tc.at, tc.now); !errors.Is(err, tc.want) {
+			cancel := runner.SessionCancel{Requested: tc.canceled, At: tc.at}
+
+			if err := runner.CheckSessionRenew(cancel, tc.now); !errors.Is(err, tc.want) {
 				t.Fatalf("CheckSessionRenew = %v, want %v", err, tc.want)
 			}
 		})

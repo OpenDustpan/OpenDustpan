@@ -171,16 +171,23 @@ func GraceFor(s *job.Step) time.Duration {
 // canceled.
 const SessionCancelBound = GraceChanges + ReportTime
 
-// CheckSessionRenew checks a renewal of the claim of a job session at now.
-// canceled is true when a cancel is requested, and cancelRequestedAt is the
-// time of the cancel on the clock of the store. It returns nil when no cancel
-// is requested. It returns ErrClaimLost when the cancel is older than
+// SessionCancel is the cancel state of the operation of a job session, as the
+// store holds it. Requested is true when a cancel is requested. At is the time
+// of the cancel on the clock of the store: the zero Time when the store holds
+// no time for the cancel.
+type SessionCancel struct {
+	Requested bool
+	At        time.Time
+}
+
+// CheckSessionRenew checks a renewal of the claim of a job session at now. It
+// returns nil when no cancel is requested. It returns ErrClaimLost when the cancel is older than
 // SessionCancelBound, and also when a cancel is requested but its time is the
 // zero Time: a cancel with no time is not a young cancel. A renewal at exactly
 // SessionCancelBound after the cancel passes. A cancel that is later than now
 // (clock skew between instances) counts as a cancel at now.
-func CheckSessionRenew(canceled bool, cancelRequestedAt, now time.Time) error {
-	if !canceled {
+func CheckSessionRenew(cancel SessionCancel, now time.Time) error {
+	if !cancel.Requested {
 		return nil
 	}
 
@@ -188,11 +195,11 @@ func CheckSessionRenew(canceled bool, cancelRequestedAt, now time.Time) error {
 	// because the age of a cancel at the year 1 is far over the bound. This
 	// check stays so that a change of the arithmetic cannot make a cancel
 	// with no time a young cancel. It does not rely on the store adapters.
-	if cancelRequestedAt.IsZero() {
+	if cancel.At.IsZero() {
 		return fmt.Errorf("%w: the cancel has no time", ErrClaimLost)
 	}
 
-	if now.Sub(cancelRequestedAt) > SessionCancelBound {
+	if now.Sub(cancel.At) > SessionCancelBound {
 		return fmt.Errorf("%w: the cancel is older than %v", ErrClaimLost, SessionCancelBound)
 	}
 
