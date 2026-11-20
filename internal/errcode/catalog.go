@@ -81,6 +81,7 @@ func areas() []func() []Spec {
 		auditSpecs,
 		authSpecs,
 		backupSpecs,
+		breakGlassSpecs,
 		collectionSpecs,
 		contextSpecs,
 		driftSpecs,

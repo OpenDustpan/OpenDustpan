@@ -186,7 +186,8 @@ curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
 ```
 
 The revoke of the last site administrator is refused with `409` and the code
-`access.last-site-administrator`.
+`access.last-site-administrator`. The refusal writes an audit entry with the
+outcome `failure` and the reason `access.last-site-administrator`.
 
 A grant on one collection reaches only that collection and its units. A writer
 on collection A that writes a unit of collection B gets `403` and nothing

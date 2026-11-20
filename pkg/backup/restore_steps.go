@@ -219,7 +219,7 @@ func permanentRestoreError(err error) bool {
 		ErrCorrupt, ErrSchemaMismatch, ErrSchemaBeforeBaseline, ErrNotFound, ErrInvalidID, ErrFailed,
 		ErrDevBackupRefused, ErrDevStripIncomplete, ErrRestoreAccessMismatch, ErrManifestKindInvalid,
 		ErrInvalidRestoreID, ErrKeyUnchecked, ErrPreBackupForeign, maintenance.ErrActiveWork,
-		principal.ErrNoWorkingBreakGlass, secret.ErrKeyNotConfigured,
+		principal.ErrNoWorkingBreakGlass, principal.ErrBreakGlassPassword, secret.ErrKeyNotConfigured,
 		secret.ErrWrapperMismatch, secret.ErrDecrypt,
 	} {
 		if errors.Is(err, sentinel) {

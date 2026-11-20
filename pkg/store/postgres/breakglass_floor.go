@@ -29,6 +29,26 @@ func checkWorkingBreakGlassFloor(before, after int64) error {
 	return nil
 }
 
+// checkBreakGlassPasswords refuses data that holds a break-glass account with
+// a local password. A restore writes the break-glass flag and the passwords
+// from the backup, so it is a write that can put the flag on a person with a
+// password. It reads with the queries of one transaction, and fails closed
+// when the count cannot run.
+func checkBreakGlassPasswords(ctx context.Context, q *db.Queries) error {
+	n, err := q.CountBreakGlassWithPassword(ctx)
+	if err != nil {
+		return fmt.Errorf("count break-glass accounts with a password: %w: %w",
+			principal.ErrBreakGlassUnavailable, err)
+	}
+
+	if n > 0 {
+		return fmt.Errorf("restore holds %d break-glass accounts with a local password: %w",
+			n, principal.ErrBreakGlassPassword)
+	}
+
+	return nil
+}
+
 // countWorkingBreakGlass counts the working break-glass accounts at the
 // time at with the queries of one transaction.
 func countWorkingBreakGlass(ctx context.Context, q *db.Queries, at time.Time) (int64, error) {

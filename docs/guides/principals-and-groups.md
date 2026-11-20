@@ -164,6 +164,9 @@ The delete is refused in these cases:
 | The last site administrator | `409` | `access.last-site-administrator` |
 | A namespace service subject | `400` | `principal.reserved-subject` |
 
+The refusal of the last site administrator writes an audit entry with the
+outcome `failure` and the reason `access.last-site-administrator`.
+
 ## Groups
 
 A group has a `name` and an optional `description`.

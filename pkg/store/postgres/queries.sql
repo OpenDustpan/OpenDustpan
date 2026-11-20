@@ -1706,6 +1706,14 @@ WHERE principals.id = $2 AND principals.namespace = $3 AND num_nulls(principals.
       AND o.deleted_at_ms IS NULL AND o.disabled_at_ms IS NULL
   ));
 
+-- name: CountBreakGlassWithPassword :one
+-- The break-glass accounts that have a local password. A break-glass account
+-- signs in with a passkey or a hardware key only, so a restore refuses data
+-- that holds one.
+SELECT COUNT(*) FROM principals p
+JOIN local_users u ON u.principal_id = p.id
+WHERE p.break_glass AND u.password_hash <> '';
+
 -- name: CountEnabledBreakGlassPrincipal :one
 -- 1 when the principal is an enabled break-glass account of the
 -- installation, so a write that changed no row of it was the refusal of the

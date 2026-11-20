@@ -241,9 +241,10 @@ func (s *Store) swapLockedTx(
 }
 
 // swapInWithBreakGlassFloor swaps in.plan.staging in for in.live, and refuses a
-// swap that lowers the working break-glass count below the floor. It counts
-// the live data before the swap and the data that is live after it, in the
-// same transaction.
+// swap that lowers the working break-glass count below the floor, or that
+// puts in a break-glass account with a local password. It counts the live
+// data before the swap and the data that is live after it, in the same
+// transaction.
 func (s *Store) swapInWithBreakGlassFloor(
 	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, kept *backup.KeepAccessResult,
 ) error {
@@ -266,6 +267,10 @@ func (s *Store) swapInWithBreakGlassFloor(
 	after, afterErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
 	if afterErr != nil {
 		return afterErr
+	}
+
+	if err := checkBreakGlassPasswords(ctx, s.queries.WithTx(tx)); err != nil {
+		return err
 	}
 
 	return checkWorkingBreakGlassFloor(before, after)
