@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
@@ -712,24 +713,32 @@ func (h *Handler) limitGroupReach(ctx context.Context, p identity.Principal) err
 	}
 }
 
-// removeAccessLimit serves DELETE {scope}/access-limits/{id}. It answers 204.
-func (h *Handler) removeAccessLimit(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+// objectRemoval says how removeObject reads and deletes one kind of object.
+type objectRemoval struct {
+	// key reads the scope and the ID of the path.
+	key func(r *http.Request, obj identity.Object) (gate.Scope, gate.ID, error)
+	// version returns the stored version of the object, or gate.ErrNotFound.
+	version func(ctx context.Context, scope gate.Scope, id gate.ID) (int64, error)
+	// remove deletes the object that ref names.
+	remove func(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error
+}
+
+// removeObject serves a DELETE of one object. It checks the scope and the ID
+// before any store call, reads the version that the delete removes (the
+// If-Match version, else the stored one), and answers 204.
+func (h *Handler) removeObject(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, spec objectRemoval,
 ) {
 	ctx := r.Context()
 
-	scope, id, err := h.gateObjectKey(r, obj)
+	scope, id, err := spec.key(r, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	version, err := h.existingVersion(r, func() (int64, error) {
-		cur, getErr := h.gates.AccessLimit(ctx, scope, id)
-
-		return cur.Version, getErr
-	})
+	version, err := h.existingVersion(r, func() (int64, error) { return spec.version(ctx, scope, id) })
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -737,11 +746,26 @@ func (h *Handler) removeAccessLimit(
 	}
 
 	ref := gate.ObjectRef{Scope: scope, ID: id, Version: version}
-	if err = h.gates.DeleteAccessLimit(ctx, ref, gateEntry(r, p)); err != nil {
+	if err = spec.remove(ctx, ref, gateEntry(r, p)); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removeAccessLimit serves DELETE {scope}/access-limits/{id}. It answers 204.
+func (h *Handler) removeAccessLimit(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	h.removeObject(w, r, p, obj, objectRemoval{
+		key: h.gateObjectKey,
+		version: func(ctx context.Context, scope gate.Scope, id gate.ID) (int64, error) {
+			cur, err := h.gates.AccessLimit(ctx, scope, id)
+
+			return cur.Version, err
+		},
+		remove: h.gates.DeleteAccessLimit,
+	})
 }

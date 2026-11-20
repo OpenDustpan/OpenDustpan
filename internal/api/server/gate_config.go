@@ -589,34 +589,17 @@ func approvalRuleFrom(scope gate.Scope, id gate.ID, in approvalRuleBody) (gate.A
 func (h *Handler) removeApprovalRule(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
-	ctx := r.Context()
+	h.removeObject(w, r, p, obj, objectRemoval{
+		key: h.ruleKey,
+		version: func(ctx context.Context, scope gate.Scope, id gate.ID) (int64, error) {
+			cur, err := h.gates.ApprovalRule(ctx, scope, id)
 
-	scope, id, err := h.ruleKey(r, obj)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	version, err := h.existingVersion(r, func() (int64, error) {
-		cur, getErr := h.gates.ApprovalRule(ctx, scope, id)
-
-		return cur.Version, getErr
+			return cur.Version, err
+		},
+		remove: func(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error {
+			return h.gates.DeleteApprovalRule(ctx, ref, e)
+		},
 	})
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	ref := gate.ObjectRef{Scope: scope, ID: id, Version: version}
-	if err := h.gates.DeleteApprovalRule(ctx, ref, gateEntry(r, p)); err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // expectedVersion returns the version that a put replaces: the If-Match

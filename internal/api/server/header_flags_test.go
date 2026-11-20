@@ -203,11 +203,39 @@ func preferenceScenarios() map[string]headertest.Scenario {
 	}
 }
 
-// gateObjectScenarios returns the scenarios of the gate, access limit,
-// approval rule and approval default operations of the four scope levels. The
-// operations of the approval rules and the approval default of the namespace
-// have their own scenarios in approvalScenarios.
-func gateObjectScenarios() map[string]headertest.Scenario {
+// gateScenarioScope is one scope level of gateObjectScenarios.
+type gateScenarioScope struct {
+	infix, base string
+	hasDefault  bool
+}
+
+// skips reports whether the scenarios of the resource res are not those of the
+// scope: the namespace approval operations have their own scenarios, and the
+// installation holds no approval default.
+func (sc gateScenarioScope) skips(res gateScenarioResource) bool {
+	namespaceApproval := sc.infix == "" && (res.segment == "approval-rules" || res.single)
+
+	return namespaceApproval || (res.single && !sc.hasDefault)
+}
+
+// gateScenarioResource is one kind of object of gateObjectScenarios.
+type gateScenarioResource struct {
+	plural, singular, segment, doc string
+	single                         bool
+}
+
+// gateScenarioScopes returns the four scope levels of the gate routes.
+func gateScenarioScopes() []gateScenarioScope {
+	return []gateScenarioScope{
+		{"", gateBase + "acme", true},
+		{"Collection", gateBase + "acme/collections/payments", true},
+		{"Unit", gateBase + "acme/units/by-name/opentofu/net", true},
+		{"Installation", installationBase, false},
+	}
+}
+
+// gateScenarioResources returns the kinds of object that a scope holds.
+func gateScenarioResources() []gateScenarioResource {
 	const (
 		gateDoc = `{"decisionPoint":"state.write","condition":"context.operation.kind == \"write\"",` +
 			`"outcome":"deny","message":"Writes are frozen","mode":"enforce"}`
@@ -215,32 +243,24 @@ func gateObjectScenarios() map[string]headertest.Scenario {
 		ruleDoc  = `{"count":1,"approvers":{"groups":["ops"]}}`
 	)
 
-	scopes := []struct {
-		infix, base string
-		hasDefault  bool
-	}{
-		{"", gateBase + "acme", true},
-		{"Collection", gateBase + "acme/collections/payments", true},
-		{"Unit", gateBase + "acme/units/by-name/opentofu/net", true},
-		{"Installation", installationBase, false},
-	}
-
-	resources := []struct {
-		plural, singular, segment, doc string
-		single                         bool
-	}{
+	return []gateScenarioResource{
 		{"Gates", "Gate", "gates", gateDoc, false},
 		{"AccessLimits", "AccessLimit", "access-limits", limitDoc, false},
 		{"ApprovalRules", "ApprovalRule", "approval-rules", ruleDoc, false},
 		{"", "ApprovalDefault", "approval-default", platformDefault, true},
 	}
+}
 
+// gateObjectScenarios returns the scenarios of the gate, access limit,
+// approval rule and approval default operations of the four scope levels. The
+// operations of the approval rules and the approval default of the namespace
+// have their own scenarios in approvalScenarios.
+func gateObjectScenarios() map[string]headertest.Scenario {
 	out := map[string]headertest.Scenario{}
 
-	for _, sc := range scopes {
-		for _, res := range resources {
-			namespaceApproval := sc.infix == "" && (res.segment == "approval-rules" || res.single)
-			if namespaceApproval || (res.single && !sc.hasDefault) {
+	for _, sc := range gateScenarioScopes() {
+		for _, res := range gateScenarioResources() {
+			if sc.skips(res) {
 				continue
 			}
 
@@ -251,38 +271,40 @@ func gateObjectScenarios() map[string]headertest.Scenario {
 				item = list
 			}
 
-			scenario := func(method, target, body string) headertest.Scenario {
-				return func(t *testing.T) headertest.Probe {
-					t.Helper()
-
-					_, h := newGateHandler(t, adminGatesAndInstallation())
-
-					put := serveGate(t, h, gateCall{http.MethodPut, item, res.doc, ""})
-					wantStatus(t, put, http.StatusOK)
-
-					return headertest.Probe{
-						ETag: put.Header().Get("ETag"),
-						Send: func(headers map[string]string) headertest.Answer {
-							rec := serveGate(t, h, gateCall{method, target, body, headers["If-Match"]})
-
-							return headertest.Answer{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
-						},
-						Replayed: nil,
-					}
-				}
-			}
-
 			if !res.single {
-				out["list"+sc.infix+res.plural] = scenario(http.MethodGet, list, "")
+				out["list"+sc.infix+res.plural] = gateObjectScenario(item, res.doc, http.MethodGet, list, "")
 			}
 
-			out["get"+sc.infix+res.singular] = scenario(http.MethodGet, item, "")
-			out["set"+sc.infix+res.singular] = scenario(http.MethodPut, item, res.doc)
-			out["delete"+sc.infix+res.singular] = scenario(http.MethodDelete, item, "")
+			out["get"+sc.infix+res.singular] = gateObjectScenario(item, res.doc, http.MethodGet, item, "")
+			out["set"+sc.infix+res.singular] = gateObjectScenario(item, res.doc, http.MethodPut, item, res.doc)
+			out["delete"+sc.infix+res.singular] = gateObjectScenario(item, res.doc, http.MethodDelete, item, "")
 		}
 	}
 
 	return out
+}
+
+// gateObjectScenario returns the scenario of one operation: it saves the object
+// at seed with doc, then sends method to target with body.
+func gateObjectScenario(seed, doc, method, target, body string) headertest.Scenario {
+	return func(t *testing.T) headertest.Probe {
+		t.Helper()
+
+		_, h := newGateHandler(t, adminGatesAndInstallation())
+
+		put := serveGate(t, h, gateCall{http.MethodPut, seed, doc, ""})
+		wantStatus(t, put, http.StatusOK)
+
+		return headertest.Probe{
+			ETag: put.Header().Get("ETag"),
+			Send: func(headers map[string]string) headertest.Answer {
+				rec := serveGate(t, h, gateCall{method, target, body, headers["If-Match"]})
+
+				return headertest.Answer{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
+			},
+			Replayed: nil,
+		}
+	}
 }
 
 // backupScenarios returns the scenarios of the backup and restore write

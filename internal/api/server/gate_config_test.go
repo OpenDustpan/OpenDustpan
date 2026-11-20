@@ -1420,6 +1420,27 @@ func wantCode(t *testing.T, rec *httptest.ResponseRecorder, code string) {
 	}
 }
 
+// entriesOf returns the audit entries of the chain ns for which keep is true.
+func entriesOf(t *testing.T, st *sqlite.Store, ns namespace.Name, keep func(e *audit.Entry) bool) []audit.Entry {
+	t.Helper()
+
+	all := listNamespaceEntries(t, st, ns)
+	out := make([]audit.Entry, 0, len(all))
+
+	for i := range all {
+		if keep(&all[i]) {
+			out = append(out, all[i])
+		}
+	}
+
+	return out
+}
+
+// ruleList is the answer of a list of approval rules.
+type ruleList struct {
+	Rules []ruleDoc `json:"rules"`
+}
+
 // TestApprovalRuleScopes proves that the approval rules have list, get, set
 // and delete at the namespace, the collection and the unit scope, that a list
 // and a read show the objects of their own scope only, and that each route
@@ -1432,8 +1453,7 @@ func TestApprovalRuleScopes(t *testing.T) {
 			t.Parallel()
 
 			_, h := newGateHandler(t, adminGates())
-			list := base + gateRulesURL
-			item := list + "/review"
+			list, item := base+gateRulesURL, base+gateRulesURL+"/review"
 
 			rec := serveGate(t, h, gateCall{http.MethodGet, list, "", ""})
 			wantStatus(t, rec, http.StatusOK)
@@ -1452,35 +1472,15 @@ func TestApprovalRuleScopes(t *testing.T) {
 			decodeGateJSON(t, rec, &created)
 
 			if created.ID != "review" || created.Version != 1 || rec.Header().Get("ETag") != `"1"` {
-				t.Fatalf("created = %+v, ETag %q; want id review, version 1, ETag \"1\"", created, rec.Header().Get("ETag"))
+				t.Fatalf(
+					"created = %+v, ETag %q; want id review, version 1, ETag \"1\"",
+					created,
+					rec.Header().Get("ETag"),
+				)
 			}
 
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, item, "", ""}), http.StatusOK)
-
-			// A list and a read show the rules of their own scope only.
-			for other, otherBase := range gateScopeURLs() {
-				var listed struct {
-					Rules []ruleDoc `json:"rules"`
-				}
-
-				decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, otherBase + gateRulesURL, "", ""}), &listed)
-
-				want, status := 0, http.StatusNotFound
-				if other == level {
-					want, status = 1, http.StatusOK
-				}
-
-				if len(listed.Rules) != want {
-					t.Errorf("%s list holds %d rules of %s, want %d", other, len(listed.Rules), level, want)
-				}
-
-				rec = serveGate(t, h, gateCall{http.MethodGet, otherBase + gateRulesURL + "/review", "", ""})
-				wantStatus(t, rec, status)
-
-				if status == http.StatusNotFound {
-					wantCode(t, rec, errcode.GateNotFound)
-				}
-			}
+			checkRuleVisibility(t, h, level)
 
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, item, "", `"9"`}), http.StatusConflict)
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, item, "", `"1"`}), http.StatusNoContent)
@@ -1489,8 +1489,46 @@ func TestApprovalRuleScopes(t *testing.T) {
 		})
 	}
 
-	t.Run("authorization", func(t *testing.T) { t.Parallel(); approvalAuthorizationCases(t, gateRulesURL+"/x", scopeCaseBody) })
-	t.Run("scope segments", func(t *testing.T) { t.Parallel(); approvalSegmentCases(t, gateRulesURL) })
+	t.Run("authorization", func(t *testing.T) {
+		t.Parallel()
+
+		approvalAuthorizationCases(t, gateRulesURL+"/x", scopeCaseBody)
+	})
+
+	t.Run("scope segments", func(t *testing.T) {
+		t.Parallel()
+
+		approvalSegmentCases(t, gateRulesURL)
+	})
+}
+
+// checkRuleVisibility checks, for the rule review that the scope of level
+// holds, that the list and the read of each scope show it at its own scope
+// only.
+func checkRuleVisibility(t *testing.T, h http.Handler, level string) {
+	t.Helper()
+
+	for other, otherBase := range gateScopeURLs() {
+		var listed ruleList
+
+		decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, otherBase + gateRulesURL, "", ""}), &listed)
+
+		want, status := 0, http.StatusNotFound
+		if other == level {
+			want, status = 1, http.StatusOK
+		}
+
+		if len(listed.Rules) != want {
+			t.Errorf("%s list holds %d rules of %s, want %d", other, len(listed.Rules), level, want)
+		}
+
+		rec := serveGate(t, h, gateCall{http.MethodGet, otherBase + gateRulesURL + "/review", "", ""})
+		wantStatus(t, rec, status)
+
+		if status == http.StatusNotFound {
+			wantCode(t, rec, errcode.GateNotFound)
+		}
+	}
 }
 
 // TestApprovalDefaultScopes proves that the approval default has get, set and
@@ -1521,18 +1559,15 @@ func TestApprovalDefaultScopes(t *testing.T) {
 			decodeGateJSON(t, rec, &created)
 
 			if created.Count != 2 || created.Version != 1 || rec.Header().Get("ETag") != `"1"` {
-				t.Fatalf("created = %+v, ETag %q; want count 2, version 1, ETag \"1\"", created, rec.Header().Get("ETag"))
+				t.Fatalf(
+					"created = %+v, ETag %q; want count 2, version 1, ETag \"1\"",
+					created,
+					rec.Header().Get("ETag"),
+				)
 			}
 
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, def, "", ""}), http.StatusOK)
-
-			for other, otherBase := range gateScopeURLs() {
-				if other == level {
-					continue
-				}
-
-				wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, otherBase + gateDefault, "", ""}), http.StatusNotFound)
-			}
+			checkDefaultVisibility(t, h, level)
 
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, def, platformDefault, `"1"`}), http.StatusOK)
 			wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, def, "", `"1"`}), http.StatusConflict)
@@ -1542,8 +1577,57 @@ func TestApprovalDefaultScopes(t *testing.T) {
 		})
 	}
 
-	t.Run("authorization", func(t *testing.T) { t.Parallel(); approvalAuthorizationCases(t, gateDefault, platformDefault) })
-	t.Run("scope segments", func(t *testing.T) { t.Parallel(); approvalSegmentCases(t, gateDefault) })
+	t.Run("authorization", func(t *testing.T) {
+		t.Parallel()
+
+		approvalAuthorizationCases(t, gateDefault, platformDefault)
+	})
+
+	t.Run("scope segments", func(t *testing.T) {
+		t.Parallel()
+
+		approvalSegmentCases(t, gateDefault)
+	})
+}
+
+// checkDefaultVisibility checks that the default that the scope of level holds
+// is no default of another scope.
+func checkDefaultVisibility(t *testing.T, h http.Handler, level string) {
+	t.Helper()
+
+	for other, otherBase := range gateScopeURLs() {
+		if other != level {
+			wantStatus(
+				t,
+				serveGate(t, h, gateCall{http.MethodGet, otherBase + gateDefault, "", ""}),
+				http.StatusNotFound,
+			)
+		}
+	}
+}
+
+// approvalAuthCase is one caller of approvalAuthorizationCases.
+type approvalAuthCase struct {
+	name   string
+	allow  map[identity.Action]namespace.Name
+	method string
+}
+
+// approvalAuthCases returns the callers that lack the action of their request.
+func approvalAuthCases() []approvalAuthCase {
+	read, manage := identity.ActionNamespaceReadGates, identity.ActionNamespaceManageGates
+
+	return []approvalAuthCase{
+		{"read needs read", map[identity.Action]namespace.Name{manage: "acme"}, http.MethodGet},
+		{"put needs manage", map[identity.Action]namespace.Name{read: "acme"}, http.MethodPut},
+		{"delete needs manage", map[identity.Action]namespace.Name{read: "acme"}, http.MethodDelete},
+		{
+			"manage of another namespace",
+			map[identity.Action]namespace.Name{read: "beta", manage: "beta"},
+			http.MethodPut,
+		},
+		{"no action", nil, http.MethodGet},
+	}
 }
 
 // approvalAuthorizationCases proves, at the collection and the unit scope,
@@ -1553,47 +1637,37 @@ func TestApprovalDefaultScopes(t *testing.T) {
 func approvalAuthorizationCases(t *testing.T, suffix, body string) {
 	t.Helper()
 
-	read, manage := identity.ActionNamespaceReadGates, identity.ActionNamespaceManageGates
-	readOnly := map[identity.Action]namespace.Name{read: "acme"}
-	manageOnly := map[identity.Action]namespace.Name{manage: "acme"}
-	other := map[identity.Action]namespace.Name{read: "beta", manage: "beta"}
-
-	cases := []struct {
-		name   string
-		allow  map[identity.Action]namespace.Name
-		method string
-	}{
-		{"read needs read", manageOnly, http.MethodGet},
-		{"put needs manage", readOnly, http.MethodPut},
-		{"delete needs manage", readOnly, http.MethodDelete},
-		{"manage of another namespace", other, http.MethodPut},
-		{"no action", nil, http.MethodGet},
-	}
-
 	for _, level := range []string{"collection", "unit"} {
-		for _, tt := range cases {
+		for _, tt := range approvalAuthCases() {
 			t.Run(level+"/"+tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				st, h := newGateHandler(t, gateAuthorizer{allow: tt.allow})
-				target := gateScopeURLs()[level] + suffix
-
-				b := ""
-				if tt.method == http.MethodPut {
-					b = body
-				}
-
-				rec := serveGate(t, h, gateCall{tt.method, target, b, ""})
-				wantStatus(t, rec, http.StatusForbidden)
-				wantCode(t, rec, errcode.AccessDenied)
-
-				for _, e := range listNamespaceEntries(t, st, "acme") {
-					if strings.HasPrefix(e.Action, "namespace:set-") || strings.HasPrefix(e.Action, "namespace:delete-") {
-						t.Errorf("a refused request wrote the audit entry %+v", e)
-					}
-				}
+				runApprovalAuthCase(t, gateScopeURLs()[level]+suffix, body, tt)
 			})
 		}
+	}
+}
+
+// runApprovalAuthCase sends the request of tt and checks the refusal.
+func runApprovalAuthCase(t *testing.T, target, body string, tt approvalAuthCase) {
+	t.Helper()
+
+	st, h := newGateHandler(t, gateAuthorizer{allow: tt.allow})
+
+	payload := ""
+	if tt.method == http.MethodPut {
+		payload = body
+	}
+
+	rec := serveGate(t, h, gateCall{tt.method, target, payload, ""})
+	wantStatus(t, rec, http.StatusForbidden)
+	wantCode(t, rec, errcode.AccessDenied)
+
+	changes := entriesOf(t, st, "acme", func(e *audit.Entry) bool {
+		return strings.HasPrefix(e.Action, "namespace:set-") || strings.HasPrefix(e.Action, "namespace:delete-")
+	})
+	if len(changes) != 0 {
+		t.Errorf("a refused request wrote the audit entries %+v", changes)
 	}
 }
 
@@ -1609,6 +1683,11 @@ func approvalSegmentCases(t *testing.T, suffix string) {
 		"unit name with a control byte": gateBase + "acme/units/by-name/pulumi/web%07",
 	}
 
+	body, target := scopeCaseBody, suffix+"/x"
+	if suffix == gateDefault {
+		body, target = platformDefault, suffix
+	}
+
 	for name, base := range bad {
 		for _, method := range []string{http.MethodGet, http.MethodPut} {
 			t.Run(name+"/"+method, func(t *testing.T) {
@@ -1616,20 +1695,12 @@ func approvalSegmentCases(t *testing.T, suffix string) {
 
 				_, h := newGateHandler(t, adminGates())
 
-				body := ""
+				payload := ""
 				if method == http.MethodPut {
-					body = scopeCaseBody
-					if suffix == gateDefault {
-						body = platformDefault
-					}
+					payload = body
 				}
 
-				target := base + suffix
-				if strings.HasSuffix(suffix, gateRulesURL) {
-					target += "/x"
-				}
-
-				wantStatus(t, serveGate(t, h, gateCall{method, target, body, ""}), http.StatusBadRequest)
+				wantStatus(t, serveGate(t, h, gateCall{method, base + target, payload, ""}), http.StatusBadRequest)
 			})
 		}
 	}
@@ -1655,32 +1726,43 @@ func TestApprovalScopeGuards(t *testing.T) {
 	}
 
 	for _, level := range []string{"collection", "unit"} {
-		base := gateScopeURLs()[level]
-
 		t.Run(level+"/final rule of the namespace", func(t *testing.T) {
 			t.Parallel()
 
-			_, h := newGateHandler(t, adminGates())
-			wide := gateBase + "acme" + gateRulesURL + "/shared"
-
-			wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, wide, scopeCaseBody, ""}), http.StatusOK)
-
-			rec := serveGate(t, h, gateCall{http.MethodPut, base + gateRulesURL + "/shared", scopeCaseBody, ""})
-			wantStatus(t, rec, http.StatusConflict)
-			wantCode(t, rec, errcode.GateFinal)
-
-			var listed struct {
-				Rules []ruleDoc `json:"rules"`
-			}
-
-			decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, base + gateRulesURL, "", ""}), &listed)
-
-			if len(listed.Rules) != 0 {
-				t.Errorf("rules at the %s after the refused save = %+v, want none", level, listed.Rules)
-			}
+			guardFinalRule(t, level)
 		})
 
-		t.Run(level+"/stale sign-in", func(t *testing.T) { t.Parallel(); guardStaleSession(t, level) })
+		t.Run(level+"/stale sign-in", func(t *testing.T) {
+			t.Parallel()
+
+			guardStaleSession(t, level)
+		})
+	}
+}
+
+// guardFinalRule saves a rule at the namespace and then a rule with the same
+// ID at a narrower scope. The narrower scope cannot take the ID.
+func guardFinalRule(t *testing.T, level string) {
+	t.Helper()
+
+	_, h := newGateHandler(t, adminGates())
+	base := gateScopeURLs()[level]
+
+	wantStatus(
+		t, serveGate(t, h, gateCall{http.MethodPut, gateBase + "acme" + gateRulesURL + "/shared", scopeCaseBody, ""}),
+		http.StatusOK,
+	)
+
+	rec := serveGate(t, h, gateCall{http.MethodPut, base + gateRulesURL + "/shared", scopeCaseBody, ""})
+	wantStatus(t, rec, http.StatusConflict)
+	wantCode(t, rec, errcode.GateFinal)
+
+	var listed ruleList
+
+	decodeGateJSON(t, serveGate(t, h, gateCall{http.MethodGet, base + gateRulesURL, "", ""}), &listed)
+
+	if len(listed.Rules) != 0 {
+		t.Errorf("rules at the %s after the refused save = %+v, want none", level, listed.Rules)
 	}
 }
 
@@ -1804,23 +1886,21 @@ func guardBody(t *testing.T, base string) {
 	t.Helper()
 
 	_, h := newGateHandler(t, adminGates())
-	rule := base + gateRulesURL + "/review"
+	rule, def := base+gateRulesURL+"/review", base+gateDefault
 	over := `{"count":1,"approvers":{"groups":["` + strings.Repeat("g", 64*1024) + `"]}}`
 
-	for name, c := range map[string]gateCall{
-		"rule with the field scope": {http.MethodPut, rule, `{"count":1,"approvers":{"groups":["ops"]},"scope":"x"}`, ""},
-		"rule with an ID":           {http.MethodPut, rule, `{"id":"x","count":1,"approvers":{"groups":["ops"]}}`, ""},
-		"rule above the cap":        {http.MethodPut, rule, over, ""},
-		"default with the scope":    {http.MethodPut, base + gateDefault, `{"count":1,"approvers":{"groups":["ops"]},"scope":"x"}`, ""},
-		"default above the cap":     {http.MethodPut, base + gateDefault, over, ""},
+	for _, c := range []gateCall{
+		{http.MethodPut, rule, `{"count":1,"approvers":{"groups":["ops"]},"scope":"x"}`, ""},
+		{http.MethodPut, rule, `{"id":"x","count":1,"approvers":{"groups":["ops"]}}`, ""},
+		{http.MethodPut, rule, over, ""},
+		{http.MethodPut, def, `{"count":1,"approvers":{"groups":["ops"]},"scope":"x"}`, ""},
+		{http.MethodPut, def, over, ""},
 	} {
 		wantStatus(t, serveGate(t, h, c), http.StatusBadRequest)
-
-		_ = name
 	}
 
 	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, rule, "", ""}), http.StatusNotFound)
-	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, base + gateDefault, "", ""}), http.StatusNotFound)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodGet, def, "", ""}), http.StatusNotFound)
 }
 
 // guardLimit saves gate.MaxApprovalRulesPerScope rules and checks that the
@@ -1851,38 +1931,32 @@ func guardAuditEntry(t *testing.T, level, base string) {
 	t.Helper()
 
 	st, h := newGateHandler(t, adminGates())
+	rule := base + gateRulesURL + "/review"
 
-	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, base + gateRulesURL + "/review", scopeCaseBody, ""}), http.StatusOK)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, rule, scopeCaseBody, ""}), http.StatusOK)
 	wantStatus(t, serveGate(t, h, gateCall{http.MethodPut, base + gateDefault, platformDefault, ""}), http.StatusOK)
-	wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, base + gateRulesURL + "/review", "", ""}), http.StatusNoContent)
+	wantStatus(t, serveGate(t, h, gateCall{http.MethodDelete, rule, "", ""}), http.StatusNoContent)
 
 	prefix := map[string]string{
 		"namespace": "namespace/acme", "collection": "collection/acme/payments", "unit": "unit/acme/pulumi/web%2Fprod",
 	}[level]
 
 	want := map[string]string{
-		gate.AuditSetApprovalRule:       prefix + "/approval-rules/review",
-		gate.AuditSetApprovalDefault:    prefix + "/approval-default",
-		gate.AuditDeleteApprovalRule:    prefix + "/approval-rules/review",
-		gate.AuditDeleteApprovalDefault: "",
+		gate.AuditSetApprovalRule:    prefix + "/approval-rules/review",
+		gate.AuditSetApprovalDefault: prefix + "/approval-default",
+		gate.AuditDeleteApprovalRule: prefix + "/approval-rules/review",
 	}
 
-	seen := 0
-
-	for _, e := range listNamespaceEntries(t, st, "acme") {
-		object, ok := want[e.Action]
-		if !ok || object == "" {
-			continue
-		}
-
-		seen++
-
-		if e.Object != object || e.Subject == "" || e.Kind != audit.KindChange || e.Outcome != audit.OutcomeSuccess {
-			t.Errorf("entry %q = %+v, want the object %q, a subject, kind change, success", e.Action, e, object)
-		}
+	got := entriesOf(t, st, "acme", func(e *audit.Entry) bool { _, ok := want[e.Action]; return ok })
+	if len(got) != len(want) {
+		t.Fatalf("found %d of the %d entries of the writes", len(got), len(want))
 	}
 
-	if seen != 3 {
-		t.Fatalf("found %d of the 3 entries of the writes, want 3", seen)
+	for i := range got {
+		e := &got[i]
+		if e.Object != want[e.Action] || e.Subject == "" || e.Kind != audit.KindChange ||
+			e.Outcome != audit.OutcomeSuccess {
+			t.Errorf("entry %q = %+v, want the object %q, a subject, kind change, success", e.Action, e, want[e.Action])
+		}
 	}
 }
