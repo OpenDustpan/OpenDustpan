@@ -51,7 +51,7 @@ Proof of the first negative claim: `rg -n -F 'jobgate.New' --glob '!*_test.go' p
 
 ## What Changes
 
-- The jobs API accepts the operations `apply` and `destroy` for an OpenTofu workspace on a runner. The job runs its plan phase, waits for the approvals that the default names, and dispatches the apply phase after the last approval. A start that the server cannot run (another tool) keeps its refusal.
+- The jobs API accepts the operations `apply` and `destroy` for an OpenTofu workspace on a runner. The limit to OpenTofu is a delivery order, not a decision: `docs/reference/jobs-api.md` says that the server "does not accept an apply or a destroy yet", and no ADR or RFC forbids it (see the ADR check). Pulumi follows when a runner runs its plan step. The job runs its plan phase, waits for the approvals that the default names, and dispatches the apply phase after the last approval. A start that the server cannot run (another tool) keeps its refusal.
 - Before the reconcile dispatches a queued job, it reads the approval defaults again. A default that adds a requirement puts the job back in `awaiting-approval`. A removed default releases nothing.
 - The audit entry of the start names the policy version of the decision.
 - E2E drives a real OpenTofu CLI on a runner through plan, wait, approval and apply, with the docs commands.
@@ -79,6 +79,30 @@ Depends on:
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+**ADR 103: Job gates, actions and audit entries** (owner-tagged: the ADR records "The project owner decided" and "The owner approved the decisions of this ADR on 17 October 2026"; decision 12 was kept by the project manager for the owner).
+
+- Decisions that apply: 8 (changed by ADR 384, extended by ADR 138 and 213), 12 (changed by ADR 128).
+- Changed by: ADR 110, 126, 128, 138, 141, 142, 146, 148, 190, 212, 213, 222, 224, 225, 227, 299, 384 (the "Changed by" column of `docs/adr/INDEX.md`). Current rule: this ADR, with ADR 110, 126, 128, 138, 141, 142, 146, 148, 190, 212, 213, 222, 224, 225, 227, 299, 384.
+- Quote (decision 8): "| `unit:run-apply` | unit | Start a runner job that applies or refreshes. |"
+- Quote (decision 8): "| `unit:run-destroy` | unit | Start a runner job that destroys. |"
+- Quote (decision 12): "**Approve-first** is the default. Each phase that changes gets a confirmation gate (decision 2), with or without a policy."
+- Quote (decision 12): "A runner job whose phases change resources or state (`apply`, `destroy`, `refresh`) fails in the same way. A runner job that only plans starts in this mode, as in every mode." ("in the same way" is `ErrAgentDenied` in review-request mode.)
+- Quote (decision 12): "`job.CheckAgent` holds the rule at start, and a table-driven test checks it."
+- Effect: An apply or a destroy start needs `unit:run-apply` or `unit:run-destroy` on the unit. Once apply starts, `job.CheckAgent` applies the agent modes to it. `pkg/job/service_start.go:412` already calls it (`checkAgent`), and this change adds no other rule. ADR 128 changes decisions 2, 7, 9, 10 and 12 of this ADR for the agent reference. This change does not touch the agent block.
+- Conflict: none. The ADR names runner apply and destroy as jobs that the server starts.
+
+**ADR 125: Agent changes go through the job model as review requests or approve-first** (not owner-tagged in `docs/adr/INDEX.md`; a decision of the project manager for the owner).
+
+- Decisions that apply: the request table and `StartActions`. Changed by: ADR 128, 210, 299, 354. Current rule: this ADR, with ADR 128, 210, 299, 354.
+- Quote: "| apply or destroy or refresh, no code location, no mode | runner | | apply |"
+- Quote: "`StartActions(req, plan)` | `job.StartRequirements(spec, nil)` | `unit:write-back`, `unit:run-plan`, `unit:run-apply` or `unit:run-destroy`, never `namespace:break-freeze`"
+- Effect: The ADR already expects a runner apply or destroy with a confirmation gate on the apply phase. The start of a runner apply gives that row its first live case.
+- Conflict: none.
+
+**ADR 101: Two executors** (not owner-tagged). Decision 5, "Write-back does `apply` only", is about write-back jobs, and a runner job is not a write-back job. It does not bear on this change, so it is not cited further.
+
+The search `rg -i 'apply|destroy' docs/adr docs/rfc`, and the narrower `rg -i 'plan jobs only|plan-only|plans only|first tag'` over the same directories, finds no ADR or RFC that forbids a runner apply or destroy before the first tag. ADR 254 says the TFE-compatible API "serves speculative plans only. It serves no apply" (line 68). That limit is for remote runs through the TFE-compatible API, not for the jobs API.
 
 **ADR 222: One model for access, gates, approvals and facts** (owner-tagged: decision 2, 4, 8).
 
