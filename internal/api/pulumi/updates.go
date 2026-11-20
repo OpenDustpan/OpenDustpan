@@ -257,7 +257,7 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 
 	u, err := h.updates.Import(ctx, ref, p.Subject, in)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateError(w, r, p, obj, err)
 
 		return
 	}
@@ -308,7 +308,7 @@ func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identit
 
 	u, err := h.updates.Restore(ctx, ref, version, p.Subject)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateError(w, r, p, obj, err)
 
 		return
 	}
@@ -394,14 +394,16 @@ func acceptedGitHead(raw string) string {
 // createUpdateHandler returns the handler that creates an update of kind.
 // The five kinds share this shape; each has its own route.
 func (h *Handler) createUpdateHandler(kind stack.UpdateKind) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		h.createUpdate(w, r, kind, p.Subject)
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		h.createUpdate(w, r, kind, p, obj)
 	}
 }
 
 // createUpdate records a new update without locking the stack. subject is
 // the caller, which the update records as its creator (ADR 28 decision 4).
-func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, subject string) {
+func (h *Handler) createUpdate(
+	w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, p identity.Principal, obj identity.Object,
+) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
@@ -425,14 +427,14 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 	}
 
 	u, err := h.updates.Create(ctx, ref, stack.Plan{
-		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: subject, RestoredFrom: 0,
+		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: p.Subject, RestoredFrom: 0,
 		// The commit is what the tool reported. It is never an authenticated
 		// claim, and no decision may trust it. The check at the boundary keeps
 		// a value that is not a commit ID out of the stored state.
 		GitHead: acceptedGitHead(req.Metadata.Environment[gitHeadKey]),
 	})
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateError(w, r, p, obj, err)
 
 		return
 	}
@@ -443,7 +445,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 // startUpdate starts the update and hands out its lease. The request tags
 // are ignored in milestone 1: they only annotate the stack. The journal version
 // is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
-func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	ref, id, ok := h.updateTarget(w, r)
@@ -466,7 +468,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity
 		int64(journal),
 	)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeStateError(w, r, p, obj, err)
 
 		return
 	}

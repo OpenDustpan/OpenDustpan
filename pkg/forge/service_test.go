@@ -659,12 +659,19 @@ func TestNewServiceNeedsItsDependencies(t *testing.T) {
 	}
 
 	for name, edit := range map[string]func(c *forge.Config){
-		"store":      func(c *forge.Config) { c.Store = nil },
-		"namespaces": func(c *forge.Config) { c.Namespaces = nil },
-		"secrets":    func(c *forge.Config) { c.Secrets = nil },
-		"audit":      func(c *forge.Config) { c.Audit = nil },
-		"check":      func(c *forge.Config) { c.CheckURL = nil },
-		"openers":    func(c *forge.Config) { c.Openers = nil },
+		"store":        func(c *forge.Config) { c.Store = nil },
+		"namespaces":   func(c *forge.Config) { c.Namespaces = nil },
+		"secrets":      func(c *forge.Config) { c.Secrets = nil },
+		"audit":        func(c *forge.Config) { c.Audit = nil },
+		"check":        func(c *forge.Config) { c.CheckURL = nil },
+		"openers":      func(c *forge.Config) { c.Openers = nil },
+		"a nil opener": func(c *forge.Config) { c.Openers = []forge.Opener{nil} },
+		"a typed nil opener": func(c *forge.Config) {
+			var typed *recorder
+
+			c.Openers = []forge.Opener{typed}
+		},
+		"an opener with no kind": func(c *forge.Config) { c.Openers = []forge.Opener{noKindOpener{Opener: r.opener}} },
 	} {
 		cfg := full
 		edit(&cfg)
@@ -714,6 +721,10 @@ func TestAnIDThatIsNotValidIsNotFound(t *testing.T) {
 
 // failingNamespaces is a forge.Namespaces that cannot read a namespace.
 type failingNamespaces struct{}
+
+func (failingNamespaces) WritableHere(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, errBoom
+}
 
 func (failingNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{}, errBoom
@@ -919,3 +930,8 @@ func TestNewServiceRefusesCheckLimitsThatAreNotPositive(t *testing.T) {
 		})
 	}
 }
+
+// noKindOpener is an Opener whose Kind is empty.
+type noKindOpener struct{ forge.Opener }
+
+func (noKindOpener) Kind() forge.Kind { return "" }

@@ -298,8 +298,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Providers: []apiserver.SignInProvider{
 			{
 				Method: hostileMethod(redirectMethod(t, client, "corp", clock.Now), opts.hostile), ID: "corp",
-				DisplayName: "Corp",
-				AutoCreate:  opts.autoCreate, Stored: false,
+				DisplayName: "Corp", Issuer: "https://idp.example", ClientID: "dustpan", Scopes: []string{"profile"},
+				AutoCreate: opts.autoCreate, Stored: false,
 			},
 		},
 	}
@@ -518,7 +518,7 @@ func (e signInEnv) readSession(t *testing.T, cookie *http.Cookie) (int, sessionB
 func (e signInEnv) serverEntries(t *testing.T) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
@@ -1299,7 +1299,7 @@ func TestSignInProviderDown(t *testing.T) {
 			Providers: []apiserver.SignInProvider{
 				{
 					Method: redirectMethod(t, downOIDC{}, "corp", time.Now), ID: "corp", DisplayName: "Corp",
-					AutoCreate: true, Stored: false,
+					Issuer: "", ClientID: "", Scopes: nil, AutoCreate: true, Stored: false,
 				},
 			},
 		},

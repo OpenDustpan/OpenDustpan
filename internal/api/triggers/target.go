@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/logtext"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -83,6 +85,9 @@ func (h *Handler) resolveUnit(r *http.Request) (target, error) {
 
 	obj, err := identity.UnitObject(e.Tool, ns.Name, e.Name)
 	if err != nil {
+		h.logger.WarnContext(r.Context(), "stored unit has no valid object",
+			slog.String("unit_id", logtext.Clean(unitID)), slog.String("error", logtext.Clean(err.Error())))
+
 		return target{}, errNotFound
 	}
 
@@ -127,6 +132,17 @@ func (h *Handler) resolveWith(
 	// same 404. This mapping stays so that this resolver does not rely on that
 	// error-writer mapping.
 	if errors.Is(err, trigger.ErrNotFound) {
+		return target{}, errNotFound
+	}
+
+	// A stored row that fails its checks (the store wraps trigger.ErrInvalid)
+	// answers as an unknown trigger, before any authorization check. Another
+	// answer would tell a caller with no right on the unit that a damaged row
+	// exists. The cause goes to the log.
+	if errors.Is(err, trigger.ErrInvalid) {
+		h.logger.WarnContext(r.Context(), "stored trigger is not served",
+			slog.String("trigger_id", logtext.Clean(string(id))), slog.String("error", logtext.Clean(err.Error())))
+
 		return target{}, errNotFound
 	}
 

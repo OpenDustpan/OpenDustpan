@@ -105,7 +105,9 @@ const (
 	ErrorCodeAuthRateLimited                       ErrorCode = "auth.rate-limited"
 	ErrorCodeAuthUnauthenticated                   ErrorCode = "auth.unauthenticated"
 	ErrorCodeBackupCorrupt                         ErrorCode = "backup.corrupt"
+	ErrorCodeBackupEndedFailed                     ErrorCode = "backup.ended-failed"
 	ErrorCodeBackupRegistryFilesTooLarge           ErrorCode = "backup.registry-files-too-large"
+	ErrorCodeBackupStillRunning                    ErrorCode = "backup.still-running"
 	ErrorCodeBackupTooManyUnverified               ErrorCode = "backup.too-many-unverified"
 	ErrorCodeCollectionAlreadyExists               ErrorCode = "collection.already-exists"
 	ErrorCodeCollectionChanged                     ErrorCode = "collection.changed"
@@ -137,6 +139,7 @@ const (
 	ErrorCodeGateUnavailable                       ErrorCode = "gate.unavailable"
 	ErrorCodeGateVersionConflict                   ErrorCode = "gate.version-conflict"
 	ErrorCodeGitHostAppBudgetSpent                 ErrorCode = "git-host.app-budget-spent"
+	ErrorCodeGitHostAppNoRotation                  ErrorCode = "git-host.app-no-rotation"
 	ErrorCodeGitHostAppNotRegistered               ErrorCode = "git-host.app-not-registered"
 	ErrorCodeGitHostInstallationNotAssigned        ErrorCode = "git-host.installation-not-assigned"
 	ErrorCodeGitHostLinkAccountInvalid             ErrorCode = "git-host.link-account-invalid"
@@ -201,6 +204,7 @@ const (
 	ErrorCodeLocalUserSignInFailed                 ErrorCode = "local-user.sign-in-failed"
 	ErrorCodeLocalUserUnavailable                  ErrorCode = "local-user.unavailable"
 	ErrorCodeLockAlreadyLocked                     ErrorCode = "lock.already-locked"
+	ErrorCodeLockBulkSize                          ErrorCode = "lock.bulk-size"
 	ErrorCodeLockChanged                           ErrorCode = "lock.changed"
 	ErrorCodeLockInvalidTarget                     ErrorCode = "lock.invalid-target"
 	ErrorCodeLockLocked                            ErrorCode = "lock.locked"
@@ -229,6 +233,17 @@ const (
 	ErrorCodeMfaSignInFailed                       ErrorCode = "mfa.sign-in-failed"
 	ErrorCodeMfaSignInSourceLimit                  ErrorCode = "mfa.sign-in-source-limit"
 	ErrorCodeMfaUnavailable                        ErrorCode = "mfa.unavailable"
+	ErrorCodeMtlsAmbiguousRule                     ErrorCode = "mtls.ambiguous-rule"
+	ErrorCodeMtlsBundleDisabled                    ErrorCode = "mtls.bundle-disabled"
+	ErrorCodeMtlsExpired                           ErrorCode = "mtls.expired"
+	ErrorCodeMtlsNoClientCertificate               ErrorCode = "mtls.no-client-certificate"
+	ErrorCodeMtlsNoMatchingRule                    ErrorCode = "mtls.no-matching-rule"
+	ErrorCodeMtlsNotYetValid                       ErrorCode = "mtls.not-yet-valid"
+	ErrorCodeMtlsPrincipalDisabled                 ErrorCode = "mtls.principal-disabled"
+	ErrorCodeMtlsRateLimited                       ErrorCode = "mtls.rate-limited"
+	ErrorCodeMtlsRevocationUnknown                 ErrorCode = "mtls.revocation-unknown"
+	ErrorCodeMtlsRevoked                           ErrorCode = "mtls.revoked"
+	ErrorCodeMtlsUnknownIssuer                     ErrorCode = "mtls.unknown-issuer"
 	ErrorCodeNamespaceAlreadyExists                ErrorCode = "namespace.already-exists"
 	ErrorCodeNamespaceFenced                       ErrorCode = "namespace.fenced"
 	ErrorCodeNamespaceInvalidName                  ErrorCode = "namespace.invalid-name"
@@ -410,6 +425,7 @@ const (
 	ErrorCodeTokenCallerNotPerson                  ErrorCode = "token.caller-not-person"
 	ErrorCodeTokenEnded                            ErrorCode = "token.ended"
 	ErrorCodeTokenInvalid                          ErrorCode = "token.invalid"
+	ErrorCodeTokenIssueFailed                      ErrorCode = "token.issue-failed"
 	ErrorCodeTokenKindHasNone                      ErrorCode = "token.kind-has-none"
 	ErrorCodeTokenNotFound                         ErrorCode = "token.not-found"
 	ErrorCodeTokenOutsideReach                     ErrorCode = "token.outside-reach"
@@ -434,6 +450,7 @@ const (
 	ErrorCodeTrustRuleNotFound                     ErrorCode = "trust-rule.not-found"
 	ErrorCodeTrustRulePrincipalRefused             ErrorCode = "trust-rule.principal-refused"
 	ErrorCodeTrustRuleSignInRequired               ErrorCode = "trust-rule.sign-in-required"
+	ErrorCodeTrustRuleSpiffeWildcard               ErrorCode = "trust-rule.spiffe-wildcard"
 	ErrorCodeUnitSettingsBulkSize                  ErrorCode = "unit-settings.bulk-size"
 	ErrorCodeUnitSettingsConnectionLacksCapability ErrorCode = "unit-settings.connection-lacks-capability"
 	ErrorCodeUnitSettingsConnectionUnknown         ErrorCode = "unit-settings.connection-unknown"
@@ -508,15 +525,16 @@ func (v *ErrorResponse) UnmarshalJSON(data []byte) error {
 
 // GitHostApp is a schema of the API description.
 type GitHostApp struct {
-	ApiAddress  string               `json:"apiAddress"`
-	AppID       string               `json:"appID"`
-	CreatedAt   string               `json:"createdAt"`
-	EventSecret GitHostCredentialSet `json:"eventSecret"`
-	HookID      string               `json:"hookID"`
-	Kind        string               `json:"kind"`
-	PrivateKey  GitHostCredentialSet `json:"privateKey"`
-	UpdatedAt   string               `json:"updatedAt"`
-	Version     int64                `json:"version"`
+	ApiAddress      string               `json:"apiAddress"`
+	AppID           string               `json:"appID"`
+	CreatedAt       string               `json:"createdAt"`
+	EventSecret     GitHostCredentialSet `json:"eventSecret"`
+	HookID          string               `json:"hookID"`
+	Kind            string               `json:"kind"`
+	OldSecretEndsAt *int64               `json:"oldSecretEndsAt,omitempty"`
+	PrivateKey      GitHostCredentialSet `json:"privateKey"`
+	UpdatedAt       string               `json:"updatedAt"`
+	Version         int64                `json:"version"`
 }
 
 // UnmarshalJSON checks that the required members are there.

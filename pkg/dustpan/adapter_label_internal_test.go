@@ -61,7 +61,7 @@ func newLabelTestServerWith(t *testing.T, extra ...Option) *Server {
 		WithBlobStore(blobs), WithInventoryReader(st), WithAuthenticator(authn),
 		WithProfileStore(st.Profiles()), WithIssuerStore(st.Issuer()),
 		WithRegistry(st.Registry(), st.RegistryKeys()), WithSinkStore(st.NotificationSinks()),
-		WithRunners(st.Runners()),
+		WithRunners(st.Runners()), WithGitHostStore(st.GitHost()),
 	}
 
 	srv, err := NewServer(append(opts, extra...)...)
@@ -147,17 +147,18 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	byName := adapterLabelsByName(t, labels, sources)
 
 	wantAdapter := map[string]string{
-		"pulumi":    metrics.AdapterPulumi,
-		"tfe":       metrics.AdapterOpenTofu,
-		"tofuhttp":  metrics.AdapterOpenTofu,
-		"inventory": metrics.AdapterInventory,
-		"server":    metrics.AdapterServer,
-		"audit":     metrics.AdapterServer,
-		"context":   metrics.AdapterServer,
-		"profiles":  metrics.AdapterServer,
-		"issuer":    metrics.AdapterServer,
-		"sinks":     metrics.AdapterServer,
-		"registry":  metrics.AdapterServer,
+		"pulumi":         metrics.AdapterPulumi,
+		"tfe":            metrics.AdapterOpenTofu,
+		"tofuhttp":       metrics.AdapterOpenTofu,
+		"inventory":      metrics.AdapterInventory,
+		"server":         metrics.AdapterServer,
+		"audit":          metrics.AdapterServer,
+		"context":        metrics.AdapterServer,
+		"profiles":       metrics.AdapterServer,
+		"issuer":         metrics.AdapterServer,
+		"githostwebhook": metrics.AdapterServer,
+		"sinks":          metrics.AdapterServer,
+		"registry":       metrics.AdapterServer,
 	}
 
 	for name, want := range wantAdapter {
@@ -432,6 +433,7 @@ func TestEveryRootPatternHasLabel(t *testing.T) {
 		"/":                               metrics.AdapterServer,
 		"/runner/v1/":                     metrics.AdapterServer,
 		"/oidc/":                          metrics.AdapterServer,
+		"/webhooks/":                      metrics.AdapterServer,
 		"/api/":                           metrics.AdapterPulumi,
 		"/api/audit/":                     metrics.AdapterServer,
 		"/api/server/":                    metrics.AdapterServer,

@@ -133,7 +133,6 @@ func listAuditEntriesForAgentBlock(ctx context.Context, t *testing.T, env *e2e.E
 
 	var got struct {
 		Entries []agentBlockEntry `json:"entries"`
-		Total   int64             `json:"total"`
 	}
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{

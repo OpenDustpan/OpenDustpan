@@ -39,6 +39,8 @@ A backup of an installation with no registry release prints `registry files: 0 f
 
 The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
+If the command cannot read the state of a backup that started, it names the backup ID. The server continues the backup on its own. Do not run the command again. To read the state of the backup, send `GET /api/dustpan/v1/backups/{id}`.
+
 A backup keeps running when you start or restart a server process, or when you update the server processes one at a time. If the server process that runs the backup stops, another server process continues the backup after the lease ends. The lease is 30 seconds by default. The backup writes each object to the same key again, so the second run replaces the objects of the first run. Any server process answers the state of the backup. A backup that fails ends as `failed` with the error text.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
@@ -90,6 +92,8 @@ opendustpan backup check --server https://dustpan.example --ca-file ca.pem --bac
 
 The command takes only `--server`, `--ca-file` and `--backup`. A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key, or the total that does not match.
 
+A backup that is still running, or that ended with an error, is not corrupt. For such a backup, the command prints the text that says so, and exits with status 1.
+
 ## Restore a backup
 
 Restore loads a backup from the configured backup target into the running
@@ -120,6 +124,8 @@ backup before restore: bkp-cnsz7imkyfh4mcrk5n3z
 
 It ends with `restore rst-aaa succeeded`. Only one restore runs
 at a time. A second start while one runs answers 409.
+
+A start for a backup that is still running answers 409 with the code `backup.still-running`. A start for a backup that ended with an error answers 409 with the code `backup.ended-failed`. Each answer has a text that names the state. A start for a backup ID that the server does not know answers 404 with the text `backup not found`. A backup that has no record on this installation starts when the target holds its live pointer. Use this to restore into a new installation. If the target holds a live pointer that the server cannot read, the start is refused and makes no restore.
 
 The server answers the start with 202 and the restore ID. A `worker` process
 runs the restore in steps, and records the result of each step in the

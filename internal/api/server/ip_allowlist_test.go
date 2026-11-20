@@ -500,7 +500,7 @@ func TestIPAllowlistDelete(t *testing.T) {
 func listNamespaceEntries(t *testing.T, st *sqlite.Store, ns namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := st.List(t.Context(), ns, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}

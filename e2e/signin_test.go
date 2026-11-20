@@ -741,6 +741,24 @@ func checkStoredProviderDelete(t *testing.T, env *e2e.Env) {
 	}
 }
 
+// providerAuditPage reads one page of 200 entries of the installation log
+// that starts at token, or the first page when token is empty.
+func providerAuditPage(t *testing.T, env *e2e.Env, token string) string {
+	t.Helper()
+
+	path := "/api/audit/entries?organization=@server&pageSize=200"
+	if token != "" {
+		path += "&pageToken=" + url.QueryEscape(token)
+	}
+
+	status, raw, err := env.APIStatus(t.Context(), http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list @server audit entries = %d, %v: %s", status, err, raw)
+	}
+
+	return raw
+}
+
 // checkProviderAuditHoldsNoSecret proves that the audit log of the
 // installation holds the changes of the stored providers and no client
 // secret: not the first one, not the rotated one, and not the one of the
@@ -748,19 +766,11 @@ func checkStoredProviderDelete(t *testing.T, env *e2e.Env) {
 func checkProviderAuditHoldsNoSecret(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	const size = 200
-
-	ctx := t.Context()
 	providerEntries := 0
+	token := ""
 
-	for number := 1; ; number++ {
-		path := "/api/audit/entries?organization=@server&page[number]=" + strconv.Itoa(number) +
-			"&page[size]=" + strconv.Itoa(size)
-
-		status, raw, err := env.APIStatus(ctx, http.MethodGet, path, "")
-		if err != nil || status != http.StatusOK {
-			t.Fatalf("list @server audit entries = %d, %v: %s", status, err, raw)
-		}
+	for {
+		raw := providerAuditPage(t, env, token)
 
 		for _, secret := range []string{e2e.StoredClientSecret, "a-wrong-secret", e2e.PlainClientSecret} {
 			if strings.Contains(raw, secret) {
@@ -771,16 +781,18 @@ func checkProviderAuditHoldsNoSecret(t *testing.T, env *e2e.Env) {
 		providerEntries += strings.Count(raw, `"sign-in-provider:`)
 
 		var page struct {
-			Entries []json.RawMessage `json:"entries"`
+			NextPageToken string `json:"nextPageToken"`
 		}
 
 		if decodeErr := json.Unmarshal([]byte(raw), &page); decodeErr != nil {
 			t.Fatalf("decode @server audit entries: %v", decodeErr)
 		}
 
-		if len(page.Entries) < size {
+		if page.NextPageToken == "" {
 			break
 		}
+
+		token = page.NextPageToken
 	}
 
 	if providerEntries == 0 {

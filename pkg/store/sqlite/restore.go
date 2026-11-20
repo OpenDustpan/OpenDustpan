@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -115,7 +118,7 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 		return backup.ErrCorrupt
 	}
 
-	plan := swapPlan{staged: s.stagingPath, keepAccess: false, before: nil, after: nil}
+	plan := swapPlan{staged: s.stagingPath, keepAccess: false, keepSettings: nil, before: nil, after: nil}
 	if _, err := s.swapStaged(ctx, plan); err != nil {
 		return err
 	}
@@ -131,6 +134,9 @@ type swapPlan struct {
 	staged string
 	// keepAccess keeps the current rows of the access tables.
 	keepAccess bool
+	// keepSettings lists the keys of the installation settings whose live rows
+	// replace the staged rows, with or without keepAccess.
+	keepSettings []string
 	// before runs under the store write lock, before the first change to
 	// the staged file: the check of the step fence on the live database.
 	before func(ctx context.Context) error
@@ -189,19 +195,18 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAcces
 		return backup.KeepAccessResult{}, checkErr
 	}
 
-	var dropped int64
+	// A swap that keeps live rows works on a copy of the staged file, made
+	// for this attempt alone. The keeps commit to the file that they change, so
+	// a retry that decides another way must start from the staged file as the
+	// backup made it, not from the keeps of the failed attempt.
+	work, dropped, err := s.keepOnWorkCopy(ctx, plan)
+	if work != plan.staged {
+		// After a successful rename the name is free and the call removes nothing.
+		defer removeSnapshot(work)
+	}
 
-	if plan.keepAccess {
-		if keepErr := s.keepLiveAccessTables(ctx, plan.staged); keepErr != nil {
-			return backup.KeepAccessResult{}, keepErr
-		}
-
-		// The swap takes temp_admins from the backup and keeps the live
-		// principals, so a staged row can name a principal that the live
-		// principals table does not hold.
-		if dropped, err = dropDanglingTempAdmins(ctx, plan.staged); err != nil {
-			return backup.KeepAccessResult{}, err
-		}
+	if err != nil {
+		return backup.KeepAccessResult{}, err
 	}
 
 	var after func(context.Context, *sql.Tx, int64) error
@@ -216,16 +221,208 @@ func (s *Store) swapStaged(ctx context.Context, plan swapPlan) (backup.KeepAcces
 		}
 	}
 
-	expired, err := s.fenceStagedFile(ctx, plan.staged, s.path, keep, after)
+	expired, err := s.fenceStagedFile(ctx, work, s.path, keep, after)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
-	if err := s.swapDatabaseLocked(ctx, plan.staged); err != nil {
+	if err := s.swapDatabaseLocked(ctx, work); err != nil {
 		return backup.KeepAccessResult{}, err
 	}
 
+	if work != plan.staged {
+		// The copy is live now. The staged file has no more use.
+		removeSnapshot(plan.staged)
+	}
+
 	return backup.KeepAccessResult{DroppedTempAdmins: dropped, ExpiredUpdateLeases: expired}, nil
+}
+
+// keepOnWorkCopy makes the file that one swap attempt changes, keeps the live
+// rows of plan in it, and runs the hook of the test. It returns the path of
+// the file, which the caller removes when it is not plan.staged, and the count
+// of the dropped temp_admins rows.
+func (s *Store) keepOnWorkCopy(ctx context.Context, plan swapPlan) (string, int64, error) {
+	work, err := s.workCopy(ctx, plan)
+	if err != nil {
+		return plan.staged, 0, err
+	}
+
+	dropped, err := s.keepLive(ctx, work, plan)
+	if err != nil {
+		return work, 0, err
+	}
+
+	if s.swapAfterKeepHook != nil {
+		if hookErr := s.swapAfterKeepHook(ctx); hookErr != nil {
+			return work, 0, hookErr
+		}
+	}
+
+	return work, dropped, nil
+}
+
+// workCopy returns the path of the file that one swap attempt changes. A plan
+// that keeps no live row changes no data of the staged file before the fence,
+// so it uses the staged file itself. A plan that keeps rows gets a new copy of
+// the staged file, made with VACUUM INTO, that the caller removes.
+func (s *Store) workCopy(ctx context.Context, plan swapPlan) (string, error) {
+	if !plan.keepAccess && len(plan.keepSettings) == 0 {
+		return plan.staged, nil
+	}
+
+	conn, err := openStagedAccess(ctx, plan.staged)
+	if err != nil {
+		return "", err
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr // Best-effort close of the staging handle.
+		}
+	}()
+
+	work, err := workCopyPath(plan.staged)
+	if err != nil {
+		return "", err
+	}
+
+	// A stop between VACUUM INTO and the rename leaves the copy. The name is
+	// fixed for the staged file, so a retry removes the stale copy here and
+	// CleanRestoreAreas removes it with the area. VACUUM INTO refuses a target
+	// that exists.
+	if clearErr := clearStaleWorkCopy(work); clearErr != nil {
+		return "", clearErr
+	}
+
+	if _, execErr := conn.ExecContext(ctx, `VACUUM INTO ?`, work); execErr != nil {
+		removeSnapshot(work)
+
+		return "", fmt.Errorf("copy staged file for the swap: %w", backup.ErrExportRead)
+	}
+
+	if checkErr := checkWorkCopy(work); checkErr != nil {
+		removeSnapshot(work)
+
+		return "", checkErr
+	}
+
+	return work, nil
+}
+
+// workCopyMode is the mode of the work copy: only the owner reads or writes
+// it, whatever the umask of the process.
+const workCopyMode os.FileMode = 0o600
+
+// checkWorkCopy checks the file that VACUUM INTO made at path and sets its
+// mode. It refuses a file that is not a regular file, such as a symbolic link
+// that another process put at the name after the clear, and a file with more
+// than one hard link, so the data of the restore cannot reach a file that
+// another name holds. The swap renames the file over the live database, so it
+// must be the file that this swap made.
+//
+// Defense in depth: clearStaleWorkCopy refuses the same kinds of file before
+// VACUUM INTO. This check stays because another process can put a link at
+// the name between that clear and the copy. It does not rely on that clear.
+func checkWorkCopy(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("check work copy: %w", backup.ErrExportRead)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("work copy is not a regular file: %w", backup.ErrCorrupt)
+	}
+
+	// Defense in depth: the Lstat check above refuses a link at the name, and
+	// O_NOFOLLOW refuses it again when the file opens, so a link that another
+	// process puts at the name after the Lstat cannot take the mode change.
+	// The checks on the open descriptor do not rely on the Lstat.
+	return chmodWorkCopy(path, info)
+}
+
+// openWorkCopyNoFollow opens the file at path read-only and refuses a link at
+// the last name. The directory is a root, so the name cannot leave it.
+func openWorkCopyNoFollow(path string) (*os.File, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("open work copy directory: %w", backup.ErrExportRead)
+	}
+
+	f, openErr := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	closeErr := root.Close() // An open file stays valid after its root closes.
+
+	switch {
+	case openErr != nil:
+		return nil, fmt.Errorf("open work copy: %w", backup.ErrCorrupt)
+	case closeErr != nil:
+		return nil, errors.Join(
+			fmt.Errorf("close work copy directory: %w", backup.ErrExportRead), f.Close(),
+		)
+	default:
+		return f, nil
+	}
+}
+
+// chmodWorkCopy sets the mode of the work copy on an open descriptor. info is
+// the Lstat of path. The checks run on the descriptor, so a link that another
+// process puts at the name after the Lstat cannot take the mode change.
+func chmodWorkCopy(path string, info os.FileInfo) (result error) {
+	f, err := openWorkCopyNoFollow(path)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && result == nil {
+			result = fmt.Errorf("close work copy: %w", backup.ErrExportRead)
+		}
+	}()
+
+	fdInfo, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("check work copy: %w", backup.ErrExportRead)
+	}
+
+	if !fdInfo.Mode().IsRegular() || !os.SameFile(info, fdInfo) {
+		return fmt.Errorf("work copy is not the file that was checked: %w", backup.ErrCorrupt)
+	}
+
+	stat, ok := fdInfo.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return fmt.Errorf("work copy has more than one hard link: %w", backup.ErrCorrupt)
+	}
+
+	if chmodErr := f.Chmod(workCopyMode); chmodErr != nil {
+		return fmt.Errorf("set mode of work copy: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// keepLive keeps the live rows that plan names in the staged file: first the
+// rows of the settings keys, then, with plan.keepAccess, the access tables.
+// It returns the count of the dropped temp_admins rows.
+func (s *Store) keepLive(ctx context.Context, path string, plan swapPlan) (int64, error) {
+	// Defense in depth: the service and the restore route decide which keys a
+	// caller may take from a backup; this layer keeps the live row of each
+	// named key itself and refuses a key that is not on the list.
+	if err := s.keepLiveSettings(ctx, path, plan.keepSettings); err != nil {
+		return 0, err
+	}
+
+	if !plan.keepAccess {
+		return 0, nil
+	}
+
+	if err := s.keepLiveAccessTables(ctx, path); err != nil {
+		return 0, err
+	}
+
+	// The swap takes temp_admins from the backup and keeps the live
+	// principals, so a staged row can name a principal that the live
+	// principals table does not hold.
+	return dropDanglingTempAdmins(ctx, path)
 }
 
 // fenceStagedFile fences the staged file at path, copies the control tables
@@ -524,7 +721,7 @@ func (s *Store) liveBookkeeping(ctx context.Context) (bookkeeping, error) {
 }
 
 // durableOperationColumns lists the columns of durable_operations.
-const durableOperationColumns = `id, start_key, kind, input, version, state, attempt, expiries, failures, ` +
+const durableOperationColumns = `id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, ` +
 	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, ` +
 	`updated_at_ms`
 
@@ -759,6 +956,56 @@ func appendDroppedRunnerCredentials(
 
 	if _, err := appendAuditEntry(ctx, q, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
 		return fmt.Errorf("append dropped runner credentials entry: %w", err)
+	}
+
+	return nil
+}
+
+// workCopySuffix joins the name of a staged file and the name of its work copy.
+// The name does not match the name of a staging area, so no listing takes the
+// copy for an area.
+const workCopySuffix = "-swap"
+
+// workCopyPath returns the path of the work copy of the staged file at staged:
+// the same name with workCopySuffix, in the same directory.
+func workCopyPath(staged string) (string, error) {
+	dir := filepath.Dir(staged)
+	name := filepath.Base(staged) + workCopySuffix
+	path := filepath.Join(dir, name)
+
+	// Defense in depth: the name of the staged file holds no separator, so the
+	// copy stays in the directory of the live database. This check stays so
+	// that a change of the name rule cannot leave that directory. It does not
+	// rely on areaPath.
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel != name || strings.ContainsRune(rel, filepath.Separator) {
+		return "", fmt.Errorf("work copy of %q: %w", filepath.Base(staged), backup.ErrInvalidRestoreID)
+	}
+
+	return path, nil
+}
+
+// clearStaleWorkCopy removes a work copy that an earlier attempt left. It
+// refuses a symbolic link or any file that is not a regular file, so a link
+// that another process put at the name cannot make the swap remove or write
+// the file that the link names.
+func clearStaleWorkCopy(path string) error {
+	for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		info, err := os.Lstat(name)
+
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return fmt.Errorf("check stale work copy: %w", backup.ErrExportRead)
+		case !info.Mode().IsRegular():
+			return fmt.Errorf("stale work copy is not a regular file: %w", backup.ErrCorrupt)
+		default:
+		}
+
+		if rmErr := os.Remove(name); rmErr != nil {
+			return fmt.Errorf("remove stale work copy: %w", backup.ErrExportRead)
+		}
 	}
 
 	return nil

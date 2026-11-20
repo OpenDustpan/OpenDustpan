@@ -27,6 +27,10 @@ var gitHostOperationLabels = map[string]apidesc.Label{
 		WithKey().WithIfMatch().
 		On(apidesc.KindServer).
 		WithBodies(apidesc.NoBody, apidesc.NoBody),
+	apidesc.Pattern(http.MethodPost, gitHostConfirmPath): apidesc.Name("confirmGitHostAppRotation", tagGitHost).
+		WithIfMatch().WithETag().
+		On(apidesc.KindServer).
+		WithBodies(apidesc.NoBody, gitHostAppSchema),
 	apidesc.Pattern(http.MethodGet, gitHostInstallationsPath): apidesc.Name("listGitHostInstallations", tagGitHost).
 		On(apidesc.KindServer).
 		WithBodies(apidesc.NoBody, apidesc.Typed[gitHostInstallationsDocument](

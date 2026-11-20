@@ -87,7 +87,7 @@ func TestMoveOutOfLockedCollectionWithUnitLock(t *testing.T) {
 func (f storeMoveFixture) wantOneMoveOutRefusal(t *testing.T) {
 	t.Helper()
 
-	l, err := f.store.List(t.Context(), f.ns.Name, audit.Page{Number: 1, Size: 100})
+	l, err := f.store.List(t.Context(), f.ns.Name, audit.Page{Size: 100, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}
@@ -257,6 +257,7 @@ func (f storeMoveFixture) move(t *testing.T, authz identity.Authorizer) *httptes
 		Outputs:       nil,
 		Views:         nil,
 		Locks:         locks, PublicURL: "", Namespaces: nsSvc,
+		Records:     nil,
 		Units:       &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections: colSvc, Moves: f.ids, Deleted: &memDeleted{entries: nil}, History: nil,
 		Lifecycles: testLifecycles(), ReadScope: fixedScope{err: nil, ids: nil, all: true}, Now: nil,

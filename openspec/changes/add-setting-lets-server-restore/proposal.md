@@ -34,7 +34,6 @@ Evidence for the claims above:
 - Add an installation setting key for the restore of access tables, default off, API only.
 - Gate the key on server:manage-settings plus server:restore-access with a fresh session step. Write an audit entry with the old and the new value.
 - Let the restore apply step replace the access tables for server:restore holders when the start value is on, with the two-path guard and a restore audit entry.
-- List the widened restore state in the admin access report when the setting is on.
 
 Out of scope:
 
@@ -77,8 +76,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "The access tables restore only with their own action. A new action, `server:restore-access`, lets a restore replace the access tables. Of the built-in roles, only `site-administrator` holds it. A restore by a caller with"
 - Quote: "A setting can change this. An installation setting can let each holder of `server:restore` replace the access tables. It is off by default. A change of the setting writes an audit entry."
 - Quote: "A guard keeps two working paths. The first setup cannot finish without two break-glass accounts. The server refuses each change that leaves fewer than two working paths, a restore included."
-- Quote: "A periodic admin access report. The API answers it first. Email and webhook delivery come later."
-- Effect: Decision 7 keeps the default refusal. Decision 8 permits the setting as the one exception. The widened restore keeps the guard of decision 24. Decision 29 covers the report.
+- Effect: Decision 7 keeps the default refusal. Decision 8 permits the setting as the one exception. The widened restore keeps the guard of decision 24.
 - Conflict: none.
 
 **ADR 227: One fresh-authentication window** (owner-tagged: decision 2).

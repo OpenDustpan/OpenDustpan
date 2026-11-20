@@ -177,11 +177,27 @@ code `placement.unavailable`.
 
 ### A unit in no collection
 
-A stack or a workspace that is in no collection takes no new write. The server
-refuses the first lock and the state write of such a workspace with `409` and
-the code `unit.no-collection`. The message names the command that moves the
-unit into a collection: `PUT /api/inventory/unit-collection`. After the move,
-repeat the request.
+A stack or a workspace that is in no collection takes no new write. This holds
+for a stack from before collections existed, or a stack that came back from an
+old backup. The server refuses these writes with `409` and the code
+`unit.no-collection`:
+
+- For a workspace: the lock and the state write.
+- For a stack: the creation and the start of an update, a checkpoint write, a
+  journal batch, a stack import and a restore.
+
+The message names the command that moves the unit into a collection:
+`PUT /api/inventory/unit-collection`. After the move, repeat the request. Reads
+stay allowed. Each refusal of a request that has a sign-in writes an entry to
+the audit log with the reason "stack in no collection".
+
+The server does not refuse these requests for a stack in no collection, because
+they only manage metadata or the lease of an update that already runs: stack
+tags, stack create, stack delete, stack rename, lease renewal, engine events,
+update completion, update cancel, and the encrypt and decrypt calls of the
+secrets provider. A stack create puts the new stack in a collection, and a
+rename keeps the collection of the stack. A running update cannot start on a
+stack in no collection, and a stack in a collection cannot go back to none.
 
 ### Routes and actions
 

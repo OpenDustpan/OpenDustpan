@@ -448,8 +448,30 @@ func (a *Authorizer) addNamespacePrincipals(ctx context.Context, ns namespace.Na
 			return out, nil
 		}
 
-		after = rows[len(rows)-1].Subject
+		after, err = nextPrincipalCursor(ns, after, rows)
+		if err != nil {
+			return out, err
+		}
 	}
+}
+
+// nextPrincipalCursor returns the cursor for the page after the full page
+// rows of the principals of the namespace ns, read after the cursor after.
+// It returns ErrInvalid when the last subject does not move past after.
+//
+// Defense in depth: a full page whose last subject does not advance would
+// loop for ever and, in a loop that collects rows, grow without bound; fail
+// closed instead. The adapters order the rows, and this check does not rely
+// on them. Each paging loop of a namespace calls this one function, so the
+// loops cannot differ.
+func nextPrincipalCursor(ns namespace.Name, after string, rows []principal.Principal) (string, error) {
+	next := rows[len(rows)-1].Subject
+	if next <= after {
+		return "", fmt.Errorf("%w: list of principals of namespace %q does not advance past %q",
+			ErrInvalid, ns.String(), after)
+	}
+
+	return next, nil
 }
 
 // grantLive reports whether a grant on obj still gives something. The name
@@ -571,6 +593,12 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 // one; this check stays so that a row from any other source gives no
 // power.
 func (a *Authorizer) confineGrants(ctx context.Context, grants []Grant) ([]Grant, error) {
+	return confineGrantsOf(ctx, grants, a.principals)
+}
+
+// confineGrantsOf is confineGrants over the principal port principals. The
+// reach walker uses it too, so that both read the same rule.
+func confineGrantsOf(ctx context.Context, grants []Grant, principals PrincipalNamespaces) ([]Grant, error) {
 	out := make([]Grant, 0, len(grants))
 	scopes := map[string]subjectScope{}
 
@@ -585,7 +613,7 @@ func (a *Authorizer) confineGrants(ctx context.Context, grants []Grant) ([]Grant
 
 		scope, read := scopes[g.Subject.ID]
 		if !read {
-			ns, found, err := principalNamespaceOf(ctx, g.Subject.ID, a.principals)
+			ns, found, err := principalNamespaceOf(ctx, g.Subject.ID, principals)
 			if err != nil {
 				return nil, err
 			}
@@ -786,28 +814,42 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 // and the staged check of a restore refuses a backup that holds one; this
 // check stays so that a row from any other source gives no power.
 func (a *Authorizer) confineSubjects(ctx context.Context, subjects []Subject) ([]Subject, error) {
-	id := ""
-	grouped := false
+	return confineSubjectsOf(ctx, subjects, "", a.principals)
+}
 
-	for i := range subjects {
-		if subjects[i].Kind == SubjectPrincipal {
-			if id == "" {
-				id = subjects[i].ID
-			}
-
-			continue
-		}
-
-		if subjects[i].Kind == SubjectGroup {
-			grouped = true
-		}
+// confineSubjectsOf is confineSubjects over the principal port principals.
+// The reach walker uses it too, so that both read the same rule. want is the
+// ID of the principal that the subjects belong to, or "" when the caller
+// knows only the subjects: the ID then comes from the one principal subject.
+//
+// The check fails closed with ErrInvalid on a list that it cannot confine:
+// a subject of an unknown kind, a group subject with no principal subject,
+// more than one principal subject, or a principal subject that is not want.
+func confineSubjectsOf(
+	ctx context.Context, subjects []Subject, want string, principals PrincipalNamespaces,
+) ([]Subject, error) {
+	id, grouped, err := principalSubjectOf(subjects)
+	if err != nil {
+		return nil, err
 	}
 
-	if id == "" || !grouped {
+	if id == "" {
+		if grouped {
+			return nil, fmt.Errorf("%w: group subject with no principal subject", ErrInvalid)
+		}
+
 		return subjects, nil
 	}
 
-	_, namespaced, err := principalNamespaceOf(ctx, id, a.principals)
+	if want != "" && id != want {
+		return nil, fmt.Errorf("%w: principal subject %q is not the principal %q", ErrInvalid, id, want)
+	}
+
+	if !grouped {
+		return subjects, nil
+	}
+
+	_, namespaced, err := principalNamespaceOf(ctx, id, principals)
 	if err != nil {
 		return nil, err
 	}
@@ -825,6 +867,35 @@ func (a *Authorizer) confineSubjects(ctx context.Context, subjects []Subject) ([
 	}
 
 	return out, nil
+}
+
+// principalSubjectOf returns the ID of the one principal subject of subjects
+// and whether a group subject is present. It returns ErrInvalid for a
+// subject of an unknown kind, for a second principal subject and for a
+// principal subject with an empty ID.
+func principalSubjectOf(subjects []Subject) (string, bool, error) {
+	id := ""
+	grouped := false
+
+	for i := range subjects {
+		switch subjects[i].Kind {
+		case SubjectPrincipal:
+			// Defense in depth: refuse an empty principal ID here on its own.
+			// The check of a group with no principal subject does not stand
+			// in for it, and this check does not rely on it.
+			if id != "" || subjects[i].ID == "" {
+				return "", false, fmt.Errorf("%w: more than one principal subject, or an empty one", ErrInvalid)
+			}
+
+			id = subjects[i].ID
+		case SubjectGroup:
+			grouped = true
+		default:
+			return "", false, fmt.Errorf("%w: subject kind %q", ErrInvalid, subjects[i].Kind)
+		}
+	}
+
+	return id, grouped, nil
 }
 
 // chain returns obj and every object that holds it, innermost first: a unit,

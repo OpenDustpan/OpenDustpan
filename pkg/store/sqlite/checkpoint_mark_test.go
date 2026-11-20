@@ -84,6 +84,8 @@ func openMarkFixture(t *testing.T) *markFixture {
 		t.Fatalf("create stack: %v", err)
 	}
 
+	storetest.PlaceStack(t, store, ref)
+
 	return &markFixture{now: now, store: store, ref: ref, fence: ns.Fence(), nsID: ns.ID, stackID: stackID}
 }
 

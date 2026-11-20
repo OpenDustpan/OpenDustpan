@@ -104,6 +104,17 @@ func (hostSealer) OpenBound(_ context.Context, _ string, binding, ciphertext []b
 	return out, nil
 }
 
+// hostNamespaces gives the namespace service the port of the Git host service.
+type hostNamespaces struct{ svc *namespace.Service }
+
+func (h hostNamespaces) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return h.svc.Get(ctx, name)
+}
+
+func (h hostNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return h.svc.WritableHere(ctx, name)
+}
+
 // hostOpener is a forge.Opener whose Forge answers what the test sets.
 type hostOpener struct {
 	mu       sync.Mutex
@@ -113,6 +124,10 @@ type hostOpener struct {
 }
 
 func (o *hostOpener) Kind() forge.Kind { return forge.KindGitHub }
+
+func (o *hostOpener) ParseEvent(context.Context, forge.EventRequest, [][]byte) (forge.Event, error) {
+	return forge.Event{}, forge.ErrUnsupported
+}
 
 //nolint:ireturn // The port is the interface.
 func (o *hostOpener) Open(context.Context, forge.Connection, forge.Credential) (forge.Forge, error) {
@@ -177,8 +192,11 @@ type hostEnv struct {
 	opener  *hostOpener
 	// refuseAddress makes the address rules of the service refuse every address.
 	refuseAddress *atomic.Bool
-	mu            sync.Mutex
-	refused       []string
+	// stepSeconds is how many seconds the clock of the service moves at each
+	// read. It is 1 until a test changes it.
+	stepSeconds *atomic.Int64
+	mu          sync.Mutex
+	refused     []string
 }
 
 // refusals returns the reasons that the service counted, in order.
@@ -208,6 +226,30 @@ func newHostEnv(t *testing.T, authz identity.Authorizer) *hostEnv {
 	t.Helper()
 
 	return newHostEnvWith(t, authz, withKeys)
+}
+
+// hostNow returns the start of the clock of the Git host service in these
+// tests. A test reads it to compute a time that the server shows, so no test
+// reads the wall clock.
+func hostNow() time.Time { return time.Date(2030, time.March, 4, 10, 0, 0, 0, time.UTC) }
+
+// newStep returns the step of a clock: 1 second at each read.
+func newStep() *atomic.Int64 {
+	step := &atomic.Int64{}
+	step.Store(1)
+
+	return step
+}
+
+// hostClock returns a clock that starts at hostNow and moves forward by step
+// seconds at each read, so the check limits of the service see time pass. A
+// test changes step to move the clock further.
+func hostClock(step *atomic.Int64) func() time.Time {
+	var elapsed atomic.Int64
+
+	return func() time.Time {
+		return hostNow().Add(time.Duration(elapsed.Add(step.Load())) * time.Second)
+	}
 }
 
 // keyMode says whether the handler of a test has the Idempotency-Key middleware.
@@ -257,6 +299,7 @@ func newHostEnvWrapped(
 		store:         st,
 		opener:        nil,
 		refuseAddress: &atomic.Bool{},
+		stepSeconds:   newStep(),
 		mu:            sync.Mutex{},
 		refused:       nil,
 	}
@@ -265,7 +308,13 @@ func newHostEnvWrapped(
 	rules := egress.Rules{Allow: nil, LoopbackForTests: false}
 
 	svc, err := forge.NewService(forge.Config{
-		Store: wrap(st.GitHost()), Namespaces: st, Secrets: hostSealer{}, Audit: st, Openers: []forge.Opener{opener},
+		Store: wrap(
+			st.GitHost(),
+		),
+		Namespaces: hostNamespaces{svc: nss},
+		Secrets:    hostSealer{},
+		Audit:      st,
+		Openers:    []forge.Opener{opener},
 		CheckURL: func(raw string) error {
 			if env.refuseAddress.Load() {
 				return errHostAddress
@@ -280,7 +329,9 @@ func newHostEnvWrapped(
 
 			env.refused = append(env.refused, reason)
 		},
-		CheckLimits: limits, Logger: nil, Now: nil,
+		CheckLimits: limits,
+		Logger:      nil,
+		Now:         hostClock(env.stepSeconds),
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)
@@ -380,7 +431,8 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 	rememberSessions(handler, sessions)
 
 	return &hostEnv{
-		handler: handler, store: st, opener: opener, refuseAddress: nil, mu: sync.Mutex{}, refused: nil,
+		handler: handler, store: st, opener: opener, refuseAddress: nil, stepSeconds: nil, mu: sync.Mutex{},
+		refused: nil,
 	}
 }
 
@@ -416,6 +468,11 @@ func (e *hostEnv) do(t *testing.T, c hostCall) hostResponse {
 // session with a recent sign-in.
 func needsFreshHostSession(method, target string) bool {
 	path, _, _ := strings.Cut(target, "?")
+
+	if method == http.MethodPost {
+		// The confirm of a rotation changes the registration like a put does.
+		return strings.HasPrefix(path, "/api/dustpan/v1/git-host-apps/") && strings.HasSuffix(path, "/confirm-rotation")
+	}
 
 	return (method == http.MethodPut || method == http.MethodDelete) &&
 		(strings.HasPrefix(path, "/api/dustpan/v1/git-host-apps/") || strings.HasPrefix(path, hostInstallationsPath))
@@ -537,7 +594,7 @@ type checkDoc struct {
 func (e *hostEnv) auditEntries(t *testing.T, scope namespace.Name) []audit.Entry {
 	t.Helper()
 
-	listing, err := e.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of %s: %v", scope, err)
 	}

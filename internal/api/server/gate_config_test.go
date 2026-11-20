@@ -1351,3 +1351,47 @@ func (testApprovers) GroupByID(_ context.Context, id string) (gate.GroupRef, gat
 func testGateEngine() gate.Engine {
 	return cedargo.New(cedargo.WithAccessActions("unit:write"))
 }
+
+// TestGateConfigUnknownNamespace proves that each route of the approval
+// configuration answers 404 with the namespace error for a namespace that
+// does not exist, also a read and a delete that find nothing to change.
+func TestGateConfigUnknownNamespace(t *testing.T) {
+	t.Parallel()
+
+	_, h := newGateHandler(t, gateAuthorizer{allow: map[identity.Action]namespace.Name{
+		identity.ActionNamespaceReadGates:   "ghost",
+		identity.ActionNamespaceManageGates: "ghost",
+	}})
+
+	def := gateBase + "ghost" + gateDefault
+	rules := gateBase + "ghost" + gateRulesURL
+	rule := rules + "/ops"
+	ruleBody := `{"count":1,"approvers":{"users":["bo"]}}`
+
+	tests := []struct {
+		name string
+		call gateCall
+	}{
+		{"list the rules", gateCall{http.MethodGet, rules, "", ""}},
+		{"read a rule", gateCall{http.MethodGet, rule, "", ""}},
+		{"read the default", gateCall{http.MethodGet, def, "", ""}},
+		{"delete the default", gateCall{http.MethodDelete, def, "", ""}},
+		{"delete the default at a version", gateCall{http.MethodDelete, def, "", `"1"`}},
+		{"delete a rule", gateCall{http.MethodDelete, rule, "", ""}},
+		{"put the default", gateCall{http.MethodPut, def, platformDefault, ""}},
+		{"put a rule", gateCall{http.MethodPut, rule, ruleBody, ""}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := serveGate(t, h, tt.call)
+			wantStatus(t, rec, http.StatusNotFound)
+
+			if !strings.Contains(rec.Body.String(), "namespace not found") {
+				t.Fatalf("%s body = %s, want the namespace error", tt.name, rec.Body.String())
+			}
+		})
+	}
+}

@@ -178,6 +178,11 @@ type Store struct {
 	// Tests set it to prove a concurrent write stays blocked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context)
+	// swapAfterKeepHook, when set, runs in the swap of a restore after the
+	// keeps of the staged copy and before the fence. A non-nil error fails the
+	// swap. Tests set it to prove that a retry of a swap starts again from the
+	// staged file. Nil in production.
+	swapAfterKeepHook func(ctx context.Context) error
 	// beforeLockDelete, when set, runs in the removal of a manual lock between
 	// the read of the lock and the delete, inside the transaction. Tests change
 	// the lock there to reach the changed-lock check. Nil in production.
@@ -422,6 +427,7 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		lastTruncateSuccess:      time.Now(),
 		busyWarned:               false,
 		keepAccessHook:           nil,
+		swapAfterKeepHook:        nil,
 		attemptDeadline:          secret.AttemptDeadline,
 		now:                      time.Now,
 		beforeLockDelete:         nil,

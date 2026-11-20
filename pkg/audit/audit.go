@@ -183,6 +183,8 @@ var (
 	// points, that is not valid UTF-8, or that holds a control character, a
 	// format character or a line or paragraph separator.
 	ErrInvalidReason = errors.New("invalid reason")
+	// ErrInvalidPage reports a Page that Normalized refuses.
+	ErrInvalidPage = errors.New("invalid audit page")
 )
 
 // ValidateReason reports whether reason can be the reason of an entry. An
@@ -712,43 +714,40 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Page selects one page of a list. Number is one-based; Size caps the
-// entries. The zero value lists the first DefaultPageSize entries.
+// Page selects one page of a list, newest first. Before is the sequence that
+// the page starts below, and 0 starts at the newest entry. Size is the
+// number of entries, and 0 reads DefaultPageSize.
 type Page struct {
-	Number int
 	Size   int
+	Before int64
 }
 
-// Normalized returns the page with defaults applied: number below one reads
-// the first page, size below one reads DefaultPageSize entries, size above
-// MaxPageSize reads MaxPageSize entries.
-func (p Page) Normalized() Page {
-	out := p
-	if out.Number < 1 {
-		out.Number = 1
+// Normalized returns the page with the default size, or ErrInvalidPage for
+// a negative Before, a negative Size or a Size above MaxPageSize.
+func (p Page) Normalized() (Page, error) {
+	// Defense in depth: the HTTP handler validates the size and the token
+	// too; this check stays so that a new caller of the port cannot skip it.
+	if p.Before < 0 {
+		return Page{}, fmt.Errorf("%w: before is below 0", ErrInvalidPage)
 	}
 
-	if out.Size < 1 {
+	if p.Size < 0 || p.Size > MaxPageSize {
+		return Page{}, fmt.Errorf("%w: size is not from 0 to %d", ErrInvalidPage, MaxPageSize)
+	}
+
+	out := p
+	if out.Size == 0 {
 		out.Size = DefaultPageSize
 	}
 
-	if out.Size > MaxPageSize {
-		out.Size = MaxPageSize
-	}
-
-	return out
+	return out, nil
 }
 
-// Offset returns the offset of the page in entries.
-func (p Page) Offset() int64 {
-	return int64(p.Normalized().Number-1) * int64(p.Normalized().Size)
-}
-
-// Listing is one page of an audit list: the entries newest first and the
-// total count of entries of the namespace.
+// Listing is one page of an audit list: the entries newest first, and More,
+// true when entries exist below the last one.
 type Listing struct {
 	Entries []Entry
-	Total   int64
+	More    bool
 }
 
 // CheckResult reports the chain check of a namespace. Valid is true when
@@ -779,9 +778,10 @@ type Store interface {
 	// namespace.ErrNotFound if the fence names a missing namespace, and
 	// namespace.ErrFenced if the fence carries a stale failover version.
 	Append(ctx context.Context, fence namespace.Fence, e Entry) (Entry, error)
-	// List answers one page of the entries of ns, newest first, with the
-	// total count. A namespace with no entries reads as an empty list. ns
-	// can be ServerScope.
+	// List answers one page of the entries of ns, newest first. A
+	// namespace with no entries reads as an empty listing. ns can be
+	// ServerScope. It returns ErrInvalidPage for a page that Normalized
+	// refuses.
 	List(ctx context.Context, ns namespace.Name, page Page) (Listing, error)
 	// Check walks the chain of ns oldest first in pages of CheckPageSize
 	// entries and reports the first entry that does not match. A namespace

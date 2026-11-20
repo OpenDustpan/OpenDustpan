@@ -128,6 +128,9 @@ var (
 	_ inventory.SweepLocker = (*Store)(nil)
 )
 
+// Unwrap implements storetest.Unwrapper: it returns the store that s wraps.
+func (s *Store) Unwrap() any { return s.inner }
+
 // New returns a Store over inner that applies faults in order.
 func New(inner Inner, faults ...Fault) (*Store, error) {
 	if inner == nil {

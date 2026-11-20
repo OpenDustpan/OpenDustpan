@@ -12,7 +12,7 @@ The chart always runs `opendustpan serve`. It uses an external PostgreSQL databa
 
 ## Make the Secrets
 
-The chart never holds a secret. Each secret comes from a Secret that exists before the install. The install fails when the names of the first two Secrets are empty.
+The chart never holds a secret. Each secret comes from a Secret that exists before the install. The install fails when the name of one of the first three Secrets is empty.
 
 1. Make the key-encryption key one time. Keep a copy outside the cluster. A lost key loses every secret.
 
@@ -20,22 +20,23 @@ The chart never holds a secret. Each secret comes from a Secret that exists befo
    opendustpan key generate --out key-encryption-key
    ```
 
-2. Make the two Secrets that every install needs.
+2. Make the three Secrets that every install needs.
 
    ```sh
    kubectl create secret generic opendustpan-database \
      --from-literal=database-url='postgres://opendustpan@db.example:5432/opendustpan?sslmode=verify-full'
    kubectl create secret generic opendustpan-key-encryption-key \
      --from-file=key-encryption-key=key-encryption-key
+   kubectl create secret generic opendustpan-admin-token \
+     --from-literal=admin-token="$(openssl rand -hex 32)"
    ```
 
-The two Secrets must not be the same Secret and key. The templates refuse that case.
+The database Secret and the key Secret must not be the same Secret and key. The templates refuse that case. The server exits with `no admin token is set` without the admin token, so the chart refuses an empty `adminToken.existingSecret.name`.
 
 Other Secrets are optional:
 
 | Secret | Value | Use |
 | --- | --- | --- |
-| Bootstrap admin tokens | `adminToken.existingSecret` | The first administrator tokens, comma-separated. |
 | S3 credentials | `s3.credentials.existingSecret` | Access key and secret key. With no Secret, the server uses its default credential chain, for example a role that `serviceAccount.annotations` gives to the pod. |
 | Built-in TLS | `server.tls.existingSecret` | A `kubernetes.io/tls` Secret. |
 | Backup token | `backup.schedule.tokenSecret` | An access token that may start a backup. Do not use a bootstrap admin token. |
@@ -53,21 +54,28 @@ database:
 keyEncryptionKey:
   existingSecret:
     name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
 ```
 
 ```sh
-helm install dustpan oci://<registry>/opendustpan --version <version> -f values.yaml
+helm install dustpan deploy/helm/opendustpan -f values.yaml
 ```
 
-We plan to publish the chart as an OCI artifact in the registry of the image. The registry is open. Until it exists, install from a checkout: `helm install dustpan deploy/helm/opendustpan -f values.yaml`.
+No release exists yet, so the chart is not published as an OCI artifact. Install from a checkout, as the command above shows. No image is published yet either: build one from the checkout (see the [install guide](install.md)) and set `image.repository` and `image.tag` to it.
 
 For production, set `image.digest` to the digest of the image. The pod then uses `<repository>@<digest>` and ignores the tag. The chart refuses the tag `latest`.
 
-The directory `deploy/helm/opendustpan/ci/` has three example values files:
+The directory `deploy/helm/opendustpan/ci/` has five example values files:
 
-- Blobs on a claim.
-- Blobs in S3, with a backup schedule, behind an ingress.
-- Built-in TLS, with a backup claim.
+- `minimal-values.yaml`: one instance, blobs on a claim.
+- `s3-values.yaml`: one instance, blobs and backups in S3, behind an ingress.
+- `tls-dir-backup-values.yaml`: built-in TLS with a private authority, blobs and backups on claims.
+- `ha.yaml`: 3 replicas on S3 blobs and an S3 backup target, with the worker component in its own Deployment.
+- `numeric-secret-key-values.yaml`: Secret names and keys that YAML reads as a number or a bool.
+
+The subdirectory `ci/refused/` holds values files that the chart refuses on purpose.
 
 ## Storage
 
@@ -172,7 +180,7 @@ The server applies migrations when it starts. The chart has no migration Job and
 4. Upgrade:
 
    ```sh
-   helm upgrade dustpan oci://<registry>/opendustpan --version <version> -f values.yaml
+   helm upgrade dustpan deploy/helm/opendustpan -f values.yaml
    ```
 
 ## Roll back

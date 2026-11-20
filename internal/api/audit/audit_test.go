@@ -66,6 +66,9 @@ func (m *memNamespaceStore) Ping(_ context.Context) error {
 type memAuditStore struct {
 	entries map[namespace.Name][]audit.Entry
 	err     error
+	// lists counts the calls of List, so a test proves that a refused
+	// request never reached the store.
+	lists int
 }
 
 var (
@@ -129,20 +132,39 @@ func (m *memAuditStore) List(
 	_ context.Context, ns namespace.Name, page audit.Page,
 ) (audit.Listing, error) {
 	if m.err != nil {
-		return audit.Listing{}, m.err
+		return audit.Listing{Entries: nil, More: false}, m.err
 	}
 
-	p := page.Normalized()
+	m.lists++
+
+	p, err := page.Normalized()
+	if err != nil {
+		return audit.Listing{Entries: nil, More: false}, err
+	}
+
 	chain := m.entries[ns]
+	out := make([]audit.Entry, 0, min(len(chain), p.Size))
+	more := false
 
-	out := make([]audit.Entry, 0, min(int64(len(chain)), int64(p.Size)))
-	for i := len(chain) - 1; i >= 0 && len(out) < p.Size; i-- {
-		if int64(len(chain)-1-i) >= p.Offset() {
-			out = append(out, chain[i])
-		}
+	if len(chain) == 0 {
+		return audit.Listing{Entries: out, More: more}, nil
 	}
 
-	return audit.Listing{Entries: out, Total: int64(len(chain))}, nil
+	for i := range slices.Backward(chain) {
+		if p.Before != 0 && chain[i].Sequence >= p.Before {
+			continue
+		}
+
+		if len(out) == p.Size {
+			more = true
+
+			break
+		}
+
+		out = append(out, chain[i])
+	}
+
+	return audit.Listing{Entries: out, More: more}, nil
 }
 
 func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.CheckResult, error) {
@@ -300,7 +322,7 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
@@ -344,7 +366,7 @@ func newEnforcingHandlerWithSessions(
 ) (*apitaudit.Handler, *memAuditStore) {
 	t.Helper()
 
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Installation: "test-region"},
@@ -430,25 +452,14 @@ type listEntriesItem struct {
 
 // listEntriesDoc is the decoded entry list of the entry list test.
 type listEntriesDoc struct {
-	Entries []listEntriesItem `json:"entries"`
-	Total   int64             `json:"total"`
+	Entries       []listEntriesItem `json:"entries"`
+	NextPageToken string            `json:"nextPageToken"`
+	PageSize      int               `json:"pageSize"`
 }
 
-// listPageItem is one decoded entry of the paging test.
-type listPageItem struct {
-	Subject string `json:"subject"`
-}
-
-// listPageDoc is the decoded entry list of the paging test.
-type listPageDoc struct {
-	Entries []listPageItem `json:"entries"`
-	Total   int64          `json:"total"`
-}
-
-// TestListEntriesAnswersNewestFirstWithTotal proves the list answers the
-// entries of the namespace newest first with the total count and the entry
-// fields in camelCase.
-func TestListEntriesAnswersNewestFirstWithTotal(t *testing.T) {
+// TestListEntriesAnswersNewestFirst proves the list answers the entries of
+// the namespace newest first with the entry fields in camelCase.
+func TestListEntriesAnswersNewestFirst(t *testing.T) {
 	t.Parallel()
 
 	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
@@ -478,13 +489,13 @@ func TestListEntriesAnswersNewestFirstWithTotal(t *testing.T) {
 	checkListedFirstEntry(t, got.Entries[1])
 }
 
-// checkEntriesNewestFirst fails the test unless got holds two entries with
-// the total, newest first.
+// checkEntriesNewestFirst fails the test unless got holds two entries,
+// newest first.
 func checkEntriesNewestFirst(t *testing.T, got listEntriesDoc) {
 	t.Helper()
 
-	if got.Total != 2 || len(got.Entries) != 2 {
-		t.Fatalf("entries/total = %d/%d, want 2/2", len(got.Entries), got.Total)
+	if len(got.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(got.Entries))
 	}
 
 	if got.Entries[0].Subject != "second" || got.Entries[1].Subject != "first" {
@@ -503,65 +514,14 @@ func checkListedFirstEntry(t *testing.T, first listEntriesItem) {
 	}
 }
 
-// TestListEntriesPages proves page[size]=1 answers one entry per page.
-func TestListEntriesPages(t *testing.T) {
-	t.Parallel()
-
-	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
-
-	ns, err := namespace.ParseName("acme")
-	if err != nil {
-		t.Fatalf("parse namespace: %v", err)
-	}
-
-	seedEntry(t, entries, ns, "first")
-	seedEntry(t, entries, ns, "second")
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(
-		rec,
-		authedRequest(t, "/api/audit/entries?organization=acme&page[number]=2&page[size]=1"),
-	)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	var got listPageDoc
-
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-
-	if got.Total != 2 || len(got.Entries) != 1 || got.Entries[0].Subject != "first" {
-		t.Fatalf("page 2 = %+v total %d, want first with total 2", got.Entries, got.Total)
-	}
-}
-
-// TestListEntriesRejectsAnInvalidPage proves a non-numeric page answers 400.
-func TestListEntriesRejectsAnInvalidPage(t *testing.T) {
-	t.Parallel()
-
-	handler, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(
-		rec,
-		authedRequest(t, "/api/audit/entries?organization=acme&page[size]=nope"),
-	)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-}
-
-// TestListEntriesOfAnUnknownNamespaceAnswers404 proves the list of a
-// namespace that does not exist answers 404.
-func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
+// TestListEntriesAnswers404ForAnUnknownNamespaceFirst proves the list of a
+// namespace that does not exist answers 404 before the page values are read:
+// the page size and the token of the request are not valid on purpose.
+func TestListEntriesAnswers404ForAnUnknownNamespaceFirst(t *testing.T) {
 	t.Parallel()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil, lists: 0}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
@@ -586,7 +546,7 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/entries?organization=ghost"))
+	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/entries?organization=ghost&pageSize=0&pageToken=%25%25"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)

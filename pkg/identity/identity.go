@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -1008,9 +1009,21 @@ func parseUnitObject(s string) (Object, error) {
 	}, nil
 }
 
-// validUnitName reports whether name is a usable opaque unit name.
+// validUnitName reports whether name is a usable opaque unit name. A name
+// that is not valid UTF-8, or that holds a hidden rune (a control character,
+// a format character such as U+202E, or a line or paragraph separator), is
+// not usable: its text can look different from its bytes when an error, a
+// log or the console shows it.
 func validUnitName(name string) bool {
 	if name == "" || len(name) > MaxUnitLength {
+		return false
+	}
+
+	// Defense in depth: the tool adapters accept only ASCII letters, digits
+	// and a few punctuation characters in a stack or workspace name, so no
+	// stored unit has such a name. This check stays so that a reference from
+	// another caller cannot hold a hidden rune and does not rely on them.
+	if !utf8.ValidString(name) || ident.HasHidden(name) {
 		return false
 	}
 
@@ -1311,7 +1324,11 @@ var _ Authenticator = (*StaticToken)(nil)
 // NewStaticToken returns an authenticator accepting token for an admin named subject.
 func NewStaticToken(subject, token string) (*StaticToken, error) {
 	if len(token) < minTokenLength {
-		return nil, fmt.Errorf("%w: need at least %d bytes", ErrWeakToken, minTokenLength)
+		return nil, fmt.Errorf(
+			"%w: need at least %d bytes: make one with: openssl rand -hex 32",
+			ErrWeakToken,
+			minTokenLength,
+		)
 	}
 
 	return &StaticToken{
@@ -1373,7 +1390,8 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 	for i, raw := range tokens {
 		token := strings.TrimSpace(raw)
 		if len(token) < minTokenLength {
-			return nil, fmt.Errorf("%w: token %d needs at least %d bytes", ErrWeakToken, i+1, minTokenLength)
+			return nil, fmt.Errorf("%w: token %d needs at least %d bytes: make one with: openssl rand -hex 32",
+				ErrWeakToken, i+1, minTokenLength)
 		}
 
 		sum := sha256.Sum256([]byte(token))

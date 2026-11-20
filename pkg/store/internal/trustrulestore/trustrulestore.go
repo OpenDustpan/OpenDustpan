@@ -137,6 +137,9 @@ func Rule(row Row) (trustrule.Rule, error) {
 // namespace of the fence against the namespace of the rule. It returns the
 // row to write.
 func CheckCreate(r *trustrule.Rule, fence namespace.Fence) (Row, error) {
+	// Defense in depth: the service checks the rule too, among them the * in a
+	// SPIFFE ID. This check stays so that a restore or a new caller cannot
+	// store a rule that names more than one SPIFFE ID.
 	if err := r.Validate(); err != nil {
 		return Row{}, fmt.Errorf("create trust rule: %w", err)
 	}
@@ -186,6 +189,9 @@ func CheckUpdate(ns namespace.Name, r *trustrule.Rule, fence namespace.Fence) (R
 		return Row{}, err
 	}
 
+	// Defense in depth: the service checks the rule too, among them the * in a
+	// SPIFFE ID. This check stays so that a new caller cannot store a rule
+	// that names more than one SPIFFE ID.
 	if err := r.Validate(); err != nil {
 		return Row{}, fmt.Errorf("update trust rule: %w", err)
 	}

@@ -10,7 +10,8 @@
 // The cases come before the first adapter. A case with no body skips with
 // "not implemented", and gets its body before an adapter implements the
 // methods that it covers. The cases of the groups "The connection", "Files",
-// "Commits", "Review requests", "Statuses", "Comments" and "Tree" have bodies.
+// "Commits", "Review requests", "Statuses", "Comments", "Tree", "Tokens" and
+// "Events" have bodies.
 // CaseNamesWithBody lists the cases that have a body. A case whose capability the forge does not list
 // skips for that forge, and the case "an operation outside the
 // capabilities is unsupported" checks that such a method returns
@@ -53,6 +54,26 @@ type Harness struct {
 	// Fixture changes the repository outside the port, as a person or
 	// another tool does.
 	Fixture Fixture
+	// Now returns the time of the forge, which is the clock of the adapter.
+	// A case that checks an expiry reads it. Nil means time.Now.
+	Now func() time.Time
+}
+
+// now returns the time of the forge.
+func (h Harness) now() time.Time {
+	if h.Now == nil {
+		return time.Now()
+	}
+
+	return h.Now()
+}
+
+// Access says what a token can do in a repository, as the forge answers.
+type Access struct {
+	// Read is true when the token reads the contents.
+	Read bool
+	// Write is true when the token writes the contents.
+	Write bool
 }
 
 // Fixture changes the repository of a case outside the port, and makes the
@@ -134,6 +155,13 @@ type Fixture interface { //nolint:interfacebloat // One fixture changes the repo
 	// secret. The kind may be one that the port does not name, to test
 	// ErrUnsupported.
 	Event(ctx context.Context, kind forge.EventKind, secret []byte) (forge.EventRequest, error)
+	// RawEvent returns a request of kind as the forge sends it, with the body
+	// that the case gives, signed with secret. The body may be one that the
+	// forge never sends, for example text that is not JSON.
+	RawEvent(ctx context.Context, kind forge.EventKind, body, secret []byte) (forge.EventRequest, error)
+	// TokenAccess asks the forge what the token can do in the repository
+	// repo, with no change to the repository.
+	TokenAccess(ctx context.Context, token []byte, repo string) (Access, error)
 	// Redeliver returns the request again, as the forge sends a retry: the
 	// same body, the same delivery ID and a new signature time.
 	Redeliver(ctx context.Context, r forge.EventRequest) (forge.EventRequest, error)
@@ -368,11 +396,11 @@ func cases() []testCase {
 		{"tree of a missing directory, a file or a missing commit is not found", forge.CapTree, caseTreeNotFound},
 
 		// Tokens.
-		{"repo token of an app reads its repository only", forge.CapRepoToken, nil},
-		{"repo token of an app cannot write", forge.CapRepoToken, nil},
-		{"repo token of an app expires within one hour", forge.CapRepoToken, nil},
+		{"repo token of an app reads its repository only", forge.CapRepoToken, caseRepoTokenReadsOneRepository},
+		{"repo token of an app cannot write", forge.CapRepoToken, caseRepoTokenCannotWrite},
+		{"repo token of an app expires within one hour", forge.CapRepoToken, caseRepoTokenExpires},
 		// Skips when Connection.Auth is not AuthToken.
-		{"repo token of a token connection is not scoped", forge.CapGitAccess, nil},
+		{"repo token of a token connection is not scoped", forge.CapGitAccess, caseRepoTokenOfAToken},
 		{"a forge with repo-token also lists git-access", forge.CapRepoToken, caseRepoTokenImpliesGitAccess},
 
 		// Rotation.
@@ -384,17 +412,17 @@ func cases() []testCase {
 		{"rotate self returns no part of the old or the new secret in an error", forge.CapSelfRotate, nil},
 
 		// Events.
-		{"parse ping event", forge.CapEvents, nil},
-		{"parse review event with a valid signature", forge.CapEvents, nil},
-		{"parse event with no secret or an empty secret fails", forge.CapEvents, nil},
-		{"parse event with a wrong signature fails", forge.CapEvents, nil},
-		{"parse event with a changed body is a signature error", forge.CapEvents, nil},
-		{"parse signed event with a body that does not parse is invalid", forge.CapEvents, nil},
-		{"parse event of a kind outside the port is unsupported", forge.CapEvents, nil},
+		{"parse ping event", forge.CapEvents, caseEventPing},
+		{"parse review event with a valid signature", forge.CapEvents, caseEventReview},
+		{"parse event with no secret or an empty secret fails", forge.CapEvents, caseEventNoSecret},
+		{"parse event with a wrong signature fails", forge.CapEvents, caseEventWrongSignature},
+		{"parse event with a changed body is a signature error", forge.CapEvents, caseEventChangedBody},
+		{"parse signed event with a body that does not parse is invalid", forge.CapEvents, caseEventBadBody},
+		{"parse event of a kind outside the port is unsupported", forge.CapEvents, caseEventOutsidePort},
 		// Skips when Connection.Auth is not AuthApp.
-		{"parse event of an app has the installation ID", forge.CapEvents, nil},
-		{"each of two active event secrets verifies an event", forge.CapEvents, nil},
-		{"a retried delivery keeps its delivery ID", forge.CapEvents, nil},
+		{"parse event of an app has the installation ID", forge.CapEvents, caseEventInstallation},
+		{"each of two active event secrets verifies an event", forge.CapEvents, caseEventTwoSecrets},
+		{"a retried delivery keeps its delivery ID", forge.CapEvents, caseEventRetry},
 	}
 }
 

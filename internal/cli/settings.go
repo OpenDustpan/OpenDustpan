@@ -505,7 +505,7 @@ var Settings = []*Setting{
 		"DUSTPAN_LDAP_URL",
 		"",
 		"address of the LDAP directory of the sign-in: ldaps://host[:port], or ldap://host[:port] with --ldap-start-tls; no path, query or user information. The sign-in also needs --ldap-provider, --ldap-bind-dn, --ldap-base-dn and --ldap-user-filter (DUSTPAN_LDAP_URL)",
-		"(none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, except to a loopback IP address or with `egress.allowPlainConnections`.",
+		"(none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, also to a loopback IP address: use ldaps:// or StartTLS. With `egress.allowPlainConnections` on, a connection with no TLS to a host that the egress rules allow is accepted.",
 	).WithFile("ldap.url").WithStaticCredentialHost().WithURL(),
 	stringSetting(
 		"ldap-provider",
@@ -785,7 +785,7 @@ var Settings = []*Setting{
 	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
-		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",
+		"Required when you set no key file. The base64 text of 32 random bytes. `serve` stops before it opens the database when it has no key.",
 	).WithSensitive(),
 	envSetting(
 		DevDataDirEnv,

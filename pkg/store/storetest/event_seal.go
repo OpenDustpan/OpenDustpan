@@ -103,13 +103,16 @@ func newSealRig(t *testing.T, store EventSealStore) *sealRig {
 		t.Fatalf("create stack: %v", err)
 	}
 
+	PlaceStack(t, store, st.Ref)
+
 	nsSvc, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Installation: sealInstallation})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Sealer: realItemSealer(t, store), BlobGuard: blobguardtest.None{}, ManualLocks: nil, Updates: store,
+		Membership: stacktest.PlacedAll(),
+		Sealer:     realItemSealer(t, store), BlobGuard: blobguardtest.None{}, ManualLocks: nil, Updates: store,
 		Tokens: nil, Checkpoints: store, Events: store, Namespaces: nsSvc, Stacks: store,
 		Blobs: openCaseBlobsIn(t, t.TempDir()), Refusals: stacktest.NewRefusals(), Now: nil, Logger: nil,
 		MaxCheckpointBytes: 0, Journal: nil, Replayer: nil,
@@ -416,6 +419,8 @@ func testEventSwapStack(t *testing.T, r *sealRig) {
 	if err := r.store.CreateStack(t.Context(), other, r.fence); err != nil {
 		t.Fatalf("create stack: %v", err)
 	}
+
+	PlaceStack(t, r.store, other.Ref)
 
 	first := r.start(t, preview())
 	r.appendDiagnostics(t, first, "of this stack")

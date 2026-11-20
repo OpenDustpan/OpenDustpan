@@ -2,6 +2,7 @@ token.already-exists
 token.caller-not-person
 token.ended
 token.invalid
+token.issue-failed
 token.kind-has-none
 token.not-found
 token.outside-reach

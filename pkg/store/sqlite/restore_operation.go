@@ -809,8 +809,15 @@ func (s *Store) removeAreas(drop func(backup.StagingArea) bool) error {
 // file, in its fence transaction. The rename then makes the record live with
 // the restored data, or neither.
 func (s *Store) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
+	// Defense in depth: the service and the decoder of the swap record check
+	// the decision too; this check stays so that no caller of the store
+	// replaces the access tables without the live row of each kept setting.
+	if err := backup.ValidateSwapDecision(d); err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
 	path, err := s.areaPath(a)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
@@ -822,11 +829,11 @@ func (s *Store) ApplyRestoreArea(
 	)
 
 	plan := swapPlan{
-		staged: path, keepAccess: keepAccess,
+		staged: path, keepAccess: d.KeepAccessTables, keepSettings: d.KeepSettingKeys,
 		before: func(ctx context.Context) error {
 			// The fence comes first, before the first change, so a cancel
 			// before the swap and the swap have one winner.
-			return s.runTx(ctx, func(q *db.Queries) error {
+			txErr := s.runTx(ctx, func(q *db.Queries) error {
 				var fenceErr error
 
 				row, now, fenceErr = fencedRestore(ctx, q, f, a.Restore)
@@ -834,27 +841,21 @@ func (s *Store) ApplyRestoreArea(
 					return fenceErr
 				}
 
-				// The swap runs only in maintenance mode, so no tool traffic
-				// writes during it. The store write lock holds the state
-				// until the rename.
-				state, stateErr := q.GetInstallationState(ctx)
-				if stateErr != nil {
-					return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
-				}
-
-				if maintenance.State(state) != maintenance.StateMaintenance {
-					return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
-				}
-
-				if _, statErr := os.Stat(path); statErr != nil {
-					return fmt.Errorf("apply staging area %s: %w", a, backup.ErrCorrupt)
-				}
-
-				return nil
+				return checkSwapState(ctx, q, a, path)
 			}, nil)
+			if txErr != nil {
+				return txErr
+			}
+
+			return s.checkWidenedSetting(ctx, d)
 		},
 		after: func(ctx context.Context, tx *sql.Tx, kept backup.KeepAccessResult) error {
-			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
+			recorded, recordErr := withStagedSetting(ctx, tx, d)
+			if recordErr != nil {
+				return recordErr
+			}
+
+			return insertStep(ctx, db.New(tx), stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, recorded))
 		},
 	}
 
@@ -864,6 +865,67 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	return kept, nil
+}
+
+// checkWidenedSetting refuses a swap that widens when the live row of the
+// restore access setting does not say true. A swap that does not widen needs
+// no check. The swap step makes the failure permanent (the error is
+// ErrCorrupt): a retry decides the same way.
+//
+// The store reads only the database row. Today no static source maps this
+// key, so the effective value of the service and the row of the store cannot
+// differ. If a static source is added, this check must read the effective
+// value too.
+//
+// Defense in depth: the service checks the setting too. This check stays so
+// that a bug in swapDecision or widenedAccess, or a new caller of the store,
+// cannot replace the access tables while the setting is off. It does not rely
+// on the service, on the route or on the decoder of the swap record.
+func (s *Store) checkWidenedSetting(ctx context.Context, d backup.SwapDecision) error {
+	if !d.Widened {
+		return nil
+	}
+
+	var value string
+
+	err := s.conn.QueryRowContext(
+		ctx, `SELECT value FROM main.settings WHERE scope_id = ? AND key = ?`,
+		serverScopeID, backup.SettingRestoreAccessTables,
+	).Scan(&value)
+
+	switch {
+	case err == nil && backup.EffectiveRestoreAccessSettingText(value) == "true":
+		return nil
+	case err == nil || errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf(
+			"widen the swap while %s is not true: %w",
+			backup.SettingRestoreAccessTables,
+			backup.ErrCorrupt,
+		)
+	default:
+		return fmt.Errorf("read live setting row: %w", backup.ErrExportRead)
+	}
+}
+
+// checkSwapState checks that the installation is in maintenance mode and that
+// the staged file at path exists. The swap runs only in maintenance mode, so
+// no tool traffic writes during it. The store write lock holds the state until
+// the rename.
+func checkSwapState(ctx context.Context, q *db.Queries, a backup.StagingArea, path string) error {
+	state, err := q.GetInstallationState(ctx)
+	if err != nil {
+		return fmt.Errorf("read installation state sqlite database: %w", maintenance.ErrUnavailable)
+	}
+
+	if maintenance.State(state) != maintenance.StateMaintenance {
+		return fmt.Errorf("swap restore area %s in state %q: %w", a, state, maintenance.ErrStateChanged)
+	}
+
+	if _, statErr := os.Stat(path); statErr != nil {
+		return fmt.Errorf("apply staging area %s: %w", a, backup.ErrCorrupt)
+	}
+
+	return nil
 }
 
 // CleanRestoreAreas implements backup.RestoreStaging. SQLite keeps no old
@@ -944,14 +1006,33 @@ func (s *Store) removeEndedAreas(ctx context.Context, id backup.RestoreID) ([]ba
 			return dropped, pathErr
 		}
 
-		if removeErr := removeSnapshotErr(path); removeErr != nil {
-			return dropped, fmt.Errorf("remove staging area %s: %w", a, removeErr)
+		if removeErr := removeAreaFiles(a, path); removeErr != nil {
+			return dropped, removeErr
 		}
 
 		dropped = append(dropped, a)
 	}
 
 	return dropped, nil
+}
+
+// removeAreaFiles removes the staging file at path of area a, and the work
+// copy that a swap leaves when it stops before its rename.
+func removeAreaFiles(a backup.StagingArea, path string) error {
+	if err := removeSnapshotErr(path); err != nil {
+		return fmt.Errorf("remove staging area %s: %w", a, err)
+	}
+
+	work, err := workCopyPath(path)
+	if err != nil {
+		return err
+	}
+
+	if err = removeSnapshotErr(work); err != nil {
+		return fmt.Errorf("remove work copy of staging area %s: %w", a, err)
+	}
+
+	return nil
 }
 
 // ListRestoreAreas implements backup.RestoreStaging.

@@ -241,8 +241,9 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 	}
 
 	r.updates, err = stack.NewUpdates(stack.UpdatesConfig{
-		Sealer:    secrettest.NewMemorySealer(),
-		BlobGuard: r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: r.store, Events: r.store,
+		Membership: stacktest.PlacedAll(),
+		Sealer:     secrettest.NewMemorySealer(),
+		BlobGuard:  r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: r.store, Events: r.store,
 		Namespaces: nsSvc, Stacks: r.store, Blobs: r.live, Refusals: refusals, Now: nil, Logger: nil,
 		MaxCheckpointBytes: 1 << 20, Journal: journal, Replayer: pulumijournal.NewReplayer(time.Now, ""),
 		OnDeleteWait: nil,

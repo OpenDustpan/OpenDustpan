@@ -808,8 +808,15 @@ func (s *Store) dropAreas(ctx context.Context, drop func(backup.StagingArea) boo
 
 // ApplyRestoreArea implements backup.RestoreStaging.
 func (s *Store) ApplyRestoreArea(
-	ctx context.Context, f durable.StepFence, a backup.StagingArea, keepAccess bool,
+	ctx context.Context, f durable.StepFence, a backup.StagingArea, d backup.SwapDecision,
 ) (backup.KeepAccessResult, error) {
+	// Defense in depth: the service and the decoder of the swap record check
+	// the decision too; this check stays so that no caller of the store
+	// replaces the access tables without the live row of each kept setting.
+	if err := backup.ValidateSwapDecision(d); err != nil {
+		return backup.KeepAccessResult{}, err
+	}
+
 	schema, err := areaSchema(a)
 	if err != nil {
 		return backup.KeepAccessResult{}, err
@@ -833,9 +840,13 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	plan := swapPlan{
-		staging: schema, previous: previous, keepAccess: keepAccess,
+		staging: schema, previous: previous, keepAccess: d.KeepAccessTables, keepSettings: d.KeepSettingKeys,
 		before: func(tx pgx.Tx) error {
-			return s.checkSwapStart(ctx, s.queries.WithTx(tx), f, a, staged)
+			if startErr := s.checkSwapStart(ctx, s.queries.WithTx(tx), f, a, staged); startErr != nil {
+				return startErr
+			}
+
+			return checkWidenedSetting(ctx, tx, d)
 		},
 		after: func(tx pgx.Tx, kept backup.KeepAccessResult) error {
 			// The fence comes after the copy of the durable control tables,
@@ -854,7 +865,12 @@ func (s *Store) ApplyRestoreArea(
 				return fenceErr
 			}
 
-			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept))
+			recorded, recordErr := withSwappedSetting(ctx, tx, d)
+			if recordErr != nil {
+				return recordErr
+			}
+
+			return insertStep(ctx, q, stepAt{row: row, now: now}, f, backup.EncodeRestoreSwap(kept, recorded))
 		},
 	}
 
@@ -864,6 +880,47 @@ func (s *Store) ApplyRestoreArea(
 	}
 
 	return kept, nil
+}
+
+// checkWidenedSetting refuses a swap that widens when the live row of the
+// restore access setting does not say true. The read locks the row with FOR
+// SHARE, in the swap transaction and before the schema swap, so no write
+// changes the row before the commit. The swap step makes the failure
+// permanent (the error is ErrCorrupt).
+//
+// The store reads only the database row. Today no static source maps this
+// key, so the effective value of the service and the row of the store cannot
+// differ. If a static source is added, this check must read the effective
+// value too.
+//
+// Defense in depth: the service checks the setting too. This check stays so
+// that a bug in swapDecision or widenedAccess, or a new caller of the store,
+// cannot replace the access tables while the setting is off. It does not rely
+// on the service, on the route or on the decoder of the swap record.
+func checkWidenedSetting(ctx context.Context, tx pgx.Tx, d backup.SwapDecision) error {
+	if !d.Widened {
+		return nil
+	}
+
+	var value string
+
+	err := tx.QueryRow(
+		ctx, `SELECT value FROM settings WHERE scope_id = $1 AND key = $2 FOR SHARE`,
+		serverScopeID, backup.SettingRestoreAccessTables,
+	).Scan(&value)
+
+	switch {
+	case err == nil && backup.EffectiveRestoreAccessSettingText(value) == "true":
+		return nil
+	case err == nil || errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf(
+			"widen the swap while %s is not true: %w",
+			backup.SettingRestoreAccessTables,
+			backup.ErrCorrupt,
+		)
+	default:
+		return fmt.Errorf("read live setting row: %w", backup.ErrExportRead)
+	}
 }
 
 // checkSwapStart runs the checks at the start of the swap of area a with the
