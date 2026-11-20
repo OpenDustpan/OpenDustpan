@@ -466,7 +466,8 @@ var Settings = []*Setting{
 			"also set a new --oidc-provider (DUSTPAN_OIDC_ISSUER)",
 		"(none: no console sign-in). The identity of a person does not hold the issuer. To use another "+
 			"issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a "+
-			"person of the old issuer with the same `sub`.",
+			"person of the old issuer with the same `sub`. The issuer has no user name or password, no query and no "+
+			"fragment.",
 	).WithFile("oidc-issuer").WithStaticCredentialHost().WithURL().WithSensitive(),
 	stringSetting(
 		"oidc-provider", "DUSTPAN_OIDC_PROVIDER", "",
@@ -475,7 +476,8 @@ var Settings = []*Setting{
 			"the first sign-in, and never use it for another issuer (DUSTPAN_OIDC_PROVIDER)",
 		"(none). The ID is part of the identity of each person who signs in: the subject "+
 			"`<provider ID>:<sub>`. A principal with that subject, a local one too, is the principal of that "+
-			"person. Never change the ID after the first sign-in. A new issuer needs a new ID.",
+			"person. Never change the ID after the first sign-in. A new issuer needs a new ID. The IDs `dev` and "+
+			"`local` are reserved: the server refuses them at start.",
 	).WithFile("oidc-provider"),
 	stringSetting(
 		"oidc-display-name", "DUSTPAN_OIDC_DISPLAY_NAME", "",
@@ -510,7 +512,7 @@ var Settings = []*Setting{
 		"DUSTPAN_LDAP_PROVIDER",
 		"",
 		"ID of the LDAP provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the identity of each person who signs in: the subject <provider ID>:<subject>. Never change the ID after the first sign-in (DUSTPAN_LDAP_PROVIDER)",
-		"(none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID.",
+		"(none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID. The IDs `dev` and `local` are reserved: the server refuses them at start.",
 	).WithFile("ldap.provider"),
 	stringSetting(
 		"ldap-display-name", "DUSTPAN_LDAP_DISPLAY_NAME", "",

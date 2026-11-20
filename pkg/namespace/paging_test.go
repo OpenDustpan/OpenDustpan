@@ -56,8 +56,8 @@ func (f *pagingFake) PageNamespaces(_ context.Context, q namespace.PageQuery) ([
 }
 
 func (f *pagingFake) CountNamespaces(_ context.Context, ftr namespace.Filter) (int64, error) {
-	f.gotAll = ftr.All
-	f.gotNames = ftr.Names
+	_, f.gotAll = ftr.Every()
+	f.gotNames = ftr.Names()
 
 	return f.total, f.countErr
 }
@@ -110,7 +110,7 @@ func TestPageNamespacesRejectsLimits(t *testing.T) {
 	t.Parallel()
 
 	svc := openService(t, &pagingFake{
-		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.Filter{All: false, Names: nil}},
+		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.NamedNamespaces()},
 		gotAll:   false,
 		gotNames: nil,
 		page:     nil,
@@ -123,7 +123,7 @@ func TestPageNamespacesRejectsLimits(t *testing.T) {
 		_, err := svc.PageNamespaces(t.Context(), namespace.PageQuery{
 			After:  "",
 			Limit:  limit,
-			Filter: namespace.Filter{All: true, Names: nil},
+			Filter: namespace.EveryNamespace(),
 		})
 		if !errors.Is(err, namespace.ErrInvalidPage) {
 			t.Fatalf("page with limit %d: err = %v, want ErrInvalidPage", limit, err)
@@ -139,13 +139,13 @@ func TestPageNamespacesNeedsPager(t *testing.T) {
 	_, err := svc.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
 		Limit:  10,
-		Filter: namespace.Filter{All: true, Names: nil},
+		Filter: namespace.EveryNamespace(),
 	})
 	if !errors.Is(err, namespace.ErrNoPaging) {
 		t.Fatalf("page without a pager: err = %v, want ErrNoPaging", err)
 	}
 
-	_, err = svc.CountNamespaces(t.Context(), namespace.Filter{All: true, Names: nil})
+	_, err = svc.CountNamespaces(t.Context(), namespace.EveryNamespace())
 	if !errors.Is(err, namespace.ErrNoPaging) {
 		t.Fatalf("count without a pager: err = %v, want ErrNoPaging", err)
 	}
@@ -155,7 +155,7 @@ func TestPageNamespacesDedupsNames(t *testing.T) {
 	t.Parallel()
 
 	fake := &pagingFake{
-		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.Filter{All: false, Names: nil}},
+		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.NamedNamespaces()},
 		gotAll:   false,
 		gotNames: nil,
 		page:     []namespace.Namespace{},
@@ -170,7 +170,7 @@ func TestPageNamespacesDedupsNames(t *testing.T) {
 	got, err := svc.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "acme",
 		Limit:  10,
-		Filter: namespace.Filter{All: false, Names: in},
+		Filter: namespace.NamedNamespaces(in...),
 	})
 	if err != nil {
 		t.Fatalf("page namespaces: %v", err)
@@ -181,11 +181,11 @@ func TestPageNamespacesDedupsNames(t *testing.T) {
 	}
 
 	want := []namespace.Name{"beta", "acme", "zeta"}
-	if !slices.Equal(fake.gotQuery.Filter.Names, want) {
-		t.Fatalf("paged names = %v, want %v", fake.gotQuery.Filter.Names, want)
+	if !slices.Equal(fake.gotQuery.Filter.Names(), want) {
+		t.Fatalf("paged names = %v, want %v", fake.gotQuery.Filter.Names(), want)
 	}
 
-	if fake.gotQuery.After != "acme" || fake.gotQuery.Limit != 10 || fake.gotQuery.Filter.All {
+	if _, every := fake.gotQuery.Filter.Every(); fake.gotQuery.After != "acme" || fake.gotQuery.Limit != 10 || every {
 		t.Fatalf("paged query = %+v, want after acme limit 10 without all", fake.gotQuery)
 	}
 
@@ -201,7 +201,7 @@ func TestPageNamespacesWrapsStoreErrors(t *testing.T) {
 	t.Parallel()
 
 	fake := &pagingFake{
-		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.Filter{All: false, Names: nil}},
+		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.NamedNamespaces()},
 		gotAll:   false,
 		gotNames: nil,
 		page:     nil,
@@ -214,13 +214,13 @@ func TestPageNamespacesWrapsStoreErrors(t *testing.T) {
 	_, err := svc.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
 		Limit:  10,
-		Filter: namespace.Filter{All: true, Names: nil},
+		Filter: namespace.EveryNamespace(),
 	})
 	if !errors.Is(err, errPageBoom) {
 		t.Fatalf("page namespaces: err = %v, want the store error", err)
 	}
 
-	_, err = svc.CountNamespaces(t.Context(), namespace.Filter{All: true, Names: nil})
+	_, err = svc.CountNamespaces(t.Context(), namespace.EveryNamespace())
 	if !errors.Is(err, errPageBoom) {
 		t.Fatalf("count namespaces: err = %v, want the store error", err)
 	}
@@ -230,7 +230,7 @@ func TestCountNamespacesDedupsNames(t *testing.T) {
 	t.Parallel()
 
 	fake := &pagingFake{
-		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.Filter{All: false, Names: nil}},
+		gotQuery: namespace.PageQuery{After: "", Limit: 0, Filter: namespace.NamedNamespaces()},
 		gotAll:   false,
 		gotNames: nil,
 		page:     nil,
@@ -242,7 +242,7 @@ func TestCountNamespacesDedupsNames(t *testing.T) {
 
 	in := []namespace.Name{"acme", "beta", "acme"}
 
-	total, err := svc.CountNamespaces(t.Context(), namespace.Filter{All: false, Names: in})
+	total, err := svc.CountNamespaces(t.Context(), namespace.NamedNamespaces(in...))
 	if err != nil {
 		t.Fatalf("count namespaces: %v", err)
 	}

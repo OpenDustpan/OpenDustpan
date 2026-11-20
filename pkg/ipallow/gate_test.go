@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,34 @@ func (f *fakeRules) NamespaceList(_ context.Context, ns namespace.Name) (ipallow
 	}
 
 	return ipallow.List{}, nil
+}
+
+// everyListKey is the key of errs whose error NamespacesWithList returns.
+// No namespace has this name, so NamespaceList never reads it.
+const everyListKey namespace.Name = "*"
+
+// NamespacesWithList returns each entry of lists that is not the zero List,
+// in name order, or the error at everyListKey. A test puts a hostile name in
+// lists to send it to the gate as the store would.
+func (f *fakeRules) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
+	f.calls++
+
+	if err, ok := f.errs[everyListKey]; ok {
+		return nil, err
+	}
+
+	out := make([]ipallow.NamedList, 0, len(f.lists))
+	for ns, l := range f.lists {
+		if !l.IsEmpty() {
+			out = append(out, ipallow.NamedList{Namespace: ns, List: l})
+		}
+	}
+
+	slices.SortFunc(out, func(a, b ipallow.NamedList) int {
+		return strings.Compare(a.Namespace.String(), b.Namespace.String())
+	})
+
+	return out, nil
 }
 
 // mustList parses items or fails the test.

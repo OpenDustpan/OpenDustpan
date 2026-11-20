@@ -243,7 +243,7 @@ func splitIssuer(issuer string) (issuerParts, bool) {
 // issuerSchemeAllowed reports whether the scheme is "https", or "http" with
 // a loopback host.
 func issuerSchemeAllowed(scheme, host string) bool {
-	return scheme == schemeHTTPS || (scheme == schemeHTTP && loopbackHost(host))
+	return scheme == schemeHTTPS || (scheme == schemeHTTP && LoopbackHost(host))
 }
 
 // issuerBytesAllowed reports whether each byte of s is a printable ASCII
@@ -437,8 +437,8 @@ func isHex(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
-// loopbackHost reports whether host is localhost or a loopback IP address.
-func loopbackHost(host string) bool {
+// LoopbackHost reports whether host is localhost or a loopback IP address.
+func LoopbackHost(host string) bool {
 	if host == "localhost" {
 		return true
 	}

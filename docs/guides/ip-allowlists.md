@@ -188,6 +188,41 @@ have no principal, so the bootstrap exemption does not reach them.
 A read that is refused by the list gets `403`, not the `404` that a denied
 object normally gets.
 
+## What a list shows
+
+When the feature is on, a list leaves out each namespace whose list does not
+contain the client address. A list never shows a namespace, or a stack, a
+workspace or a collection in it, that a request from the same address cannot
+open.
+
+This applies to every principal that is not exempt, also to a principal whose
+grant covers every object: an administrator, or a principal with a grant on
+the installation. For that principal:
+
+- `GET /api/server/namespaces` leaves out the namespace, and its `total` does
+  not count it.
+- `GET /api/dustpan/v1/me/access/objects` answers `"all": true` and names the
+  namespace in `excluded.namespaces`. `all` covers every object except the
+  objects of the namespaces in that list.
+- The list of the deleted stacks and workspaces of the namespace holds none.
+
+The bootstrap administrator token is exempt, as it is for a request, unless the
+server runs with `--ip-allowlists-include-bootstrap`. From an address in the
+list, the namespace is in each list again.
+
+To find the namespaces that a list leaves out for your address, read your
+access:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://dustpan.example.com/api/dustpan/v1/me/access/objects?type=namespace"
+```
+
+```json
+{"type": "namespace", "action": "namespace:read", "all": true,
+ "excluded": {"namespaces": ["acme"]}, "objects": [], "total": 0, "nextPageToken": ""}
+```
+
 Three health probe paths are outside the installation list: `/health/live`,
 `/health/ready` and `/health/ready/<component>`. They answer from the state of
 the process, they do not authenticate a credential and they do not read a
@@ -241,12 +276,14 @@ namespaces that have a list, in one read of at most 1000 namespaces. This
 limit is a [code rule](../reference/code-rules.md#ip-allowlists): no grant or
 setting changes it, and the API does not show it yet.
 
-When more than 1000 namespaces have a list, the read fails with the error
+The server reads the namespaces that have a list for each list request of a
+principal whose grant covers every object, so that the list can leave out the
+namespaces that refuse the client address. When more than 1000 namespaces have
+a list, the read fails with the error
 `ipallow: too many namespaces have an IP allowlist`. The server fails closed:
-it does not cover every object. Once a list check calls the read, the server
-refuses a principal whose scope covers every object on every list while more
-than 1000 namespaces have a list. To end the refusal, delete the lists that you do not
-need until 1000 namespaces or fewer have a list.
+each list request of such a principal answers `500`, and the server log names
+the error. A request on one object still works. To end the refusal, delete the
+lists that you do not need until 1000 namespaces or fewer have a list.
 
 ## Errors
 

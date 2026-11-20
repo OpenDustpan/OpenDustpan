@@ -15,6 +15,13 @@ A grant on the namespace or on the installation puts the namespace in the
 list. A grant on a collection, a stack or a workspace does not list its
 namespace.
 
+When the IP allowlist feature is on, the list leaves out each namespace whose
+IP allowlist does not contain the client address. This applies to a grant on
+the installation and to an administrator too. Only the bootstrap administrator
+token is exempt, unless the server runs with
+`--ip-allowlists-include-bootstrap`. `total` leaves out the same namespaces.
+See [IP allowlists](../guides/ip-allowlists.md#what-a-list-shows).
+
 | Query value | Meaning |
 | --- | --- |
 | `limit` | The largest number of namespaces on the page, from 1 to 1000. The default is 100. |
