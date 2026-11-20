@@ -1,75 +1,108 @@
 ---
-version: 9
+version: 10
 ---
 
 Issue: #1157.
 
 ## Why
 
-**Persona: developer.** A developer runs the Pulumi CLI and OpenTofu against the server and must see one predictable approval wait when the namespace requires it, instead of an apply that skips review or blocks without a reason.
+**Persona: developer.** A developer starts an OpenTofu apply through the jobs API of a namespace that requires approval. The developer needs the job to wait for a second person, and to run only after that person approves. Today the server refuses the start of an apply, so no stored approval default takes effect on a live job.
 
 The user path this change must make work:
 
-1. **API.** Namespace administrator sets the approval default through the API and reads the docs page.
-2. **CLI.** Developer runs a Pulumi stack update and an OpenTofu workspace apply through the tool CLIs against the server.
-3. **API.** Developer sees approval wait, a second person approves, and the job continues.
-4. **Docs page.** Developer reads the docs page for the default, the wait state and the approve command.
+1. **API.** Namespace administrator sets the approval default (`PUT /api/dustpan/v1/namespaces/{namespace}/approval-default`) and reads the docs page.
+2. **API.** Developer starts an apply job (`POST /api/dustpan/v1/namespaces/{namespace}/jobs`). The plan phase runs, then the job waits in `awaiting-approval`.
+3. **API.** A second person approves (`POST .../jobs/{job_id}/approvals`) with the plan binding, and the apply phase dispatches.
+4. **Docs page.** Developer reads `docs/guides/approval-rules.md` for the default, the wait state and the approve command.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Apply refused for a principal with only plan rights. | 403 with the required action and the decision record. Run `GET /api/dustpan/v1/namespaces/{namespace}/approval-default` to read the default that requires approval. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-default` |
-| Job stopped by a deny gate at a job decision point. | Stop with the message of each deny and the record. Run `GET /api/dustpan/v1/namespaces/{namespace}/approval-rules` to read the rules and the record. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-rules` |
+| A default saved after the start adds an approval to a job that waits to dispatch. | The job goes to `awaiting-approval` and the reason names the new default. Read the default and the job. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-default` |
+| The approver sends the approval without the plan binding of the stored plan. | 409 with the reason. Read the plan in the job document and send its binding. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
 
-Evidence for the claims above:
+## What the change was and what main already does
 
-- Slice 1 stores approval defaults and rules and jobgate is tested but wired nowhere. Proof: Issue #1157 body: Slice 1 stores approval defaults and approval rules (REST routes) and has a `job.Decider` adapter (`pkg/gate/jobgate`) that is tested but wired nowhere, because no job service runs.
-- pkg/gate/jobgate implements job.Decider. Proof: rg -n -F --glob '!*_test.go' 'job.Decider' pkg internal cmd matches 4, first lines pkg/gate/jobgate/jobgate.go:39:// Decider is a job.Decider. It allows every start, and adds the approval gate
-- No live caller wires jobgate.Decider. Proof: rg -n -F --glob '!*_test.go' 'jobgate.Decider' pkg internal cmd matches 0 with empty first_lines
-- The change path exists as a package. Proof: Path pkg/gate/jobgate exists: true.
+The first version of this change said that no code wires `job.Decider`. That premise is false. Each fact below was checked on main (7a6c1125a, 20 Nov 2026) with its file and line.
+
+| Part of the first version | State on main | Proof |
+| --- | --- | --- |
+| Wire `jobgate.Decider` into the job service | DONE | `pkg/dustpan/jobservice.go:45` builds it with `jobgate.New`, and `jobservice.go:69` passes it as `Decider` to `job.NewService`. The call is in `pkg/job/service_start.go:417`. |
+| The default gives the phase that changes a gate | DONE | `pkg/gate/jobgate/jobgate.go:73` (`Decide`). Tests: `TestDecideGatesTheApplyPhase` (`jobgate_test.go:189`), `TestDecideFailsClosed` (`:426`), `TestDecideStoreErrorsRefuse` (`:479`). |
+| Apply with no default needs no approval | DONE | `TestDecideWithNoDefaultNeedsNoApproval` (`jobgate_test.go:152`). A plan and a drift check get no gate (`:380`, `:396`). |
+| A job with a gate waits in `awaiting-approval` and resumes on the last approval | DONE at the service | `TestStartGateOnFirstPhase` (`pkg/job/service_test.go:963`), `TestApproveRecordsTheVerdict` (`service_approve_test.go:154`), `testReconcileGate` (`jobtest/reconcile.go:245`). |
+| The wait and the signatures survive a restart | DONE | The gates and approvals are fields of the stored phase, and the store suites run `jobtest` (`jobtest/approve.go:163`, `jobtest/reconcile.go:245`). An approval wait holds no runner claim, so a lease loss does not touch it. |
+| A plan that went stale sends the job back to plan | DONE | `ErrPlanStale` (`pkg/job/record.go:492`), `EventReplan` (`pkg/job/state.go:117`), `docs/guides/approval-rules.md:39`. |
+| A principal without the action is refused | DONE at the service | `TestStartApplyAndDestroyNeedTheirActions` (`pkg/job/service_applydestroy_test.go:74`). The route side is owned by `planner-role-2`. |
+| A gate at change.propose or state.write stops a start and a claim | DONE as a refusal, not as an evaluation | `jobGates.Enforced` (`pkg/dustpan/jobservice.go:275`), `checkGates` (`pkg/job/service_start.go:370`), `gateRefusal` (`pkg/job/claimer.go:512`). The answer says the server "cannot evaluate it for a job yet" (`pkg/job/service.go:85`). |
+| **A start of an apply or a destroy** | **MISSING** | `checkPlanRequest` and `startsOnRunner` refuse every operation but a plan (`pkg/dustpan/jobservice.go:597`, `:622`). Test: `TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer` (`pkg/dustpan/jobservice_internal_test.go:531`). Docs: `docs/reference/jobs-api.md:8`. So `Decide` is reached with a plan only, and `Decide` gives a plan no gate. No approval default takes effect on a live job. |
+| **A recheck of the defaults before the apply phase dispatches** | **MISSING** | The gates of a job are stored at the start. `reconcile.go:372` reads only the stored gates. A default saved after the start changes nothing. |
+| **A removed default does not release a wait** | PARTLY | It holds by construction, because no code path removes a stored gate. No test names it. |
+| **The record of the decision names the policy** | **MISSING** | `Decision.PolicyVersion` is set (`jobgate.go:143`) and no code reads it: `rg -n 'PolicyVersion' --glob '*.go' pkg internal cmd` finds no reader in `pkg/job`. |
+| Docs and e2e | **MISSING** | `e2e/jobs_api_test.go:186` says the API starts plan jobs only. `docs/guides/approval-rules.md:16` says that a job that the CLI of the tool starts waits for no approval. |
+
+The first version also named two parts that main does not have and that this change does not need:
+
+- `internal/jobsvc`, `StartJob`, `ApproveJob` and `DispatchApply` do not exist. The job service is `pkg/job` (`Service.Start`, `Service.Approve`) and the dispatch is `Reconciler` (`pkg/job/reconcile.go`).
+- The real Pulumi CLI and the real OpenTofu CLI do not start a job through this API. They use their own APIs. The docs say that such a change waits for no approval (`docs/guides/approval-rules.md:16`).
+
+Proof of the first negative claim: `rg -n -F 'jobgate.New' --glob '!*_test.go' pkg internal cmd` finds `pkg/dustpan/jobservice.go:45`.
 
 ## What Changes
 
-- Job service evaluates stored approval defaults through jobgate.Decider at change.propose, change.planned and change.apply for Pulumi and OpenTofu jobs.
-- Applies with a requirement wait in approval wait and resume after approvals; applies with no default need no approval.
-- E2E proves the wait and resume path on both tools with decision records.
+- The jobs API accepts the operations `apply` and `destroy` for an OpenTofu workspace on a runner. The limit to OpenTofu is a delivery order, not a decision: `docs/reference/jobs-api.md` says that the server "does not accept an apply or a destroy yet", and no ADR or RFC forbids it (see the ADR check). Pulumi follows when a runner runs its plan step. The job runs its plan phase, waits for the approvals that the default names, and dispatches the apply phase after the last approval. A start that the server cannot run (another tool) keeps its refusal.
+- Before the reconcile dispatches a queued job, it reads the approval defaults again. A default that adds a requirement puts the job back in `awaiting-approval`. A removed default releases nothing.
+- The audit entry of the start names the policy version of the decision.
+- E2E drives a real OpenTofu CLI on a runner through plan, wait, approval and apply, with the docs commands.
+- `docs/guides/approval-rules.md` and `docs/reference/jobs-api.md` describe the live path.
 
 Out of scope:
 
-- New approval rule kinds or gate policy language
-- Console run page timeline and diff rendering
-- Pre-merge apply and pull request automation behavior
-- Stored plan hash binding beyond plan staleness reset
-- State.write, profile.save and profile.open evaluation
-- Job cancel and timeout while in approval wait (job service change)
-- Deleted unit while in approval wait (unit lifecycle change)
+- Evaluation of gates by the Cedar engine at change.propose, change.planned and change.apply, with deny, engine errors, facts, evaluate mode and the decision record of gate versions. Owner: `evaluate-gates-on-pulumi-jobs`. Until it lands, a start and a claim that an enforced gate covers stay refused.
+- More than one approval requirement, users and unit owners as approvers, and fresh authentication per approval. Owner: `several-approval-requirements-one-change`.
+- The 403 of a principal with only plan rights on the HTTP route. Owner: `planner-role-2`.
+- A Pulumi stack job on a runner. The docs say that no runner runs the Pulumi plan step yet. This change does not add it.
+- Console run page, state.write, profile.save and profile.open, cancel and timeout during a wait.
 
 Depends on:
 
-- add-job-service-routes-start-1
-- several-approval-requirements-one-change
-- gate-evaluation-must-apply-dev
+- `add-job-service-routes-start-freeze-manage`
+- `several-approval-requirements-one-change` only for the second requirement. One requirement works without it.
 
 ## Usability
 
-Where the path still costs the person time or surprises them:
-
-- A developer sees two tool flows with one wait word and one approve command.
-- The wait names the requirement, the approvers still needed and the decision record.
-- An apply that waits after a default changed surprises the developer; the wait names the new requirement and the record.
-
-## What main already does
-
-Each fact names its file, line and function on main. The change specifies only the difference.
-
-- pkg/gate/jobgate implements job.Decider and is wired nowhere (`pkg/gate/jobgate/jobgate.go:41`)
-- job.Decider port exists for the job service (`pkg/job/gate.go:440`)
-- jobgate Decider constructor and input shape live in jobgate (`pkg/gate/jobgate/jobgate.go:46`)
+- One wait word (`awaiting-approval`) and one approve route.
+- The wait names the default that causes it, and the person sees the plan binding to send in the job document.
+- An apply that waits after a default changed surprises the developer. The reason of the job names the new default.
 
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+**ADR 103: Job gates, actions and audit entries** (owner-tagged: the ADR records "The project owner decided" and "The owner approved the decisions of this ADR on 17 October 2026"; decision 12 was kept by the project manager for the owner).
+
+- Decisions that apply: 8 (changed by ADR 384, extended by ADR 138 and 213), 12 (changed by ADR 128).
+- Changed by: ADR 110, 126, 128, 138, 141, 142, 146, 148, 190, 212, 213, 222, 224, 225, 227, 299, 384 (the "Changed by" column of `docs/adr/INDEX.md`). Current rule: this ADR, with ADR 110, 126, 128, 138, 141, 142, 146, 148, 190, 212, 213, 222, 224, 225, 227, 299, 384.
+- Quote (decision 8): "| `unit:run-apply` | unit | Start a runner job that applies or refreshes. |"
+- Quote (decision 8): "| `unit:run-destroy` | unit | Start a runner job that destroys. |"
+- Quote (decision 12): "**Approve-first** is the default. Each phase that changes gets a confirmation gate (decision 2), with or without a policy."
+- Quote (decision 12): "A runner job whose phases change resources or state (`apply`, `destroy`, `refresh`) fails in the same way. A runner job that only plans starts in this mode, as in every mode." ("in the same way" is `ErrAgentDenied` in review-request mode.)
+- Quote (decision 12): "`job.CheckAgent` holds the rule at start, and a table-driven test checks it."
+- Effect: An apply or a destroy start needs `unit:run-apply` or `unit:run-destroy` on the unit. Once apply starts, `job.CheckAgent` applies the agent modes to it. `pkg/job/service_start.go:412` already calls it (`checkAgent`), and this change adds no other rule. ADR 128 changes decisions 2, 7, 9, 10 and 12 of this ADR for the agent reference. This change does not touch the agent block.
+- Conflict: none. The ADR names runner apply and destroy as jobs that the server starts.
+
+**ADR 125: Agent changes go through the job model as review requests or approve-first** (not owner-tagged in `docs/adr/INDEX.md`; a decision of the project manager for the owner).
+
+- Decisions that apply: the request table and `StartActions`. Changed by: ADR 128, 210, 299, 354. Current rule: this ADR, with ADR 128, 210, 299, 354.
+- Quote: "| apply or destroy or refresh, no code location, no mode | runner | | apply |"
+- Quote: "`StartActions(req, plan)` | `job.StartRequirements(spec, nil)` | `unit:write-back`, `unit:run-plan`, `unit:run-apply` or `unit:run-destroy`, never `namespace:break-freeze`"
+- Effect: The ADR already expects a runner apply or destroy with a confirmation gate on the apply phase. The start of a runner apply gives that row its first live case.
+- Conflict: none.
+
+**ADR 101: Two executors** (not owner-tagged). Decision 5, "Write-back does `apply` only", is about write-back jobs, and a runner job is not a write-back job. It does not bear on this change, so it is not cited further.
+
+The search `rg -i 'apply|destroy' docs/adr docs/rfc`, and the narrower `rg -i 'plan jobs only|plan-only|plans only|first tag'` over the same directories, finds no ADR or RFC that forbids a runner apply or destroy before the first tag. ADR 254 says the TFE-compatible API "serves speculative plans only. It serves no apply" (line 68). That limit is for remote runs through the TFE-compatible API, not for the jobs API.
 
 **ADR 222: One model for access, gates, approvals and facts** (owner-tagged: decision 2, 4, 8).
 
@@ -111,7 +144,9 @@ none
 
 Questions considered and answered:
 
-- Does any live job path already evaluate approval defaults? No. Issue #1157 states slice 1 stored approval defaults and approval rules and pkg/gate/jobgate is tested but wired nowhere because no job service runs; the rg proof shows job.Decider is implemented in pkg/gate/jobgate/jobgate.go with zero uses of jobgate.Decider outside it.
-- Which decision point must a running job evaluate? ADR 224 decisions 2 and 3 and ADR 222 decision 2 fix the points; this change evaluates at change.propose, change.planned and change.apply through the job service points that #899 and #968 provide, and leaves state.write, profile.save and profile.open to their own changes.
+- Is `job.Decider` wired? Yes. `rg -n -F 'jobgate.New' --glob '!*_test.go' pkg internal cmd` finds `pkg/dustpan/jobservice.go:45`. The first version said it is not.
+- Where does the recheck run? In `Reconciler`, which is the one place that dispatches a queued phase (`pkg/job/reconcile.go:372`). It already moves a queued job with a closed gate to `awaiting-approval`. ADR 224 decision 2 gives the recheck at `change.apply`, and "A recheck only adds" gives the removal rule.
+- Is a refusal of an enforced Cedar gate still right while this change lands? Yes. The start and the claim refuse a gate that nobody evaluates (`pkg/job/service_start.go:370`). This change does not change that.
+- Does the lift of the refusal need a security decision? No. The apply start keeps each existing check: the actions of the starter on the unit, the access limits, the gates guard, the freeze and the fence. The change adds no new way to start a job.
 
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+Rewritten on 20 Nov 2026 from the evidence above, replacing the factory draft of the first version. Every path and line was checked on main.

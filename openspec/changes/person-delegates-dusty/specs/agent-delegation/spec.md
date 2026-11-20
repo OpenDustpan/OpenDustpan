@@ -1,101 +1,129 @@
 ## ADDED Requirements
 
-### Requirement: agent-principal
+### Requirement: delegation-record
 
-When an administrator connects a model, the server SHALL make one agent principal with stable ID dusty of the NEW kind agent.
+The server SHALL store one delegation record for each delegation of a person to an agent principal, with the stable ID of the person, the stable ID of the agent, the mode, the expanded scope, the creator, the created time, the expiry, the client authentication and the audiences. The creator SHALL be the person.
 
-#### Scenario: dusty principal exists
-- **WHEN** an administrator connects a model
-- **THEN** the server returns one principal of the NEW kind agent with stable ID dusty
+#### Scenario: person creates a delegation to Dusty
+- **WHEN** a person in a console session sends a create request for the agent principal Dusty with the mode `propose`, one namespace and an expiry within the effective maximum
+- **THEN** the server stores one row with the stable IDs of the person, of the agent and of the namespace, the mode, the list of actions that the mode expanded to, the creator equal to the person, the created time, the expiry, the client authentication `server` and an empty list of audiences, and returns its ID
 
-### Requirement: create-delegation
+#### Scenario: scope is stored expanded
+- **WHEN** a later change redefines what the mode `propose` expands to
+- **THEN** a delegation that exists keeps its stored list of actions
 
-When a person sends CreateDelegation for dusty, the server SHALL store one delegation record with holder dusty, scope, creator and time.
+#### Scenario: all namespaces does not cover the installation
+- **WHEN** a person creates a delegation with all namespaces and `installation` false
+- **THEN** the stored scope does not cover an action whose object is the installation or a principal
 
-#### Scenario: person creates delegation
-- **WHEN** a person with namespace read on the scope namespace sends CreateDelegation for dusty with level look, suggest or operate and expiry within 30 days
-- **THEN** the server stores one row with holder dusty, creator equal to caller, scope namespace id, level, creator and time and returns its id with prefix dlg-
+#### Scenario: only a person delegates
+- **WHEN** a service principal, a workload or an agent sends a create request
+- **THEN** the server refuses it and stores no row
 
-### Requirement: create-delegation-refuses-bad-input
+### Requirement: delegation-needs-a-console-session
 
-When CreateDelegation carries an invalid level, scope, expiry or caller right, the server SHALL refuse the write with 422 or 403 and store no row.
+The server SHALL accept the create, renew and widen of a delegation only in a console session, and SHALL refuse an access token and a break-glass session.
 
-#### Scenario: bad level refused
-- **WHEN** the caller sends level admin
-- **THEN** the server answers 422 with the NEW error code delegation.invalid-level and stores no row
+#### Scenario: access token refused
+- **WHEN** a caller sends a create request with an access token
+- **THEN** the server answers 403 with the NEW error code `delegation.session-required` and stores no row
 
-#### Scenario: unknown namespace refused
-- **WHEN** the caller sends a scope namespace id that does not exist
-- **THEN** the server answers 422 with the NEW error code delegation.unknown-namespace and stores no row
+#### Scenario: break-glass session refused
+- **WHEN** a person in a break-glass session sends a create, renew or widen request
+- **THEN** the server answers 403 with the NEW error code `delegation.session-required` and changes no row
 
-#### Scenario: bad expiry refused
-- **WHEN** the caller sends an expiry in the past or more than 30 days after creation
-- **THEN** the server answers 422 with the NEW error code delegation.invalid-expiry and stores no row
+#### Scenario: agent refused
+- **WHEN** an agent principal sends a create, renew, widen or revoke request
+- **THEN** the server refuses it, changes no row and writes a denial entry
 
-#### Scenario: caller without membership refused
-- **WHEN** a caller without namespace read on the scope namespace sends CreateDelegation
-- **THEN** the server answers 403 with the NEW error code delegation.forbidden and stores no row
+### Requirement: delegation-lifetime-is-a-setting
 
-### Requirement: list-own-delegations
+The server SHALL take the default and the maximum lifetime of a delegation from an installation setting, SHALL show the effective values in the API, and SHALL write an audit entry when the setting changes. For the client type `server` the shipped default is 30 days and the shipped maximum is 90 days.
 
-When a person sends ListDelegations, the server SHALL return each delegation that names the person as creator.
+#### Scenario: default lifetime
+- **WHEN** a person creates a delegation to Dusty with no expiry
+- **THEN** the server stores an expiry 30 days after the created time
 
-#### Scenario: creator lists own rows
-- **WHEN** the creator sends ListDelegations
-- **THEN** the server returns the one row with holder dusty, live state, level, scope namespace id and expiry
+#### Scenario: expiry above the maximum
+- **WHEN** a person creates or renews a delegation with an expiry after the effective maximum
+- **THEN** the server answers 422 with the NEW error code `delegation.invalid-expiry`, names the maximum, and changes no row
 
-#### Scenario: empty list
-- **WHEN** a person with no delegation sends ListDelegations
-- **THEN** the server answers 200 with an empty list
+#### Scenario: expiry in the past
+- **WHEN** a person creates a delegation with an expiry before the created time
+- **THEN** the server answers 422 with the NEW error code `delegation.invalid-expiry` and stores no row
 
-#### Scenario: expired row stays visible
-- **WHEN** the creator lists after the expiry time
-- **THEN** the server returns the row with live state expired
+#### Scenario: effective values in the API
+- **WHEN** a person reads the lifetime settings
+- **THEN** the answer shows the default and the maximum of each client type and where each value comes from
 
-### Requirement: read-one-delegation
+### Requirement: delegation-renewal
 
-When a caller reads one delegation id, the server SHALL return the row to its creator or to an administrator with scope manage and answer 404 otherwise.
+The server SHALL renew a delegation under the same ID, with the same or a narrower scope, and SHALL write an audit entry for each renewal. The server SHALL NOT renew a delegation by itself.
 
-#### Scenario: creator reads own row
-- **WHEN** the creator reads an own delegation id
-- **THEN** the server returns the row with holder dusty, scope, creator, time, level and live state
+#### Scenario: person renews
+- **WHEN** a person in a console session renews a live delegation with an expiry within the effective maximum
+- **THEN** the row keeps its ID, the expiry and the time of the last renewal change, and one audit entry names the renewal
 
-#### Scenario: unknown id
-- **WHEN** any caller reads an unknown delegation id
-- **THEN** the server answers 404 with the NEW error code delegation.not-found
+#### Scenario: wider scope refused
+- **WHEN** a person renews a delegation with a scope wider than the stored scope
+- **THEN** the server refuses the request and changes no row
 
-#### Scenario: other creator hidden
-- **WHEN** a plain member reads a delegation id of another creator
-- **THEN** the server answers 404 with the NEW error code delegation.not-found
+#### Scenario: no automatic renewal
+- **WHEN** the expiry passes and nobody renews
+- **THEN** the delegation ends with the cause `expired` and no renewal is made
 
-### Requirement: list-by-namespace
+### Requirement: delegation-ends-are-audited
 
-When a caller with namespace manage sends the namespace delegation list, the server SHALL return each delegation in that namespace.
+The server SHALL end a delegation when the person revokes it, it expires, the agent is disabled or deleted, or the person is disabled, deleted, removed by SCIM or terminated by the identity provider. Each end SHALL write one audit entry with the cause.
 
-#### Scenario: administrator lists namespace rows
-- **WHEN** a caller with namespace manage on the namespace sends the namespace list
-- **THEN** the server returns each delegation whose scope is that namespace id
+#### Scenario: person revokes
+- **WHEN** the person sends a revoke request for a live delegation
+- **THEN** the row gets its end time and the cause `revoked`, and one audit entry names the delegation and the revoker
 
-#### Scenario: member refused
-- **WHEN** a caller without namespace manage sends the namespace list
-- **THEN** the server answers 403 with the NEW error code delegation.forbidden
+#### Scenario: expiry ends the delegation
+- **WHEN** the expiry passes
+- **THEN** `Resolve` refuses the delegation with the cause `expired` and one audit entry names the cause
 
-### Requirement: revoke-delegation
+#### Scenario: agent disabled or deleted
+- **WHEN** an administrator disables or deletes the agent principal
+- **THEN** each live delegation to it ends with the cause `agent-disabled` or `agent-deleted`, and each end writes one audit entry
 
-When an allowed revoker with a live credential sends RevokeDelegation, the server SHALL mark the delegation revoked.
-
-#### Scenario: creator revokes own row
-- **WHEN** the creator with a live credential sends RevokeDelegation with no extra fresh step
-- **THEN** the server marks the row revoked and writes an audit entry that names holder dusty, creator and revoker
-
-#### Scenario: emergency revoke by administrator
-- **WHEN** a caller with namespace manage on the scope sends RevokeDelegation for a row of another creator with a live credential and no extra fresh step
-- **THEN** the server marks the row revoked and writes an audit entry that names the revoker
+#### Scenario: person leaves
+- **WHEN** the person is disabled, deleted, removed by SCIM or terminated by the identity provider
+- **THEN** each live delegation of the person ends with the matching cause, and each end writes one audit entry
 
 #### Scenario: second revoke is idempotent
-- **WHEN** any allowed revoker revokes an already revoked row
-- **THEN** the server answers success with no further state change
+- **WHEN** an allowed caller revokes a delegation that is already ended
+- **THEN** the server answers success, keeps the first cause and writes no second entry
 
-#### Scenario: unknown id on revoke
-- **WHEN** a caller revokes an unknown delegation id
-- **THEN** the server answers 404 with the NEW error code delegation.not-found
+### Requirement: delegation-list-and-read
+
+The server SHALL return to a person the delegations of that person, and SHALL return every delegation to a caller with `server:manage-access` on the installation.
+
+#### Scenario: person lists own delegations
+- **WHEN** a person lists delegations
+- **THEN** the server returns only the rows of that person, each with its live state, its expiry and the cause of its end where it ended
+
+#### Scenario: empty list
+- **WHEN** a person with no delegation lists delegations
+- **THEN** the server answers 200 with an empty list
+
+#### Scenario: row of another person hidden
+- **WHEN** a person reads, renews or revokes the row of another person with no `server:manage-access`
+- **THEN** the server answers 404 with the NEW error code `delegation.not-found` and changes no row
+
+#### Scenario: administrator lists and revokes
+- **WHEN** a caller with `server:manage-access` on the installation lists or revokes a delegation of another person
+- **THEN** the server returns every delegation, or ends the row with the cause `revoked` and one audit entry that names the revoker
+
+#### Scenario: unknown ID
+- **WHEN** any caller reads or revokes an unknown ID
+- **THEN** the server answers 404 with the NEW error code `delegation.not-found`
+
+### Requirement: delegation-writes-need-the-audit-entry
+
+The server SHALL write the audit entry of a create, a renew and an end in the same transaction as the write, and SHALL fail the write when the entry cannot be written.
+
+#### Scenario: append fails
+- **WHEN** the audit append of a create, a renew or an end fails
+- **THEN** the row does not change and the server answers an error with no partial state

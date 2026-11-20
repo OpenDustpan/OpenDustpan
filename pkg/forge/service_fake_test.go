@@ -625,7 +625,7 @@ func (m *memStore) ConfirmRotation(
 		return forge.Registration{}, forge.ErrNoRegistration
 	case ifVersion > 0 && m.reg.Version != ifVersion:
 		return forge.Registration{}, forge.ErrVersionConflict
-	case m.reg.OldEventSecretEndsAt.IsZero() && m.reg.OldEventSecretSetID == "" && len(m.reg.OldSealedEventSecret) == 0:
+	case !m.reg.OldEventSecretEndsAt.After(e.At):
 		return forge.Registration{}, forge.ErrNoRotation
 	}
 

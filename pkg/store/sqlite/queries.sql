@@ -4428,11 +4428,12 @@ SET app_id = sqlc.arg(app_id), base_url = sqlc.arg(base_url), sealed_key = sqlc.
 WHERE kind = sqlc.arg(kind) AND (CAST(sqlc.arg(if_version) AS INTEGER) = 0 OR version = CAST(sqlc.arg(if_version) AS INTEGER));
 
 -- name: ConfirmGitHostRotation :execrows
--- Ends the window of the old event secret. It writes only while a window is open.
+-- Ends the window of the old event secret. It writes only while a window is open:
+-- the window ends after the time of the write, which is the updated_at_ms argument.
 UPDATE git_host_app_registrations
 SET old_event_secret_ends_at_ms = NULL, old_event_secret_set_id = NULL, old_sealed_event_secret = NULL,
     version = version + 1, updated_at_ms = MAX(CAST(sqlc.arg(updated_at_ms) AS INTEGER), git_host_app_registrations.created_at_ms)
-WHERE kind = sqlc.arg(kind) AND old_event_secret_ends_at_ms IS NOT NULL AND (CAST(sqlc.arg(if_version) AS INTEGER) = 0 OR version = CAST(sqlc.arg(if_version) AS INTEGER));
+WHERE kind = sqlc.arg(kind) AND old_event_secret_ends_at_ms > CAST(sqlc.arg(updated_at_ms) AS INTEGER) AND (CAST(sqlc.arg(if_version) AS INTEGER) = 0 OR version = CAST(sqlc.arg(if_version) AS INTEGER));
 
 -- name: DeleteGitHostRegistration :execrows
 DELETE FROM git_host_app_registrations
