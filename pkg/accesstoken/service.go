@@ -277,8 +277,9 @@ func (s *Service) Get(ctx context.Context, id string) (Token, error) {
 // and its principal still exists and is not disabled. For a service token it
 // also checks that the maker still has the act-as path to the principal, as
 // the check at the use of the token does, with the same revocation and audit
-// entry. Otherwise it answers an error that wraps
-// identity.ErrUnauthenticated, or the store error. It records no use of the
+// entry. A token that does not work answers an error that wraps
+// identity.ErrUnauthenticated. An error of a store, or of a maker check that
+// cannot decide, does not wrap it: the token is refused and kept. It records no use of the
 // token: an update checks its token on each lease request.
 func (s *Service) CheckActive(ctx context.Context, id string) error {
 	t, err := s.store.GetToken(ctx, id)
@@ -312,7 +313,7 @@ func (s *Service) CheckActive(ctx context.Context, id string) error {
 	// so that a path that ends with no such run, during an update that the
 	// token started, never lets the update keep its lease. It does not rely
 	// on those checks or on the lease check of the update service.
-	return s.checkMakerAtUse(ctx, t)
+	return s.checkMakerOfLease(ctx, t)
 }
 
 // List returns one page of tokens, newest first.

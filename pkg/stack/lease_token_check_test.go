@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -21,11 +22,14 @@ import (
 // act-as path during an update. It keeps the ID of the last token it checked.
 type switchChecker struct {
 	refuse atomic.Bool
+	calls  atomic.Int64
 	mu     sync.Mutex
 	id     string
 }
 
 func (c *switchChecker) CheckActive(_ context.Context, id string) error {
+	c.calls.Add(1)
+
 	c.mu.Lock()
 	c.id = id
 	c.mu.Unlock()
@@ -129,7 +133,7 @@ func TestLeaseRequestsRefuseWhenTheTokenCheckFails(t *testing.T) {
 			t.Parallel()
 
 			f := newUpdates(t)
-			checker := &switchChecker{refuse: atomic.Bool{}, mu: sync.Mutex{}, id: ""}
+			checker := &switchChecker{refuse: atomic.Bool{}, calls: atomic.Int64{}, mu: sync.Mutex{}, id: ""}
 			svc := f.withTokens(t, checker)
 			s := f.startByToken(t, svc)
 
@@ -197,5 +201,43 @@ func TestLeaseRequestsRefuseATokenUpdateWithNoChecker(t *testing.T) {
 	_, err := f.svc.Renew(t.Context(), f.ref, s.Update.ID, s.Token, time.Minute)
 	if !errors.Is(err, stack.ErrAccessTokenUnchecked) {
 		t.Fatalf("renew with no checker = %v, want ErrAccessTokenUnchecked", err)
+	}
+}
+
+// TestWrongLeaseNeverReachesTheTokenCheck sends each lease request with a
+// lease token that is not the one of the update, to a service whose token
+// check refuses. The check can revoke a token and write an audit entry, so it
+// must not run: each request answers ErrLeaseInvalid, the answer of a lease
+// that is not the one of the update with any token state, and the checker
+// receives no call.
+func TestWrongLeaseNeverReachesTheTokenCheck(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range leaseRequests() {
+		t.Run(r.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdates(t)
+			checker := &switchChecker{refuse: atomic.Bool{}, calls: atomic.Int64{}, mu: sync.Mutex{}, id: ""}
+			svc := f.withTokens(t, checker)
+			s := f.startByToken(t, svc)
+
+			foreign, err := token.New()
+			if err != nil {
+				t.Fatalf("new token: %v", err)
+			}
+
+			s.Token = foreign
+
+			checker.refuse.Store(true)
+
+			if err := r.do(svc, f, s); !errors.Is(err, stack.ErrLeaseInvalid) {
+				t.Fatalf("%s with a wrong lease = %v, want ErrLeaseInvalid", r.name, err)
+			}
+
+			if got := checker.calls.Load(); got != 0 {
+				t.Fatalf("the token check ran %d times for a wrong lease, want 0", got)
+			}
+		})
 	}
 }

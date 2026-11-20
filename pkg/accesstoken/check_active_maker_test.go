@@ -26,6 +26,21 @@ func (m *switchMakers) CanActAs(context.Context, string, string) (bool, error) {
 	return m.can.Load(), nil
 }
 
+// activeCase is one row of the table of TestCheckActiveChecksTheMaker.
+type activeCase struct {
+	name        string
+	can         bool
+	err         error
+	personal    bool
+	wantRefused bool
+	// wantUnauth is true when the refusal wraps ErrUnauthenticated. A
+	// checker that cannot decide refuses with its own error: the update
+	// that holds the token gets a server error, not the answer of a
+	// revoked token.
+	wantUnauth  bool
+	wantRevoked bool
+}
+
 // TestCheckActiveChecksTheMaker sends the hostile cases of the lease check of
 // a service token to CheckActive, the same check that runs at the use of the
 // token. A refusal wraps ErrUnauthenticated. A maker with no path, and a check
@@ -34,23 +49,27 @@ func (m *switchMakers) CanActAs(context.Context, string, string) (bool, error) {
 func TestCheckActiveChecksTheMaker(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		can         bool
-		err         error
-		personal    bool
-		wantRefused bool
-		wantRevoked bool
-	}{
-		{name: "maker keeps the path", can: true, err: nil, personal: false, wantRefused: false, wantRevoked: false},
-		{name: "maker lost the path", can: false, err: nil, personal: false, wantRefused: true, wantRevoked: true},
+	tests := []activeCase{
+		{
+			name:        "maker keeps the path",
+			can:         true,
+			err:         nil,
+			personal:    false,
+			wantRefused: false,
+			wantUnauth:  false,
+			wantRevoked: false,
+		},
+		{
+			name: "maker lost the path", can: false, err: nil, personal: false,
+			wantRefused: true, wantUnauth: true, wantRevoked: true,
+		},
 		{
 			name: "checker cannot decide", can: true, err: errDecide, personal: false,
-			wantRefused: true, wantRevoked: false,
+			wantRefused: true, wantUnauth: false, wantRevoked: false,
 		},
 		{
 			name: "personal token needs no maker", can: false, err: nil, personal: true,
-			wantRefused: false, wantRevoked: false,
+			wantRefused: false, wantUnauth: false, wantRevoked: false,
 		},
 	}
 
@@ -70,9 +89,7 @@ func TestCheckActiveChecksTheMaker(t *testing.T) {
 
 			err := f.checked.CheckActive(t.Context(), id)
 
-			if tc.wantRefused != errors.Is(err, identity.ErrUnauthenticated) {
-				t.Fatalf("CheckActive = %v, want refused = %v", err, tc.wantRefused)
-			}
+			wantActiveAnswer(t, &tc, err)
 
 			if tc.wantRevoked {
 				wantRevokedAtUse(t, &f, id)
@@ -80,6 +97,23 @@ func TestCheckActiveChecksTheMaker(t *testing.T) {
 				t.Fatal("the token is revoked")
 			}
 		})
+	}
+}
+
+// wantActiveAnswer fails the test unless err is the answer that tc wants.
+func wantActiveAnswer(t *testing.T, tc *activeCase, err error) {
+	t.Helper()
+
+	if tc.wantRefused != (err != nil) {
+		t.Fatalf("CheckActive = %v, want refused = %v", err, tc.wantRefused)
+	}
+
+	if tc.wantUnauth != errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("CheckActive = %v, want ErrUnauthenticated = %v", err, tc.wantUnauth)
+	}
+
+	if tc.err != nil && !errors.Is(err, tc.err) {
+		t.Fatalf("CheckActive = %v, want the error of the checker", err)
 	}
 }
 

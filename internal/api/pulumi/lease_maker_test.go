@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -23,11 +24,28 @@ import (
 // makerToken is the ID of the service token that the maker made.
 const makerToken = "tok-ci-maker"
 
+// makerAt is the fixed time of the rows of these tests, and the clock of the
+// token service. It is far in the future, so the token never expires while the
+// tests run, and no test reads the wall clock.
+func makerAt() time.Time {
+	return time.Date(2030, time.January, 2, 12, 0, 0, 0, time.UTC)
+}
+
+// errMakerStore is the error of a maker check that cannot decide.
+var errMakerStore = errors.New("the grant store is not available")
+
 // switchMaker answers the act-as path of the maker. A test turns it off as a
 // direct change in the store does: no run of RevokeLostMakers follows it.
-type switchMaker struct{ can atomic.Bool }
+type switchMaker struct {
+	can  atomic.Bool
+	fail atomic.Bool
+}
 
 func (m *switchMaker) CanActAs(context.Context, string, string) (bool, error) {
+	if m.fail.Load() {
+		return false, errMakerStore
+	}
+
 	return m.can.Load(), nil
 }
 
@@ -53,7 +71,7 @@ func seedMakerToken(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
 	ctx := t.Context()
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := makerAt()
 
 	ci := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-ci", Subject: "ci-deploy",
@@ -161,7 +179,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerLostThePath(t *testing.T) {
 
 	seedMakerToken(t, st)
 
-	makers := &switchMaker{can: atomic.Bool{}}
+	makers := &switchMaker{can: atomic.Bool{}, fail: atomic.Bool{}}
 	makers.can.Store(true)
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
@@ -180,7 +198,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerLostThePath(t *testing.T) {
 			Units:       nil,
 		},
 		Logger: nil,
-		Now:    time.Now,
+		Now:    makerAt,
 		NewID:  nil,
 	})
 	if err != nil {

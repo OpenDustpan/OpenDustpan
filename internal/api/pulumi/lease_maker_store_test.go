@@ -164,7 +164,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerRowIsGone(t *testing.T) {
 			t.Parallel()
 
 			st := openMakerStore(t)
-			at := time.Now().UTC().Truncate(time.Millisecond)
+			at := makerAt()
 
 			seedMakerToken(t, st)
 			seedMakerPerson(t, st, at)
@@ -172,7 +172,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerRowIsGone(t *testing.T) {
 
 			svc, err := accesstoken.NewService(accesstoken.Config{
 				Makers: makerChecker(t, st), TempAdmins: nil, Store: st, Principals: st, Freshness: nil,
-				Authorizer: nil, Logger: nil, Now: time.Now, NewID: nil,
+				Authorizer: nil, Logger: nil, Now: makerAt, NewID: nil,
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 				},
