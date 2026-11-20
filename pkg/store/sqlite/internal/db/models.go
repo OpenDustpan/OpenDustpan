@@ -221,7 +221,7 @@ type DurableOperation struct {
 	State               string
 	Attempt             int64
 	Expiries            int64
-	DeadlineReleases int64
+	DeadlineReleases    int64
 	Failures            int64
 	LastError           string
 	ClaimOwner          sql.NullString
