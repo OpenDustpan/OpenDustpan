@@ -1,6 +1,8 @@
 package backup
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +53,14 @@ func TestSettingAuditEntryHostileRecords(t *testing.T) {
 
 	for _, tc := range []entryCase{
 		noEntry("a record that does not decode", []byte(corrupt)),
+		noEntry("an old value with a line break", takenRecord("true\r\nforged line", "true", false)),
+		noEntry("a new value with a line break", takenRecord("false", "true\r\nforged line", false)),
+		noEntry("an old value of 1 MiB", takenRecord(strings.Repeat("A", 1<<20), "true", false)),
+		noEntry("a new value of 1 MiB", takenRecord("false", strings.Repeat("A", 1<<20), false)),
+		noEntry("an old value that is not lower case", takenRecord("TRUE", "true", false)),
+		noEntry("a new value that is not lower case", takenRecord("false", "TRUE", false)),
+		noEntry("an old value that is the unknown marker", takenRecord(SettingValueUnknown, "true", false)),
+		noEntry("a new value that is the unknown marker", takenRecord("false", SettingValueUnknown, false)),
 		noEntry("a kept row with a new value in the record", []byte(keptRecord)),
 		noEntry("the static layer sets the key", takenRecord("false", "true", true)),
 		noEntry("the static layer sets the key and the old value is unknown", takenRecord("", "true", true)),
@@ -142,6 +152,115 @@ func TestSettingModeTextNamesTheNewValue(t *testing.T) {
 
 		if got := settingModeText(d); got != tc.want {
 			t.Errorf("%s: settingModeText = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// hostileTexts are the texts that a step record, which a restore of another
+// version or a person can change, must never put in an audit entry or a log
+// line: a line break, 1 MiB, a value that is not lower case, and the marker of
+// an unknown value.
+func hostileTexts() map[string]string {
+	return map[string]string{
+		"a line break":       "true\r\nforged line",
+		"1 MiB":              strings.Repeat("A", 1<<20),
+		"not lower case":     "TRUE",
+		"the unknown marker": SettingValueUnknown,
+	}
+}
+
+// TestSettingChangeEntryHostileDecisions sends a decision with hostile text
+// straight to settingChangeEntry, as if the decoder and the store did not
+// check it. Only the check of the service layer decides: it must fail closed
+// and write no entry. The test fails when that check is removed.
+func TestSettingChangeEntryHostileDecisions(t *testing.T) {
+	t.Parallel()
+
+	svc := new(RestoreService)
+	svc.now = func() time.Time { return time.UnixMilli(1_700_000_000_000) }
+
+	for name, text := range hostileTexts() {
+		for _, field := range []string{"old", "new"} {
+			t.Run(field+" value with "+name, func(t *testing.T) {
+				t.Parallel()
+
+				d := SwapDecision{
+					KeepAccessTables: false, Widened: false, KeepSettingKeys: nil,
+					SettingBefore: "false", SettingAfter: "true", SettingStatic: false,
+				}
+
+				if field == "old" {
+					d.SettingBefore = text
+				} else {
+					d.SettingAfter = text
+				}
+
+				var in restoreInput
+
+				if entry, ok := svc.settingChangeEntry(d, in); ok {
+					t.Fatalf(
+						"settingChangeEntry wrote %d bytes of entry for a hostile %s value",
+						len(entry.Object),
+						field,
+					)
+				}
+			})
+		}
+	}
+}
+
+// TestSettingModeTextHostileDecisions sends a decision with hostile text
+// straight to settingModeText. The text of the restore entry and of the log
+// line must hold none of it. The test fails when the check is removed.
+func TestSettingModeTextHostileDecisions(t *testing.T) {
+	t.Parallel()
+
+	for name, text := range hostileTexts() {
+		for _, field := range []string{"old", "new"} {
+			t.Run(field+" value with "+name, func(t *testing.T) {
+				t.Parallel()
+
+				d := SwapDecision{
+					KeepAccessTables: false, Widened: false, KeepSettingKeys: nil,
+					SettingBefore: "false", SettingAfter: "true", SettingStatic: false,
+				}
+
+				if field == "old" {
+					d.SettingBefore = text
+				} else {
+					d.SettingAfter = text
+				}
+
+				got := settingModeText(d)
+				if strings.ContainsAny(got, "\r\n") || len(got) > 512 || strings.Contains(got, text) {
+					t.Fatalf("settingModeText holds the hostile %s value: %d bytes", field, len(got))
+				}
+			})
+		}
+	}
+}
+
+// TestDecodeRestoreSwapDecisionHostileTexts proves the decoder, alone, refuses
+// a record with hostile text in either value of the setting, and accepts the
+// known texts.
+func TestDecodeRestoreSwapDecisionHostileTexts(t *testing.T) {
+	t.Parallel()
+
+	for name, text := range hostileTexts() {
+		for _, record := range [][]byte{takenRecord(text, "true", false), takenRecord("false", text, false)} {
+			if _, err := DecodeRestoreSwapDecision(record); !errors.Is(err, ErrCorrupt) {
+				t.Errorf("decode of a record with %s = %v, want ErrCorrupt", name, err)
+			}
+
+			if _, err := DecodeRestoreSwap(record); !errors.Is(err, ErrCorrupt) {
+				t.Errorf("decode of the counts of a record with %s = %v, want ErrCorrupt", name, err)
+			}
+		}
+	}
+
+	for _, text := range []string{"", "true", "false"} {
+		if _, err := DecodeRestoreSwapDecision(takenRecord(text, text, false)); err != nil {
+			t.Errorf("decode of a record with %q = %v, want nil", text, err)
 		}
 	}
 }

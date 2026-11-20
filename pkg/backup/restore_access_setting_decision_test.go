@@ -318,6 +318,67 @@ func TestRestoreSettingChangeEntryWhenTheLiveValueWasNotRead(t *testing.T) {
 	}
 }
 
+// restoreEntryObjects returns the object text of each restore entry that the
+// restore appended.
+func restoreEntryObjects(setup *restoreServiceSetup) []string {
+	var found []string
+
+	appends := setup.live.devSnapshot().appends
+	for i := range appends {
+		if appends[i].Action == string(identity.ActionServerRestore) {
+			found = append(found, appends[i].Object)
+		}
+	}
+
+	return found
+}
+
+// TestRestoreSettingChangeEntryRecordsTheEffectiveLiveValue is the hostile
+// table of the live value that the reader gives. The decision records the
+// effective value, so an empty text, a text that the declaration refuses, one
+// with a line break and one of 1 MiB all give the old value false in the change
+// entry, and the restore still writes its own entry, which holds no line break.
+// An empty text from a reader that answers without an error is a value that
+// was read, not an unknown one. The test fails when the source of the decision
+// records the raw text.
+func TestRestoreSettingChangeEntryRecordsTheEffectiveLiveValue(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "an empty text", text: ""},
+		{name: "a text that is not lower case", text: "TRUE"},
+		{name: "a text with a line break", text: "true\r\nforged line"},
+		{name: "a text of 1 MiB", text: strings.Repeat("A", 1<<20)},
+		{name: "the unknown marker", text: backup.SettingValueUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			read := fixedSetting(tc.text)
+			setup := newRestoreServiceSetupWith(t, func(cfg *backup.RestoreConfig) { cfg.AccessSetting = read })
+			setup.live.backupSetting = "true"
+
+			runStartedRestore(t, setup, false)
+
+			checkSettingChange(t, settingChangeEntries(setup), "false", "true")
+
+			objects := restoreEntryObjects(setup)
+			if len(objects) == 0 {
+				t.Fatal("the restore wrote no restore entry")
+			}
+
+			for _, object := range objects {
+				if strings.ContainsAny(object, "\r\n") || len(object) > 2048 {
+					t.Fatalf("the restore entry holds raw text: %d bytes", len(object))
+				}
+			}
+		})
+	}
+}
+
 // TestRestoreSwapRecordHostileDecode proves the decoder of the swap record
 // refuses a record that shows a swap that took the restore setting while it
 // kept or widened the access tables, and a record that is both kept and
