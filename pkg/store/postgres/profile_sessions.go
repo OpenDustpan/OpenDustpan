@@ -37,7 +37,7 @@ func (p *ProfileSessions) Put(
 	// value skips it. This check stays so that a store never writes a row of
 	// the zero value.
 	if sess.ID() == "" || sess.Namespace() != fence.Namespace {
-		return fmt.Errorf("%w: a session is made by NewSession and belongs to the namespace of the fence",
+		return fmt.Errorf("%w: the session is not valid for the namespace of the fence",
 			profile.ErrInvalid)
 	}
 
@@ -114,10 +114,15 @@ func (p *ProfileSessions) Get(
 		return profile.Session{}, err
 	}
 
-	var row db.ProfileOpenSession
+	var (
+		nsID string
+		row  db.ProfileOpenSession
+	)
 
 	err := p.store.inSnapshotTx(ctx, func(q *db.Queries) error {
-		nsID, err := profileNamespaceID(ctx, q, ns)
+		var err error
+
+		nsID, err = profileNamespaceID(ctx, q, ns)
 		if err != nil {
 			return err
 		}
@@ -133,17 +138,28 @@ func (p *ProfileSessions) Get(
 			return fmt.Errorf("select open session: %w", err)
 		}
 
-		// Defense in depth: the query holds the namespace. This check stays
-		// so that a row of another namespace never reaches a caller if the
-		// query changes.
-		if row.NamespaceID != nsID {
-			return profile.ErrNotFound
-		}
-
 		return nil
 	})
 	if err != nil {
 		return profile.Session{}, err
+	}
+
+	return sessionFromRow(ns, nsID, id, owner, now, row)
+}
+
+// sessionFromRow decodes the row that the query of Get found, and checks it
+// against the key of the read. A row of another namespace, of another owner or
+// of an ended session is profile.ErrNotFound. A row that fails the rules of
+// profile.NewSession is an error that wraps profile.ErrInvalid.
+func sessionFromRow(
+	ns namespace.Name, nsID, id string, owner profile.SessionOwner, now time.Time, row db.ProfileOpenSession,
+) (profile.Session, error) {
+	// Defense in depth: the query holds the namespace, the ID, the owner and
+	// the clock. These checks stay so that a row of another namespace, of
+	// another owner or of an ended session never reaches a caller if the
+	// query changes.
+	if row.NamespaceID != nsID {
+		return profile.Session{}, profile.ErrNotFound
 	}
 
 	sess, err := codec.ProfileSessionFromRow(ns, codec.ProfileOpenSessionRow(row))
@@ -151,9 +167,6 @@ func (p *ProfileSessions) Get(
 		return profile.Session{}, err
 	}
 
-	// Defense in depth: the query holds the namespace, the ID, the owner and
-	// the clock. This check stays so that a store never answers a session of
-	// another owner if the query changes.
 	if sess.ID() != id || sess.Owner() != owner || !sess.Live(now) {
 		return profile.Session{}, profile.ErrNotFound
 	}
@@ -161,16 +174,17 @@ func (p *ProfileSessions) Get(
 	return sess, nil
 }
 
-// Delete implements profile.Sessions.
+// Delete implements profile.Sessions. The namespace is the namespace of the
+// fence.
 func (p *ProfileSessions) Delete(
-	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner,
+	ctx context.Context, id string, owner profile.SessionOwner, fence namespace.Fence, e []audit.Entry,
 ) error {
 	if err := checkSessionKey(id, owner); err != nil {
 		return err
 	}
 
-	return p.store.inTx(ctx, func(q *db.Queries) error {
-		nsID, err := profileNamespaceID(ctx, q, ns)
+	return p.store.inAuditedWrite(ctx, fence, e, func() any { return nil }, func(q *db.Queries) error {
+		nsID, err := profileNamespaceID(ctx, q, fence.Namespace)
 		if err != nil {
 			return err
 		}

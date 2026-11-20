@@ -456,16 +456,23 @@ func (s memSessions) Get(
 	return *sess, nil
 }
 
-func (s memSessions) Delete(_ context.Context, ns namespace.Name, id string, owner profile.SessionOwner) error {
+func (s memSessions) Delete(
+	_ context.Context, id string, owner profile.SessionOwner, f namespace.Fence, es []audit.Entry,
+) error {
 	s.m.mu.Lock()
 	defer s.m.mu.Unlock()
 
-	sess, ok := s.m.sessions[ns][id]
+	if err := s.m.begin(f, es); err != nil {
+		return err
+	}
+
+	sess, ok := s.m.sessions[f.Namespace][id]
 	if !ok || sess.Owner() != owner {
 		return profile.ErrNotFound
 	}
 
-	delete(s.m.sessions[ns], id)
+	delete(s.m.sessions[f.Namespace], id)
+	s.m.entries[f.Namespace] = append(s.m.entries[f.Namespace], es...)
 
 	return nil
 }

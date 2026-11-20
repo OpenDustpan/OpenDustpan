@@ -294,12 +294,21 @@ type Sessions interface {
 	// Get reads the live session id of ns that owner opened, at now.
 	// ErrNotFound otherwise, also for an id that is not a session ID.
 	Get(ctx context.Context, ns namespace.Name, id string, owner SessionOwner, now time.Time) (Session, error)
-	// Delete removes the session id of ns that owner opened. It returns
-	// ErrNotFound for a session that does not exist, and removes a session
-	// that ended and that a sweep has not removed yet.
-	Delete(ctx context.Context, ns namespace.Name, id string, owner SessionOwner) error
+	// Delete removes the session id that owner opened in the namespace of
+	// fence, ended or not, and appends each entry of e in the same
+	// transaction, as Put does. It returns ErrNotFound for an id that is not
+	// a session ID, for an owner that cannot own a session and for a session
+	// that does not exist, belongs to another owner or is in another
+	// namespace. It returns namespace.ErrFenced for a stale fence,
+	// namespace.ErrNotFound for an unknown namespace, audit.ErrInvalidEntry
+	// for an entry that fails validation or names another namespace, and
+	// ErrInvalid for an empty slice of entries. It changes nothing on an
+	// error, and writes no entry for a session that it does not find.
+	Delete(ctx context.Context, id string, owner SessionOwner, fence namespace.Fence, e []audit.Entry) error
 	// Sweep deletes at most limit sessions that ended at or before now, in
 	// any namespace, and returns how many it deleted. ErrInvalid for a
-	// limit below 1.
+	// limit below 1. A sweep takes no fence and writes no audit entry: it
+	// removes only rows that no read answers, and the open that made each row
+	// wrote its entry. The sweep of the replay records works the same way.
 	Sweep(ctx context.Context, now time.Time, limit int) (int, error)
 }

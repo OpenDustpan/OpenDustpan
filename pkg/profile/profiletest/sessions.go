@@ -52,7 +52,11 @@ func RunSessions(t *testing.T, newStore Factory) {
 		{"a put of a root profile that is not live is not found", testSessionRootNotLive},
 		{"a failed audit write leaves no session", testSessionAuditRollsBack},
 		{"a put appends every entry in order", testSessionAuditMany},
+		{"a put of a session of another namespace than the fence is refused", testSessionPutOtherFence},
 		{"delete of another owner leaves the row", testSessionDeleteOtherOwner},
+		{"delete with an owner that cannot own a session is not found", testSessionDeleteInvalidOwner},
+		{"a stale fence refuses the delete, with the row and no entry", testSessionDeleteFenced},
+		{"delete writes its entry and a session that is not found writes none", testSessionDeleteAudit},
 		{"delete removes the session of its owner, ended or not", testSessionDelete},
 		{"sweep with a limit below 1 is invalid", testSessionSweepInvalid},
 		{"sweep deletes the ended sessions and keeps the live ones", testSessionSweep},
@@ -74,8 +78,9 @@ const maxOwnerSessions = profile.MaxLiveSessions
 // Times that the cases read at, after the end of a session of one minute or
 // one hour.
 const (
-	afterEnd  = 2 * time.Minute
-	longAfter = 24 * time.Hour
+	afterEnd        = 2 * time.Minute
+	longAfter       = 24 * time.Hour
+	halfMillisecond = 500 * time.Microsecond
 )
 
 // openSessionFixture is a namespace with a root profile and the start of its
@@ -112,6 +117,13 @@ func SeedOpenSession(t *testing.T, s Store, name string) string {
 
 	return sess.ID()
 }
+
+// SeedOwner returns the owner of the session that SeedOpenSession makes. The
+// session ends one hour after the time that SeedNow returns.
+func SeedOwner() profile.SessionOwner { return profile.PrincipalOwner(subject) }
+
+// SeedNow returns the time at which the session of SeedOpenSession starts.
+func SeedNow() time.Time { return epoch() }
 
 // HasOpenSession reports whether the namespace name holds the live open
 // session id of the subject of SeedOpenSession, read through the field
@@ -185,6 +197,13 @@ func (f openSessionFixture) put(t *testing.T, s Store, sess profile.Session) {
 	}
 }
 
+// delete removes the session id of owner under the fence of the namespace of
+// f, with one audit entry.
+func (f openSessionFixture) delete(s Store, id, owner string) error {
+	return s.Sessions.Delete(context.Background(), id, profile.PrincipalOwner(owner), f.ns.Fence(),
+		openEntries(f.ns.Name))
+}
+
 func (f openSessionFixture) get(s Store, id, owner string, now time.Time) (profile.Session, error) {
 	return s.Sessions.Get(context.Background(), f.ns.Name, id, profile.PrincipalOwner(owner), now)
 }
@@ -255,7 +274,8 @@ func testSessionOtherNamespace(t *testing.T, s Store) {
 	_, err := s.Sessions.Get(t.Context(), other.Name, firstSessionID, profile.PrincipalOwner(subject), epoch())
 	wantErr(t, "Get in another namespace", err, profile.ErrNotFound)
 
-	err = s.Sessions.Delete(t.Context(), other.Name, firstSessionID, profile.PrincipalOwner(subject))
+	err = s.Sessions.Delete(t.Context(), firstSessionID, profile.PrincipalOwner(subject), other.Fence(),
+		openEntries(other.Name))
 	wantErr(t, "Delete in another namespace", err, profile.ErrNotFound)
 
 	f.wantFound(t, s, firstSessionID, subject)
@@ -286,8 +306,10 @@ func testSessionEnded(t *testing.T, s Store) {
 
 	end := epoch().Add(time.Hour)
 
-	if _, err := f.get(s, firstSessionID, subject, end.Add(-time.Millisecond)); err != nil {
-		t.Errorf("Get a millisecond before the end: %v, want the session", err)
+	for _, before := range []time.Duration{time.Millisecond, halfMillisecond} {
+		if _, err := f.get(s, firstSessionID, subject, end.Add(-before)); err != nil {
+			t.Errorf("Get %s before the end: %v, want the session", before, err)
+		}
 	}
 
 	for _, now := range []time.Time{end, end.Add(time.Millisecond), end.Add(longAfter)} {
@@ -309,7 +331,7 @@ func testSessionForgedID(t *testing.T, s Store) {
 		_, err := f.get(s, id, subject, epoch())
 		wantErr(t, fmt.Sprintf("Get of %q", id), err, profile.ErrNotFound)
 
-		err = s.Sessions.Delete(t.Context(), f.ns.Name, id, profile.PrincipalOwner(subject))
+		err = f.delete(s, id, subject)
 		wantErr(t, fmt.Sprintf("Delete of %q", id), err, profile.ErrNotFound)
 	}
 
@@ -556,10 +578,107 @@ func testSessionDeleteOtherOwner(t *testing.T, s Store) {
 	f := newOpenFixture(t, s)
 	f.put(t, s, f.session(t, firstSessionID, subject))
 
-	err := s.Sessions.Delete(t.Context(), f.ns.Name, firstSessionID, profile.PrincipalOwner(otherSubject))
+	err := f.delete(s, firstSessionID, otherSubject)
 	wantErr(t, "Delete of another owner", err, profile.ErrNotFound)
 
 	f.wantFound(t, s, firstSessionID, subject)
+}
+
+func testSessionPutOtherFence(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newOpenFixture(t, s)
+	other := newNamespace(t, s, "globex")
+	before := auditCount(t, s, other.Name)
+
+	// The session is of namespace A. The fence and the entries are of B.
+	err := s.Sessions.Put(t.Context(), f.session(t, firstSessionID, subject), other.Fence(), openEntries(other.Name))
+	wantErr(t, "Put of a session of namespace A under the fence of B", err, profile.ErrInvalid)
+
+	f.wantGone(t, s, firstSessionID, subject)
+
+	if _, err = s.Sessions.Get(t.Context(), other.Name, firstSessionID, profile.PrincipalOwner(subject), epoch()); err == nil {
+		t.Errorf("namespace B holds the session of namespace A")
+	}
+
+	if after := auditCount(t, s, other.Name); after != before {
+		t.Errorf("audit entries of B after the refused put = %d, want %d", after, before)
+	}
+}
+
+func testSessionDeleteInvalidOwner(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newOpenFixture(t, s)
+	f.put(t, s, f.session(t, firstSessionID, subject))
+
+	for _, owner := range []profile.SessionOwner{
+		{Kind: "job", ID: subject}, {Kind: "", ID: subject}, {Kind: profile.OwnerPrincipal, ID: ""},
+		{Kind: profile.OwnerPrincipal, ID: "al\nice"},
+	} {
+		err := s.Sessions.Delete(t.Context(), firstSessionID, owner, f.ns.Fence(), openEntries(f.ns.Name))
+		wantErr(t, fmt.Sprintf("Delete of owner %+v", owner), err, profile.ErrNotFound)
+	}
+
+	f.wantFound(t, s, firstSessionID, subject)
+}
+
+func testSessionDeleteFenced(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newOpenFixture(t, s)
+	f.put(t, s, f.session(t, firstSessionID, subject))
+
+	before := auditCount(t, s, f.ns.Name)
+
+	stale := f.ns.Fence()
+	stale.FailoverVersion = f.ns.FailoverVersion - 1
+
+	err := s.Sessions.Delete(t.Context(), firstSessionID, profile.PrincipalOwner(subject), stale,
+		openEntries(f.ns.Name))
+	wantErr(t, "Delete with a stale fence", err, namespace.ErrFenced)
+
+	f.wantFound(t, s, firstSessionID, subject)
+
+	if after := auditCount(t, s, f.ns.Name); after != before {
+		t.Errorf("audit entries after the fenced delete = %d, want %d", after, before)
+	}
+}
+
+func testSessionDeleteAudit(t *testing.T, s Store) {
+	t.Helper()
+
+	f := newOpenFixture(t, s)
+	f.put(t, s, f.session(t, firstSessionID, subject))
+
+	before := auditCount(t, s, f.ns.Name)
+
+	if err := f.delete(s, firstSessionID, subject); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if after := auditCount(t, s, f.ns.Name); after != before+1 {
+		t.Errorf("audit entries after the delete = %d, want %d", after, before+1)
+	}
+
+	// The session is gone: the second delete finds none and writes no entry.
+	err := f.delete(s, firstSessionID, subject)
+	wantErr(t, "second Delete", err, profile.ErrNotFound)
+
+	if after := auditCount(t, s, f.ns.Name); after != before+1 {
+		t.Errorf("audit entries after the refused delete = %d, want %d", after, before+1)
+	}
+
+	// An invalid entry changes nothing.
+	f.put(t, s, f.session(t, "pos-two", subject))
+
+	bad := openEntries(f.ns.Name)
+	bad[0].Subject = ""
+
+	err = s.Sessions.Delete(t.Context(), "pos-two", profile.PrincipalOwner(subject), f.ns.Fence(), bad)
+	wantErr(t, "Delete with an invalid entry", err, audit.ErrInvalidEntry)
+
+	f.wantFound(t, s, "pos-two", subject)
 }
 
 func testSessionDelete(t *testing.T, s Store) {
@@ -570,11 +689,11 @@ func testSessionDelete(t *testing.T, s Store) {
 	f.put(t, s, f.sessionAt(t, "pos-ended", subject, epoch(), time.Minute))
 
 	for _, id := range []string{"pos-live", "pos-ended"} {
-		if err := s.Sessions.Delete(t.Context(), f.ns.Name, id, profile.PrincipalOwner(subject)); err != nil {
+		if err := f.delete(s, id, subject); err != nil {
 			t.Errorf("Delete(%s): %v", id, err)
 		}
 
-		err := s.Sessions.Delete(t.Context(), f.ns.Name, id, profile.PrincipalOwner(subject))
+		err := f.delete(s, id, subject)
 		wantErr(t, "second Delete of "+id, err, profile.ErrNotFound)
 	}
 
@@ -597,7 +716,7 @@ func testSessionSweepInvalid(t *testing.T, s Store) {
 	}
 
 	// The refused sweeps left the row, which Delete still finds.
-	if err := s.Sessions.Delete(t.Context(), f.ns.Name, "pos-ended", profile.PrincipalOwner(subject)); err != nil {
+	if err := f.delete(s, "pos-ended", subject); err != nil {
 		t.Errorf("Delete after the refused sweeps: %v", err)
 	}
 }

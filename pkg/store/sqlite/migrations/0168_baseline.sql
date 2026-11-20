@@ -723,20 +723,6 @@ CREATE TABLE profiles (
     CHECK (latest >= 1)
 ) STRICT;
 
-CREATE TABLE profile_revisions (
-    namespace_id  TEXT    NOT NULL,
-    profile_id    TEXT    NOT NULL,
-    number        INTEGER NOT NULL,
-    document      TEXT    NOT NULL,
-    document_sha256 TEXT  NOT NULL,
-    author        TEXT    NOT NULL,
-    created_at_ms INTEGER NOT NULL,
-    reason        TEXT    NOT NULL,
-    PRIMARY KEY (namespace_id, profile_id, number),
-    FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles (namespace_id, id),
-    CHECK (number >= 1)
-) STRICT;
-
 CREATE TABLE profile_open_sessions (
     namespace_id    TEXT    NOT NULL REFERENCES namespaces (id),
     id              TEXT    NOT NULL CHECK (substr(id, 1, 4) = 'pos-' AND length(id) > 4),
@@ -751,6 +737,20 @@ CREATE TABLE profile_open_sessions (
     PRIMARY KEY (namespace_id, id),
     FOREIGN KEY (namespace_id, root_profile_id) REFERENCES profiles (namespace_id, id),
     CHECK (expires_at_ms > created_at_ms)
+) STRICT;
+
+CREATE TABLE profile_revisions (
+    namespace_id  TEXT    NOT NULL,
+    profile_id    TEXT    NOT NULL,
+    number        INTEGER NOT NULL,
+    document      TEXT    NOT NULL,
+    document_sha256 TEXT  NOT NULL,
+    author        TEXT    NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    reason        TEXT    NOT NULL,
+    PRIMARY KEY (namespace_id, profile_id, number),
+    FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles (namespace_id, id),
+    CHECK (number >= 1)
 ) STRICT;
 
 CREATE TABLE proxy_rule_sets (
