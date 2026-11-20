@@ -27,7 +27,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - A workload exchange e2e test exists Proof: e2e/workload_test.go:38 TestWorkloadTokenExchange
-- A trust token lifetime test exists Proof: pkg/accesstoken/trust_token_test.go:59 TestTrustTokenLivesTheExchangeLifetime
+- A trust token lifetime test exists Proof: pkg/accesstoken/trust_token_test.go:85 TestTrustTokenLivesTheExchangeLifetime
 - The error code token.invalid exists Proof: internal/errcode/catalog_token.go:11
 
 ## What Changes
@@ -71,7 +71,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - The SPIFFE ID pattern check allows a trailing `/*` (`pkg/trustrule/trustrule.go:410`, func ValidateSpiffePattern), and Rule.Validate runs it for the create, the update, the store and the restore (`pkg/trustrule/trustrule.go:581`, func Validate)
 - The route maps an invalid rule to trust-rule.invalid (`internal/api/trustrules/handlers.go:570`, func classifyRefusal)
 - The JWT exchange builds the Exchange value with named fields (`internal/trustrulesvc/exchange.go:218`, func Exchange)
-- Trust token lifetime test (`pkg/accesstoken/trust_token_test.go:59`)
+- Trust token lifetime test (`pkg/accesstoken/trust_token_test.go:85`)
 - Workload exchange e2e (`e2e/workload_test.go:38`)
 - token.invalid code (`internal/errcode/catalog_token.go:11`)
 

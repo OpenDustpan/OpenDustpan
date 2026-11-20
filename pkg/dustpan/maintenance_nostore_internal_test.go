@@ -24,6 +24,7 @@ func TestMaintenanceAnswersAreNoStore(t *testing.T) {
 		{"TFE", shapeTFE},
 		{"HTTP backend", shapeHTTPBackend},
 		{"runner", shapeRunner},
+		{"webhook", shapeWebhook},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

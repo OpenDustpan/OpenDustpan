@@ -84,6 +84,9 @@ type Config struct {
 	// answers. Nil means the upgrade check answers 0: a store that predates
 	// the count still serves.
 	Journal JournalReporter
+	// FirstAdministrator is the service of the first administrator. Nil
+	// means the three routes of the first administrator are not mounted.
+	FirstAdministrator FirstAdministratorService
 	// Principals keeps the principals and the groups of the installation
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
@@ -255,6 +258,7 @@ type Handler struct {
 	preferences    *preferences.Service
 	gitHostLinks   *forgelinksvc.Service
 	localUsers     *localusersvc.Service
+	firstAdmin     FirstAdministratorService
 	// passkeys is the passkey service of the console sign-in. With no
 	// sign-in there is no service.
 	passkeys      PasskeyService
@@ -342,6 +346,7 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		stateWrite:     cfg.StateWriteGates,
 		preferences:    cfg.Preferences,
 		localUsers:     cfg.LocalUsers,
+		firstAdmin:     cfg.FirstAdministrator,
 		passkeys:       nil, passkeyBegins: newBeginLimiter(),
 		settings:  cfg.Settings,
 		gitHost:   cfg.GitHost,
@@ -707,7 +712,7 @@ func classifyIdentity(err error) (failure, bool) {
 // part of the contract: the first function that maps the error decides.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyReview, classifyIdentity, classifyWorker,
+		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyReview, classifyIdentity, classifyPrincipalState, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifyProxyRules, classifySessionPolicy, classifySignIn, classifyProviders,
 		classifyGitHost, classifyInstance, classifyRequest,
 	} {
@@ -746,9 +751,13 @@ func classifyRequest(err error) (failure, bool) {
 // classifyRegistry maps the backup and restore registry errors to their
 // status and message. Registry and target failures may hold driver text, so
 // only the sentinel decides the status and the message. A missing backup
-// answers 404 and a second start 409.
+// answers 404, a second start 409, and a backup that runs or failed 409.
 func classifyRegistry(err error) failure {
 	switch {
+	case errors.Is(err, backup.ErrStillRunning):
+		return failCoded(http.StatusConflict, backup.ErrStillRunning.Error(), errcode.BackupStillRunning)
+	case errors.Is(err, backup.ErrEndedFailed):
+		return failCoded(http.StatusConflict, backup.ErrEndedFailed.Error(), errcode.BackupEndedFailed)
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return fail(http.StatusConflict, "a backup is already running")
 	case errors.Is(err, backup.ErrRestoreRunning):
@@ -784,6 +793,10 @@ func classifyBackup(err error) (failure, bool) {
 		text, args := unverifiedRefusal(err)
 
 		return failCoded(http.StatusUnprocessableEntity, text, errcode.BackupTooManyUnverified, args...), true
+	case errors.Is(err, backup.ErrRegistryFilesTooLarge):
+		text, args := registryFilesRefusal(err)
+
+		return failCoded(http.StatusUnprocessableEntity, text, errcode.BackupRegistryFilesTooLarge, args...), true
 	case errors.Is(err, backup.ErrDevBackupRefused):
 		return fail(http.StatusConflict, backup.ErrDevBackupRefused.Error()), true
 	case errors.Is(err, backup.ErrManifestKindInvalid):
@@ -904,6 +917,33 @@ func activeWorkArgs(err error) []errcode.Value {
 	return []errcode.Value{
 		errcode.Quantity("workCount", int64(work)),
 		errcode.Quantity("canceledCount", int64(canceled)),
+	}
+}
+
+// registryFilesRefusal returns the text and the arguments of the answer to a
+// backup that the limits of the registry files refused: the size that passed
+// the limit, in bytes, and the limit. An error that carries no size gives zero
+// for both.
+func registryFilesRefusal(err error) (string, []errcode.Value) {
+	refused, ok := errors.AsType[*backup.RegistryFilesTooLargeError](err)
+	if !ok {
+		return backup.ErrRegistryFilesTooLarge.Error(), []errcode.Value{
+			errcode.Quantity("size", 0),
+			errcode.Quantity("limit", 0),
+		}
+	}
+
+	size := refused.Size
+	if refused.Limit == backup.RegistryFileLimitNamespace {
+		size = refused.Total
+	}
+
+	// Defense in depth: the refusal text holds names of a release and a
+	// version, which a publisher chose. Clean stays so that no control
+	// character reaches the answer, also when another layer lets one pass.
+	return denials.Clean(refused.Error(), maxCauseBytes), []errcode.Value{
+		errcode.Quantity("size", size),
+		errcode.Quantity("limit", refused.Max),
 	}
 }
 

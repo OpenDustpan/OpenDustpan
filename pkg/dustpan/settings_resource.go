@@ -1,9 +1,12 @@
 package dustpan
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -26,17 +29,54 @@ func drainPeriodDeclaration(period time.Duration) setting.Declaration {
 	}
 }
 
+// errRetentionRange is the reason of a refused retention value.
+var errRetentionRange = fmt.Errorf("give 0 (keep forever) or a whole number of hours from %d to %d",
+	gate.MinRetentionHours, gate.MaxRetentionHours)
+
+// retentionCheck runs the check of the gate package and gives the settings
+// resource a reason that holds no package prefix and does not repeat the key:
+// the answer names the key itself.
+func retentionCheck(value string) error {
+	if gate.RetentionCheck(value) != nil {
+		return errRetentionRange
+	}
+
+	return nil
+}
+
+// decisionRecordRetentionDeclaration returns the declaration of the retention
+// period of the decision records, in whole hours. The default "0" keeps the
+// records forever. The setting prunes decision records only and never an audit
+// entry. No job reads it yet, so the setting alone deletes nothing. A change
+// to a shorter period, or from keep-forever to a period, needs a fresh
+// authentication, because it deletes evidence sooner.
+func decisionRecordRetentionDeclaration() setting.Declaration {
+	return setting.Declaration{
+		Key: gate.RetentionKey, Level: setting.LevelInstallation, Kind: setting.KindInt, Default: "0",
+		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
+		// The kind check of the setting package and RetentionCheck both run, so
+		// the declaration does not rely on one of them alone.
+		Check:           retentionCheck,
+		ReducesSecurity: gate.RetentionReducesSecurity,
+		Doc: fmt.Sprintf("The hours that the server keeps decision records, from %d to %d. 0 keeps decision "+
+			"records forever. The setting never deletes an audit entry. No job deletes decision records yet.",
+			gate.MinRetentionHours, gate.MaxRetentionHours),
+	}
+}
+
 // settingDeclarations returns the declarations of the settings resource: the
 // declarations of WithSettings and the settings that the server declares
 // itself.
 func settingDeclarations(cfg *settings) []setting.Declaration {
 	allowlist := ipallow.SettingDeclarations()
 
-	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+len(allowlist)+1)
+	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+len(allowlist))
 	out = append(out, cfg.settingsConfig.declarations...)
 	out = append(out, allowlist...)
 
-	return append(out, drainPeriodDeclaration(cfg.drainPeriod))
+	out = append(out, decisionRecordRetentionDeclaration(), drainPeriodDeclaration(cfg.drainPeriod))
+
+	return out
 }
 
 // settingsConfig holds what WithSettings sets.
@@ -92,4 +132,43 @@ func newSettingService(cfg *settings, namespaces setting.Namespaces) *setting.Se
 	}
 
 	return setting.NewService(cfg.settingsConfig.store, registry, cfg.settingsConfig.static, namespaces, cfg.now)
+}
+
+// restoreAccessSettingStaticReader returns the reader that says whether the
+// static layer sets the restore access setting, or nil when the server keeps
+// no settings.
+func restoreAccessSettingStaticReader(cfg *settings) func(context.Context) (bool, error) {
+	svc := newSettingService(cfg, nil)
+	if svc == nil {
+		return nil
+	}
+
+	return func(ctx context.Context) (bool, error) {
+		item, err := svc.Effective(ctx, setting.InstallationScope(), backup.SettingRestoreAccessTables)
+		if err != nil {
+			return false, fmt.Errorf("read the restore access setting: %w", err)
+		}
+
+		return item.Source != setting.SourceDatabase && item.Source != setting.SourceDefault, nil
+	}
+}
+
+// restoreAccessSettingReader returns the reader of the stored text of the
+// restore access setting, or nil when the server keeps no settings. A key that
+// the declarations do not hold makes the reader fail, and the restore then
+// keeps the access tables.
+func restoreAccessSettingReader(cfg *settings) func(context.Context) (string, error) {
+	svc := newSettingService(cfg, nil)
+	if svc == nil {
+		return nil
+	}
+
+	return func(ctx context.Context) (string, error) {
+		item, err := svc.Effective(ctx, setting.InstallationScope(), backup.SettingRestoreAccessTables)
+		if err != nil {
+			return "", fmt.Errorf("read the restore access setting: %w", err)
+		}
+
+		return item.Value, nil
+	}
 }

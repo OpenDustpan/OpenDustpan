@@ -5,6 +5,10 @@ package errcode
 const (
 	// PrincipalAlreadyExists means that a principal or a group with the same subject or name exists.
 	PrincipalAlreadyExists = "principal.already-exists"
+	// PrincipalBreakGlassKind means that the principal is marked as a break-glass account but is not a person.
+	PrincipalBreakGlassKind = "principal.break-glass-kind"
+	// PrincipalBreakGlassPassword means that a break-glass account has a local password.
+	PrincipalBreakGlassPassword = "principal.break-glass-password"
 	// PrincipalDisabled means that the principal is disabled, so the request cannot change it.
 	PrincipalDisabled = "principal.disabled"
 	// PrincipalInvalid means that the principal or the group is not valid.
@@ -40,6 +44,12 @@ func principalSpecs() []Spec {
 			Meaning: "a principal or a group with the same subject or name exists",
 			Args:    nil,
 		},
+		{
+			Code:    PrincipalBreakGlassKind,
+			Meaning: "the principal is marked as a break-glass account but is not a person",
+			Args:    nil,
+		},
+		{Code: PrincipalBreakGlassPassword, Meaning: "a break-glass account has a local password", Args: nil},
 		{Code: PrincipalDisabled, Meaning: "the principal is disabled, so the request cannot change it", Args: nil},
 		{Code: PrincipalInvalid, Meaning: "the principal or the group is not valid", Args: nil},
 		noWorkingBreakGlassSpec(),

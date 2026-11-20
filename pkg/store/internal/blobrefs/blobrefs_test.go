@@ -606,3 +606,37 @@ func TestCollectorKeepsUnverifiedUnique(t *testing.T) {
 		collected{keys: nil, unverified: []string{prefix + "00000001-jla-x", prefix + "00000002-jla-x"}},
 	)
 }
+
+// TestNewCollectorFirstIsNotInDedupSet checks that the references that the
+// caller gives to NewCollector stay in the list, also when a row names the
+// same key: the collector drops a repeated key only among the rows that it
+// adds itself.
+func TestNewCollectorFirstIsNotInDedupSet(t *testing.T) {
+	t.Parallel()
+
+	row := chunkRow(0, true, false, 5, md5Bytes(t))
+
+	probe := blobrefs.NewCollector(nil)
+	if err := probe.Chunk(row); err != nil {
+		t.Fatalf("Chunk = %v", err)
+	}
+
+	refs := probe.Refs()
+	if len(refs) != 1 {
+		t.Fatalf("probe refs = %d, want 1", len(refs))
+	}
+
+	collector := blobrefs.NewCollector([]backup.BlobRef{refs[0]})
+	if err := collector.Chunk(row); err != nil {
+		t.Fatalf("Chunk = %v", err)
+	}
+
+	// The same row twice adds one reference; the first reference stays.
+	if err := collector.Chunk(row); err != nil {
+		t.Fatalf("Chunk = %v", err)
+	}
+
+	if got := len(collector.Refs()); got != 2 {
+		t.Errorf("refs = %d, want 2 (the given first reference and one reference of the row)", got)
+	}
+}

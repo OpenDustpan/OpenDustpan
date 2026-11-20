@@ -98,11 +98,14 @@ keyEncryptionKey:
     # The key in the Secret that holds the base64 key.
     key: key-encryption-key
 
-# Optional bootstrap admin tokens, comma-separated, from a Secret. The pod
-# gets them in DUSTPAN_ADMIN_TOKEN. Empty name means no bootstrap admin
-# token.
+# Required. The bootstrap admin tokens, comma-separated, from a Secret that
+# exists before the install. The pod gets them in DUSTPAN_ADMIN_TOKEN. `serve`
+# exits with "no admin token is set" without a token, so the chart refuses an
+# empty name. The chart never makes a token. Make one with
+# `openssl rand -hex 32`, and put it in the Secret.
 adminToken:
   existingSecret:
+    # Required. The name of a Secret in the namespace of the release.
     name: ""
     key: admin-token
 
@@ -203,8 +206,14 @@ console:
 server:
   # The external base URL, for example https://dustpan.example. Set it when
   # an ingress or a load balancer is in front of the server. Console sign-in
-  # needs it.
+  # needs it. An https URL says that the ingress or the load balancer ends
+  # TLS. The chart needs an https publicURL, tls.existingSecret or
+  # allowPlainHTTP.
   publicURL: ""
+  # true lets the server listen with plain HTTP on the pod address with no
+  # TLS and no https publicURL. Tokens and state then go over the network
+  # with no encryption. The server logs a warning at each start.
+  allowPlainHTTP: false
   # The addresses (CIDRs) of the proxies that may set the client address
   # header, for example the pod CIDR of the ingress controller.
   trustedProxies: []

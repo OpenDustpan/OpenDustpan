@@ -93,8 +93,8 @@ func (d *jobDomain) CreateUnit(
 			ID: stack.ID(ident.NewID("stk-")), Version: 0,
 		}
 
-		if err := d.s.CreateStack(ctx, st, fence); err != nil {
-			return identity.Object{}, fmt.Errorf("create stack: %w", err)
+		if err := d.createPlacedStack(ctx, st, fence); err != nil {
+			return identity.Object{}, err
 		}
 	default:
 		return identity.Object{}, fmt.Errorf("%w: tool %q", identity.ErrInvalidObject, tool)
@@ -281,15 +281,19 @@ func (d *jobDomain) RecordStepBegin(ctx context.Context, pc job.PhaseClaim, r jo
 func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error) {
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := d.s.List(ctx, ns, audit.Page{Number: page, Size: audit.MaxPageSize})
+	for before := int64(0); ; {
+		listing, err := d.s.List(ctx, ns, audit.Page{Size: audit.MaxPageSize, Before: before})
 		if err != nil {
 			return nil, fmt.Errorf("list audit: %w", err)
 		}
 
 		out = append(out, listing.Entries...)
 
-		if len(listing.Entries) < audit.MaxPageSize {
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
 			break
 		}
 	}
@@ -303,6 +307,20 @@ func (d *jobDomain) AuditEntries(ctx context.Context, ns namespace.Name) ([]audi
 // reads, as a restore or another version of the server leaves one.
 func (d *jobDomain) DamageJobBody(ctx context.Context, id job.ID) error {
 	return d.s.ExecForTest(ctx, `UPDATE jobs SET body = '{' WHERE id = ?`, string(id))
+}
+
+// createPlacedStack makes st and puts it in a collection: the stores refuse
+// the state writes of a stack in no collection.
+func (d *jobDomain) createPlacedStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
+	if err := d.s.CreateStack(ctx, st, fence); err != nil {
+		return fmt.Errorf("create stack: %w", err)
+	}
+
+	if err := storetest.PlaceStackCtx(ctx, d.s, st.Ref); err != nil {
+		return fmt.Errorf("place stack: %w", err)
+	}
+
+	return nil
 }
 
 // lockForStateWrite returns the workspace of unit, locked for a state write. A

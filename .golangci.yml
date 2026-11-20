@@ -281,6 +281,7 @@ linters:
             - "**/internal/freeze/**"
             - "**/pkg/breakglass/**"
             - "**/pkg/tempadmin/**"
+            - "**/pkg/firstadmin/**"
             - "**/internal/oncall/**"
             - "**/internal/cost/**"
             - "**/pkg/notify/*.go"
@@ -379,6 +380,19 @@ linters:
               desc: Client commands meet the server through its REST API, never through route code.
             - pkg: opendustpan.org/opendustpan/cmd/opendustpan
               desc: Client commands never import the serve wiring that opens the data.
+
+        cmdnostore:
+          # The binary opens the data through the SDK (dustpan.OpenStore and the
+          # exported store errors), so cmd/opendustpan has no store wiring of
+          # its own. Test files may still import a store package to set up
+          # fixtures. Defense in depth: the SDK is the one place that picks a
+          # store adapter, and this rule keeps a new import out of the binary.
+          files:
+            - "**/cmd/opendustpan/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/pkg/store
+              desc: The binary opens the store through pkg/dustpan, never through a store package.
 
         runnerdeps:
           # The Kubernetes client and the OCI image library are for the runner

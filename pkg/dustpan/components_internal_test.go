@@ -87,6 +87,7 @@ func TestStartBackgroundByComponent(t *testing.T) {
 			srv := testServer(st.DurableOperations(), "a")
 
 			tokens, err := accesstoken.NewService(accesstoken.Config{
+				Makers:     nil,
 				TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil,
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
@@ -152,7 +153,7 @@ func operationAt(
 ) durable.Operation {
 	return durable.Operation{
 		ID: "", Key: "", Kind: "", Version: 0, Input: nil, State: state, Steps: nil, Attempt: 0,
-		Failures: 0, Expiries: 0, LastError: "", CancelRequested: false, UpdatedAt: time.Time{},
+		Failures: 0, Expiries: 0, DeadlineReleases: 0, LastError: "", CancelRequested: false, UpdatedAt: time.Time{},
 		Claim:     durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: expires},
 		NotBefore: notBefore, CreatedAt: created,
 	}

@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -30,6 +33,10 @@ var (
 	ErrAlreadyExists = errors.New("stack already exists")
 	// ErrInvalidName reports a project or stack name that fails validation.
 	ErrInvalidName = errors.New("invalid project or stack name")
+	// ErrInvalidTags reports a tag map that fails validation: too many tags, a
+	// tag name that is not allowed, or a tag value that is too long, not valid
+	// UTF-8 or holds a hidden character other than a line break or a tab.
+	ErrInvalidTags = errors.New("invalid stack tags")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 	// ErrHasResources reports that a stack still manages resources, so a
@@ -43,6 +50,12 @@ var (
 const (
 	maxNameLength = 100
 	maxTags       = 64
+
+	// maxTagNameLen and maxTagValueLen are the limits that the Pulumi CLI
+	// and Pulumi Cloud set for a stack tag: the CLI never sends a tag outside
+	// them.
+	maxTagNameLen  = 40
+	maxTagValueLen = 256
 )
 
 // ProjectName is a validated project name.
@@ -189,6 +202,8 @@ type PlacedStore interface {
 	// collection.ErrPlacementCollectionMissing when the collection does not
 	// exist, collection.ErrCollectionChanged when it has another ID than
 	// p.CollectionID, and the errors of a refused join (for example a gate).
+	// Like CreateStack, it returns ErrInvalidTags, and writes nothing, for a
+	// tag value that CheckTagValues refuses.
 	CreateStackPlaced(ctx context.Context, st Stack, p Placement, fence namespace.Fence) error
 }
 
@@ -199,7 +214,8 @@ type PlacedStore interface {
 type Store interface {
 	// CreateStack persists st if fence matches the namespace's current failover
 	// version. It returns ErrAlreadyExists, namespace.ErrNotFound or
-	// namespace.ErrFenced.
+	// namespace.ErrFenced, or ErrInvalidTags for a tag value that
+	// CheckTagValues refuses.
 	CreateStack(ctx context.Context, st Stack, fence namespace.Fence) error
 	// GetStack returns the stack identified by ref, or ErrNotFound.
 	GetStack(ctx context.Context, ref Ref) (Stack, error)
@@ -249,11 +265,15 @@ type Store interface {
 	ForceDeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
 	DeletedStore
 	// UpdateStackTags replaces the tags of the stack identified by ref with
-	// tags, keyed by its stable ID, and stamps updatedAt. It returns
-	// ErrNotFound, namespace.ErrNotFound or namespace.ErrFenced.
-	UpdateStackTags(
-		ctx context.Context, ref Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
-	) error
+	// u.Tags, keyed by its stable ID, and stamps u.UpdatedAt. It appends the
+	// audit entry u.Entry in the same fenced transaction, with the stable stack ID and
+	// one change for each tag key that the update adds, removes or gives
+	// another value (see TagChanges). A replace that changes no key writes no
+	// audit entry. It returns ErrNotFound, namespace.ErrNotFound,
+	// namespace.ErrFenced or audit.ErrInvalidEntry if e fails validation or
+	// names another namespace. It returns ErrInvalidTags, and writes nothing,
+	// for a tag value that CheckTagValues refuses.
+	UpdateStackTags(ctx context.Context, ref Ref, u TagUpdate, fence namespace.Fence) error
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
 	// row stay with the stack. It appends the audit entry e in the same fenced
@@ -403,8 +423,8 @@ func createRows(ctx context.Context, store Store, st Stack, p Placement, fence n
 }
 
 func createStack(ctx context.Context, s *Service, ref Ref, tags map[string]string, p Placement) (Stack, error) {
-	if len(tags) > maxTags {
-		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+	if err := CheckTags(tags); err != nil {
+		return Stack{}, err
 	}
 
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
@@ -626,12 +646,14 @@ func (s *Service) PurgeExpired(
 // UpdateTags replaces the tags of the stack identified by ref with tags, as
 // the Pulumi CLI sends them on PATCH, and returns the updated stack. An empty
 // or nil map clears every tag. The write is fenced on the namespace's
-// failover version and only allowed in its primary installation.
+// failover version and only allowed in its primary installation. The update
+// and the audit entry e, stamped with the time of the update, commit together
+// or not at all. The entry names the tag keys that changed, never their values.
 func (s *Service) UpdateTags(
-	ctx context.Context, ref Ref, tags map[string]string,
+	ctx context.Context, ref Ref, tags map[string]string, e audit.Entry,
 ) (Stack, error) {
-	if len(tags) > maxTags {
-		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+	if err := CheckTags(tags); err != nil {
+		return Stack{}, err
 	}
 
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
@@ -641,7 +663,11 @@ func (s *Service) UpdateTags(
 
 	now := s.now().UTC()
 
-	storeErr := s.store.UpdateStackTags(ctx, ref, maps.Clone(tags), now, ns.Fence())
+	e.At = now
+
+	update := TagUpdate{Tags: maps.Clone(tags), UpdatedAt: now, Entry: e}
+
+	storeErr := s.store.UpdateStackTags(ctx, ref, update, ns.Fence())
 	if storeErr != nil {
 		return Stack{}, fmt.Errorf("update tags of %s: %w", ref, storeErr)
 	}
@@ -779,4 +805,152 @@ func refuseRestoreUnderNamespaceLock(ctx context.Context, locks ManualLocks, ns 
 		Lock: l, Unit: collection.UnitRef{Namespace: ns, Tool: InventoryTool, Name: id.String()},
 		Noun: "stack", Name: ns.String() + "/" + id.String(),
 	}
+}
+
+// TagUpdate is one replace of the tags of a stack: the new tags, the time of
+// the update, and the audit entry that the store appends in the same
+// transaction.
+type TagUpdate struct {
+	Tags      map[string]string
+	UpdatedAt time.Time
+	Entry     audit.Entry
+}
+
+// Words that a tag change records instead of a tag value.
+const (
+	tagSet    = "set"
+	tagNotSet = "not set"
+)
+
+// TagChanges returns the audit changes of a replace of the tags old with the
+// tags next: one change for each key that the replace adds, removes or gives
+// another value. A change is named "tags.<key>". It records only "set" or
+// "not set" for the old and the new side, never a tag value, because a tag
+// value can hold a secret. The result is sorted by key and is empty when the
+// replace changes no key.
+func TagChanges(old, next map[string]string) []audit.Change {
+	var changes []audit.Change
+
+	for _, key := range slices.Sorted(maps.Keys(old)) {
+		if v, kept := next[key]; kept && v == old[key] {
+			continue
+		}
+
+		was := tagSet
+		now := tagNotSet
+
+		if _, kept := next[key]; kept {
+			now = tagSet
+		}
+
+		changes = append(changes, audit.Change{
+			Key: "tags." + key, Old: &was, New: now, Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(next)) {
+		if _, had := old[key]; had {
+			continue
+		}
+
+		was := tagNotSet
+
+		changes = append(changes, audit.Change{
+			Key: "tags." + key, Old: &was, New: tagSet, Layer: "", TakesEffect: "",
+		})
+	}
+
+	slices.SortFunc(changes, func(a, b audit.Change) int { return strings.Compare(a.Key, b.Key) })
+
+	return changes
+}
+
+// CheckTags returns ErrInvalidTags when tags holds more than maxTags tags,
+// or a tag whose name is not 1 to maxTagNameLen characters of letters,
+// digits and "-", "_", ".", ":", or whose value is not valid UTF-8 text of at
+// most maxTagValueLen bytes. A value may hold a line break or a tab: the
+// Pulumi CLI sends a multi-line description unchanged. Any other hidden
+// character (a control character such as NUL, CR or ESC, or a format
+// character such as U+202E) is refused. The error text never holds the
+// rejected name or value.
+//
+// The service calls it in UpdateTags and in the create path. Defense in depth:
+// the layers check the tags one by one, and none relies on another. They are
+// the handler (checkTagBoundary), the service (CheckTags), the stores
+// (CheckTagValues in UpdateStackTags and in createStackRows) and the staged
+// check of a restore (checkStagedStackTags).
+func CheckTags(tags map[string]string) error {
+	if len(tags) > maxTags {
+		return fmt.Errorf("%w: more than %d tags", ErrInvalidTags, maxTags)
+	}
+
+	for name, value := range tags {
+		if !validTagName(name) {
+			return fmt.Errorf("%w: a tag name must have 1 to %d characters: letters, digits, hyphen, "+
+				"underscore, period or colon", ErrInvalidTags, maxTagNameLen)
+		}
+
+		if err := checkTagValue(value); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// CheckTagValues returns ErrInvalidTags when a value of tags is not valid
+// UTF-8 text of at most maxTagValueLen bytes, or holds a hidden character
+// other than a line break or a tab. It does not check the tag names: the
+// audit validation of the keys does that in the stores. The stores call it
+// before the first write, so that a value that one SQL dialect refuses and
+// another one stores never reaches a driver. The error text never holds a
+// value.
+func CheckTagValues(tags map[string]string) error {
+	for _, value := range tags {
+		if err := checkTagValue(value); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkTagValue returns ErrInvalidTags when value may not be a tag value.
+func checkTagValue(value string) error {
+	if len(value) > maxTagValueLen || !utf8.ValidString(value) {
+		return fmt.Errorf("%w: the value of a tag is not valid text of at most %d bytes",
+			ErrInvalidTags, maxTagValueLen)
+	}
+
+	if strings.IndexFunc(value, hiddenTagRune) >= 0 {
+		return fmt.Errorf("%w: the value of a tag holds a control or hidden character", ErrInvalidTags)
+	}
+
+	return nil
+}
+
+// hiddenTagRune reports whether r may not be in a tag value: a hidden rune
+// other than a line break or a tab.
+func hiddenTagRune(r rune) bool {
+	return ident.IsHiddenRuneExcept(r, '\n', '\t')
+}
+
+// validTagName reports whether name is an allowed tag name.
+func validTagName(name string) bool {
+	if name == "" || len(name) > maxTagNameLen {
+		return false
+	}
+
+	for i := range len(name) {
+		c := name[i]
+
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
+			return false
+		}
+	}
+
+	return true
 }

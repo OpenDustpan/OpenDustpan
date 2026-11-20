@@ -36,6 +36,8 @@ Changes:
 - Changes ADR 225 decisions 1, 7 and 12: `authorMayApprove` does not apply to
   a review request, mode 1 counts reviews on the Git host, and the binding
   level replaces signature carry-over.
+- Changes ADR 230 decisions 1, 2, 3 and 7: the binding level replaces the
+  signature carry-over setting, so no route serves it.
 - Changes ADR 267 decisions 14 and 19: one credential rule for every start of
   a plan, and a fork plan with no credentials.
 - Changes ADR 271 decision 4: webhooks with three recovery paths and no
@@ -395,3 +397,9 @@ has a benchmark, and each one can be reversed by a later ADR.
 - `GLOSSARY.md` gets the terms Review mode, Binding level, Approval floor,
   Set of operations, Plan conflict, Declared paths and Plan comment, and the
   entries Review request and Comment command change.
+
+## Changelog
+
+- 2026-11-20, link item (ADR 296, ADR 365): the "Changes:" list gets the item
+  for ADR 230, the reverse of its new "Changed by" item. No word of a decision
+  changes.

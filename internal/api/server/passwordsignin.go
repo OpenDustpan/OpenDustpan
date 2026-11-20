@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -76,6 +77,15 @@ type LDAPSettings struct {
 	GroupMemberOfAttribute string
 	GroupNameAttribute     string
 	StartTLS               bool
+	// CAFile is the path of the file with the certificate authorities of the
+	// directory. Empty means the system roots.
+	CAFile string
+	// DisabledMask is the bit mask of the disabled attribute as an unsigned
+	// decimal text. Empty means no mask.
+	DisabledMask string
+	// DisabledValues are the values of the disabled attribute that mark an
+	// account as disabled.
+	DisabledValues []string
 	// SubjectFailureLimit is the limit of the count of the subject from
 	// every source.
 	SubjectFailureLimit int
@@ -103,6 +113,9 @@ type providerLDAP struct {
 	GroupMemberAttribute      string   `json:"groupMemberAttribute"`
 	GroupMemberOfAttribute    string   `json:"groupMemberOfAttribute"`
 	GroupNameAttribute        string   `json:"groupNameAttribute"`
+	CAFile                    string   `json:"caFile"`
+	DisabledMask              string   `json:"disabledMask"`
+	DisabledValues            []string `json:"disabledValues"`
 	StartTLS                  bool     `json:"startTLS"`
 	BindPasswordSet           bool     `json:"bindPasswordSet"`
 	SubjectFailureLimit       int      `json:"subjectFailureLimit"`
@@ -125,6 +138,14 @@ var (
 	errPasswordSignInUnavailable = &codedError{
 		status: http.StatusServiceUnavailable, code: errcode.SignInUnavailable, args: nil,
 		message: "the directory of the sign-in provider does not answer: try again later",
+	}
+	// errPasswordSignInNeedsTLS is the answer when the URL of the directory
+	// has no TLS and the installation does not allow that. A retry does not
+	// help: the text names the change that an administrator makes.
+	errPasswordSignInNeedsTLS = &codedError{
+		status: http.StatusServiceUnavailable, code: errcode.SignInUnavailable, args: nil,
+		message: "the sign-in provider is not set up with TLS: ask an administrator to use ldaps:// " +
+			"or StartTLS for the directory",
 	}
 )
 
@@ -177,7 +198,9 @@ func providerIDIn(providers []SignInProvider, id string) (SignInProvider, bool) 
 		}
 	}
 
-	return SignInProvider{Method: nil, ID: "", DisplayName: "", AutoCreate: false, Stored: false}, false
+	return SignInProvider{
+		Method: nil, ID: "", DisplayName: "", Issuer: "", ClientID: "", Scopes: nil, AutoCreate: false, Stored: false,
+	}, false
 }
 
 // directorySignInRoutes returns the route of the password sign-in of the
@@ -232,7 +255,7 @@ func (h *Handler) providerPasswordSignIn(
 		return
 	}
 
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -281,6 +304,14 @@ func (h *Handler) answerPasswordError(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
+	if errors.Is(err, ldapauth.ErrPlainRefused) {
+		// The setting of the provider is not valid: the person caused
+		// nothing, so the budget of the address does not change.
+		h.writeError(ctx, w, errPasswordSignInNeedsTLS)
+
+		return
+	}
+
 	if errors.Is(err, session.ErrMethodUnavailable) {
 		// The directory did not answer: the person caused nothing, so the
 		// budget of the address does not change.
@@ -300,10 +331,24 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 	s := &p.LDAP
 
 	return providerResponse{
-		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
-		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: false, Mode: string(session.ModeLDAP), AuthorizationURL: "", TokenURL: "",
-		UserinfoURL: "", Claims: nil,
+		CreatedAt:        nil,
+		UpdatedAt:        nil,
+		ID:               p.ID,
+		Source:           providerSourceStatic,
+		Issuer:           "",
+		DisplayName:      p.DisplayName,
+		ClientID:         "",
+		Scopes:           []string{},
+		Version:          0,
+		AutoCreate:       p.AutoCreate,
+		Enabled:          true,
+		ClientSecretSet:  false,
+		IssuerRefused:    false,
+		Mode:             string(session.ModeLDAP),
+		AuthorizationURL: "",
+		TokenURL:         "",
+		UserinfoURL:      "",
+		Claims:           nil,
 		LDAP: &providerLDAP{
 			AllowedRanges: nonNilRanges(
 				s.AllowedRanges,
@@ -323,6 +368,9 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 			GroupMemberAttribute:      s.GroupMemberAttribute,
 			GroupMemberOfAttribute:    s.GroupMemberOfAttribute,
 			GroupNameAttribute:        s.GroupNameAttribute,
+			CAFile:                    s.CAFile,
+			DisabledMask:              s.DisabledMask,
+			DisabledValues:            nonNilRanges(s.DisabledValues),
 			StartTLS:                  s.StartTLS,
 			BindPasswordSet:           true,
 			SubjectFailureLimit:       s.SubjectFailureLimit,

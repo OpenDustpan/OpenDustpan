@@ -9,8 +9,8 @@ import (
 )
 
 // Adapter labels for the request metrics. The middleware maps each request
-// to one of these from its route pattern, or from its path prefix when no
-// pattern matched. It never uses the path itself as a label.
+// to one of these from the adapter that registered its route pattern. It
+// never uses the path itself as a label.
 const (
 	AdapterPulumi    = "pulumi"
 	AdapterOpenTofu  = "opentofu"
@@ -101,22 +101,24 @@ const MaxSinkSeries = 16
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
-	registry  *Registry
-	requests  *Counter
-	duration  *Histogram
-	inFlight  *Gauge
-	ready     *Counter
-	audit     *Counter
-	chain     *chainFamilies
-	sinks     sinkFamilies
-	reloads   *Counter
-	reloadOK  *Gauge
-	sweeps    *Counter
-	deleted   *Counter
-	blobWait  *Counter
-	signin    *Counter
-	gitHost   *Counter
-	claimSkip *Counter
+	registry   *Registry
+	requests   *Counter
+	duration   *Histogram
+	inFlight   *Gauge
+	ready      *Counter
+	audit      *Counter
+	chain      *chainFamilies
+	sinks      sinkFamilies
+	reloads    *Counter
+	reloadOK   *Gauge
+	sweeps     *Counter
+	deleted    *Counter
+	blobWait   *Counter
+	signin     *Counter
+	gitHost    *Counter
+	gitEvent   *Counter
+	claimSkip  *Counter
+	mtlsRefuse *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -173,20 +175,21 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps:    newSweepCounter(reg),
-		deleted:   newDeletedSweepCounter(reg),
-		blobWait:  newBlobDeleteWaitCounter(reg),
-		signin:    newSignInCounterErrors(reg),
-		gitHost:   newGitHostRefusedCounter(reg),
-		claimSkip: newClaimPollSkippedCounter(reg),
+		sweeps:     newSweepCounter(reg),
+		deleted:    newDeletedSweepCounter(reg),
+		blobWait:   newBlobDeleteWaitCounter(reg),
+		signin:     newSignInCounterErrors(reg),
+		gitHost:    newGitHostRefusedCounter(reg),
+		gitEvent:   newGitHostEventRejectedCounter(reg),
+		claimSkip:  newClaimPollSkippedCounter(reg),
+		mtlsRefuse: newMtlsRefusedCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
 	// starts at 1: an alert on 0 fires only after a failed reload.
 	m.reloadOK.Set(1, []string{}...)
 
-	build := reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount)
-	build.Set(1, version)
+	reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount).Set(1, version)
 
 	start := reg.NewGauge("dustpan_process_start_time_seconds", "Process start time in seconds.", nil, 1)
 	start.Set(float64(startedAt.Unix()), []string{}...)
@@ -226,8 +229,8 @@ func (m *ServerMetrics) ObserveRequest(adapter, route, method string, code int, 
 }
 
 // IncInFlight adds one to the in-flight gauge of adapter. The middleware
-// calls it before the next handler runs, when only the path is known, so the
-// gauge has no route label: the route is not known until the handler returns.
+// calls it before the next handler runs, with the label of the route that the
+// root mux matches. The gauge has no route label.
 func (m *ServerMetrics) IncInFlight(adapter string) {
 	m.inFlight.Inc(NormalizeAdapter(adapter))
 }
@@ -581,6 +584,48 @@ func newBlobDeleteWaitCounter(reg *Registry) *Counter {
 	return c
 }
 
+const (
+	// MtlsRefusedRateLimit counts an mTLS exchange call that the rate limit
+	// refused.
+	MtlsRefusedRateLimit = "rate-limit"
+	// MtlsRefusedBodySize counts an mTLS exchange call that the body size
+	// limit refused.
+	MtlsRefusedBodySize = "body-size"
+)
+
+// maxMtlsRefusedReasons holds one series for each reason.
+const maxMtlsRefusedReasons = 2
+
+// newMtlsRefusedCounter creates dustpan_mtls_exchange_refused_total in reg.
+// It registers the two reasons at zero, so an alert sees them before the
+// first refusal.
+func newMtlsRefusedCounter(reg *Registry) *Counter {
+	c := reg.NewCounter(
+		"dustpan_mtls_exchange_refused_total",
+		"mTLS exchange calls that the guard refused before any certificate check, by reason.",
+		[]string{labelReason},
+		maxMtlsRefusedReasons,
+	)
+
+	c.Add(0, MtlsRefusedRateLimit)
+	c.Add(0, MtlsRefusedBodySize)
+
+	return c
+}
+
+// IncMtlsRefused adds one to the mTLS exchange calls that the guard refused,
+// for reason: MtlsRefusedRateLimit or MtlsRefusedBodySize. Any other value
+// counts as MtlsRefusedRateLimit, so the label set stays fixed.
+func (m *ServerMetrics) IncMtlsRefused(reason string) {
+	// Defense in depth: the handler passes one of the two values already.
+	// This check stays so that a new caller cannot add a label value.
+	if reason != MtlsRefusedBodySize {
+		reason = MtlsRefusedRateLimit
+	}
+
+	m.mtlsRefuse.Inc(reason)
+}
+
 // IncBlobDeleteWaiting adds one to the blob deletes that a refused take kept
 // back, for reason: one of the BlobDeleteWait constants. Any other value
 // counts as BlobDeleteWaitGuardError, so the label set stays fixed.
@@ -734,6 +779,55 @@ func (m *ServerMetrics) ObserveGitHostRefused(reason string) {
 	}
 
 	m.gitHost.Inc(reason)
+}
+
+// Reasons of dustpan_git_host_event_rejected_total. Each one is a class of
+// refusal: none names a hook ID, an installation or a repository.
+const (
+	GitHostEventUnknownHook     = "unknown-hook"
+	GitHostEventNoRegistration  = "no-registration"
+	GitHostEventSignature       = "signature"
+	GitHostEventTooLarge        = "too-large"
+	GitHostEventMalformed       = "malformed"
+	GitHostEventUnsupported     = "unsupported"
+	GitHostEventDuplicate       = "duplicate"
+	GitHostEventNotAssigned     = "not-assigned"
+	GitHostEventNotPrimary      = "not-primary"
+	GitHostEventSecretNotOpened = "secret-not-opened"
+	GitHostEventReceiptsFull    = "receipts-full"
+	// GitHostEventOther counts any other reason, so the label set stays fixed.
+	GitHostEventOther = "other"
+)
+
+// maxGitHostEventRejectedReasons holds one series for each reason.
+const maxGitHostEventRejectedReasons = 12
+
+// newGitHostEventRejectedCounter creates dustpan_git_host_event_rejected_total
+// in reg.
+func newGitHostEventRejectedCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_git_host_event_rejected_total",
+		"Deliveries of Git host events that the server refused, by reason.",
+		[]string{labelReason},
+		maxGitHostEventRejectedReasons,
+	)
+}
+
+// ObserveGitHostEventRejected counts one refused delivery of a Git host event
+// for reason: one of the GitHostEvent constants. Any other value counts as
+// GitHostEventOther. No label holds a hook ID, an installation or a
+// repository. The sender gets the same answer for every reason, so this
+// counter and the audit entry are the only places where an operator reads it.
+func (m *ServerMetrics) ObserveGitHostEventRejected(reason string) {
+	switch reason {
+	case GitHostEventUnknownHook, GitHostEventNoRegistration, GitHostEventSignature, GitHostEventTooLarge,
+		GitHostEventMalformed, GitHostEventUnsupported, GitHostEventDuplicate, GitHostEventNotAssigned,
+		GitHostEventNotPrimary, GitHostEventSecretNotOpened, GitHostEventReceiptsFull:
+	default:
+		reason = GitHostEventOther
+	}
+
+	m.gitEvent.Inc(reason)
 }
 
 // newClaimPollSkippedCounter creates dustpan_job_claim_poll_skipped_total in

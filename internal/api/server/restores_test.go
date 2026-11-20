@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -54,6 +56,10 @@ func workRestores(t *testing.T, restores *backup.RestoreService) {
 		<-done
 	})
 }
+
+// unreadableBackupID is a backup that the target names with a live pointer and
+// no manifest. A restore of it starts and ends failed.
+const unreadableBackupID = "bkp-missing000000000001"
 
 // newRestoreFixture builds a Handler with a backup service and a restore
 // service over fresh stores. The registry store doubles as the restore live
@@ -102,6 +108,16 @@ func newRestoreFixtureWorkers(
 ) restoreFixture {
 	t.Helper()
 
+	// A restore of a backup with no row starts when the target holds the live
+	// pointer of the backup, as on a new installation. The pointer names an
+	// attempt with no manifest, so the restore starts and then fails fast.
+	key := blob.Key("backups/" + unreadableBackupID + "/live.json")
+
+	putErr := stores.target.Put(t.Context(), key, strings.NewReader(`{"attempt":"1"}`))
+	if putErr != nil && !errors.Is(putErr, blob.ErrExists) {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, putErr)
+	}
+
 	workers, authz := opts.workers, opts.authz
 	if authz == nil {
 		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
@@ -128,25 +144,27 @@ func newRestoreFixtureWorkers(
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:            stores.registry,
-		Operations:      stores.registry.DurableOperationsPort(),
-		Backups:         backups,
-		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
-		Blobs:           stores.live,
-		Leases:          stores.registry,
-		Target:          target,
-		Key:             nil,
-		Installation:    "test",
-		AfterApply:      afterApply,
-		Admit:           nil,
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
+		Live:                stores.registry,
+		Operations:          stores.registry.DurableOperationsPort(),
+		Backups:             backups,
+		Maintenance:         storetest.StateMaintenance{State: stores.registry, Hold: false},
+		Blobs:               stores.live,
+		Leases:              stores.registry,
+		Target:              target,
+		Key:                 nil,
+		Installation:        "test",
+		AfterApply:          afterApply,
+		Admit:               nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -162,47 +180,48 @@ func newRestoreFixtureWorkers(
 	aud := newTestAudit()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          workers,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          backups,
-		Restores:         restores,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            aud,
-		OnAuditFailure:   nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		SignIn:           nil,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            workers,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         authz,
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            backups,
+		Restores:           restores,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              aud,
+		OnAuditFailure:     nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		SignIn:             nil,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -410,12 +429,10 @@ func (g *gatedRestoreTarget) Ping(ctx context.Context) error {
 // TestStartRestoreAnswersAcceptedAndSecondConflicts proves the start route
 // answers 202 with the restore ID only (never a pre-backup ID: the service
 // takes that backup only after the checks pass) and that a second start
-// while one runs answers 409. The backup ID names no backup, so the
-// background restore fails once the gate opens; the GET proves the failure
-// lands in the row without driver text or capability paths. The gate holds
-// the first restore before it reads the target, so the second start meets a
-// running restore on every run: without it the missing backup fails faster
-// than the second POST arrives and the test flakes.
+// while one runs answers 409. The gate holds the first restore, which
+// restores a real backup, before it reads the target, so the second start
+// meets a running restore on every run. The second backup ID names no backup:
+// the conflict answer comes before any read of it.
 func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	t.Parallel()
 
@@ -429,6 +446,16 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 		}
 	}()
 
+	// The backup runs over the plain target, so the first restore finds a
+	// live pointer and a manifest and the gate holds it. A backup that does
+	// not exist fails the restore at its first read, before the gate.
+	plain := newRestoreFixtureOver(t, stores, stores.target)
+
+	backupID := backup.ID("bkp-gated0000000000001")
+	if _, err := plain.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup %s: %v", backupID, err)
+	}
+
 	fix := newRestoreFixtureOver(
 		t,
 		stores,
@@ -436,7 +463,7 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	)
 
 	status, startBody := serveRestore(
-		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+backupID.String()+`"}`,
 	)
 	if status != http.StatusAccepted {
 		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusAccepted, startBody)
@@ -466,21 +493,13 @@ func TestStartRestoreAnswersAcceptedAndSecondConflicts(t *testing.T) {
 	close(gate)
 	released = true
 
-	failed := waitRestoreState(t, fix.handler, doc.ID, "failed")
-	if failed.Error == "" {
-		t.Fatalf("failed restore %s holds no error text", doc.ID)
+	done := waitRestoreState(t, fix.handler, doc.ID, "succeeded")
+	if done.Error != "" {
+		t.Fatalf("succeeded restore %s holds the error text %q", doc.ID, done.Error)
 	}
 
-	if strings.Contains(failed.Error, "backups/") {
-		t.Fatalf("failed restore error %q holds a capability path", failed.Error)
-	}
-
-	if failed.PreBackupID != "" {
-		t.Fatalf("failed check restores pre-backup ID = %q, want empty", failed.PreBackupID)
-	}
-
-	if failed.RequestedBy != "tester" {
-		t.Fatalf("restore requestedBy = %q, want tester", failed.RequestedBy)
+	if done.RequestedBy != "tester" {
+		t.Fatalf("restore requestedBy = %q, want tester", done.RequestedBy)
 	}
 }
 
@@ -636,21 +655,22 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    tokenAuthenticator{},
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      tokenAuthenticator{},
 		Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{
 			identity.ActionServerRestore: true,
 		}},
@@ -887,47 +907,48 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		Now:              nil,
-		TempAdmins:       nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            newTestAudit(),
-		OnAuditFailure:   nil,
-		DeletedUnits:     nil,
-		AuditChain:       nil,
-		AuditSinks:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		SignIn:           nil,
-		CheckpointEpochs: nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		Now:                nil,
+		TempAdmins:         nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            nil,
+		Restores:           nil,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              newTestAudit(),
+		OnAuditFailure:     nil,
+		DeletedUnits:       nil,
+		AuditChain:         nil,
+		AuditSinks:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		SignIn:             nil,
+		CheckpointEpochs:   nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -962,26 +983,119 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables will be replaced"},
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "the caller holds server:restore-access"},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables will be kept",
+			want: "the caller lacks server:restore-access",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			checkAccessModeAuditEntry(t, tc.deny, tc.want)
+			checkAccessModeAuditEntry(t, tc.deny, nil, tc.want)
 		})
 	}
 }
 
+// TestStartRestoreAuditEntryNamesTheSettingAtTheRequest proves that the start
+// entry names the value of the restore access setting that the server read at
+// the request, labeled as the value at the request and not as the swap.
+func TestStartRestoreAuditEntryNamesTheSettingAtTheRequest(t *testing.T) {
+	t.Parallel()
+
+	const tail = "; the swap entry records the value at the swap"
+
+	for _, tc := range []struct {
+		name string
+		// set is the value of the setting; "" builds no settings service and
+		// "default" leaves the row absent.
+		set  string
+		want string
+	}{
+		{
+			name: "no settings service", set: "",
+			want: "restore.replace-access-tables was not read at the request: the server keeps no settings" + tail,
+		},
+		{name: "the default", set: "default", want: "restore.replace-access-tables was false at the request" + tail},
+		{name: "on", set: "true", want: "restore.replace-access-tables was true at the request" + tail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var svc *setting.Service
+			if tc.set != "" {
+				svc = restoreSettingServiceOf(t, tc.set)
+			}
+
+			checkSettingAtRequestEntry(t, svc, tc.want)
+		})
+	}
+}
+
+// checkSettingAtRequestEntry starts a restore on a handler with the settings
+// service svc and proves that the start entry holds want.
+func checkSettingAtRequestEntry(t *testing.T, svc *setting.Service, want string) {
+	t.Helper()
+
+	checkAccessModeAuditEntry(t, map[identity.Action]bool{}, svc, want)
+}
+
+// restoreSettingServiceOf returns a settings service over a new store with the
+// declaration of the restore access setting, with value set through a patch
+// with a fresh authentication. "default" sets nothing.
+func restoreSettingServiceOf(t *testing.T, value string) *setting.Service {
+	t.Helper()
+
+	reg, err := setting.NewRegistry(backup.RestoreAccessSettingDeclarations())
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	st := openBackupDeps(t).registry
+	svc := setting.NewService(
+		st.SettingStore(),
+		reg,
+		nil,
+		st,
+		func() time.Time { return time.UnixMilli(1_700_000_000_000) },
+	)
+
+	if value == "default" {
+		return svc
+	}
+
+	entry := audit.Entry{
+		At: time.UnixMilli(1), Namespace: audit.ServerScope, Subject: "alice", IDPSubject: "", TokenID: "",
+		Action: "", Object: audit.ServerScope.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+
+	patch := setting.Patch{{Key: backup.SettingRestoreAccessTables, Value: value, Delete: false}}
+
+	_, err = svc.Patch(
+		t.Context(), setting.InstallationScope(), patch, setting.PatchRequest{Entry: entry, IfMatch: 0, Fresh: true},
+	)
+	if err != nil {
+		t.Fatalf("set the restore access setting: %v", err)
+	}
+
+	return svc
+}
+
 // checkAccessModeAuditEntry starts a restore with deny controlling
 // server:restore-access and proves the restore audit entry names want.
-func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want string) {
+func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, settings *setting.Service, want string) {
 	t.Helper()
 
 	stores := openBackupDeps(t)
+
+	// The backup has no row, so the target must name it with a live pointer.
+	pointer := blob.Key("backups/" + unreadableBackupID + "/live.json")
+	if putErr := stores.target.Put(t.Context(), pointer, strings.NewReader(`{"attempt":"1"}`)); putErr != nil {
+		t.Fatalf("put the live pointer of %s: %v", unreadableBackupID, putErr)
+	}
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
@@ -1004,25 +1118,27 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:            stores.registry,
-		Operations:      stores.registry.DurableOperationsPort(),
-		Backups:         backups,
-		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
-		Blobs:           stores.live,
-		Leases:          stores.registry,
-		Target:          stores.target,
-		Key:             nil,
-		Installation:    "test",
-		AfterApply:      nil,
-		Admit:           nil,
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
+		Live:                stores.registry,
+		Operations:          stores.registry.DurableOperationsPort(),
+		Backups:             backups,
+		Maintenance:         storetest.StateMaintenance{State: stores.registry, Hold: false},
+		Blobs:               stores.live,
+		Leases:              stores.registry,
+		Target:              stores.target,
+		Key:                 nil,
+		Installation:        "test",
+		AfterApply:          nil,
+		Admit:               nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1036,47 +1152,48 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		TempAdmins:       nil,
-		Now:              nil,
-		CheckpointEpochs: nil,
-		SignIn:           nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: deny},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          backups,
-		Restores:         restores,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            stores.registry,
-		OnAuditFailure:   nil,
-		AuditChain:       nil,
-		DeletedUnits:     nil,
-		AuditSinks:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           settings,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:         nil,
+		Now:                nil,
+		CheckpointEpochs:   nil,
+		SignIn:             nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         selectiveAuthorizer{deny: deny},
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            backups,
+		Restores:           restores,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              stores.registry,
+		OnAuditFailure:     nil,
+		AuditChain:         nil,
+		DeletedUnits:       nil,
+		AuditSinks:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1100,11 +1217,15 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		deny map[identity.Action]bool
 		want string
 	}{
-		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{
+			name: "replaces with restore-access", deny: map[identity.Action]bool{},
+			want: "access tables replaced; setting restore.replace-access-tables " +
+				"taken from the backup (the live value was not read before the swap, the new value is false)",
+		},
 		{
 			name: "keeps without restore-access",
 			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
-			want: "access tables kept",
+			want: "access tables kept; setting restore.replace-access-tables kept (the live value was not read)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1144,25 +1265,27 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
-		Live:            stores.registry,
-		Operations:      stores.registry.DurableOperationsPort(),
-		Backups:         backups,
-		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
-		Blobs:           stores.live,
-		Leases:          stores.registry,
-		Target:          stores.target,
-		Key:             nil,
-		Installation:    "test",
-		AfterApply:      nil,
-		Admit:           nil,
-		AllowDevBackups: false,
-		AllowDevHint:    "",
-		Owner:           "",
-		Lease:           0,
-		CleanupLockWait: 0,
-		RetryBase:       time.Millisecond,
-		Now:             nil,
-		Logger:          nil,
+		Live:                stores.registry,
+		Operations:          stores.registry.DurableOperationsPort(),
+		Backups:             backups,
+		Maintenance:         storetest.StateMaintenance{State: stores.registry, Hold: false},
+		Blobs:               stores.live,
+		Leases:              stores.registry,
+		Target:              stores.target,
+		Key:                 nil,
+		Installation:        "test",
+		AfterApply:          nil,
+		Admit:               nil,
+		AllowDevBackups:     false,
+		AllowDevHint:        "",
+		Owner:               "",
+		Lease:               0,
+		CleanupLockWait:     0,
+		RetryBase:           time.Millisecond,
+		Now:                 nil,
+		Logger:              nil,
+		AccessSetting:       nil,
+		AccessSettingStatic: nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service: %v", err)
@@ -1176,47 +1299,48 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
-		ProxyRules:       nil,
-		Cursors:          testCursors(t),
-		Reach:            noReach(),
-		LocalUsers:       nil,
-		Preferences:      nil,
-		GitHostLinks:     nil,
-		Settings:         nil,
-		GitHost:          nil,
-		Idempotency:      nil,
-		Workers:          nil,
-		InstallationKind: "",
-		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		TempAdmins:       nil,
-		Now:              nil,
-		CheckpointEpochs: nil,
-		SignIn:           nil,
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: deny},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          backups,
-		Restores:         restores,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		Journal:          nil,
-		Principals:       nil,
-		Access:           nil,
-		Tokens:           nil,
-		Audit:            stores.registry,
-		OnAuditFailure:   nil,
-		AuditChain:       nil,
-		DeletedUnits:     nil,
-		AuditSinks:       nil,
-		IPAllowlists:     nil,
-		Gates:            nil,
-		SessionPolicy:    nil,
-		DenialLimiter:    nil,
-		Instances:        nil,
-		StoreChecks:      nil,
+		FirstAdministrator: nil,
+		ProxyRules:         nil,
+		Cursors:            testCursors(t),
+		Reach:              noReach(),
+		LocalUsers:         nil,
+		Preferences:        nil,
+		GitHostLinks:       nil,
+		Settings:           nil,
+		GitHost:            nil,
+		Idempotency:        nil,
+		Workers:            nil,
+		InstallationKind:   "",
+		StateWriteGates:    stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:         nil,
+		Now:                nil,
+		CheckpointEpochs:   nil,
+		SignIn:             nil,
+		Authenticator:      tokenAuthenticator{},
+		Authorizer:         selectiveAuthorizer{deny: deny},
+		Logger:             slog.New(slog.DiscardHandler),
+		Namespaces:         namespaces,
+		Backups:            backups,
+		Restores:           restores,
+		Maintenance:        newFakeMaintenance(maintenance.StateNormal),
+		Metrics:            stubMetrics{},
+		Version:            "test",
+		Schema:             stubSchema{migrations: nil},
+		Journal:            nil,
+		Principals:         nil,
+		Access:             nil,
+		Tokens:             nil,
+		Audit:              stores.registry,
+		OnAuditFailure:     nil,
+		AuditChain:         nil,
+		DeletedUnits:       nil,
+		AuditSinks:         nil,
+		IPAllowlists:       nil,
+		Gates:              nil,
+		SessionPolicy:      nil,
+		DenialLimiter:      nil,
+		Instances:          nil,
+		StoreChecks:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1231,7 +1355,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	doc := startRestore(t, handler, `{"backupID":"`+backupID.String()+`"}`)
 	waitRestoreState(t, handler, doc.ID, "succeeded")
 
-	listing, err := stores.registry.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := stores.registry.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}
@@ -1260,7 +1384,7 @@ func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want 
 	t.Helper()
 
 	listing, err := stores.registry.List(
-		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+		t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0},
 	)
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
@@ -1412,13 +1536,23 @@ func TestStartRestoreInvalidBackupIDAnswers400(t *testing.T) {
 
 	const want = "invalid backup ID: use an ID that opendustpan backup printed"
 
-	for _, id := range []string{"../x", "bkp-a/b", "x"} {
+	for _, id := range []string{"../x", "bkp-a/b", "x", `bkp-a\u0000`} {
 		status, resp := serveRestore(
 			t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
 		)
 		if status != http.StatusBadRequest || !strings.Contains(resp, want) {
-			t.Errorf("POST restores of %q answers %d %s, want 400 that names the ID rule", id, status, resp)
+			t.Errorf("POST restores of %.20q answers %d %.200s, want 400 that names the ID rule", id, status, resp)
 		}
+	}
+
+	// An ID of 10 kB is over the body limit of the route: the body check
+	// refuses it before the ID check.
+	status, resp := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores",
+		`{"backupID":"bkp-`+strings.Repeat("a", 10_000)+`"}`,
+	)
+	if status != http.StatusRequestEntityTooLarge {
+		t.Errorf("POST restores of an ID of 10 kB answers %d %.200s, want 413", status, resp)
 	}
 
 	listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
@@ -1461,5 +1595,169 @@ func TestStartRestoreBodyTooLarge(t *testing.T) {
 
 	if got.ErrorCode != "request.body-too-large" || got.ErrorArgs["maxBytes"] != float64(limit) {
 		t.Fatalf("answer = %+v, want request.body-too-large with maxBytes %d", got, limit)
+	}
+}
+
+// TestStartRestoreUnknownBackupAnswers404 proves a start for an ID that has no
+// row and no data in the target answers 404 and makes no restore row.
+func TestStartRestoreUnknownBackupAnswers404(t *testing.T) {
+	t.Parallel()
+
+	fix := newRestoreFixture(t)
+
+	status, body := serveRestore(
+		t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-nonexistent0000001"}`,
+	)
+	if status != http.StatusNotFound {
+		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	if doc := decodeError(t, body); doc.Message != "backup not found" {
+		t.Fatalf("POST restores error = %+v, want the message backup not found", doc)
+	}
+
+	status, body = serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if status != http.StatusOK || strings.Contains(body, "bkp-nonexistent0000001") {
+		t.Fatalf("GET restores = %d %s, want a list with no restore of the unknown backup", status, body)
+	}
+}
+
+// TestStartRestoreRunningBackupAnswers409 proves a start for a backup that has
+// not ended answers 409 with a text that says it runs, and makes no row.
+func TestStartRestoreRunningBackupAnswers409(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	gate := newGateExporter(stores.registry)
+	fix := newBackupFixture(t, stores, gate, nil)
+	restores := newRestoreFixtureOver(t, stores, stores.target)
+
+	id := startBackup(t, fix.handler)
+
+	waitGateEntered(t, gate)
+
+	status, body := serveRestore(
+		t, restores.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+	)
+	if status != http.StatusConflict {
+		t.Fatalf("POST restores answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	if doc := decodeError(t, body); !strings.Contains(doc.Message, "still running") {
+		t.Fatalf("POST restores error = %+v, want a message that says the backup is still running", doc)
+	}
+
+	close(gate.release)
+}
+
+// getFailTarget fails the Get of every live pointer with errTargetDown and
+// passes all other calls to the embedded store.
+type getFailTarget struct {
+	blob.Store
+}
+
+var errTargetDown = errors.New("target down")
+
+func (s getFailTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if strings.HasSuffix(key.String(), "/live.json") {
+		return nil, errTargetDown
+	}
+
+	return s.Store.Get(ctx, key)
+}
+
+// TestStartRestoreUnreadablePointerIsRefused proves that a start for a backup
+// with no row, whose live pointer in the target cannot be read, is refused
+// with a status that is not 202, and makes no restore row.
+func TestStartRestoreUnreadablePointerIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const id = "bkp-badpointer0000001"
+
+	tests := []struct {
+		name    string
+		pointer string
+		failGet bool
+		status  int
+	}{
+		{"not JSON", "not json", false, http.StatusInternalServerError},
+		{"oversize", `{"attempt":"` + strings.Repeat("a", 2048) + `"}`, false, http.StatusInternalServerError},
+		{"bad attempt", `{"attempt":"5/../6"}`, false, http.StatusInternalServerError},
+		{"target error", "", true, http.StatusInternalServerError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stores := openBackupDeps(t)
+			putLivePointer(t, stores, id, tc.pointer)
+
+			var target blob.Store = stores.target
+			if tc.failGet {
+				target = getFailTarget{Store: stores.target}
+			}
+
+			fix := newRestoreFixtureOver(t, stores, target)
+
+			status, body := serveRestore(
+				t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+id+`"}`,
+			)
+			if status == http.StatusAccepted || status != tc.status {
+				t.Fatalf("POST restores answers %d %s, want %d", status, body, tc.status)
+			}
+
+			listStatus, listBody := serveRestore(t, fix.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+			if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
+				t.Fatalf("GET restores answers %d %s, want 200 with no restore", listStatus, listBody)
+			}
+		})
+	}
+}
+
+// putLivePointer stores data as the live pointer of backup id in the target
+// of stores. Empty data stores nothing.
+func putLivePointer(t *testing.T, stores backupStores, id, data string) {
+	t.Helper()
+
+	if data == "" {
+		return
+	}
+
+	key := blob.Key("backups/" + id + "/live.json")
+	if err := stores.target.Put(t.Context(), key, strings.NewReader(data)); err != nil {
+		t.Fatalf("put pointer: %v", err)
+	}
+}
+
+// TestFailedBackupAnswersWithItsState proves that the check of a backup that
+// ended with an error answers 200 with complete false and a text that says
+// so, and that a start for it answers 409 with the same text and makes no
+// restore row.
+func TestFailedBackupAnswersWithItsState(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	status, body := serveRestore(
+		t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+testBackupID.String()+"/check", "",
+	)
+	if status != http.StatusOK || !strings.Contains(body, `"complete":false`) ||
+		!strings.Contains(body, "ended with an error") || strings.Contains(body, "corrupt") {
+		t.Fatalf("GET check answers %d %s, want 200 complete false and the text ended with an error", status, body)
+	}
+
+	_, before := serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+
+	status, body = serveRestore(
+		t, handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+testBackupID.String()+`"}`,
+	)
+	if status != http.StatusConflict || !strings.Contains(body, "ended with an error") {
+		t.Fatalf("POST restores answers %d %s, want 409 that says the backup ended with an error", status, body)
+	}
+
+	status, body = serveRestore(t, handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if status != http.StatusOK || body != before {
+		t.Fatalf("GET restores answers %d %s, want the list %s that it had before the start", status, body, before)
 	}
 }

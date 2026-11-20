@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -244,8 +245,8 @@ func decisionRecordsUnitScope(t *testing.T) gate.Scope {
 }
 
 // runDecisionRecordsRefusedLock runs a tofu plan with no lock wait, which the
-// deny gate refuses, and returns the ID of the decision record from the
-// stored records.
+// deny gate refuses, and returns the ID of the decision record that the
+// refusal text names.
 func runDecisionRecordsRefusedLock(
 	ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Install, maintainer *decisionRecordsPerson,
 ) gate.RecordID {
@@ -260,11 +261,6 @@ func runDecisionRecordsRefusedLock(
 		t.Fatalf("tofu init: %v:\n%s", err, initRes.Stdout+initRes.Stderr)
 	}
 
-	before, err := env.StateWriteRecords(ctx, namespace.Name(e2e.Namespace))
-	if err != nil {
-		t.Fatalf("records before the refusal: %v", err)
-	}
-
 	res, err := env.RunAs(ctx, cli, decisionRecordsTofuDir(env),
 		[]string{"TF_CLI_CONFIG_FILE=" + decisionRecordsTofuRC(env, maintainer)},
 		"plan", "-input=false", "-no-color", "-lock-timeout=0s")
@@ -276,17 +272,27 @@ func runDecisionRecordsRefusedLock(
 		t.Fatalf("tofu plan succeeds, want a refusal:\n%s", res.Stdout+res.Stderr)
 	}
 
-	after, err := env.StateWriteRecords(ctx, namespace.Name(e2e.Namespace))
+	// The page tells the reader to take the ID from the refusal text, so the
+	// step does the same. It reads no store, and it runs with the server
+	// binary too.
+	text := res.Stdout + res.Stderr
+
+	id := decisionRecordIDPattern.FindString(text)
+	if id == "" {
+		t.Fatalf("the refusal names no decision record ID:\n%s", text)
+	}
+
+	recordID, err := gate.ParseRecordID(id)
 	if err != nil {
-		t.Fatalf("records after the refusal: %v", err)
+		t.Fatalf("the refusal names the record ID %q: %v", id, err)
 	}
 
-	if len(after) != len(before)+1 {
-		t.Fatalf("records = %d (before %d), want one new record", len(after), len(before))
-	}
-
-	return after[len(after)-1].ID
+	return recordID
 }
+
+// decisionRecordIDPattern finds a decision record ID in the refusal text: the
+// prefix and 20 lowercase letters and digits.
+var decisionRecordIDPattern = regexp.MustCompile(`gdr-[a-z0-9]{20}`)
 
 // decisionRecordsTofuDir is the directory of the OpenTofu configuration.
 func decisionRecordsTofuDir(env *e2e.Env) string {

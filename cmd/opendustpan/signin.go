@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // Variables of the client secret of the OpenID Connect provider. A flag
@@ -83,6 +84,13 @@ func (f *serveFlags) oidcProviderOption(lookup func(string) (string, bool)) (dus
 		}
 
 		return none, false, nil
+	}
+
+	// Defense in depth: NewServer and session.BindProviders check the issuer
+	// too. This check stays so that the start stops at the flag. It does not
+	// rely on those checks.
+	if issuerErr := session.CheckIssuer(f.oidcIssuer); issuerErr != nil {
+		return none, false, fmt.Errorf("--oidc-issuer: %w", issuerErr)
 	}
 
 	secret, err := secretFrom(lookup, oidcSecretEnvVar, oidcSecretFileEnvVar, errNoOIDCSecret)

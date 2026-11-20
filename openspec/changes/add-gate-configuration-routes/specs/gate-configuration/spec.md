@@ -1,193 +1,161 @@
 ## ADDED Requirements
 
-### Requirement: Serve scope routes
+### Requirement: Approval routes at collection and unit scope
 
-The server SHALL serve the gate, approval-rule and approval-default routes at the namespace, collection and by-name unit scopes with the read and manage actions of the namespace.
+The server SHALL serve list, get, set and delete of approval rules, and get, set and reset of the approval default, at the collection scope and at the by-name unit scope. The read routes SHALL declare `namespace:read-gates`. The write routes SHALL declare `namespace:manage-gates` and SHALL need a fresh authentication.
 
-#### Scenario: List gates
-- **WHEN** a holder of the read action lists the gates of a namespace
-- **THEN** the server answers the gates of that namespace only
+#### Scenario: List at a collection
+- **WHEN** a holder of the read action lists the approval rules of a collection
+- **THEN** the server answers the rules stored at that collection only, and no rule of the namespace
 
-#### Scenario: Other scope
-- **WHEN** a caller reads an object ID of another scope
+#### Scenario: Unit path
+- **WHEN** a holder of the read action reads an approval rule of the stack web/prod through the by-name path with the name encoded
+- **THEN** the server answers the rule of that unit
+
+#### Scenario: Rule of another scope
+- **WHEN** a caller reads the ID of a namespace rule through a collection path
 - **THEN** the server answers 404 with code gate.not-found
 
 #### Scenario: No action
-- **WHEN** a caller without the manage action writes a gate
-- **THEN** the server answers 403 with code gate.denied and the record ID
+- **WHEN** a caller without the manage action saves an approval rule at a collection
+- **THEN** the server answers 403 with code access.denied and stores nothing
 
-#### Scenario: Unit path
-- **WHEN** a holder of the read action lists the gates of the stack web/prod through the by-name path with the segment encoded
-- **THEN** the server answers the gates of that unit
+#### Scenario: Access token write
+- **WHEN** a caller with an access token saves an approval default at a unit
+- **THEN** the server answers 403 with code mfa.fresh-step-required and the stored default does not change
 
-#### Scenario: Collection action
-- **WHEN** a holder of the namespace manage action saves a gate on a collection
-- **THEN** the server stores the gate at the collection scope
+#### Scenario: Reset without a default
+- **WHEN** a manager resets the approval default of a unit that has none
+- **THEN** the server answers 204
 
-### Requirement: Installation scope
+### Requirement: Versions and limits at the new scopes
 
-Where a gate route addresses the installation, the server SHALL check the installation read or manage gate action.
+A write at the collection or the unit scope SHALL follow the rules of the namespace scope: a missing If-Match uses the stored version, a stale version gives 409 with code gate.version-conflict, a body with an unknown field gives 400, and a scope holds at most 64 approval rules.
+
+#### Scenario: Stale version
+- **WHEN** a manager saves an approval rule at a collection with an If-Match that is not the stored version
+- **THEN** the server answers 409 with code gate.version-conflict and the rule does not change
+
+#### Scenario: Missing If-Match
+- **WHEN** a manager saves an approval rule at a unit with no If-Match header
+- **THEN** the server replaces the stored rule, or creates it
+
+#### Scenario: Rule limit
+- **WHEN** a manager saves the 65th approval rule of a collection
+- **THEN** the server answers 422 with code gate.limit and stores nothing
+
+#### Scenario: Final rule
+- **WHEN** a manager saves a rule at a unit with the ID of a final rule of the namespace
+- **THEN** the server answers 409 with code gate.final and stores nothing
+
+#### Scenario: Unknown field
+- **WHEN** a manager sends a body with the field `scope`
+- **THEN** the server answers 400 and calls no store method
+
+### Requirement: Stable unit key for approval rules
+
+The approval rules and the approval default of a unit SHALL stay with the stable unit ID. The by-name path SHALL resolve to the ID inside the request.
+
+#### Scenario: Rename
+- **WHEN** a unit with an approval rule is renamed
+- **THEN** a read through the new name answers the rule
+
+#### Scenario: Reused name
+- **WHEN** a unit is deleted and a new unit gets its name
+- **THEN** the new unit has no approval rule
+
+#### Scenario: Unknown unit
+- **WHEN** a manager saves a rule for a unit that does not exist
+- **THEN** the server answers 404 with code unit.not-found
+
+### Requirement: Audit of a scope write
+
+A write of an approval rule or an approval default at a collection or a unit SHALL write an audit entry in the same transaction. The entry SHALL name the caller, the action and the scope key.
+
+#### Scenario: Audit entry
+- **WHEN** a manager saves an approval rule at a collection
+- **THEN** the audit log holds an entry with the action `namespace:set-approval-rule` and the scope key of the collection row
+
+#### Scenario: Audit failure
+- **WHEN** the audit write fails
+- **THEN** the rule does not change
+
+### Requirement: Installation read routes
+
+The server SHALL serve list and get of gates, access limits and approval rules at the installation scope under `/api/dustpan/v1`. The routes SHALL declare `installation:read-gates` on the object `@server`. The service SHALL accept the installation scope for these reads and SHALL read no namespace.
 
 #### Scenario: Installation read
 - **WHEN** a holder of the installation read action lists the gates of the installation
-- **THEN** the server answers the installation gates
+- **THEN** the server answers the gates stored at the installation only
 
-#### Scenario: Namespace manager
-- **WHEN** a holder of only the namespace manage action writes an installation gate
-- **THEN** the server answers 403 with code gate.denied
+#### Scenario: Namespace holder
+- **WHEN** a holder of only `namespace:read-gates` lists the gates of the installation
+- **THEN** the server answers 403 with code access.denied
 
-### Requirement: Stable unit key
-
-The server SHALL key the gate rows of a unit on the stable unit ID.
-
-#### Scenario: Reused name
-- **WHEN** a unit is deleted and a new unit takes its name
-- **THEN** the new unit has no gate rows of the deleted unit
-
-#### Scenario: Rename
-- **WHEN** a unit is renamed
-- **THEN** its gate rows stay with it
-
-#### Scenario: Restore
-- **WHEN** a deleted unit is restored
-- **THEN** its gate rows return with it
-
-#### Scenario: Unknown unit
-- **WHEN** a caller lists the gates of a name that no unit holds
+#### Scenario: Unknown ID
+- **WHEN** a holder of the installation read action reads an ID that is not stored at the installation
 - **THEN** the server answers 404 with code gate.not-found
 
-### Requirement: Stale write
+### Requirement: Installation write routes
 
-If the If-Match version is not the stored version, then the server SHALL refuse the write with the code gate.version-conflict.
+The server SHALL serve PUT and DELETE of one gate, one access limit and one approval rule at the installation scope under `/api/dustpan/v1`. The routes SHALL declare the action `installation:manage-gates` on the object `@server`, and SHALL need a fresh authentication.
+
+#### Scenario: Installation operator saves a gate
+- **WHEN** an installation operator with a fresh sign-in saves a gate at the installation
+- **THEN** the server stores the gate and writes an audit entry with the action `installation:set-gate` and the scope `@server`
+
+#### Scenario: Namespace administrator
+- **WHEN** a holder of only `namespace:manage-gates` saves a gate at the installation
+- **THEN** the server answers 403 with code access.denied and stores nothing
+
+#### Scenario: Reader
+- **WHEN** a holder of only `installation:read-gates` deletes an approval rule at the installation
+- **THEN** the server answers 403 with code access.denied and the rule stays
+
+#### Scenario: Access token write
+- **WHEN** a site administrator with an access token saves an access limit at the installation
+- **THEN** the server answers 403 with code mfa.fresh-step-required and the stored access limit does not change
 
 #### Scenario: Stale version
-- **WHEN** two managers write with the same version
-- **THEN** the second write gets 409 and the first stays
+- **WHEN** an operator saves an approval rule at the installation with an If-Match that is not the stored version
+- **THEN** the server answers 409 with code gate.version-conflict and the rule does not change
 
-#### Scenario: Retry
-- **WHEN** the second manager reads the object again and writes with the new version
-- **THEN** the write succeeds
+### Requirement: Audit and fence of an installation write
 
-#### Scenario: No If-Match
-- **WHEN** a write to an existing object carries no If-Match
-- **THEN** the server answers 428 and stores no change
+The service SHALL write each installation change with the zero fence and an audit entry with the scope `@server`. The audit action SHALL be `installation:set-gate`, `installation:delete-gate`, `installation:set-access-limit`, `installation:delete-access-limit`, `installation:set-approval-rule` or `installation:delete-approval-rule`.
 
-#### Scenario: Create
-- **WHEN** a manager saves an object that does not exist, with no If-Match
-- **THEN** the server stores the object
+#### Scenario: Audit action of a namespace
+- **WHEN** a namespace administrator saves a gate at a namespace
+- **THEN** the audit entry has the action `namespace:set-gate`, and no `installation:` action
 
-### Requirement: Limits
+### Requirement: Scopes that the service refuses
 
-If a save makes a scope hold more than 256 gates or 64 approval rules, then the server SHALL refuse it with the code gate.limit.
+The service SHALL refuse an approval default at the installation, a blueprint scope, a profile scope and the empty scope with `gate.ErrInvalid`. The store SHALL refuse a write at the installation with the fence of a namespace.
 
-#### Scenario: Over gate limit
-- **WHEN** a scope holds 256 gates and a save adds one
-- **THEN** the server answers 422 with code gate.limit
+#### Scenario: Installation approval default
+- **WHEN** a caller of the service sets an approval default at the installation scope
+- **THEN** the service returns `gate.ErrInvalid` and calls no store method
 
-#### Scenario: Over rule limit
-- **WHEN** a scope holds 64 approval rules and a save adds one
-- **THEN** the server answers 422 with code gate.limit
+#### Scenario: Wrong fence
+- **WHEN** a caller of the store writes at the installation scope with the fence of a namespace
+- **THEN** the store returns `gate.ErrInvalid` and stores nothing
 
-#### Scenario: Condition size
-- **WHEN** a save carries a condition above 4 KiB
-- **THEN** the server answers 422 with code gate.limit
+#### Scenario: Empty scope
+- **WHEN** a caller of the service reads with the empty scope
+- **THEN** the service returns `gate.ErrInvalid`
 
-### Requirement: ID grammar
+### Requirement: Operator action for installation gates
 
-If an ID does not match the gate ID grammar, then the server SHALL refuse the save with the code gate.invalid.
+The action `installation:manage-gates` SHALL be in the operator family (`pkg/access`). No built-in role outside the operator family and the site administrator SHALL hold it. The catalog of actions SHALL list it, and the sensitive-action table of the principals guide SHALL name it.
 
-#### Scenario: Bad ID
-- **WHEN** a save names an ID with a capital letter or a space
-- **THEN** the server answers 422 with code gate.invalid and stores no change
+#### Scenario: Role family
+- **WHEN** the built-in roles are listed with their actions
+- **THEN** `installation-operator` and `site-administrator` hold `installation:manage-gates`, and `account-administrator` and the namespace roles do not
 
-### Requirement: Rule resolution
+### Requirement: No signature carry-over route
 
-When a gate names approval:<id>, the server SHALL resolve the rule at the scope of the gate and then at each wider scope.
+The server SHALL NOT serve a route for the signature carry-over setting. The binding level replaces the setting.
 
-#### Scenario: Wider rule
-- **WHEN** a unit gate names a rule that only the namespace holds
-- **THEN** the server resolves the namespace rule
-
-#### Scenario: Narrower rule
-- **WHEN** a namespace gate names a rule that only a unit holds
-- **THEN** the server does not resolve it and refuses the save
-
-### Requirement: Final gate
-
-If a narrower scope saves an object with the ID of a wider final object, then the server SHALL refuse the save with the code gate.final.
-
-#### Scenario: Shadow save
-- **WHEN** a unit manager saves a rule with the ID of a final namespace rule
-- **THEN** the server answers 409 with code gate.final
-
-#### Scenario: Weaker with reason
-- **WHEN** a holder of the manage action of its own scope makes a final gate weaker and gives a reason
-- **THEN** the audit entry holds the reason
-
-### Requirement: Locks held
-
-If a lock is held on the unit, then the server SHALL refuse the save of a gate with 409.
-
-#### Scenario: Held lock
-- **WHEN** a manager saves a gate on a unit that a workspace lock holds
-- **THEN** the server answers 409 and stores no change
-
-### Requirement: Audit
-
-The server SHALL write a change audit entry with the old and the new version in the transaction of each create, change and delete.
-
-#### Scenario: Atomic entry
-- **WHEN** the audit write fails
-- **THEN** the server stores no change
-
-### Requirement: Fresh authentication
-
-If a change to a final gate, an approval rule or an approval default has no fresh authentication, then the server SHALL refuse it with the code mfa.fresh-step-required.
-
-#### Scenario: Access token
-- **WHEN** a caller with an access token saves an approval rule
-- **THEN** the server answers with code mfa.fresh-step-required and stores no change
-
-#### Scenario: Old session
-- **WHEN** a console session with an old sign-in saves an approval default
-- **THEN** the server answers with code mfa.fresh-step-required
-
-#### Scenario: Fresh session
-- **WHEN** a session inside the fresh window saves an approval default
-- **THEN** the server stores it
-
-### Requirement: Unavailable
-
-If the server cannot read the gate configuration, then the server SHALL answer 503 with the code gate.unavailable.
-
-#### Scenario: Store down
-- **WHEN** the store fails on a read
-- **THEN** the server answers 503 with code gate.unavailable
-
-### Requirement: Default reset
-
-When a holder of the manage action deletes the approval default, the server SHALL answer 204 also when none is set.
-
-#### Scenario: Reset set default
-- **WHEN** a manager deletes an approval default that is set
-- **THEN** the server answers 204 and the scope has no default
-
-#### Scenario: Reset none
-- **WHEN** a manager deletes the approval default of a scope that has none
-- **THEN** the server answers 204
-
-### Requirement: Carry-over setting
-
-When a holder of the manage action saves the signature carry-over setting of a scope, the server SHALL store it and show its effective value on read.
-
-#### Scenario: Read default
-- **WHEN** a holder of the read action reads a scope that has no saved setting
-- **THEN** the server answers the default value
-
-### Requirement: Backup
-
-When the server makes a backup, the server SHALL include the gate configuration rows.
-
-#### Scenario: Round trip
-- **WHEN** a backup with gates and approval rules is restored
-- **THEN** the same gates and rules exist after the restore
+#### Scenario: No route
+- **WHEN** the route table is listed
+- **THEN** it has no path with the segment `signature-carry-over`

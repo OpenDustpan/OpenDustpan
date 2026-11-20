@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/metrics"
 )
 
 // operationLister is implemented by an adapter that describes its routes under
@@ -28,27 +29,28 @@ type routeSource struct {
 // fails without it.
 func (a adapters) allHandlers() []namedHandler {
 	return []namedHandler{
-		{"server", a.server},
-		{"inventory", a.inventory},
-		{"audit", a.audit},
-		{"context", a.context},
-		{"decisionrecords", a.decisionRecords},
-		{"runners", a.runners},
-		{"runnerpools", a.runnerPools},
-		{"profiles", a.profiles},
-		{"issuer", a.issuer},
-		{"sinks", a.sinks},
-		{"jobs", a.jobs},
-		{"triggers", a.triggers},
-		{"unitsettings", a.unitSettings},
-		{"drift", a.drift},
-		{"registry", a.registry},
-		{"sourcefilter", a.sourceFilter},
-		{"trustrules", a.trustRules},
-		{"selfservice", a.selfService},
-		{"pulumi", a.pulumi},
-		{"tfe", a.tfe},
-		{"tofuhttp", a.tofuHTTP},
+		{name: "server", handler: a.server, label: metrics.AdapterServer},
+		{name: "inventory", handler: a.inventory, label: metrics.AdapterInventory},
+		{name: "audit", handler: a.audit, label: metrics.AdapterServer},
+		{name: "context", handler: a.context, label: metrics.AdapterServer},
+		{name: "decisionrecords", handler: a.decisionRecords, label: metrics.AdapterServer},
+		{name: "runners", handler: a.runners, label: metrics.AdapterServer},
+		{name: "runnerpools", handler: a.runnerPools, label: metrics.AdapterServer},
+		{name: "profiles", handler: a.profiles, label: metrics.AdapterServer},
+		{name: "issuer", handler: a.issuer, label: metrics.AdapterServer},
+		{name: "githostwebhook", handler: a.gitHostWebhook, label: metrics.AdapterServer},
+		{name: "sinks", handler: a.sinks, label: metrics.AdapterServer},
+		{name: "jobs", handler: a.jobs, label: metrics.AdapterServer},
+		{name: "triggers", handler: a.triggers, label: metrics.AdapterServer},
+		{name: "unitsettings", handler: a.unitSettings, label: metrics.AdapterServer},
+		{name: "drift", handler: a.drift, label: metrics.AdapterServer},
+		{name: "registry", handler: a.registry, label: metrics.AdapterServer},
+		{name: "sourcefilter", handler: a.sourceFilter, label: metrics.AdapterServer},
+		{name: "trustrules", handler: a.trustRules, label: metrics.AdapterServer},
+		{name: "selfservice", handler: a.selfService, label: metrics.AdapterServer},
+		{name: "pulumi", handler: a.pulumi, label: metrics.AdapterPulumi},
+		{name: "tfe", handler: a.tfe, label: metrics.AdapterOpenTofu},
+		{name: "tofuhttp", handler: a.tofuHTTP, label: metrics.AdapterOpenTofu},
 	}
 }
 
@@ -66,10 +68,99 @@ func (a adapters) handlers() []namedHandler {
 	return out
 }
 
-// namedHandler is an adapter with the name that the tests print.
+// namedHandler is an adapter with the name that the tests print and the
+// adapter label that the request metrics and the request log use.
 type namedHandler struct {
 	name    string
 	handler http.Handler
+	label   string
+}
+
+// errLabelConflict means that two adapters register one pattern, or one path,
+// with different adapter labels.
+var errLabelConflict = errors.New("adapter label: one route has two labels")
+
+// errLabelNoHandler means that a route source has no handler row, so it has no
+// label. The server does not start: no rule picks a label for it.
+var errLabelNoHandler = errors.New("adapter has no handler row")
+
+// adapterLabels maps each registered pattern of every mounted adapter, and the
+// path of that pattern, to the label of the adapter. The path key is for the
+// root mux, which knows a mounted route by its path only. It returns
+// errLabelConflict, with the key and both adapters, when one key would get two
+// labels, so that a server never starts with an ambiguous label.
+func (a adapters) adapterLabels(root labelSet) (map[string]string, error) {
+	return buildAdapterLabels(a.routeSources(), a.allHandlers(), root)
+}
+
+// labelSet collects the label of each key and the adapter that set it first.
+type labelSet struct {
+	label map[string]string
+	owner map[string]string
+	// err is the first conflict that a registration found. Only the root mux
+	// uses it.
+	err error
+}
+
+// newLabelSet returns an empty labelSet.
+func newLabelSet() labelSet {
+	return labelSet{label: map[string]string{}, owner: map[string]string{}, err: nil}
+}
+
+// add sets the label of key for adapter, or returns errLabelConflict when key
+// already has another label.
+func (l labelSet) add(key, label, adapter string) error {
+	if prev, seen := l.label[key]; seen && prev != label {
+		return fmt.Errorf("%w: %q is %q for adapter %q and %q for adapter %q",
+			errLabelConflict, key, prev, l.owner[key], label, adapter)
+	}
+
+	l.label[key] = label
+
+	if _, seen := l.owner[key]; !seen {
+		l.owner[key] = adapter
+	}
+
+	return nil
+}
+
+// buildAdapterLabels adds the patterns of sources to the labels that the root
+// mux holds, and returns the joined map.
+func buildAdapterLabels(sources []routeSource, handlers []namedHandler, root labelSet) (map[string]string, error) {
+	if root.err != nil {
+		return nil, root.err
+	}
+
+	labelOf := map[string]string{}
+	for _, h := range handlers {
+		labelOf[h.name] = h.label
+	}
+
+	set := newLabelSet()
+	for key, label := range root.label {
+		set.label[key] = label
+		set.owner[key] = root.owner[key]
+	}
+
+	for _, source := range sources {
+		label, ok := labelOf[source.name]
+		if !ok {
+			return nil, fmt.Errorf(
+				"adapter %q lists routes but has no row in allHandlers: %w",
+				source.name, errLabelNoHandler,
+			)
+		}
+
+		for _, pattern := range source.patterns {
+			for _, key := range []string{pattern, patternPath(pattern)} {
+				if err := set.add(key, label, source.name); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	return set.label, nil
 }
 
 // isNilHandler reports whether h is a nil interface. A module that is off

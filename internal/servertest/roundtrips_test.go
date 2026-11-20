@@ -895,6 +895,16 @@ type requestFlow struct {
 // "unlock" holds 2 for the final version of the release, and "pulumi cancel"
 // and the other pulumi flows that end an update hold up to 4 for their writes
 // and their final version.
+//
+// Each create and each start of an update asks which collection holds the
+// stack, to refuse a stack in no collection before the update exists and
+// before it takes its lease. The lookup is 1 round trip
+// (GetUnitCollectionByName). The service pays it once in Updates.Create and
+// once in Updates.Start. So "pulumi update cycle", "pulumi stack import" and
+// "pulumi stack restore" each pay it twice. The writes of a running update (the
+// checkpoints and the journal batches) pay nothing for this check: the store
+// makes it in the transaction of the write, in the statement that already
+// reads the stack.
 func requestFlows() []requestFlow {
 	return []requestFlow{
 		{"opentofu upload", 42, func(h *rtHarness) {
@@ -951,7 +961,7 @@ func requestFlows() []requestFlow {
 		// attempt deadline with one set_config: one more round trip. The start
 		// reads the stack one time, so that the manual lock check matches the
 		// lock by the stable ID of the stack, not by its name.
-		{"pulumi update cycle", 68, func(h *rtHarness) {
+		{"pulumi update cycle", 70, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -988,12 +998,12 @@ func requestFlows() []requestFlow {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 72, func(h *rtHarness) {
+		{"pulumi stack import", 74, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 73, func(h *rtHarness) {
+		{"pulumi stack restore", 75, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
@@ -1511,9 +1521,15 @@ const attemptClaimTrips = 23
 // The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
 // the grants and the memberships of principals of a namespace.
 //
+// The fixed part also holds stagedStackTagCheckTrips: the staged check of the
+// tag values of the stacks.
+//
 // The fixed part also holds stagedTriggerClockTrips: the staged check of the
 // trigger rows reads the clock of the store in one statement, once for each
 // restore.
+//
+// The fixed part also holds updateLeaseExpireTrips: the swap expires the
+// update leases in one statement.
 //
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
@@ -1534,15 +1550,62 @@ const attemptClaimTrips = 23
 func restoreModel() costModel {
 	return costModel{
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
-			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips,
+			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedStackTagCheckTrips + stagedTriggerClockTrips +
+			unitStateTrips +
+			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
+			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips + firstAdministratorTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// swappedSettingTrips is the number of round trips of the read of the restore
+// access setting row in the swap transaction: one SELECT after the swap and
+// before the step record, so the record holds the value that the installation
+// uses. A swap that keeps the live row skips it, but the restores of this test
+// take the row from the backup. It does not grow with the units or the tables.
+const swappedSettingTrips = 1
+
+// settingChangeEntryTrips is the number of round trips of the audit entry that
+// records the restore access setting after a swap that takes the row from the
+// backup. The restores of this test have no reader of the live value, so the
+// old value is unknown and the restore writes the entry, which it did not write
+// before. It was measured at 3 and at 30 units: the count does not grow with the
+// units or the tables.
+const settingChangeEntryTrips = 2
+
+// eventReceiptTrips is the number of round trips that the table of the Git host
+// event receipts takes off the fixed part. A restore leaves the table empty and
+// reads it only for its column check, 1 round trip, so it costs 1 less than the
+// 2 that perOther gives.
+const eventReceiptTrips = 1
+
+// firstAdministratorTrips is the change in the fixed part for the two tables of
+// the first administrator. The measured restore makes 3 round trips fewer than
+// the model gives for them, at 3 and at 30 units, so the count does not grow
+// with the units:
+//
+//   - The marker table first_administrator is a table of Tables that the dev
+//     strip never counts: its rows hold the ID of a person that was never a dev
+//     person. It makes 5 round trips, 2 fewer than perTable gives, as for
+//     proxy_rule_sets. It has the 3 column checks, the count of the staged rows
+//     and the export read, and no count of the strip. The restore with
+//     server:restore-access brings the marker back from the backup, and a
+//     restore without it keeps the live marker: the kept rows are copied in the
+//     statements of the other access tables, so the step counts are the same.
+//   - The code table first_administrator_codes is emptied. It makes 1 round
+//     trip, its column check, which is 1 fewer than perOther gives: the swap
+//     deletes no row of it, and a backup holds none.
+const firstAdministratorTrips = -2 - 1
+
+// updateLeaseExpireTrips is the number of round trips of the statement that
+// expires the lease of every running update in the swap transaction. It is one
+// statement for the restore, not one for each stack or update, so the count
+// does not grow with the units.
+const updateLeaseExpireTrips = 1
 
 // unitStateTrips is the number of round trips by which the state version of
 // each unit changes the fixed part. The restore derives the versions with one
@@ -1595,6 +1658,18 @@ const stagedJobCheckTrips = 1
 // units or the tables.
 const stagedPrincipalCheckTrips = 2
 
+// stagedGrantIDCheckTrips is the number of round trips of the staged check of
+// the grant IDs: checkStagedGrantIDs reads the IDs of the staging schema in
+// one query, once for each restore. The count is fixed: it does not grow with
+// the units or the tables.
+const stagedGrantIDCheckTrips = 1
+
+// stagedStackTagCheckTrips is the number of round trips of the staged check of
+// the tag values of the stacks: checkStagedStackTags reads the stack_tags rows
+// of the staging schema in one query, once for each restore, and not once for
+// each row. The count is fixed: it does not grow with the units or the tables.
+const stagedStackTagCheckTrips = 1
+
 // stagedTriggerClockTrips is the number of round trips that the staged check of
 // the trigger rows adds for the clock: it reads the clock of the store in one
 // statement, once for each restore. It does not grow with the units or the
@@ -1607,6 +1682,12 @@ const stagedTriggerClockTrips = 1
 // once for each restore. The count is fixed: it does not grow with the units
 // or the tables.
 const breakGlassFloorTrips = 3
+
+// breakGlassPasswordTrips is the number of round trips of the check for
+// break-glass accounts with a local password in the swap step: the query
+// CountBreakGlassWithPassword runs once for each restore, after the swap. The
+// count is fixed: it does not grow with the units or the tables.
+const breakGlassPasswordTrips = 1
 
 // droppedRunnerCredentialTrips is the number of round trips of the read of
 // the runner credentials that the swap drops: one read of the handoff tokens

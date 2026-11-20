@@ -23,8 +23,6 @@ import (
 const (
 	skipNoPasskeyStore = "no passkey store yet: no person has a passkey, so a password removal always " +
 		"fails with ErrLastCredential"
-	skipNoBreakGlassFlip = "no port sets the break-glass flag on an existing person, so no break-glass " +
-		"person holds a password or a reset code; the store checks the flag in each write that would"
 )
 
 // storeCase is one case of the store suite. A case with a skip reason skips.
@@ -103,8 +101,8 @@ func passwordCases() []storeCase {
 		runCase("a change-required set and clear read back and each appends one entry", testChangeRequired),
 		runCase("a change-required set for a user with no password fails with ErrNotFound",
 			testChangeRequiredNoPassword),
-		skipped("a break-glass flag on a person with a password fails with principal.ErrBreakGlassPassword",
-			skipNoBreakGlassFlip),
+		runCase("an update of a person with a password does not set the break-glass flag",
+			testUpdateKeepsBreakGlassFlag),
 		runCase("a password set for a break-glass person fails with ErrBreakGlass and changes nothing",
 			testSetPasswordBreakGlass),
 		skipped("a password remove and a remove of the last passkey at the same time: one wins and "+
@@ -132,10 +130,10 @@ func resetCases() []storeCase {
 		runCase("a redeem after the expiry fails with ErrNotFound, deletes the code and sets no password",
 			testRedeemExpired),
 		runCase("a redeem whose audit append fails keeps the code and sets no password", testRedeemAppendFails),
-		skipped("a set-up code redeemed for a break-glass person fails with ErrBreakGlass and stores no hash",
-			skipNoBreakGlassFlip),
-		skipped("a redeem for a break-glass person fails with ErrBreakGlass and changes nothing",
-			skipNoBreakGlassFlip),
+		runCase("a set-up code redeemed for a break-glass person fails with ErrBreakGlass and stores no hash",
+			testRedeemBreakGlass(localuser.PurposeSetUp)),
+		runCase("a redeem for a break-glass person fails with ErrBreakGlass and changes nothing",
+			testRedeemBreakGlass(localuser.PurposeReset)),
 		runCase("a reset code for a break-glass person fails with ErrBreakGlass and stores nothing",
 			testResetBreakGlass),
 		runCase("a new reset code deletes the earlier code of the same user", testResetReplaces),
@@ -342,7 +340,7 @@ func generation(t *testing.T, s Store, id string) uint64 {
 func entries(t *testing.T, s Store, prefix string) []audit.Entry {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list entries: %v", err)
 	}

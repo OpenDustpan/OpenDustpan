@@ -87,9 +87,17 @@ func cases() []suiteCase {
 		// An exchange stores its token only for a rule and a principal that
 		// still accept it, in the transaction of its audit entry.
 		exchangeCases(),
+		// An exchange of a TLS client certificate matches its SPIFFE ID again
+		// in its own transaction.
+		mtlsExchangeCases(),
+		// The same exchange checks the version of the trust bundle again in
+		// its own transaction.
+		mtlsBundleCases(),
 		// An update checks the revision, the fence and the principal, and
 		// keeps what never changes.
 		updateCases(),
+		// A SPIFFE ID pattern with a * is refused, and nothing changes.
+		spiffeWildcardCases(),
 		// The trust bundle of a namespace keeps append-only versions with one
 		// active pointer, and refuses input that fails its checks.
 		bundleCases(),

@@ -1,94 +1,151 @@
 ## Context
 
-The key-encryption key sits above namespace key versions, the data keys of `@server`, and sign-in secrets. Rotation rewraps that one level without touching data key values, item keys, or customer keys, while reads continue.
+On main the key-encryption key wraps four families of records directly: the data keys of the scopes (`secret_keys`), the installation data keys (`installation_secret_keys`), the item keys (`item_keys` with one blob each) and the idempotency server key (`idempotency_server_key`). Each record stores the wrapper ID of its key. The start check refuses a database with more than one wrapper ID, and no rewrap exists.
+
+The change adds one resumable rewrap of these four families with reads that keep working. It changes no data key value, no item key value and no content. The hierarchy of namespace keys and customer keys is not on main, so the rewrap acts on the records above. The engine takes both keys from its caller. They reach the process at start (decision 12), and a REST API and a CLI command drive the engine (decisions 14 and 15). A rotation only moves forward: start, resume, finish (decision 13). The owner decided these on 2026-11-20.
+
+A rotation has three parts that must agree at each moment: the stored state (`started` or `finished`), the wrapper ID that each process writes with, and the wrapper IDs of the stored records. The decisions below fix the rule of each part and the check that holds the three together.
 
 ## Decisions
 
-1. **Rotation state machine owns rewraps.** A NEW unexported `rotation` struct in `pkg/secret` owns the state machine started, resuming, finished, and aborted. Only its constructor checks the staged new key, the derived wrapper ID form of ADR 23 decision 4, and the empty active rotation.
-2. **Dual-read window with single-flip finish.** Reads try the new wrapper ID first and then the old wrapper ID while the rotation is active. Writes wrap under the new wrapper ID from the start of the rotation, so records made behind the cursor are already done and the cursor skips them. Finish flips one stored active wrapper ID, so the old key stops working in one step. Each replica stages both keys: the NEW allowlist variable `DUSTPAN_KEY_ENCRYPTION_KEY_PREVIOUS` holds the old key and `DUSTPAN_KEY_ENCRYPTION_KEY` holds the new key; a replica with only one key staged refuses to start while a rotation is active. Rewrap batches hold the fence of the installation and one cursor.
+1. **Tables.** NEW table `key_rotation_state` in the baseline of each dialect holds one singleton row that the baseline inserts and that is always present: the key `1` (a CHECK allows no other), the `generation` (a `BIGINT`, 0 at the baseline) and the ID of the active rotation (null when none is `started`). The start and the finish each add 1 to the generation and no other write changes it. NEW table `key_rotations` holds one row for each rotation: ID, state (`started` or `finished`), old wrapper ID, new wrapper ID, actor, start time, end time and the ID of the durable operation. A partial unique index on the state `started` lets the store refuse a second active rotation. NEW table `key_rotation_blob_deletes` holds the pending deletes of decision 5: rotation ID and blob key. NEW table `instance_wrapper_ids` holds the wrapper IDs of each instance row (decision 8): instance ID (foreign key to `instance_versions`, delete cascades) and wrapper ID. NEW column `rotation_generation` of the `backups` row holds the generation that the backup read when it began (decision 9). The four new tables are control tables: a backup leaves them out and a restore keeps the live rows, as for `instance_versions` (`pkg/store/sqlite/restore.go:765` and `pkg/store/sqlite/restore.go:806`; `pkg/backup/coverage.go:52`). `backups` is a control table on main already (`TableBackups` in `pkg/backup/coverage.go`). Each new object sits in the name order of the baseline, and the change edits the baseline in place, with no numbered migration.
+2. **The rewrap is a durable operation.** The kind is `key-rotation`, NEW const `KeyRotationKind`. Each step is one batch of at most 100 records of one family, in a fixed order of families, and the last step drains the pending deletes of decision 5. A claim, the step fence and the expiry give resume after a stop, and give one runner at a time. A resume starts a new pass over the families, so a record that a late write left under the old ID is found. A batch re-reads each record in its transaction and updates it only when its stored wrapper ID is still the old one, so a replay changes nothing. Resume answers 409 `key-rotation.claimed` while another instance holds a live claim. A record that opens under no held key stops the step. The rewrap writes one audit entry of kind `change`, outcome `failure`, for that record, with the family and the scope or stable ID, and no key bytes, and it logs the same fields. A repeat of the failure on a resume writes a new entry, so the operator sees each attempt.
+3. **Wrapper, write rule and write fence.**
+   - NEW `secret.Rotating` holds two `Wrapper` values and a read-only port `RotationState` with one method that answers the latest rotation row. NEW function `secret.Holds(wrapper, id)` answers true for the ID of a plain wrapper and for either ID of a `Rotating`. The five places that compare a stored ID with the ID of the wrapper call it.
+   - **Unwrap by the stored ID, with no trial (nit N1).** The AAD of a wrapped key binds the scope and not the wrapper ID (`pkg/secret/builtin.go:73`, `pkg/secret/builtin.go:85`). So a trial under each key would work by the GCM tag and would tell nothing about which key the record names. NEW optional interface `IDUnwrapper` with `UnwrapByID(ctx, id, ciphertext, aad)`. `Rotating` implements it: it picks the key whose ID equals `id` and returns `ErrDecrypt` for any other ID. Its plain `Unwrap` method, which has no ID, returns `ErrDecrypt` and never tries a key. A helper `unwrapStored` calls `UnwrapByID` when the wrapper has it, and otherwise compares the ID and calls `Unwrap`. The data key open (`pkg/secret/envelope.go:48`), the installation key open, the item key open, the idempotency key open (`pkg/store/internal/codec/idempotency.go:320`) and the restore open (`OpenKey`, `pkg/secret/secret.go`) use the helper.
+   - **Write rule (blocking B1) and fail closed (nit N-e).** `Rotating.Wrap` reads the singleton row and the latest rotation row for each wrap and picks the key: no rotation row: the old key; state `started` or `finished`: the key of the new wrapper ID of the row. A process that holds both keys therefore writes under the old key until a rotation is stored, so an instance that holds the old key alone can open every record that exists before the start. The read is two indexed lookups for each new data key, installation key, item key or idempotency key. It is not on the path of a read. **One statement (nit N-1, nit N-6).** `Wrap` reads the singleton row and the active rotation row in one statement (one query over the two tables, one snapshot). A start that commits between two separate reads could give a stamp of the old generation with the new key, or the reverse. With one statement the pair is consistent, and a write with the old generation fails the fence. `Rotating` has an unexported method `wrap` that returns the ciphertext and the wrapper ID that it used, both from that one snapshot; `Wrap`, `WrapStamped` and `CursorSealer.Seal` call it, so no caller reads the ID in a second step. Hostile rows: a start that commits between the two reads, and a start that commits between the wrap and the read of the ID (the ID in the result must be the ID of the key that wrapped); the test makes the store commit a start from a hook between the reads and shows that no stamped write commits under a mixed pair. `Wrap` fails closed: when the read fails it returns the error and wraps nothing, and when the new wrapper ID of the row is an ID that the process does not hold it returns `ErrWrapperMismatch` and wraps nothing. It never falls back to the old key on an error.
+   - **Write fence (blocking B-a, B-b).** The fence does not depend on a row that may be missing. The singleton row `key_rotation_state` is always present. `Rotating.WrapStamped(ctx, key, aad)` returns the ciphertext and the `generation` that it read in the same call, and the four write paths (data key, installation data key, item key, idempotency key) pass that generation to the store. In the transaction of the write, the store reads the singleton row and fails with NEW `ErrRotationFence`, writing nothing, when (a) the generation of the stamp is not the generation of the row, or (b) the row holds an active rotation and the wrapper ID of the record is not its new wrapper ID. A plain wrapper gives no stamp, so only (b) applies to its writes. The service wraps again with the fresh state and writes again after one `ErrRotationFence`.
+   - **PostgreSQL.** The write reads the singleton row with `FOR SHARE`. The start and the finish take the singleton row with `FOR UPDATE` before any check. A writer that holds its share lock therefore blocks the start or the finish until it commits, and a writer that reads the row after a start or a finish sees the new generation and fails once. A writer that wrapped under the generation 0, stalls, and meets the row after a start and a finish (generation 2) fails in (a): a record under the old ID cannot commit after the finish count. The check of an instance row, the check of a running backup and the insert of the rotation row run in the same transaction as the `FOR UPDATE` of the start, and the write of an instance row and the begin of a backup take the singleton row with `FOR SHARE` in their own transactions. This removes the write skew across tables: a concurrent instance write or backup begin either commits before the start reads it, or waits for the start and then fails its own check.
+   - **SQLite.** Each write and the start and the finish are write transactions, and SQLite lets one write transaction run at a time (the write lock of the database). The singleton read and the generation compare run inside that transaction, so the order is strict by the lock: the same rules (a) and (b) hold with no extra statement. The test suite runs the same hostile table on both dialects.
+   - **After a restore (blocking B-b).** The restore keeps the live singleton row and the live rotation rows (decision 1). Rule (b) applies only while a rotation is `started`, and a restore is refused while one is (decision 9). After a finished rotation A to B, a restore of an all-A backup, and the start of a plain A process (row 9), no rule refuses a write: the generation of its wraps is not stamped, and no rotation is active. The write works.
+4. **Start.** The start succeeds only when, in the transaction that inserts the row: no rotation is `started` (the unique index); the two wrapper IDs differ and each wrapper is built; each stored wrapper ID of the four families is the old or the new ID (a third ID fails with the family and the count); the old wrapper opens one record of each non-empty family that holds the old ID; each row of `instance_versions` has both wrapper IDs in `instance_wrapper_ids` (decision 8); no backup runs (decision 9). The audit entry commits in the same transaction (decision 7). The start leaves the records as they are. Any record that holds the new ID already is skipped by the rewrap. This allows a start in the other direction after a finish, and a second start of the same pair after a stopped rewrap that the operator finished by hand with no row (none exists today).
+5. **Item keys and pending deletes (blocking B5).** The rewrap of an item key reads the record, opens the blob under the old key, wraps again, writes a new blob (new attempt part, next version) and then, in one transaction, updates the record (the transaction checks the record is not shredded) and inserts one row in `key_rotation_blob_deletes` for the old blob key. After the commit it deletes the old blob from the live store and then deletes the row. A crash between the commit and the delete leaves the row, so the delete runs again at the next pass, and a delete of a blob that is gone counts as done. If a shred committed between the read and the write, the rewrap deletes the new blob and writes no row. This follows the steps that ADR 217 decision 18 gives for the namespace key. NEW method `ItemKeyIndex.RewrapItemKey`, with a conformance test before any adapter. The deleter of the rewrap works on the live store only (decision 16). Finish refuses while a row of the rotation remains in `key_rotation_blob_deletes` (decision 8). **A fenced item key write (nit N-4).** An item key write puts its blob first and commits the record after. When the fence refuses the record (`ErrRotationFence`), the blob that the write put has no record. The orphan cleanup covers it: it deletes a key blob that has no record after the grace period (ADR 151 decision 22; the code constant is `ItemKeyBlobGracePeriod` at `pkg/secret/itemkeyblob.go:39`, and this change relies on the cleanup and on no number). The writer wraps again and writes again with a new attempt part, so the orphan is a different blob. An orphan that a write under the old key left lives until the grace period ends. It holds no wrapped key, because the wrap is in the record that was not written. Finish counts records and not blobs, so an orphan does not block it, and no reader can open it.
+6. **The idempotency server key (nit N5).** The rewrap opens the key under the old key and replaces the row with the existing compare-and-swap replace of the store, so the replay records stay. The start check counts the wrapper ID of the idempotency key (decision 10), so a process that holds no key for that ID does not start, and it never reaches the reset path of main (`pkg/store/internal/codec/idempotency.go:266`). No ADR line allows the silent reset of a rotation: `rg -i 'idempotency' docs/adr docs/rfc` finds no decision about the reset. This change chooses to refuse at start. The reset path stays for a row that holds a held ID and fails to open (damage), and it returns an error in place of a reset while a rotation is `started`, so a rotation never drops replay records. After `finished`, the reset path works as on main (nit N-c).
+7. **Audit is the record, and it fails closed (nit N2).** Start, resume, finish and each failed record of the rewrap write one entry of kind `change` in the scope `@server`. An entry holds the actor, the time, the old and the new wrapper ID and, at finish, the counts. It never holds key bytes. SQLite `AppendServer` opens its own transaction (`pkg/store/sqlite/audit.go:61`), so it cannot join the state change. The store methods that change the rotation state take the entry and use `inAuditedTx` (`pkg/store/sqlite/audit.go:86`, `pkg/store/postgres/audit.go:125`): NEW `RotationStore.StartRotation(ctx, Rotation, audit.Entry)`, `FinishRotation(ctx, id, at, audit.Entry)` and `RecordResume(ctx, id, audit.Entry)`. A failed audit write fails the call and leaves the state as it was. The port and its conformance suite hold these signatures.
+8. **Instance rows and finish (blocking B2).**
+   - A process writes the wrapper IDs that it holds in `instance_wrapper_ids` in the transaction that writes its instance row: one ID for a plain wrapper, two for a `Rotating`. The transaction takes the singleton row with `FOR SHARE` (decision 3). **Order (nit N-b).** On main `startUp` calls `registerInstance` before `secret.CheckWrapper` (`pkg/dustpan/dustpan.go:2619` and `:2625`), so a refused process leaves a row. This change moves the call after the checks of decision 10, and a test shows that a refused process leaves no instance row. NEW `InstanceStore` method `RegisterInstanceKeys`. The row of a process that dies stays, as it does on main (`pkg/installation/instances.go:29`). It blocks start and finish until the administrator deletes it with `DELETE /api/server/instances/{id}`, and the answer names its ID.
+   - Start and finish refuse with `key-rotation.instance-lacks-key` while a row has not both IDs of the rotation. After the start, a process that holds one key does not start (decision 10), so no new row lacks an ID.
+   - Finish runs in one transaction that: counts the records that hold the old ID in the four families (each count is zero); reads `key_rotation_blob_deletes` (it is empty for the rotation); reads `instance_wrapper_ids` (each row holds both IDs); sets the state `finished` and adds 1 to the generation; and writes the audit entry with the counts. The transaction takes the singleton row with `FOR UPDATE` first, so no stamped writer can commit an old-ID record between the count and the commit (decision 3). After the commit the start check needs the new key alone (decision 10).
+9. **Backup and restore (blocking B4, reviewer-prescribed).**
+   - A backup is refused while a rotation is `started`. The backup start reads the singleton row (`FOR SHARE`) in the transaction that writes the backup row and stores the generation in `rotation_generation` (`pkg/backup/service.go:689`, `pkg/backup/service.go:368`) and fails with NEW `secret.ErrRotationActive`, answered as 409 `backup.key-rotation-active`. The rotation start refuses while a backup runs (409 `key-rotation.backup-running`; the text names the backup ID and `GET /api/dustpan/v1/backups/{id}`). **A stuck running backup (nit N-g).** No command on main clears or fails a running backup: `rg` over `internal/api/server/backups.go` finds the routes `POST` and `GET` of `/api/dustpan/v1/backups`, `GET` of `/backups/{id}` and `/backups/{id}/check` only, and `internal/cli/backup.go` has no cancel row. A backup whose process stops is taken over by another instance after the lease and ends `done` or `failed` (`pkg/backup/service.go:394`). This change adds no command for it. The refusal text says to wait for the end of that backup. A backup that never ends is outside this change. A backup that ends reads the singleton row again before it writes its manifest and fails when the generation is not the stored one (nit N-d: a counter, not a wall clock), so a start that commits between the two reads still cannot yield a backup with a row and no blob. A scheduled backup that is refused logs the refusal and writes an audit entry of outcome `failure`.
+   - Why a refusal and not a delete in a last step: the rewrap deletes the old blob of an item key at once (decision 5), and a backup in flight can copy an item key row whose blob is gone. The refusal is the simplest rule and needs no change of the order of the rewrap. The reviewer prescribed it. The cost is that no backup runs during the rewrap, and the docs page says so.
+   - A restore is refused while a rotation is `started`, in `admitStart` (`pkg/backup/restore_service.go:519`), with 409 `restore.key-rotation-active`. The restore key check needs a key for every wrapper ID of the manifest: `backupKeyCheck.run` (`pkg/backup/staging.go:295`) replaces the single comparison at line 306 with `secret.Holds` for each ID of the manifest, and it fails with `ErrWrapperMismatch` for the first ID that the wrapper does not hold (nit of blocking B3, part c). A manifest with no wrapper ID needs no key.
+10. **Start-up (blocking B3).** The start check reads the latest rotation row and the wrapper IDs of the four families (the data keys, the installation data keys, the item keys through `ListItemKeyWrapperIDs`, and the idempotency key). The table gives each case. S is the set of stored IDs, P the ID of a plain wrapper, O and N the IDs of the old and the new key of a `Rotating`, and R the latest rotation row.
+
+    | # | Latest row R | Wrapper | Stored IDs S | Result |
+    | --- | --- | --- | --- | --- |
+    | 1 | none | plain P | S is empty or S is {P} | Start. |
+    | 2 | none | plain P | S holds an ID other than P | Refuse with `ErrWrapperMismatch`. The text names both IDs and keeps the word "rewrap". |
+    | 3 | none | Rotating (O, N) | S is inside {O, N} | Start (the operator staged both keys before the start). |
+    | 4 | none | Rotating (O, N) | S holds an ID outside {O, N} | Refuse with `ErrWrapperMismatch`. |
+    | 5 | `started` | plain | any | Refuse with `ErrRotationActive`. The text names the state and both IDs of R. |
+    | 6 | `started` | Rotating (O, N) with {O, N} not equal to {R.old, R.new} | any | Refuse with `ErrRotationActive`. |
+    | 7 | `started` | Rotating (R.old, R.new) | S is inside {O, N} | Start. |
+    | 8 | `started` | Rotating (R.old, R.new) | S holds an ID outside {O, N} | Refuse with `ErrWrapperMismatch`. |
+    | 9 | `finished` | plain P | S is {P} | Start. |
+    | 10 | `finished` | plain P | S holds an ID other than P (the old key after finish) | Refuse with `ErrWrapperMismatch`, as main does. |
+    | 11 | `finished` | Rotating (O, N) with O equal to R.old | S is inside {O, N} and holds no O | Refuse with NEW `ErrOldKeyHeld`: the text names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`, says to remove the one that is set, and names `opendustpan serve` with the new key alone (owner, 2026-11-20, round 2). There is no warning. |
+    | 12 | `finished` | Rotating (O, N) with O equal to R.old | S is inside {O, N} and holds O | Start (owner, 2026-11-20, round 4). The stored data holds the old ID, as after a restore of a backup from before the rotation. The operator runs a new rotation of the same pair (decision 4). |
+    | 13 | `finished` | Rotating (O, N) with O not equal to R.old | S is inside {O, N} | Start. This is the start in the other direction (decision 13), or a start before a later rotation. |
+    | 14 | `finished` | Rotating (O, N) | S holds an ID outside {O, N} | Refuse with `ErrWrapperMismatch`. |
+
+    **Row 11 and a restore (owner, 2026-11-20, round 4).** Row 11 refuses only when the stored data holds no `R.old` ID. A clean finish with the old key still staged is refused (the answer of round 2). A backup from before the rotation holds the old ID, so a server that runs on it starts under row 12 and the operator runs a new rotation. This keeps ADR 217 decision 21 true: "A restore of a backup made before a rotation of the key-encryption key needs the old key-encryption key". A process with no key and a database with no wrapped key starts as on main. A process with no key and a database that holds a wrapped key is refused as on main (`ErrKeyNotConfigured`). The same table holds for each of the four families: the check reads the union of their IDs. The table is the contract of the test `TestStartUpMatrix`, one row for each line.
+
+    **The process that runs the restore (blocking B-h).** After a finished rotation A to B, the data holds B IDs only, and no process that holds one key can restore an all-A backup. A plain B server refuses the restore: the key check runs before any write and refuses a key that is not in the manifest (`pkg/backup/staging.go:306`, `ErrWrapperMismatch`; `docs/guides/backup-restore-upgrade.md:253-260`: "The server checks the key that it started with before it writes anything"). A `Rotating` (A, B) is refused at its start by row 11, because the data holds no A ID. A `Rotating` (B, A) starts under row 13 (O is B, which is not R.old). The steps are: (1) start `opendustpan serve` with `DUSTPAN_KEY_ENCRYPTION_KEY` set to the B key and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` (or `_OLD_FILE`) set to the A key: `Rotating` (B, A), row 13. (2) Call `POST /api/dustpan/v1/restores` with the backup ID. The route needs the action `server:restore` (declared at `internal/api/server/routes.go:194`; used at `internal/api/server/restores.go:225`) and runs the restore on the running server with its own key. The changed key check calls `secret.Holds` for each manifest ID, and (B, A) holds A. The restore runs in the process, with no restart (`internal/api/server/restores.go:7-8`; `docs/guides/backup-restore-upgrade.md:101-104`). Steps (1) and (2) run with `Rotating` (B, A) on every instance. (3) Restarting with the keys swapped is a separate operator step, taken when the restore ends: `DUSTPAN_KEY_ENCRYPTION_KEY` the A key and the old-key variable the B key: `Rotating` (A, B), which starts under row 12 because the data holds A. (4) Run a new rotation A to B and finish it. (5) Restart with the B key alone. The restore refuses while a rotation is `started` (decision 9). The docs page has this procedure (task 4.4). `TestRestoredPreRotationBackupStartsAndRotatesAgain` and the e2e step run step (2) through the real route, not a fixture load.
+11. **Authorization at the service (blocking B6; the action is owner, 2026-11-20).**
+    - NEW constant `ActionInstallationRotateKeyEncryptionKey = "installation:rotate-key-encryption-key"` in `pkg/identity/identity.go`, next to `ActionInstallationStoreCheck` (line 262). Object: `ServerObject()`. `pkg/access/access.go` classifies it in `FamilyAdministration` (as `server:manage-sign-in`, line 165) and `siteOnlyActions` (`pkg/access/roles.go:150`) lists it, so only the site administrator holds it. The grant is a stored grant of the built-in role, as every grant is. The row for the table of ADR 216 decision 3 is a task.
+    - The route checks the action, as every route does. The service checks it too, because CLAUDE.md step 4 says that the check is at the point of use and that no layer relies on another. NEW rotation service methods `Start(ctx, caller identity.Principal, fresh FreshCheck, req)`, `Resume(ctx, caller)`, `Finish(ctx, caller, fresh FreshCheck)`, `Show(ctx, caller, id)` and `List(ctx, caller)`. Each takes the `identity.Authorizer` at construction and calls `Authorize(ctx, caller, ActionInstallationRotateKeyEncryptionKey, identity.ServerObject())` first, in the form of `internal/trustrulesvc/service.go:471 (method authorizeCreate)`. A denial returns NEW `ErrRotationDenied` (it wraps `identity.ErrDenied`), writes one audit entry of outcome `denied` with the action and the object, and changes nothing. A check that cannot run returns `ErrAccessUnchecked` and fails closed. A nil authorizer fails the constructor.
+    - `FreshCheck` is `func(context.Context) error`. The handler passes the check that `Handler.fresh` uses (`internal/api/server/freshness.go:221`). `Start` and `Finish` call it after the action check and fail with the fresh-step error when it is nil or returns an error, so a new caller of the service cannot skip the step. The batches of the durable operation run as the system after a start or a resume that passed the check. They need no caller, and their audit entries name the actor of the start.
+12. **The old key (owner, 2026-11-20; nits N3 and N4).**
+    - `loadKeyEncryptionKey` (`cmd/opendustpan/main.go:1887`) gets a twin for `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`. Both read the value or the file as the current key does: base64, 32 bytes, the file mode rule (no bit for group or others), no flag.
+    - **Both variables together are refused (N3).** Main lets the value win silently (`cmd/opendustpan/main.go:1905`). For the old key, a value and a file together fail the start with a text that names both variables. The change does not touch the rule of the current key.
+    - **Both are sensitive (N3).** The two settings are declared in `internal/cli/settings.go` as `envSetting` entries with `WithSensitive()`, so `SensitiveEnvs` lists them and `clearSensitiveEnv` (`cmd/opendustpan/envclear.go:22`) clears them after the start. The reader also clears the value variable at the read, as line 1893 does. A test reads the process environment by name after the start and finds neither variable.
+    - **Zero the bytes (N4).** The decoded old key bytes and the raw text are zeroed with `clear` after the wrapper is built. The new key keeps the behavior of main.
+    - **The file read (N4, blocking B-e).** The old key file opens through a root: `os.OpenRoot(filepath.Dir(path))`, then `root.Open(base)`, then `f.Stat()` on the open descriptor for the mode check and the regular-file check. `os.Root` refuses a path that escapes the directory (a link that leads outside it, an absolute link, a `..` out of the root) and follows a link that stays inside it. A Kubernetes Secret volume shows `key` as a relative link to `..data/key` and `..data` as a link to a timestamp directory, all inside the one directory, so it opens. A swap of the path between the check and the read cannot change the file, because the mode comes from the descriptor. A refusal names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`. This is stricter than `readKeyFile`, which follows every link (`cmd/opendustpan/main.go:1935`). The change does not touch `readKeyFile` itself. The chart example is in the docs page (task 4.4): a Secret volume and `server.extraEnv` with `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE` (`deploy/helm/opendustpan/values.yaml:236`).
+    - When the old key is set, the process builds `Rotating(old, new)`. The start of the process fails when the wrapper IDs of the old key and of the new key are equal.
+13. **A rotation only moves forward (owner, 2026-11-20, round 2).** The states are `started` and `finished`. There is no abort route, command, code or audit action. A rotation that stops is resumed. A rotation that cannot end, for example because a record opens under no held key, stays `started`: the operator stages the right key and resumes. To go back to the old key, the operator finishes, then starts a rotation in the other direction (table row 12), with the keys swapped between the two variables. No state of this change is an aborted state.
+14. **The API (owner, 2026-11-20).** Routes under `/api/dustpan/v1/key-rotations`, each with the action of decision 11 and `ServerObject()`, in the form of `internal/api/server/store_checks.go:126`:
+    - `POST /key-rotations` starts a rotation. 202. The body has no field; it never holds key bytes, and the decode is strict. Wrapped by `Handler.fresh`. Needs `Idempotency-Key`.
+    - `GET /key-rotations` lists rotations, newest first. `GET /key-rotations/{id}` answers state, old and new wrapper ID, counts for each family, the pending deletes and the operation state.
+    - `POST /key-rotations/{id}/resume` claims the durable operation again. No fresh step.
+    - `POST /key-rotations/{id}/finish`. Wrapped by `Handler.fresh`.
+    Errors have codes in the NEW file `internal/errcode/catalog_keyrotation.go`: `key-rotation.active` (409), `key-rotation.old-key-missing` (409), `key-rotation.incomplete` (409, with the counts), `key-rotation.not-found` (404), `key-rotation.not-active` (409, for a resume or a finish of a finished rotation), `key-rotation.claimed` (409), `key-rotation.instance-lacks-key` (409), `key-rotation.backup-running` (409). The catalogs of the backup and the restore get `backup.key-rotation-active` and `restore.key-rotation-active` (409), in `internal/errcode/catalog_backup.go` and `internal/errcode/catalog_restore.go`. A refusal of the action writes the denial entry as for every route. **The path under a second-factor rule (owner, Q-3, option (a)).** The documented path (the password sign-in) is written for an installation with no second-factor rule. Under a second-factor rule, start and finish need a console session from a passkey sign-in in a browser, and the page documents no `curl` path for that case. The facts on main: a password sign-in then answers 403 `local-user.second-factor-required` (`docs/guides/local-users.md:45-48`); the fresh code is `requireFresh` (`internal/api/server/freshness.go:112-121`); the password and passkey sign-ins set `AuthTime` (`internal/localusersvc/signin.go:203`, `internal/api/server/passkeysignin.go:288`); the step-up port has no adapter (`internal/stepup/stepup.go:1-7`: "No adapter and no service implements them yet"). Decision 12 of round 4 (a TOTP second step from `curl`) rested on a wrong fact and is withdrawn, returned to the owner; Q-3 replaced it. The route actions are declared at `internal/api/server/routes.go:194` for the restore routes, as the model for the declaration of the new routes. The operation labels, the request and response types and the regenerated API description follow the store check (`internal/api/server/operations_storecheck.go:15`).
+15. **The command (owner, 2026-11-20).** NEW group `opendustpan key-rotation` with `status`, `resume`, `start` and `finish`, a client of the API (server ADR 39 decision 1). `status` calls the two GET routes and `resume` calls the resume route, with `SettingsFor("server", "ca-file")` as `internal/cli/store_check.go:9` does. `start` and `finish` send no request. They print the documented path (the sign-in, the CSRF read, the call with the cookie, the CSRF header and `Origin`) and the docs page, as `internal/cli/audit_chain.go:17` does for the approval (owner, 2026-11-20, round 2). The command never reads a key. It reads no `DUSTPAN_KEY_ENCRYPTION_KEY*` variable.
+16. **Targets keep their blobs (owner, 2026-11-20).** The rewrap deletes the old item key blob in the live store (decision 5) and never in a backup target. No code path of the rewrap holds a target. Retention of backups removes the old blobs when it removes the backup.
+17. **Old wraps stay in storage (nit N7).** An update of a row in PostgreSQL leaves the old row version in the table until vacuum, and SQLite leaves free pages and the write-ahead log. A backup made before the finish holds the old wraps. A rotation therefore does not protect against a person who holds the old key and a copy of the database from before the finish. The docs page `docs/guides/key-rotation.md` says so in its first section, and names the follow-up that removes the copies: a vacuum and a delete of old backups, which the operator does.
+18. **Page cursors carry the wrapper ID, behind a narrow port (blocking B-d, blocking B-f).**
+    - NEW port `secret.CursorSealer` in `pkg/secret`, with two methods: `Seal(ctx, plain, aad []byte) ([]byte, error)` and `Open(ctx, sealed, aad []byte) ([]byte, error)`. NEW constructor `secret.NewCursorSealer(w Wrapper) (CursorSealer, error)`; it returns `ErrInvalidKey` for a nil wrapper. The type behind the port has unexported fields, and no method gives the wrapper back (ADR 364 decision 1: "The guard against a bug class is Go visibility first"). `pkg/dustpan` builds it from `cfg.secretWrapper` where `cursors: cfg.secretWrapper` is today (`pkg/dustpan/dustpan.go:3051`, `pkg/dustpan/jobs.go:86`). `internal/api/jobs` (`jobs.go:85` and `:97`) and `internal/api/server` take a `secret.CursorSealer` and never hold a `secret.Wrapper`, so a plain `Unwrap` of a cursor cannot be written there: the method does not exist on the type that they hold.
+    - **Seal.** The sealed value is one length byte, the wrapper ID and the ciphertext. `Seal` calls `Wrap`, and not `WrapStamped`: a cursor is never stored, so it needs no stamp and no fence. It takes the ID from the same call that wrapped (the unexported `wrap` of `Rotating`, or `ID()` of a plain wrapper), never from a second read. The AAD of the ciphertext is the caller AAD with the length byte and the ID in front of it (a second layer: an ID that is changed in the sealed value fails the tag even when the other key is held).
+    - **Open and hostile input (nit N-2).** `Open` checks in this order and stops at the first failure: (1) the input is not empty; (2) the length byte is not 0 and is not larger than the rest of the buffer minus one; (3) the ID is on the allowlist of IDs that the wrapper holds (`Holds`, an exact compare, so an ID that is a prefix of a held ID fails, and an ID with CR or LF fails); (4) the ciphertext is not empty; (5) `unwrapStored` opens it by the ID with the AAD of the second layer. Each failure returns the one error `ErrDecrypt` with constant text. The text never holds the ID, a length or a byte of the input, so a log line cannot carry attacker bytes (CRLF in a log). The handler answers the existing invalid cursor answer.
+    - **Cost (nit N-2).** `Seal` on a `Rotating` makes the two reads of decision 3 (one statement) for each list page that has a next page. `Open` makes no state read: it picks the key by the stored ID. Risks names this cost. A plain wrapper makes no read.
+    - **The rest of the callers (blocking B-f).** After the change, these non-test places call `Wrapper.Unwrap` on main: `pkg/secret/envelope.go:60`, `pkg/secret/installation.go:256` and `pkg/secret/secret.go:258` (inside `pkg/secret`, they move to `unwrapStored`), the two cursor handlers (`internal/api/jobs/list.go:215` and `internal/api/server/namespaces.go:417`, they move to `CursorSealer.Open`), and the idempotency codec (`pkg/store/internal/codec/idempotency.go:326`). The codec calls NEW exported `secret.UnwrapStored(ctx, w, id, ciphertext, aad)`, which is `unwrapStored` and fails closed for an ID that the wrapper does not hold. `secrettest/wrapper.go` and tests call `Unwrap` in the suite of the port.
+    - **The guard for the rest (no custom check).** One rule in the existing `forbidigo` block of `.golangci.yml` (the block at line 520 has `analyze-types: true`): the pattern `^\*?secret\.(Wrapper|BuiltinWrapper|Rotating)\.Unwrap$` with `pkg: ^opendustpan\.org/opendustpan/pkg/secret$` and the message "Open a stored key with secret.UnwrapStored and a cursor with secret.CursorSealer." The exclusion is scoped to this rule by a `text:` line, as the existing exclusions are (`.golangci.yml:744-769`): `path-except: ^pkg/secret/` or `path: _test\.go$`, `linters: [forbidigo]` and `text: secret\.UnwrapStored` (a word of the new message). Without `text:` the exclusion would turn off every `forbidigo` rule in `pkg/secret` and in every test file, which weakens the config. **Known limit (nit N-5).** The pattern covers the interface and the concrete types `secret.BuiltinWrapper` and `secret.Rotating`, and it covers a method value. An interface in another package that embeds `secret.Wrapper` still escapes it. The port of this decision is the main guard. No analyzer, no scan test and no `rg` test is added. A rule of the lint config is a golangci-lint feature that ADR 364 decision 1 names. The removal proof is the lint run: `make check` fails on a call of `Unwrap` through a `secret.Wrapper`, a `*secret.BuiltinWrapper` or a method value outside `pkg/secret`, and the tasks show this once with a throwaway call that is not committed.
+    - The old cursor format is not kept: no tag shipped it (ADR 322).
 
 ## Structure
 
-NEW unexported type `rotation` in `pkg/secret` with constructor `newRotation` that checks invariants; no new tool and no custom analyzer.
+NEW unexported fields and a constructor for `Rotating` and for the rotation service, so a value cannot exist with equal IDs, with an empty key, with a nil store or with a nil authorizer. NEW port `secret.RotationStore` with a conformance suite in `secrettest`. The store adapters implement it for SQLite and PostgreSQL. No new tool, no custom analyzer.
 
 ## Risks
 
-- Large key tables make rotation slow; batches and resume bound each step.
+- A large item key table makes the rewrap slow. Batches and resume bound each step. No backup runs during the rewrap (decision 9).
+- Page cursors are sealed with the wrapper (`pkg/dustpan/dustpan.go:3051`, `pkg/dustpan/jobs.go:86`) and are opened with the plain `Unwrap` (`internal/api/jobs/list.go:215`, `internal/api/server/namespaces.go:417`). The plain `Unwrap` of `Rotating` returns `ErrDecrypt`, so without a change every list cursor would fail for the whole window of the staged keys. Decision 18 fixes it. A cursor sealed under the old key stops opening after the finish. The caller gets the existing invalid cursor answer and starts the list again. The seal of a cursor on a `Rotating` makes one state read (one statement) for each list page that has a next page; the open makes none (decision 18).
+- Old item key blobs in backup targets stay readable with the old key (owner, 2026-11-20). A copy of the old key must stay as long as the oldest backup that holds them.
+- A stale instance row blocks start and finish until an administrator deletes it. The answer names the row.
+- A rotation that cannot end stays `started` and blocks backups. The operator resumes it with the right key staged.
 - Old key copies outside the server stay outside this change.
 
 ## Layers (defense in depth)
 
+One table for each layer. Each guard has a test that fails when the guard is removed. Each redundant check gets the comment that CLAUDE.md asks for.
+
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| authorize at point of use | Handler checks NEW action `installation:rotate-key` on the installation and denies without it. | Call the NEW rotation route without the grant and check 403. |
-| boundary check | Service accepts only a staged 32-byte base64 key from the configured file or variable and derives the wrapper ID by HMAC; the request body carries no key bytes. | Send key bytes, a shell string, and a short key in the body and check rejection before any rewrap. |
-| limit | Rewrap batches of 100 keys per transaction with a 60 s timeout per batch; a failed batch retries the same cursor and a poison record stops with an error. | Stop the server mid-batch and check resume completes with no partial wrap. |
-| encode or contain | Rewrap encodes wrapper IDs as stored values and never logs key bytes. | Run rotation with secret logging enabled and check no key bytes appear. |
-| fail closed | Unknown wrapper ID fails closed and start refuses a mismatched key per ADR 23 decision 3. | Start with the old key after finish and check refusal to start. |
+| Port adapter (store) | `StartRotation` refuses a second active rotation by the unique index. The batch update names the old wrapper ID in its `WHERE` clause. Wrapper IDs are bound as placeholders. The new ID must not equal the old ID. The write fence reads the always-present singleton row (`FOR SHARE` on PostgreSQL, the write lock on SQLite) and refuses a stale generation, and refuses an ID other than the new ID while a rotation is `started`. Start and finish take the singleton row `FOR UPDATE`. Finish counts, checks the pending deletes and the instance rows in its transaction. | Two concurrent starts; a batch replay with a record that already holds the new ID; a wrapper ID with a quote and a semicolon; equal IDs; an insert of a record under the old ID after the start; a PostgreSQL write that holds its fence read (its share lock) across a start and a finish: the start waits, and a writer with a stale generation fails after both; a finish that races with such an insert; a finish with one pending delete; a finish with one instance row that lacks an ID; a concurrent instance write and a concurrent backup begin against a start. |
+| Service (`secret`) | The constructor accepts two built wrappers, a store and an authorizer. Each method checks `installation:rotate-key-encryption-key` on `ServerObject` before it reads or writes, and `Start` and `Finish` call the fresh check. Rewrap re-opens each record under its stored ID and refuses a record that opens under no held key. Finish counts all four families. Each state change and its audit entry share one transaction. | A caller without the action on each method (with the denial entry); a nil fresh check; a record under a third ID; a record that fails to open; finish with one old record left in each family; an audit store that fails. |
+| Wrapper | `Holds` answers true only for a held ID. `UnwrapByID` fails closed with `ErrDecrypt` for an ID that the wrapper does not hold and for a ciphertext of another key. The plain `Unwrap` of `Rotating` tries no key. `Wrap` fails closed when the state read fails and when the new ID of the row is not held. `UnwrapStored` fails closed for an unheld ID. | An ID of a third key; a truncated ciphertext; a ciphertext made for another AAD; a call of `Unwrap` without an ID; a state store that returns an error on `Wrap`; a row whose new ID is a key that the process does not hold; a start that commits between the two reads of `Wrap` (nit N-1). |
+| Cursor port (`secret.CursorSealer`) | The handlers hold the port and never a `Wrapper`. `Open` checks the input, the length byte, the ID against the allowlist of held IDs, and the ciphertext, in that order, and answers one constant error. The ID is part of the AAD. A `forbidigo` rule bans `secret.Wrapper.Unwrap` outside `pkg/secret`. | Empty input; a length byte beyond the buffer; a length byte of 0; an empty ciphertext; a truncated ciphertext; an ID with CR and LF; an ID that is a prefix of a held ID; a sealed value whose ID was swapped to the other held ID; an error text that must not hold the input. Removal proof: each of the five steps of `Open` is removed once, and its row fails. |
+| Start-up and restore | The table of decision 10, one test for each row. A restore needs every wrapper ID of the manifest and is refused while a rotation is active. | Each of the 14 rows with a store that holds the IDs of the row; a manifest with two IDs and a plain wrapper; a restore while active. |
+| Backup | A backup is refused while a rotation is active and the rotation start refuses while a backup runs. | A backup start after a rotation start; a rotation start during a backup; a backup that ends after a rotation start. |
+| Instance rows | Start and finish refuse while a row lacks an ID of the rotation. A refused process leaves no row. | A row with one ID; a row with no ID; a row that a process left; a process that start-up refuses. Removal proof: take out the instance check of the start once and show `TestStartRefusesInstanceWithOneID` fail. |
+| Log and audit | Entries and logs hold wrapper IDs and counts, never key bytes or ciphertext. | A capture of logs and audit entries during a full rotation, searched for the key bytes in base64 and in hex. |
+| HTTP handler | Each route declares the action and `ServerObject()`. Start and finish need a fresh step. The body limit and a strict decode: the start body has no field, so a key field is refused. | A token of the account administrator; an access token on start and finish; a body with a `key` field; a body over the limit. |
+| Old key source | The old key comes from a variable or from a file that opens through `os.OpenRoot` of its directory, is a regular file, and has no mode bit for group or others (read from the descriptor), never from a flag. The variable and the file together are refused. The variables are sensitive and cleared. The bytes are zeroed after use. Equal keys fail at start. | A file with mode 0644; a link that escapes the directory; an absolute link; a relative link such as `..data/key` inside the directory (it opens); a file that is not regular; a value that is not base64; the variable and the file together; equal old and new key; a read of the environment after start. |
+| Target | The rewrap holds no target and deletes no blob in one: the deleter takes the live store only, and the rewrap code imports no target type. | A rewrap over a fixture with a live store and two targets: each target keeps every old blob, the live store keeps none, and a deleter that is given a target fails the compile or the test. Removal proof: give the deleter the target list once and show `TestRewrapKeepsTargetBlobs` fail. |
 
 ## Diagrams
 
-After this change:
+After this change (the engine and the routes of decision 14):
 
 ```mermaid
 sequenceDiagram
-participant O as Operator
-participant H as NEW installation key handler
-participant S as NEW rotation service
-participant K as pkg/secret Wrapper
-participant D as store
-participant A as pkg/audit
-O->>H: POST rotation start
-H->>S: StartRotation
-S->>D: write rotation started
-S->>A: audit start
+participant C as Caller (route or command)
+participant S as Rotation service
+participant R as RotationStore
+participant D as Durable operation
+participant K as Rotating wrapper
+participant A as Audit
+C->>S: Start(caller, fresh)
+S->>S: check the action and the fresh step
+S->>R: insert started row, audit entry, instance and backup checks (one transaction)
+S->>D: start operation key-rotation
 loop each batch
-S->>K: rewrap batch under new wrapper ID
-S->>D: store rewrapped keys
+D->>K: open by stored ID, wrap under new
+D->>R: update records still under old, queue blob deletes
 end
-O->>H: POST rotation finish
-H->>S: FinishRotation
-S->>D: flip active wrapper ID
-S->>A: audit finish
+D->>R: drain pending blob deletes
+C->>S: Finish(caller, fresh)
+S->>S: check the action and the fresh step
+S->>R: count old IDs, pending deletes, instance rows, set finished, audit entry (one transaction)
 ```
 
-Modules that the change touches, and their imports on main:
-
-```mermaid
-flowchart LR
-P1[pkg/secret]
-P2[pkg/audit]
-P3[internal/api/server]
-P3 --> P1
-P3 --> P2
-```
-
-New imports of this change (each one allowed by the module rules):
-
-- `internal/api/server` imports `pkg/secret`
-
-States on main in the touched packages:
+States of a rotation:
 
 ```mermaid
 stateDiagram-v2
-state
-on
-off
-```
-
-States and transitions after this change:
-
-```mermaid
-stateDiagram-v2
-[*] --> started: StartRotation
-started --> resuming: stop and restart
-resuming --> started: resume from cursor
-started --> started: RewrapNextBatch
-started --> finished: FinishRotation
-resuming --> finished: FinishRotation
-started --> aborted: AbortRotation
-resuming --> aborted: AbortRotation
-aborted --> [*]
+[*] --> started: Start
+started --> started: batch or resume
+started --> finished: Finish, no old ID left
 finished --> [*]
 ```
 
@@ -96,58 +153,57 @@ finished --> [*]
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| latency | 60 | s | each rewrap batch of 100 keys |
-| correctness | 100 | % | reads during rotation |
-| storage growth | 10 | KiB | rotation record per installation |
+| batch size | 100 | records | each step |
+| step time | 60 | s | each batch, then the step fails and the claim retries it |
+| read correctness during rotation | 100 | % | reads of the four families and opens of page cursors, while both keys are staged (a cursor sealed under the old key fails after the finish) |
+| record size | 1 | KiB | each rotation row |
 
 ## Threat model
 
-Data flow and trust boundaries:
-
-```mermaid
-flowchart TB
-subgraph outside[untrusted: operator terminal]
-O[operator request with staged key]
-end
-subgraph server[trust boundary: server process]
-H[NEW handler]
-S[NEW rotation service]
-W[pkg/secret Wrapper]
-D[(store)]
-A[pkg/audit]
-end
-O-->H-->S-->W-->D
-S-->A
-```
-
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| operator terminal to server | S | Spoofed operator starts rotation with attacker key. | boundary check | Allowlist: staged 32-byte base64 key from the file or variable only, with the NEW previous-key variable for the old key; body carries no key bytes; reject and log no key bytes. | Send key bytes and shell text in the body directly to the handler. |
-| operator terminal to server | S | Spoofed operator starts rotation with attacker key. | encode or contain | Key bytes stay in request-local values; audit and logs hold only wrapper IDs. | Grep logs and audit entries for key bytes after a rotation. |
-| operator terminal to server | S | Spoofed operator starts rotation with attacker key. | limit | Batch cap 100 keys and 60 s per batch; handler body limit per ADR 45. | Send a large batch and a slow store and check the cap fires. |
-| operator terminal to server | S | Spoofed operator starts rotation with attacker key. | authorize at point of use | NEW action `installation:rotate-key` on the installation at the point of use. | Call start, show, resume, abort, and finish without the grant and check 403. |
-| operator terminal to server | S | Spoofed operator starts rotation with attacker key. | fail closed | Invalid key or unknown wrapper ID denies; start with wrong key refuses per ADR 23 decision 3. | Finish with incomplete rewraps and start with the old key after finish. |
-| server to store | T | Tampered key rows downgrade wraps to the old key. | boundary check | Wrapper ID syntax check at service boundary before each write. | Inject a bad wrapper ID at the service and check rejection. |
-| server to store | T | Tampered key rows downgrade wraps to the old key. | encode or contain | Placeholders only for key IDs; sealed blobs opaque to SQL. | Inject SQL in a key ID and check it stays a value. |
-| server to store | T | Tampered key rows downgrade wraps to the old key. | limit | Fenced transactions per batch; cursor bounds each batch. | Kill mid-batch and check resume keeps exactly-once wraps. |
-| server to store | T | Tampered key rows downgrade wraps to the old key. | authorize at point of use | Fence check in the same transaction for each rewrap batch. | Replay a batch with a stale fence and check refusal. |
-| server to store | T | Tampered key rows downgrade wraps to the old key. | fail closed | Partial batch rolls back; finish needs full new-wrap coverage of directly wrapped records. | Corrupt one record mid-batch and check finish stays blocked. |
+| caller to service | S, E | A caller starts a rotation to a key that the attacker holds. | Service | The service takes built wrappers from the process that holds the keys. No request field carries key bytes. The service checks the action of decision 11, held by the site administrator only, and a fresh step for start and finish. | A start with equal IDs and with a nil wrapper; a caller without the action. |
+| service to store | T | A tampered row downgrades a record to the old key, or finish passes with an old record left. | Port adapter, service | The update names the old ID; the write fence refuses an old ID after the start; finish counts under the transaction; an unknown ID is refused. | A record under a third ID; a record written between count and finish. |
+| instance to store | T, D | A running process that holds the old key alone writes old-ID records, or replaces the idempotency key. | Port adapter, start-up | Each instance row names its IDs; start and finish refuse; the fence refuses its writes; the reset path returns an error during a rotation. | An old-only row; an old-ID write after the start. |
+| store to log | I | Key bytes reach a log or an audit entry. | Log and audit | Only IDs and counts are written. | A capture of logs and entries. |
+| restart | D | A process with one key serves a half-rewrapped store. | Start-up | The table of decision 10 needs a `Rotating` wrapper while a rotation is active. | A plain wrapper with an active rotation. |
+| action | E | An account administrator or an operator starts a rotation. | Service, HTTP handler | The action is in `siteOnlyActions`; the service and the route check it; start needs a fresh step. | The two roles; a token without a fresh step. |
+| restore and backup | T | A backup or a restore across a rotation brings back old wraps, a row with no blob or a stale rotation row. | Backup, restore | A backup and a restore are refused while active; a restore needs every manifest ID. | A restore with a manifest of two IDs; a backup during the rewrap. |
 
-## Contracts
+## Contract
 
-**Installation key-encryption-key rotation**
+**Rotation (package `secret`)**
 
-- Invariant: At most one rotation is active at one time.
-- Invariant: Each directly wrapped record, namely each namespace key version, each data key of `@server`, and each sign-in secret, records exactly one wrapper ID.
-- Invariant: Reads succeed while a rotation is active with either the old key or the new key.
-- `StartRotation`: pre: No rotation is active and the caller holds the NEW action `installation:rotate-key` on the installation.. Post: The rotation record exists in state started with the new wrapper ID..
-- `RewrapNextBatch`: pre: The rotation is in state started or resuming.. Post: Each returned directly wrapped record wraps under the new wrapper ID and keeps its stable ID..
-- `FinishRotation`: pre: Every directly wrapped record wraps under the new wrapper ID.. Post: The rotation is in state finished and the old wrapper ID is refused..
+- Invariant: At most one rotation has the state `started`.
+- Invariant: Each directly wrapped record holds exactly one wrapper ID, and a rewrap changes only that ID and the ciphertext.
+- Invariant: While a rotation is active, a read of a record under the old key or the new key succeeds.
+- Invariant: While a rotation is `started`, no write commits a record under an ID other than the new ID.
+- Invariant: A stamped write commits only when its generation is the generation of the singleton row at commit.
+- NEW `func NewRotating(oldWrapper, newWrapper Wrapper, state RotationState) (*Rotating, error)`: returns `ErrInvalidKey` for a nil wrapper, a nil state or two equal IDs.
+- NEW `func Holds(w Wrapper, id string) bool`.
+- NEW `func (r *Rotating) WrapStamped(ctx, key, aad []byte) (ciphertext []byte, generation int64, err error)`; NEW `type CursorSealer interface { Seal(ctx, plain, aad []byte) ([]byte, error); Open(ctx, sealed, aad []byte) ([]byte, error) }`, NEW `func NewCursorSealer(w Wrapper) (CursorSealer, error)` and NEW `func UnwrapStored(ctx, w Wrapper, id string, ciphertext, aad []byte) ([]byte, error)`.
+- NEW `type IDUnwrapper interface`: `UnwrapByID(ctx, id string, ciphertext, aad []byte) ([]byte, error)`.
+- NEW `type RotationStore interface`: `StartRotation(ctx, Rotation, audit.Entry) (Rotation, error)` returns `ErrRotationActive`, `ErrInstanceLacksKey` or `ErrBackupRunning`; `GetLatestRotation(ctx) (Rotation, error)` returns `ErrNoRotation`; `CurrentState(ctx) (RotationView, error)` answers the singleton row (generation and the active rotation ID) and never returns `ErrNoRotation`; `RewrapKeys(ctx, family, oldID, newID, batch)` for the data keys, the installation data keys and the idempotency key; `QueueBlobDelete`, `PendingBlobDeletes` and `DoneBlobDelete`; `CountWrapperIDs(ctx) (map[string]int, error)`; `FinishRotation(ctx, id, at, audit.Entry) error` returns `ErrRotationIncomplete`, `ErrInstanceLacksKey`; `RecordResume(ctx, id, audit.Entry) error`.
+- NEW sentinels `ErrRotationActive`, `ErrNoRotation`, `ErrRotationIncomplete`, `ErrRotationFence`, `ErrRotationDenied`, `ErrOldKeyHeld`, `ErrInstanceLacksKey`, `ErrBackupRunning`. Each wraps with `fmt.Errorf("...: %w", err)`, and the adapter translates driver errors.
+- `StartRotation`: pre: no rotation is active, the two IDs differ and each wrapper opens one record of each non-empty family that holds its ID. Post: one row `started` and one audit entry.
+- `RewrapNextBatch`: pre: the rotation is `started`. Post: each record of the batch holds the new ID and the same stable ID or scope.
+- `FinishRotation`: pre: no record holds the old ID, no pending delete remains, each instance row holds both IDs. Post: the row is `finished`; the old ID is refused at start.
+- NEW routes of decision 14 and NEW `ActionInstallationRotateKeyEncryptionKey`.
+- NEW `ItemKeyIndex.RewrapItemKey(ctx, ref, from ItemKey, to ItemKey, oldBlob blob.Key) (ItemKey, error)`: returns `ErrShredded` for a shredded record and `ErrKeyNotFound` when the record is gone or no longer holds the old ID. It writes the pending delete row of the old blob in the same transaction as the record.
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| RewrapNextBatch | Server stops mid-batch. | Operator restarts the server with both keys staged and calls the NEW resume operation; rewraps restart from the stored cursor. | resuming, with cursor kept |
-| StartRotation | Staged new key value is invalid. | Operator stages a valid 32-byte base64 key; no keys change. | no rotation |
-| FinishRotation | Some directly wrapped record still wraps under the old wrapper ID. | Finish answers 409 with the NEW error code `installation.rotation-incomplete`; operator resumes rewraps or aborts. | started |
+| Batch | The process stops mid-batch. | A new claim of the operation runs the step again. | `started`; records of the batch are all old or all new |
+| Batch | One record fails to open under both keys. | The step fails with the record's scope and writes one audit entry. The operator stages the right key and resumes. | `started` |
+| Item key | A shred commits between read and write. | The new blob is deleted and the record is skipped. | `started` |
+| Item key | The process stops after the commit of the record and before the delete of the old blob. | The next pass deletes the blob from the stored list. Finish refuses until the list is empty. | `started`; one pending delete |
+| Finish | A record still holds the old ID. | Finish returns `ErrRotationIncomplete`; run the rest of the batches. | `started` |
+| Finish or start | An instance row lacks an ID. | Restart that instance with both keys, or delete the row of a process that is gone. | unchanged |
+| Start | The process holds no old key. | Stage the old key and restart. | unchanged |
+| Start | A backup runs. | Repeat after the backup ends. | unchanged |
+| Resume | Another instance holds the claim. | Repeat after the lease ends. | `started` |
+| Fresh step | The request has an access token or an old sign-in. | Sign in again over the API as the docs page shows. | unchanged |
+| Write | A stamped write meets a new generation. | One `ErrRotationFence`; the service wraps again and writes again. | unchanged |
+| Audit | The audit write fails. | The call fails with no state change. | unchanged |

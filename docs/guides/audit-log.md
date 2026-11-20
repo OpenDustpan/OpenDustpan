@@ -68,6 +68,13 @@ person starts through the API has that person as the subject.
 
 A stack rename writes one entry with the old and the new name in `changes`.
 
+A change of stack tags writes one entry with the action `unit:manage`.
+Its `changes` holds `tags.<key>` for each key that the change adds,
+deletes or gives another value. Each change says `set` or `not set`,
+never the tag value. A key that keeps its name and gets another value
+shows `set` before and `set` after. A change that changes no key writes
+no entry.
+
 Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
@@ -407,16 +414,59 @@ old configuration and the reload fails.
 ## Read the entries
 
 `GET /api/audit/entries?organization=<namespace>` lists one page of the
-entries of the namespace, newest first, with the total count.
+entries of the namespace, newest first.
 It needs the action `namespace:read-audit` on the namespace.
 Send the access token as `Authorization: token <token>` or `Authorization: Bearer <token>`.
-`page[number]` selects the page (from 1) and `page[size]` selects its size
-(up to 200). Both default when missing.
+
+The list pages with a token:
+
+- `pageSize` is the number of entries in a page. It is a number from 1 to 200
+  with no sign and no leading zero. Without `pageSize` the page holds 50
+  entries.
+- The answer holds `entries`, `nextPageToken` and `pageSize`. `pageSize` is the
+  size that the server used.
+- `nextPageToken` is an opaque text. Send it as `pageToken`, with the same
+  `organization`, to read the next page. On the last page `nextPageToken` is the
+  empty string.
+- The list has no total. The server does not count the entries, so a page costs
+  the same at any depth. To check the log as a whole, use the chain check below.
+- A page holds the entries below the last entry of the page before. An entry
+  that the server appends while you read does not move an entry from one page
+  to the next.
 
 ```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
+curl -g -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/entries?organization=acme&pageSize=50"
 ```
+
+To read the whole log, send each `nextPageToken` as `pageToken` until it is
+empty. This loop writes one entry for each line:
+
+```sh
+token=""
+while :; do
+  page=$(curl -sS --fail-with-body -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" --get \
+    --data-urlencode "organization=acme" --data-urlencode "pageSize=200" \
+    --data-urlencode "pageToken=$token" \
+    "https://dustpan.example/api/audit/entries") || { echo "$page" >&2; break; }
+  echo "$page" | jq -c '.entries[]'
+  token=$(echo "$page" | jq -r '.nextPageToken // empty')
+  [ -n "$token" ] || break
+done
+```
+
+The server refuses a bad request with status 400 and one of these error codes:
+
+| Error code | Cause | What to do |
+| --- | --- | --- |
+| `request.page-size-invalid` | `pageSize` is not a number from 1 to 200, or the request sends it twice | Send a number from 1 to 200, or send no `pageSize` for 50 |
+| `request.page-token-invalid` | `pageToken` does not decode, is longer than 4096 bytes, the request sends it twice, or is the token of another namespace or of `@server` | Send the request again without `pageToken` |
+| `request.invalid-query` | `organization` is missing, or the request holds `page[number]` or `page[size]`, which the list no longer reads | Send `organization`, `pageSize` and `pageToken` |
+
+A token works only for the `organization` that made it. The server checks the
+action on the `organization` before it reads `pageSize` or `pageToken`, so a
+caller who may not read the log gets the refusal of the route and nothing
+about the token.
 
 `GET /api/audit/entries/<sequence>?organization=<namespace>` reads one
 entry of the namespace by its sequence, in the same shape as an entry of the
@@ -461,23 +511,6 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 Each export writes one entry of the kind `audit-read` in the log that it
 reads. If the server cannot write that entry, it sends no line.
 
-`GET /api/audit/export?organization=<namespace>` sends the entries of the
-namespace oldest first, one JSON object for each line. It needs the same
-action. Use it to keep a copy of a range, or to check a range with no help
-from the server. The lines hold the previous hash and the hash, so a reader
-can compute each hash again. See
-[Audit export API](../reference/audit-export-api.md) for the query values, the
-fields and the steps of the offline check.
-
-```sh
-curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
-  "https://dustpan.example/api/audit/export?organization=acme&fromSequence=100" \
-  > acme-audit.jsonl
-```
-
-Each export writes one entry of the kind `audit-read` in the log that it
-reads. If the server cannot write that entry, it sends no line.
-
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the installation log (`@server`). Read that log with
 `organization=@server`. It needs the action `server:read-audit` on the
@@ -489,7 +522,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
-A new namespace audit log starts with the grant of its creator.
+The audit log of a new namespace holds no entry until the first change in it. The creation of the namespace is an entry in the `@server` scope, with the action `server:create-namespace`.
 
 ## Turn the chain on or off
 
@@ -522,6 +555,7 @@ The CLI cannot give a fresh authentication.
 It prints where to approve and ends with an error.
 
 `opendustpan audit-chain status --server https://dustpan.example` shows the state of the chain and whether a change waits.
+The command reads the admin token from `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
@@ -755,6 +789,15 @@ It answers 201 with the number of the new epoch, and it writes a change entry in
 It answers 409 when signed checkpoints are off.
 Each server process reads the new epoch at its next check.
 A mark from an older epoch stops nothing in the new epoch.
+
+A stored mark ends only when the current epoch is higher than the epoch of the mark.
+If you turn off signed checkpoints, or you replace the blob store, the epoch goes back to 0.
+The old marks then keep `dustpan_audit_chain_invalid` at 1 or more.
+To end them, turn signed checkpoints on, and then send the request above.
+Each request starts the epoch after the current one.
+Send it again until the epoch number is higher than the epoch of the highest mark, because a mark of the same epoch still stands.
+Each request writes a change entry.
+No other API clears a mark.
 
 ## What the chain protects against
 

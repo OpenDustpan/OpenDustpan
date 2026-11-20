@@ -3,6 +3,8 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -73,8 +75,20 @@ func (fixedAllowlists) SetNamespaceList(
 	return errFixedReadOnly
 }
 
-// NamespacesWithList lists no namespace: the fixture holds the lists of the
-// test only.
-func (fixedAllowlists) NamespacesWithList(context.Context) ([]namespace.Name, error) {
-	return nil, nil
+// NamespacesWithList lists each namespace of the fixture whose list is not
+// the zero List, in name order.
+func (f fixedAllowlists) NamespacesWithList(context.Context) ([]ipallow.NamedList, error) {
+	out := make([]ipallow.NamedList, 0, len(f))
+	for ns, list := range f {
+		if !list.IsEmpty() {
+			out = append(out, ipallow.NamedList{Namespace: ns, List: list})
+		}
+	}
+
+	slices.SortFunc(
+		out,
+		func(a, b ipallow.NamedList) int { return strings.Compare(a.Namespace.String(), b.Namespace.String()) },
+	)
+
+	return out, nil
 }

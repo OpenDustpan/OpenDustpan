@@ -146,6 +146,89 @@ func TestJobUnits(t *testing.T) {
 	}
 }
 
+// wrongEntryInventory answers GetUnit with entry, whatever ID is asked, as a
+// reader that fails to look up by ID.
+type wrongEntryInventory struct {
+	fakeInventory
+
+	entry inventory.Entry
+}
+
+func (f wrongEntryInventory) GetUnit(context.Context, string) (inventory.Entry, error) {
+	return f.entry, nil
+}
+
+// TestJobUnitsByID is the hostile table of UnitByID: each case sends its input
+// straight to the lookup, as if the caller had not checked it.
+func TestJobUnitsByID(t *testing.T) {
+	t.Parallel()
+
+	web := inventoryEntry("web", "ws-1")
+	other := inventoryEntry("web", "ws-1")
+	other.Namespace = "other"
+	longID := strings.Repeat("a", maxJobUnitIDLength+1)
+
+	tests := []struct {
+		name    string
+		reader  inventory.Reader
+		ns      namespace.Name
+		unitID  string
+		wantErr error
+		// wantMiss is true when the answer must be job.ErrNotFound.
+		wantMiss bool
+	}{
+		{"a live unit", inventoryOf(web), "acme", "ws-1", nil, false},
+		{"a unit of another namespace", inventoryOf(other), "acme", "ws-1", nil, true},
+		{"an unknown ID", inventoryOf(web), "acme", "ws-9", nil, true},
+		{"a deleted unit", fakeInventory{entries: nil, err: inventory.ErrUnitNotFound}, "acme", "ws-1", nil, true},
+		{"an empty ID", inventoryOf(web), "acme", "", nil, true},
+		{"an ID with a slash", inventoryOf(web), "acme", "ws-1/../x", nil, true},
+		{"an overlong ID", inventoryOf(web), "acme", longID, nil, true},
+		{"no reader", nil, "acme", "ws-1", nil, true},
+		{"the reader fails", fakeInventory{entries: nil, err: errReaderDown}, "acme", "ws-1", errReaderDown, false},
+		// The reader answers any ID that it is asked, so only the check of the ID can stop these.
+		{
+			"an ID with a slash that the reader answers",
+			wrongEntryInventory{fakeInventory{nil, nil}, inventoryEntry("web", "ws-1/../x")},
+			"acme", "ws-1/../x", nil, true,
+		},
+		{
+			"an overlong ID that the reader answers",
+			wrongEntryInventory{fakeInventory{nil, nil}, inventoryEntry("web", longID)},
+			"acme", longID, nil, true,
+		},
+		{
+			"the reader answers an entry with another ID",
+			wrongEntryInventory{fakeInventory{nil, nil}, inventoryEntry("web", "ws-2")},
+			"acme", "ws-1", nil, true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			u := jobUnits{facts: inventoryFacts{reader: tc.reader, ids: nil, deleted: nil}}
+			got, err := u.UnitByID(t.Context(), tc.ns, tc.unitID)
+
+			switch {
+			case tc.wantMiss:
+				if !errors.Is(err, job.ErrNotFound) {
+					t.Fatalf("UnitByID = %v, %v; want job.ErrNotFound", got, err)
+				}
+			case tc.wantErr != nil:
+				// A failure of the reader is not "no such unit".
+				if !errors.Is(err, tc.wantErr) || errors.Is(err, job.ErrNotFound) {
+					t.Fatalf("UnitByID = %v; want %v and not job.ErrNotFound", err, tc.wantErr)
+				}
+			case err != nil || got.UnitID() != "ws-1" || got.Namespace() != "acme" || got.UnitName() != "web":
+				t.Fatalf("UnitByID = %v, %v; want web with the ID ws-1", got, err)
+			default:
+			}
+		})
+	}
+}
+
 // fakePools serves the pools of every namespace that is asked.
 type fakePools struct {
 	runner.PoolStore
@@ -598,6 +681,55 @@ func TestPlanStepsPulumi(t *testing.T) {
 	}
 }
 
+// stopsAtUnitObject reports whether identity.UnitObject refuses the name of
+// the case of TestPlanStepsPulumi, so that the name never reaches the step.
+func stopsAtUnitObject(name string) bool {
+	switch name {
+	case "empty stack", "empty project", "tab", "newline in the stack", "carriage return",
+		"NUL in the stack", "NUL in the project":
+		return true
+	default:
+		return false
+	}
+}
+
+// TestValidPulumiNameRefusesHiddenRunes sends each hidden rune and bytes that
+// are not valid UTF-8 directly to the allowlist of the step, as if
+// identity.UnitObject accepted the name.
+func TestValidPulumiNameRefusesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		part string
+	}{
+		{"tab", "pr\tod"},
+		{"line feed", "pr\nod"},
+		{"carriage return", "pr\rod"},
+		{"NUL", "pr\x00od"},
+		{"right-to-left override U+202E", "pr" + string(rune(0x202e)) + "od"},
+		{"left-to-right isolate U+2066", "pr" + string(rune(0x2066)) + "od"},
+		{"line separator U+2028", "pr" + string(rune(0x2028)) + "od"},
+		{"zero width space U+200B", "pr" + string(rune(0x200b)) + "od"},
+		{"invalid UTF-8", "pr\xffod"},
+		{"hidden rune first", "\x00prod"},
+	}
+
+	if !validPulumiName("prod") {
+		t.Fatal(`validPulumiName("prod") = false, want true`)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if validPulumiName(tt.part) {
+				t.Errorf("validPulumiName(%q) = true, want false", tt.part)
+			}
+		})
+	}
+}
+
 // checkPulumiPlanCase plans the Pulumi stack unit. A nil wantArgs means that
 // the step must refuse the name.
 func checkPulumiPlanCase(t *testing.T, name, ref string, wantArgs []string) {
@@ -605,13 +737,19 @@ func checkPulumiPlanCase(t *testing.T, name, ref string, wantArgs []string) {
 
 	unit, err := identity.UnitObject("pulumi", "acme", ref)
 	if err != nil {
-		// Only a name with an empty part stops at identity.UnitObject. Each hostile
-		// name must reach the step, so the test proves the layer of the step alone.
-		if wantArgs != nil || (name != "empty stack" && name != "empty project") {
+		// Only a name with an empty part or a hidden rune stops at
+		// identity.UnitObject. Each other hostile name must reach the step.
+		// TestValidPulumiNameRefusesHiddenRunes sends the hidden runes to the
+		// check of the step directly.
+		if wantArgs != nil || !stopsAtUnitObject(name) {
 			t.Fatalf("UnitObject(%q) = %v: the name must reach the step", ref, err)
 		}
 
 		return
+	}
+
+	if stopsAtUnitObject(name) {
+		t.Fatalf("UnitObject(%q) = nil error, want ErrInvalidObject", ref)
 	}
 
 	steps, err := planSteps(unit)

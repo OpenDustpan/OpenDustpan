@@ -129,16 +129,17 @@ func (f *fixture) serviceWith(t *testing.T, reach access.ReachConfig) *localuser
 	t.Helper()
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:        nil,
-		Store:      f.store,
-		Principals: f.principals,
-		Hasher:     f.hasher,
-		Blocklist:  blocklist.Embedded(),
-		Audit:      f.store,
-		Locks:      f.store,
-		Keys:       f.store,
-		Settings:   f.settings,
-		SSO:        func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
+		Log:         nil,
+		Store:       f.store,
+		Principals:  f.principals,
+		NoPublicURL: false,
+		Hasher:      f.hasher,
+		Blocklist:   blocklist.Embedded(),
+		Audit:       f.store,
+		Locks:       f.store,
+		Keys:        f.store,
+		Settings:    f.settings,
+		SSO:         func(context.Context) (bool, error) { return f.sso, nil }, Reach: reach,
 		Subjects: f.store,
 		Kind:     installation.KindProduction,
 		Now:      nil,
@@ -202,7 +203,7 @@ func (f *fixture) generation(t *testing.T, id string) uint64 {
 func (f *fixture) entriesWith(t *testing.T, action string) []audit.Entry {
 	t.Helper()
 
-	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 500})
+	page, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
 	}

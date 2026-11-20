@@ -2,118 +2,116 @@ Roadmap: `docs/roadmap.md:772` (Dusty proposes a change order).
 
 ## Why
 
-**Persona: developer.** Developer asks Dusty to draft infrastructure work. Developer needs a proposed change order that names them as proposer and names Dusty and the delegation, so review and confirm stay with people.
+**Persona: developer.** A developer asks Dusty to draft infrastructure work. The developer needs a draft that names them, Dusty and the delegation, so that the review and the confirm stay with people.
 
 The user path this change must make work:
 
-1. **Console.** Person asks Dusty to propose a change for one unit, under a live delegation.
-2. **API.** Dusty writes a draft through the existing draft store, with the person, the agent, the delegation and a run, turn and call index key.
-3. **Console.** Person confirms the draft. The server creates the change order in state proposed.
+1. **Console.** The person asks Dusty to propose a change for one unit, under a live delegation.
+2. **API.** Dusty writes a draft, with the person, the agent, the delegation and a key from the run, the turn and the call index.
+3. **Console.** The person confirms the draft. Only then does a change order exist (ADR 344 decision 2).
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Delegation expired or revoked at draft | The server denies the draft with the NEW error code `delegation.expired` and stores nothing. | `make e2e` |
-| Person lacks the right to propose on the unit | The server denies the draft with the NEW error code `changeorder.denied` and stores nothing. | `make e2e` |
+| The delegation ended before the draft | 403 with the NEW error code `delegation.ended` of `revoke-stops-work`. Nothing is stored. | `GET /api/dustpan/v1/delegations` (from `person-delegates-dusty`) |
+| The delegation does not cover the unit | Refused. The code is open question 4. Nothing is stored. | `GET /api/dustpan/v1/delegations` |
 
 Evidence for the claims above:
 
-- No e2e test names Dusty in this pack Proof: evidence.Dusty.e2e is empty with e2e_count 0
-- No e2e test names Change order in this pack Proof: evidence.Change order.e2e is empty with e2e_count 0
-- A delegation grant pin rule exists on main Proof: TestGrantOnAPrincipalTakesDelegationActionsOnly at pkg/access/delegation_pin_test.go:58
+- No change order package exists on main. Proof: `ls pkg/changeorder` fails, and `rg -n 'changeorder' -g '*.go' pkg internal` finds no package of that name. The earlier draft of this change named an existing draft store, `changeorder.Service` and `CheckAgent`. None exists on main.
+- No draft state exists in the code or in an ADR. Proof: ADR 344 line 27: "This ADR does not decide the state of a draft, the tool in ADR 122, the action name or the audit entry. A later ADR decides them."
+- A grant on a principal takes act-as actions only. Proof: `pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`.
 
 ## What Changes
 
-- Dusty writes a draft through the existing draft store, with the person, the agent dusty and the delegation as actor.
-- The person confirm-draft creates the change order in state proposed, with the person as proposer, naming the agent and the delegation.
-- The server re-checks the live delegation and the person right at the confirm-draft.
-- Draft and confirm-draft audit entries go through every-step-audited.
+- Dusty writes a draft of a change order for a unit, under a live delegation of the mode `propose` or `operate` (RFC 121 decision 12). The draft names the person, the agent and the delegation, and carries the key of ADR 120 decision 11.
+- The server resolves the delegation at the draft (RFC 121 decisions 9 and 31) and refuses an ended delegation.
+- A draft is not a change order. The person confirms it in `person-confirms` (ADR 344 decision 2).
+- The draft write goes through the audit entry of `every-step-audited`.
 
 Out of scope:
 
-- The audit of every step, written through every-step-audited
-- A revoke that stops running work after the confirm-draft
-- The MCP endpoint and the stdio proxy
-- The agent verdict rule, held by changeorder.CheckAgent
-- The creation of the delegation record
-- The confirm of a proposed change order, held by person-confirms
+- The confirm of the draft, in `person-confirms`.
+- The audit entry shape, in `every-step-audited`.
+- The refusal after an end, in `revoke-stops-work`.
+- The delegation record, in `person-delegates-dusty`.
+- The change order package and its routes, in the change order work. They are not on main.
+- The tool of ADR 122 and the MCP endpoint.
 
 Depends on:
 
-- person-delegates-dusty
-- every-step-audited
+- `person-delegates-dusty` and `every-step-audited`.
+- A change that makes the change order package (ADR 190, ADR 196). None is in `openspec/changes/` on 20 November 2026. It is a dependency to be written.
+- A model-connect change that makes Dusty. It is a dependency to be written.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- The proposer is the person, and the agent and the delegation are named.
-- Confirm-draft and the later confirm of the proposed order use different names, routes and actions, so the person sees which step they do.
+- The person sees the agent, the delegation and the person on the draft, so that they know whose draft they confirm.
+- A draft and the later change order use different words, so that the person knows which step they do.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The delegation grant pin test exists on main (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
+- A grant on a principal takes act-as actions only. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed by" chain and the "Current rule" come from `docs/adr/INDEX.md`.
 
-**ADR 120: Dusty, the built-in agent, runs on durable operations** (not owner-tagged).
+**ADR 344: An agent drafts a change order, and a person confirms it** (owner-tagged).
 
-- Decisions that apply: 11 (current), 13 (changed).
-- Changed by: ADR 128 changes decision 22; ADR 129 changes decisions 3, 7 and 20; ADR 129 extends; ADR 210 changes; ADR 297 changes decisions 13 and 14; ADR 311 extends; ADR 314 extends; ADR 354 changes decisions 13, 14, 15 and 16. Chain to the end: ADR 128, ADR 129, ADR 210, ADR 297, ADR 311, ADR 314, ADR 354, ADR 190, ADR 222, ADR 227, ADR 286, ADR 247, ADR 301, ADR 333, ADR 357, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 335, ADR 351, ADR 320, ADR 339, ADR 328, ADR 359, ADR 332.
-- Current rule: this ADR, with ADR 128, 129, 210, 297, 311, 314, 354.
-- Quote: "Effects happen once. A step that proposes or cancels a change passes a key that it makes from the run, the turn and the index of the call."
-- Effect: The draft write uses a key from run, turn and call index. The run acts for the delegating person.
+- Decisions that apply: 1 and 2 (current). Changed by: -. Chain to the end: none. Current rule: this ADR. It changes ADR 190 decision 14.
+- Quote, decision 2: "The draft is not a change order until a person confirms it."
+- Quote: "This ADR does not decide the state of a draft, the tool in ADR 122, the action name or the audit entry. A later ADR decides them."
+- Effect: the draft state, the action name and the audit entry are open questions here, not decisions.
 - Conflict: none.
 
-**ADR 190: Change orders: an object above jobs** (owner-tagged: decision 4, 14).
+**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged) with **RFC 121** (accepted by ADR 354 decision 6).
 
-- Decisions that apply: 2 (current), 4 (changed), 14 (changed).
-- Changed by: ADR 222 changes decisions 6 and 7; ADR 225 changes decisions 6 and 7; ADR 299 changes decisions 4, 9, 10, 12 and 14; ADR 300 changes decision 10; ADR 344 changes decision 14; ADR 365 changes decision 10. Chain to the end: ADR 222, ADR 225, ADR 299, ADR 300, ADR 344, ADR 365, ADR 286, ADR 335, ADR 351, ADR 354, ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 222, 225, 299, 300, 344, 365.
-- Quote: "The authors. The authors of a change order are the principal that created it and each principal that attached a plan revision to it (ADR 191 decision 2)."
-- Quote: "Agents. An agent reads a change order and leaves comments, when a later ADR gives it a tool."
-- Effect: The proposer is the person who confirms the draft. The agent writes a draft only and records no approval.
+- Decision 1 (current): "The person who delegated may confirm (owner, 2026-11-07)."
+- RFC 121 decision 24: a change order that an agent drafts waits for the ADR 344 confirmation. Decision 26: the person is the proposer, and four-eyes sees the person.
+- Effect: the proposer is the person. The agent and the delegation are named on the draft.
 - Conflict: none.
 
-**ADR 196: Change order ports, errors, fences and conformance suites** (not owner-tagged).
+**ADR 190: Change orders: an object above jobs** (decisions 4 and 14 are owner-tagged).
 
-- Decisions that apply: 8 (current), 10 (current).
-- Changed by: ADR 222 changes decisions 1 and 5; ADR 230 changes decisions 1 and 5. Chain to the end: ADR 222, ADR 230, ADR 286, ADR 335, ADR 351, ADR 354, ADR 268, ADR 355.
-- Current rule: this ADR, with ADR 222, 230.
-- Quote: "The service. `changeorder.Service` is what the REST API calls. It takes an actor with the principal, the agent reference and the credential (ADR 128 decisions 1 and 6), checks the actions of ADR 197, writes the audit entries, and calls the store."
-- Effect: The service takes the agent reference. The draft rule stays in CheckAgent.
+- Decision that applies: 14 (changed by ADR 344). Changed by: ADR 222, 225, 299, 300, 344, 365. Chain to the end: ADR 222, 225, 299, 300, 344, 365, 286, 335, 351, 354, 328, 359, 377. Current rule: this ADR, with ADR 222, 225, 299, 300, 344, 365.
+- Effect: an agent may draft and a person confirms.
 - Conflict: none.
 
-**ADR 299: Review requests and change orders: one integration with the Git host** (owner-tagged (all decisions)).
+**ADR 120: Dusty, the built-in agent, runs on durable operations** (not owner-tagged). Decision 11 is current. Current rule: this ADR, with ADR 128, 129, 210, 297, 311, 314, 354, 367.
 
-- Decisions that apply: 35 (current).
-- Changed by: ADR 328 extends decision 1; ADR 359 extends decision 1; ADR 359 extends decision 15; ADR 359 extends decision 25. Chain to the end: ADR 328, ADR 359.
-- Current rule: this ADR, with ADR 328, 359.
-- Quote: "Agents never approve, on either side (owner)."
-- Effect: The draft and the confirm-draft record no approval.
+- Quote, decision 11: "Effects happen once. A step that proposes or cancels a change passes a key that it makes from the run, the turn and the index of the call."
+- Effect: the draft write carries that key.
+- Conflict: none.
+
+**ADR 299: one integration with the Git host** (owner-tagged). Current rule: this ADR, with ADR 328, 359, 368.
+
+- Quote, decision 35: "Agents never approve, on either side (owner)."
+- Effect: a draft records no approval.
 - Conflict: none.
 
 ## Open questions
 
-none
+Open questions: 5, parked
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+The questions below are not decided. No ADR line and no RFC line settles them. The owner decides each one.
 
-1. Which authorization action and object guard the draft and the confirm-draft, and what is the credential shape?
-   - Options: Confirm-draft uses the existing create check on the unit; the draft carries the delegation ID with the access token of the person; New actions changeorder:draft and changeorder:confirm-draft, with a short-lived bound token.
-   - Provisional decision (owner review 14 Nov): Confirm-draft uses the existing create check on the unit; the draft carries the delegation ID with the access token of the person
-   - Reason: The pack gives no text of the action rules or the credential shape. Benchmark: Google Cloud IAM names one permission per method and denies by default.
-   - Persona impact: Developer sees one denied message that names the fix. Escape hatch: A denied call stores nothing, so a person retries after the grant.
-   - Owner-tagged ADRs involved: ADR 190 (their words do not change).
+1. **Where does a draft live, and what is its state?** ADR 344 does not decide the state of a draft. The roadmap says "proposed". ADR 344 says that the draft is not a change order until a person confirms. Options:
+   - (a) A separate draft record in its own table. Cost: a second object that a person lists and cleans up.
+   - (b) A change order in a state `draft` that no review rule sees. Cost: ADR 344 says it is not a change order, and a state in the table says it is.
+   - Decides: the owner.
+2. **What are the action names and the routes of the draft?** ADR 344 leaves the action name open. The earlier draft invented `changeorder:confirm-draft` and a route. Options: (a) one action for the draft write; (b) an action for each mode. Cost of (b): more rows in the mode table of `person-delegates-dusty` open question 8. Decides: the owner.
+3. **What happens to a draft when the delegation ends before the confirm?** RFC 121 decision 23 covers a held request and not a draft. Options: (a) the draft stays and the person may confirm it (the person is the proposer, RFC 121 decision 26); (b) the confirm refuses it with `delegation.ended`; (c) the draft is canceled with the stop reason `delegation-ended`. Cost of (a): a person confirms work of an agent that they stopped. Cost of (b) and (c): lost work. Decides: the owner.
+4. **What is the error code for a unit that the delegation does not cover?** Options: (a) reuse the standard 403 of the authorization check; (b) a NEW code. Decides: the owner.
+5. **What credential does Dusty use to write the draft?** RFC 121 decision 10 says Dusty has no delegated token. Options: (a) the run holds the delegation ID and the server checks the grant of the delegation at each call; (b) a short-lived token bound to the run. Cost of (b): a second credential. Decides: the owner. The earlier draft took (a) as a provisional answer for the unit check and named no source.
 
 Questions considered and answered:
 
-- May Dusty approve? No. ADR 299 decision 35 forbids it.
-- What do ADR 344 and ADR 354 change here? The pack gives no decision text for them, so they are not quoted. They change the agent rule of ADR 190 decision 14 to a draft that a person confirms. This change follows that effect and asks the shape of the credential as an open question.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+- May Dusty approve? No. ADR 299 decision 35.
+- Who is the proposer? The person (RFC 121 decision 26).
+- What was the earlier route and action for the confirm of the draft? They are withdrawn. No line names them.

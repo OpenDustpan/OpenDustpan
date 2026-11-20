@@ -252,6 +252,25 @@ func TestAdmitReadsTheResult(t *testing.T) {
 	}
 }
 
+// TestAdmitAdmitsAPassedBreakGlass checks the decision that the gate service
+// gives for a write that a break-glass pass let through a gate in error: the
+// result is warn, with the warning and the record. The admission allows it.
+func TestAdmitAdmitsAPassedBreakGlass(t *testing.T) {
+	t.Parallel()
+
+	d := gate.Decision{
+		Record: "rec-bg", Result: gate.ResultWarn, Requirements: nil, AutoApply: false,
+		Warnings: []string{"a break-glass pass let the write through a gate in error"},
+	}
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: d, err: nil, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+
+	out := newAdmitter(t, guard).Admit(t.Context(), write(t, gate.OperationLock, principal("", "")), rec.record)
+	if !out.Allowed || len(rec.entries()) != 0 {
+		t.Fatalf("outcome = %+v, entries %q, want allowed with no entry", out, rec.entries())
+	}
+}
+
 // TestAdmitRefusesEachGuardError sends each kind of guard error straight to
 // the admission, as if the gate service had failed. Each one refuses with
 // its code and one audit entry.

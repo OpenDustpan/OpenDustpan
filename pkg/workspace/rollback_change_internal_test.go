@@ -271,3 +271,69 @@ func TestRollbackChangeNeverReadsALookAlikeAsEncrypted(t *testing.T) {
 		}
 	}
 }
+
+// deepResourceDoc returns a state with one resource a and a field x that nests
+// depth levels, outside the attributes.
+func deepResourceDoc(depth int) string {
+	return `{"resources":[{"type":"t","name":"a","instances":[{"index_key":0}],"x":` +
+		strings.Repeat(`{"a":`, depth) + `1` + strings.Repeat(`}`, depth) + `}]}`
+}
+
+// TestRollbackChangeReadsDeepState proves that the rollback change counts the
+// instances of a state that nests deeper than MaxStateDepth. The read walks
+// no value, so the depth bound of the masked readers does not apply to it. The
+// masked readers still refuse the same state.
+func TestRollbackChangeReadsDeepState(t *testing.T) {
+	t.Parallel()
+
+	deep := deepResourceDoc(MaxStateDepth + 50)
+
+	got, err := rollbackChangeOf([]byte(deep), "sv-next", []byte(instancesDoc(2)), "sv-cur")
+	if err != nil {
+		t.Fatalf("deep restored state: err = %v, want nil", err)
+	}
+
+	if got.Resources != 1 {
+		t.Fatalf("resources = %d, want 1", got.Resources)
+	}
+
+	if _, err := rollbackChangeOf([]byte(instancesDoc(2)), "sv-next", []byte(deep), "sv-cur"); err != nil {
+		t.Fatalf("deep current state: err = %v, want nil", err)
+	}
+
+	if _, err := decodeBoundedState([]byte(deep)); !errors.Is(err, ErrStateBound) {
+		t.Fatalf("masked decode: err = %v, want ErrStateBound", err)
+	}
+}
+
+// TestMaskedReadersRefuseDeepState proves that each masked reader refuses a
+// state deeper than MaxStateDepth with ErrStateBound: the read of a resource,
+// both sides of the diff and both states of the list.
+func TestMaskedReadersRefuseDeepState(t *testing.T) {
+	t.Parallel()
+
+	deep := []byte(deepResourceDoc(MaxStateDepth + 50))
+	plain := []byte(instancesDoc(1))
+
+	if _, err := ReadStateResource(t.Context(), deep, nil, "t.a"); !errors.Is(err, ErrStateBound) {
+		t.Fatalf("read: err = %v, want ErrStateBound", err)
+	}
+
+	for name, sides := range map[string][2][]byte{"from": {deep, plain}, "to": {plain, deep}} {
+		older := StateWithMarks{State: sides[0], Marks: nil}
+		newer := StateWithMarks{State: sides[1], Marks: nil}
+
+		_, err := DiffStates(t.Context(), older, newer, "", 10)
+		if !errors.Is(err, ErrStateBound) {
+			t.Fatalf("diff %s: err = %v, want ErrStateBound", name, err)
+		}
+	}
+
+	if _, err := ListStateResources(plain, deep, "", 10, ""); !errors.Is(err, ErrStateBound) {
+		t.Fatalf("list previous: err = %v, want ErrStateBound", err)
+	}
+
+	if _, err := ListStateResources(deep, plain, "", 10, ""); !errors.Is(err, ErrStateBound) {
+		t.Fatalf("list current: err = %v, want ErrStateBound", err)
+	}
+}

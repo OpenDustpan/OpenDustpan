@@ -32,7 +32,7 @@ func JoinTTL(d time.Duration) (time.Duration, error) {
 	case d == 0:
 		return DefaultJoinTTL, nil
 	case d < 0 || d > MaxJoinTTL:
-		return 0, fmt.Errorf("%w: a join token lives 1 second to %v", ErrInvalid, MaxJoinTTL)
+		return 0, NewFieldRangeError("ttl", "milliseconds", 0, MaxJoinTTL.Milliseconds())
 	default:
 		return d, nil
 	}

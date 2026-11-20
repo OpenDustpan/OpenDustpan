@@ -57,7 +57,9 @@ const (
 const maxIDLength = 128
 
 // MaxReasonLength is the length limit of the reason of a reset, in bytes.
-const MaxReasonLength = 1024
+// The audit log keeps a reason of at most 500 code points, and a code point
+// is at most 4 bytes in UTF-8, so each reason that the audit log keeps fits.
+const MaxReasonLength = 2000
 
 // Defaults and bounds of the password rules.
 //
@@ -142,6 +144,8 @@ var (
 	// ErrLastCredential reports a change that removes the last sign-in
 	// credential of a local user: the password when the person has no
 	// passkey.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrLastCredential = errors.New("the change removes the last sign-in credential")
 	// ErrDemoOnly reports a demo sign-in on an installation that is not of
 	// the kind dev, or a demo person on such an installation.
@@ -156,6 +160,9 @@ var (
 	// ErrPasswordSignInOff reports a password sign-in while the installation
 	// setting for local password sign-in is off.
 	ErrPasswordSignInOff = errors.New("password sign-in is off on this installation")
+	// ErrPublicURLRequired reports a password sign-in or a redeem of a code on
+	// a server that has no public URL: the console sign-in cannot start.
+	ErrPublicURLRequired = errors.New("password sign-in is off because the server has no usable public URL")
 	// ErrUnavailable reports that the store or the hasher cannot answer.
 	// The sign-in fails closed on it.
 	ErrUnavailable = errors.New("local user store unavailable")
@@ -166,6 +173,8 @@ var (
 	// ErrOwnAccount reports a reset or a removal of the password of the own
 	// account by an administrator. A person changes the own password with
 	// the change route.
+	//
+	// Code rule: docs/reference/code-rules.md lists it.
 	ErrOwnAccount = errors.New("an administrator cannot reset or remove the own password")
 	// ErrGenerationChanged reports a change from a session whose session
 	// generation is no longer the stored one: another change ended the
@@ -175,7 +184,7 @@ var (
 	// not cover the reach of the person.
 	ErrOutsideReach = errors.New("the reach of the administrator does not cover the reach of the person")
 	// ErrReasonRequired reports an administrator change with no reason, or a
-	// reason that is not valid.
+	// reason with a control character.
 	ErrReasonRequired = errors.New("the change needs a reason")
 	// ErrSecondFactorRequired reports a password sign-in that needs a second
 	// factor that the server cannot ask for yet. The sign-in fails closed.
@@ -639,8 +648,8 @@ type PasswordChange struct {
 // Each write that stores a password hash for a person reads the break-glass
 // flag of the principal in its own transaction, and returns ErrBreakGlass for
 // a break-glass person. The service checks this too. The reverse holds in
-// the principal store: a write that sets the break-glass flag on a person
-// with a password returns principal.ErrBreakGlassPassword.
+// a restore, the one write that can set the break-glass flag on a person with
+// a password: it returns principal.ErrBreakGlassPassword.
 type Store interface {
 	// CreateUser stores u, with no password, and appends e, in one
 	// transaction. A first password comes only from a set-up code

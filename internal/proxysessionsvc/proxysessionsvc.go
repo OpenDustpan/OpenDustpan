@@ -59,6 +59,9 @@ const (
 	// ReasonNoProxyOperation: the claim is a sweep, or its job has no proxy
 	// operation.
 	ReasonNoProxyOperation = "no-proxy-operation"
+	// ReasonUpstreamEndpointChanged: a save moved the upstream proxy to another
+	// endpoint and named no credential, so the save cleared the stored one.
+	ReasonUpstreamEndpointChanged = "upstream-endpoint-changed"
 )
 
 // Sources of the proxy settings of a pool.
@@ -467,10 +470,22 @@ func (s *Service) saveOnce(
 		next.Credential = sealed
 	}
 
+	// A write-only credential is for one endpoint. A save that moves the
+	// upstream proxy and names no credential must not send the stored one to
+	// the new endpoint, so it clears it. The audit entry says why. Defense in
+	// depth: the store refuses the same write; this clearing does not rely on it.
+	if !req.Credential.Present && len(current.Credential) != 0 &&
+		runner.UpstreamEndpointChanged(current.Settings.UpstreamURL(), settings.UpstreamURL()) {
+		next.Credential = nil
+	}
+
 	// Fail closed: a credential with no upstream proxy has no use, so the save
 	// refuses it and keeps the credential out of the row.
 	if len(next.Credential) != 0 && settings.UpstreamURL() == "" {
-		return runner.ProxySettingsRecord{}, fmt.Errorf("%w: a credential needs an upstream URL", runner.ErrInvalid)
+		return runner.ProxySettingsRecord{}, runner.NewFieldError(
+			"upstreamCredential",
+			"set upstreamProxy, or remove the credential.",
+		)
 	}
 
 	return s.settings.SetProxySettings(ctx, fence, req.Pool.ID, next, s.settingsEntry(req, &current, &next))
@@ -813,15 +828,15 @@ func (s *Service) unseal(ctx context.Context, pool runner.Pool, sealed []byte) (
 func checkCredential(c *Credential) error {
 	switch {
 	case c.Username == "" || len(c.Username) > MaxUsernameBytes:
-		return fmt.Errorf("%w: the user name of the credential is 1 to %d bytes", runner.ErrInvalid, MaxUsernameBytes)
+		return runner.NewFieldRangeError("upstreamCredential.username", "bytes", 1, MaxUsernameBytes)
 	case len(c.Password) > MaxPasswordBytes:
-		return fmt.Errorf("%w: the password of the credential is at most %d bytes", runner.ErrInvalid, MaxPasswordBytes)
+		return runner.NewFieldRangeError("upstreamCredential.password", "bytes", 0, MaxPasswordBytes)
 	case !utf8.ValidString(c.Username) || !utf8.ValidString(c.Password):
-		return fmt.Errorf("%w: the credential is not valid text", runner.ErrInvalid)
+		return runner.NewFieldError("upstreamCredential", "use valid UTF-8 text for the user name and the password.")
 	case strings.Contains(c.Username, ":"):
-		return fmt.Errorf("%w: the user name of the credential holds no colon", runner.ErrInvalid)
+		return runner.NewFieldError("upstreamCredential.username", "use a user name with no colon.")
 	case strings.ContainsFunc(c.Username+c.Password, ident.IsHiddenRune):
-		return fmt.Errorf("%w: the credential has a control, format or separator character", runner.ErrInvalid)
+		return runner.NewFieldError("upstreamCredential", "do not use a control, format or separator character.")
 	}
 
 	return nil
@@ -838,6 +853,10 @@ func (s *Service) settingsEntry(req *PutRequest, old, next *runner.ProxySettings
 	oldRanges := strings.Join(old.Settings.AllowedRanges(), ",")
 	oldVersion := strconv.FormatInt(old.Version, 10)
 
+	// The save cleared the credential when it named none, the pool had one and
+	// the row has none now.
+	cleared := !req.Credential.Present && len(old.Credential) != 0 && len(next.Credential) == 0
+
 	e := req.Entry
 	e.At = next.UpdatedAt
 	e.Namespace = req.Pool.Namespace
@@ -852,11 +871,18 @@ func (s *Service) settingsEntry(req *PutRequest, old, next *runner.ProxySettings
 			Layer: "", TakesEffect: "",
 		},
 		change("upstreamURLChanged", strconv.FormatBool(old.Settings.UpstreamURL() != next.Settings.UpstreamURL())),
-		change("credentialChanged", strconv.FormatBool(req.Credential.Present)),
+		change("credentialChanged", strconv.FormatBool(req.Credential.Present || cleared)),
 		audit.Change{
 			Key: "version", Old: &oldVersion, New: strconv.FormatInt(old.Version+1, 10), Layer: "", TakesEffect: "",
 		},
 	)
+
+	if cleared {
+		e.Changes = append(e.Changes,
+			change("credentialCleared", "true"),
+			change("reason", ReasonUpstreamEndpointChanged),
+		)
+	}
 
 	return e
 }

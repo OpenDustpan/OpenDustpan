@@ -221,6 +221,7 @@ type DurableOperation struct {
 	State            string
 	Attempt          int64
 	Expiries         int64
+	DeadlineReleases int64
 	Failures         int64
 	LastError        string
 	ClaimOwner       pgtype.Text
@@ -245,6 +246,25 @@ type DurableStep struct {
 	Seq         int64
 	Result      []byte
 	DoneAtMs    int64
+}
+
+type FirstAdministrator struct {
+	ID          int32
+	PrincipalID string
+	GrantID     string
+	SessionID   string
+	CreatedBy   string
+	MadeAtMs    int64
+}
+
+type FirstAdministratorCode struct {
+	ID          int32
+	PrincipalID string
+	Digest      string
+	CreatedBy   string
+	Reason      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
 }
 
 type ForgeAccountLink struct {
@@ -319,6 +339,9 @@ type GitHostAppRegistration struct {
 	Version                int64
 	CreatedAtMs            int64
 	UpdatedAtMs            int64
+	OldEventSecretEndsAtMs pgtype.Int8
+	OldEventSecretSetID    pgtype.Text
+	OldSealedEventSecret   []byte
 }
 
 type GitHostConnection struct {
@@ -333,6 +356,17 @@ type GitHostConnection struct {
 	Version        int64
 	CreatedAtMs    int64
 	UpdatedAtMs    int64
+}
+
+type GitHostEventReceipt struct {
+	Kind           string
+	DeliveryID     string
+	BodyDigest     string
+	InstallationID string
+	EventKind      string
+	Repo           string
+	ReviewID       string
+	ReceivedAtMs   int64
 }
 
 type GitHostInstallation struct {

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -204,12 +205,85 @@ type Store interface {
 	Ping(ctx context.Context) error
 }
 
-// Filter names which namespaces qualify for a page or a count. With All
-// set, every namespace qualifies; otherwise only the namespaces named in
-// Names qualify (unknown names are ignored; empty Names gives none).
+// Filter names which namespaces qualify for a page or a count. EveryNamespace
+// builds the filter of every namespace except the left-out ones;
+// NamedNamespaces builds the filter of the named namespaces only (unknown
+// names are ignored; no name gives none). The zero Filter qualifies no
+// namespace. The fields are unexported: a store reads the filter only
+// through Every and Names, so that it cannot see the every-namespace case
+// without its left-out namespaces.
 type Filter struct {
-	All   bool
-	Names []Name
+	every  bool
+	except []Name
+	names  []Name
+}
+
+// EveryNamespace returns the filter of every namespace except the named
+// ones. It keeps each left-out name once, in sorted order, and copies the
+// input.
+func EveryNamespace(except ...Name) Filter {
+	names := slices.Clone(except)
+	slices.Sort(names)
+
+	return Filter{every: true, except: slices.Compact(names), names: nil}
+}
+
+// NamedNamespaces returns the filter of the named namespaces only. It keeps
+// each name once, in the first order, and copies the input. No name gives
+// the filter of no namespace.
+func NamedNamespaces(names ...Name) Filter {
+	return Filter{every: false, except: nil, names: dedupNames(names)}
+}
+
+// Every reports whether f qualifies every namespace, and returns a copy of
+// the namespaces that it leaves out, in sorted order. A store that pages or
+// counts every namespace leaves out each returned name in the same query. It
+// returns nil and false for the filter of named namespaces.
+func (f Filter) Every() ([]Name, bool) {
+	if !f.every {
+		return nil, false
+	}
+
+	return slices.Clone(f.except), true
+}
+
+// Names returns a copy of the named namespaces of f, never nil, so that an
+// empty set matches nothing. It returns the empty set for the filter of
+// every namespace: a store reads that case through Every.
+func (f Filter) Names() []Name {
+	if f.every {
+		return []Name{}
+	}
+
+	out := make([]Name, 0, len(f.names))
+
+	return append(out, f.names...)
+}
+
+// Key returns a text that is equal for two filters that qualify the same
+// namespaces under the same rule, and different otherwise: the order of the
+// names does not count. Each kind of filter has its own prefix, so the filter
+// of one namespace named "all" never gives the key of the filter of every
+// namespace.
+func (f Filter) Key() string {
+	if f.every {
+		return "all:" + joinNames(f.except)
+	}
+
+	names := slices.Clone(f.names)
+	slices.Sort(names)
+
+	return "names:" + joinNames(names)
+}
+
+// joinNames joins names with a line feed, which no namespace name holds.
+func joinNames(names []Name) string {
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name.String())
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 // PageQuery asks for one page of namespaces, in the order of
@@ -331,7 +405,7 @@ func (s *Service) List(ctx context.Context) ([]Namespace, error) {
 // PageNamespaces returns one page of namespaces through the Pager port of
 // the store. It returns ErrInvalidPage when the limit is not 1 to
 // maxPageLimit, and ErrNoPaging when the store does not implement Pager.
-// Names are deduplicated before the call, and the slice is not modified.
+// The constructors of Filter keep each name once.
 func (s *Service) PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace, error) {
 	if q.Limit < 1 || q.Limit > maxPageLimit {
 		return nil, fmt.Errorf("%w: limit %d is not 1 to %d", ErrInvalidPage, q.Limit, maxPageLimit)
@@ -345,7 +419,7 @@ func (s *Service) PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace,
 	page, err := pager.PageNamespaces(ctx, PageQuery{
 		After:  q.After,
 		Limit:  q.Limit,
-		Filter: Filter{All: q.Filter.All, Names: dedupNames(q.Filter.Names)},
+		Filter: q.Filter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("page namespaces: %w", err)
@@ -356,15 +430,14 @@ func (s *Service) PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace,
 
 // CountNamespaces returns how many namespaces qualify under Filter through
 // the Pager port of the store. It returns ErrNoPaging when the store does
-// not implement Pager. Names are deduplicated before the call, and the
-// slice is not modified.
+// not implement Pager. The constructors of Filter keep each name once.
 func (s *Service) CountNamespaces(ctx context.Context, f Filter) (int64, error) {
 	pager, ok := s.store.(Pager)
 	if !ok {
 		return 0, ErrNoPaging
 	}
 
-	total, err := pager.CountNamespaces(ctx, Filter{All: f.All, Names: dedupNames(f.Names)})
+	total, err := pager.CountNamespaces(ctx, f)
 	if err != nil {
 		return 0, fmt.Errorf("count namespaces: %w", err)
 	}

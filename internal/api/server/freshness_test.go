@@ -559,7 +559,7 @@ func TestFreshAuthRefusesASignInAfterNow(t *testing.T) {
 func failureEntries(t *testing.T, e providerEnv, scope namespace.Name, action identity.Action) int {
 	t.Helper()
 
-	listing, err := e.store.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := e.store.List(t.Context(), scope, audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit of %s: %v", scope, err)
 	}
@@ -827,7 +827,7 @@ func TestFreshAuthFailsClosedWhenThePolicyReadFails(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, idempotency: false,
+		hostile: nil, passwords: nil, idempotency: false, failTempAdminRead: false,
 		failPolicyRead: func() error {
 			if down.Load() {
 				return errPolicyStoreDown

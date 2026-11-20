@@ -413,7 +413,9 @@ func (m *memDB) List(_ context.Context, f job.Filter) (job.Page, error) {
 		read++
 
 		if reason, damaged := m.damaged[id]; damaged {
-			out.Damaged = append(out.Damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
+			out.Damaged = append(out.Damaged, job.DamagedRow{
+				ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason, State: j.State, Version: j.Version,
+			})
 		} else {
 			out.Jobs = append(out.Jobs, copyJob(j))
 		}
@@ -499,19 +501,41 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 	return copyJob(&next), nil
 }
 
+// GetDamaged implements job.Store.
+func (m *memDB) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, namespace.Name, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cur, ok := m.lookup(id)
+	if !ok {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", job.ErrNotFound
+	}
+
+	reason, damaged := m.damaged[id]
+	if !damaged {
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "",
+			fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+	}
+
+	return job.DamagedRow{
+		ID: id, UnitID: cur.Spec.Unit.UnitID(), Reason: reason, State: cur.State, Version: cur.Version,
+	}, cur.Spec.Unit.Namespace(), nil
+}
+
 // CancelDamaged implements job.Store. It reads no body: a row that a reader
 // cannot decode can still be canceled by its ID.
-func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry) error {
+func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fence, e []audit.Entry,
+) (job.DamagedCancel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkFence(fence); err != nil {
-		return err
+		return job.DamagedCancel{}, err
 	}
 
 	cur, ok := m.lookup(id)
 	if !ok || cur.Spec.Unit.Namespace() != fence.Namespace {
-		return job.ErrNotFound
+		return job.DamagedCancel{}, job.ErrNotFound
 	}
 
 	// A cancel through this path does not stop the durable operation of
@@ -520,15 +544,15 @@ func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fenc
 	// this check stays so that a new caller cannot cancel a readable
 	// job here.
 	if _, damaged := m.damaged[id]; !damaged {
-		return fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
+		return job.DamagedCancel{}, fmt.Errorf("%w: job %s is not damaged", job.ErrInvalid, id)
 	}
 
 	if cur.State.Terminal() {
-		return fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, cur.State)
+		return job.DamagedCancel{}, fmt.Errorf("%w: job %s is %s", job.ErrFinished, id, cur.State)
 	}
 
 	if err := checkNamespace(fence.Namespace, fence, e); err != nil {
-		return err
+		return job.DamagedCancel{}, err
 	}
 
 	next := copyJob(cur)
@@ -539,7 +563,7 @@ func (m *memDB) CancelDamaged(_ context.Context, id job.ID, fence namespace.Fenc
 	m.jobs[id] = &next
 	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
 
-	return nil
+	return job.DamagedCancel{Version: next.Version, CreatedAt: next.CreatedAt, ChangedAt: now}, nil
 }
 
 // settle sets the state, the version, the wait reason and the reason of next
@@ -622,7 +646,9 @@ func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.Dam
 		}
 
 		if reason, isDamaged := m.damaged[id]; isDamaged {
-			damaged = append(damaged, job.DamagedRow{ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason})
+			damaged = append(damaged, job.DamagedRow{
+				ID: id, UnitID: j.Spec.Unit.UnitID(), Reason: reason, State: j.State, Version: j.Version,
+			})
 		} else {
 			out = append(out, job.Orphan{Job: copyJob(j), Missing: end.missing})
 		}

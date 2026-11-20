@@ -238,8 +238,9 @@ func (h *Handler) writeJSONAPIDocument(ctx context.Context, w http.ResponseWrite
 	}
 }
 
-// classifyTooLarge maps the errors of a limit: an oversized body or a budget
-// that can never fit to 413, a full body budget to 503, and a source over its
+// classifyTooLarge maps the errors of a limit: an oversized body, a budget
+// that can never fit or a state that is too deep or too large for a masked
+// read to 413, a full body budget to 503, and a source over its
 // failure budget to 429. ok is false for any other error.
 func classifyTooLarge(err error) (errorClass, bool) {
 	switch {
@@ -255,6 +256,11 @@ func classifyTooLarge(err error) (errorClass, bool) {
 		return errorClass{
 			status: http.StatusRequestEntityTooLarge, title: titleTooLarge, detail: err.Error(),
 			code: errcode.StateVersionTooLarge, args: nil,
+		}, true
+	case errors.Is(err, workspace.ErrStateBound):
+		return errorClass{
+			status: http.StatusRequestEntityTooLarge, title: titleTooLarge, detail: err.Error(),
+			code: errcode.StateVersionTooComplex, args: nil,
 		}, true
 	case errors.Is(err, workspace.ErrBudgetTooSmall):
 		return errorClass{

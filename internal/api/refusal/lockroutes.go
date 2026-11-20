@@ -19,6 +19,11 @@ const (
 	CollectionLockPath = "/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/lock"
 	// NamespaceLockPath is the route of the manual lock of a whole namespace.
 	NamespaceLockPath = "/api/dustpan/v1/namespaces/{namespace}/lock"
+	// BulkLockPath is the route that locks many units in one call.
+	BulkLockPath = "/api/dustpan/v1/namespaces/{namespace}/unit-locks/bulk-lock"
+	// BulkUnlockPath is the route that removes the locks of many units in one
+	// call.
+	BulkUnlockPath = "/api/dustpan/v1/namespaces/{namespace}/unit-locks/bulk-unlock"
 	// ForceUnlockSuffix follows a lock route in the route of a force-unlock.
 	ForceUnlockSuffix = "/force-unlock"
 )

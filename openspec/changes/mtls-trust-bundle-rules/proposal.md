@@ -59,7 +59,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Main has a workload token exchange test that this part does not replace (`e2e/workload_test.go:38`)
-- Main has a test that the trust token lives the exchange lifetime (`pkg/accesstoken/trust_token_test.go:59`)
+- Main has a test that the trust token lives the exchange lifetime (`pkg/accesstoken/trust_token_test.go:85`)
 
 ## ADR check
 

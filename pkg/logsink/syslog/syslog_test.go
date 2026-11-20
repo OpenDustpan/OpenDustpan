@@ -792,3 +792,39 @@ func closeOnCleanup(t *testing.T, s logsink.Sink) {
 		}
 	})
 }
+
+// TestFormatEscapesHiddenRunes is the encoder layer: the whole RFC 5424
+// message, header and MSG, holds no hidden rune when the host name, the app
+// name and the record hold one.
+func TestFormatEscapesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	for name, v := range logsinktest.HostileText() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config(syslog.TCP, "127.0.0.1:514")
+			cfg.Hostname = "host" + v
+			cfg.AppName = "app" + v
+
+			s, err := syslog.New(cfg)
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			closeOnCleanup(t, s)
+
+			got, err := s.Format(logsink.Record{
+				Time:    time.Date(2026, time.November, 20, 0, 0, 0, 0, time.UTC),
+				Level:   logsink.LevelError,
+				Message: v,
+				Attrs:   []logsink.Attr{logsink.String("k"+v, v)},
+			})
+			if err != nil {
+				t.Fatalf("format: %v", err)
+			}
+
+			logsinktest.CheckNoHiddenRune(t, "syslog message", got)
+		})
+	}
+}

@@ -36,12 +36,12 @@ server does not store them, and an operator cannot change them.
 
 | Role | What it holds |
 | --- | --- |
-| `viewer` | Read the namespace, the collections, the units, the outputs that the sharing rules allow, the profiles and the gates, and manage its own saved views. |
+| `viewer` | Read the namespace, the collections, the units, the outputs (the action `unit:read-outputs`), the profiles and the gates. Read the runner pools, the runners and the source filter (`namespace:read-runners`). Manage its own saved views. |
 | `auditor` | Everything in `viewer`, plus the audit log and the access of each object. |
 | `secret-viewer` | Everything in `viewer`, plus read the secrets of a unit. |
 | `planner` | Everything in `viewer`, plus plan jobs and their logs. |
 | `writer` | Everything in `viewer`, plus write, encrypt and decrypt state, read secrets and set the context of a unit. |
-| `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. |
+| `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. It manages runner pools and runners (`namespace:manage-runners`), and defines custom steps (`unit:define-steps`). |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
 | `installation-operator` | Every action of the operator family for the installation. |
 | `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. It makes the tokens of each service principal whose reach is inside its own reach. |
@@ -50,7 +50,8 @@ server does not store them, and an operator cannot change them.
 
 The `planner` role cannot apply, destroy, approve, cancel or read secrets. The [planner role guide](planner-role.md) describes the role in detail.
 
-The name `namespace-admin` is an alias of `admin`.
+The server has no role named `namespace-admin`. `GET /api/server/roles/namespace-admin`
+and a grant create with this role answer `404`. Use the role `admin`.
 
 ## Make a custom role
 
@@ -120,14 +121,17 @@ The object is set by the route. The body does not name it.
 | The installation | `/api/server/grants` | `server:manage-access` | `DELETE /api/server/grants/{id}` |
 | A namespace | `/api/server/namespaces/{namespace}/grants` | `namespace:manage-access` | `DELETE /api/server/namespaces/{namespace}/grants/{id}` |
 | A collection | `/api/server/namespaces/{namespace}/collections/{collection}/grants` | `collection:manage-access` | `DELETE .../collections/{collection}/grants/{id}` |
-| A unit | `/api/server/namespaces/{namespace}/unit-grants?tool=<tool>&unit=<name>` | `unit:manage-access` | `DELETE /api/server/namespaces/{namespace}/unit-grants/{id}` |
+| A unit | `/api/server/namespaces/{namespace}/unit-grants?tool=<tool>&unit=<name>` | `unit:manage-access` | `DELETE /api/server/namespaces/{namespace}/unit-grants/{id}?tool=<tool>&unit=<name>` |
 | A service principal | `/api/server/principals/{principal}/grants` | `server:manage-access` on the principal | `DELETE /api/server/principals/{principal}/grants/{id}` |
 
-The unit route needs both `tool` and `unit`. Without them the answer is `400`.
+The unit routes need both `tool` and `unit`, also the revoke route. Without
+them the answer is `400`. The route of a service principal lists and makes the
+grants whose object is the principal, that is, who can act as it. It does not
+list the grants that the principal holds.
 
 Create a grant. The body holds `subject` and `role`.
 
-A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. The body of the grant is:
+A stored access token gets `403` with `mfa.fresh-step-required`. The body of the grant is:
 
 ```json
 {"subject":"group:grp-...#member","role":"viewer"}
@@ -172,7 +176,9 @@ the history keeps it.
 A revoke takes effect on the next request. The server reads the stored grant
 for each request and keeps no allow, so a personal access token whose only
 grant ended gets `403` on the next CLI command. To see which grants a token
-still holds, read `GET /api/server/principals/{principal}/grants`.
+still holds, read an [access review](access-review.md) of an object with the
+`subject` filter, for example
+`GET /api/server/namespaces/{namespace}/access-review?subject=principal:<id>`.
 
 ```sh
 curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
@@ -180,7 +186,8 @@ curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
 ```
 
 The revoke of the last site administrator is refused with `409` and the code
-`access.last-site-administrator`.
+`access.last-site-administrator`. The refusal writes an audit entry with the
+outcome `failure` and the reason `access.last-site-administrator`.
 
 A grant on one collection reaches only that collection and its units. A writer
 on collection A that writes a unit of collection B gets `403` and nothing
@@ -215,6 +222,19 @@ with an optional `action`.
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" \
   "https://dustpan.example.com/api/dustpan/v1/me/access/objects?type=namespace&action=unit:write"
+```
+
+The answer holds `objects`, the objects of the page, and `total`. When a grant
+on the installation, or the administrator flag, covers every object, the
+answer has `"all": true` and no objects. `excluded.namespaces` then names the
+namespaces whose objects `all` does not cover, in name order. A namespace is in
+it when its IP allowlist does not contain the client address (see
+[IP allowlists](ip-allowlists.md#what-a-list-shows)). The list is empty when
+`all` is `false`, and for the type `principal`.
+
+```json
+{"type": "namespace", "action": "unit:write", "all": true,
+ "excluded": {"namespaces": ["acme"]}, "objects": [], "total": 0, "nextPageToken": ""}
 ```
 
 Any signed-in principal can read its own access. The caller only sees its own

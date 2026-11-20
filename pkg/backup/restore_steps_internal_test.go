@@ -58,6 +58,7 @@ func cancelLogService(recorder *cancelLogRecorder) *RestoreService {
 		target: nil,
 		key:    nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
 		lockWait: 0, now: nil, logger: slog.New(recorder), runner: nil,
+		accessSetting: nil, accessSettingStatic: nil, decide: nil,
 	}
 }
 
@@ -132,7 +133,7 @@ func TestGuardedDefersTheLiveBlobDeletes(t *testing.T) {
 		Operation: durable.Operation{
 			ID: "restore-op", Key: RestoreOperationKey(id), Kind: RestoreOperationKind,
 			Version: RestoreOperationVersion, Input: input, State: durable.StateRunning, Steps: nil, Attempt: 1,
-			Failures: durable.DefaultMaxAttempts - 1, Expiries: 0, LastError: "",
+			Failures: durable.DefaultMaxAttempts - 1, Expiries: 0, DeadlineReleases: 0, LastError: "",
 			Claim:           durable.Claim{Operation: "restore-op", Owner: "", Token: 0, ExpiresAt: time.Time{}},
 			CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		},
@@ -158,7 +159,7 @@ func TestRestoreWriterCheckLogsTheAttempt(t *testing.T) {
 		live: live, operations: writerCheckOps{Store: nil, op: durable.Operation{
 			ID: "restore-op", Key: RestoreOperationKey(id), Kind: RestoreOperationKind,
 			Version: RestoreOperationVersion, Input: nil, State: durable.StateRunning, Steps: nil, Attempt: 1,
-			Failures: 0, Expiries: 0, LastError: "",
+			Failures: 0, Expiries: 0, DeadlineReleases: 0, LastError: "",
 			Claim:           durable.Claim{Operation: "restore-op", Owner: "", Token: 7, ExpiresAt: time.Time{}},
 			CancelRequested: false, NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		}},
@@ -166,6 +167,7 @@ func TestRestoreWriterCheckLogsTheAttempt(t *testing.T) {
 		installation: "",
 		afterApply:   nil, admit: nil, allowDev: false, devHint: "", lease: 0, lockWait: 0, now: nil,
 		logger: slog.New(recorder), runner: nil,
+		accessSetting: nil, accessSettingStatic: nil, decide: nil,
 	}
 
 	unit := "pulumi:acme/web/prod"

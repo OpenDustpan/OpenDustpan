@@ -252,8 +252,8 @@ func TestLocalPasswordRoutes(t *testing.T) {
 			code:   "request.body-invalid",
 		},
 		{
-			name: "too large", body: `{"userName":"alice","password":"` + strings.Repeat("a", 9000) + `"}`, status: 400,
-			code: "request.body-invalid",
+			name: "too large", body: `{"userName":"alice","password":"` + strings.Repeat("a", 9000) + `"}`, status: 413,
+			code: "request.body-too-large",
 		},
 	})
 
@@ -332,6 +332,39 @@ func (s localServer) checkAdministratorRoutes(t *testing.T) {
 	}
 
 	checkLockRules(t, policy.Body.Bytes())
+	checkLockPrune(t, policy.Body.Bytes())
+}
+
+// lockPruneBody is the lockPrune part of the policy answer.
+type lockPruneBody struct {
+	IntervalSeconds  int64 `json:"intervalSeconds"`
+	MaxRows          int   `json:"maxRows"`
+	MaxEndedLocks    int   `json:"maxEndedLocks"`
+	MaxRunSeconds    int64 `json:"maxRunSeconds"`
+	BatchPauseMillis int64 `json:"batchPauseMillis"`
+}
+
+// checkLockPrune checks that the policy answer shows the effective schedule
+// of the prune of the name counts, with the time bound of a run and the
+// pause between two batches.
+func checkLockPrune(t *testing.T, body []byte) {
+	t.Helper()
+
+	var got struct {
+		LockPrune lockPruneBody `json:"lockPrune"`
+	}
+
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode the policy: %v", err)
+	}
+
+	p := got.LockPrune
+	if p.IntervalSeconds != 3600 || p.MaxRows != authgate.MaxNamePruneRows ||
+		p.MaxEndedLocks != authgate.MaxNamePruneEnded ||
+		p.MaxRunSeconds != int64(authgate.NamePruneMaxRun/time.Second) ||
+		p.BatchPauseMillis != authgate.NamePruneBatchPause.Milliseconds() {
+		t.Fatalf("lockPrune = %+v, want the effective schedule with the time bound and the pause", p)
+	}
 }
 
 // lockRuleBody is one rule of the policy answer.
@@ -390,5 +423,35 @@ func checkLockRules(t *testing.T, body []byte) {
 	}
 	if got.LockRules != want {
 		t.Fatalf("lockRules = %+v, want %+v", got.LockRules, want)
+	}
+}
+
+// TestLocalUsersPolicyShowsTheMissingPublicURL proves the wiring of the
+// service: a server that has no console sign-in shows the password sign-in as
+// off with the source public-url, and a server with a public URL shows it on.
+// Removing the NoPublicURL setting of the server fails this test.
+func TestLocalUsersPolicyShowsTheMissingPublicURL(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+
+	srv, err := dustpan.NewServer(fullServerOptions(t, st, blobs, authn)...)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	off := localServer{handler: startedHandler(t, srv)}
+
+	policy := off.do(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", administrator())
+	wantAnswer(t, "policy without a public URL", policy, http.StatusOK, "")
+
+	if !strings.Contains(policy.Body.String(), `"enabled":false`) ||
+		!strings.Contains(policy.Body.String(), `"enabledSource":"public-url"`) {
+		t.Fatalf("policy without a public URL = %s", policy.Body)
+	}
+
+	on := newLocalServer(t).do(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", administrator())
+	if !strings.Contains(on.Body.String(), `"enabledSource":"default"`) {
+		t.Fatalf("policy with a public URL = %s", on.Body)
 	}
 }

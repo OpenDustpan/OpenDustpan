@@ -160,7 +160,7 @@ func contextHarness(s *sqlite.Store) objectcontexttest.Harness {
 		Audited: func(t *testing.T, ns string) []audit.Entry {
 			t.Helper()
 
-			listing, err := s.List(t.Context(), namespace.Name(ns), audit.Page{Number: 1, Size: audit.MaxPageSize})
+			listing, err := s.List(t.Context(), namespace.Name(ns), audit.Page{Size: audit.MaxPageSize, Before: 0})
 			if err != nil {
 				t.Fatalf("list audit: %v", err)
 			}

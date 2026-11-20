@@ -252,7 +252,7 @@ func (r *outputShareRig) grant(_ *testing.T, principal string, action identity.A
 func (r *outputShareRig) audited(t *testing.T, ns string) []string {
 	t.Helper()
 
-	listing, err := r.store.List(t.Context(), namespace.Name(ns), audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := r.store.List(t.Context(), namespace.Name(ns), audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("list audit entries of %s: %v", ns, err)
 	}

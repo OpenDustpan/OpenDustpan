@@ -62,7 +62,10 @@ type Store interface {
 	Claim(ctx context.Context, req ClaimRequest) (Operation, error)
 
 	// Extend moves the expiry of c to now plus lease, and returns the new
-	// claim. It returns ErrClaimLost when c is not the live claim, also when
+	// claim. It leaves DeadlineReleases as it is: a renewal whose reply came
+	// too late shows nothing about the holder, so only an end of a claim by
+	// the holder sets the count to 0: Complete, Fail, Release and GiveBack. It
+	// returns ErrClaimLost when c is not the live claim, also when
 	// c expired and no other claim took the operation. It returns
 	// ErrCanceled when a cancel is requested. It returns ErrInvalid for a
 	// lease that is not positive. On an error it changes nothing.
@@ -97,6 +100,14 @@ type Store interface {
 	// changes nothing. When a cancel is requested, it ends the operation
 	// canceled instead, and returns nil.
 	Release(ctx context.Context, c Claim) error
+
+	// ReleaseAtDeadline releases the operation of c as Release does, and adds
+	// 1 to DeadlineReleases, unless a cancel is requested: then the operation
+	// ends canceled and the count is set to 0, as every other end of a claim
+	// sets it. A holder calls it when it stops its
+	// work because it could not renew the claim in time. It returns
+	// ErrClaimLost when c is not the live claim, and then changes nothing.
+	ReleaseAtDeadline(ctx context.Context, c Claim) error
 
 	// GiveBack returns the operation of c to pending without a failure, as
 	// Release does, but only while no cancel is requested. It checks in

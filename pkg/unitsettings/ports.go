@@ -54,6 +54,9 @@ type Store interface {
 	// stored one and UpdatedAt set to e.At, reads the unit defaults of the
 	// namespace, and appends the entry that ChangeEntry makes from e.
 	//
+	// It stores the form that Canonical gives: a directory of RootDirectory
+	// is stored, compared, audited and returned as empty.
+	//
 	// A write that changes no field (Equal) of a record at expected writes
 	// nothing: no new version, no new time and no audit entry. The result is
 	// the stored record and the defaults that the write read.

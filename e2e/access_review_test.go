@@ -80,9 +80,16 @@ type e2eGrantedBy struct {
 
 type e2eAccessObjects struct {
 	Objects       []e2eAccessObject `json:"objects"`
+	Excluded      e2eAccessExcluded `json:"excluded"`
 	NextPageToken string            `json:"nextPageToken"`
 	Total         int64             `json:"total"`
 	All           bool              `json:"all"`
+}
+
+// e2eAccessExcluded is the excluded part of a caller-access page: the
+// namespaces that all=true does not cover.
+type e2eAccessExcluded struct {
+	Namespaces []string `json:"namespaces"`
 }
 
 type e2eAccessObject struct {

@@ -59,7 +59,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{
-		ProxyRules:     nil,
+		ProxyRules: nil, FirstAdministrator: nil,
 		LocalUsers:     coverageLocalUsers(tb, st, principals),
 		Preferences:    nil,
 		GitHostLinks:   nil,
@@ -149,16 +149,17 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 	}
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:        nil,
-		Store:      st,
-		Principals: principals,
-		Hasher:     hasher,
-		Blocklist:  blocklist.Embedded(),
-		Audit:      st,
-		Locks:      st,
-		Keys:       st,
-		Settings:   nil,
-		SSO:        nil,
+		Log:         nil,
+		Store:       st,
+		Principals:  principals,
+		NoPublicURL: false,
+		Hasher:      hasher,
+		Blocklist:   blocklist.Embedded(),
+		Audit:       st,
+		Locks:       st,
+		Keys:        st,
+		Settings:    nil,
+		SSO:         nil,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
@@ -266,6 +267,7 @@ func coveragePasswordProvider() serverapi.PasswordProvider {
 			EmailAttribute: "", NameAttribute: "", Subject: "", DisabledAttribute: "", Groups: "", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
 			StartTLS: false, SubjectFailureLimit: 0, SubjectFailureLimitSource: "",
+			CAFile: "", DisabledMask: "", DisabledValues: nil,
 		},
 	}
 }

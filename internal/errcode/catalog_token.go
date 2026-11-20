@@ -9,6 +9,8 @@ const (
 	TokenEnded = "token.ended"
 	// TokenInvalid is an access token that the server cannot use for the request.
 	TokenInvalid = "token.invalid"
+	// TokenIssueFailed means that the server could not store the access token or its audit entry, so it made no token.
+	TokenIssueFailed = "token.issue-failed"
 	// TokenKindHasNone means that the kind of the principal gets no access token.
 	TokenKindHasNone = "token.kind-has-none"
 	// TokenCallerNotPerson means that the caller is not a person with a principal record.
@@ -19,6 +21,9 @@ const (
 	TokenReachExceeded = "token.outside-reach"
 	// TokenRequiresSignIn means that the request needs a console sign-in, and an access token cannot do it.
 	TokenRequiresSignIn = "token.requires-sign-in"
+	// TokenUnknownKind means that the access token has a kind that this version does not know, so the request cannot
+	// change it.
+	TokenUnknownKind = "token.unknown-kind"
 	// TokenUnsupported means that the store of the server keeps no access tokens.
 	TokenUnsupported = "token.unsupported"
 	// TokenWrongKind means that the kind of the access token does not fit the route.
@@ -31,6 +36,11 @@ func tokenSpecs() []Spec {
 		{Code: TokenAlreadyExists, Meaning: "an access token with the same identity exists", Args: nil},
 		{Code: TokenEnded, Meaning: "the access token ended, so the request cannot change it", Args: nil},
 		{Code: TokenInvalid, Meaning: "the access token is not valid for this request", Args: nil},
+		{
+			Code:    TokenIssueFailed,
+			Meaning: "the server could not store the access token or its audit entry, so it made no token",
+			Args:    nil,
+		},
 		{Code: TokenKindHasNone, Meaning: "the kind of the principal gets no access token", Args: nil},
 		{Code: TokenCallerNotPerson, Meaning: "the caller is not a person with a principal record", Args: nil},
 		{Code: TokenNotFound, Meaning: "the access token does not exist", Args: nil},
@@ -42,6 +52,11 @@ func tokenSpecs() []Spec {
 		{
 			Code:    TokenRequiresSignIn,
 			Meaning: "the request needs a console sign-in, and an access token cannot do it",
+			Args:    nil,
+		},
+		{
+			Code:    TokenUnknownKind,
+			Meaning: "the access token has a kind that this version does not know, so the request cannot change it",
 			Args:    nil,
 		},
 		{Code: TokenUnsupported, Meaning: "the store of the server keeps no access tokens", Args: nil},

@@ -1568,6 +1568,28 @@ func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersio
 	return sv, nil
 }
 
+// StateVersionWorkspace returns the ID of the workspace that owns the
+// finalized state version with id, or ErrStateVersionNotFound when it does
+// not exist or is not finalized. It reads the version row only: it never
+// unwraps a data key and never opens an output, so a caller can find the
+// object to authorize before any secret-handling work runs.
+func (s *Service) StateVersionWorkspace(ctx context.Context, id StateVersionID) (ID, error) {
+	sv, err := s.states.GetStateVersion(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("locate state %q: %w", id, err)
+	}
+
+	// Defense in depth: this check stays so that a resolver never authorizes
+	// a pending version, and so that a new caller of this method cannot skip
+	// it. It does not rely on the later ReadState of the handler, which
+	// checks the status too, and it does not rely on the authorization guard.
+	if sv.Status != StatusFinalized {
+		return "", fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, id, sv.Status)
+	}
+
+	return sv.Workspace, nil
+}
+
 // Open returns the content of a finalized state version. The caller closes it.
 // The version opens its sealed blob, so the caller reads the same bytes
 // the CLI sent. A decryption failure reports the version ID only, never a
@@ -1715,7 +1737,7 @@ func (s *Service) ReadResource(
 		return StateDetail{}, encryptedErr
 	}
 
-	detail, err := ReadStateResource(state, sv.SensitiveMarks, address)
+	detail, err := ReadStateResource(ctx, state, sv.SensitiveMarks, address)
 	if err != nil {
 		return StateDetail{}, fmt.Errorf("read resource of %s: %w", id, err)
 	}
@@ -1764,6 +1786,7 @@ func (s *Service) DiffStates(
 	}
 
 	diff, err := DiffStates(
+		ctx,
 		StateWithMarks{State: fromState, Marks: fromVersion.SensitiveMarks},
 		StateWithMarks{State: toState, Marks: toVersion.SensitiveMarks},
 		cursor, size,

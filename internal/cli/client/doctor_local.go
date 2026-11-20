@@ -3,12 +3,11 @@ package client
 import (
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 const (
@@ -130,15 +129,20 @@ func databaseCheck(d doctorSettings) checkResult {
 	return checkResult{statusPass, nameDatabase, "the database is set"}
 }
 
-// adminTokenCheck checks that each bootstrap admin token has at least 32
-// bytes. No token is a pass: the operator may sign in another way. The
-// detail never shows a token.
+// adminTokenCheck checks that the operator set a bootstrap admin token and
+// that each token has at least 32 bytes. It reads the tokens with
+// LoadAdminTokensFrom, the function that serve calls, so doctor fails when
+// serve exits with ErrAdminTokenMissing. The detail never shows a token.
 func adminTokenCheck(d doctorSettings) checkResult {
 	tokens, err := LoadAdminTokensFrom(d.lookup)
 
 	switch {
 	case errors.Is(err, ErrAdminTokenMissing):
-		return checkResult{statusPass, nameAdminToken, "no bootstrap admin token is set"}
+		return checkResult{
+			statusFail,
+			nameAdminToken,
+			err.Error() + ". To make a token, run: openssl rand -hex 32",
+		}
 	case err != nil:
 		return checkResult{statusFail, nameAdminToken, err.Error()}
 	}
@@ -154,6 +158,13 @@ func adminTokenCheck(d doctorSettings) checkResult {
 				),
 			}
 		}
+	}
+
+	// Serve builds its tokens with the same constructor, so a duplicate fails
+	// here and in serve with the same text. The error names the index of the
+	// token and never holds a token value.
+	if _, err := identity.NewStaticTokens(tokens...); err != nil {
+		return checkResult{statusFail, nameAdminToken, err.Error()}
 	}
 
 	return checkResult{
@@ -176,25 +187,46 @@ func backupTargetCheck(d doctorSettings) checkResult {
 	return checkResult{statusPass, nameBackupTarget, "a backup target is set"}
 }
 
-// listenCheck warns about plain HTTP on an address that is not loopback, when
-// the operator set no TLS and no public URL with https that names a proxy.
+// listenCheck fails for plain HTTP on an address that is not loopback, when
+// the operator set no TLS, no public URL with https that names a proxy and no
+// opt-in. Serve refuses to start in the same case, with the same rule and
+// the same text. With the opt-in, serve starts and logs a warning, so the
+// check warns.
 func listenCheck(d doctorSettings) checkResult {
 	listen := d.value("listen")
-	tls := d.value("tls-cert") != "" && d.value("tls-key") != ""
 
-	switch {
-	case isLoopbackListen(listen):
+	reason, err := cli.CheckListen(cli.ListenSettings{
+		Address:        listen,
+		TLSCert:        d.value("tls-cert"),
+		TLSKey:         d.value("tls-key"),
+		PublicURL:      d.value("public-url"),
+		AllowPlainHTTP: d.value(cli.AllowPlainHTTPFlag) == "true",
+	})
+	if err != nil {
+		return checkResult{statusFail, nameListen, err.Error()}
+	}
+
+	switch reason {
+	case cli.ListenLoopback:
 		return checkResult{statusPass, nameListen, listen + " is a loopback address"}
-	case tls:
+	case cli.ListenTLS:
 		return checkResult{statusPass, nameListen, listen + " uses TLS"}
-	case httpsPublicURL(d.value("public-url")):
+	case cli.ListenProxy:
 		return checkResult{statusPass, nameListen, listen + " is behind a proxy that --public-url names with https"}
-	default:
+	case cli.ListenPlainHTTPAllowed:
 		return checkResult{
 			statusWarn, nameListen,
-			listen + " is not a loopback address and uses plain HTTP: set --tls-cert and --tls-key, " +
-				"or set --public-url to the https address of the proxy in front",
+			listen + " is not a loopback address and uses plain HTTP, because --" + cli.AllowPlainHTTPFlag +
+				" is set: tokens and state go over the network with no encryption",
 		}
+	case cli.ListenRefused:
+		// Defense in depth: CheckListen answers an error for each refused
+		// address, so the check returned above. This case stays so that a
+		// refusal with no error fails, and does not pass.
+		return checkResult{statusFail, nameListen, listen + " is not a loopback address and has no TLS"}
+	default:
+		// Fail closed: a reason with no case here fails, and does not pass.
+		return checkResult{statusFail, nameListen, listen + " has no known listen rule"}
 	}
 }
 
@@ -212,31 +244,4 @@ func proxyCheck(d doctorSettings) checkResult {
 	default:
 		return checkResult{statusPass, nameProxies, "--trusted-proxies is set"}
 	}
-}
-
-// isLoopbackListen reports whether the listen address names loopback only. An
-// address with no host, like :8080, listens on every interface.
-func isLoopbackListen(listen string) bool {
-	host, _, err := net.SplitHostPort(listen)
-	if err != nil || host == "" {
-		return false
-	}
-
-	if host == "localhost" {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-
-	return ip != nil && ip.IsLoopback()
-}
-
-// httpsPublicURL reports whether rawURL is an https URL.
-func httpsPublicURL(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed == nil {
-		return false
-	}
-
-	return parsed.Scheme == "https"
 }

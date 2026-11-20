@@ -199,7 +199,7 @@ func (*deleteStacks) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence
 }
 
 func (m *deleteStacks) UpdateStackTags(
-	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.TagUpdate, _ namespace.Fence,
 ) error {
 	return stack.ErrNotFound
 }
@@ -799,6 +799,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 	blobs := newMemBlob(newClock())
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Membership:         stacktest.PlacedAll(),
 		Sealer:             secrettest.NewMemorySealer(),
 		BlobGuard:          blobguardtest.None{},
 		ManualLocks:        nil,

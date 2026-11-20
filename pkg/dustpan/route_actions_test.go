@@ -60,6 +60,7 @@ var publicRoutes = map[string]string{
 	"GET /api/server/sign-in/{provider}/callback":                      "end of an identity provider sign-in",
 	"GET /oidc/{nsid}/.well-known/openid-configuration":                "issuer discovery for a cloud trust policy",
 	"GET /oidc/{nsid}/jwks":                                            "issuer keys for a cloud trust policy",
+	"POST /webhooks/{hookID}":                                          "the signature of the delivery, checked against the event secret of the registration, is the credential",
 	"/":                                                                "the files of the web console, with WithConsoleDir",
 	"/api/dustpan/v1/":                                                 "the 404 answer for a path under the prefix that no handler serves",
 }
@@ -79,6 +80,7 @@ var rootPrefixes = map[string]string{
 	"/api/server/":    "server",
 	"/api/":           "pulumi",
 	"/oidc/":          "issuer",
+	"/webhooks/":      "githostwebhook",
 	"/v1/providers/":  "tfe",
 	"/v1/modules/":    "tfe",
 	"/v1/mirror/":     "tfe",

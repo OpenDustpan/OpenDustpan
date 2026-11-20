@@ -215,7 +215,14 @@ func (x *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (ExchangeRes
 	entry.Subject = owner.Subject
 	entry.PrincipalKind = string(owner.Kind)
 
-	xch := trustrule.Exchange{Rule: rule.ID, Token: issued.Token, Digest: issued.Digest}
+	xch := trustrule.Exchange{
+		Rule:          rule.ID,
+		Token:         issued.Token,
+		Digest:        issued.Digest,
+		SPIFFEID:      "",
+		BundleID:      "",
+		BundleVersion: 0,
+	}
 	if err := x.cfg.Exchanges.RecordExchange(ctx, xch, ns.Fence(), entry); err != nil {
 		if errors.Is(err, trustrule.ErrNotFound) || errors.Is(err, trustrule.ErrPrincipal) {
 			return ExchangeResult{}, x.refuse(ctx, ns, in, signed, err)

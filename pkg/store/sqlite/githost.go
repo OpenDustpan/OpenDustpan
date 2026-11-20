@@ -371,7 +371,8 @@ func readRegistration(ctx context.Context, q *db.Queries, kind forge.Kind) (forg
 		KeySetID: row.KeySetID, KeyCreatedAtMs: row.KeyCreatedAtMs, SealedEventSecret: row.SealedEventSecret,
 		EventSecretSetID: row.EventSecretSetID, EventSecretCreatedAtMs: row.EventSecretCreatedAtMs,
 		AddressDigest: row.AddressDigest, Version: row.Version, CreatedAtMs: row.CreatedAtMs,
-		UpdatedAtMs: row.UpdatedAtMs,
+		UpdatedAtMs: row.UpdatedAtMs, OldEventSecretEndsAtMs: row.OldEventSecretEndsAtMs,
+		OldEventSecretSetID: row.OldEventSecretSetID, OldSealedEventSecret: row.OldSealedEventSecret,
 	})
 	if err != nil {
 		return forge.Registration{}, fmt.Errorf("read registration: %w", err)
@@ -398,6 +399,14 @@ func (g gitHost) PutRegistration(
 		return forge.Registration{}, fmt.Errorf("put registration: %w", err)
 	}
 
+	// Defense in depth: Validate refuses a part of the old event secret and the
+	// CHECK constraint of the schema does too. This check stays so that the
+	// store never sends a part to the database, and does not rely on either.
+	old, oldErr := githoststore.OldEventSecret(&r)
+	if oldErr != nil {
+		return forge.Registration{}, fmt.Errorf("put registration: %w", oldErr)
+	}
+
 	g.s.mu.RLock()
 	defer g.s.mu.RUnlock()
 
@@ -412,9 +421,9 @@ func (g gitHost) PutRegistration(
 		var writeErr error
 
 		if errors.Is(getErr, forge.ErrNoRegistration) {
-			writeErr = insertRegistration(ctx, q, r, ifVersion)
+			writeErr = insertRegistration(ctx, q, r, &old, ifVersion)
 		} else {
-			writeErr = updateRegistration(ctx, q, r, ifVersion)
+			writeErr = updateRegistration(ctx, q, r, &old, ifVersion)
 		}
 
 		if writeErr != nil {
@@ -437,7 +446,9 @@ func (g gitHost) PutRegistration(
 	return out, nil
 }
 
-func insertRegistration(ctx context.Context, q *db.Queries, r forge.Registration, ifVersion int64) error {
+func insertRegistration(
+	ctx context.Context, q *db.Queries, r forge.Registration, old *githoststore.OldEventSecretColumns, ifVersion int64,
+) error {
 	if ifVersion > 0 {
 		return forge.ErrNoRegistration
 	}
@@ -447,6 +458,7 @@ func insertRegistration(ctx context.Context, q *db.Queries, r forge.Registration
 		KeySetID: r.KeySetID, KeyCreatedAtMs: codec.Millis(r.KeyCreatedAt), SealedEventSecret: r.SealedEventSecret,
 		EventSecretSetID: r.EventSecretSetID, EventSecretCreatedAtMs: codec.Millis(r.EventSecretCreatedAt),
 		AddressDigest: r.AddressDigest, CreatedAtMs: codec.Millis(r.CreatedAt), UpdatedAtMs: codec.Millis(r.UpdatedAt),
+		OldEventSecretEndsAtMs: old.EndsAtMs, OldEventSecretSetID: old.SetID, OldSealedEventSecret: old.SealedKey,
 	})
 	if err != nil {
 		return fmt.Errorf("insert registration: %w", err)
@@ -460,13 +472,16 @@ func insertRegistration(ctx context.Context, q *db.Queries, r forge.Registration
 	return nil
 }
 
-func updateRegistration(ctx context.Context, q *db.Queries, r forge.Registration, ifVersion int64) error {
+func updateRegistration(
+	ctx context.Context, q *db.Queries, r forge.Registration, old *githoststore.OldEventSecretColumns, ifVersion int64,
+) error {
 	n, err := q.UpdateGitHostRegistration(ctx, db.UpdateGitHostRegistrationParams{
 		AppID: r.AppID, BaseUrl: r.BaseURL, SealedKey: r.SealedKey, KeySetID: r.KeySetID,
 		KeyCreatedAtMs: codec.Millis(r.KeyCreatedAt), SealedEventSecret: r.SealedEventSecret,
 		EventSecretSetID: r.EventSecretSetID, EventSecretCreatedAtMs: codec.Millis(r.EventSecretCreatedAt),
 		AddressDigest: r.AddressDigest, UpdatedAtMs: codec.Millis(r.UpdatedAt), Kind: string(r.Kind),
-		IfVersion: ifVersion,
+		IfVersion: ifVersion, OldEventSecretEndsAtMs: old.EndsAtMs, OldEventSecretSetID: old.SetID,
+		OldSealedEventSecret: old.SealedKey,
 	})
 	if err != nil {
 		return fmt.Errorf("update registration: %w", err)
@@ -690,4 +705,63 @@ func (g gitHost) DeleteAssignment(ctx context.Context, installationID string, if
 
 		return finishCompletion(ctx, q, current)
 	})
+}
+
+// ConfirmRotation implements forge.Store. It clears the old event secret and
+// gives the registration its next version, and it appends e, in one
+// transaction. When ctx carries an idempotency completion, the transaction also
+// stores its answer.
+func (g gitHost) ConfirmRotation(
+	ctx context.Context, kind forge.Kind, ifVersion int64, e audit.Entry,
+) (forge.Registration, error) {
+	g.s.mu.RLock()
+	defer g.s.mu.RUnlock()
+
+	var out forge.Registration
+
+	err := g.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
+		current, err := readRegistration(ctx, q, kind)
+		if err != nil {
+			return err
+		}
+
+		if ifVersion > 0 && current.Version != ifVersion {
+			return forge.ErrVersionConflict
+		}
+
+		// A window that ended at or before the time of the entry is closed, as
+		// the view and the receive path treat it. The zero time is never after.
+		if !current.OldEventSecretEndsAt.After(e.At) {
+			return forge.ErrNoRotation
+		}
+
+		// Defense in depth: the reads above refuse a missing window, a closed
+		// window and another version. The query refuses all three too, so a
+		// write that the read did not see cannot be lost. Each layer stays and
+		// does not rely on the other.
+		n, upErr := q.ConfirmGitHostRotation(ctx, db.ConfirmGitHostRotationParams{
+			UpdatedAtMs: codec.Millis(e.At), Kind: string(kind), IfVersion: ifVersion,
+		})
+		if upErr != nil {
+			return fmt.Errorf("confirm rotation: %w", upErr)
+		}
+
+		if n == 0 {
+			return forge.ErrVersionConflict
+		}
+
+		stored, readErr := readRegistration(ctx, q, kind)
+		if readErr != nil {
+			return readErr
+		}
+
+		out = stored
+
+		return finishCompletion(ctx, q, stored)
+	})
+	if err != nil {
+		return forge.Registration{}, err
+	}
+
+	return out, nil
 }

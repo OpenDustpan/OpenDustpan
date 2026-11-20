@@ -19,8 +19,9 @@ const devKeyFirstLine = "opendustpan dev key: this key is for a trial, and opend
 
 // TestServeDecisions proves through the real binary that serve stops, before it
 // opens the database, when the operator did not decide the key or the database,
-// when the shell holds DUSTPAN_DEV, and when the key file is a key of dev. Each
-// refusal exits with 1 and names one command or setting that helps.
+// when the shell holds DUSTPAN_DEV, when the key file is a key of dev, and when
+// it would serve plain HTTP on an address that is not loopback. Each refusal
+// exits with 1 and names the command or the settings that help.
 func TestServeDecisions(t *testing.T) {
 	t.Parallel()
 
@@ -71,10 +72,42 @@ func TestServeDecisions(t *testing.T) {
 		{
 			name: "key file of dev",
 			args: func(database string) []string {
-				return []string{"serve", "--database", database, "--key-encryption-key-file", devKeyFile}
+				return []string{
+					"serve", "--database", database, "--key-encryption-key-file", devKeyFile, "--listen", "127.0.0.1:0",
+				}
 			},
 			env:  nil,
 			want: "the key file was made by opendustpan dev: serve refuses it",
+		},
+		{
+			name: "plain HTTP on a public address",
+			args: func(database string) []string {
+				return []string{"serve", "--database", database, "--key-encryption-key-file", keyFile, "--listen", ":0"}
+			},
+			env: nil,
+			want: `opendustpan: --listen ":0" (DUSTPAN_LISTEN) is not a loopback address and has no TLS: ` +
+				"set --tls-cert and --tls-key (DUSTPAN_TLS_CERT, DUSTPAN_TLS_KEY), " +
+				"or set --public-url (DUSTPAN_PUBLIC_URL) to the https URL of the proxy that ends TLS, " +
+				"or set --allow-plain-http (DUSTPAN_ALLOW_PLAIN_HTTP) to serve plain HTTP",
+		},
+		{
+			name: "plain HTTP with an http public URL",
+			args: func(database string) []string {
+				return []string{
+					"serve", "--database", database, "--key-encryption-key-file", keyFile, "--listen", ":0",
+					"--public-url", "http://dustpan.example",
+				}
+			},
+			env:  nil,
+			want: `opendustpan: --listen ":0" (DUSTPAN_LISTEN) is not a loopback address and has no TLS`,
+		},
+		{
+			name: "plain HTTP with a hostile opt-in variable",
+			args: func(database string) []string {
+				return []string{"serve", "--database", database, "--key-encryption-key-file", keyFile, "--listen", ":0"}
+			},
+			env:  []string{"DUSTPAN_ALLOW_PLAIN_HTTP=yes"},
+			want: `opendustpan: --listen ":0" (DUSTPAN_LISTEN) is not a loopback address and has no TLS`,
 		},
 	}
 
@@ -128,7 +161,7 @@ func TestKeyGenerate(t *testing.T) {
 	checkKeyFile(t, path, out)
 
 	out, err = runBinary(t, bin, "key", "generate", "--out", path)
-	if err == nil || !strings.Contains(out, "the key file exists: "+path+": set --out to a new path") {
+	if err == nil || !strings.Contains(out, "key file exists: "+path+": set --out to a new path") {
 		t.Fatalf("key generate over the file: err = %v, output:\n%s", err, out)
 	}
 
@@ -263,7 +296,19 @@ func TestDoctor(t *testing.T) {
 		{
 			name: "plain HTTP on a public address",
 			args: []string{"doctor", "--database", database, "--key-encryption-key-file", keyFile, "--listen", ":8080"},
-			env:  nil, exit: 0, want: "warn  listen address: :8080 is not a loopback address and uses plain HTTP",
+			env:  nil, exit: 1,
+			want: `fail  listen address: --listen ":8080" (DUSTPAN_LISTEN) is not a loopback address and has no TLS`,
+		},
+		{
+			name: "plain HTTP on a public address with the opt-in",
+			args: []string{
+				"doctor", "--database", database, "--key-encryption-key-file", keyFile, "--listen", ":8080",
+				"--allow-plain-http",
+			},
+			env:  nil,
+			exit: 0,
+			want: "warn  listen address: :8080 is not a loopback address and uses plain HTTP, " +
+				"because --allow-plain-http is set",
 		},
 	}
 

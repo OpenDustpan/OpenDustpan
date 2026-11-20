@@ -27,11 +27,12 @@ close review requests (pull requests of GitHub), and delete the branch of a
 review request that the write-back made. The capabilities `commit` and `review`
 need the permissions in the section "Permissions of the app".
 
-This release does not compare commits, take webhooks or give tokens to runners.
-The capabilities list of a check holds no other capability for that reason. The
-answer still names, for each feature, the capabilities that the feature needs and
-the connection does not have. GitLab is
-not supported yet.
+This release takes the deliveries of the webhook of the app and keeps a short
+record of each one that it accepts (see "Webhooks and a federation"). No
+feature reads that record yet. It does not compare commits or give tokens to
+runners. The answer of a check names, for each feature, the capabilities that
+the feature needs and the connection does not have. GitLab is not supported
+yet.
 
 ## One app for the installation, or one for each namespace
 
@@ -79,6 +80,40 @@ write-back (the name starts with `dustpan/`) in the repository of the base. It
 only deletes such a branch, and never the default branch, a protected branch, or
 a branch that an open review request has as its head or its base.
 
+## What you need
+
+The commands in this guide use these values:
+
+- `$SERVER`: the public URL of the server, for example `https://dustpan.example`.
+- `$TOKEN`: an access token with the action in each step.
+- A console session of a person who holds the role installation operator, for
+  the writes of Step 1, Step 2 and "Rotate the event secret".
+
+The writes of the operator need a console session with a recent sign-in. An
+access token gets 403 with the error code `mfa.fresh-step-required` for them.
+You need no console for this: a local user can sign in over the API. To make
+the first administrator and a local user, see
+[Make the first administrator](first-administrator.md) and
+[Local users with a password](local-users.md).
+
+Sign in. The command keeps the session cookie in the file `session.txt`:
+
+```sh
+curl -c session.txt -X POST -H "Content-Type: application/json" \
+  -d '{"userName":"alice","password":"<password>"}' \
+  "$SERVER/api/dustpan/v1/sign-in/password"
+```
+
+Read the CSRF value of the session. It is the field `csrfToken`:
+
+```sh
+curl -b session.txt "$SERVER/api/server/session"
+```
+
+Put the value in `$CSRF`. Each write of the operator in this guide sends the
+cookie, the header `X-Dustpan-Csrf` and the header `Origin` with the value of
+`$SERVER`. The server refuses a write without them.
+
 ## Step 1: the operator registers the app
 
 Make a GitHub App in GitHub. Download its private key (a `.pem` file) and note
@@ -89,11 +124,14 @@ openssl rand -hex 32
 ```
 
 The caller needs the action `server:manage-git-host` on the installation. The
-role installation operator has it.
+role installation operator has it. The caller also needs a console session with
+a recent sign-in (see "What you need"). A request with an access token gets 403
+with the error code `mfa.fresh-step-required`.
 
 ```sh
-curl -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -b session.txt -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
+  -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+  -H "Content-Type: application/json" \
   -d "$(jq -n --rawfile key app.pem --arg secret "$EVENT_SECRET" \
         '{appID:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
 ```
@@ -120,8 +158,10 @@ Rules for the registration:
   addresses also inside a range.
 - A replacement keeps the `hookID`. To change the key, the event secret, the
   app ID or the address, send all four fields again. Send `If-Match` with the
-  version that you read to make sure that no one else changed it.
-- A console session needs a recent sign-in for this change.
+  version that you read to make sure that no one else changed it. To change the
+  event secret with no lost delivery, follow "Rotate the event secret".
+- A console session needs a recent sign-in for this change. An access token gets
+403 with the error code `mfa.fresh-step-required`.
 
 The server stores the key and the event secret sealed with a key of the
 installation. A backup holds them sealed.
@@ -132,8 +172,9 @@ Install the app in a GitHub organization or account. GitHub gives the
 installation an ID. Give it to a namespace:
 
 ```sh
-curl -X PUT "$SERVER/api/dustpan/v1/git-host-installations/67890" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -b session.txt -X PUT "$SERVER/api/dustpan/v1/git-host-installations/67890" \
+  -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+  -H "Content-Type: application/json" \
   -d '{"namespace":"acme"}'
 ```
 
@@ -256,13 +297,164 @@ The check takes no `Idempotency-Key`. A retry is safe.
 
 ## Webhooks and a federation
 
-This release takes no webhook. The `hookID` that the registration shows is
-for the next release. A GitHub App has one webhook address. When webhooks
-arrive, use an address with a stable host name that every member of a
-federation accepts, for example a name with DNS failover or a global load
-balancer. Do not use the host name of one member. Then a promotion does not
-change the address that GitHub stores. A member that receives an event for a
-namespace that another member owns answers 204 and drops the event, and the
+A GitHub App has one webhook address for all of its installations. The address
+is `https://<stable-host>/webhooks/<hook ID>`. The `<hook ID>` is the `hookID`
+of the registration (see Step 1). In the settings of the GitHub App:
+
+1. Set the webhook URL to that address.
+2. Set the content type to `application/json`.
+3. Set the webhook secret to the event secret of the registration.
+4. Keep the check of the TLS certificate on.
+5. Subscribe to the event "Pull requests". GitHub sends the event `ping` when
+   you save the webhook, and the server accepts it.
+
+The route needs no sign-in. The signature of the delivery is its credential:
+the server checks the header `X-Hub-Signature-256` against the event secret of
+the registration. The value of the header is `sha256=` and the hex form of the
+HMAC-SHA256 of the raw body, with the event secret as the key. The server never
+reads the older header `X-Hub-Signature`. A delivery also needs the header
+`X-GitHub-Event` with the event name, and the header `X-GitHub-Delivery` with a
+UUID. GitHub sets all three headers.
+
+### The answer
+
+The server answers 204 with no body for each delivery: one that it accepts, and
+one that it refuses for any reason. The headers are the same too. So no answer
+tells a sender why a delivery was dropped, and a sender that guesses hook IDs
+learns nothing. A request with another method than `POST`, or to another path
+under `/webhooks/`, gets the same answer for every hook ID. A body of more than
+2 MiB is not read further and counts as refused. During maintenance mode the
+server answers 503 with `Retry-After`, and writes nothing. GitHub does not send
+a failed delivery again on its own. A person sends it again.
+
+### Find a lost delivery
+
+The answer 204 shows as a success in the delivery list of GitHub, also when the
+server did not keep the delivery. This is true for the reasons `other` (for
+example, a store that does not answer) and `receipts-full`, and for each other
+reason in the table below. The 503 of maintenance mode is the only failure that
+GitHub shows. To find the deliveries that the server lost:
+
+1. Read the metric `dustpan_git_host_event_rejected_total` and the audit
+   entries `git-host-event:receive` with the outcome denied. Note the time of
+   each entry with the reason `other` or `receipts-full`, and the time of each
+   503 in the maintenance window.
+2. In the GitHub App, open "Advanced" and then "Recent Deliveries". Find the
+   deliveries from the same times.
+3. Select each delivery and select "Redeliver". The server accepts it again,
+   because a refused delivery leaves no receipt. A delivery that the server
+   accepted is a `duplicate` for 24 hours and the server drops it.
+
+GitHub keeps the recent deliveries for a limited time. Do step 2 and step 3
+soon after the fault ends.
+
+The operator reads the reason in two places:
+
+- The metric `dustpan_git_host_event_rejected_total` counts each refused
+  delivery by reason (see "Metric").
+- The audit log of the installation gets one entry for each reason in one
+  minute: the action `git-host-event:receive`, the outcome denied and the reason
+  class. The entry of the next minute carries the count of the deliveries that
+  had no entry of their own. An entry never holds a header, a body, a hook ID or
+  a signature.
+
+The reasons are:
+
+| Reason | What it means | What to check |
+| --- | --- | --- |
+| `unknown-hook` | The hook ID is not the one of the registration | Compare the webhook address in GitHub with `hookID` |
+| `no-registration` | The server has no registration | `GET /api/dustpan/v1/git-host-apps/github` |
+| `signature` | The signature matches no event secret that is valid now | Compare `eventSecret.setID` and `oldSecretEndsAt` with the secret in GitHub |
+| `too-large` | The body is more than 2 MiB | Not a delivery of GitHub |
+| `malformed` | The body is not valid, or has no installation, repository, pull request number or sender. Or the header `X-GitHub-Delivery` is not a UUID | Open the delivery in GitHub and read the body |
+| `unsupported` | The event or its action is not one that the server uses. The server uses `ping` and the pull request actions `opened`, `reopened`, `synchronize` and `closed` | Subscribe to "Pull requests" only |
+| `duplicate` | The delivery ID, or the body, came in the last 24 hours | None: a person redelivered it from GitHub, or someone sent the same body again |
+| `not-assigned` | No installation of the map owns the installation of the event | `PUT /api/dustpan/v1/git-host-installations/{installation_id}` |
+| `not-primary` | The namespace of the installation has its primary installation in another member of the federation | `GET /api/dustpan/v1/components` |
+| `secret-not-opened` | The server cannot open the stored event secret, for example after a change of the address | Register the app again (Step 1) |
+| `receipts-full` | The record of accepted deliveries holds 100000 rows | Wait: a row ends after 24 hours |
+| `other` | Any other failure, for example a store that does not answer | Read the server log |
+
+### The record of a delivery
+
+For each accepted delivery the server keeps a receipt for 24 hours: the delivery
+ID, a digest of the body, the installation, the event kind, the repository and
+the pull request number. A later feature reads the receipt as a hint and reads
+the object from GitHub before it changes a record. The receipt is not state: a
+restore leaves the table empty. A redelivery from GitHub keeps its delivery ID, so
+the server drops it. A body that is sent again with a new delivery ID is dropped for
+the same 24 hours, because the delivery ID is not under the signature.
+
+The check for a repeat covers 24 hours only. GitHub signs no timestamp. A person
+who holds a signed delivery, for example from a leaked log, can send it again
+and the server accepts it again after the receipt ends, 24 hours later. The
+receipt is a hint, so the effect is that a later feature reads the object from
+GitHub again. Keep the logs of your reverse proxy private and rotate the event
+secret if a signed delivery leaks.
+
+### Rotate the event secret
+
+GitHub needs a moment to hold a new secret, so the server accepts the old secret
+and the new one for up to 7 days. Do these steps in order:
+
+1. Make a new event secret:
+
+   ```sh
+   openssl rand -hex 32
+   ```
+
+2. Send the registration again with the new secret, as in Step 1. Send all four
+   fields.
+
+   ```sh
+   curl -b session.txt -X PUT "$SERVER/api/dustpan/v1/git-host-apps/github" \
+     -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+     -H "Content-Type: application/json" \
+     -d "$(jq -n --rawfile key app.pem --arg secret "$NEW_EVENT_SECRET" \
+           '{appID:"12345", apiAddress:"https://api.github.com", privateKey:$key, eventSecret:$secret}')"
+   ```
+
+   The answer has the field `oldSecretEndsAt`: the end of the window, in Unix
+   milliseconds. The field is not in the answer when no window is open.
+3. Set the new secret in the webhook settings of the GitHub App.
+4. Cause a new event in GitHub, for example open a pull request. Do not use a
+   redelivery in "Recent Deliveries": the server drops a delivery ID or a body
+   that it saw in the last 24 hours as `duplicate`, and writes no entry for
+   the secret. A delivery that the new secret signs writes no extra entry.
+   Each new delivery that the old secret signs writes the audit entry
+   `git-host-app:event-accepted-old-secret`.
+5. When no entry of the old secret is new, end the window:
+
+   ```sh
+   curl -b session.txt -X POST \
+     -H "Origin: $SERVER" -H "X-Dustpan-Csrf: $CSRF" \
+     "$SERVER/api/dustpan/v1/git-host-apps/github/confirm-rotation"
+   ```
+
+   The answer is 200 with the registration, and it has no `oldSecretEndsAt`. It
+   is 409 when no window is open. After this call, a delivery that the
+   old secret signs is refused with the reason `signature`. The route needs
+   the action `server:manage-git-host` and, in a console session, a recent
+   sign-in.
+
+Rules for the window:
+
+- The window ends at `oldSecretEndsAt` also when you do not call the route. At that
+  time the old secret stops, with no entry.
+- A second change of the event secret in the window drops the secret that was
+  oldest. The server holds two secrets at most.
+- A registration with the same event secret keeps the window as it is.
+- A change of the API address ends the window at once, because the old secret
+  opens only for the address that it was sealed for.
+- A restore brings the window back with the registration.
+
+### A federation
+
+Use an address with a stable host name that every member of a federation
+accepts, for example a name with DNS failover or a global load balancer. Do not
+use the host name of one member. Then a promotion does not change the address
+that GitHub stores. A member that receives an event for a namespace that another
+member owns answers 204 and drops the event (the reason `not-primary`), and the
 poll of each feature catches the change.
 
 ## Metric
@@ -272,3 +464,11 @@ server refused to open. Its label `reason` is `installation-not-assigned`,
 `address-changed`, `no-registration`, `key-not-opened`, `address-refused`
 or `other`. Alert when it grows: the
 operator moved an installation, or the registration changed.
+
+`dustpan_git_host_event_rejected_total` counts the deliveries of the webhook that
+the server refused. Its label `reason` is one of the reasons in the table of
+"Webhooks and a federation": `unknown-hook`, `no-registration`, `signature`,
+`too-large`, `malformed`, `unsupported`, `duplicate`, `not-assigned`,
+`not-primary`, `secret-not-opened`, `receipts-full` or `other`. No label holds a
+hook ID, an installation or a repository. Alert on `signature` after a rotation,
+and on `unknown-hook` when the address of the webhook changed.

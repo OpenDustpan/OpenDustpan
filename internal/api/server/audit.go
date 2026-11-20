@@ -50,6 +50,18 @@ func reachReason(err error) string {
 	return access.MissingActionsReason(missing)
 }
 
+// refusalReason returns the audit reason of a refused change: the code
+// access.last-site-administrator for a change that would leave the
+// installation with no site administrator, and the reason of reachReason for
+// any other error.
+func refusalReason(err error) string {
+	if errors.Is(err, access.ErrLastSiteAdministrator) {
+		return errcode.AccessLastSiteAdministrator
+	}
+
+	return reachReason(err)
+}
+
 // callerEntry returns the audit entry of the caller p for action: who acted,
 // from where and through which channel. For a console session, the entry
 // also records the session ID, so a token that a session creates leads

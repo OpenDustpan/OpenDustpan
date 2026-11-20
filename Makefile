@@ -148,7 +148,7 @@ licenses: ## Each module linked into the binary has a license file to ship, on e
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
 STE_LINT  := python3 -I .agents/skills/asd-ste100/scripts/ste-lint.py
-DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md docs/explanation/*.md)
+DOCS      := $(wildcard README.md CLAUDE.md .agents/skills/adr/SKILL.md pkg/store/AGENTS.md internal/api/AGENTS.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md docs/explanation/*.md)
 DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 
 # Words that claim quality instead of showing it, and emoji. The list and its
@@ -188,9 +188,12 @@ openspec-validate: ## Validate every OpenSpec change and spec (openspec validate
 # version, a record with a CR or a NUL byte, and a missing record. With
 # VERSION=vX.Y.Z on the command line it checks the record for that tag, as a
 # release does. A VERSION in the environment does not change the mode.
+ifeq ($(origin VERSION),command line)
+release-record-check: export RELEASE_VERSION := $(VERSION)
+endif
 release-record-check: ## Check the release record: the cases that need no tag, or VERSION=vX.Y.Z for a tag.
 ifeq ($(origin VERSION),command line)
-	./scripts/check-release-record.sh '$(VERSION)'
+	./scripts/check-release-record.sh "$$RELEASE_VERSION"
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
@@ -446,8 +449,16 @@ build-launcher: ## Build the launcher binary, static with no cgo.
 demo: build ## Run the server with the web console and demo data on 127.0.0.1:8080 (needs Go, Node and npm; not part of check).
 	CONSOLE_REPO="$(CONSOLE_REPO)" CONSOLE_REF="$(CONSOLE_REF)" DEMO_PORT="$(DEMO_PORT)" ./scripts/demo.sh
 
-image-smoke: ## Build the container image and run the local smoke test (needs docker; not part of check).
+# The image version is VERSION=vX.Y.Z on the command line, as for
+# release-record-check. The value goes to the script through the environment,
+# so that a shell never reads it as code.
+image-smoke: export IMAGE_VERSION_ARG := $(VERSION)
+image-smoke: ## Build the container image and run the local smoke test: optional VERSION=vX.Y.Z (needs docker; not part of check).
+ifeq ($(origin VERSION),command line)
+	IMAGE_VERSION="$$IMAGE_VERSION_ARG" ./scripts/smoke-image.sh
+else
 	./scripts/smoke-image.sh
+endif
 
 compose-smoke: ## Start the stack of deploy/compose and drive the real Pulumi CLI and OpenTofu against it (needs docker with compose and openssl; not part of check).
 	E2E_COMPOSE=1 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -timeout 30m -run '^TestComposeQuickstart$$' ./e2e/...

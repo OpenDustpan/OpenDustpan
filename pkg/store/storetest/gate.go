@@ -596,17 +596,19 @@ func (d gateDomain) MoveUnit(ctx context.Context, ns namespace.Name, tool, name 
 func (d gateDomain) Entries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error) {
 	var out []audit.Entry
 
-	for page := 1; ; page++ {
-		listing, err := d.s.List(ctx, ns, audit.Page{Number: page, Size: audit.MaxPageSize})
+	for before := int64(0); ; {
+		listing, err := d.s.List(ctx, ns, audit.Page{Size: audit.MaxPageSize, Before: before})
 		if err != nil {
 			return nil, fmt.Errorf("list audit entries of %s: %w", ns, err)
 		}
 
 		out = append(out, listing.Entries...)
 
-		if len(listing.Entries) < audit.MaxPageSize {
+		if !listing.More || len(listing.Entries) == 0 {
 			break
 		}
+
+		before = listing.Entries[len(listing.Entries)-1].Sequence
 	}
 
 	// The listing is newest first, and the cases count the entries of the gate
@@ -737,7 +739,7 @@ func testGateFields(t *testing.T, s GateStore) {
 func wantRemoved(t *testing.T, s GateStore, action string, keys []string) {
 	t.Helper()
 
-	listing, err := s.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List(audit) = %v", err)
 	}
@@ -834,7 +836,17 @@ func tagGateUnit(t *testing.T, s GateStore, tc gateUnitCase, fence namespace.Fen
 		t.Fatalf("ParseRef() = %v", err)
 	}
 
-	if err = s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "core"}, gateTime(), fence); err != nil {
+	err = s.UpdateStackTags(
+		t.Context(),
+		ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"team": "core"},
+			UpdatedAt: gateTime(),
+			Entry:     renameEntry(ref.Namespace, ref),
+		},
+		fence,
+	)
+	if err != nil {
 		t.Fatalf("UpdateStackTags() = %v", err)
 	}
 
@@ -1158,7 +1170,7 @@ func testGatePurgeChangeCap(t *testing.T, s GateStore) {
 		t.Fatalf("PurgeWorkspace() = %v", err)
 	}
 
-	listing, err := s.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	listing, err := s.List(t.Context(), "acme", audit.Page{Size: audit.MaxPageSize, Before: 0})
 	if err != nil {
 		t.Fatalf("List(audit) = %v", err)
 	}

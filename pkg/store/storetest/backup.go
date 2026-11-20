@@ -608,7 +608,8 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		CreatedAt: now(), UpdatedAt: now(), KeyCreatedAt: now(), EventSecretCreatedAt: now(), Kind: forge.KindGitHub,
 		AppID: "12345", BaseURL: apiURL, HookID: forge.NewHookID(), KeySetID: forge.NewSetID(),
 		EventSecretSetID: forge.NewSetID(), AddressDigest: forge.AddressDigest(forge.KindGitHub, apiURL, "12345"),
-		SealedKey: []byte("sealed-key"), SealedEventSecret: []byte("sealed-event-secret"), Version: 1,
+		SealedKey: []byte("sealed-key"), SealedEventSecret: []byte("sealed-event-secret"), OldEventSecretSetID: "",
+		OldSealedEventSecret: nil, OldEventSecretEndsAt: time.Time{}, Version: 1,
 	}
 
 	_, err := store.PutRegistration(t.Context(), reg, 0, entry(audit.ServerScope, "git-host-app:put"))
@@ -1437,14 +1438,15 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 }
 
 // backupChanges answers changes whose text JSON escapes: <, & and > (which
-// encoding/json writes as \u003c, \u0026 and \u003e), U+2028, quotes and a
-// backslash, so the round trip proves the changes column keeps the exact
+// encoding/json writes as \u003c, \u0026 and \u003e), a line break and a
+// tab (which it writes as \n and \t), quotes and a backslash, so the round
+// trip proves the changes column keeps the exact
 // text that the hash covers.
 func backupChanges() []audit.Change {
 	old := `say "hi" <&> \ end`
 
 	return []audit.Change{
-		{Key: "region", Old: &old, New: "line\u2028sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
+		{Key: "region", Old: &old, New: "line\nsep\t<tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
 		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
 	}
 }
@@ -1538,6 +1540,8 @@ func mustCreateStack(t *testing.T, s BackupStore, ns namespace.Namespace, name s
 	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
 		t.Fatalf("create stack %s: %v", st.Ref, err)
 	}
+
+	PlaceStack(t, s, st.Ref)
 
 	return st
 }
