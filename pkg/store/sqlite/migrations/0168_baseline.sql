@@ -435,6 +435,34 @@ CREATE TABLE oidc_providers (
     created_at_ms INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE output_sharing_rules (
+    namespace          TEXT    NOT NULL REFERENCES namespaces (name),
+    id                 TEXT    NOT NULL CHECK (length(id) >= 1 AND length(id) <= 64 AND id NOT GLOB '*[^a-z0-9_-]*'),
+    producer_kind      TEXT    NOT NULL CHECK (producer_kind IN ('unit', 'collection', 'namespace')),
+    producer_id        TEXT    NOT NULL DEFAULT '',
+    consumer_kind      TEXT    NOT NULL CHECK (consumer_kind IN ('unit', 'collection', 'namespace')),
+    consumer_namespace TEXT    NOT NULL,
+    consumer_id        TEXT    NOT NULL DEFAULT '',
+    consumer_tool      TEXT    NOT NULL DEFAULT '',
+    consumer_name      TEXT    NOT NULL DEFAULT '',
+    created_by         TEXT    NOT NULL CHECK (created_by <> ''),
+    created_at_ms      INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    PRIMARY KEY (namespace, id),
+    CHECK ((producer_kind = 'namespace') = (producer_id = '')),
+    CHECK (
+        (consumer_kind = 'namespace' AND consumer_namespace = namespace AND consumer_id = ''
+            AND consumer_tool = '' AND consumer_name = '')
+        OR (consumer_kind IN ('unit', 'collection') AND consumer_namespace = namespace AND consumer_id <> ''
+            AND consumer_tool = '' AND consumer_name = '')
+        OR (consumer_kind IN ('unit', 'collection') AND consumer_namespace <> namespace AND consumer_id = ''
+            AND consumer_name <> '' AND ((consumer_kind = 'unit') = (consumer_tool <> '')))
+    )
+) STRICT;
+
+CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules (
+    namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id, consumer_tool, consumer_name
+);
+
 CREATE TABLE installation_secret_keys (
     scope_id      TEXT    NOT NULL PRIMARY KEY,
     wrapper_id    TEXT    NOT NULL,

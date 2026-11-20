@@ -503,6 +503,16 @@ func (s *Store) purgeUnit(
 			return err
 		}
 
+		// The rules that name the unit as producer or as consumer in its own
+		// namespace go with the unit, so that a new unit never matches a stale
+		// rule.
+		err := q.DeleteOutputSharingRulesOfUnit(ctx, db.DeleteOutputSharingRulesOfUnitParams{
+			Namespace: fence.Namespace.String(), UnitID: u.id,
+		})
+		if err != nil {
+			return fmt.Errorf("delete sharing rules of the unit: %w", err)
+		}
+
 		if err := insertBlobPurge(ctx, q, fence.Namespace, u, e.At); err != nil {
 			return err
 		}

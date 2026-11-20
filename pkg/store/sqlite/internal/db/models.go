@@ -891,6 +891,20 @@ type OidcProvider struct {
 	CreatedAtMs int64
 }
 
+type OutputSharingRule struct {
+	Namespace         string
+	ID                string
+	ProducerKind      string
+	ProducerID        string
+	ConsumerKind      string
+	ConsumerNamespace string
+	ConsumerID        string
+	ConsumerTool      string
+	ConsumerName      string
+	CreatedBy         string
+	CreatedAtMs       int64
+}
+
 type Passkey struct {
 	ID             string
 	PrincipalID    string

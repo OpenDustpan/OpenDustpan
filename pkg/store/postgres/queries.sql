@@ -75,6 +75,132 @@ UPDATE namespaces
 SET output_sharing_default = $1
 WHERE name = $2;
 
+-- name: CountOutputSharingRulesOfProducer :one
+-- The rules of one producer, for the limit. The caller counts in the
+-- transaction of the write.
+SELECT COUNT(*)
+FROM output_sharing_rules
+WHERE namespace = sqlc.arg(namespace) AND producer_kind = sqlc.arg(producer_kind)
+    AND producer_id = sqlc.arg(producer_id);
+
+-- name: DeleteOutputSharingRule :execrows
+-- Removes the rule only when its producer is the producer of the call.
+DELETE FROM output_sharing_rules
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id)
+    AND producer_kind = sqlc.arg(producer_kind) AND producer_id = sqlc.arg(producer_id);
+
+-- name: DeleteOutputSharingRulesOfUnit :exec
+-- Removes the rules that name the unit as producer or as consumer in its own
+-- namespace. A rule that names a unit of another namespace by name stays.
+DELETE FROM output_sharing_rules
+WHERE namespace = sqlc.arg(namespace)
+    AND ((producer_kind = 'unit' AND producer_id = sqlc.arg(unit_id))
+        OR (consumer_kind = 'unit' AND consumer_namespace = namespace AND consumer_id = sqlc.arg(unit_id)));
+
+-- name: GetOutputSharingRule :one
+-- One rule by ID, when its producer is the producer of the call. The names
+-- are the names that the stable IDs have now.
+SELECT r.id, r.producer_kind, r.producer_id, r.consumer_kind, r.consumer_namespace, r.consumer_id,
+    r.consumer_tool, r.consumer_name, r.created_by, r.created_at_ms,
+    COALESCE(pu.tool, ''::text)::text AS producer_unit_tool,
+    COALESCE(pu.name, ''::text)::text AS producer_unit_name,
+    COALESCE(pc.name, ''::text)::text AS producer_collection_name,
+    COALESCE(cu.tool, ''::text)::text AS consumer_unit_tool_now,
+    COALESCE(cu.name, ''::text)::text AS consumer_unit_name_now,
+    COALESCE(cc.name, ''::text)::text AS consumer_collection_name_now
+FROM output_sharing_rules AS r
+LEFT JOIN inventory AS pu
+    ON r.producer_kind = 'unit' AND pu.namespace = r.namespace AND pu.unit_id = r.producer_id
+LEFT JOIN collections AS pc
+    ON r.producer_kind = 'collection' AND pc.namespace = r.namespace AND pc.id = r.producer_id
+LEFT JOIN inventory AS cu
+    ON r.consumer_kind = 'unit' AND r.consumer_namespace = r.namespace
+    AND cu.namespace = r.namespace AND cu.unit_id = r.consumer_id
+LEFT JOIN collections AS cc
+    ON r.consumer_kind = 'collection' AND r.consumer_namespace = r.namespace
+    AND cc.namespace = r.namespace AND cc.id = r.consumer_id
+WHERE r.namespace = sqlc.arg(namespace) AND r.id = sqlc.arg(id)
+    AND r.producer_kind = sqlc.arg(producer_kind) AND r.producer_id = sqlc.arg(producer_id);
+
+-- name: InsertOutputSharingRule :execrows
+-- The caller checks the fence, the limit and the objects in the same
+-- transaction. A rule with the same producer and consumer is not written.
+INSERT INTO output_sharing_rules (
+    namespace, id, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id,
+    consumer_tool, consumer_name, created_by, created_at_ms
+) VALUES (
+    sqlc.arg(namespace), sqlc.arg(id), sqlc.arg(producer_kind), sqlc.arg(producer_id), sqlc.arg(consumer_kind),
+    sqlc.arg(consumer_namespace), sqlc.arg(consumer_id), sqlc.arg(consumer_tool), sqlc.arg(consumer_name),
+    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+)
+ON CONFLICT DO NOTHING;
+
+-- name: ListOutputSharingRulesOfProducer :many
+-- The rules whose producer is exactly the producer of the call, ordered by ID.
+SELECT r.id, r.producer_kind, r.producer_id, r.consumer_kind, r.consumer_namespace, r.consumer_id,
+    r.consumer_tool, r.consumer_name, r.created_by, r.created_at_ms,
+    COALESCE(pu.tool, ''::text)::text AS producer_unit_tool,
+    COALESCE(pu.name, ''::text)::text AS producer_unit_name,
+    COALESCE(pc.name, ''::text)::text AS producer_collection_name,
+    COALESCE(cu.tool, ''::text)::text AS consumer_unit_tool_now,
+    COALESCE(cu.name, ''::text)::text AS consumer_unit_name_now,
+    COALESCE(cc.name, ''::text)::text AS consumer_collection_name_now
+FROM output_sharing_rules AS r
+LEFT JOIN inventory AS pu
+    ON r.producer_kind = 'unit' AND pu.namespace = r.namespace AND pu.unit_id = r.producer_id
+LEFT JOIN collections AS pc
+    ON r.producer_kind = 'collection' AND pc.namespace = r.namespace AND pc.id = r.producer_id
+LEFT JOIN inventory AS cu
+    ON r.consumer_kind = 'unit' AND r.consumer_namespace = r.namespace
+    AND cu.namespace = r.namespace AND cu.unit_id = r.consumer_id
+LEFT JOIN collections AS cc
+    ON r.consumer_kind = 'collection' AND r.consumer_namespace = r.namespace
+    AND cc.namespace = r.namespace AND cc.id = r.consumer_id
+WHERE r.namespace = sqlc.arg(namespace) AND r.producer_kind = sqlc.arg(producer_kind)
+    AND r.producer_id = sqlc.arg(producer_id)
+ORDER BY r.id;
+
+-- name: ListOutputSharingRulesThatCover :many
+-- The rules of the producer namespace that cover the producer unit, the
+-- collection of the unit or the namespace, and name the consumer. A consumer
+-- of the producer namespace matches by stable ID. A consumer of another
+-- namespace matches by the name of its unit or its collection.
+SELECT r.id, r.producer_kind, r.producer_id, r.consumer_kind, r.consumer_namespace, r.consumer_id,
+    r.consumer_tool, r.consumer_name, r.created_by, r.created_at_ms,
+    COALESCE(pu.tool, ''::text)::text AS producer_unit_tool,
+    COALESCE(pu.name, ''::text)::text AS producer_unit_name,
+    COALESCE(pc.name, ''::text)::text AS producer_collection_name,
+    COALESCE(cu.tool, ''::text)::text AS consumer_unit_tool_now,
+    COALESCE(cu.name, ''::text)::text AS consumer_unit_name_now,
+    COALESCE(cc.name, ''::text)::text AS consumer_collection_name_now
+FROM output_sharing_rules AS r
+LEFT JOIN inventory AS pu
+    ON r.producer_kind = 'unit' AND pu.namespace = r.namespace AND pu.unit_id = r.producer_id
+LEFT JOIN collections AS pc
+    ON r.producer_kind = 'collection' AND pc.namespace = r.namespace AND pc.id = r.producer_id
+LEFT JOIN inventory AS cu
+    ON r.consumer_kind = 'unit' AND r.consumer_namespace = r.namespace
+    AND cu.namespace = r.namespace AND cu.unit_id = r.consumer_id
+LEFT JOIN collections AS cc
+    ON r.consumer_kind = 'collection' AND r.consumer_namespace = r.namespace
+    AND cc.namespace = r.namespace AND cc.id = r.consumer_id
+WHERE r.namespace = sqlc.arg(namespace)
+    AND ((r.producer_kind = 'unit' AND r.producer_id = sqlc.arg(producer_unit_id))
+        OR (r.producer_kind = 'collection' AND sqlc.arg(producer_collection_id)::text <> ''
+            AND r.producer_id = sqlc.arg(producer_collection_id))
+        OR r.producer_kind = 'namespace')
+    AND ((r.consumer_namespace = r.namespace AND sqlc.arg(consumer_namespace) = r.namespace
+            AND (r.consumer_kind = 'namespace'
+                OR (r.consumer_kind = 'unit' AND r.consumer_id = sqlc.arg(consumer_unit_id))
+                OR (r.consumer_kind = 'collection' AND sqlc.arg(consumer_collection_id)::text <> ''
+                    AND r.consumer_id = sqlc.arg(consumer_collection_id))))
+        OR (r.consumer_namespace <> r.namespace AND r.consumer_namespace = sqlc.arg(consumer_namespace)
+            AND ((r.consumer_kind = 'unit' AND r.consumer_tool = sqlc.arg(consumer_tool)
+                    AND r.consumer_name = sqlc.arg(consumer_unit_name))
+                OR (r.consumer_kind = 'collection' AND sqlc.arg(consumer_collection_name)::text <> ''
+                    AND r.consumer_name = sqlc.arg(consumer_collection_name)))))
+ORDER BY r.id;
+
 -- name: GetNamespaceSourceFilter :one
 SELECT source_filter
 FROM namespaces
