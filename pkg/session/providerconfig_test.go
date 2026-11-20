@@ -48,6 +48,13 @@ func TestProviderConfigValidate(t *testing.T) {
 		{"issuer with opaque userinfo", func(p *session.ProviderConfig) {
 			p.Issuer = strings.Replace(fakecred.URL("https", "u", "p", "idp.example", ""), "://", ":", 1)
 		}},
+		{"issuer with an empty query", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example?" }},
+		{"issuer with an empty fragment", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example#" }},
+		{"issuer with an upper-case scheme", func(p *session.ProviderConfig) { p.Issuer = "HTTPS://idp.example" }},
+		{"issuer with a space", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example/a b" }},
+		{"issuer with a backslash", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example/a\\b" }},
+		{"issuer with a control character", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example/a\x01b" }},
+		{"issuer with no host", func(p *session.ProviderConfig) { p.Issuer = "https://" }},
 		{"other scheme", func(p *session.ProviderConfig) { p.Issuer = "ftp://idp.example" }},
 		{"http issuer", func(p *session.ProviderConfig) { p.Issuer = "http://idp.example" }},
 		{"http issuer with a fragment", func(p *session.ProviderConfig) { p.Issuer = "http://127.0.0.1:9000#x" }},

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -213,9 +214,29 @@ func TestLDAPRootsNamesTheWholePath(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nonexistent.pem")
 
 	_, err := ldapRoots(missing)
-	if err == nil || !strings.Contains(err.Error(), "--ldap-ca-file "+missing+":") ||
+	if err == nil || !strings.Contains(err.Error(), "--ldap-ca-file "+strconv.Quote(missing)+":") ||
 		strings.Contains(err.Error(), "openat") {
 		t.Fatalf("ldapRoots = %v, want the flag and the whole path and no system call", err)
+	}
+}
+
+// TestLDAPRootsQuotesThePath proves that a CA path with CR, LF or another
+// control character cannot split a line of the start error or of a log.
+func TestLDAPRootsQuotesThePath(t *testing.T) {
+	t.Parallel()
+
+	name := "a\r\nX-Injected: y\x01.pem"
+	hostile := filepath.Join(t.TempDir(), name)
+
+	_, err := ldapRoots(hostile)
+	if err == nil {
+		t.Fatal("ldapRoots = nil, want an error")
+	}
+
+	for _, bad := range []string{"\r", "\n", "\x01"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Fatalf("error %q holds the raw character %q", err, bad)
+		}
 	}
 }
 
@@ -343,6 +364,32 @@ func TestWarnUnusedS3Endpoint(t *testing.T) {
 				t.Fatalf("log %q: warning = %v, want %v", buf.String(), got, tt.warn)
 			}
 		})
+	}
+}
+
+// TestWarnUnusedS3EndpointLogsOnlyTheKind proves that the warning never logs
+// the --blob-store value, which can hold a key or a control character.
+func TestWarnUnusedS3EndpointLogsOnlyTheKind(t *testing.T) {
+	t.Parallel()
+
+	secret := fakecred.URL("https", "u53r", "s3cr3t", "store.example", "")
+
+	for _, value := range []string{secret, "dir:/a\r\nX: y", "other\x01"} {
+		var buf bytes.Buffer
+
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		parseCheckFlags(t, "--s3-endpoint", "http://s3.example.com", "--blob-store", value).
+			warnUnusedS3Endpoint(t.Context(), logger)
+
+		for _, bad := range []string{"s3cr3t", "u53r", "/a", "X: y", "\r", "\x01", "store.example"} {
+			if strings.Contains(buf.String(), bad) {
+				t.Fatalf("log %q holds %q for the value %q", buf.String(), bad, value)
+			}
+		}
+
+		if !strings.Contains(buf.String(), "has no effect") {
+			t.Fatalf("log %q has no warning for the value %q", buf.String(), value)
+		}
 	}
 }
 

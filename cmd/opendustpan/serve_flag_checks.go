@@ -150,7 +150,7 @@ func (f *serveFlags) checkTLSFiles() error {
 			continue
 		}
 
-		if _, err := os.Stat(item.path); err != nil {
+		if err := openAndClose(item.path); err != nil {
 			return fmt.Errorf("%w: %q: set %s (%s) to a readable PEM file: %w",
 				errTLSFile, item.path, item.flag, item.env, unwrapPathError(err))
 		}
@@ -171,4 +171,19 @@ func (f *serveFlags) checkFlagValues() error {
 	}
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+}
+
+// openAndClose opens the file at path for reading and closes it, so that the
+// check proves that the server can read the file, not only that it exists.
+func openAndClose(path string) error {
+	f, err := os.Open(path) //nolint:gosec // The operator names the TLS file with a flag.
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+
+	return nil
 }

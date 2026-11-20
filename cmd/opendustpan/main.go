@@ -1867,12 +1867,18 @@ func readKeyFile(path string) ([]byte, error) {
 	return decodeKey(keyFileEnvVar, string(raw))
 }
 
-// blobStoreKind returns the --blob-store value for a log record: "fs" when the
-// value is empty, else the value with the white space around it removed.
+// blobStoreKind returns the kind of the --blob-store value for a log record:
+// "fs" when the value is empty, "dir" for a dir: address, else "other". It
+// never returns the value, which can hold a key or a control character.
 func blobStoreKind(v string) string {
-	if strings.TrimSpace(v) == "" {
-		return "fs"
-	}
+	v = strings.TrimSpace(v)
 
-	return strings.TrimSpace(v)
+	switch {
+	case v == "":
+		return "fs"
+	case strings.HasPrefix(v, "dir:"):
+		return "dir"
+	default:
+		return "other"
+	}
 }
