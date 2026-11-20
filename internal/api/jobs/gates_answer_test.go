@@ -10,6 +10,26 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
+// gatesDoc is the part of the answer of a job that the test reads.
+type gatesDoc struct {
+	Phases []gatesPhase `json:"phases"`
+}
+
+type gatesPhase struct {
+	Gates     []gatesGate     `json:"gates"`
+	Approvals []gatesApproval `json:"approvals"`
+}
+
+type gatesGate struct {
+	Name      string `json:"name"`
+	Approvals int    `json:"approvals"`
+	Filled    int    `json:"filled"`
+}
+
+type gatesApproval struct {
+	For []string `json:"for"`
+}
+
 // TestGetJobListsTheGatesWithTheirFilledSlots proves that the answer names each
 // gate, counts the slots that the matching fills, and shows the gates of each
 // approval. One person who holds both gates fills one slot of one gate.
@@ -25,10 +45,14 @@ func TestGetJobListsTheGatesWithTheirFilledSlots(t *testing.T) {
 
 	stored := runningJob(t, testJob)
 	stored.Phases[0].Gates = []job.Gate{
-		{Type: job.GateApproval, Name: "default/namespace/acme", Approvals: 2, Groups: []string{"platform"},
-			GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: false},
-		{Type: job.GateApproval, Name: "default", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
-			Timeout: 0, BindPlan: false},
+		{
+			Type: job.GateApproval, Name: "default/namespace/acme", Approvals: 2, Groups: []string{"platform"},
+			GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: false,
+		},
+		{
+			Type: job.GateApproval, Name: "default", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
+			Timeout: 0, BindPlan: false,
+		},
 	}
 	stored.Phases[0].Approvals = []job.Approval{
 		approval("bo", "default/namespace/acme", "default"),
@@ -42,18 +66,7 @@ func TestGetJobListsTheGatesWithTheirFilledSlots(t *testing.T) {
 		t.Fatalf("status = %d %s, want 200", rec.Code, rec.Body.String())
 	}
 
-	var doc struct {
-		Phases []struct {
-			Gates []struct {
-				Name      string `json:"name"`
-				Approvals int    `json:"approvals"`
-				Filled    int    `json:"filled"`
-			} `json:"gates"`
-			Approvals []struct {
-				For []string `json:"for"`
-			} `json:"approvals"`
-		} `json:"phases"`
-	}
+	var doc gatesDoc
 
 	err := json.Unmarshal(rec.Body.Bytes(), &doc)
 	if err != nil {

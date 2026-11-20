@@ -308,6 +308,8 @@ func (s *service) checkGroups(ctx context.Context, j *Job, subject string, gates
 			return nil, denied("the group membership cannot be read", err)
 		case member:
 			holding = append(holding, g.Name)
+		default:
+			// Not a member: the gate does not hold the subject.
 		}
 	}
 

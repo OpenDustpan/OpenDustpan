@@ -220,7 +220,7 @@ func keepDenied(err error) (problem.Problem, bool) {
 			http.StatusForbidden, errcode.JobNoRequirement), true
 	}
 
-	return problem.Problem{}, false
+	return problem.Pass()
 }
 
 // classify returns the answer to an error of the jobs API, and false for an

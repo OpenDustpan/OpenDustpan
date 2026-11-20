@@ -311,7 +311,7 @@ func GateFor(ctx context.Context, d *policy.Combined, bindPlan bool, groups gate
 
 	out := make([]job.Gate, 0, len(d.Approvals))
 
-	for _, a := range d.Approvals {
+	for i, a := range d.Approvals {
 		refs, err := gate.ResolveGroups(ctx, groups, a.Groups)
 		if err != nil {
 			return nil, fmt.Errorf("resolve the approver groups of the policy: %w", err)
@@ -323,7 +323,8 @@ func GateFor(ctx context.Context, d *policy.Combined, bindPlan bool, groups gate
 		}
 
 		out = append(out, job.Gate{
-			Type: job.GateApproval, Approvals: a.Count, Groups: names, GroupIDs: ids,
+			Type: job.GateApproval, Name: fmt.Sprintf("requirement-%d", i+1), Approvals: a.Count, Groups: names,
+			GroupIDs:  ids,
 			AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
 		})
 	}

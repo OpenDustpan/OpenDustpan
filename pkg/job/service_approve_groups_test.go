@@ -237,33 +237,93 @@ func TestApproveRefusesAnInactiveMemberOfTheGroup(t *testing.T) {
 	}
 }
 
-// severalGates seeds the apply phase with two gates: "platform" holds group
-// grp-a and needs one approval, "dba" holds group grp-b and needs one. A third
-// gate named "open" names no group.
-func severalGates(withOpen bool) func(*job.Job) {
-	return func(j *job.Job) {
-		gates := []job.Gate{
-			{
-				Type: job.GateApproval, Name: "platform", Approvals: 1, Groups: []string{"platform"},
-				GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: true,
-			},
-			{
-				Type: job.GateApproval, Name: "dba", Approvals: 1, Groups: []string{"dba"},
-				GroupIDs: []string{"grp-b"}, AllowSelf: false, Timeout: 0, BindPlan: true,
-			},
-		}
+// platformGate and dbGate are gates of one approval that name a group.
+func platformGate() job.Gate {
+	return job.Gate{
+		Type: job.GateApproval, Name: "platform", Approvals: 1, Groups: []string{"platform"},
+		GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+	}
+}
 
-		if withOpen {
-			gates = []job.Gate{
-				gates[0],
-				{
-					Type: job.GateApproval, Name: "open", Approvals: 1, Groups: nil, GroupIDs: nil,
-					AllowSelf: false, Timeout: 0, BindPlan: true,
-				},
-			}
-		}
+func dbaGate() job.Gate {
+	return job.Gate{
+		Type: job.GateApproval, Name: "dba", Approvals: 1, Groups: []string{"dba"},
+		GroupIDs: []string{"grp-b"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+	}
+}
 
-		j.Phases[1].Gates = gates
+// twoGroupGates seeds the apply phase with the gates platform (group grp-a) and
+// dba (group grp-b), one approval each.
+func twoGroupGates(j *job.Job) {
+	j.Phases[1].Gates = []job.Gate{platformGate(), dbaGate()}
+}
+
+// groupAndOpenGates seeds the apply phase with the gate platform and a gate
+// named open that names no group.
+func groupAndOpenGates(j *job.Job) {
+	open := job.Gate{
+		Type: job.GateApproval, Name: "open", Approvals: 1, Groups: nil, GroupIDs: nil,
+		AllowSelf: false, Timeout: 0, BindPlan: true,
+	}
+
+	j.Phases[1].Gates = []job.Gate{platformGate(), open}
+}
+
+// severalCase is one approval on a phase with several gates.
+type severalCase struct {
+	name      string
+	gates     func(*job.Job)
+	subject   string
+	members   map[string][]string
+	suspended map[string][]string
+	err       error
+	nilPort   bool
+	want      error
+	wantFor   []string
+	asked     int
+}
+
+func newSeveralCase(name string, gates func(*job.Job), subject string, members map[string][]string) severalCase {
+	return severalCase{
+		name: name, gates: gates, subject: subject, members: members, suspended: nil, err: nil, nilPort: false,
+		want: nil, wantFor: nil, asked: 0,
+	}
+}
+
+func (c severalCase) expect(want error, wantFor []string, asked int) severalCase {
+	c.want, c.wantFor, c.asked = want, wantFor, asked
+
+	return c
+}
+
+func severalCases() []severalCase {
+	carol := func(ids ...string) map[string][]string { return map[string][]string{"carol": ids} }
+
+	suspended := newSeveralCase("an inactive member is refused", twoGroupGates, "carol", carol("grp-a")).
+		expect(identity.ErrDenied, nil, 2)
+	suspended.suspended = carol("grp-a")
+
+	broken := newSeveralCase("a failure of the reader is refused", twoGroupGates, "carol", carol("grp-a")).
+		expect(errGroupsDown, nil, 1)
+	broken.err = errGroupsDown
+
+	noReader := newSeveralCase("no reader is refused", twoGroupGates, "carol", nil).expect(identity.ErrDenied, nil, 0)
+	noReader.nilPort = true
+
+	return []severalCase{
+		newSeveralCase("a member of group platform fills platform only", twoGroupGates, "carol", carol("grp-a")).
+			expect(nil, []string{"platform"}, 2),
+		newSeveralCase("a member of both groups holds both gates", twoGroupGates, "carol", carol("grp-a", "grp-b")).
+			expect(nil, []string{"platform", "dba"}, 2),
+		newSeveralCase("a member of neither group is refused", twoGroupGates, "carol", carol("grp-z")).
+			expect(identity.ErrDenied, nil, 2),
+		suspended,
+		broken,
+		noReader,
+		newSeveralCase("a gate with no groups holds a person in no group", groupAndOpenGates, "carol", carol("grp-z")).
+			expect(nil, []string{"open"}, 1),
+		newSeveralCase("the starter is refused when no gate allows it", twoGroupGates, "alice",
+			map[string][]string{"alice": {"grp-a", "grp-b"}}).expect(job.ErrSelfApproval, nil, 0),
 	}
 }
 
@@ -272,104 +332,74 @@ func severalGates(withOpen bool) func(*job.Job) {
 func TestApproveSeveralGates(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		gates     func(*job.Job)
-		subject   string
-		members   map[string][]string
-		suspended map[string][]string
-		err       error
-		nilPort   bool
-		want      error
-		wantFor   []string
-		asked     int
-	}{
-		{
-			name: "a member of group platform fills platform only", gates: severalGates(false), subject: "carol",
-			members: map[string][]string{"carol": {"grp-a"}}, wantFor: []string{"platform"}, asked: 2,
-		},
-		{
-			name: "a member of both groups holds both gates", gates: severalGates(false), subject: "carol",
-			members: map[string][]string{"carol": {"grp-a", "grp-b"}}, wantFor: []string{"platform", "dba"}, asked: 2,
-		},
-		{
-			name: "a member of neither group is refused", gates: severalGates(false), subject: "carol",
-			members: map[string][]string{"carol": {"grp-z"}}, want: identity.ErrDenied, asked: 2,
-		},
-		{
-			name: "an inactive member is refused", gates: severalGates(false), subject: "carol",
-			members:   map[string][]string{"carol": {"grp-a"}},
-			suspended: map[string][]string{"carol": {"grp-a"}}, want: identity.ErrDenied, asked: 2,
-		},
-		{
-			name: "a failure of the reader is refused", gates: severalGates(false), subject: "carol",
-			members: map[string][]string{"carol": {"grp-a"}}, err: errGroupsDown, want: errGroupsDown, asked: 1,
-		},
-		{
-			name: "no reader is refused", gates: severalGates(false), subject: "carol", nilPort: true,
-			want: identity.ErrDenied, asked: 0,
-		},
-		{
-			name: "a gate with no groups holds a person in no group", gates: severalGates(true), subject: "carol",
-			members: map[string][]string{"carol": {"grp-z"}}, wantFor: []string{"open"}, asked: 1,
-		},
-		{
-			name: "the starter is refused when no gate allows it", gates: severalGates(false), subject: "alice",
-			members: map[string][]string{"alice": {"grp-a", "grp-b"}}, want: job.ErrSelfApproval, asked: 0,
-		},
-	}
-
-	for _, tc := range tests {
+	for _, tc := range severalCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			reader := &fakeGroups{members: tc.members, suspended: tc.suspended, removed: nil, err: tc.err, asked: nil}
-
-			var port job.GroupReader = reader
-			if tc.nilPort {
-				port = nil
-			}
-
-			r := approveRigWithGroups(t, openPolicy(), port)
-			r.seed(tc.gates)
-
-			_, err := r.svc.Approve(t.Context(), actorOf(tc.subject), approveID, job.VerdictApprove, r.binding(), "")
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("Approve = %v, want %v", err, tc.want)
-			}
-
-			if len(reader.asked) != tc.asked {
-				t.Errorf("reader calls = %d, want %d", len(reader.asked), tc.asked)
-			}
-
-			if tc.want != nil {
-				if len(r.store.applies) != 0 {
-					t.Fatalf("changes = %d, want none after a refusal", len(r.store.applies))
-				}
-
-				if errors.Is(tc.want, identity.ErrDenied) || errors.Is(tc.want, errGroupsDown) {
-					denied, ok := errors.AsType[*job.DeniedError](err)
-					if !ok {
-						t.Fatalf("Approve = %v, want a *DeniedError that the handler audits", err)
-					}
-
-					if errors.Is(tc.want, identity.ErrDenied) && tc.members != nil && tc.err == nil &&
-						!strings.Contains(denied.Error(), "platform") {
-						t.Errorf("refusal = %q, want the names of the requirements", denied.Error())
-					}
-				}
-
-				return
-			}
-
-			if len(r.store.applies) != 1 {
-				t.Fatalf("changes = %d, want 1", len(r.store.applies))
-			}
-
-			if got := r.store.applies[0].Approval.For; !slices.Equal(got, tc.wantFor) {
-				t.Fatalf("For = %v, want %v", got, tc.wantFor)
-			}
+			checkSeveralCase(t, &tc)
 		})
+	}
+}
+
+func checkSeveralCase(t *testing.T, tc *severalCase) {
+	t.Helper()
+
+	reader := &fakeGroups{members: tc.members, suspended: tc.suspended, removed: nil, err: tc.err, asked: nil}
+
+	var port job.GroupReader = reader
+	if tc.nilPort {
+		port = nil
+	}
+
+	r := approveRigWithGroups(t, openPolicy(), port)
+	r.seed(tc.gates)
+
+	_, err := r.svc.Approve(t.Context(), actorOf(tc.subject), approveID, job.VerdictApprove, r.binding(), "")
+	if !errors.Is(err, tc.want) {
+		t.Fatalf("Approve = %v, want %v", err, tc.want)
+	}
+
+	if len(reader.asked) != tc.asked {
+		t.Errorf("reader calls = %d, want %d", len(reader.asked), tc.asked)
+	}
+
+	if tc.want != nil {
+		checkSeveralRefusal(t, r, tc, err)
+
+		return
+	}
+
+	if len(r.store.applies) != 1 {
+		t.Fatalf("changes = %d, want 1", len(r.store.applies))
+	}
+
+	if got := r.store.applies[0].Approval.For; !slices.Equal(got, tc.wantFor) {
+		t.Fatalf("For = %v, want %v", got, tc.wantFor)
+	}
+}
+
+// checkSeveralRefusal fails t when a refusal wrote a change, when a denial is
+// not a *DeniedError that the handler audits, or when a refusal of a person in
+// no group does not name the requirements.
+func checkSeveralRefusal(t *testing.T, r *rig, tc *severalCase, err error) {
+	t.Helper()
+
+	if len(r.store.applies) != 0 {
+		t.Fatalf("changes = %d, want none after a refusal", len(r.store.applies))
+	}
+
+	if !errors.Is(tc.want, identity.ErrDenied) && !errors.Is(tc.want, errGroupsDown) {
+		return
+	}
+
+	denied, ok := errors.AsType[*job.DeniedError](err)
+	if !ok {
+		t.Fatalf("Approve = %v, want a *DeniedError that the handler audits", err)
+	}
+
+	if errors.Is(tc.want, identity.ErrDenied) && tc.members != nil && tc.err == nil &&
+		!strings.Contains(denied.Error(), "platform") {
+		t.Errorf("refusal = %q, want the names of the requirements", denied.Error())
 	}
 }
 
@@ -384,7 +414,7 @@ func TestApproveSeveralGatesRepeat(t *testing.T) {
 
 	r := approveRigWithGroups(t, openPolicy(), reader)
 	r.seed(func(j *job.Job) {
-		severalGates(false)(j)
+		twoGroupGates(j)
 		j.Phases[1].Approvals = []job.Approval{approvedBy("carol")}
 		j.Phases[1].Approvals[0].For = []string{"platform", "dba"}
 	})
@@ -411,7 +441,7 @@ func TestApproveSeveralGatesOnePersonFillsOneSlot(t *testing.T) {
 	}
 
 	r := approveRigWithGroups(t, openPolicy(), reader)
-	r.seed(severalGates(false))
+	r.seed(twoGroupGates)
 
 	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
 	if err != nil {
@@ -436,7 +466,7 @@ func TestApproveSeveralGatesOnePersonFillsOneSlot(t *testing.T) {
 
 	r2 := approveRigWithGroups(t, openPolicy(), reader)
 	r2.seed(func(j *job.Job) {
-		severalGates(false)(j)
+		twoGroupGates(j)
 		first := approvedBy("carol")
 		first.For = []string{"platform", "dba"}
 		j.Phases[1].Approvals = []job.Approval{first}
@@ -460,7 +490,7 @@ func TestApproveSeveralGatesStarterFillsOnlyGatesThatAllowIt(t *testing.T) {
 	t.Parallel()
 
 	allowPlatform := func(j *job.Job) {
-		severalGates(false)(j)
+		twoGroupGates(j)
 		j.Phases[1].Gates[0].AllowSelf = true
 	}
 
@@ -471,7 +501,12 @@ func TestApproveSeveralGatesStarterFillsOnlyGatesThatAllowIt(t *testing.T) {
 		wantFor []string
 	}{
 		{"the starter holds both gates", map[string][]string{"alice": {"grp-a", "grp-b"}}, nil, []string{"platform"}},
-		{"the starter holds only the gate that refuses it", map[string][]string{"alice": {"grp-b"}}, job.ErrSelfApproval, nil},
+		{
+			"the starter holds only the gate that refuses it",
+			map[string][]string{"alice": {"grp-b"}},
+			job.ErrSelfApproval,
+			nil,
+		},
 	}
 
 	for _, tc := range tests {

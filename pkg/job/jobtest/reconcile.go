@@ -34,11 +34,17 @@ func reconcileCases() []suiteCase {
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
 		{
 			"the reconcile keeps a job with two gates and two people waiting",
-			func(t *testing.T, h Harness) { testReconcileSeveralGates(t, h, "cy", "di") },
+			func(t *testing.T, h Harness) {
+				t.Helper()
+				testReconcileSeveralGates(t, h, "cy", "di")
+			},
 		},
 		{
 			"the reconcile dispatches a job with two gates after the third person",
-			func(t *testing.T, h Harness) { testReconcileSeveralGates(t, h, "cy", "di", "ed") },
+			func(t *testing.T, h Harness) {
+				t.Helper()
+				testReconcileSeveralGates(t, h, "cy", "di", "ed")
+			},
 		},
 		{"the reconcile fails a queued job whose plan phase stored no plan, and never replans it", testReconcileNoPlan},
 		{"the reconcile expires the jobs past their queue, dispatch and state timeouts", testReconcileExpires},
@@ -277,10 +283,20 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
 		BindPlan: false,
 	}}
-	j.Phases[0].Approvals = []job.Approval{{
-		Gate: job.GateApproval, For: []string{""}, Subject: "bo", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
-		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
-	}}
+	j.Phases[0].Approvals = []job.Approval{
+		{
+			Gate:    job.GateApproval,
+			For:     []string{""},
+			Subject: "bo",
+			Agent:   "",
+			Verdict: job.VerdictApprove,
+			Comment: "",
+			Plan:    nil,
+			At:      time.Now().UTC(),
+			Auth:    "",
+			AuthAt:  time.Time{},
+		},
+	}
 	queued := create(t, h, f, j, nil)
 
 	// An approved job goes back to queued, and the reconcile dispatches it. It
@@ -291,6 +307,10 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 
 	assertState(t, h, queued.ID, job.StateDispatched)
 }
+
+// allApprovers is the number of people that fill the three places of the two
+// gates of testReconcileSeveralGates.
+const allApprovers = 3
 
 // testReconcileSeveralGates stores a queued job with a gate of two approvals
 // and a gate of one, and the approvals of people, in this order: cy fills
@@ -315,7 +335,7 @@ func testReconcileSeveralGates(t *testing.T, h Harness, people ...string) {
 	}
 
 	queued := create(t, h, f, j, nil)
-	open := len(people) == 3
+	open := len(people) == allApprovers
 
 	res := runReconcile(t, h, 0)
 	if open && (res.Dispatched != 1 || res.Gated != 0) {

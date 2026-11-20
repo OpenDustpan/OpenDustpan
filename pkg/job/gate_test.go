@@ -24,8 +24,16 @@ func TestGateStatus(t *testing.T) {
 
 	approve := func(subject string) job.Approval {
 		return job.Approval{
-			Gate: job.GateApproval, For: []string{""}, Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "",
-			Plan: nil, At: time.Time{}, Auth: "", AuthAt: time.Time{},
+			Gate:    job.GateApproval,
+			For:     []string{""},
+			Subject: subject,
+			Agent:   "",
+			Verdict: job.VerdictApprove,
+			Comment: "",
+			Plan:    nil,
+			At:      time.Time{},
+			Auth:    "",
+			AuthAt:  time.Time{},
 		}
 	}
 	reject := func(subject string) job.Approval {
@@ -183,7 +191,14 @@ func TestGatesStatus(t *testing.T) {
 	t.Parallel()
 
 	policy := job.Gate{
-		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0, BindPlan: false,
+		Type:      job.GateApproval,
+		Name:      "",
+		Approvals: 1,
+		Groups:    nil,
+		GroupIDs:  nil,
+		AllowSelf: false,
+		Timeout:   0,
+		BindPlan:  false,
 	}
 	both := []job.Gate{policy, job.ConfirmationGate(false)}
 	approved := withGate(confirmation("bo", 0), job.GateApproval)
@@ -227,7 +242,16 @@ func TestGatesStatus(t *testing.T) {
 func TestPhaseGates(t *testing.T) {
 	t.Parallel()
 
-	policy := job.Gate{Type: "", Name: "", Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0, BindPlan: true}
+	policy := job.Gate{
+		Type:      "",
+		Name:      "",
+		Approvals: 2,
+		Groups:    nil,
+		GroupIDs:  nil,
+		AllowSelf: false,
+		Timeout:   0,
+		BindPlan:  true,
+	}
 	none := job.Decision{Allow: true, Reason: "", Gates: nil, PolicyVersion: ""}
 	gated := job.Decision{
 		Allow: true, Reason: "", Gates: map[job.PhaseKind][]job.Gate{job.PhaseApply: {policy}}, PolicyVersion: "v1",
@@ -497,8 +521,16 @@ func confirmation(subject string, authAge time.Duration) job.Approval {
 	at := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 
 	return job.Approval{
-		Gate: job.GateConfirmation, For: []string{""}, Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "",
-		Plan: nil, At: at, Auth: job.ConfirmAuthMFA, AuthAt: at.Add(-authAge),
+		Gate:    job.GateConfirmation,
+		For:     []string{""},
+		Subject: subject,
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      at,
+		Auth:    job.ConfirmAuthMFA,
+		AuthAt:  at.Add(-authAge),
 	}
 }
 
@@ -832,7 +864,16 @@ func TestAgentModeValid(t *testing.T) {
 func TestPolicyGatesSeveral(t *testing.T) {
 	t.Parallel()
 
-	a := job.Gate{Type: "", Name: "default/ns", Approvals: 2, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0, BindPlan: true}
+	a := job.Gate{
+		Type:      "",
+		Name:      "default/ns",
+		Approvals: 2,
+		Groups:    nil,
+		GroupIDs:  nil,
+		AllowSelf: false,
+		Timeout:   0,
+		BindPlan:  true,
+	}
 	b := a
 	b.Name, b.Approvals = "default", 1
 

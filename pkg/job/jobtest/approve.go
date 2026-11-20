@@ -223,13 +223,25 @@ func checkApprovals(t *testing.T, name string, j *job.Job, want approvalsWant) {
 	}
 }
 
+// The numbers of people in testApprovalSeveralGates.
+const (
+	onePerson   = 1
+	threePeople = 3
+)
+
 // severalGates returns the two named gates of the apply phase of the cases: a
 // gate of two approvals and a gate of one.
 func severalGates() []job.Gate {
 	return []job.Gate{
 		{
-			Type: job.GateApproval, Name: "default/namespace/acme", Approvals: 2, Groups: []string{"platform"},
-			GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+			Type:      job.GateApproval,
+			Name:      "default/namespace/acme",
+			Approvals: needApprovals,
+			Groups:    []string{"platform"},
+			GroupIDs:  []string{"grp-a"},
+			AllowSelf: false,
+			Timeout:   0,
+			BindPlan:  true,
 		},
 		{
 			Type: job.GateApproval, Name: "default", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
@@ -261,17 +273,17 @@ func testApprovalSeveralGates(t *testing.T, h Harness) {
 
 	first := apply(t, h, f, verdictFor(&j, "cy", job.EventApprovalRecorded, ns, def))
 	checkApprovals(t, "first approval", &first, approvalsWant{
-		state: job.StateAwaitingApproval, count: 1, status: job.GateWaiting,
+		state: job.StateAwaitingApproval, count: onePerson, status: job.GateWaiting,
 	})
 
 	second := apply(t, h, f, verdictFor(&first, "di", job.EventApprovalRecorded, ns))
 	checkApprovals(t, "second approval", &second, approvalsWant{
-		state: job.StateAwaitingApproval, count: 2, status: job.GateWaiting,
+		state: job.StateAwaitingApproval, count: needApprovals, status: job.GateWaiting,
 	})
 
 	third := apply(t, h, f, verdictFor(&second, "ed", job.EventApproved, def))
 	checkApprovals(t, "third approval", &third, approvalsWant{
-		state: job.StateQueued, count: 3, status: job.GateOpen,
+		state: job.StateQueued, count: threePeople, status: job.GateOpen,
 	})
 
 	got, err := h.Jobs.Get(t.Context(), j.ID)
@@ -308,8 +320,16 @@ func testApprovalRecordedElsewhere(t *testing.T, h Harness) {
 
 	c := change(&queued, job.EventApprovalRecorded)
 	c.Approval = &job.Approval{
-		Gate: job.GateApproval, For: []string{""}, Subject: "cy", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
-		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
+		Gate:    job.GateApproval,
+		For:     []string{""},
+		Subject: "cy",
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      time.Now().UTC(),
+		Auth:    "",
+		AuthAt:  time.Time{},
 	}
 
 	_, err := h.Jobs.Apply(t.Context(), c, f.fence, nil)

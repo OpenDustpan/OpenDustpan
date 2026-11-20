@@ -131,8 +131,16 @@ func (r *rig) binding() job.PlanBinding {
 
 func approvedBy(subject string) job.Approval {
 	return job.Approval{
-		Gate: job.GateApproval, For: []string{""}, Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
-		At: time.Time{}, Auth: "", AuthAt: time.Time{},
+		Gate:    job.GateApproval,
+		For:     []string{""},
+		Subject: subject,
+		Agent:   "",
+		Verdict: job.VerdictApprove,
+		Comment: "",
+		Plan:    nil,
+		At:      time.Time{},
+		Auth:    "",
+		AuthAt:  time.Time{},
 	}
 }
 

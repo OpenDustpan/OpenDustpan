@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -199,14 +198,4 @@ func gatesOf(reqs []gate.Requirement) ([]job.Gate, error) {
 	}
 
 	return out, nil
-}
-
-func names(reqs []gate.Requirement) string {
-	out := make([]string, 0, len(reqs))
-
-	for i := range reqs {
-		out = append(out, string(reqs[i].Name))
-	}
-
-	return strings.Join(out, ", ")
 }

@@ -497,9 +497,13 @@ func TestApproveMapsTheErrorsOfTheService(t *testing.T) {
 // requirement of the phase holds, in the form that the service gives it.
 func noRequirement() error {
 	return &job.DeniedError{
-		Action: identity.ActionJobApprove, Object: identity.NamespaceObject("acme"),
-		Err: fmt.Errorf("%w: %w: the subject is not a member of a group of any requirement: default, default/namespace/acme",
-			identity.ErrDenied, job.ErrNoRequirement),
+		Action: identity.ActionJobApprove,
+		Object: identity.NamespaceObject("acme"),
+		Err: fmt.Errorf(
+			"%w: %w: the subject is not a member of a group of any requirement: default, default/namespace/acme",
+			identity.ErrDenied,
+			job.ErrNoRequirement,
+		),
 	}
 }
 

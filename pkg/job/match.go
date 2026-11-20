@@ -78,6 +78,15 @@ func matchGates(
 		return filled, false
 	}
 
+	// Defense in depth: an approval names its gates by name, so two gates with
+	// one name cannot be told apart, and a person who holds one of them would
+	// hold both. checkGates refuses such a set at the start, and the decider
+	// gives unique names. This check stays so that a stored job of another
+	// shape cannot open, and does not rely on either.
+	if repeatedName(gates) {
+		return filled, false
+	}
+
 	subjects, eligible := candidates(gates, approvals, startedBy, policy)
 	assigned := make([][]int, len(gates)) // for each gate, the subjects in its slots
 
@@ -97,6 +106,19 @@ func matchGates(
 	}
 
 	return filled, open
+}
+
+// repeatedName reports whether two of gates have the same name.
+func repeatedName(gates []Gate) bool {
+	for i := range gates {
+		for j := i + 1; j < len(gates); j++ {
+			if gates[i].Name == gates[j].Name {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // candidates returns the distinct subjects that may fill a slot, in order of
