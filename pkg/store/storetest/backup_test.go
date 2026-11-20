@@ -448,7 +448,7 @@ func (*fakeBackupStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fe
 
 // UpdateStackTags implements stack.Store.
 func (s *fakeBackupStore) UpdateStackTags(
-	_ context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
+	_ context.Context, ref stack.Ref, u stack.TagUpdate, fence namespace.Fence,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -466,14 +466,15 @@ func (s *fakeBackupStore) UpdateStackTags(
 		return stack.ErrNotFound
 	}
 
+	tags := u.Tags
 	if len(tags) == 0 {
 		tags = map[string]string{}
 	}
 
 	st.Tags = maps.Clone(tags)
-	st.UpdatedAt = updatedAt
+	st.UpdatedAt = u.UpdatedAt
 	s.data.stacks[ref.String()] = st
-	s.publishStack(ref, st.ID.String(), updatedAt)
+	s.publishStack(ref, st.ID.String(), u.UpdatedAt)
 
 	return nil
 }

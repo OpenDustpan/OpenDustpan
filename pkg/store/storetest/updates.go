@@ -60,6 +60,27 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "update round trip", test: testUpdateRoundTrip},
 		{name: "the state writes of a stack in no collection are refused", test: testNoCollectionRefusesStateWrites},
 		{name: "update keeps the access token that started it", test: testUpdateTokenIDRoundTrip},
+		{
+			name: "a tags update appends its change entry in the same transaction",
+			test: testUpdateTagsAppendsChangeEntry,
+		},
+		{name: "a tags update that changes no key appends no entry", test: testUpdateTagsWithoutChangeAppendsNothing},
+		{
+			name: "a tags update with a refused audit entry changes nothing",
+			test: testUpdateTagsRefusedEntryChangesNothing,
+		},
+		{
+			name: "a tags update with a hostile tag key changes nothing",
+			test: testUpdateTagsHostileKeyChangesNothing,
+		},
+		{
+			name: "a tags update or a create with a hostile tag value changes nothing",
+			test: testUpdateTagsHostileValueChangesNothing,
+		},
+		{
+			name: "a tags update whose audit append fails changes nothing",
+			test: testUpdateTagsFailedAppendChangesNothing,
+		},
 		{name: "a delete appends its change entry in the same transaction", test: testDeleteAppendsChangeEntry},
 		{name: "a delete with a refused audit entry changes nothing", test: testDeleteRefusedEntryChangesNothing},
 		{name: "a delete whose audit append fails changes nothing", test: testDeleteFailedAppendChangesNothing},

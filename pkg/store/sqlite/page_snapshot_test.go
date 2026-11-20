@@ -59,7 +59,16 @@ func retagBetweenReads(t *testing.T, s *sqlite.Store, ns namespace.Namespace, re
 
 		done = true
 
-		err := s.UpdateStackTags(ctx, ref, map[string]string{"team": "red"}, time.Now(), ns.Fence())
+		err := s.UpdateStackTags(
+			ctx,
+			ref,
+			stack.TagUpdate{
+				Tags:      map[string]string{"team": "red"},
+				UpdatedAt: time.Now(),
+				Entry:     renameTestEntry(ref.Namespace, ref),
+			},
+			ns.Fence(),
+		)
 		if err != nil {
 			t.Errorf("change the tags between the reads: %v", err)
 		}

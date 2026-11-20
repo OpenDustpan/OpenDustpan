@@ -107,7 +107,16 @@ func seedSnapshotStore(t *testing.T, s *sqlite.Store) (namespace.Fence, string) 
 		t.Fatalf("create stack: %v", placeErr)
 	}
 
-	tagErr := s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "core"}, at, ns.Fence())
+	tagErr := s.UpdateStackTags(
+		t.Context(),
+		ref,
+		stack.TagUpdate{
+			Tags:      map[string]string{"team": "core"},
+			UpdatedAt: at,
+			Entry:     renameTestEntry(ref.Namespace, ref),
+		},
+		ns.Fence(),
+	)
 	if tagErr != nil {
 		t.Fatalf("tag stack: %v", tagErr)
 	}
