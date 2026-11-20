@@ -2804,6 +2804,16 @@ CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE s.digest = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
 
+-- name: GetSessionForShare :one
+-- The redeem of the first administrator reads the session row with a share
+-- lock, so a sign-out cannot end the session between the read and the commit.
+-- The audit lock of the installation serializes the redeems only. It does not
+-- serialize a sign-out, so this share lock is the guard against one.
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent,
+  generation
+FROM sessions WHERE id = $1
+FOR SHARE;
+
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
 -- created_after_ms are the bounds of an active session at at_ms.
@@ -4909,6 +4919,30 @@ WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::big
 -- name: DeleteGitHostInstallation :execrows
 DELETE FROM git_host_installations
 WHERE installation_id = sqlc.arg(installation_id) AND (sqlc.arg(if_version)::bigint = 0 OR version = sqlc.arg(if_version)::bigint);
+
+-- name: DeleteFirstAdministratorCode :execrows
+-- The delete is a check: it matches the code row only when the digest, the
+-- principal and the open time are those that the redeem checked.
+DELETE FROM first_administrator_codes
+WHERE id = 1 AND digest = sqlc.arg(digest) AND principal_id = sqlc.arg(principal_id) AND expires_at_ms > sqlc.arg(now_ms);
+
+-- name: GetFirstAdministratorCode :one
+SELECT principal_id, digest, created_by, reason, created_at_ms, expires_at_ms FROM first_administrator_codes WHERE id = 1
+FOR UPDATE;
+
+-- name: GetFirstAdministratorMarker :one
+SELECT principal_id, grant_id, session_id, created_by, made_at_ms FROM first_administrator WHERE id = 1;
+
+-- name: InsertFirstAdministratorMarker :exec
+INSERT INTO first_administrator (id, principal_id, grant_id, session_id, created_by, made_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(grant_id), sqlc.arg(session_id), sqlc.arg(created_by), sqlc.arg(made_at_ms));
+
+-- name: ReplaceFirstAdministratorCode :exec
+INSERT INTO first_administrator_codes (id, principal_id, digest, created_by, reason, created_at_ms, expires_at_ms)
+VALUES (1, sqlc.arg(principal_id), sqlc.arg(digest), sqlc.arg(created_by), sqlc.arg(reason), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms))
+ON CONFLICT (id) DO UPDATE SET principal_id = excluded.principal_id, digest = excluded.digest,
+  created_by = excluded.created_by, reason = excluded.reason, created_at_ms = excluded.created_at_ms,
+  expires_at_ms = excluded.expires_at_ms;
 
 -- name: LockGitHostEventReceipts :exec
 -- Makes the writers of receipts take turns, so the bound is exact. Readers do not wait.
