@@ -47,8 +47,8 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 
 	s, path := openOutputShare(t)
 
-	return outputsharetest.Harness{
-		Store:        nil,
+	h := outputsharetest.Harness{
+		Store:        s.OutputSharingStore(),
 		Checker:      nil,
 		Attachments:  nil,
 		States:       nil,
@@ -83,13 +83,35 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 
 			return actions
 		},
-		Calls:    nil,
-		StoreRaw: nil,
+		Calls: nil,
+		StoreRaw: func(t *testing.T, r outputshare.Rule) {
+			t.Helper()
+
+			plantRuleRow(t, path, r)
+		},
 		SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 			t.Helper()
 
 			plantSettingRow(t, path, ns, value)
 		},
+	}
+
+	return outputsharetest.WithUnits(h, s)
+}
+
+// plantRuleRow writes the rule r as a row with direct SQL and the CHECK
+// constraints off, as a row of another version could hold it.
+func plantRuleRow(t *testing.T, path string, r outputshare.Rule) {
+	t.Helper()
+
+	conn := rawSettingDB(t, path)
+
+	if _, err := conn.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("ignore check constraints: %v", err)
+	}
+
+	if _, err := conn.ExecContext(t.Context(), outputsharetest.RawRuleInsert(false), outputsharetest.RawRuleRow(r)...); err != nil {
+		t.Fatalf("plant the sharing rule %q: %v", r.ID, err)
 	}
 }
 
