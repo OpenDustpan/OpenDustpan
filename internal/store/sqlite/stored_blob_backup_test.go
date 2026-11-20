@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -74,6 +75,7 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 	})
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:     jobcheck.Checker{},
 		Exporter: st, Kinds: st, Registry: st, Blobs: live, Target: in.Target, TargetName: "dir:test",
 		Operations: st.DurableOperationsPort(), Version: "test", StateOpener: nil, Owner: "", Lease: 0, Now: nil,
 		MaxSQLBytes: 0, Logger: nil,

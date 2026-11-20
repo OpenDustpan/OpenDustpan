@@ -56,7 +56,7 @@ done
 # root, one for each line. pkg/store/storetest is not in the list: the
 # conformance suite stays in the SDK.
 moved_packages() {
-  printf '%s\n' pkg/store/sqlite pkg/store/postgres pkg/store/schema
+  printf '%s\n' pkg/store/sqlite pkg/store/postgres pkg/store/schema pkg/store/jobcheck
   find pkg/store/internal -mindepth 1 -maxdepth 1 -type d -print | sort
 }
 

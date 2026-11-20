@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
@@ -122,6 +123,7 @@ func (d durableSetup) service(
 	t.Helper()
 
 	svc, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    d.reg,

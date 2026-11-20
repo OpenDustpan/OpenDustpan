@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/internal/unmanaged/unmanagedtest"
@@ -458,6 +459,7 @@ func unmanagedBackupServices(
 	t.Helper()
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:     jobcheck.Checker{},
 		Exporter: st, Kinds: st, Registry: st, Blobs: live, Target: target, TargetName: "dir:test",
 		Operations: st.DurableOperationsPort(), Version: "test", StateOpener: nil, Owner: "", Lease: 0, Now: nil,
 		MaxSQLBytes: 0, Logger: nil,

@@ -176,7 +176,7 @@ func (f *fakeJobs) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, nam
 	f.note("GetDamaged")
 
 	if f.getDamagedErr != nil {
-		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", f.getDamagedErr
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", f.getDamagedErr
 	}
 
 	f.mu.Lock()
@@ -184,16 +184,18 @@ func (f *fakeJobs) GetDamaged(_ context.Context, id job.ID) (job.DamagedRow, nam
 
 	d, ok := f.damaged[id]
 	if !ok {
-		return job.DamagedRow{ID: "", UnitID: "", Reason: ""}, "", job.ErrNotFound
+		return job.DamagedRow{ID: "", UnitID: "", Reason: "", State: "", Version: 0}, "", job.ErrNotFound
 	}
 
 	return d.row, d.ns, nil
 }
 
-func (f *fakeJobs) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
+func (f *fakeJobs) CancelDamaged(
+	context.Context, job.ID, namespace.Fence, []audit.Entry,
+) (job.DamagedCancel, error) {
 	f.note("CancelDamaged")
 
-	return errUnexpected
+	return job.DamagedCancel{}, errUnexpected
 }
 
 // set stores j, so a running stream finds the new record at its next read.

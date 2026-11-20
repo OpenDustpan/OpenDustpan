@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/backuptest"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -188,7 +190,57 @@ func TestCheckStagedJobsRefusesAMissingNamespace(t *testing.T) {
 	}
 
 	err = checkStagedJobs(t.Context(), s.conn)
-	if err == nil || !errors.Is(err, backup.ErrCorrupt) || !strings.Contains(err.Error(), "has no namespace") {
+	if err == nil || !errors.Is(err, backup.ErrCorrupt) || !strings.Contains(err.Error(), backup.ReasonJobNoNamespace) {
 		t.Fatalf("check = %v, want the refusal of a job with no namespace", err)
 	}
+}
+
+// storedJobRows reads each job row of s as a backup row, with the name of its
+// namespace.
+func storedJobRows(t *testing.T, s *Store) []backup.JobRow {
+	t.Helper()
+
+	rows, err := s.conn.QueryContext(t.Context(), `SELECT j.id, n.name, j.namespace_id, j.unit_id, j.seq, j.state,
+j.wait, j.current_phase, j.current_changes, j.current_operation, j.idempotency_key, j.version, j.body,
+j.created_at_ms, j.updated_at_ms, j.state_changed_at_ms FROM jobs AS j JOIN namespaces AS n ON n.id = j.namespace_id`)
+	if err != nil {
+		t.Fatalf("read the job rows: %v", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close the job rows: %v", closeErr)
+		}
+	}()
+
+	var out []backup.JobRow
+
+	for rows.Next() {
+		var r backup.JobRow
+
+		scanErr := rows.Scan(&r.ID, &r.Namespace, &r.NamespaceID, &r.UnitID, &r.Seq, &r.State, &r.Wait, &r.Phase,
+			&r.Changes, &r.Operation, &r.Key, &r.Version, &r.Body, &r.CreatedMs, &r.UpdatedMs, &r.ChangedMs)
+		if scanErr != nil {
+			t.Fatalf("scan a job row: %v", scanErr)
+		}
+
+		out = append(out, r)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("read the job rows: %v", rowsErr)
+	}
+
+	return out
+}
+
+// TestJobRowCheckerConformance runs the suite of the job row port against the
+// adapter of the job store, with a row that this store wrote.
+func TestJobRowCheckerConformance(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedJobRow(t, s)
+
+	backuptest.RunJobRowChecker(t, jobcheck.Checker{}, storedJobRows(t, s))
 }

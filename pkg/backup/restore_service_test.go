@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -695,6 +696,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
 	}
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
@@ -1365,6 +1367,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	live.maint = maint
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs: jobcheck.Checker{},
 		Exporter: &stubBackupExporter{
 			sum: testSummary(), data: []byte("pre-backup-sql"), order: nil, hook: atomic.Pointer[func()]{},
 		},

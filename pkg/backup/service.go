@@ -157,6 +157,11 @@ type ManifestBlob struct {
 // Config holds the dependencies of a Service.
 type Config struct {
 	Exporter PortableExporter
+	// Jobs applies the rules of a stored job to each job row that backup
+	// check reads. It is required. The restore applies the same rules, so a
+	// backup that the check calls complete holds no job row that a restore
+	// refuses.
+	Jobs     JobRowChecker
 	Registry Registry
 	// Kinds reads the installation kind of the database that the exporter
 	// reads. The manifest records it. A caller cannot pass a kind in.
@@ -199,6 +204,7 @@ type Config struct {
 // Service runs backups of a whole installation into a blob.Store target.
 type Service struct {
 	exporter   PortableExporter
+	jobs       JobRowChecker
 	kinds      KindReader
 	registry   Registry
 	source     blob.Store
@@ -239,6 +245,8 @@ func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Exporter == nil:
 		return nil, fmt.Errorf("%w: exporter", ErrMissingDependency)
+	case cfg.Jobs == nil:
+		return nil, fmt.Errorf("%w: job row checker", ErrMissingDependency)
 	case cfg.Kinds == nil:
 		return nil, fmt.Errorf("%w: installation kind reader", ErrMissingDependency)
 	case cfg.Registry == nil:
@@ -263,6 +271,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	s := &Service{
 		exporter:      cfg.Exporter,
+		jobs:          cfg.Jobs,
 		kinds:         cfg.Kinds,
 		registry:      cfg.Registry,
 		source:        cfg.Blobs,
@@ -567,6 +576,11 @@ func (s *Service) Check(ctx context.Context, id ID) error {
 	}
 
 	if err := checkDamagedOrigin(ctx, s, manifest); err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	// The restore refuses a damaged job row, so the check reports it too.
+	if err := checkBackupJobs(ctx, s.jobs, portableOpener(ctx, s.target, id, live.attempt), manifest); err != nil {
 		return fmt.Errorf("check backup %s: %w", id, err)
 	}
 

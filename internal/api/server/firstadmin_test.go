@@ -378,8 +378,11 @@ func (c faCaller) with(headers map[string]string) faCaller {
 func (f faFixture) sessionOf(t *testing.T, subject string, authTime time.Time) (*http.Cookie, string) {
 	t.Helper()
 
-	return accessFixture{store: f.store, path: f.path, sessions: f.sessions, handler: f.handler, passwords: f.limiter}.
-		sessionOf(t, subject, authTime)
+	base := accessFixture{
+		store: f.store, path: f.path, sessions: f.sessions, handler: f.handler, passwords: f.limiter, tokens: nil,
+	}
+
+	return base.sessionOf(t, subject, authTime)
 }
 
 // send sends one request as who.

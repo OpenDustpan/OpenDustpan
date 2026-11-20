@@ -167,7 +167,7 @@ func TestPutManifestReturnsPutErrorAndStopsEncoder(t *testing.T) {
 // other dependency.
 func serviceOver(target blob.Store) *Service {
 	return &Service{
-		exporter: nil, kinds: nil, registry: nil, source: nil, opener: nil, target: target, targetName: "",
+		jobs: nil, exporter: nil, kinds: nil, registry: nil, source: nil, opener: nil, target: target, targetName: "",
 		now: nil, version: "bench", maxSQL: 0, maxUnverified: 0, runner: nil, operations: nil, lease: 0, logger: nil,
 	}
 }

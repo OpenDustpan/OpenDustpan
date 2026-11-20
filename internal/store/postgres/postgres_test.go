@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -1150,6 +1151,7 @@ func newRestoreAuditServices(
 	t.Helper()
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    st,
 		Kinds:       st,
 		Registry:    st,

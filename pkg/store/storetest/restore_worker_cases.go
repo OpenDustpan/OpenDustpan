@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
@@ -200,6 +201,7 @@ func newWorkerRig(t *testing.T, newStore RestoreFactory) *workerRig {
 	)
 
 	r.backups, err = backup.NewService(backup.Config{
+		Jobs:     jobcheck.Checker{},
 		Exporter: st, Registry: st, Kinds: st, Blobs: r.live.Store, StateOpener: nil, Target: r.target,
 		TargetName: "dir:test", Now: nil, Version: "test", MaxSQLBytes: 0, Operations: r.ops, Owner: "backup",
 		Lease: 0, Logger: nil,

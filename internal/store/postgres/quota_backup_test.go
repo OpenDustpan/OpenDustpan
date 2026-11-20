@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/quota"
+	"opendustpan.org/opendustpan/internal/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -57,6 +58,7 @@ func newQuotaBackupRig(t *testing.T, base, targetPath string) *quotaBackupRig {
 	})
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs:     jobcheck.Checker{},
 		Exporter: st, Kinds: st, Registry: st, Blobs: live, Target: target, TargetName: "dir:test",
 		Operations: st.DurableOperationsPort(), Version: "test", StateOpener: nil, Owner: "", Lease: 0, Now: nil,
 		MaxSQLBytes: 0, Logger: nil,
