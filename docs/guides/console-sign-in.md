@@ -54,7 +54,9 @@ one line ending at the end of the file.
 
 The issuer must use HTTPS. It must have no user information, no query and
 no fragment. The server refuses the start with such an issuer, and it does not
-change the issuer. The server reads the discovery document of the
+change the issuer. The IDs `dev` and `local` are reserved: the server refuses
+them for `--oidc-provider` and `--ldap-provider` at start. The server reads the
+discovery document of the
 provider at the first sign-in, not at start. So the server starts while the
 provider is down. When the provider does not answer, the start of a
 sign-in answers 502.
@@ -99,8 +101,9 @@ The rules:
   has another version, the change answers 409. Read the provider again
   and send the change again.
 - A change applies at the next sign-in, with no restart.
-- The issuer must be an `https` URL. The server accepts an `http` URL only
-  on a loopback host, for tests.
+- The issuer must be an `https` URL, with no user name or password, no query
+  and no fragment. The server accepts an `http` URL only on a loopback host,
+  for tests. The IDs `dev` and `local` are reserved: the server refuses them.
 - The server does not read the discovery document of a new provider. The
   first sign-in through a provider with a bad issuer answers 502.
 - At a sign-in, the server reads the discovery document from the issuer.
