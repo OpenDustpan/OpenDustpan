@@ -48,7 +48,10 @@ func damagedReadRig(
 	svc := &fakeCanceler{Starter: nil, mu: sync.Mutex{}, calls: nil, job: runningJob(t, testJob), err: nil}
 	store := newFakeJobs()
 	store.damaged = map[job.ID]fakeDamaged{
-		testJob: {row: job.DamagedRow{ID: testJob, UnitID: unitID, Reason: damagedSecret}, ns: ns},
+		testJob: {
+			row: job.DamagedRow{ID: testJob, UnitID: unitID, Reason: damagedSecret, State: "", Version: 0},
+			ns:  ns,
+		},
 	}
 
 	h := newWorkerHandler(t, authz, handlerDeps{
