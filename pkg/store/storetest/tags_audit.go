@@ -16,8 +16,9 @@ import (
 // tagSecret is a tag value that no audit entry may hold.
 const tagSecret = "s3cr3t-tag-value"
 
-// listAudit returns the audit entries of ns, or skips the test when the store
-// cannot list them.
+// listAudit returns every audit entry of ns, newest first, or skips the test
+// when the store cannot list them. It follows the pages until the listing says
+// that no entry is left, so a test never misses an entry that a page cut off.
 func listAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
 	t.Helper()
 
@@ -26,12 +27,24 @@ func listAudit(t *testing.T, s any, ns namespace.Name) []audit.Entry {
 		t.Skip("store does not list audit entries")
 	}
 
-	listing, err := lister.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
-	if err != nil {
-		t.Fatalf("list audit entries: %v", err)
-	}
+	var entries []audit.Entry
 
-	return listing.Entries
+	page := audit.Page{Size: audit.MaxPageSize, Before: 0}
+
+	for {
+		listing, err := lister.List(t.Context(), ns, page)
+		if err != nil {
+			t.Fatalf("list audit entries: %v", err)
+		}
+
+		entries = append(entries, listing.Entries...)
+
+		if !listing.More || len(listing.Entries) == 0 {
+			return entries
+		}
+
+		page.Before = listing.Entries[len(listing.Entries)-1].Sequence
+	}
 }
 
 // tagUpdateAction is the action of the audit entry of a tags update: the entry
