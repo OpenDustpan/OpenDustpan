@@ -563,10 +563,11 @@ func etag(version int64) string {
 }
 
 // decodeBody reads and decodes the body of r into v. It refuses a body above
-// unitsettings.MaxBodyBytes, text that a decode would change, an unknown field
-// and data after the document.
+// unitsettings.MaxBodyBytes, text that a decode would change, a body that is
+// not one object (null too), a key that an object names two times, an unknown
+// field and data after the document.
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
-	if err := textbody.Decode(w, r, unitsettings.MaxBodyBytes, v); err != nil {
+	if err := textbody.Decode(w, r, unitsettings.MaxBodyBytes, v, textbody.Object()); err != nil {
 		if errors.Is(err, textbody.ErrTooLarge) {
 			return err
 		}

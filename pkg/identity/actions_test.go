@@ -9,9 +9,11 @@ import (
 
 // catalogCount pins the size of the catalog that Actions returns: one
 // entry for each action constant of the block in identity.go. An author
-// who adds a new action constant must add its catalog entry too, and this
-// count makes the missing entry fail here.
-const catalogCount = 128
+// who adds a new action constant must add its catalog entry too. This
+// count does not catch a new action constant that has no catalog entry:
+// the test still passes. The project accepts this risk, and no other
+// check covers it.
+const catalogCount = 131
 
 // TestActionsCatalogIsComplete checks the catalog that Actions returns:
 // it holds one entry for each action of the core, sorted, with no

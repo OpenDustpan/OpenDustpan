@@ -59,6 +59,8 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "staging refuses stacks without their namespace", test: testPortableStageRefusesForeignKeys},
 		{name: "staging refuses a corrupt stream", test: testPortableStageRefusesBrokenStream},
 		{name: "staging refuses blob references that differ from the manifest", test: testPortableStageRefusesBlobs},
+		{name: "staging refuses an owner over the saved view limit", test: testPortableSavedViewOwnerLimit},
+		{name: "staging refuses a namespace over the saved view limit", test: testPortableSavedViewNamespaceLimit},
 		{name: "peek returns one key of the wrapper without loading", test: testPortablePeekKey},
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},

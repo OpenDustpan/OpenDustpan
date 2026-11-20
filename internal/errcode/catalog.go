@@ -84,6 +84,7 @@ func areas() []func() []Spec {
 		collectionSpecs,
 		contextSpecs,
 		driftSpecs,
+		firstAdministratorSpecs,
 		gateSpecs,
 		gitHostSpecs,
 		grantSpecs,
