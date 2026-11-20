@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerpools"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // holdsOnly allows the actions it lists on a namespace, and denies the rest.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -14,7 +15,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -60,6 +60,7 @@ func seedDeletedWorkspace(t *testing.T, st *sqlite.Store, n namespace.Namespace)
 		Ref:         workspace.Ref{Namespace: "acme", Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
 		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err = st.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

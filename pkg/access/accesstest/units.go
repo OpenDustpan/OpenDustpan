@@ -88,8 +88,9 @@ func unitStore(t *testing.T, s access.Store) UnitStore {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err := us.CreateWorkspace(ctx, ws, ns.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

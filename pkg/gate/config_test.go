@@ -408,11 +408,6 @@ func TestConfigServiceRefusesBeforeTheStore(t *testing.T) {
 
 			return err
 		}, gate.ErrInvalid},
-		{"rule at the installation", func(s *gate.ConfigService) error {
-			_, err := s.PutApprovalRule(t.Context(), goodRule(gate.InstallationScope()), 0, callerEntry())
-
-			return err
-		}, gate.ErrInvalid},
 		{"delete at the zero scope", func(s *gate.ConfigService) error {
 			return s.DeleteApprovalDefault(t.Context(), gate.Scope{}, 1, callerEntry())
 		}, gate.ErrInvalid},

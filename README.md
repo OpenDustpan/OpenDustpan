@@ -576,9 +576,9 @@ server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
 with the four S3 variables drives the runs with the live blobs on the
 S3-compatible server.
 
-With the race detector, one run of `pkg/store/sqlite` or `pkg/store/postgres`
+With the race detector, one run of `internal/store/sqlite` or `internal/store/postgres`
 can take more than 10 minutes, the default limit of `go test`. On a
-4-core CI runner, `pkg/store/postgres` alone took more than 20 minutes. `make
+4-core CI runner, `internal/store/postgres` alone took more than 20 minutes. `make
 test` sets `-timeout 45m` (set `TEST_TIMEOUT` to change it). The CI targets
 keep their own limits: `make test-ci-other` sets `-timeout 20m`, and
 `make test-ci-store` sets `-timeout 30m`. When

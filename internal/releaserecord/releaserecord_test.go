@@ -182,15 +182,15 @@ type guard struct {
 // directory.
 func guards() []guard {
 	return []guard{
-		{"../../pkg/store/sqlite/frozen_test.go", "TestFrozenMigrations", "Off"},
-		{"../../pkg/store/postgres/frozen_test.go", "TestFrozenMigrations", "Off"},
-		{"../../pkg/store/sqlite/frozen_test.go", "TestMigrationFilesFollowTheRecord", "MigrationFiles"},
-		{"../../pkg/store/postgres/frozen_test.go", "TestMigrationFilesFollowTheRecord", "MigrationFiles"},
-		{"../../pkg/store/internal/baseline/roundtrip_test.go", "TestSQLiteBaselineRoundTrip", "Off"},
-		{"../../pkg/store/internal/baseline/roundtrip_test.go", "TestPostgresBaselineRoundTrip", "Off"},
+		{"../../internal/store/sqlite/frozen_test.go", "TestFrozenMigrations", "Off"},
+		{"../../internal/store/postgres/frozen_test.go", "TestFrozenMigrations", "Off"},
+		{"../../internal/store/sqlite/frozen_test.go", "TestMigrationFilesFollowTheRecord", "MigrationFiles"},
+		{"../../internal/store/postgres/frozen_test.go", "TestMigrationFilesFollowTheRecord", "MigrationFiles"},
+		{"../../internal/store/baseline/roundtrip_test.go", "TestSQLiteBaselineRoundTrip", "Off"},
+		{"../../internal/store/baseline/roundtrip_test.go", "TestPostgresBaselineRoundTrip", "Off"},
 		{"../../internal/api/apidesc/version_test.go", "TestVersionFollowsTheDescription", "Off"},
-		{"../../pkg/store/sqlite/frozen_test.go", "TestTagCopiesHaveTheirLines", "TagCopies"},
-		{"../../pkg/store/postgres/frozen_test.go", "TestTagCopiesHaveTheirLines", "TagCopies"},
+		{"../../internal/store/sqlite/frozen_test.go", "TestTagCopiesHaveTheirLines", "TagCopies"},
+		{"../../internal/store/postgres/frozen_test.go", "TestTagCopiesHaveTheirLines", "TagCopies"},
 	}
 }
 
@@ -669,7 +669,7 @@ func TestCheckReleaseRecordRefuses(t *testing.T) {
 			version + " postgres " + baseline + " " + sumOf("base") + "\n"
 	}
 
-	next := map[string]string{"pkg/store/sqlite/migrations/0169_next.sql": "next"}
+	next := map[string]string{"internal/store/sqlite/migrations/0169_next.sql": "next"}
 
 	tests := []struct {
 		name    string
@@ -780,7 +780,7 @@ func writeMigrations(t *testing.T, dir string, extra map[string]string) {
 
 	files := map[string]string{}
 	for _, dialect := range releaserecord.Dialects() {
-		files["pkg/store/"+dialect+"/migrations/"+baseline] = "base"
+		files["internal/store/"+dialect+"/migrations/"+baseline] = "base"
 	}
 
 	maps.Copy(files, extra)

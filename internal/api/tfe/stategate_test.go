@@ -16,11 +16,11 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/store/schema"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -61,12 +61,12 @@ func newWriteCounter() *writeCounter {
 	return &writeCounter{stubWorkspaces: stubWorkspaces{}, mu: sync.Mutex{}, writes: 0}
 }
 
-func (c *writeCounter) LockForJob(
+func (c *writeCounter) LockForJobInCollection(
 	ctx context.Context, id workspace.ID, holder, reason, job string,
 ) (workspace.Workspace, error) {
 	c.bump()
 
-	return c.stubWorkspaces.LockForJob(ctx, id, holder, reason, job)
+	return c.stubWorkspaces.LockForJobInCollection(ctx, id, holder, reason, job)
 }
 
 //nolint:revive // The signature of the workspace port that the handler reads.
@@ -569,7 +569,7 @@ func (h heldWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspace
 	return w, err
 }
 
-func (h heldWorkspaces) LockForJob(
+func (h heldWorkspaces) LockForJobInCollection(
 	_ context.Context, _ workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrLocked
@@ -614,8 +614,8 @@ func TestForceUnlockAsksTheGuardAfterTheAllowance(t *testing.T) {
 }
 
 // flipWorkspaces is a workspace port whose lock reads as held by bob while
-// held(lockCalls) is true. LockForJob answers the errors in lockErrs one by
-// one, then succeeds, and counts its calls. A held lock that LockForJob would
+// held(lockCalls) is true. LockForJobInCollection answers the errors in lockErrs one by
+// one, then succeeds, and counts its calls. A held lock that LockForJobInCollection would
 // still take models a holder that unlocks after the check of the handler.
 type flipWorkspaces struct {
 	*writeCounter
@@ -646,7 +646,7 @@ func (f *flipWorkspaces) GetByID(ctx context.Context, id workspace.ID) (workspac
 	return w, err
 }
 
-func (f *flipWorkspaces) LockForJob(
+func (f *flipWorkspaces) LockForJobInCollection(
 	ctx context.Context, id workspace.ID, holder, reason, job string,
 ) (workspace.Workspace, error) {
 	f.mu.Lock()
@@ -662,7 +662,7 @@ func (f *flipWorkspaces) LockForJob(
 
 	f.mu.Unlock()
 
-	return f.writeCounter.LockForJob(ctx, id, holder, reason, job)
+	return f.writeCounter.LockForJobInCollection(ctx, id, holder, reason, job)
 }
 
 func (f *flipWorkspaces) calls() int {
@@ -676,8 +676,8 @@ func always(int) bool { return true }
 
 func never(int) bool { return false }
 
-// The lock is held at the check and would be free at LockForJob. The handler
-// must not call LockForJob for a lock that it saw held: the call that would win
+// The lock is held at the check and would be free at LockForJobInCollection. The handler
+// must not call LockForJobInCollection for a lock that it saw held: the call that would win
 // has not passed the gates and the limits.
 func TestLockHeldAtTheCheckIsNeverTakenUnguarded(t *testing.T) {
 	t.Parallel()
@@ -720,7 +720,7 @@ func TestLimitBlockedCallerSeesTheHolderOfAHeldLock(t *testing.T) {
 }
 
 // A lost compare-and-swap retries through the guard again, so the second
-// LockForJob call is also guarded.
+// LockForJobInCollection call is also guarded.
 func TestLockRetryRunsTheGuardAgain(t *testing.T) {
 	t.Parallel()
 
@@ -735,7 +735,7 @@ func TestLockRetryRunsTheGuardAgain(t *testing.T) {
 }
 
 // The holder appears between the lost compare-and-swap and the retry. The
-// retry answers 409 and does not call LockForJob again.
+// retry answers 409 and does not call LockForJobInCollection again.
 func TestLockRetryOnAHeldLockCallsNothing(t *testing.T) {
 	t.Parallel()
 

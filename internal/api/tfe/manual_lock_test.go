@@ -30,7 +30,7 @@ func (m manualLockedWorkspaces) GetByID(ctx context.Context, id workspace.ID) (w
 	return m.stubWorkspaces.GetByID(ctx, id)
 }
 
-func (m manualLockedWorkspaces) LockForJob(
+func (m manualLockedWorkspaces) LockForJobInCollection(
 	_ context.Context, id workspace.ID, _, _, _ string,
 ) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {

@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/postgres"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/drift/drifttest"
@@ -19,7 +20,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -270,16 +270,17 @@ func seedUnit(t *testing.T, st checkerStore, ns namespace.Namespace, tool, name 
 	}
 
 	w := workspace.Workspace{
-		CreatedAt:   ns.CreatedAt,
-		UpdatedAt:   ns.CreatedAt,
-		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(ident.NewID("ws-")),
-		Ref:         workspace.Ref{Namespace: ns.Name, Name: wsName},
-		NamespaceID: ns.ID,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:    1,
-		Origin:      identity.StateOrigin{Job: "", Commit: ""},
+		CreatedAt:    ns.CreatedAt,
+		UpdatedAt:    ns.CreatedAt,
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		ID:           workspace.ID(ident.NewID("ws-")),
+		Ref:          workspace.Ref{Namespace: ns.Name, Name: wsName},
+		NamespaceID:  ns.ID,
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if createErr := st.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace %q: %v", name, createErr)

@@ -27,7 +27,7 @@ type forcedDeclareWorkspaces struct {
 	seen *namespace.Overrides
 }
 
-func (w forcedDeclareWorkspaces) BeginState(
+func (w forcedDeclareWorkspaces) BeginStateInCollection(
 	_ context.Context, _ workspace.ID, _ string, in workspace.NewState, auth workspace.Authority,
 ) (workspace.PendingState, error) {
 	*w.seen = auth.Allow
@@ -165,7 +165,7 @@ type refusingWorkspaces struct {
 	err error
 }
 
-func (w refusingWorkspaces) BeginState(
+func (w refusingWorkspaces) BeginStateInCollection(
 	context.Context, workspace.ID, string, workspace.NewState, workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, w.err

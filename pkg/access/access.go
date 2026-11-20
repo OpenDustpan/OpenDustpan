@@ -126,8 +126,11 @@ var families = map[identity.Action]Family{
 	identity.ActionInstallationStoreCheck: FamilyOperator,
 	// The gates and the decision records of the installation.
 	identity.ActionInstallationReadGates: FamilyOperator,
-	identity.ActionServerMaintenance:     FamilyOperator,
-	identity.ActionServerObserve:         FamilyOperator,
+	// The gates, the access limits and the approval rules of the installation
+	// act on every namespace, so a write of them is an operator action.
+	identity.ActionInstallationManageGates: FamilyOperator,
+	identity.ActionServerMaintenance:       FamilyOperator,
+	identity.ActionServerObserve:           FamilyOperator,
 	// The version rows of the server processes: the list, and the delete of
 	// the row of a process that died.
 	identity.ActionServerReadInstances:  FamilyOperator,

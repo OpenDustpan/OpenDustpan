@@ -14,6 +14,7 @@ Changed by:
   failover.
 - ADR 300 changes decision 5: a job of a unit with an open rule waits. It does not fail.
 - ADR 353 extends decision 1: the server derives the consumer job-proxy from the proxy session.
+- ADR 392 changes decision 3: the cap of 100 sessions that did not end, for a principal and for a job, no longer applies. A rate limit on opens for each principal replaces it.
 .
 ## Context
 

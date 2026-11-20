@@ -86,11 +86,8 @@ type AccessLimitObjects interface {
 // approval rule. The approver lists are small, so this is ample.
 const maxGateConfigBodyBytes = 64 * 1024
 
-// The routes of the approval defaults and the approval rules of a namespace.
+// The answers of the gate configuration routes.
 const (
-	approvalDefaultPath   = "/api/dustpan/v1/namespaces/{namespace}/approval-default"
-	approvalRulesPath     = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
-	approvalRuleItemPath  = "/api/dustpan/v1/namespaces/{namespace}/approval-rules/{id}"
 	gateConfigNotFoundMsg = "no such gate, access limit, approval rule or approval default"
 	// gateUnitNotFoundMsg is the answer to a write for a name that no live
 	// stack or workspace has in the namespace.
@@ -270,60 +267,22 @@ func gateEntry(r *http.Request, p identity.Principal) audit.Entry {
 	return entry
 }
 
-// gateConfigRoutes returns the rows of the approval defaults and the
-// approval rules of a namespace, and of the gates and the access limits of a
-// namespace, of one of its collections and of one of its units. Nil
-// GateConfig means the store keeps no gate configuration: no route is
-// mounted. A read needs namespace:read-gates and a write needs
-// namespace:manage-gates, both on the namespace of the path, also for a
-// collection or a unit of it. A write also needs a fresh sign-in of a
-// console session.
+// gateConfigRoutes returns the rows of the gates, the access limits, the
+// approval rules and the approval defaults of a namespace, of one of its
+// collections and of one of its units, and the rows of the gates, the access
+// limits and the approval rules of the installation. Nil GateConfig means the
+// store keeps no gate configuration: no route is mounted. A read of a
+// namespace scope needs namespace:read-gates and a write needs
+// namespace:manage-gates, both on the namespace of the path. A read of the
+// installation needs installation:read-gates and a write needs
+// installation:manage-gates, both on the installation. A write also needs a
+// fresh sign-in of a console session.
 func (h *Handler) gateConfigRoutes() []Route {
 	if h.gates == nil {
 		return nil
 	}
 
-	read := []identity.Action{identity.ActionNamespaceReadGates}
-	manage := []identity.Action{identity.ActionNamespaceManageGates}
-
-	row := func(method, path string, actions []identity.Action, serve RouteHandler) Route {
-		return Route{
-			Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions,
-			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false, Serve: serve,
-		}
-	}
-
-	routes := h.gateObjectRoutes(row, read, manage)
-
-	return append(routes, []Route{
-		row(http.MethodGet, approvalDefaultPath, read, h.readApprovalDefault),
-		row(
-			http.MethodPut,
-			approvalDefaultPath,
-			manage,
-			h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalDefault),
-		),
-		row(
-			http.MethodDelete,
-			approvalDefaultPath,
-			manage,
-			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalDefault),
-		),
-		row(http.MethodGet, approvalRulesPath, read, h.listApprovalRules),
-		row(http.MethodGet, approvalRuleItemPath, read, h.readApprovalRule),
-		row(
-			http.MethodPut,
-			approvalRuleItemPath,
-			manage,
-			h.fresh(identity.ActionNamespaceManageGates, h.writeApprovalRule),
-		),
-		row(
-			http.MethodDelete,
-			approvalRuleItemPath,
-			manage,
-			h.fresh(identity.ActionNamespaceManageGates, h.removeApprovalRule),
-		),
-	}...)
+	return h.gateObjectRoutes()
 }
 
 // readApprovalDefault serves GET /api/dustpan/v1/namespaces/{namespace}/approval-default.
@@ -332,7 +291,14 @@ func (h *Handler) readApprovalDefault(
 ) {
 	ctx := r.Context()
 
-	d, err := h.gates.ApprovalDefault(ctx, gate.NamespaceScope(obj.Namespace()))
+	scope, err := gateScopeOf(r, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	d, err := h.gates.ApprovalDefault(ctx, scope)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -352,15 +318,22 @@ func (h *Handler) writeApprovalDefault(
 ) {
 	ctx := r.Context()
 
-	var in approvalDefaultBody
-	if err := decodeGateBody(w, r, &in); err != nil {
+	scope, err := gateScopeOf(r, obj)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	if err := in.Approvers.refuseHiddenUsers(); err != nil {
-		h.writeError(ctx, w, err)
+	var in approvalDefaultBody
+	if decodeErr := decodeGateBody(w, r, &in); decodeErr != nil {
+		h.writeError(ctx, w, decodeErr)
+
+		return
+	}
+
+	if hiddenErr := in.Approvers.refuseHiddenUsers(); hiddenErr != nil {
+		h.writeError(ctx, w, hiddenErr)
 
 		return
 	}
@@ -371,8 +344,6 @@ func (h *Handler) writeApprovalDefault(
 
 		return
 	}
-
-	scope := gate.NamespaceScope(obj.Namespace())
 
 	prev, err := h.expectedVersion(r, func() (int64, error) {
 		d, getErr := h.gates.ApprovalDefault(ctx, scope)
@@ -408,7 +379,13 @@ func (h *Handler) removeApprovalDefault(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
-	scope := gate.NamespaceScope(obj.Namespace())
+
+	scope, err := gateScopeOf(r, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
 
 	prev, err := h.existingVersion(r, func() (int64, error) {
 		d, getErr := h.gates.ApprovalDefault(ctx, scope)
@@ -452,7 +429,14 @@ func (h *Handler) listApprovalRules(
 ) {
 	ctx := r.Context()
 
-	rules, err := h.gates.ApprovalRules(ctx, gate.NamespaceScope(obj.Namespace()))
+	scope, err := gateScopeOf(r, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	rules, err := h.gates.ApprovalRules(ctx, scope)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -473,20 +457,36 @@ func ruleIDOf(r *http.Request) (gate.ID, error) {
 	return gate.ParseRuleID(r.PathValue("id"))
 }
 
+// ruleKey reads the scope and the rule ID of the path. The scope is checked
+// before the ID, and both before any store call.
+func (h *Handler) ruleKey(r *http.Request, obj identity.Object) (gate.Scope, gate.ID, error) {
+	scope, err := gateScopeOf(r, obj)
+	if err != nil {
+		return gate.Scope{}, "", err
+	}
+
+	id, err := ruleIDOf(r)
+	if err != nil {
+		return gate.Scope{}, "", err
+	}
+
+	return scope, id, nil
+}
+
 // readApprovalRule serves GET /api/dustpan/v1/namespaces/{namespace}/approval-rules/{id}.
 func (h *Handler) readApprovalRule(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
-	id, err := ruleIDOf(r)
+	scope, id, err := h.ruleKey(r, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	rule, err := h.gates.ApprovalRule(ctx, gate.NamespaceScope(obj.Namespace()), id)
+	rule, err := h.gates.ApprovalRule(ctx, scope, id)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -505,7 +505,7 @@ func (h *Handler) writeApprovalRule(
 ) {
 	ctx := r.Context()
 
-	id, err := ruleIDOf(r)
+	scope, id, err := h.ruleKey(r, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -525,7 +525,7 @@ func (h *Handler) writeApprovalRule(
 		return
 	}
 
-	rule, err := approvalRuleFrom(gate.NamespaceScope(obj.Namespace()), id, in)
+	rule, err := approvalRuleFrom(scope, id, in)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -589,36 +589,17 @@ func approvalRuleFrom(scope gate.Scope, id gate.ID, in approvalRuleBody) (gate.A
 func (h *Handler) removeApprovalRule(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
-	ctx := r.Context()
+	h.removeObject(w, r, p, obj, objectRemoval{
+		key: h.ruleKey,
+		version: func(ctx context.Context, scope gate.Scope, id gate.ID) (int64, error) {
+			cur, err := h.gates.ApprovalRule(ctx, scope, id)
 
-	id, err := ruleIDOf(r)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	scope := gate.NamespaceScope(obj.Namespace())
-
-	version, err := h.existingVersion(r, func() (int64, error) {
-		cur, getErr := h.gates.ApprovalRule(ctx, scope, id)
-
-		return cur.Version, getErr
+			return cur.Version, err
+		},
+		remove: func(ctx context.Context, ref gate.ObjectRef, e audit.Entry) error {
+			return h.gates.DeleteApprovalRule(ctx, ref, e)
+		},
 	})
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	ref := gate.ObjectRef{Scope: scope, ID: id, Version: version}
-	if err := h.gates.DeleteApprovalRule(ctx, ref, gateEntry(r, p)); err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // expectedVersion returns the version that a put replaces: the If-Match

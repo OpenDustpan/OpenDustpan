@@ -108,7 +108,7 @@ rules:
       - pattern-not-inside: |
           func TestBackupTakeoverAfterGracefulStop(...) { ... }
       # Rank 2. checkPlanPage in
-      # pkg/store/postgres/namespace_page_internal_test.go: upper bound 250ms on
+      # internal/store/postgres/namespace_page_internal_test.go: upper bound 250ms on
       # one page query. Not fixed yet.
       - pattern-not-inside: |
           func checkPlanPage(...) { ... }
@@ -123,21 +123,21 @@ rules:
       - pattern-not-inside: |
           func TestBuildJournalCheckpointTimesOut(...) { ... }
       # Rank 5. checkSwapDoesNotQueueReads in
-      # pkg/store/postgres/snapshot_swap_internal_test.go: upper bound readBound
+      # internal/store/postgres/snapshot_swap_internal_test.go: upper bound readBound
       # = 500ms. Not fixed yet.
       - pattern-not-inside: |
           func checkSwapDoesNotQueueReads(...) { ... }
-      # Rank 6. writeStacksPastThreshold in pkg/store/sqlite/wal_test.go: upper
+      # Rank 6. writeStacksPastThreshold in internal/store/sqlite/wal_test.go: upper
       # bound 2s. Not fixed yet.
       - pattern-not-inside: |
           func writeStacksPastThreshold(...) { ... }
       # Rank 7. TestReleaseOfStalledLongConnFreesTheSlot in
-      # pkg/store/postgres/long_path_internal_test.go: upper bound
+      # internal/store/postgres/long_path_internal_test.go: upper bound
       # resetTimeout+1s = 3s. Not fixed yet.
       - pattern-not-inside: |
           func TestReleaseOfStalledLongConnFreesTheSlot(...) { ... }
       # Rank 8. TestStatementDeadlineClosesStalledConnection in
-      # pkg/store/postgres/failover_internal_test.go: upper bound deadlineBound
+      # internal/store/postgres/failover_internal_test.go: upper bound deadlineBound
       # = 5s. Not fixed yet.
       - pattern-not-inside: |
           func TestStatementDeadlineClosesStalledConnection(...) { ... }
@@ -183,23 +183,23 @@ rules:
       # 10s. Not fixed yet.
       - pattern-not-inside: |
           func staleFinish(...) { ... }
-      # Rank 19. terminateSessions in pkg/store/postgres/store_lost_test.go:
+      # Rank 19. terminateSessions in internal/store/postgres/store_lost_test.go:
       # deadline killWait = 10s. Not fixed yet.
       - pattern-not-inside: |
           func terminateSessions(...) { ... }
-      # Rank 20. waitForFailedTicks in pkg/store/sqlite/wal_test.go: deadline
+      # Rank 20. waitForFailedTicks in internal/store/sqlite/wal_test.go: deadline
       # 10s. Not fixed yet.
       - pattern-not-inside: |
           func waitForFailedTicks(...) { ... }
-      # Rank 21. waitForWALBelow in pkg/store/sqlite/wal_test.go: deadline 10s.
+      # Rank 21. waitForWALBelow in internal/store/sqlite/wal_test.go: deadline 10s.
       #. Not fixed yet.
       - pattern-not-inside: |
           func waitForWALBelow(...) { ... }
-      # Rank 22. waitForBusyWarnings in pkg/store/sqlite/wal_test.go: deadline
+      # Rank 22. waitForBusyWarnings in internal/store/sqlite/wal_test.go: deadline
       # 10s. Not fixed yet.
       - pattern-not-inside: |
           func waitForBusyWarnings(...) { ... }
-      # Rank 23. waitForStoreTicks in pkg/store/sqlite/wal_test.go: deadline 10s
+      # Rank 23. waitForStoreTicks in internal/store/sqlite/wal_test.go: deadline 10s
       # to 15s. Not fixed yet.
       - pattern-not-inside: |
           func waitForStoreTicks(...) { ... }
@@ -296,11 +296,11 @@ rules:
       # 90s. Not fixed yet.
       - pattern-not-inside: |
           func waitForEntries(...) { ... }
-      # Rank 46. waitRestoreSucceeded in pkg/store/postgres/postgres_test.go:
+      # Rank 46. waitRestoreSucceeded in internal/store/postgres/postgres_test.go:
       # deadline StuckTestLimit = 20min. Not fixed yet.
       - pattern-not-inside: |
           func waitRestoreSucceeded(...) { ... }
-      # Rank 47. waitBackupEnd in pkg/store/sqlite/backup_recovery_test.go:
+      # Rank 47. waitBackupEnd in internal/store/sqlite/backup_recovery_test.go:
       # deadline StuckTestLimit = 20min. Not fixed yet.
       - pattern-not-inside: |
           func waitBackupEnd(...) { ... }
