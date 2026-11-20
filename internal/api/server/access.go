@@ -190,6 +190,7 @@ func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHa
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		res, err := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
 		if err == nil {
+			h.revokeLostMakers(r, p, action, res.object)
 			h.writePrincipalResult(w, r, res, committedWrite)
 
 			return
@@ -865,6 +866,7 @@ func (h *Handler) serveRevokeGrantByID(
 		return
 	}
 
+	h.revokeLostMakers(r, p, actions.manage, access.GrantRef(revoked))
 	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)), committedWrite)
 }
 

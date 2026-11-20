@@ -188,7 +188,8 @@ func TestRestoredDevPeopleAreRefusedOnProduction(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: prod, Principals: prod, Freshness: nil, Authorizer: nil,
+		Makers: nil,
+		Store:  prod, Principals: prod, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},

@@ -157,6 +157,47 @@ and the change does not happen. The refusal names the principal only when the
 caller holds `server:read-principals`. A revoke, and a removal of a member,
 take access away, so they never run this compare.
 
+### A service token ends when its maker loses access
+
+The maker of a service token is the person or principal that made it. The
+maker can act as the service principal through the token. So the server
+revokes a service token when its maker has no path to
+`principal:manage-tokens` on the service principal any more. A path is a
+grant on the service principal or on the installation, to the maker or to a
+group of the maker. A bootstrap admin token always has a path.
+
+The server checks the makers after each of these changes:
+
+- the revoke of a grant, also a grant to a group,
+- the change of a role that drops `principal:manage-tokens`,
+- the removal of a member from a group, and the delete of a group,
+- the disable or the delete of the maker.
+
+The server revokes each service token whose maker lost the last path, before
+it answers the change. Each revocation writes an audit entry in the scope
+`@server` with the subject `@server`, the action `principal:manage-tokens`,
+the object of the token and this reason:
+
+```text
+the maker of the service token has no act-as path to its principal
+```
+
+The entry has three changes: `maker` is the subject of the maker, `cause` is
+the action and the object of the change, and `causedBy` is the subject of the
+caller of the change.
+
+The server also checks the maker each time a service token is used. This
+covers a path that ends in another way, for example a sync of the groups of
+an identity provider. A token whose maker has no path is refused with `401`
+and revoked, with the reason `the maker of the service token has no act-as
+path to its principal at its use`. When the server cannot read the grants of
+the maker, it refuses the token and keeps it.
+
+A credential that must work after a person leaves the team does not depend on
+a person. Use a trust rule instead: a workload gets its token from the
+exchange of its own identity, with no maker. See
+[Workload identity for CI](workload-identity.md).
+
 ## Revoke a token
 
 A revoke answers `204`. The token stops working at once, and its record stays

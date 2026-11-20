@@ -73,6 +73,13 @@ type Config struct {
 	// the principal with the reach of the caller. A zero or incomplete
 	// config refuses each such change: the check never skips.
 	Reach access.ReachConfig
+	// Makers decides whether the maker of a service token still has an
+	// act-as path to the principal of the token. With it, the Service
+	// refuses and revokes a service token at its use when the path is gone,
+	// and RevokeLostMakers revokes such tokens after a change. Nil keeps
+	// each service token until its expiry or a revoke: the server wires the
+	// access service, so only a setup with no grants passes nil.
+	Makers MakerChecker
 	// TempAdmins reads the temporary administrator records for the
 	// break-glass exemption of the inactivity checks. Nil turns the
 	// exemption off: an inactive token is refused even for a temporary
@@ -100,6 +107,7 @@ type Service struct {
 	freshness  Freshness
 	authz      identity.Authorizer
 	reach      access.ReachConfig
+	makers     MakerChecker
 	tempAdmins tempadmin.Reader
 	logger     *slog.Logger
 	now        func() time.Time
@@ -133,8 +141,16 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
-		authz: cfg.Authorizer, reach: cfg.Reach, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
+		store:      cfg.Store,
+		principals: cfg.Principals,
+		freshness:  cfg.Freshness,
+		authz:      cfg.Authorizer,
+		reach:      cfg.Reach,
+		makers:     cfg.Makers,
+		tempAdmins: cfg.TempAdmins,
+		logger:     logger,
+		now:        now,
+		newID:      newID,
 	}, nil
 }
 
@@ -703,6 +719,10 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}
 
 	if err := s.checkPolicyActive(ctx, m, now); err != nil {
+		return identity.Principal{}, err
+	}
+
+	if err := s.checkMakerAtUse(ctx, m.Token); err != nil {
 		return identity.Principal{}, err
 	}
 

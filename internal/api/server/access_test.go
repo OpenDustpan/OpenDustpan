@@ -293,6 +293,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     grants,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
 		Reach: access.ReachConfig{

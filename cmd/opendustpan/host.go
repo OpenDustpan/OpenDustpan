@@ -420,9 +420,23 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Reach: access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil},
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		return hostMade{}, fmt.Errorf("access token service: %w", err)

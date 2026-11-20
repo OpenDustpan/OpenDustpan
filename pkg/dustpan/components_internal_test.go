@@ -87,6 +87,7 @@ func TestStartBackgroundByComponent(t *testing.T) {
 			srv := testServer(st.DurableOperations(), "a")
 
 			tokens, err := accesstoken.NewService(accesstoken.Config{
+				Makers:     nil,
 				TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil,
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,

@@ -156,6 +156,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers:     nil,
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
 		Reach: access.ReachConfig{
