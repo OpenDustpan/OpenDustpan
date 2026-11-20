@@ -122,41 +122,8 @@ func gateRoutesInstallation(ctx context.Context, t *testing.T, env *e2e.Env) {
 		list := gateRoutesInstallationBase + "/" + kind.segment
 
 		gateRoutesLifecycle(ctx, t, env, gateRoutesCase{level: "installation", list: list, doc: kind.doc})
-
-		for _, s := range []principalStep{
-			{http.MethodPut, list + "/Bad", kind.doc, http.StatusUnprocessableEntity},
-			{http.MethodPut, list + "/refused", strings.Replace(kind.doc, "{", `{"scope":"installation",`, 1), http.StatusBadRequest},
-			{http.MethodGet, list + "/refused", "", http.StatusNotFound},
-		} {
-			gateRoutesCall(ctx, t, env, s)
-		}
-
-		seed := list + "/seed"
-		gateRoutesCall(ctx, t, env, principalStep{http.MethodPut, seed, kind.doc, http.StatusOK})
-
-		for _, s := range []principalStep{
-			{http.MethodPut, seed, kind.doc, 0},
-			{http.MethodPut, list + "/new", kind.doc, 0},
-			{http.MethodDelete, seed, "", 0},
-		} {
-			status, body, err := env.ServerAPIStatus(ctx, s.method, s.path, s.body)
-			if err != nil {
-				t.Fatalf("%s %s: %v", s.method, s.path, err)
-			}
-
-			if status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
-				t.Fatalf("%s %s with a token answers %d (%s), want 403 that asks for a recent sign-in",
-					s.method, s.path, status, body)
-			}
-		}
-
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, seed, "")
-		if err != nil || status != http.StatusOK {
-			t.Fatalf("read %s with a token = %d, %v (%s); want 200", seed, status, err, body)
-		}
-
-		gateRoutesCall(ctx, t, env, principalStep{http.MethodGet, list + "/new", "", http.StatusNotFound})
-		gateRoutesCall(ctx, t, env, principalStep{http.MethodDelete, seed, "", http.StatusNoContent})
+		gateRoutesInstallationRefusals(ctx, t, env, list, kind.doc)
+		gateRoutesInstallationTokenWrites(ctx, t, env, list, kind.doc)
 	}
 
 	// A list of the installation shows the objects of the installation only: the
@@ -165,8 +132,58 @@ func gateRoutesInstallation(ctx context.Context, t *testing.T, env *e2e.Env) {
 		ctx, t, e2e.SessionRequest{Method: http.MethodGet, Path: gateRoutesInstallationBase + "/gates", Body: ""},
 	)
 	if status != http.StatusOK || !strings.Contains(body, `"gates":[]`) {
-		t.Fatalf("list the gates of the installation with a fresh session = %d (%s), want 200 and no gate", status, body)
+		t.Fatalf("list the gates of the installation with a fresh session = %d (%s), want 200 and no gate",
+			status, body)
 	}
+}
+
+// gateRoutesInstallationRefusals sends an ID with a capital letter and a body
+// with the field scope to list, and checks that nothing is stored.
+func gateRoutesInstallationRefusals(ctx context.Context, t *testing.T, env *e2e.Env, list, doc string) {
+	t.Helper()
+
+	withScope := strings.Replace(doc, "{", `{"scope":"installation",`, 1)
+
+	for _, s := range []principalStep{
+		{http.MethodPut, list + "/Bad", doc, http.StatusUnprocessableEntity},
+		{http.MethodPut, list + "/refused", withScope, http.StatusBadRequest},
+		{http.MethodGet, list + "/refused", "", http.StatusNotFound},
+	} {
+		gateRoutesCall(ctx, t, env, s)
+	}
+}
+
+// gateRoutesInstallationTokenWrites proves that an access token never writes at
+// the installation, and that a read with the token works.
+func gateRoutesInstallationTokenWrites(ctx context.Context, t *testing.T, env *e2e.Env, list, doc string) {
+	t.Helper()
+
+	seed := list + "/seed"
+	gateRoutesCall(ctx, t, env, principalStep{http.MethodPut, seed, doc, http.StatusOK})
+
+	for _, s := range []principalStep{
+		{http.MethodPut, seed, doc, 0},
+		{http.MethodPut, list + "/new", doc, 0},
+		{http.MethodDelete, seed, "", 0},
+	} {
+		status, body, err := env.ServerAPIStatus(ctx, s.method, s.path, s.body)
+		if err != nil {
+			t.Fatalf("%s %s: %v", s.method, s.path, err)
+		}
+
+		if status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
+			t.Fatalf("%s %s with a token answers %d (%s), want 403 that asks for a recent sign-in",
+				s.method, s.path, status, body)
+		}
+	}
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, seed, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("read %s with a token = %d, %v (%s); want 200", seed, status, err, body)
+	}
+
+	gateRoutesCall(ctx, t, env, principalStep{http.MethodGet, list + "/new", "", http.StatusNotFound})
+	gateRoutesCall(ctx, t, env, principalStep{http.MethodDelete, seed, "", http.StatusNoContent})
 }
 
 // gateRoutesCall sends s and fails unless it answers s.want. It answers the

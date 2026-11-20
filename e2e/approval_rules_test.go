@@ -468,7 +468,12 @@ func checkApprovalScopes(ctx context.Context, t *testing.T, env approvalEnv) {
 		item := rules + "/review"
 		def := scope + "/approval-default"
 
-		wantBodyHas(t, level+" list before", step(level+" list before", http.MethodGet, rules, "", http.StatusOK), `"rules":[]`)
+		wantBodyHas(
+			t,
+			level+" list before",
+			step(level+" list before", http.MethodGet, rules, "", http.StatusOK),
+			`"rules":[]`,
+		)
 
 		wantBodyHas(t, level+" set the rule",
 			step(level+" set the rule", http.MethodPut, item, approvalScopeRule, http.StatusOK),
@@ -484,7 +489,13 @@ func checkApprovalScopes(ctx context.Context, t *testing.T, env approvalEnv) {
 
 		status, body, err := env.env.ServerAPIStatus(ctx, http.MethodPut, item, approvalScopeRule)
 		if err != nil || status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
-			t.Fatalf("%s write with a token = %d, %v (%s), want 403 that asks for a recent sign-in", level, status, err, body)
+			t.Fatalf(
+				"%s write with a token = %d, %v (%s), want 403 that asks for a recent sign-in",
+				level,
+				status,
+				err,
+				body,
+			)
 		}
 
 		step(level+" delete the rule", http.MethodDelete, item, "", http.StatusNoContent)
@@ -504,7 +515,13 @@ func checkApprovalScopes(ctx context.Context, t *testing.T, env approvalEnv) {
 			step(level+" set the default", http.MethodPut, def, `{"count":2,"approvers":{"groups":["platform"]}}`,
 				http.StatusOK),
 			`"count":2`, `"version":1`)
-		step(level+" namespace default", http.MethodGet, approvalNamespaceBase+"/approval-default", "", http.StatusNotFound)
+		step(
+			level+" namespace default",
+			http.MethodGet,
+			approvalNamespaceBase+"/approval-default",
+			"",
+			http.StatusNotFound,
+		)
 		step(level+" reset the default", http.MethodDelete, def, "", http.StatusNoContent)
 		step(level+" default after", http.MethodGet, def, "", http.StatusNotFound)
 	}
@@ -553,7 +570,13 @@ func checkApprovalInstallation(ctx context.Context, t *testing.T, env approvalEn
 			ctx, t, e2e.SessionRequest{Method: http.MethodGet, Path: path, Body: ""},
 		)
 		if status != http.StatusOK || !strings.Contains(body, want) {
-			t.Fatalf("GET %s with the session of the site administrator = %d (%s), want 200 with %s", path, status, body, want)
+			t.Fatalf(
+				"GET %s with the session of the site administrator = %d (%s), want 200 with %s",
+				path,
+				status,
+				body,
+				want,
+			)
 		}
 	}
 }
