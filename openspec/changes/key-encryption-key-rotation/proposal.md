@@ -1,5 +1,5 @@
 ---
-version: 11
+version: 12
 ---
 
 Issue: none. The PM directed this change; no issue exists.
@@ -213,9 +213,27 @@ Each quote is copied from the file in `docs/adr/`. The "Changed by" chain and th
 
 ## Open questions
 
-Open questions: none.
+Status: parked on Q-3 for the part that depends on it. Do not start the tasks that Q-3 blocks (the path under a second-factor rule, task 4.4).
 
-All questions are answered by the owner on 2026-11-20 (section "Owner decisions"):
+Open questions: 1.
+
+**Q-3. What is the API path for a site administrator when the MFA policy asks for a second factor, given that main has no second sign-in step and step-up does not satisfy `Handler.fresh`?**
+
+Facts on main (`bff8277dd`):
+- "A password sign-in next to an identity provider needs a second factor. The server cannot ask for a second factor yet. So when you set the switch to `"true"` on an installation with an identity provider, each password sign-in answers `403` with the error code `local-user.second-factor-required`." (`docs/guides/local-users.md:45-48`).
+- "The server does not ask for a passkey as a second factor yet." (`docs/guides/passkeys.md:9-10`). A passkey is a sign-in of its own for a local user (`pkg/mfa/mfa.go:5`).
+- `Handler.fresh` passes a request only when the console session signed in recently enough: `sessionauth.Fresh(..., caller.Match.Session.AuthTime, window.duration())` (`internal/api/server/freshness.go:205`); an access token gets 403 `mfa.fresh-step-required` (`internal/api/server/freshness.go:215-218`). The step-up factor (TOTP) is not a sign-in and sets no session `AuthTime` that `fresh` reads, as far as the search of `AuthTime` over non-test code finds (sign-in paths only: `devsignin.go:137`, `passkeysignin.go:288`).
+- Decision 12 of round 4 said a TOTP second step works from `curl`. That fact is wrong. Decision 12 is withdrawn in the record as "wrong fact, returned to the owner". It is not deleted from the history of this change.
+
+Options:
+- Option 1: the page says that under a second-factor rule the site administrator signs in with a passkey (a sign-in of its own that sets `AuthTime`) and shows the calls. Cost: a passkey needs a WebAuthn client, not `curl`; the page needs a check that the passkey sign-in is allowed under the rule, which this change did not verify.
+- Option 2 (recommended): the page says that under a second-factor rule the rotation start and finish wait for the console screen, and the page claims no API path for that case. Cost: no operator path under the rule until the console screen exists.
+- Option 3: a server change in a later capability: a second sign-in step after the password, or a step-up that satisfies the fresh check. Cost: a new capability with its own change, and a change of the fresh-step meaning, which the owner-tagged ADRs on freshness cover (ADR 56, ADR 227); it needs the owner.
+- Recommendation: option 2, because options 1 and 3 add a claim or a capability that this change cannot check. Plain 3 a.m. summary: under a second-factor rule an administrator cannot run start and finish from the command line today. The page says so, and the console screen will give the path.
+
+Tasks that depend on Q-3 stay blocked: the second-factor part of task 4.4 and its e2e step.
+
+All other questions are answered by the owner on 2026-11-20 (section "Owner decisions"):
 
 | Question | Answer (owner, 2026-11-20) | Where it lands |
 | --- | --- | --- |
@@ -226,7 +244,7 @@ All questions are answered by the owner on 2026-11-20 (section "Owner decisions"
 | R2-1. How a person reaches start and finish before the console exists | The documented API path with a password sign-in; the CLI prints it | Spec requirement "Rotation API and command"; task 4.4 |
 | R2-2. What abort means | There is no abort; a rotation only moves forward | Spec requirement "Finish"; design decision 13 |
 | R2-3. A process that holds the old key after finish | The server refuses to start and names the variable | Spec requirement "Start-up with a rotation"; design decision 10 |
-| 12 (was Q-1). The API path under an MFA policy | The docs say that the site administrator needs a local user with a second factor that works from `curl`, and state the cost; otherwise wait for the console | Spec scenario "Documented API path under an MFA policy"; design decision 14; task 4.4 |
-| 13 (was B-c). A restore of a backup from before the rotation | Row 11 refuses only when the stored data holds no old ID; the restored backup starts and runs a new rotation; this keeps ADR 217 decision 21 | Spec requirement "Start-up with a rotation" (rows 11 and 12, scenario "Restore of a backup from before the rotation"); design decision 10; task 1.9 |
+| 12 (was Q-1). The API path under an MFA policy | Withdrawn: wrong fact, returned to the owner. Main has no second sign-in step (`docs/guides/local-users.md:45-48`) | Open question Q-3; design decision 14; task 4.4 (blocked part) |
+| 13 (was B-c). A restore of a backup from before the rotation | Row 11 refuses only when the stored data holds no old ID; the restored backup runs on a `Rotating` (B, A) server through `POST /api/dustpan/v1/restores`, then a `Rotating` (A, B) server starts (row 12) and runs a new rotation; this keeps ADR 217 decision 21 | Spec requirement "Start-up with a rotation" (rows 11 and 12, scenario "Restore of a backup from before the rotation"); design decision 10; task 1.9 |
 
 Design choices that follow from the answers and that the PM can check (they need no new owner decision): the fresh step applies to start and finish only, and the commands `start` and `finish` send no request, as the audit chain approval does, because an access token never gives a fresh step.

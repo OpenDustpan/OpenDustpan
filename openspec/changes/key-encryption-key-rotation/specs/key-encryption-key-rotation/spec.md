@@ -222,8 +222,8 @@ The server SHALL decide at start-up from the latest rotation row, the wrapper of
 | 14 | finished | Rotating | an ID outside {O, N} | refuse, `ErrWrapperMismatch` |
 
 #### Scenario: Restore of a backup from before the rotation
-- **WHEN** The rotation A to B is finished, an operator restores a backup made before it, and the process holds the old key and the new key (row 12).
-- **THEN** The server starts, because the stored data holds the old ID. The operator runs a new rotation of the same pair, which rewraps the old records and finishes. After that the server starts with the new key alone.
+- **WHEN** The rotation A to B is finished and an operator restores a backup made before it. A plain B server and a `Rotating` (A, B) cannot run the restore (the key check refuses, and row 11 refuses the start). The operator starts `Rotating` (B, A) (row 13), calls `POST /api/dustpan/v1/restores`, restarts with `Rotating` (A, B) (row 12), runs a new rotation A to B, finishes it and restarts with the new key alone.
+- **THEN** Each step works, the restore key check holds every wrapper ID of the manifest through `secret.Holds`, and the docs page gives the steps and the variables of each process. The test and the e2e step use the real restore route, not a fixture load.
 
 #### Scenario: Old key held after finish
 - **WHEN** The rotation is finished, the stored data holds no old ID, and the process still holds the old key (row 11).
@@ -349,9 +349,9 @@ The server SHALL give five routes under `/api/dustpan/v1/key-rotations`, and the
 - **WHEN** A person follows the page with a local-user password sign-in, on an installation whose MFA policy asks site administrators for no second factor.
 - **THEN** The session has a CSRF value, and start and finish with the cookie, the CSRF header and `Origin` pass the fresh step.
 
-#### Scenario: Documented API path under an MFA policy
-- **WHEN** The MFA policy asks site administrators for a second factor.
-- **THEN** The page says that the site administrator needs a local user with a second factor that works from `curl` (a TOTP factor does; a passkey needs a browser), shows the second step of the sign-in, and states the cost: a local user, a TOTP factor enrolled once in the console, and the code typed into the call. An installation that cannot meet this waits for the console screen. The page claims no more than the e2e step covers.
+#### Scenario: No claim under a second-factor rule
+- **WHEN** The installation has a second-factor rule.
+- **THEN** The page and the spec make no claim about a path for a site administrator. Main has no second sign-in step: a password sign-in answers 403 `local-user.second-factor-required` (`docs/guides/local-users.md:45-48`). The path is open question Q-3 in the proposal, and the tasks that depend on it stay blocked.
 
 ### Requirement: Keep blobs in targets
 
