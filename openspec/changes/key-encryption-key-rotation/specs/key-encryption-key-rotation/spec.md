@@ -96,9 +96,17 @@ While a rotation is active, the server SHALL open each directly wrapped record u
 - **WHEN** The latest row names a new wrapper ID that the process does not hold.
 - **THEN** `Wrap` returns `ErrWrapperMismatch` and wraps nothing.
 
+#### Scenario: Start between the two reads of Wrap
+- **WHEN** A start commits between the read of the singleton row and the read of the rotation row.
+- **THEN** `Wrap` reads both rows in one statement, so it sees a consistent pair. A write that carries a stamp of the old generation fails the fence and the service wraps again.
+
 #### Scenario: Page cursors work while both keys are staged
 - **WHEN** A list route seals a page cursor and opens it while the process holds a `Rotating` wrapper.
-- **THEN** The cursor carries the wrapper ID, opens by that ID, and the list continues. A cursor with an ID that the wrapper does not hold, with a length byte of 0, or sealed for another AAD fails with the invalid cursor answer.
+- **THEN** The cursor carries the wrapper ID, opens by that ID, and the list continues. The list handlers hold the narrow port `secret.CursorSealer` (seal and open only) and never a `secret.Wrapper`. The open checks the input, the length byte, the ID against the held IDs, and the ciphertext, in that order, and the ID is part of the AAD.
+
+#### Scenario: Hostile page cursor
+- **WHEN** A cursor is empty, has a length byte of 0 or beyond the buffer, holds an ID that is not held, an ID that is a prefix of a held ID, an ID with CR and LF, an empty or a truncated ciphertext, another AAD, or the ID of the other held key.
+- **THEN** Each one fails with the invalid cursor answer and one constant error text that holds no byte of the input.
 
 #### Scenario: Cursor of the old key after finish
 - **WHEN** A cursor was sealed under the old key and the rotation is finished.
@@ -194,7 +202,7 @@ The server SHALL decide at start-up from the latest rotation row, the wrapper of
 
 #### Scenario: Each row of the table
 - **WHEN** The server starts with the wrapper and the store of one row. S is the set of stored IDs, P the ID of a plain wrapper, O and N the IDs of a `Rotating` wrapper, R the latest row.
-- **THEN** The result is the result of that row of the table below, and the test `TestStartUpMatrix` has one case for each of the 13 rows and for each of the four families.
+- **THEN** The result is the result of that row of the table below, and the test `TestStartUpMatrix` has one case for each of the 14 rows and for each of the four families.
 
 | # | Row R | Wrapper | Stored IDs S | Result |
 | --- | --- | --- | --- | --- |
@@ -208,12 +216,17 @@ The server SHALL decide at start-up from the latest rotation row, the wrapper of
 | 8 | started | Rotating (R.old, R.new) | an ID outside {O, N} | refuse, `ErrWrapperMismatch` |
 | 9 | finished | plain P | {P} | start |
 | 10 | finished | plain P | an ID other than P | refuse, `ErrWrapperMismatch` |
-| 11 | finished | Rotating with O equal to R.old | any | refuse, `ErrOldKeyHeld` |
-| 12 | finished | Rotating with O not equal to R.old | inside {O, N} | start |
-| 13 | finished | Rotating with O not equal to R.old | an ID outside {O, N} | refuse, `ErrWrapperMismatch` |
+| 11 | finished | Rotating with O equal to R.old | inside {O, N} and holds no O | refuse, `ErrOldKeyHeld` |
+| 12 | finished | Rotating with O equal to R.old | inside {O, N} and holds O | start |
+| 13 | finished | Rotating with O not equal to R.old | inside {O, N} | start |
+| 14 | finished | Rotating | an ID outside {O, N} | refuse, `ErrWrapperMismatch` |
+
+#### Scenario: Restore of a backup from before the rotation
+- **WHEN** The rotation A to B is finished, an operator restores a backup made before it, and the process holds the old key and the new key (row 12).
+- **THEN** The server starts, because the stored data holds the old ID. The operator runs a new rotation of the same pair, which rewraps the old records and finishes. After that the server starts with the new key alone.
 
 #### Scenario: Old key held after finish
-- **WHEN** The rotation is finished and the process still holds the old key (row 11).
+- **WHEN** The rotation is finished, the stored data holds no old ID, and the process still holds the old key (row 11).
 - **THEN** The start fails with `ErrOldKeyHeld`, the text names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`, says to remove the one that is set, and names the command `opendustpan serve` with the new key alone. The server writes no warning and starts no listener.
 
 #### Scenario: Plain wrapper refusal keeps the word rewrap
@@ -333,8 +346,12 @@ The server SHALL give five routes under `/api/dustpan/v1/key-rotations`, and the
 - **THEN** The command sends no request and prints the documented path (password sign-in as a local user, read of the CSRF value, the call with the cookie, the CSRF header and `Origin`) and the page `docs/guides/key-rotation.md`.
 
 #### Scenario: Documented API path
-- **WHEN** A person follows the page with a local-user password sign-in, on an installation whose MFA policy asks site administrators for no second factor. Whether the path also works under a policy that asks for one is an open owner question (see the proposal) and this change does not claim it.
+- **WHEN** A person follows the page with a local-user password sign-in, on an installation whose MFA policy asks site administrators for no second factor.
 - **THEN** The session has a CSRF value, and start and finish with the cookie, the CSRF header and `Origin` pass the fresh step.
+
+#### Scenario: Documented API path under an MFA policy
+- **WHEN** The MFA policy asks site administrators for a second factor.
+- **THEN** The page says that the site administrator needs a local user with a second factor that works from `curl` (a TOTP factor does; a passkey needs a browser), shows the second step of the sign-in, and states the cost: a local user, a TOTP factor enrolled once in the console, and the code typed into the call. An installation that cannot meet this waits for the console screen. The page claims no more than the e2e step covers.
 
 ### Requirement: Keep blobs in targets
 

@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 11
 ---
 
 Issue: none. The PM directed this change; no issue exists.
@@ -48,7 +48,7 @@ Specified now (every part is decided; owner decisions are marked "(owner, 2026-1
 - NEW rotation record in SQL, one row for each rotation, with the states `started` and `finished`, in the baseline of each dialect. NEW table of the pending blob deletes of a rotation. NEW table of the wrapper IDs of each instance row.
 - NEW `secret.Rotating`: a `Wrapper` that wraps under one key by a rule of the stored rotation state and opens a record by its stored wrapper ID, and NEW function `secret.Holds(wrapper, id)`, used by the places that compare a stored wrapper ID with the ID of the wrapper (the data key open, the two start checks, the idempotency key open and the restore check).
 - NEW singleton row `key_rotation_state` (always present, with a generation) and NEW write fence: each write of a wrapped record reads that row in its own transaction (`FOR SHARE` on PostgreSQL, the write lock on SQLite) and fails when its generation is stale, or when its wrapper ID is not the new ID while a rotation is started; start and finish take the row `FOR UPDATE` (reviewer-prescribed; round 3).
-- NEW page cursors that carry the wrapper ID, so the list routes keep working while both keys are staged (round 3).
+- NEW page cursors that carry the wrapper ID, so the list routes keep working while both keys are staged (round 3), behind the NEW narrow port `secret.CursorSealer` (seal and open only), so the list handlers never hold a `secret.Wrapper` (round 4).
 - NEW rewrap of the four families that the key-encryption key wraps directly: the data keys (`secret_keys`), the installation data keys (`installation_secret_keys`, which hold the sign-in secrets and the other values of `@server`), the item keys (`item_keys` and their blobs) and the idempotency server key. Run as a durable operation. The old item key blob is deleted from a stored list of pending deletes, so a crash leaves no blob behind (reviewer-prescribed).
 - NEW start-up check with a table of cases (design decision 10): both keys while a rotation is active, the new key alone after finish, a refusal when the old key is still staged after finish, and a count of the wrapper IDs of the item keys and of the idempotency key.
 - NEW audit entries of kind `change` in the scope `@server` for start, resume, finish and for each record that the rewrap cannot open, with the actor and the wrapper IDs.
@@ -205,28 +205,17 @@ Each quote is copied from the file in `docs/adr/`. The "Changed by" chain and th
 - Changed by: ADR 237, 238, 245 change decisions 1 and 4. Current rule: this ADR, with ADR 237, 238, 245.
 - Effect: `opendustpan key-rotation` never reads a key. It sends a request with `--server` and a token, and prints the answer. Only `serve` reads the old key.
 
+**ADR 364: Unexported fields and golangci-lint before added checks (owner, 2026-11-10)** (owner-tagged).
+- Decisions that apply: 1.
+- Quote: "The guard against a bug class is Go visibility first. Fields are unexported, so that only a constructor can make a value, and the constructor checks the invariants of the value. Rules that visibility cannot express go into the existing golangci-lint configuration (for example `forbidigo`, `depguard` and `exhaustruct`). This decision adds no custom analyzer and no new tool."
+- Effect: the guard against a plain `Unwrap` of a cursor is visibility (the port `secret.CursorSealer`, which has no `Unwrap`) and one `forbidigo` rule for the remaining callers. The change adds no source-scan test, no analyzer and no tool (round 4).
+- Conflict: none.
+
 ## Open questions
 
-Status: parked until the owner answers the two questions below (round 3, PM direction). Do not start the implementation.
+Open questions: none.
 
-Open questions: 2.
-
-**B-c. Restore of a pre-rotation backup after a finish.** After a finished rotation A to B, an operator restores a backup made before it, and the database holds only A IDs. The server then runs with a `Rotating` (A, B), because the staged old key is A, and row 11 of the start-up table refuses it with `ErrOldKeyHeld`, although the data needs A.
-
-- Option 1: keep row 11 as written (the owner decision of 2026-11-20, round 2). The operator removes the old key variable, so a plain B process meets A records and row 10 refuses it. A restore of a pre-rotation backup then needs a new rotation in the other direction, which needs the old key staged, which row 11 refuses. The path is closed. Cost: such a backup cannot be used after the finish.
-- Option 2 (recommended): row 11 refuses only when S holds no `R.old` ID. A process with the old key staged starts when the stored IDs include the old ID, and refuses when none does (the case that the owner answered). Cost: one more condition and one more test row; a stale old key staged after a clean finish still refuses.
-- Recommendation: option 2. It keeps the answer that the owner gave (a clean finish refuses a held old key) and opens the one path that a restore needs. Plain 3 a.m. summary: after a restore of an old backup, the server needs the old key again. Option 2 lets it start with that key, and only then.
-
-**Q-1. The API path when the MFA policy asks site administrators for a second factor.** The documented path is a local-user password sign-in. When the policy asks a second factor, the password sign-in answers a step that the documented calls do not show, and the fresh step may need the second factor again.
-
-- Option 1: document the path for installations without a second-factor policy and say so on the page; an installation with the policy waits for the console screen. Cost: no operator path under the policy until the console screen exists.
-- Option 2 (recommended): document the second step too (the sign-in with the factor, the same CSRF read, the same calls), after one check on main of the exact sign-in route and its answers, so that the page needs no console. Cost: one more section and one e2e step with the factor.
-- Option 3: add a CLI sign-in flow. The owner ruled this out in round 2 ("No new CLI fresh flow").
-- Recommendation: option 2. Plain 3 a.m. summary: the rotation must work for an administrator who has a second factor. The page shows both sign-ins.
-
-Until the answers come, this change documents the path for a policy with no second factor, and makes no claim about the other case.
-
-The four questions of the first round and the three questions of the second round are answered by the owner on 2026-11-20 (section "Owner decisions"):
+All questions are answered by the owner on 2026-11-20 (section "Owner decisions"):
 
 | Question | Answer (owner, 2026-11-20) | Where it lands |
 | --- | --- | --- |
@@ -237,5 +226,7 @@ The four questions of the first round and the three questions of the second roun
 | R2-1. How a person reaches start and finish before the console exists | The documented API path with a password sign-in; the CLI prints it | Spec requirement "Rotation API and command"; task 4.4 |
 | R2-2. What abort means | There is no abort; a rotation only moves forward | Spec requirement "Finish"; design decision 13 |
 | R2-3. A process that holds the old key after finish | The server refuses to start and names the variable | Spec requirement "Start-up with a rotation"; design decision 10 |
+| 12 (was Q-1). The API path under an MFA policy | The docs say that the site administrator needs a local user with a second factor that works from `curl`, and state the cost; otherwise wait for the console | Spec scenario "Documented API path under an MFA policy"; design decision 14; task 4.4 |
+| 13 (was B-c). A restore of a backup from before the rotation | Row 11 refuses only when the stored data holds no old ID; the restored backup starts and runs a new rotation; this keeps ADR 217 decision 21 | Spec requirement "Start-up with a rotation" (rows 11 and 12, scenario "Restore of a backup from before the rotation"); design decision 10; task 1.9 |
 
 Design choices that follow from the answers and that the PM can check (they need no new owner decision): the fresh step applies to start and finish only, and the commands `start` and `finish` send no request, as the audit chain approval does, because an access token never gives a fresh step.
