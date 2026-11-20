@@ -668,7 +668,8 @@ func testSessionCompletionStored(t *testing.T, s Store) {
 	f := newOpenFixture(t, s)
 	ctx, c, ref := pendingRequest(t, s, "open", sessionAnswer)
 
-	if err := s.Sessions.Put(ctx, f.session(t, firstSessionID, subject), f.ns.Fence(), openEntries(f.ns.Name)); err != nil {
+	sess := f.session(t, firstSessionID, subject)
+	if err := s.Sessions.Put(ctx, sess, f.ns.Fence(), openEntries(f.ns.Name)); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 

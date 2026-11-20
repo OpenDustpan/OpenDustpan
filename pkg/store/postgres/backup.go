@@ -541,6 +541,15 @@ func pgBlobDeleteLeaseControlTables() []pgCopyTable {
 	}
 }
 
+// pgProfileOpenSessionColumns lists the columns of the table of open
+// sessions.
+func pgProfileOpenSessionColumns() []string {
+	return []string{
+		pgColNamespaceID, "id", "root_profile_id", pgColOwnerKind, pgColOwnerID, "consumer", "paths", pgColSealed,
+		pgColCreatedAtMs, pgColExpiresAtMs,
+	}
+}
+
 // pgEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live
 // columns.
@@ -596,19 +605,8 @@ func pgEmptiedTables() []pgCopyTable {
 			orderBy: []string{"digest"},
 		},
 		{
-			table: backup.TableProfileOpenSessions,
-			columns: []string{
-				pgColNamespaceID,
-				"id",
-				"root_profile_id",
-				pgColOwnerKind,
-				pgColOwnerID,
-				"consumer",
-				"paths",
-				pgColSealed,
-				pgColCreatedAtMs,
-				pgColExpiresAtMs,
-			},
+			table:   backup.TableProfileOpenSessions,
+			columns: pgProfileOpenSessionColumns(),
 			orderBy: []string{pgColNamespaceID, "id"},
 		},
 		{
