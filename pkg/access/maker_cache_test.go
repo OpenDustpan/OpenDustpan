@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -9,105 +10,91 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-// TestCanActAsIgnoresTheRequestCache sends the case of a request whose route
-// check cached the access of the maker before a change. CanActAs must read the
-// state after the change, with the same context and with a context that
-// holds a request cache: a caller cannot make it decide on cached reads.
-func TestCanActAsIgnoresTheRequestCache(t *testing.T) {
+// cachedTina returns a context with a request cache whose cache holds the
+// access of tina to prn-ci: the first decision of a request, as the route
+// check makes it, before a change. It fails unless tina has the path.
+func cachedTina(t *testing.T, f *fixture, ci identity.Object) context.Context {
+	t.Helper()
+
+	ctx := access.WithRequestCache(t.Context())
+
+	tina := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "tina", DisplayName: "",
+		Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: "", JobID: "",
+	}
+
+	authErr := f.svc.Authorizer().Authorize(ctx, tina, identity.ActionPrincipalManageTokens, ci)
+	if authErr != nil {
+		t.Fatalf("the route check before the change: %v", authErr)
+	}
+
+	return ctx
+}
+
+// wantNoPathWithCache fails when CanActAs answers true or fails with ctx,
+// whose cache holds the reads from before the change.
+func wantNoPathWithCache(ctx context.Context, t *testing.T, f *fixture) {
+	t.Helper()
+
+	if !access.HasRequestCache(ctx) {
+		t.Fatal("the test context has no cache")
+	}
+
+	got, err := f.svc.CanActAs(ctx, "tina", "prn-ci")
+	if err != nil {
+		t.Fatalf("CanActAs after the change: %v", err)
+	}
+
+	if got {
+		t.Fatal("CanActAs answered true from the cache of the request after the change")
+	}
+}
+
+// TestCanActAsIgnoresTheGroupCache removes the maker from the group that
+// gives her the path after the request cache read her groups. CanActAs with
+// the same context must read the groups after the removal.
+func TestCanActAsIgnoresTheGroupCache(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name   string
-		setup  func(t *testing.T, f *fixture, role access.Role, ci identity.Object)
-		change func(t *testing.T, f *fixture, role access.Role)
-	}{
-		{
-			"the maker leaves the group that gives the path",
-			func(t *testing.T, f *fixture, _ access.Role, ci identity.Object) {
-				t.Helper()
+	f := newFixture(t)
+	f.installationService(t, "prn-ci", "ci-deploy")
+	f.person(t, "tina")
 
-				f.grant(t, f.group(t, "deployers", "tina"), access.RoleTokenManager, ci)
-			},
-			func(t *testing.T, f *fixture, _ access.Role) {
-				t.Helper()
+	ci := identity.PrincipalObject("prn-ci")
+	f.grant(t, f.group(t, "deployers", "tina"), access.RoleTokenManager, ci)
 
-				err := f.store.RemoveMember(t.Context(), "grp-deployers", "prn-tina",
-					storetest.ServerChange(time.Unix(1, 0), "group:grp-deployers"))
-				if err != nil {
-					t.Fatalf("remove tina: %v", err)
-				}
-			},
-		},
-		{
-			"the custom role of the maker loses the action",
-			func(t *testing.T, f *fixture, role access.Role, _ identity.Object) {
-				t.Helper()
+	ctx := cachedTina(t, f, ci)
 
-				f.grant(t, prn("tina"), role.ID, identity.ServerObject())
-			},
-			func(t *testing.T, f *fixture, role access.Role) {
-				t.Helper()
-
-				_, err := f.svc.UpdateRole(t.Context(), testEntry(), admin(), role.ID, access.RoleInput{
-					Name: role.Name, Description: "", Actions: []identity.Action{identity.ActionServerReadPrincipals},
-				})
-				if err != nil {
-					t.Fatalf("update the role: %v", err)
-				}
-			},
-		},
+	err := f.store.RemoveMember(t.Context(), "grp-deployers", "prn-tina",
+		storetest.ServerChange(time.Unix(1, 0), "group:grp-deployers"))
+	if err != nil {
+		t.Fatalf("remove tina: %v", err)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	wantNoPathWithCache(ctx, t, f)
+}
 
-			f := newFixture(t)
-			f.installationService(t, "prn-ci", "ci-deploy")
-			f.person(t, "tina")
+// TestCanActAsIgnoresTheRoleCache removes the action from the custom role
+// that gives the maker her path after the request cache read the role.
+func TestCanActAsIgnoresTheRoleCache(t *testing.T) {
+	t.Parallel()
 
-			ci, err := identity.ParsePrincipalObject("prn-ci")
-			if err != nil {
-				t.Fatalf("parse the principal object: %v", err)
-			}
+	f := newFixture(t)
+	f.installationService(t, "prn-ci", "ci-deploy")
+	f.person(t, "tina")
 
-			role := f.customRole(t, identity.ActionPrincipalManageTokens, identity.ActionServerReadPrincipals)
-			tc.setup(t, f, role, ci)
+	role := f.customRole(t, identity.ActionPrincipalManageTokens, identity.ActionServerReadPrincipals)
+	f.grant(t, prn("tina"), role.ID, identity.ServerObject())
 
-			// The context of the request: its first decision reads the
-			// groups of tina and her custom role into the cache.
-			ctx := access.WithRequestCache(t.Context())
+	ctx := cachedTina(t, f, identity.PrincipalObject("prn-ci"))
 
-			can, err := f.svc.CanActAs(ctx, "tina", "prn-ci")
-			if err != nil || !can {
-				t.Fatalf("CanActAs before the change = %t, %v; want true", can, err)
-			}
-
-			tinaCaller := identity.Principal{
-				TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Subject: "tina", DisplayName: "",
-				Admin: false, TokenID: "", TokenExpiresAt: time.Time{}, Kind: identity.KindPerson,
-				Credential: "", JobID: "",
-			}
-			if err := f.svc.Authorizer().Authorize(ctx, tinaCaller, identity.ActionPrincipalManageTokens,
-				ci); err != nil {
-				t.Fatalf("the route check before the change: %v", err)
-			}
-
-			tc.change(t, f, role)
-
-			// The same context, with the cache that holds the old reads.
-			if !access.HasRequestCache(ctx) {
-				t.Fatal("the test context lost its cache")
-			}
-
-			got, err := f.svc.CanActAs(ctx, "tina", "prn-ci")
-			if err != nil {
-				t.Fatalf("CanActAs after the change: %v", err)
-			}
-
-			if got {
-				t.Fatal("CanActAs answered true from the cache of the request after the change")
-			}
-		})
+	_, err := f.svc.UpdateRole(t.Context(), testEntry(), admin(), role.ID, access.RoleInput{
+		Name: role.Name, Description: "", Actions: []identity.Action{identity.ActionServerReadPrincipals},
+	})
+	if err != nil {
+		t.Fatalf("update the role: %v", err)
 	}
+
+	wantNoPathWithCache(ctx, t, f)
 }

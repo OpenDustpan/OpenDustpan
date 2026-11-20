@@ -24,7 +24,7 @@ func (f accessFixture) withRequestCache() accessFixture {
 
 // makeRole makes a custom role with actions as the bootstrap admin and
 // returns its ID.
-func makeRole(t *testing.T, f accessFixture, name string, actions string) string {
+func makeRole(t *testing.T, f accessFixture, name, actions string) string {
 	t.Helper()
 
 	var role struct {
@@ -50,115 +50,94 @@ func grantRole(t *testing.T, f accessFixture, subject, role string) {
 	}, nil)
 }
 
-// TestMakerWhoChangesHerOwnPathLosesTheTokenInTheSameAnswer sends the change
-// as the maker herself, through the real handler chain with the request
-// cache on. The route check of the request reads the access of the maker
-// before the change. The check of the makers after the change must read the
-// access after it: the token ends before the answer, and its audit entry
-// names the change, not a later use of the token.
-func TestMakerWhoChangesHerOwnPathLosesTheTokenInTheSameAnswer(t *testing.T) {
+// wantRevokedByChange sends call as caller through the handler chain with the
+// request cache on, and fails unless the token of the maker ended before the
+// answer, with an entry whose cause starts with cause.
+func wantRevokedByChange(t *testing.T, f accessFixture, caller string, call apiCall, cause string) {
+	t.Helper()
+
+	if lostMakerRevocation(t, f) != nil {
+		t.Fatal("the token is revoked before the change")
+	}
+
+	f.withRequestCache().as(t, caller, call, nil)
+
+	e := lostMakerRevocation(t, f)
+	if e == nil {
+		t.Fatal("the token of the maker who lost her path is still active after the answer")
+	}
+
+	if !strings.HasPrefix(causeOf(e), cause) || e.Reason != accesstoken.ReasonMakerLostPath {
+		t.Fatalf("revocation entry = %+v, want the cause %q and the reason of a change", *e, cause)
+	}
+}
+
+// groupManager lets tina manage groups, and so remove herself from one. The
+// removal of a member of a group that holds a principal action also needs
+// server:manage-access.
+func groupManager(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	role := makeRole(t, f, "group-manager", `"server:manage-groups","server:manage-access"`)
+	grantRole(t, f, "tina", role)
+}
+
+// TestMakerWhoRemovesHerselfFromTheGroupLosesTheToken sends the issue case: tina
+// removes herself from grp-deployers through the real handler chain with the
+// request cache on. The route check caches her groups before the removal.
+// Her token for prn-ci ends before the answer, and the entry names the group
+// change.
+func TestMakerWhoRemovesHerselfFromTheGroupLosesTheToken(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name   string
-		setup  func(t *testing.T, f accessFixture, role string)
-		path   makerPath
-		caller string
-		call   func(role string) apiCall
-		cause  string
-	}{
-		{
-			name: "she removes herself from the group that gives her the path",
-			setup: func(t *testing.T, f accessFixture, role string) {
-				t.Helper()
-				grantRole(t, f, "tina", makeRole(t, f, "group-manager", `"server:manage-groups","server:manage-access"`))
-			},
-			path: pathGroup,
-			call: func(string) apiCall {
-				return apiCall{http.MethodDelete, "/api/server/groups/grp-deployers/members/prn-tina", "", http.StatusNoContent}
-			},
-			cause: "server:manage-groups group:grp-deployers",
-		},
-		{
-			name: "she deletes the group that gives her the path",
-			setup: func(t *testing.T, f accessFixture, role string) {
-				t.Helper()
-				grantRole(t, f, "tina", makeRole(t, f, "group-manager", `"server:manage-groups","server:manage-access"`))
-			},
-			path: pathGroup,
-			call: func(string) apiCall {
-				return apiCall{http.MethodDelete, "/api/server/groups/grp-deployers", "", http.StatusNoContent}
-			},
-			cause: "server:manage-groups group:grp-deployers",
-		},
-		{
-			name: "a role manager who holds the same role removes its action",
-			setup: func(t *testing.T, f accessFixture, role string) {
-				t.Helper()
-				f.seed(t, "rita", "", identity.Object{})
-				grantRole(t, f, "rita", makeRole(t, f, "role-manager", `"server:manage-roles","server:manage-access"`))
-				// Rita holds the role "ops" too, so her route check reads
-				// it into the request cache before the change.
-				grantRole(t, f, "rita", role)
-			},
-			path:   pathDirect,
-			caller: "rita",
-			call: func(role string) apiCall {
-				return apiCall{
-					http.MethodPatch, "/api/server/roles/" + role,
-					`{"actions":["server:read-principals"]}`, http.StatusOK,
-				}
-			},
-			cause: "server:manage-roles role:",
-		},
-	}
+	f := newAccessFixture(t)
+	seedLostMaker(t, f, pathGroup)
+	groupManager(t, f)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	wantRevokedByChange(t, f, "tina", apiCall{
+		http.MethodDelete, "/api/server/groups/grp-deployers/members/prn-tina", "", http.StatusNoContent,
+	}, "server:manage-groups group:grp-deployers")
+}
 
-			f := newAccessFixture(t)
+// TestMakerWhoDeletesTheGroupLosesTheToken sends the delete of the group
+// that gives the path, by the maker herself, with the request cache on.
+func TestMakerWhoDeletesTheGroupLosesTheToken(t *testing.T) {
+	t.Parallel()
 
-			// Tina gets her act-as path through the custom role "minter"
-			// in the direct case, so that the role is in her access, and
-			// through the group in the group case.
-			seedLostMaker(t, f, pathGroup)
+	f := newAccessFixture(t)
+	seedLostMaker(t, f, pathGroup)
+	groupManager(t, f)
 
-			var role string
+	wantRevokedByChange(t, f, "tina", apiCall{
+		http.MethodDelete, "/api/server/groups/grp-deployers", "", http.StatusNoContent,
+	}, "server:manage-groups group:grp-deployers")
+}
 
-			if tc.path == pathDirect {
-				// Give the path of the custom role first, then end the path of
-				// the group, so that no change ends the last path early.
-				role = makeRole(t, f, "ops", `"principal:manage-tokens","server:read-principals"`)
-				grantRole(t, f, "tina", role)
+// TestRoleChangeWithTheRequestCacheRevokesTheToken sends the second case: the
+// last path of tina is the custom role "ops" on the installation. Rita holds
+// the same role, so the route check of her request reads the role into the
+// request cache. She removes principal:manage-tokens from the role. The
+// token of tina ends before the answer.
+func TestRoleChangeWithTheRequestCacheRevokesTheToken(t *testing.T) {
+	t.Parallel()
 
-				f.as(t, "admin", apiCall{http.MethodDelete, "/api/server/grants/grt-deployers", "", http.StatusNoContent}, nil)
-				f.as(t, "admin", apiCall{http.MethodDelete, "/api/server/groups/grp-deployers", "", http.StatusNoContent}, nil)
-			}
+	f := newAccessFixture(t)
+	seedLostMaker(t, f, pathGroup)
 
-			tc.setup(t, f, role)
+	role := makeRole(t, f, "ops", `"principal:manage-tokens","server:read-principals"`)
+	grantRole(t, f, "tina", role)
 
-			if lostMakerRevocation(t, f) != nil {
-				t.Fatal("the token is revoked before the change")
-			}
+	f.seed(t, "rita", "", identity.Object{})
+	grantRole(t, f, "rita", makeRole(t, f, "role-manager", `"server:manage-roles","server:manage-access"`))
+	grantRole(t, f, "rita", role)
 
-			caller := tc.caller
-			if caller == "" {
-				caller = "tina"
-			}
+	// End the path of the group, so that the role is the last path.
+	f.as(t, "admin", apiCall{http.MethodDelete, "/api/server/grants/grt-deployers", "", http.StatusNoContent}, nil)
+	f.as(t, "admin", apiCall{http.MethodDelete, "/api/server/groups/grp-deployers", "", http.StatusNoContent}, nil)
 
-			f.withRequestCache().as(t, caller, tc.call(role), nil)
-
-			e := lostMakerRevocation(t, f)
-			if e == nil {
-				t.Fatal("the token of the maker who removed her own path is still active after the answer")
-			}
-
-			if !strings.HasPrefix(causeOf(e), tc.cause) || e.Reason != accesstoken.ReasonMakerLostPath {
-				t.Fatalf("revocation entry = %+v, want the cause %q and the reason of a change", *e, tc.cause)
-			}
-		})
-	}
+	wantRevokedByChange(t, f, "rita", apiCall{
+		http.MethodPatch, "/api/server/roles/" + role, `{"actions":["server:read-principals"]}`, http.StatusOK,
+	}, "server:manage-roles role:")
 }
 
 // TestMakerKeepsTheTokenWhenTheChangeLeavesAPathWithTheRequestCache proves
@@ -170,7 +149,7 @@ func TestMakerKeepsTheTokenWhenTheChangeLeavesAPathWithTheRequestCache(t *testin
 	f := newAccessFixture(t)
 	seedLostMaker(t, f, pathGroup)
 
-	grantRole(t, f, "tina", makeRole(t, f, "group-manager", `"server:manage-groups","server:manage-access"`))
+	groupManager(t, f)
 
 	obj, err := identity.ParsePrincipalObject("prn-ci")
 	if err != nil {
