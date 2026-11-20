@@ -73,9 +73,13 @@ func TestFilterCopies(t *testing.T) {
 	input[0] = "beta"
 
 	left, _ := every.Every()
-	left[0] = "gamma"
-
 	names := named.Names()
+
+	if len(left) != 1 || len(names) != 1 {
+		t.Fatalf("left-out names = %v and names = %v, want one each", left, names)
+	}
+
+	left[0] = "gamma"
 	names[0] = "gamma"
 
 	if got, _ := every.Every(); !slices.Equal(got, []namespace.Name{"acme"}) {

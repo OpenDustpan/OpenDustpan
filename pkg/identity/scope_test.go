@@ -386,6 +386,10 @@ func TestEveryObjectExcept(t *testing.T) {
 
 	scope := identity.Every("acme")
 	got, _ := scope.EveryObjectExcept()
+	if len(got) != 1 {
+		t.Fatalf("left-out names = %v, want [acme]", got)
+	}
+
 	got[0] = "gamma"
 
 	if scope.Contains(identity.NamespaceObject("acme")) || !scope.Contains(identity.NamespaceObject("gamma")) {
