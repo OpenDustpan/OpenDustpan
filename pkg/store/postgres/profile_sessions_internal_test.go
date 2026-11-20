@@ -205,3 +205,34 @@ func TestGetQueryGuards(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckSessionKey sends a hostile key straight to the check that runs
+// before the query of Get and of Delete. A key that fails it never reaches the
+// database, and the caller learns nothing from the error.
+func TestCheckSessionKey(t *testing.T) {
+	t.Parallel()
+
+	owner := rowOwner()
+
+	for _, id := range []string{
+		"", "pos-", "one", "POS-one", "pos-one ", "pos-%", "pos-a/b", "pos-a%2Fb", "../pos-one", "pos-one\x00",
+		"pos-one\n", "pos-one' OR '1'='1",
+	} {
+		if err := checkSessionKey(id, owner); !errors.Is(err, profile.ErrNotFound) {
+			t.Errorf("checkSessionKey(%q) = %v, want ErrNotFound", id, err)
+		}
+	}
+
+	for _, o := range []profile.SessionOwner{
+		{Kind: "job", ID: "alice"}, {Kind: "", ID: "alice"}, {Kind: profile.OwnerPrincipal, ID: ""},
+		{Kind: profile.OwnerPrincipal, ID: "al\rice"},
+	} {
+		if err := checkSessionKey(rowID, o); !errors.Is(err, profile.ErrNotFound) {
+			t.Errorf("checkSessionKey with owner %+v = %v, want ErrNotFound", o, err)
+		}
+	}
+
+	if err := checkSessionKey(rowID, owner); err != nil {
+		t.Errorf("checkSessionKey of a good key = %v, want nil", err)
+	}
+}
