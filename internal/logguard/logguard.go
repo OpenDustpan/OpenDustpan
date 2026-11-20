@@ -13,7 +13,8 @@
 // becomes its JSON text, in which the handler escapes each string and each
 // object key. A JSON handler writes that text as JSON, so the structure
 // stays. A value that has no JSON form becomes "!ERROR:" and the escaped
-// text of the encode error, as log/slog writes it.
+// text of the encode error, as log/slog writes it. This includes a value
+// nested deeper than the depth limit of encoding/json.
 //
 // The escape is visible text in the style of Go quoting, for example "\n",
 // "\x1b" or "\u2028", so a reader can see that the rune was there. A reader
@@ -233,12 +234,16 @@ func jsonValue(x any) slog.Value {
 	enc.SetEscapeHTML(false)
 
 	if err := enc.Encode(x); err != nil {
-		return slog.StringValue(Escape("!ERROR:" + err.Error()))
+		return errorValue(err)
 	}
 
 	// Encode appends a newline. A log value holds none.
-	js := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	return escapeEncoded(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
+}
 
+// escapeEncoded answers the JSON text js, which an encoder wrote, with
+// Escape run on each string and each object key.
+func escapeEncoded(js []byte) slog.Value {
 	// A string of js can hold a hidden rune only as a raw rune or as a
 	// JSON escape, which starts with a backslash.
 	if !NeedsEscape(string(js)) && bytes.IndexByte(js, '\\') < 0 {
@@ -247,12 +252,22 @@ func jsonValue(x any) slog.Value {
 
 	out, err := escapeJSONStrings(js)
 	if err != nil {
-		// Fail closed: text that the walk cannot read does not reach the
-		// handler.
-		return slog.StringValue(Escape("!ERROR:" + err.Error()))
+		// Defense in depth: the encoder checks its own output, and the
+		// decoder and the encoder share one depth limit, so no input that
+		// the encoder wrote fails the walk today. This branch stays so that
+		// text that the walk cannot read never reaches the handler, if the
+		// encoder or the decoder changes.
+		return errorValue(err)
 	}
 
 	return slog.AnyValue(escapedJSON(out))
+}
+
+// errorValue answers "!ERROR:" and the escaped text of err, as the value of
+// an attribute that has no JSON form. An error text can hold a value from
+// outside, for example the text of an error from a MarshalJSON method.
+func errorValue(err error) slog.Value {
+	return slog.StringValue(Escape("!ERROR:" + err.Error()))
 }
 
 // errTrailing reports JSON text with more after its first value.
@@ -270,6 +285,9 @@ func escapeJSONStrings(js []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// Defense in depth: the encoder writes one value, so no input has more
+	// text today. The check stays so that the walk never drops text that a
+	// changed encoder writes after the value.
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errTrailing
 	}
@@ -277,9 +295,15 @@ func escapeJSONStrings(js []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// tokenSource reads JSON tokens: a *json.Decoder.
+type tokenSource interface {
+	Token() (json.Token, error)
+	More() bool
+}
+
 // copyValue reads one JSON value from dec and writes it to out, with each
 // string escaped.
-func copyValue(out *bytes.Buffer, dec *json.Decoder) error {
+func copyValue(out *bytes.Buffer, dec tokenSource) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return fmt.Errorf("read JSON: %w", err)
@@ -301,6 +325,9 @@ func copyValue(out *bytes.Buffer, dec *json.Decoder) error {
 	case nil:
 		out.WriteString("null")
 	default:
+		// Defense in depth: json.Decoder answers no other token type, so no
+		// input reaches this branch today. It fails closed for a token
+		// type that a changed decoder could add.
 		return fmt.Errorf("%w: %T", errToken, tok)
 	}
 
@@ -312,7 +339,7 @@ var errToken = errors.New("unknown JSON token")
 
 // copyObject writes the members of an object, whose "{" dec has read, with
 // each key and each string escaped.
-func copyObject(out *bytes.Buffer, dec *json.Decoder) error {
+func copyObject(out *bytes.Buffer, dec tokenSource) error {
 	out.WriteByte('{')
 
 	for i := 0; dec.More(); i++ {
@@ -325,6 +352,10 @@ func copyObject(out *bytes.Buffer, dec *json.Decoder) error {
 			return fmt.Errorf("read JSON key: %w", err)
 		}
 
+		// Defense in depth: json.Decoder answers only a string for a key,
+		// so no input reaches this check today. It stays so that a key of
+		// another type never reaches the output unescaped, if the token
+		// source changes. A test reaches it with a fake token source.
 		key, ok := tok.(string)
 		if !ok {
 			return fmt.Errorf("%w: key %T", errToken, tok)
@@ -346,7 +377,7 @@ func copyObject(out *bytes.Buffer, dec *json.Decoder) error {
 
 // copyArray writes the items of an array, whose "[" dec has read, with each
 // string escaped.
-func copyArray(out *bytes.Buffer, dec *json.Decoder) error {
+func copyArray(out *bytes.Buffer, dec tokenSource) error {
 	out.WriteByte('[')
 
 	for i := 0; dec.More(); i++ {
@@ -364,7 +395,7 @@ func copyArray(out *bytes.Buffer, dec *json.Decoder) error {
 
 // closeDelim reads the closing delimiter of an object or an array and
 // writes it.
-func closeDelim(out *bytes.Buffer, dec *json.Decoder, end byte) error {
+func closeDelim(out *bytes.Buffer, dec tokenSource, end byte) error {
 	if _, err := dec.Token(); err != nil {
 		return fmt.Errorf("read JSON: %w", err)
 	}
