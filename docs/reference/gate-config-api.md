@@ -134,13 +134,16 @@ TOKEN=<access token>
 
 ## Calls to copy
 
-Set `SCOPE` to the scope of the object. Use one of these lines:
+Set `API` to the API of the server, and `SCOPE` to the scope of the object. Use
+one of the `SCOPE` lines:
 
 ```sh
-SCOPE=$SERVER/api/dustpan/v1/namespaces/acme
-SCOPE=$SERVER/api/dustpan/v1/namespaces/acme/collections/payments
-SCOPE=$SERVER/api/dustpan/v1/namespaces/acme/units/by-name/pulumi/web%2Fprod
-SCOPE=$SERVER/api/dustpan/v1
+API=$SERVER/api/dustpan/v1
+
+SCOPE=$API/namespaces/acme
+SCOPE=$API/namespaces/acme/collections/payments
+SCOPE=$API/namespaces/acme/units/by-name/pulumi/web%2Fprod
+SCOPE=$API
 ```
 
 Each call below has a read and a change. A change repeats the three headers. The
