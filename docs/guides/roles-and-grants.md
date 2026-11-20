@@ -224,6 +224,19 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "https://dustpan.example.com/api/dustpan/v1/me/access/objects?type=namespace&action=unit:write"
 ```
 
+The answer holds `objects`, the objects of the page, and `total`. When a grant
+on the installation, or the administrator flag, covers every object, the
+answer has `"all": true` and no objects. `excluded.namespaces` then names the
+namespaces whose objects `all` does not cover, in name order. A namespace is in
+it when its IP allowlist does not contain the client address (see
+[IP allowlists](ip-allowlists.md#what-a-list-shows)). The list is empty when
+`all` is `false`, and for the type `principal`.
+
+```json
+{"type": "namespace", "action": "unit:write", "all": true,
+ "excluded": {"namespaces": ["acme"]}, "objects": [], "total": 0, "nextPageToken": ""}
+```
+
 Any signed-in principal can read its own access. The caller only sees its own
 grants here. For the grants of other principals, use the access review in
 [Access review](access-review.md).

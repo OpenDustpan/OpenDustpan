@@ -252,7 +252,17 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return err
 	}
 
+	if err := f.checkTLSFiles(); err != nil {
+		return err
+	}
+
 	if err := f.requireDecisions(terminal, os.LookupEnv); err != nil {
+		return err
+	}
+
+	// The key and the database come first: with neither, the person most
+	// likely wants a trial, and that error names dev.
+	if err := f.checkPlainHTTP(); err != nil {
 		return err
 	}
 
@@ -304,6 +314,7 @@ type serveFlags struct {
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
+	allowPlainHTTP               bool
 	issuerBaseURL                string
 	oidcIssuer                   string
 	oidcProvider                 string
@@ -436,7 +447,7 @@ func (f *serveFlags) check() error {
 
 	f.auditSinkRanges = ranges
 
-	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+	return f.checkFlagValues()
 }
 
 // checkNames refuses an incomplete TLS pair, a --listen value that is not host:port and an
@@ -566,6 +577,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag(cli.AllowPlainHTTPFlag).Bool(fs, &f.allowPlainHTTP)
 	cli.ByFlag("issuer-base-url").String(fs, &f.issuerBaseURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
@@ -1000,6 +1012,17 @@ func (f *serveFlags) serveWithStores(
 
 	opts = append(opts, dustpan.WithBeforeServe(f.beforeServe(ctx, st, logger, reloads, started)))
 
+	// Serve binds the listen address itself and checks the bound address,
+	// then passes the listener to the server.
+	ln, err := f.listenChecked(ctx, logger)
+	if err != nil {
+		return err
+	}
+
+	defer closeServeListener(ctx, logger, ln)
+
+	opts = append(opts, dustpan.WithListener(ln))
+
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
@@ -1051,6 +1074,8 @@ func (f *serveFlags) openBlobStores(
 //
 //nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
 func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (blob.Store, error) {
+	f.warnUnusedS3Endpoint(ctx, logger)
+
 	cfg := blobOpenConfig{
 		database: f.database,
 		dir:      f.blobDir,
@@ -1060,6 +1085,20 @@ func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (bl
 	}
 
 	return openBlobs(ctx, cfg, logger)
+}
+
+// warnUnusedS3Endpoint warns when --s3-endpoint is set and neither
+// --blob-store nor --backup-target is an s3:// address. Both flags use the
+// endpoint.
+func (f *serveFlags) warnUnusedS3Endpoint(ctx context.Context, logger *slog.Logger) {
+	if strings.TrimSpace(f.s3Endpoint) == "" ||
+		strings.HasPrefix(strings.TrimSpace(f.blobStore), "s3://") ||
+		strings.HasPrefix(strings.TrimSpace(f.backupTarget), "s3://") {
+		return
+	}
+
+	logger.WarnContext(ctx, "--s3-endpoint has no effect: --blob-store and --backup-target are not s3:// addresses",
+		slog.String("blob_store", blobStoreKind(f.blobStore)))
 }
 
 // closeLiveStore closes the live blob store when it holds a directory
@@ -1845,4 +1884,20 @@ func readKeyFile(path string) ([]byte, error) {
 	}
 
 	return decodeKey(keyFileEnvVar, string(raw))
+}
+
+// blobStoreKind returns the kind of the --blob-store value for a log record:
+// "fs" when the value is empty, "dir" for a dir: address, else "other". It
+// never returns the value, which can hold a key or a control character.
+func blobStoreKind(v string) string {
+	v = strings.TrimSpace(v)
+
+	switch {
+	case v == "":
+		return "fs"
+	case strings.HasPrefix(v, "dir:"):
+		return "dir"
+	default:
+		return "other"
+	}
 }

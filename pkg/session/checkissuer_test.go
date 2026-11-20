@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/fakecred"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -12,6 +13,8 @@ import (
 // an issuer that the allowlist names, and refuses every other form.
 func TestCheckIssuerAllowlist(t *testing.T) {
 	t.Parallel()
+
+	opaque := strings.Replace(fakecred.URL("https", "u", "p", "idp.example", ""), "://", ":", 1)
 
 	for issuer, ok := range map[string]bool{
 		"https://idp.example":                             true,
@@ -55,6 +58,12 @@ func TestCheckIssuerAllowlist(t *testing.T) {
 		"http://idp.example":                              false,
 		"http://localhost.example":                        false,
 		"https://user@idp.example":                        false,
+		"HTTP://127.0.0.1":                                false,
+		"https://idp.example?":                            false,
+		"https://idp.example#":                            false,
+		"https://idp.example/a b":                         false,
+		"https://idp.example/a\\b":                        false,
+		opaque:                                            false,
 		"https://":                                        false,
 		"https:///x":                                      false,
 		"ftp://idp.example":                               false,

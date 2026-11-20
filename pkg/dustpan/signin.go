@@ -382,7 +382,10 @@ func (s *Server) pruneSignInRequestsOnce(ctx context.Context) {
 // development and tests).
 func signInOrigin(base string) (string, error) {
 	if base == "" {
-		return "", fmt.Errorf("%w: set --public-url, the base of the redirect URI", errSignInSetup)
+		return "", fmt.Errorf(
+			"%w: set --public-url (DUSTPAN_PUBLIC_URL) to the address that people open in a browser",
+			errSignInSetup,
+		)
 	}
 
 	u, err := url.Parse(base)

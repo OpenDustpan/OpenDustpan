@@ -128,7 +128,7 @@ func TestListWorkspacesStorePage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, scope := range []identity.Scope{namespaceScope("acme"), identity.Every()} {
+			for _, scope := range []identity.Scope{namespaceScope("acme"), identity.Every(), identity.Every("other")} {
 				checkStorePage(t, scope, tc.query, tc.want, tc.total)
 			}
 		})
@@ -162,8 +162,9 @@ func checkStorePage(t *testing.T, scope identity.Scope, query string, want []str
 }
 
 // TestListWorkspacesOtherScopeChecksEach proves that a caller whose scope
-// holds another namespace, or single units only, gets the list that checks
-// each workspace and no store page.
+// holds another namespace, single units only, or every object except the
+// namespace of the list, gets the list that checks each workspace and no
+// store page.
 func TestListWorkspacesOtherScopeChecksEach(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +176,8 @@ func TestListWorkspacesOtherScopeChecksEach(t *testing.T) {
 	for _, scope := range []identity.Scope{
 		namespaceScope("other"),
 		{Units: []identity.Object{ref}}, //nolint:exhaustruct_v5 // A unit grant only.
+		identity.Every("acme"),
+		identity.Every("acme", "other"),
 	} {
 		queries := &atomic.Int64{}
 		ws := queryCounting{pagingWorkspaces: newPagingWorkspaces(t), queries: queries}

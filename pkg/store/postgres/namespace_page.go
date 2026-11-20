@@ -13,14 +13,16 @@ import (
 var _ namespace.Pager = (*Store)(nil)
 
 // PageNamespaces implements namespace.Pager. The filter and the page run
-// in SQL: with All set it reads past After, otherwise it keeps only the
-// names in the query. The comparison and the order use the column collation,
-// as ListNamespaces does, so the page and the count agree with the list.
+// in SQL: for every namespace it reads past After and leaves out the
+// left-out names in the query, otherwise it keeps only the names in the
+// query. The comparison and the order use the column collation, as
+// ListNamespaces does, so the page and the count agree with the list.
 func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]namespace.Namespace, error) {
-	if q.Filter.All {
+	if leftOut, every := q.Filter.Every(); every {
 		rows, err := s.queries.PageNamespaces(ctx, db.PageNamespacesParams{
-			After: q.After.String(),
-			Lim:   int32(min(max(q.Limit, 0), math.MaxInt32)),
+			After:   q.After.String(),
+			LeftOut: pageNameStrings(leftOut),
+			Lim:     int32(min(max(q.Limit, 0), math.MaxInt32)),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("select namespaces page: %w", err)
@@ -31,7 +33,7 @@ func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]na
 
 	rows, err := s.queries.PageNamespacesByNames(ctx, db.PageNamespacesByNamesParams{
 		After: q.After.String(),
-		Names: pageNameStrings(q.Filter.Names),
+		Names: pageNameStrings(q.Filter.Names()),
 		Lim:   int32(min(max(q.Limit, 0), math.MaxInt32)),
 	})
 	if err != nil {
@@ -47,10 +49,10 @@ func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]na
 }
 
 // CountNamespaces implements namespace.Pager. It counts under the same
-// filter as PageNamespaces.
+// filter as PageNamespaces, with the left-out names left out in the query.
 func (s *Store) CountNamespaces(ctx context.Context, f namespace.Filter) (int64, error) {
-	if f.All {
-		total, err := s.queries.CountNamespaces(ctx)
+	if leftOut, every := f.Every(); every {
+		total, err := s.queries.CountNamespaces(ctx, pageNameStrings(leftOut))
 		if err != nil {
 			return 0, fmt.Errorf("count namespaces: %w", err)
 		}
@@ -58,7 +60,7 @@ func (s *Store) CountNamespaces(ctx context.Context, f namespace.Filter) (int64,
 		return total, nil
 	}
 
-	total, err := s.queries.CountNamespacesByNames(ctx, pageNameStrings(f.Names))
+	total, err := s.queries.CountNamespacesByNames(ctx, pageNameStrings(f.Names()))
 	if err != nil {
 		return 0, fmt.Errorf("count namespaces: %w", err)
 	}

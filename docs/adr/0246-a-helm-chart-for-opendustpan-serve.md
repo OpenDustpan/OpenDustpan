@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-19. Decides the Helm chart part of RFC 35. Decides the Helm chart item of ADR 27 decision 8. Correction 2026-10-19: the metrics path is GET /api/server/metrics.
 
+Changed by:
+
+- ADR 387 changes decision 21: the chart needs an `https` `server.publicURL`, `server.tls.existingSecret` or `server.allowPlainHTTP`.
+
 ## Context
 
 The project owner decided on 2026-10-17 (label "(owner)"): start the Helm

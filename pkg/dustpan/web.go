@@ -258,7 +258,7 @@ func withCORS(next http.Handler, allowed []string) http.Handler {
 // server compares each origin to the Origin header as an exact string.
 func checkAllowedOrigins(origins []string) error {
 	for _, o := range origins {
-		if !validAllowedOrigin(o) {
+		if !ValidAllowedOrigin(o) {
 			return fmt.Errorf(
 				"%w: WithAllowedOrigins: origin %q must be http:// or https:// with a host and an optional port, "+
 					"in lower case with an ASCII (punycode) host and no default port, "+
@@ -271,10 +271,11 @@ func checkAllowedOrigins(origins []string) error {
 	return nil
 }
 
-// validAllowedOrigin reports whether o can equal the Origin header of a
-// browser: scheme://host[:port] in lower case, ASCII only, with no default
-// port.
-func validAllowedOrigin(o string) bool {
+// ValidAllowedOrigin reports whether o is an origin that WithAllowedOrigins
+// accepts: it can equal the Origin header of a browser, which is
+// scheme://host[:port] in lower case, ASCII only, with no default port. A
+// caller can use it to check a setting before it builds the server.
+func ValidAllowedOrigin(o string) bool {
 	u, err := url.Parse(o)
 	if err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) ||
 		o != u.Scheme+"://"+u.Host || o != strings.ToLower(o) ||

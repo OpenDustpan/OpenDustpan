@@ -259,15 +259,25 @@ type grantedByResponse struct {
 
 // accessObjectsResponse is one page of the objects where the caller can do
 // an action. All is true, with no objects, when a grant on the
-// installation covers every object. An object of a containing kind covers
-// each object of the type inside it.
+// installation covers every object. Excluded then names the namespaces
+// whose objects all does not cover, such as a namespace whose IP allowlist
+// refuses the client address; its list is empty otherwise. An object of a
+// containing kind covers each object of the type inside it.
 type accessObjectsResponse struct {
 	Type          string                 `json:"type"`
 	Action        string                 `json:"action"`
 	NextPageToken string                 `json:"nextPageToken"`
 	Objects       []accessObjectResponse `json:"objects"`
+	Excluded      accessExcludedResponse `json:"excluded"`
 	Total         int64                  `json:"total"`
 	All           bool                   `json:"all"`
+}
+
+// accessExcludedResponse names the objects that all=true does not cover:
+// the namespaces in name order. It is an object, not a list at the top of
+// the answer, because the page has one list, the objects.
+type accessExcludedResponse struct {
+	Namespaces []string `json:"namespaces"`
 }
 
 // callerGrantsResponse is one page of the grants of the caller, with the
@@ -323,7 +333,7 @@ func (h *Handler) reviewRoutes() []Route {
 			Resolve:      resolveCaller,
 			ActionsFor:   nil,
 			OpaqueDenial: false,
-			Serve:        h.serveAccessRead(callerAccessObjects),
+			Serve:        h.serveAccessRead(h.callerAccessObjects),
 		},
 		{
 			Method: http.MethodGet,
@@ -710,7 +720,7 @@ func callerAccess(
 
 // callerAccessObjects serves GET /api/dustpan/v1/me/access/objects: one page
 // of the objects of one kind where the caller can do an action.
-func callerAccessObjects(
+func (h *Handler) callerAccessObjects(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	// Defense in depth: the service refuses an empty type, an unknown type
@@ -737,7 +747,7 @@ func callerAccessObjects(
 		}
 	}
 
-	return callerAccessByType(r, svc, c.p, access.ObjectKind(q.Get("type")))
+	return callerAccessByType(r, svc, h.authz, c.p, access.ObjectKind(q.Get("type")))
 }
 
 // callerAccessOn answers the access of p on the object with the wire form
@@ -888,16 +898,18 @@ func grantableActions() []identity.Action {
 }
 
 // callerAccessByType answers one page of the objects of kind where p can
-// do the action of the query.
+// do the action of the query, as lister, the authorizer of the routes, lists
+// them: a namespace whose IP allowlist refuses the client address is not in
+// the page, and an answer with all=true names it in excludedNamespaces.
 func callerAccessByType(
-	r *http.Request, svc *access.Service, p identity.Principal, kind access.ObjectKind,
+	r *http.Request, svc *access.Service, lister identity.Authorizer, p identity.Principal, kind access.ObjectKind,
 ) (principalResult, error) {
 	page, err := callerPageOf(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	got, err := svc.Objects(r.Context(), p, access.ObjectsRequest{
+	got, err := svc.Objects(r.Context(), lister, p, access.ObjectsRequest{
 		Kind: kind, Action: identity.Action(queryOf(r).Get("action")), Cursor: page.token, Limit: page.size,
 	})
 	if err != nil {
@@ -911,6 +923,11 @@ func callerAccessByType(
 		Objects:       make([]accessObjectResponse, 0, len(got.Objects)),
 		Total:         got.Total,
 		All:           got.All,
+		Excluded:      accessExcludedResponse{Namespaces: make([]string, 0, len(got.Excluded))},
+	}
+
+	for _, ns := range got.Excluded {
+		out.Excluded.Namespaces = append(out.Excluded.Namespaces, ns.String())
 	}
 
 	for i := range got.Objects {

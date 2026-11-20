@@ -353,7 +353,9 @@ func TestServeRefusesDevKeyFile(t *testing.T) {
 	var logs lockedBuffer
 
 	err := serveWithIO(
-		t.Context(), []string{"--database", "sqlite:" + dbPath, "--key-encryption-key-file", keyPath}, &logs, false,
+		t.Context(),
+		[]string{"--database", "sqlite:" + dbPath, "--key-encryption-key-file", keyPath, "--listen", "127.0.0.1:0"},
+		&logs, false,
 	)
 	if !errors.Is(err, errDevKeyRefused) {
 		t.Fatalf("serve error = %v, want errDevKeyRefused", err)

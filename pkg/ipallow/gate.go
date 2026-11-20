@@ -11,9 +11,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
-// Rules reads the list of a namespace. The Store port of this package satisfies it.
+// Rules reads the lists of the namespaces. The Store port of this package
+// satisfies it. NamespaceList reads the list of one namespace, for the check
+// of one object. NamespacesWithList reads every list, for a scope that covers
+// every object.
 type Rules interface {
 	NamespaceList(ctx context.Context, ns namespace.Name) (List, error)
+	NamespacesWithList(ctx context.Context) ([]NamedList, error)
 }
 
 // Gate is an identity.Authorizer decorator that refuses requests from client
@@ -49,22 +53,21 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 }
 
 // ScopeExact reports that the scope is exact when the gate is off and the
-// scope of Next is exact. An enabled gate says no: it keeps a scope that
-// covers every object unchanged, and Authorize still refuses each object in a
-// namespace whose list does not hold the client address. A caller that needs
-// an exact scope checks each object instead.
+// scope of Next is exact. An enabled gate says no: ListObjects and Authorize
+// read the lists in separate reads, so a list change between the two reads
+// can make Authorize refuse an object that the scope holds. A caller that
+// needs an exact scope checks each object instead.
 func (g Gate) ScopeExact() bool {
 	return !g.Enabled && identity.HasExactScope(g.Next)
 }
 
 // ListObjects asks Next, then leaves out each object in a namespace whose
 // list does not contain the client address in ctx, as Authorize refuses
-// them. A scope that covers every object stays unchanged: it leaves out no
-// namespace, and the gate cannot name the namespaces of its lists, so a
-// caller of such a list must Authorize the namespace of its list through the
-// gate first. A scope of every object that leaves out namespaces does not
-// cover every object, so it passes with only its explicit sets filtered. A
-// store error fails the whole list.
+// them. It filters the explicit sets of the scope object by object. A scope
+// that covers every object gets each namespace whose list refuses the client
+// address as a left-out namespace (identity.Scope.LeaveOut), so that a list
+// of every namespace leaves it out too. A store error, a list of too many
+// namespaces and an invalid stored name fail the whole list.
 func (g Gate) ListObjects(
 	ctx context.Context, p identity.Principal, action identity.Action,
 ) (identity.Scope, error) {
@@ -75,7 +78,7 @@ func (g Gate) ListObjects(
 		return none, fmt.Errorf("list objects: %w", err)
 	}
 
-	if !g.Enabled || scope.CoversEveryObject() || g.bootstrapExempt(p) {
+	if !g.Enabled || g.bootstrapExempt(p) {
 		return scope, nil
 	}
 
@@ -89,6 +92,15 @@ func (g Gate) ListObjects(
 		}
 
 		*set = kept
+	}
+
+	if _, every := scope.EveryObjectExcept(); every {
+		refused, refusedErr := g.refusedNamespaces(ctx)
+		if refusedErr != nil {
+			return none, refusedErr
+		}
+
+		scope = scope.LeaveOut(refused...)
 	}
 
 	return scope, nil
@@ -108,6 +120,42 @@ func (g Gate) CheckAddress(ctx context.Context, ns namespace.Name) error {
 	}
 
 	return g.checkNamespace(ctx, ns)
+}
+
+// refusedNamespaces returns each namespace whose list does not contain the
+// client address in ctx, in the order of the store. An unknown address is
+// outside every list. A namespace with the zero List has no rule, as in
+// checkNamespace, so it is not refused. Any error fails closed: the caller
+// does not get a scope that covers every object.
+func (g Gate) refusedNamespaces(ctx context.Context) ([]namespace.Name, error) {
+	lists, err := g.Rules.NamespacesWithList(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list the namespaces with an IP allowlist: %w", err)
+	}
+
+	addr := clientip.FromContext(ctx)
+	out := make([]namespace.Name, 0, len(lists))
+
+	for i := range lists {
+		// Defense in depth: both SQL adapters parse each stored name too; this
+		// check stays so that a Rules port that does not parse cannot put an
+		// empty or invalid name into the scope, where it would leave out
+		// nothing.
+		name, parseErr := namespace.ParseName(lists[i].Namespace.String())
+		if parseErr != nil {
+			return nil, fmt.Errorf("list the namespaces with an IP allowlist: %w", parseErr)
+		}
+
+		if lists[i].List.IsEmpty() {
+			continue
+		}
+
+		if !lists[i].List.Contains(addr) {
+			out = append(out, name)
+		}
+	}
+
+	return out, nil
 }
 
 // checkNamespace refuses the request when ns holds a list that does not
