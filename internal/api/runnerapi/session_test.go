@@ -510,17 +510,13 @@ func TestSessionRenewIsRefusedAfterTheCancelBound(t *testing.T) {
 				t.Fatalf("cancel: %v", err)
 			}
 
-			if err := s.store.ageCancel(t.Context(), string(op), runner.SessionCancelBound-time.Minute); err != nil {
-				t.Fatalf("age the cancel: %v", err)
-			}
+			s.ageCancel(t, op, runner.SessionCancelBound-time.Minute)
 
 			if resp := renewOf(t, l); !resp.Canceled {
 				t.Fatalf("renew inside the bound = %+v, want canceled", resp)
 			}
 
-			if err := s.store.ageCancel(t.Context(), string(op), runner.SessionCancelBound+time.Minute); err != nil {
-				t.Fatalf("age the cancel: %v", err)
-			}
+			s.ageCancel(t, op, runner.SessionCancelBound+time.Minute)
 
 			before := s.opState().Claim.ExpiresAt
 
@@ -533,6 +529,16 @@ func TestSessionRenewIsRefusedAfterTheCancelBound(t *testing.T) {
 				t.Fatalf("expiry after a refused renewal = %v, want %v", after, before)
 			}
 		})
+	}
+}
+
+// ageCancel sets the time of the cancel of the operation op to age before the
+// clock of the database.
+func (s *sessionEnv) ageCancel(t *testing.T, op durable.ID, age time.Duration) {
+	t.Helper()
+
+	if err := s.store.ageCancel(t.Context(), string(op), age); err != nil {
+		t.Fatalf("age the cancel: %v", err)
 	}
 }
 

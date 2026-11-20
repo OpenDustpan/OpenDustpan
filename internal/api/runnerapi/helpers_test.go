@@ -216,13 +216,15 @@ func openSQLite(t *testing.T) stores {
 }
 
 // operationID is the allowlist of the operation id that ageCancel takes.
+var errOperationID = errors.New("operation id is not valid")
+
 var operationID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // ageCancelSQLite returns the ageCancel of the SQLite store in the file path.
 func ageCancelSQLite(path string) func(context.Context, string, time.Duration) error {
 	return func(ctx context.Context, operation string, age time.Duration) error {
 		if !operationID.MatchString(operation) {
-			return fmt.Errorf("operation id %q is not valid", operation)
+			return fmt.Errorf("%w: %q", errOperationID, operation)
 		}
 
 		conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")

@@ -107,7 +107,7 @@ func execSQL(ctx context.Context, dbURL, statement string) error {
 func ageCancelPostgres(schemaURL string) func(context.Context, string, time.Duration) error {
 	return func(ctx context.Context, operation string, age time.Duration) error {
 		if !operationID.MatchString(operation) {
-			return fmt.Errorf("operation id %q is not valid", operation)
+			return fmt.Errorf("%w: %q", errOperationID, operation)
 		}
 
 		conn, err := pgx.Connect(ctx, schemaURL)
