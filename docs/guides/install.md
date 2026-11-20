@@ -90,11 +90,15 @@ helm install opendustpan deploy/helm/opendustpan \
   --values image-values.yaml \
   --set database.existingSecret.name=opendustpan-database \
   --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
-  --set adminToken.existingSecret.name=opendustpan-admin-token
+  --set adminToken.existingSecret.name=opendustpan-admin-token \
+  --set server.publicURL=https://dustpan.example
 ```
 
-The [Helm guide](kubernetes.md) shows the other Secrets, storage, upgrade
-and rollback steps.
+Set `server.publicURL` to the `https` URL of the ingress or the load balancer
+that ends TLS. The chart refuses an install with no TLS and no `https` public
+URL, because `serve` refuses plain HTTP on the pod address. The
+[Helm guide](kubernetes.md) shows the other choices, the other Secrets,
+storage, upgrade and rollback steps.
 
 ## After the first release
 
@@ -159,7 +163,8 @@ registry:
 helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
   --set database.existingSecret.name=opendustpan-database \
   --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
-  --set adminToken.existingSecret.name=opendustpan-admin-token
+  --set adminToken.existingSecret.name=opendustpan-admin-token \
+  --set server.publicURL=https://dustpan.example
 ```
 
 Or switch to Docker Hub with one more value:
@@ -169,7 +174,8 @@ helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 
   --set image.repository=docker.io/opendustpan/opendustpan \
   --set database.existingSecret.name=opendustpan-database \
   --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key \
-  --set adminToken.existingSecret.name=opendustpan-admin-token
+  --set adminToken.existingSecret.name=opendustpan-admin-token \
+  --set server.publicURL=https://dustpan.example
 ```
 
 ## Maintainer setup: Docker Hub secrets

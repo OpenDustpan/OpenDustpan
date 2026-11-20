@@ -45,7 +45,7 @@ Other Secrets are optional:
 
 ## Install
 
-Make a values file. This file is the smallest install: blobs on a PersistentVolumeClaim.
+Make a values file. This file is the smallest install: blobs on a PersistentVolumeClaim, and an ingress or a load balancer in front that ends TLS. Set `server.publicURL` to its `https` URL. [Console, ingress and TLS](#console-ingress-and-tls) gives the other choices.
 
 ```yaml
 database:
@@ -57,6 +57,8 @@ keyEncryptionKey:
 adminToken:
   existingSecret:
     name: opendustpan-admin-token
+server:
+  publicURL: https://dustpan.example
 ```
 
 ```sh
