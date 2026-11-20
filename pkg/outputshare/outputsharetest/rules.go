@@ -734,7 +734,14 @@ func testRuleInvalidKey(t *testing.T, h Harness) {
 		}
 	}
 
-	for _, producer := range []identity.Object{identity.PrincipalObject("p1"), nsObject("bad name!"), {}} {
+	bare, err := identity.UnitObject(ToolOpenTofu, r.ns, "a")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	for _, producer := range []identity.Object{
+		identity.PrincipalObject("p1"), nsObject("bad name!"), {}, bare, identity.CollectionObject(r.ns, "team"),
+	} {
 		if _, err := h.Store.Get(t.Context(), producer, "rule-001"); !errors.Is(err, outputshare.ErrInvalid) {
 			t.Fatalf("Get on the producer %q = %v, want ErrInvalid", producer, err)
 		}
@@ -901,6 +908,28 @@ func testRulePurge(t *testing.T, h Harness) {
 	r.wantIDs(a.Unit)
 	r.wantIDs(c.Unit, string(keep.ID))
 	r.wantIDs(b.Unit, string(byName.ID))
+
+	// The reader leaves out a rule of a unit that is gone, so the count of the
+	// limit shows whether the purge removed it. The producer c holds the rule
+	// that names b. With 98 more rules it holds 99, and the last place is
+	// free only when the rule that named the purged unit is gone.
+	const others = outputshare.MaxRulesPerProducer - 2
+
+	for i := range others {
+		unit, unitErr := identity.UnitObject(ToolOpenTofu, globex, fmt.Sprintf("web-%03d", i))
+		if unitErr != nil {
+			t.Fatalf("unit object: %v", unitErr)
+		}
+
+		r.link(c.Unit, unit)
+	}
+
+	last, err := identity.UnitObject(ToolOpenTofu, globex, "web-last")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	r.link(c.Unit, last)
 }
 
 func testFindProducerLevels(t *testing.T, h Harness) {

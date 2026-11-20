@@ -440,7 +440,7 @@ CREATE TABLE output_sharing_rules (
     id                 TEXT    NOT NULL CHECK (length(id) >= 1 AND length(id) <= 64 AND id NOT GLOB '*[^a-z0-9_-]*'),
     producer_kind      TEXT    NOT NULL CHECK (producer_kind IN ('unit', 'collection', 'namespace')),
     producer_id        TEXT    NOT NULL DEFAULT '',
-    consumer_kind      TEXT    NOT NULL CHECK (consumer_kind IN ('unit', 'collection', 'namespace')),
+    consumer_kind      TEXT    NOT NULL,
     consumer_namespace TEXT    NOT NULL,
     consumer_id        TEXT    NOT NULL DEFAULT '',
     consumer_tool      TEXT    NOT NULL DEFAULT '',

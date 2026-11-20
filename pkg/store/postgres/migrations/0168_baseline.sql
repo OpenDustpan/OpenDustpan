@@ -983,7 +983,6 @@ CREATE TABLE output_sharing_rules (
     created_by text NOT NULL,
     created_at_ms bigint NOT NULL,
     CONSTRAINT output_sharing_rules_consumer_check CHECK ((((consumer_kind = 'namespace'::text) AND (consumer_namespace = namespace) AND (consumer_id = ''::text) AND (consumer_tool = ''::text) AND (consumer_name = ''::text)) OR ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text])) AND (consumer_namespace = namespace) AND (consumer_id <> ''::text) AND (consumer_tool = ''::text) AND (consumer_name = ''::text)) OR ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text])) AND (consumer_namespace <> namespace) AND (consumer_id = ''::text) AND (consumer_name <> ''::text) AND ((consumer_kind = 'unit'::text) = (consumer_tool <> ''::text))))),
-    CONSTRAINT output_sharing_rules_consumer_kind_check CHECK ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text, 'namespace'::text]))),
     CONSTRAINT output_sharing_rules_created_at_ms_check CHECK ((created_at_ms >= 0)),
     CONSTRAINT output_sharing_rules_created_by_check CHECK ((created_by <> ''::text)),
     CONSTRAINT output_sharing_rules_id_check CHECK (((length(id) >= 1) AND (length(id) <= 64) AND (id ~ '^[a-z0-9_-]+$'::text))),

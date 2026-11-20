@@ -36,7 +36,7 @@ func TestCheckOutputSharingRuleValueRefusesHostileColumns(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := checkOutputSharingRuleValue(tc.column, tc.value)
+			err := checkPortableValue(TableOutputSharingRules, tc.column, tc.value)
 
 			switch {
 			case tc.ok && err != nil:
