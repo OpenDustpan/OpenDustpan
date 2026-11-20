@@ -95,6 +95,20 @@ codes for a job that exists:
 | `409` | `job.plan-changed` | The plan of the body is not the stored plan. |
 | `409` | `job.plan-stale` | The stored plan is too old, or was redacted. |
 | `409` | `job.already-approved` | The caller approved this phase already. |
+| `403` | `job.no-requirement` | The caller is a member of no group of any requirement of the phase. The message names the requirements. |
+
+`GET .../jobs/{job_id}` lists the gates of each phase. Each gate has these
+fields, in addition to `type` and `approvals`:
+
+| Field | Meaning |
+| --- | --- |
+| `name` | The name of the requirement of the gate, for example `default` or `default/namespace/acme`. |
+| `filled` | The number of places of the gate that the approvals fill. One person fills one place of one gate. |
+
+Each approval has the field `for`: the names of the gates that the approval can
+fill. They are the gates whose groups held the approver when the approver signed.
+An approval with no `for` fills no place. The job runs when `filled` equals
+`approvals` for every gate.
 
 See [approval rules](approval-rules.md) for the rules that open a gate.
 
