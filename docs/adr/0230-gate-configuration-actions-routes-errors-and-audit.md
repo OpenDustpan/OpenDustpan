@@ -7,6 +7,8 @@ Changed by:
 - ADR 268 changes decision 3: the route DELETE of the approval default.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 299 changes decisions 1, 2, 3 and 7: the binding level replaces the
+  signature carry-over setting, so no route serves it.
 - ADR 335 extends decision 4: a save of a gate while locks are held answers 409.
 - ADR 355 changes decision 3: the unit path has the segment `by-name`.
 - ADR 355 changes decision 4: the error table has two more rows.
@@ -138,3 +140,9 @@ providers of each manage them as code.
 
 - The Catalog route `PUT /api/catalog/policy/{namespace}` goes in slice 5.
 - The IaC providers of RFC 48 get a resource for each object of decision 1.
+
+## Changelog
+
+- 2026-11-20, link item (ADR 296, ADR 365): the "Changed by" list gets the
+  item for ADR 299. No word of a decision changes. ADR 299 decision 12 (owner)
+  deletes the signature carry-over setting that decisions 1, 2, 3 and 7 name.
