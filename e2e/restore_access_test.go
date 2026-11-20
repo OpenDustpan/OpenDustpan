@@ -58,6 +58,8 @@ func checkOperatorRestoreKeepsTempAdmin(
 	t.Helper()
 
 	if store == e2e.StoreSQLite && !e2e.UseBinaryServer() {
+		t.Log("skip the temporary administrator restore step: the host command needs E2E_SERVER=binary on SQLite")
+
 		return false
 	}
 

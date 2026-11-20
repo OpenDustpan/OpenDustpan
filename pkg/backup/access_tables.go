@@ -18,8 +18,8 @@ const (
 	// names a group by a foreign key, so the table moves with the groups.
 	TableGroupMappings = "group_mappings"
 	// TableTempAdmins holds the temporary administrators. A row names a
-	// principal by a foreign key and gives it the authority of an
-	// administrator for a time, so the table moves with the principals table:
+	// principal by principal_id, with no foreign key, and gives it the
+	// authority of an administrator for a time, so the table moves with the principals table:
 	// a restore without server:restore-access keeps the current rows and never
 	// brings in a row of the backup, and never lets a row of the backup end a
 	// live administrator.
