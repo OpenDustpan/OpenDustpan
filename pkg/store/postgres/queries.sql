@@ -4261,6 +4261,50 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND COALESCE(deleted_at_ms, -1) = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
 
+-- name: CountLiveProfileOpenSessions :one
+-- The sessions of one owner in a namespace that have not ended at now_ms.
+SELECT COUNT(*)
+FROM profile_open_sessions
+WHERE namespace_id = sqlc.arg(namespace_id) AND owner_kind = sqlc.arg(owner_kind)
+  AND owner_id = sqlc.arg(owner_id) AND expires_at_ms > sqlc.arg(now_ms);
+
+-- name: DeleteEndedProfileOpenSessions :execrows
+-- Removes at most page_limit sessions that ended at or before now_ms, in any
+-- namespace, the oldest end first.
+DELETE FROM profile_open_sessions
+WHERE (namespace_id, id) IN (
+    SELECT s.namespace_id, s.id
+    FROM profile_open_sessions AS s
+    WHERE s.expires_at_ms <= sqlc.arg(now_ms)
+    ORDER BY s.expires_at_ms, s.namespace_id, s.id
+    LIMIT sqlc.arg(page_limit)::BIGINT
+);
+
+-- name: DeleteProfileOpenSession :execrows
+-- Removes the session of the owner, ended or not. No row removed means that
+-- the session does not exist or belongs to another owner.
+DELETE FROM profile_open_sessions
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id)
+  AND owner_kind = sqlc.arg(owner_kind) AND owner_id = sqlc.arg(owner_id);
+
+-- name: GetProfileOpenSession :one
+-- The session of the owner that has not ended at now_ms.
+SELECT namespace_id, id, root_profile_id, owner_kind, owner_id, consumer, paths, sealed,
+       created_at_ms, expires_at_ms
+FROM profile_open_sessions
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id)
+  AND owner_kind = sqlc.arg(owner_kind) AND owner_id = sqlc.arg(owner_id)
+  AND expires_at_ms > sqlc.arg(now_ms);
+
+-- name: InsertProfileOpenSession :exec
+INSERT INTO profile_open_sessions (
+    namespace_id, id, root_profile_id, owner_kind, owner_id, consumer, paths, sealed,
+    created_at_ms, expires_at_ms
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(root_profile_id), sqlc.arg(owner_kind), sqlc.arg(owner_id),
+    sqlc.arg(consumer), sqlc.arg(paths), sqlc.arg(sealed), sqlc.arg(created_at_ms), sqlc.arg(expires_at_ms)
+);
+
 -- name: DeleteProxyRuleSet :execrows
 -- The caller checks the fence in the same transaction. A row of another
 -- version is not removed.

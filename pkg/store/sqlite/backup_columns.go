@@ -57,6 +57,9 @@ const (
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
+	backupColOwnerID     = "owner_id"
+	backupColOwnerKind   = "owner_kind"
+	backupColSealed      = "sealed"
 	backupColSeq         = "seq"
 	backupColJobID       = "job_id"
 	backupColPoolID      = "pool_id"
@@ -678,6 +681,21 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 				backupColDigest, backupColNamespaceID, "starter_id", backupColJobID, "unit_tool",
 				backupColUnitID, "claim_operation", "claim_token", backupColExpiresAtMs,
 				backupColCreatedAtMs,
+			},
+		},
+		{
+			table: backup.TableProfileOpenSessions,
+			columns: []string{
+				backupColNamespaceID,
+				"id",
+				"root_profile_id",
+				backupColOwnerKind,
+				backupColOwnerID,
+				"consumer",
+				"paths",
+				backupColSealed,
+				backupColCreatedAtMs,
+				backupColExpiresAtMs,
 			},
 		},
 		{

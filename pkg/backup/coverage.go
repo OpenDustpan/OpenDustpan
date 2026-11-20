@@ -62,8 +62,8 @@ var ControlTables = []string{
 // a restore leaves empty: the replay records of the Idempotency-Key header and
 // the server key of their fingerprints, the heartbeats of the workers, the
 // reset codes and set-up codes of local users, the open passkey ceremonies,
-// the job tokens, the event receipts of the Git host, and the state version of each unit.
-// A reset code that a restore
+// the job tokens, the event receipts of the Git host, the open sessions of
+// profiles, and the state version of each unit. A reset code that a restore
 // brought back would set a password that an administrator gave out before
 // the time of the restore. A ceremony lives 300 seconds, and a restore that
 // brought one back would let an old challenge work again. A
@@ -75,7 +75,9 @@ var ControlTables = []string{
 // state that an installation holds now, so a restore derives it from the
 // restored rows and brings no stored value back. The code of the first
 // administrator is a secret that lives 10 minutes: a restore never brings
-// it back, and its marker table travels. The schema holds these
+// it back, and its marker table travels. An open session holds a result that
+// ends within hours: a restore that brought one back would let a caller read
+// values after the end that the caller was told. The schema holds these
 // tables and the tables of Tables and ControlTables, and no other table.
 // Treat the list as a constant and never mutate it.
 //
@@ -89,6 +91,7 @@ var EmptiedTables = []string{
 	TableJobTokens,
 	TableLocalUserResets,
 	TablePasskeyChallenges,
+	TableProfileOpenSessions,
 	TableUnitState,
 }
 
