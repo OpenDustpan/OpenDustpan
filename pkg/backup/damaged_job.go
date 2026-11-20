@@ -53,13 +53,13 @@ type JobRowChecker interface {
 // DamagedJobError reports a job row that the server could not read: the
 // backup holds it, and a restore refuses it. It wraps ErrCorrupt. Its text
 // holds the job ID, the unit and the reason, and nothing else from the row.
+//
+// The fields are not exported, so NewDamagedJobError is the only way to make
+// the error from outside this package.
 type DamagedJobError struct {
-	// JobID is the ID of the damaged job row.
-	JobID string
-	// UnitID is the unit ID of the row, not the unit that its body names.
-	UnitID string
-	// Reason says why the row is damaged.
-	Reason string
+	jobID  string
+	unitID string
+	reason string
 }
 
 // NewDamagedJobError returns the error for a damaged job row. A row of a
@@ -68,16 +68,33 @@ type DamagedJobError struct {
 // log line, in the stored restore text and in the output of the CLI.
 func NewDamagedJobError(jobID, unitID, reason string) *DamagedJobError {
 	return &DamagedJobError{
-		JobID:  cleanJobField(jobID),
-		UnitID: cleanJobField(unitID),
-		Reason: cleanJobField(reason),
+		jobID:  cleanJobField(jobID),
+		unitID: cleanJobField(unitID),
+		reason: cleanJobField(reason),
 	}
 }
 
+// JobID returns the ID of the damaged job row, as the constructor cleaned it.
+func (e *DamagedJobError) JobID() string { return e.jobID }
+
+// UnitID returns the unit ID of the row, not the unit that its body names, as
+// the constructor cleaned it.
+func (e *DamagedJobError) UnitID() string { return e.unitID }
+
+// Reason returns why the row is damaged, as the constructor cleaned it.
+func (e *DamagedJobError) Reason() string { return e.reason }
+
 // Error returns the text. It ends with the text of ErrCorrupt, as every
 // refusal of a corrupt backup does.
+//
+// Defense in depth: NewDamagedJobError cleans each field. Error cleans them
+// again at the point of use, so a value that a new code path in this package
+// builds without the constructor never puts a control character into the
+// restore text, the check answer or the CLI. This does not rely on the
+// constructor.
 func (e *DamagedJobError) Error() string {
-	return fmt.Sprintf("%s%s of unit %s: %s: %s", DamagedJobPrefix, e.JobID, e.UnitID, e.Reason, ErrCorrupt)
+	return fmt.Sprintf("%s%s of unit %s: %s: %s", DamagedJobPrefix,
+		cleanJobField(e.jobID), cleanJobField(e.unitID), cleanJobField(e.reason), ErrCorrupt)
 }
 
 // Unwrap returns ErrCorrupt.
@@ -154,6 +171,12 @@ func checkBackupJobs(ctx context.Context, checker JobRowChecker, open PortableOp
 		return nil
 	})
 	if err != nil {
+		// A damaged job keeps its own text, which starts with the prefix that
+		// a client reads. Any other error names the step that failed.
+		if damaged, ok := errors.AsType[*DamagedJobError](err); ok && damaged != nil {
+			return damaged
+		}
+
 		return fmt.Errorf("read the jobs of the backup: %w", err)
 	}
 
@@ -188,7 +211,12 @@ func readNamespaceNames(ctx context.Context, open PortableOpener, manifest Manif
 	names := map[string]string{}
 
 	err = ReadPortableTable(ctx, open, file, table, func(v []any) error {
-		names[textAt(v, idAt)] = textAt(v, nameAt)
+		id := textAt(v, idAt)
+		if _, dup := names[id]; dup {
+			return fmt.Errorf("%w: table %q holds a namespace ID twice: %w", errJobCheckInput, table.Table, ErrCorrupt)
+		}
+
+		names[id] = textAt(v, nameAt)
 
 		return nil
 	})

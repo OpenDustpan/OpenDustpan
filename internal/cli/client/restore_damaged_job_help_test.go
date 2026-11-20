@@ -79,3 +79,28 @@ func TestBackupCheckOfADamagedJobNamesTheCancel(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupCheckTextWithTheMarkerInsideGetsNoCancelHelp proves that only a
+// text that starts with the damaged job marker gets the help of a damaged job.
+// A text that holds the marker in another place does not. The test sets the
+// admin token, so it cannot run in parallel.
+func TestBackupCheckTextWithTheMarkerInsideGetsNoCancelHelp(t *testing.T) {
+	t.Setenv(client.AdminTokenEnvVar, "test-token")
+
+	errText := "check backup bkp-aaa: object " + backup.DamagedJobPrefix + "x is missing"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		doc := map[string]any{"id": "bkp-aaa", "complete": false, "error": errText}
+		if err := json.NewEncoder(w).Encode(doc); err != nil {
+			t.Errorf("write the answer: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	var stdout, stderr bytes.Buffer
+
+	err := client.BackupCheck(t.Context(), []string{"--server", srv.URL, "--backup", "bkp-aaa"}, &stdout, &stderr)
+	if err == nil || !errors.Is(err, backup.ErrCorrupt) || strings.Contains(err.Error(), "cancel the damaged job") {
+		t.Fatalf("check = %v, want ErrCorrupt with no cancel help", err)
+	}
+}

@@ -321,3 +321,45 @@ func zeroManifest() Manifest {
 
 	return m
 }
+
+// TestDamagedJobErrorTextEncodesAtThePointOfUse proves that Error cleans each
+// field again. The value is built without NewDamagedJobError, as a new code
+// path of this package could build it. The test fails when the cleaning in
+// Error is removed.
+func TestDamagedJobErrorTextEncodesAtThePointOfUse(t *testing.T) {
+	t.Parallel()
+
+	err := &DamagedJobError{
+		jobID:  "job-1\r\nlevel=ERROR forged\x1b[31m",
+		unitID: strings.Repeat("u", 5000),
+		reason: "reason\r\n",
+	}
+
+	text := err.Error()
+	if strings.ContainsAny(text, "\r\n\x1b") || len(text) > 4*maxDamagedJobField+200 {
+		t.Fatalf("text %q holds a control character or has no bound (%d bytes)", text, len(text))
+	}
+
+	if !strings.HasPrefix(text, DamagedJobPrefix+"job-1??level=ERROR forged?[31m of unit u") {
+		t.Fatalf("text = %q, want the cleaned job ID and the unit", text)
+	}
+}
+
+// TestCheckBackupJobsDuplicateNamespace proves that a namespaces table with
+// the same ID twice is corrupt, so a hostile table cannot choose the name that
+// a job row gets.
+func TestCheckBackupJobsDuplicateNamespace(t *testing.T) {
+	t.Parallel()
+
+	f := &jobsFixture{files: map[string][]byte{}, manifest: zeroManifest(), nsID: string(namespace.NewID())}
+	twice := map[string]any{"id": f.nsID, "name": "acme", "output_sharing_default": "nobody"}
+	other := map[string]any{"id": f.nsID, "name": "other", "output_sharing_default": "nobody"}
+
+	f.writeFixtureTable(t, "namespaces", []map[string]any{twice, other})
+	f.writeFixtureTable(t, "jobs", nil)
+
+	err := checkBackupJobs(t.Context(), fakeJobChecker{other: nil}, f.open, f.manifest)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt", err)
+	}
+}

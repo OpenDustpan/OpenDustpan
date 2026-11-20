@@ -46,7 +46,7 @@ func TestCheckJobRowRefusesHostileRows(t *testing.T) {
 				t.Fatalf("check = %v, want a damaged job error", err)
 			}
 
-			if damaged.JobID != "job-dmg1" || damaged.UnitID != "ws-1" || damaged.Reason == "" {
+			if damaged.JobID() != "job-dmg1" || damaged.UnitID() != "ws-1" || damaged.Reason() == "" {
 				t.Fatalf("damaged = %+v, want the job, the unit and a reason", damaged)
 			}
 
