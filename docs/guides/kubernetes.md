@@ -100,6 +100,12 @@ Kubernetes stops a backup Job after `backup.schedule.activeDeadlineSeconds`, 6 h
 
 The default is plain HTTP inside the cluster and TLS at the ingress. Set `ingress.*` to make an Ingress. Set `server.publicURL` to the URL that users see, and `server.trustedProxies` to the addresses of the proxies in front of the server. OpenTofu needs TLS at the edge that the client sees.
 
+The server listens on the pod address, which is not a loopback address, and `serve` refuses plain HTTP there. So the chart needs one of these values, and refuses the install without one:
+
+- `server.publicURL` with `https`: the ingress or the load balancer ends TLS.
+- `server.tls.existingSecret`: the server serves TLS itself.
+- `server.allowPlainHTTP: true`: the server serves plain HTTP on the pod address. Tokens and state then go over the network with no encryption. Use it only in a trusted network. The server logs a warning at each start.
+
 An Ingress in front of built-in TLS needs the annotation of your ingress controller that makes it connect to the backend with HTTPS. For the NGINX ingress controller, this is `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"`. Without it, the controller sends plain HTTP to a TLS port.
 
 With `server.tls.existingSecret`, the server serves TLS itself, and the probes use HTTPS. A certificate renewal needs a restart of the pods.

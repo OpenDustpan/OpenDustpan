@@ -256,6 +256,12 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return err
 	}
 
+	// The key and the database come first: with neither, the person most
+	// likely wants a trial, and that error names dev.
+	if err := f.checkPlainHTTP(); err != nil {
+		return err
+	}
+
 	return schemaRefusal(kindRefusal(f.run(ctx, stderr), commandServe), commandServe, "")
 }
 
@@ -304,6 +310,7 @@ type serveFlags struct {
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
+	allowPlainHTTP               bool
 	issuerBaseURL                string
 	oidcIssuer                   string
 	oidcProvider                 string
@@ -566,6 +573,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag(cli.AllowPlainHTTPFlag).Bool(fs, &f.allowPlainHTTP)
 	cli.ByFlag("issuer-base-url").String(fs, &f.issuerBaseURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
@@ -999,6 +1007,17 @@ func (f *serveFlags) serveWithStores(
 	started := &startedReloader{stop: nil}
 
 	opts = append(opts, dustpan.WithBeforeServe(f.beforeServe(ctx, st, logger, reloads, started)))
+
+	// Serve binds the listen address itself and checks the bound address,
+	// then passes the listener to the server.
+	ln, err := f.listenChecked(ctx, logger)
+	if err != nil {
+		return err
+	}
+
+	defer closeServeListener(ctx, logger, ln)
+
+	opts = append(opts, dustpan.WithListener(ln))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {

@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 315 extends: the quickstart.
 - ADR 356 changes decision 3: the trial variant of the message for a missing database goes.
+- ADR 387 changes decision 6: the `doctor` check of plain HTTP on an address that is not loopback fails, not warns.
+- ADR 387 changes decision 10: the row of the listen address gives `fail`, and the opt-in gives `warn`.
 
 ## Context
 

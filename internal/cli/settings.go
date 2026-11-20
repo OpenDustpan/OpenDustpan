@@ -220,6 +220,15 @@ var Settings = []*Setting{
 		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
 		referenceNone,
 	).WithFile("public-url").WithURL(),
+	boolSetting(
+		AllowPlainHTTPFlag, "DUSTPAN_ALLOW_PLAIN_HTTP",
+		"serve plain HTTP on an address that is not loopback, with no TLS and no https --public-url "+
+			"(DUSTPAN_ALLOW_PLAIN_HTTP)",
+		"(none: off). Without it, `serve` refuses to start when `--listen` is not a loopback address, "+
+			"`--tls-cert` is not set and `--public-url` is not an `https` URL. Set `true` only in a trusted "+
+			"network: tokens and state then go over the network with no encryption. The server writes a warning "+
+			"to the log at each start with it. `dev` does not read it",
+	).WithFile(AllowPlainHTTPFlag),
 	stringSetting(
 		"issuer-base-url", "DUSTPAN_ISSUER_BASE_URL", "",
 		"host of the OIDC issuer URL of each namespace, for example https://issuer.example.com; "+

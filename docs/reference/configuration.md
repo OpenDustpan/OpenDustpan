@@ -24,6 +24,7 @@ the same list.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
+| `--allow-plain-http` | `DUSTPAN_ALLOW_PLAIN_HTTP` | `allow-plain-http` | (none: off). Without it, `serve` refuses to start when `--listen` is not a loopback address, `--tls-cert` is not set and `--public-url` is not an `https` URL. Set `true` only in a trusted network: tokens and state then go over the network with no encryption. The server writes a warning to the log at each start with it. `dev` does not read it |
 | `--issuer-base-url` | `DUSTPAN_ISSUER_BASE_URL` | `issuer-base-url` | (none: the issuer uses `--public-url`. With neither setting, the issuer is off) |
 | `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
 | `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |

@@ -1,0 +1,13 @@
+# Refused: a public URL with http does not say that a proxy ends TLS.
+# want: Set server.publicURL to the https URL
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
+server:
+  publicURL: http://dustpan.example

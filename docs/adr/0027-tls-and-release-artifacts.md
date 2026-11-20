@@ -10,6 +10,7 @@ Changed by:
 - ADR 278 changes decision 6: only Linux and macOS archives, no zip archive.
 - ADR 283 changes decision 8: no ACME, OS packages, signing or SBOM in v0.1.0.
 - ADR 283 extends decision 7: the owner says yes to buildx and QEMU actions.
+- ADR 387 changes decision 3: `serve` refuses plain HTTP on an address that is not loopback, unless TLS, an `https` public URL or `--allow-plain-http` is set.
 
 ## Context
 

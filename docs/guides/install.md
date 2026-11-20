@@ -64,6 +64,30 @@ Use one of these ways today:
 - Build the container image from your checkout with
   `./scripts/build-image-local.sh`. The quickstart shows how to run it.
 
+## Listen address and TLS
+
+`serve` listens on `--listen` (`DUSTPAN_LISTEN`), `:8080` by default. An
+address with no host listens on every interface. `serve` refuses to start
+with plain HTTP on an address that is not loopback. Set one of these:
+
+- `--tls-cert` and `--tls-key`: the server serves TLS itself.
+- `--public-url` with `https`, for example `https://dustpan.example`: a
+  reverse proxy or a load balancer in front ends TLS. Also set
+  `--trusted-proxies` to the addresses of the proxy.
+- `--allow-plain-http` (`DUSTPAN_ALLOW_PLAIN_HTTP`): the server serves plain
+  HTTP. Tokens and state then go over the network with no encryption. Use it
+  only in a trusted network. The server logs a warning at each start.
+
+Without one of these, `serve` stops before it opens the database:
+
+```text
+opendustpan: --listen ":8080" (DUSTPAN_LISTEN) is not a loopback address and has no TLS: set --tls-cert and --tls-key (DUSTPAN_TLS_CERT, DUSTPAN_TLS_KEY), or set --public-url (DUSTPAN_PUBLIC_URL) to the https URL of the proxy that ends TLS, or set --allow-plain-http (DUSTPAN_ALLOW_PLAIN_HTTP) to serve plain HTTP
+```
+
+A loopback address, for example `127.0.0.1:8080`, needs none of these.
+`opendustpan doctor` fails its listen address check in the same case. `dev`
+logs a warning and serves.
+
 ## Install with Helm
 
 Make the three Secrets first. The chart refuses an install without all

@@ -149,6 +149,10 @@ app.kubernetes.io/part-of: opendustpan
 - name: DUSTPAN_TLS_KEY
   value: /tls/tls.key
 {{- end }}
+{{- if eq (toString .Values.server.allowPlainHTTP) "true" }}
+- name: DUSTPAN_ALLOW_PLAIN_HTTP
+  value: "true"
+{{- end }}
 {{- with .Values.server.extraEnv }}
 {{- toYaml . | nindent 0 }}
 {{- end }}
@@ -225,5 +229,8 @@ and key, and values that the release needs.
 {{- end -}}
 {{- if and .Values.metrics.serviceMonitor.enabled (not .Values.metrics.serviceMonitor.tokenSecret.name) -}}
 {{- fail "metrics.serviceMonitor.tokenSecret.name is required when metrics.serviceMonitor.enabled is true" -}}
+{{- end -}}
+{{- if not (or .Values.server.tls.existingSecret (hasPrefix "https://" (toString (default "" .Values.server.publicURL))) (eq (toString .Values.server.allowPlainHTTP) "true")) -}}
+{{- fail "the server listens on the pod address with no TLS, and serve refuses plain HTTP there. Set server.publicURL to the https URL of the ingress or load balancer that ends TLS, or set server.tls.existingSecret, or set server.allowPlainHTTP to true" -}}
 {{- end -}}
 {{- end -}}

@@ -149,7 +149,8 @@ Settings of `opendustpan serve`.
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `server.publicURL` | `""` | The external base URL, for example https://dustpan.example. Set it when an ingress or a load balancer is in front of the server. Console sign-in needs it. |
+| `server.publicURL` | `""` | The external base URL, for example https://dustpan.example. Set it when an ingress or a load balancer is in front of the server. Console sign-in needs it. An `https` URL says that the ingress or the load balancer ends TLS. The chart needs an `https` URL here, `server.tls.existingSecret` or `server.allowPlainHTTP`. |
+| `server.allowPlainHTTP` | `false` | `true` lets the server listen with plain HTTP on the pod address with no TLS and no `https` `server.publicURL`. Tokens and state then go over the network with no encryption. The server logs a warning at each start. The chart sets `DUSTPAN_ALLOW_PLAIN_HTTP` from it. |
 | `server.trustedProxies` | `[]` | The addresses (CIDRs) of the proxies that may set the client address header, for example the pod CIDR of the ingress controller. |
 | `server.trustedProxyHeader` | `x-forwarded-for` | The header that holds the client address. It applies when `trustedProxies` is not empty. |
 | `server.installation` | `""` | The name of this installation. Empty means the server default, `local`. |
