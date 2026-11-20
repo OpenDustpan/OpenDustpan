@@ -264,7 +264,8 @@ func createWALWorkspace(
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 
 	return s.CreateWorkspace(ctx, w, ns.Fence())

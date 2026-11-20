@@ -145,8 +145,9 @@ func (s *jobTokenServer) putState(t *testing.T, name, state string) {
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(), ID: workspace.ID(ident.NewID("ws-")),
 		Ref: workspace.Ref{Namespace: "acme", Name: ref}, Revision: 1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-		Origin:    identity.StateOrigin{Job: "", Commit: ""},
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 
 	if err = s.st.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

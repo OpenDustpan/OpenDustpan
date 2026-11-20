@@ -813,13 +813,15 @@ ORDER BY name;
 -- name: ReadWorkspace :one
 -- The read behind the store port: the workspace with the ID of its namespace,
 -- from the join with the namespace row, so a caller needs no second read.
-SELECT sqlc.embed(w), n.id AS namespace_id
+SELECT sqlc.embed(w), n.id AS namespace_id,
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id AND m.namespace = w.namespace) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = ? AND w.name = ? AND w.deleted_at_ms IS NULL;
 
 -- name: ReadWorkspaceByID :one
-SELECT sqlc.embed(w), n.id AS namespace_id
+SELECT sqlc.embed(w), n.id AS namespace_id,
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id AND m.namespace = w.namespace) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.id = ? AND w.deleted_at_ms IS NULL;
@@ -2810,17 +2812,17 @@ SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix
 -- name: InsertDurableOperation :exec
 INSERT INTO durable_operations (
     id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
-) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?);
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, 0, 0, ?, ?, ?);
 
 -- name: GetDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = ?;
 
 -- name: GetDurableOperationByKey :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = ?;
 
 -- name: CountRunnableDurableOperations :one
@@ -2833,7 +2835,7 @@ SELECT COUNT(*) FROM durable_operations WHERE kind = ? AND state IN ('pending', 
 -- Writes every column that changes after the start of an operation.
 UPDATE durable_operations
 SET state = ?, attempt = ?, expiries = ?, deadline_releases = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
-    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+    claim_expires_at_ms = ?, cancel_requested = ?, cancel_requested_at_ms = ?, not_before_ms = ?, updated_at_ms = ?
 WHERE id = ?;
 
 -- name: ListDurableSteps :many

@@ -168,8 +168,9 @@ func createGateUnitWorkspace(t *testing.T, s *Store, ns namespace.Namespace, id 
 			Forced:   false,
 			Unlocked: false,
 		},
-		Revision: 1,
-		Origin:   identity.StateOrigin{Job: "", Commit: ""},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
 		t.Fatalf("create workspace %s/%s: %v", ns.Name, name, err)

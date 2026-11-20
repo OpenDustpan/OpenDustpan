@@ -1935,7 +1935,8 @@ func newLatencyFixture(t *testing.T, s latencyStore, records idempotency.Store) 
 			LastRelease: workspace.NoRelease(), ID: workspace.ID(ident.NewID("ws-")),
 			Ref:      workspace.Ref{Namespace: ns.Name, Name: workspace.Name(fmt.Sprintf("bulk-%03d", i))},
 			Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-			Origin: identity.StateOrigin{Job: "", Commit: ""},
+			Origin:       identity.StateOrigin{Job: "", Commit: ""},
+			InCollection: false,
 		}
 		if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
 			t.Fatalf("create workspace %d: %v", i, err)

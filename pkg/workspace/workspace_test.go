@@ -348,6 +348,8 @@ func (m *memStore) GetWorkspaceByID(_ context.Context, id workspace.ID) (workspa
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
 
+	_, w.InCollection = m.placements[id]
+
 	return w, nil
 }
 

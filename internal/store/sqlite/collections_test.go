@@ -84,7 +84,8 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 	if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)

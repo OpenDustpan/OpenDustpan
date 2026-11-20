@@ -101,7 +101,7 @@ func newProxyEnv(t *testing.T) *proxyEnv {
 
 		return stores{
 			namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), jobtokens: s.JobTokens(), units: s,
-			runners: s.Runners(), audit: s,
+			runners: s.Runners(), audit: s, ageCancel: nil,
 		}
 	}
 

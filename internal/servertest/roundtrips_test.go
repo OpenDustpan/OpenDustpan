@@ -875,9 +875,8 @@ type requestFlow struct {
 // upload and unlock" holds 2.
 //
 // A lock and the declare of a state version refuse a workspace that no
-// collection holds. Each check reads the unit and its membership with one
-// statement and no transaction. So "lock" and "opentofu upload" each hold 1
-// round trip for it, and "lock, upload and unlock" holds 2.
+// collection holds. Each check uses the membership that the read of the
+// workspace returns, so it holds no round trip of its own.
 //
 // Each check of the state.write gates first reads the principal record of the
 // caller with one query, for its groups and its break-glass mark. So "lock",
@@ -908,12 +907,12 @@ type requestFlow struct {
 // reads the stack.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 43, func(h *rtHarness) {
+		{"opentofu upload", 42, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 35, func(h *rtHarness) {
+		{"lock", 34, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -939,7 +938,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 96, func(h *rtHarness) {
+		{"lock, upload and unlock", 94, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()

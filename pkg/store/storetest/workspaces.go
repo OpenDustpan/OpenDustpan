@@ -402,7 +402,8 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 			Forced:   false,
 			Unlocked: false,
 		},
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
 	}
 }
 

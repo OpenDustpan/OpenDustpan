@@ -6276,7 +6276,7 @@ func (q *Queries) GetDriftResult(ctx context.Context, arg GetDriftResultParams) 
 
 const getDurableOperation = `-- name: GetDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = ?
 `
 
@@ -6299,6 +6299,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -6308,7 +6309,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 
 const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = ?
 `
 
@@ -6331,6 +6332,7 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 		&i.ClaimToken,
 		&i.ClaimExpiresAtMs,
 		&i.CancelRequested,
+		&i.CancelRequestedAtMs,
 		&i.NotBeforeMs,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -11034,8 +11036,8 @@ const insertDurableOperation = `-- name: InsertDurableOperation :exec
 
 INSERT INTO durable_operations (
     id, start_key, kind, input, version, state, attempt, expiries, deadline_releases, failures, last_error, claim_owner,
-    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
-) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?)
+    claim_token, claim_expires_at_ms, cancel_requested, cancel_requested_at_ms, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, 0, '', NULL, 0, NULL, 0, 0, ?, ?, ?)
 `
 
 type InsertDurableOperationParams struct {
@@ -21293,7 +21295,8 @@ func (q *Queries) QueryGateRecords(ctx context.Context, arg QueryGateRecordsPara
 }
 
 const readWorkspace = `-- name: ReadWorkspace :one
-SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id,
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id AND m.namespace = w.namespace) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.namespace = ? AND w.name = ? AND w.deleted_at_ms IS NULL
@@ -21305,8 +21308,9 @@ type ReadWorkspaceParams struct {
 }
 
 type ReadWorkspaceRow struct {
-	Workspace   Workspace
-	NamespaceID string
+	Workspace    Workspace
+	NamespaceID  string
+	InCollection bool
 }
 
 // The read behind the store port: the workspace with the ID of its namespace,
@@ -21336,20 +21340,23 @@ func (q *Queries) ReadWorkspace(ctx context.Context, arg ReadWorkspaceParams) (R
 		&i.Workspace.LastReleaseKind,
 		&i.Workspace.LastReleaseAtMs,
 		&i.NamespaceID,
+		&i.InCollection,
 	)
 	return i, err
 }
 
 const readWorkspaceByID = `-- name: ReadWorkspaceByID :one
-SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id
+SELECT w.id, w.namespace, w.name, w.revision, w.lock_id, w.lock_holder, w.lock_reason, w.locked_at_ms, w.current_state_version_id, w.created_at_ms, w.updated_at_ms, w.allow_forced_writes, w.allow_unlocked_writes, w.deleted_at_ms, w.deleted_name, w.last_release_lock_id, w.last_release_holder, w.last_release_by, w.last_release_kind, w.last_release_at_ms, n.id AS namespace_id,
+       EXISTS (SELECT 1 FROM collection_members AS m WHERE m.unit_id = w.id AND m.namespace = w.namespace) AS in_collection
 FROM workspaces AS w
 JOIN namespaces AS n ON n.name = w.namespace
 WHERE w.id = ? AND w.deleted_at_ms IS NULL
 `
 
 type ReadWorkspaceByIDRow struct {
-	Workspace   Workspace
-	NamespaceID string
+	Workspace    Workspace
+	NamespaceID  string
+	InCollection bool
 }
 
 func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspaceByIDRow, error) {
@@ -21377,6 +21384,7 @@ func (q *Queries) ReadWorkspaceByID(ctx context.Context, id string) (ReadWorkspa
 		&i.Workspace.LastReleaseKind,
 		&i.Workspace.LastReleaseAtMs,
 		&i.NamespaceID,
+		&i.InCollection,
 	)
 	return i, err
 }
@@ -24226,24 +24234,25 @@ func (q *Queries) UpdateBreakGlassReviewVerdict(ctx context.Context, arg UpdateB
 const updateDurableOperation = `-- name: UpdateDurableOperation :exec
 UPDATE durable_operations
 SET state = ?, attempt = ?, expiries = ?, deadline_releases = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
-    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+    claim_expires_at_ms = ?, cancel_requested = ?, cancel_requested_at_ms = ?, not_before_ms = ?, updated_at_ms = ?
 WHERE id = ?
 `
 
 type UpdateDurableOperationParams struct {
-	State            string
-	Attempt          int64
-	Expiries         int64
-	DeadlineReleases int64
-	Failures         int64
-	LastError        string
-	ClaimOwner       sql.NullString
-	ClaimToken       int64
-	ClaimExpiresAtMs sql.NullInt64
-	CancelRequested  bool
-	NotBeforeMs      int64
-	UpdatedAtMs      int64
-	ID               string
+	State               string
+	Attempt             int64
+	Expiries            int64
+	DeadlineReleases    int64
+	Failures            int64
+	LastError           string
+	ClaimOwner          sql.NullString
+	ClaimToken          int64
+	ClaimExpiresAtMs    sql.NullInt64
+	CancelRequested     bool
+	CancelRequestedAtMs int64
+	NotBeforeMs         int64
+	UpdatedAtMs         int64
+	ID                  string
 }
 
 // Writes every column that changes after the start of an operation.
@@ -24259,6 +24268,7 @@ func (q *Queries) UpdateDurableOperation(ctx context.Context, arg UpdateDurableO
 		arg.ClaimToken,
 		arg.ClaimExpiresAtMs,
 		arg.CancelRequested,
+		arg.CancelRequestedAtMs,
 		arg.NotBeforeMs,
 		arg.UpdatedAtMs,
 		arg.ID,
