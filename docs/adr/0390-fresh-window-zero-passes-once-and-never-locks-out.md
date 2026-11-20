@@ -1,4 +1,4 @@
-# 389. Window 0 passes once and never locks out
+# 390. Window 0 passes once and never locks out
 
 Status: accepted · 2026-11-20. Decided by the project owner (owner, 2026-11-20). The owner accepted the reading of ADR 227 decision 3 that the lead recommended. The words of ADR 227 decision 3 stay as they are
 

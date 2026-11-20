@@ -13,7 +13,7 @@ Changed by:
 - ADR 373 extends decision 1: the proof of a break-glass pass.
 - ADR 385 changes decision 3: the setting `freshAuthEnabled` turns the check off.
 - ADR 385 extends decision 2: the one window applies only when `freshAuthEnabled` is on.
-- ADR 389 extends decision 3: with a window of 0, a fresh authentication made for the step passes once, then it is used up. A window of 0 is never a lockout.
+- ADR 390 extends decision 3: with a window of 0, a fresh authentication made for the step passes once, then it is used up. A window of 0 is never a lockout.
 .
 ## Context
 

@@ -4369,15 +4369,15 @@ decisions:
   accepted_artifact: "docs/adr/0388-a-service-token-ends-when-its-maker-loses-the-right.md"
   evidence:
   - "docs/adr/0388-a-service-token-ends-when-its-maker-loses-the-right.md"
-- id: "adr-0389"
-  title: "ADR 389: Window 0 passes once and never locks out"
-  decision: "1. **A fresh authentication passes one step, once (owner, 2026-11-20).** With a window of 0, a fresh authentication that was made for this step passes the step. Then it is used up. The next step needs a new fresh authentication.\n2. **Never a lockout (owner, 2026-11-20).** A window of 0 is never a lockout. A person who makes a fresh authentication for a step can do that step, also right after a sign-in. This holds for each route that needs a fresh authentication, the session policy included.\n3. **The words of ADR 227 decision 3 stay (owner, 2026-11-20).** \"0 asks every time\" and \"no value turns the check off\" keep their meaning. This ADR gives the reading of \"asks every time\". It adds no other change.\n\nLater changes, from the status line of ADR 389: Decided by the project owner (owner, 2026-11-20). The owner accepted the reading of ADR 227 decision 3 that the lead recommended. The words of ADR 227 decision 3 stay as they are."
+- id: "adr-0390"
+  title: "ADR 390: Window 0 passes once and never locks out"
+  decision: "1. **A fresh authentication passes one step, once (owner, 2026-11-20).** With a window of 0, a fresh authentication that was made for this step passes the step. Then it is used up. The next step needs a new fresh authentication.\n2. **Never a lockout (owner, 2026-11-20).** A window of 0 is never a lockout. A person who makes a fresh authentication for a step can do that step, also right after a sign-in. This holds for each route that needs a fresh authentication, the session policy included.\n3. **The words of ADR 227 decision 3 stay (owner, 2026-11-20).** \"0 asks every time\" and \"no value turns the check off\" keep their meaning. This ADR gives the reading of \"asks every time\". It adds no other change.\n\nLater changes, from the status line of ADR 390: Decided by the project owner (owner, 2026-11-20). The owner accepted the reading of ADR 227 decision 3 that the lead recommended. The words of ADR 227 decision 3 stay as they are."
   reason: "ADR 227 decision 3 says (owner, 2026-10-18): > **0 asks every time (owner, 2026-10-18).** A window of 0 asks for a > fresh authentication at each step. No value turns the check off. The decision does not say what \"asks for a fresh authentication at each step\" means for a person who has just signed in or who has just made a fresh step. A walk of the code found this result: a window of 0 locked every route that needs a fresh authentication, the session policy included. The lock held right after a sign-in, and it held for the bootstrap token too. The only way back was a change in the database."
   scope:
   - "internal/api/server/freshness.go"
   currency: "active"
   source: "adr"
   accepted_at: "2026-11-20"
-  accepted_artifact: "docs/adr/0389-fresh-window-zero-passes-once-and-never-locks-out.md"
+  accepted_artifact: "docs/adr/0390-fresh-window-zero-passes-once-and-never-locks-out.md"
   evidence:
-  - "docs/adr/0389-fresh-window-zero-passes-once-and-never-locks-out.md"
+  - "docs/adr/0390-fresh-window-zero-passes-once-and-never-locks-out.md"
