@@ -1,18 +1,27 @@
 package server_test
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -296,5 +305,127 @@ func TestTokenStaysWhileItsMakerKeepsAPath(t *testing.T) {
 
 	if lostMakerRevocation(t, f) != nil {
 		t.Fatal("a change that leaves the maker a path revoked the token")
+	}
+}
+
+// TestRevokeOfLostMakersSurvivesTheCancelOfTheRequest proves that a client
+// that leaves after the commit of the change does not stop the revoke. The
+// request context ends right after the commit of the revoke of the grant. The
+// token still ends, and its audit entry names the change as the cause, not the
+// use of the token.
+func TestRevokeOfLostMakersSurvivesTheCancelOfTheRequest(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	f := newAccessFixtureAll(t, accessFixtureParts{
+		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
+		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
+		now: nil, logger: nil, noSignIn: false, getGrantErr: nil, afterRevoke: cancel, tokenList: nil,
+	})
+	seedLostMaker(t, f, pathDirect)
+
+	req := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/api/server/grants/grt-seed-tina", nil)
+	req.Header.Set("Authorization", "Bearer admin")
+
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+
+	if ctx.Err() == nil {
+		t.Fatal("the request context was not canceled after the commit: the test does not test the cancel")
+	}
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke of the grant answers %d, want %d (%s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	e := lostMakerRevocation(t, f)
+	if e == nil {
+		t.Fatal("the cancel of the request stopped the revoke: the token of the maker with no path is still active")
+	}
+
+	if !strings.HasPrefix(causeOf(e), "server:manage-access grant:grt-seed-tina") ||
+		e.Reason != accesstoken.ReasonMakerLostPath {
+		t.Fatalf("revocation entry = %+v, want the change as the cause and the reason of the sweep", *e)
+	}
+}
+
+// TestRevokeOfLostMakersEndsAtItsTimeout proves that a store that never
+// answers does not hold the request. The list of the tokens blocks until its
+// context ends. The revoke ends at its timeout, the request answers, the fault
+// is in the log, and the check at the use of the token refuses and revokes it.
+func TestRevokeOfLostMakersEndsAtItsTimeout(t *testing.T) {
+	t.Parallel()
+
+	var (
+		armed atomic.Bool
+		logs  bytes.Buffer
+	)
+
+	block := func(ctx context.Context) error {
+		if !armed.Load() {
+			return nil
+		}
+
+		<-ctx.Done()
+
+		return fmt.Errorf("the list of the tokens ended with its context: %w", ctx.Err())
+	}
+
+	f := newAccessFixtureAll(t, accessFixtureParts{
+		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
+		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
+		now: nil, logger: slog.New(slog.NewTextHandler(&logs, nil)), noSignIn: false, getGrantErr: nil,
+		afterRevoke: nil, tokenList: block,
+	})
+	seedLostMaker(t, f, pathDirect)
+	apiserver.SetLostMakerRevokeTimeout(f.handler.Handler, 100*time.Millisecond)
+
+	armed.Store(true)
+
+	answered := make(chan int, 1)
+
+	// The deadline only ends a broken build: with the timeout in place the
+	// request answers after 100 ms.
+	deadline, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+
+	go func() {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/server/grants/grt-seed-tina", nil)
+		req.Header.Set("Authorization", "Bearer admin")
+
+		rec := httptest.NewRecorder()
+		f.handler.ServeHTTP(rec, req)
+		answered <- rec.Code
+	}()
+
+	select {
+	case code := <-answered:
+		if code != http.StatusNoContent {
+			t.Fatalf("revoke of the grant answers %d, want %d", code, http.StatusNoContent)
+		}
+	case <-deadline.Done():
+		t.Fatal("the request did not answer: the revoke of the lost makers has no timeout")
+	}
+
+	armed.Store(false)
+
+	if !strings.Contains(logs.String(), "revoke of the service tokens whose maker lost the act-as path failed") {
+		t.Fatalf("log = %q, want the fault of the revoke", logs.String())
+	}
+
+	if lostMakerRevocation(t, f) != nil {
+		t.Fatal("the token was revoked by the sweep that the timeout stopped")
+	}
+
+	err := f.tokens.CheckActive(t.Context(), lostMakerToken)
+	if !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("check at use = %v, want ErrUnauthenticated", err)
+	}
+
+	e := lostMakerRevocation(t, f)
+	if e == nil || e.Reason != accesstoken.ReasonMakerLostPathAtUse {
+		t.Fatalf("revocation entry = %+v, want the reason of a use", e)
 	}
 }
