@@ -1,5 +1,5 @@
 ---
-version: 8
+version: 9
 ---
 
 Issue: none. The PM directed this change; no issue exists.
@@ -10,43 +10,52 @@ Issue: none. The PM directed this change; no issue exists.
 
 The user path this change must make work (every step is decided, owner, 2026-11-20):
 
-1. **Docs page.** The operator reads the rotation page `docs/guides/key-rotation.md` and stages the new key and the old key.
-2. **Server start.** The operator starts each server process with the new key in `DUSTPAN_KEY_ENCRYPTION_KEY` (or `DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and the old key in `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` (or `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`).
-3. **API and CLI.** A site administrator, with a fresh authentication step, starts the rotation, and watches the progress with `opendustpan key-rotation status`.
-4. **API and CLI.** The site administrator resumes or aborts a rotation that stopped.
+1. **Docs page.** The operator reads the rotation page `docs/guides/key-rotation.md`. It lists what the operator needs, the sign-in over the API and the order of the steps.
+2. **Server start.** The operator starts each server process with the new key in `DUSTPAN_KEY_ENCRYPTION_KEY` (or `DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and the old key in `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` (or `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`). Each process writes the wrapper IDs that it holds in its instance row.
+3. **API.** A site administrator signs in with a local-user password over the API, reads the CSRF value of the session, and starts the rotation with the session cookie, the CSRF header and the `Origin` header (owner, 2026-11-20, round 2). The administrator watches the progress with `opendustpan key-rotation status`. The commands `key-rotation start` and `key-rotation finish` send no request and print this path and the docs page.
+4. **API and CLI.** The site administrator resumes a rotation that stopped.
 5. **API.** The site administrator, with a fresh authentication step, finishes the rotation when no record wraps under the old key.
 6. **Server start.** The operator removes the old key and starts each server process with the new key alone.
+
+A rotation only moves forward: start, resume, finish (owner, 2026-11-20, round 2). To go back to the old key, finish, then start a rotation in the other direction.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Start of the server with one key while a rotation is active. | The server refuses to start, names both key settings and the rotation state. | `opendustpan serve` with both keys staged |
+| Start of the server with the old key still staged after finish. | The server refuses to start, names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE` and the one variable to remove (owner, 2026-11-20, round 2). | `opendustpan serve` with the new key alone |
 | Start of a rotation from a process that holds no old key. | 409 with the code `key-rotation.old-key-missing`; the text names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD`. | `opendustpan serve` with the old key staged |
-| Start, finish or abort with an access token. | 403 with the code `mfa.fresh-step-required`. | Sign in to the console again and repeat the call (see "Usability") |
-| Finish while a record still holds the old key. | 409 with the code `key-rotation.incomplete` and the count for each family. | `opendustpan key-rotation resume` |
+| Start or finish while a running instance does not hold both wrapper IDs. | 409 with the code `key-rotation.instance-lacks-key`; the text names the instance ID. | Restart that instance with both keys, or `DELETE /api/server/instances/{id}` for a row of a process that is gone |
+| Start while a backup runs. | 409 with the code `key-rotation.backup-running`. | Wait for the backup, then repeat the start |
+| Backup or restore while a rotation is active. | 409 with the code `backup.key-rotation-active` or `restore.key-rotation-active`. | `opendustpan key-rotation status` |
+| Start or finish with an access token. | 403 with the code `mfa.fresh-step-required`. | Sign in over the API as the docs page shows, and repeat the call |
+| Finish while a record still holds the old key, or a blob delete is pending. | 409 with the code `key-rotation.incomplete` and the count for each family. | `opendustpan key-rotation resume` |
+| Resume while another instance holds the claim. | 409 with the code `key-rotation.claimed`. | Repeat after the lease ends |
 | Start of the server with the old key alone after finish. | Unchanged on main: the server refuses to start and names `DUSTPAN_KEY_ENCRYPTION_KEY`. | `opendustpan serve` with the new key |
 
 Evidence for the claims above:
 
 - Main refuses a database that holds keys under more than one wrapper ID, and the text names a rewrap command that does not exist. Proof: `pkg/secret/secret.go:225 (func checkWrapperIDs)` and the test `TestCheckWrapper` at `pkg/secret/builtin_test.go:209 (func TestCheckWrapper)`, subtest "a half-rotated store is refused".
 - Main has no rewrap path. Proof: `rg -i rewrap --glob '*.go'` over non-test files on main names only comments and the error text above. No store method updates a stored wrapper ID.
-- Main has no rotation table. Proof: the baseline `pkg/store/sqlite/migrations/0168_baseline.sql` and the PostgreSQL baseline hold no such table. The four tables with a `wrapper_id` column are `secret_keys` (line 74), `installation_secret_keys` (line 436), `idempotency_server_key` (line 902) and `item_keys` (line 1065) in the SQLite baseline.
+- Main has no rotation table. Proof: the baseline `pkg/store/sqlite/migrations/0168_baseline.sql` and the PostgreSQL baseline hold no such table. The four tables with a `wrapper_id` column are `secret_keys` (`CREATE TABLE` at line 71, column at line 74), `installation_secret_keys` (line 438, column at line 440), `idempotency_server_key` (line 904, column at line 907) and `item_keys` (line 1082, column at line 1088) in the SQLite baseline.
+- Main has no record of the wrapper IDs that a running process holds. Proof: `instance_versions` in the SQLite baseline (`CREATE TABLE` at line 1196) holds `id`, `binary_version` and `started_at_ms` only.
 
 ## What Changes
 
-Specified now (every part is decided; owner decisions are marked "(owner, 2026-11-20)"):
+Specified now (every part is decided; owner decisions are marked "(owner, 2026-11-20)"; a rule that the reviewer of this change prescribed is marked "(reviewer-prescribed)"):
 
-- NEW rotation record in SQL, one row for each rotation, in the baseline of each dialect.
-- NEW `secret.Rotating`: a `Wrapper` that wraps under the new key and opens under the new key or the old key, and NEW function `secret.Holds(wrapper, id)`, used by the places that compare a stored wrapper ID with the ID of the wrapper (the data key open, the two start checks, the idempotency key open and the restore check).
-- NEW rewrap of the four families that the key-encryption key wraps directly: the data keys (`secret_keys`), the installation data keys (`installation_secret_keys`, which hold the sign-in secrets and the other values of `@server`), the item keys (`item_keys` and their blobs) and the idempotency server key. Run as a durable operation with a stored cursor.
-- NEW start-up check that needs both keys while a rotation is active and the new key alone after finish. The same check counts the wrapper IDs of the item keys and of the idempotency key, which the start-up check on main does not read.
-- NEW audit entries of kind `change` in the scope `@server` for start, resume, finish and abort, with the actor and the wrapper IDs.
-- A restore of a backup made under the old key works while both keys are staged. The server refuses a restore while a rotation is active.
-- NEW installation action `installation:rotate-key-encryption-key` (constant `ActionInstallationRotateKeyEncryptionKey`), held by the site administrator only, and a fresh authentication step on start, finish and abort (owner, 2026-11-20, question 1). The name follows `installation:store-check` and `installation:read-gates` at `pkg/identity/identity.go:262` and `pkg/identity/identity.go:266`. A row for it in the table of ADR 216 decision 3 is a task.
-- NEW source of the old key: `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`, with the rules of the current key. The new key writes. The old key only reads. The variable is cleared after the read like the current one (owner, 2026-11-20, question 2).
-- NEW REST API under `/api/dustpan/v1/key-rotations` and NEW CLI command group `opendustpan key-rotation`, a client of the API (owner, 2026-11-20, question 3). Each route declares its action and its object.
-- NEW docs page `docs/guides/key-rotation.md` and an e2e step with the real binary and the real CLIs.
+- NEW rotation record in SQL, one row for each rotation, with the states `started` and `finished`, in the baseline of each dialect. NEW table of the pending blob deletes of a rotation. NEW table of the wrapper IDs of each instance row.
+- NEW `secret.Rotating`: a `Wrapper` that wraps under one key by a rule of the stored rotation state and opens a record by its stored wrapper ID, and NEW function `secret.Holds(wrapper, id)`, used by the places that compare a stored wrapper ID with the ID of the wrapper (the data key open, the two start checks, the idempotency key open and the restore check).
+- NEW write fence: each write of a wrapped record checks, in its own transaction, that the wrapper ID of the record is the new ID while a rotation is started or finished (reviewer-prescribed).
+- NEW rewrap of the four families that the key-encryption key wraps directly: the data keys (`secret_keys`), the installation data keys (`installation_secret_keys`, which hold the sign-in secrets and the other values of `@server`), the item keys (`item_keys` and their blobs) and the idempotency server key. Run as a durable operation. The old item key blob is deleted from a stored list of pending deletes, so a crash leaves no blob behind (reviewer-prescribed).
+- NEW start-up check with a table of cases (design decision 10): both keys while a rotation is active, the new key alone after finish, a refusal when the old key is still staged after finish, and a count of the wrapper IDs of the item keys and of the idempotency key.
+- NEW audit entries of kind `change` in the scope `@server` for start, resume, finish and for each record that the rewrap cannot open, with the actor and the wrapper IDs.
+- A backup is refused while a rotation is active, and a restore is refused while a rotation is active (reviewer-prescribed). A restore needs a key for every wrapper ID of the manifest.
+- NEW installation action `installation:rotate-key-encryption-key` (constant `ActionInstallationRotateKeyEncryptionKey`), held by the site administrator only, and a fresh authentication step on start and finish (owner, 2026-11-20, question 1). The name follows `installation:store-check` and `installation:read-gates` at `pkg/identity/identity.go:262` and `pkg/identity/identity.go:266`. The service checks the action itself, with the principal and the authorizer (reviewer-prescribed). A row for it in the table of ADR 216 decision 3 is a task.
+- NEW source of the old key: `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`, with the rules of the current key. The two variables together are refused. Both are sensitive. The new key writes. The old key only reads (owner, 2026-11-20, question 2).
+- NEW REST API under `/api/dustpan/v1/key-rotations` with five routes (start, list, show, resume, finish) and NEW CLI command group `opendustpan key-rotation` with `status`, `resume`, `start` and `finish` (owner, 2026-11-20, question 3 and round 2). Each route declares its action and its object.
+- NEW docs page `docs/guides/key-rotation.md` and an e2e step with the real binary and the real CLIs. The page also says that old wraps stay in the database history and in backups.
 - The rewrap deletes old item key blobs in the live store only. It never deletes them in a backup target (owner, 2026-11-20, question 4).
 
 Out of scope:
@@ -54,7 +63,9 @@ Out of scope:
 - Tagging or publishing a release.
 - Rotation of customer keys in a KMS and of namespace keys. Main has neither a customer key nor a namespace key version, so the data keys and the item keys are wrapped by the key-encryption key directly.
 - Change of data key or item key values.
-- A console screen for the rotation. The API is complete without it. The console lives in `OpenDustpan/console` and gets its own change.
+- A console screen for the rotation. The API is complete without it, and the console screen is not a dependency (owner, 2026-11-20, round 2). The console lives in `OpenDustpan/console` and gets its own change.
+- A CLI flow that gets a fresh authentication step.
+- An abort of a rotation (owner, 2026-11-20, round 2).
 - A KMS source for the old key. ADR 238 decision 1 says "or a KMS key-encryption key when that setting exists", and no such setting exists on main.
 
 Depends on:
@@ -66,9 +77,10 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - The server names the rotation state and both wrapper IDs in each start refusal, so the operator sees which key is missing.
-- Finish says plainly that the old key is safe to remove only after it succeeds. Before that, both keys are needed.
-- The fresh authentication step is a cost. An access token never gives it, so start, finish and abort answer 403 `mfa.fresh-step-required` for a CLI that holds a token alone. This is the rule of the audit chain approval, whose command sends no request and names the console (`internal/cli/audit_chain.go:16 (func AuditChainApproveCommand)`). The commands `key-rotation start`, `finish` and `abort` follow it: they send no request and print the console path and the route. The commands `status` and `resume` call the API. The console screen is a separate change. The docs page says this in its first lines.
-- The old key stays in the environment of each process until the operator removes it after finish. A process that still holds the old key after finish starts and writes a warning that names `DUSTPAN_KEY_ENCRYPTION_KEY_OLD`.
+- Finish says plainly that the old key is safe to remove only after it succeeds. Before that, both keys are needed. After finish, a process that still holds the old key does not start, and the text names the variable to remove.
+- The fresh authentication step is a cost. An access token never gives it, so start and finish answer 403 `mfa.fresh-step-required` for a CLI that holds a token alone. The person signs in over the API: `POST /api/dustpan/v1/sign-in/password` answers a session cookie, `GET /api/server/session` answers the CSRF value, and each call to start or finish sends the cookie, the `X-Dustpan-Csrf` header and an `Origin` header that equals the public URL (owner, 2026-11-20, round 2). The docs page shows each request, in the form of `docs/guides/connect-github.md` and its section "What you need". The commands `key-rotation start` and `key-rotation finish` send no request and print this path and the docs page. The commands `status` and `resume` call the API.
+- A backup and a restore stop while a rotation is active. The window is the time of the rewrap. The docs page says to make a backup before the start and another after the finish.
+- Old wraps stay in the database history (dead tuples, free pages, the write-ahead log) and in each backup. The docs page says this, so the operator does not treat a rotation as the end of a leaked key. A leaked old key still opens a copy of the database made before the finish.
 
 ## What main already does
 
@@ -77,30 +89,51 @@ Each fact names its file, line and function on main. The change specifies only t
 - The start check lists the stored wrapper IDs of `secret_keys` and refuses a key that is not the only one. (`pkg/secret/secret.go:210 (func CheckWrapper)`)
 - The comparison of wrapper IDs: each stored ID must equal the `ID` of the wrapper. The error says "no rewrap command exists yet". (`pkg/secret/secret.go:225 (func checkWrapperIDs)`)
 - The same check for the installation data keys. (`pkg/secret/installation.go:230 (func CheckInstallationWrapper)`)
-- Opening a data key refuses a stored wrapper ID that is not the `ID` of the wrapper before it calls the wrapper. (`pkg/secret/envelope.go:48 (func unwrapKey)`)
+- Opening a data key refuses a stored wrapper ID that is not the `ID` of the wrapper before it calls the wrapper. (`pkg/secret/envelope.go:48 (func unwrapKey)`, the comparison at line 55)
 - A new data key is wrapped by the one wrapper of the service. (`pkg/secret/envelope.go:14 (func wrapNewKey)`)
-- The idempotency server key compares its stored wrapper ID with the `ID` of the wrapper in the same way, and a key that this process cannot open is replaced and the replay records are deleted. (`pkg/store/internal/codec/idempotency.go:320 (func open)`, `pkg/store/internal/codec/idempotency.go:266 (func reset)`)
-- The server runs the check of the data keys and of the installation data keys at start. It does not read `ListItemKeyWrapperIDs`. (`pkg/dustpan/dustpan.go:2614 (func startUp)`, which calls `secret.CheckWrapper` at line 2625, `pkg/secret/itemkey.go:243 (method ListItemKeyWrapperIDs)`)
+- The AAD of a wrapped key binds the scope, not the wrapper ID. The built-in wrapper seals with a random nonce and the AAD, and a wrong key fails with `ErrDecrypt`. (`pkg/secret/builtin.go:73 (method Wrap)`, `pkg/secret/builtin.go:85 (method Unwrap)`)
+- The idempotency server key compares its stored wrapper ID with the `ID` of the wrapper in the same way, and a key that this process cannot open is replaced and the replay records are deleted. (`pkg/store/internal/codec/idempotency.go:197 (method Resolve)`, `pkg/store/internal/codec/idempotency.go:266 (method reset)`, `pkg/store/internal/codec/idempotency.go:320 (method open)`)
+- The server runs the check of the data keys and of the installation data keys at start. It does not read `ListItemKeyWrapperIDs`. The instance row is written before the key check. (`pkg/dustpan/dustpan.go:2614 (func startUp)`, which calls `registerInstance` and then `secret.CheckWrapper` at line 2625; `pkg/secret/itemkey.go:243 (method ListItemKeyWrapperIDs)`)
 - An item key record holds its wrapper ID and the name of its blob. `NewKey` makes the blob key of one write, and its comment names the rewrap to a new version, but no code rewraps an item key. (`pkg/secret/itemkey.go:199 (type ItemKey)`, `pkg/secret/itemkeyblob.go:219 (method NewKey)`)
-- The key-encryption key comes from one variable or one file, and the variable is cleared from the environment after the read. (`cmd/opendustpan/main.go:1887 (func loadKeyEncryptionKey)`, clear at `cmd/opendustpan/main.go:1893`; the direct wrapper path clears at `cmd/opendustpan/main.go:929 (func directKeyWrapper)`)
-- A restore proves that the one wrapper names one of the wrapper IDs of the manifest. (`pkg/backup/staging.go:295 (func run)`)
+- The key-encryption key comes from one variable or one file, and the variable is cleared from the environment after the read. When both are set, the value wins and the file is ignored. (`cmd/opendustpan/main.go:1887 (func loadKeyEncryptionKey)`, clear at `cmd/opendustpan/main.go:1893`, `cmd/opendustpan/main.go:1905 (func loadKeyEncryptionKeyFrom)`; the direct wrapper path clears at `cmd/opendustpan/main.go:929 (func directKeyWrapper)`)
+- The key file is checked with `os.Stat` and then read with `os.ReadFile`, which follows a symbolic link. (`cmd/opendustpan/main.go:1935 (func readKeyFile)`)
+- The server clears the variables of the settings that are marked sensitive, and each secret variable that no setting declares. (`cmd/opendustpan/envclear.go:22 (func clearSensitiveEnv)`, `internal/cli/setting.go:363 (func SensitiveEnvs)`; the setting `DUSTPAN_KEY_ENCRYPTION_KEY` is in `internal/cli/settings.go`)
+- A restore proves that the one wrapper names one of the wrapper IDs of the manifest. A manifest with two IDs passes when the wrapper holds only one of them. (`pkg/backup/staging.go:295 (method run of backupKeyCheck)`, the comparison at line 306)
+- A backup starts in `begin`, and a restore starts in `Start` with `admitStart`. Neither reads a rotation state. (`pkg/backup/service.go:689 (method begin)`, `pkg/backup/service.go:368 (method Start)`, `pkg/backup/restore_service.go:519 (method admitStart)`)
+- The instance version row holds the ID, the binary version and the start time. It is no liveness lease: a process that dies leaves its row, and an administrator removes it with `DELETE /api/server/instances/{id}`. (`pkg/installation/instances.go:34 (type Instance)`, `pkg/dustpan/instances.go:66 (method registerInstance)`, `internal/api/server/instances.go:32`)
 - Durable operations with a claim, ordered steps and resume exist. (`pkg/durable/durable.go:1 (package durable)`, `pkg/backup/restore_operation.go:253 (const RestoreOperationKind)`)
-- The server audit scope takes an entry through `AppendServer`, and the kind `change` exists. (`pkg/audit/audit.go:815 (method AppendServer)`, `pkg/audit/audit.go:54 (const KindChange)`)
+- The server audit scope takes an entry through `AppendServer`, and the kind `change` exists. `AppendServer` of SQLite opens its own transaction. The method `inAuditedTx` writes a change and its entry in one transaction. (`pkg/audit/audit.go:815 (method AppendServer)`, `pkg/audit/audit.go:54 (const KindChange)`, `pkg/store/sqlite/audit.go:61 (method AppendServer)`, `pkg/store/sqlite/audit.go:86 (method inAuditedTx)`, `pkg/store/postgres/audit.go:125 (method inAuditedTx)`)
+- A service can take the caller and the authorizer, check the action at the point of use and return a sentinel for a denial. (`internal/trustrulesvc/service.go:467 (method authorizeCreate)`, `pkg/identity/identity.go:1138 (type Authorizer)`)
 - The installation actions are `server:*`, with `installation:store-check` and `installation:read-gates` as the two `installation:*` constants. No action for the key-encryption key exists. (`pkg/identity/identity.go:262 (const ActionInstallationStoreCheck)`, `pkg/identity/identity.go:266 (const ActionInstallationReadGates)`)
 - Only the site administrator holds the actions in `siteOnlyActions`, which are in the administration family and are removed from the account administrator. (`pkg/access/roles.go:150 (func siteOnlyActions)`, `pkg/access/access.go:165` for the family of `server:manage-sign-in`)
 - A write that needs a fresh authentication is wrapped by `Handler.fresh`. A request with an access token answers 403 `mfa.fresh-step-required`. (`internal/api/server/freshness.go:221 (method fresh)`, `internal/api/server/freshness.go:112 (func requireFresh)`; first use: `internal/api/server/audit_chain.go:92`)
 - A route row declares method, path, scope, actions, resolver and handler; the store check routes are the model. (`internal/api/server/store_checks.go:126 (func row)`, operation labels at `internal/api/server/operations_storecheck.go:15`)
-- A command can be a client that sends nothing: the audit chain approve command. A client command takes `Settings: SettingsFor("server", "ca-file")`. (`internal/cli/audit_chain.go:16`, `internal/cli/store_check.go:9`, command table `cmd/opendustpan/commands.go:51`)
+- A command can be a client that sends nothing: the audit chain approve command. A client command takes `Settings: SettingsFor("server", "ca-file")`. (`internal/cli/audit_chain.go:17 (func AuditChainApproveCommand)`, `internal/cli/store_check.go:9`, command table `cmd/opendustpan/commands.go:51`)
+- The password sign-in answers a session cookie, and `GET /api/server/session` answers the CSRF value. (`internal/api/server/localusers.go:43 (const localSignInPath)`, `internal/api/server/signin.go:48 (const sessionPath)`, `docs/guides/local-users.md` section "Sign in")
 - The upgrade check always answers that a key-encryption key exists. (`internal/api/server/upgrade.go:92`; test `internal/api/server/upgrade_test.go:388 (func TestUpgradeCheckAnswersKeyEncryptionKey)`)
 
 Differences from the earlier text of this change: the earlier draft rewrapped "namespace key versions", which main does not have; it named the tests at wrong lines; it needed a rotation route that the audit of main showed was not decided; and it let the new key arrive in a running process, which cannot read a changed environment (the variable is cleared at start, `cmd/opendustpan/main.go:1893`). This version reads both keys at the start of the process.
 
 ## Owner decisions (owner, 2026-11-20)
 
-- **Question 1: the action (owner, 2026-11-20).** A NEW installation action, held by the site administrator only, that needs a fresh authentication step. Name: `installation:rotate-key-encryption-key`, in the area `installation:` as ADR 210 decision 7 and the constants at `pkg/identity/identity.go:262` and `pkg/identity/identity.go:266` show. Its object is `ServerObject`. It joins the administration family and `siteOnlyActions` (`pkg/access/roles.go:150`), so the account administrator and the operator do not hold it. One action covers start, show, resume, abort and finish. The fresh step applies to start, finish and abort. Resume and show need the action only, because resume runs batches of a rotation that the administrator already started and show reads.
+- **Question 1: the action (owner, 2026-11-20).** A NEW installation action, held by the site administrator only, that needs a fresh authentication step. Name: `installation:rotate-key-encryption-key`, in the area `installation:` as ADR 210 decision 7 and the constants at `pkg/identity/identity.go:262` and `pkg/identity/identity.go:266` show. Its object is `ServerObject`. It joins the administration family and `siteOnlyActions` (`pkg/access/roles.go:150`), so the account administrator and the operator do not hold it. One action covers start, show, resume and finish. The fresh step applies to start and finish. Resume and show need the action only, because resume runs batches of a rotation that the administrator already started and show reads.
 - **Question 2: the old key (owner, 2026-11-20).** `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `DUSTPAN_KEY_ENCRYPTION_KEY_OLD_FILE`, with the same format, file mode rule and clear rule as ADR 23 decision 1. The process builds `Rotating` when it holds the old key, with the new key as the writer and the old key as the reader only.
 - **Question 3: API and CLI (owner, 2026-11-20).** A REST API and a CLI command. The command is a client of the API (ADR 17, ADR 39).
 - **Question 4: backup targets (owner, 2026-11-20).** The rewrap does not delete old item key blobs in a backup target. A restore of an older backup needs the old key (ADR 217 decision 21), and retention removes old backups.
+- **Round 2, reach without the console (owner, 2026-11-20, "Yes as recommended").** Document the API path: a local-user password sign-in gives a console session with a CSRF value, and the call to start or finish sends the cookie, the CSRF header and `Origin`, as in `docs/guides/connect-github.md` "What you need". No new CLI flow for a fresh step. The CLI `start` and `finish` print that path and the docs page. The console screen comes later and is not a dependency.
+- **Round 2, abort (owner, 2026-11-20, "Yes as recommended").** Remove abort. A rotation only moves forward: start, resume, finish. To go back, finish, then start a rotation in the other direction.
+- **Round 2, old key held after finish (owner, 2026-11-20, "Yes as recommended").** The server refuses to start. The error names the variable to remove and one command. There is no warning.
+
+## Reviewer-prescribed rules
+
+An Opus review (rev2) of version 8 found the gaps below. Each rule follows from that review, and none changes an owner decision.
+
+- The wrapper that a process writes with follows the stored rotation state, and a write fence in the store enforces it (design decision 3).
+- Each running instance stores the wrapper IDs that it holds, and start and finish refuse while one lacks a key (design decision 8).
+- The start-up and restore cases are one table (design decision 10 and the spec requirement "Start-up with a rotation").
+- A backup is refused while a rotation is active. This is the simplest rule. The other choice, a delete of the old blobs in a last step at finish, changes the order of the rewrap and leaves the live store with no point where a backup is safe (design decision 9).
+- The old blob delete is a stored list, and finish needs the list empty (design decision 5).
+- The service checks the action itself (design decision 11).
 
 ## Security change
 
@@ -175,7 +208,7 @@ Each quote is copied from the file in `docs/adr/`. The "Changed by" chain and th
 
 Open questions: none.
 
-The four questions that this change held open are answered by the owner on 2026-11-20 (section "Owner decisions"):
+The four questions of the first round and the three questions of the second round are answered by the owner on 2026-11-20 (section "Owner decisions"):
 
 | Question | Answer (owner, 2026-11-20) | Where it lands |
 | --- | --- | --- |
@@ -183,5 +216,8 @@ The four questions that this change held open are answered by the owner on 2026-
 | 2. Source of the old key | `DUSTPAN_KEY_ENCRYPTION_KEY_OLD` and `_OLD_FILE`, mirror of ADR 23 decision 1 | Spec requirement "Stage the old key"; task 4.3 |
 | 3. API, command or both | A REST API and a CLI command that is a client of it | Spec requirement "Rotation API and command"; tasks 4.2 and 4.4 |
 | 4. Old item key blobs in targets | Not deleted; retention removes old backups | Spec requirement "Keep blobs in targets"; task 4.5 |
+| R2-1. How a person reaches start and finish before the console exists | The documented API path with a password sign-in; the CLI prints it | Spec requirement "Rotation API and command"; task 4.4 |
+| R2-2. What abort means | There is no abort; a rotation only moves forward | Spec requirement "Finish"; design decision 13 |
+| R2-3. A process that holds the old key after finish | The server refuses to start and names the variable | Spec requirement "Start-up with a rotation"; design decision 10 |
 
-Two design choices that follow from the answers and that the PM can check (they need no new owner decision): the fresh step applies to start, finish and abort only, and the commands `start`, `finish` and `abort` send no request, as the audit chain approval does, because an access token never gives a fresh step.
+Design choices that follow from the answers and that the PM can check (they need no new owner decision): the fresh step applies to start and finish only, and the commands `start` and `finish` send no request, as the audit chain approval does, because an access token never gives a fresh step.
