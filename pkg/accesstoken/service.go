@@ -313,7 +313,7 @@ func (s *Service) CheckActive(ctx context.Context, id string) error {
 	// so that a path that ends with no such run, during an update that the
 	// token started, never lets the update keep its lease. It does not rely
 	// on those checks or on the lease check of the update service.
-	return s.checkMakerOfLease(ctx, t)
+	return s.checkMakerAtUse(ctx, t)
 }
 
 // List returns one page of tokens, newest first.
