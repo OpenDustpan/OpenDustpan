@@ -1140,6 +1140,42 @@ func testSessionRenewCancelWithoutTime(t *testing.T, h Harness) {
 	wantErr(t, "SessionRenew of a cancel with no time", err, runner.ErrClaimLost)
 }
 
+// testSessionRenewFutureCancel proves that a renewal is refused when the time
+// of the cancel is far in the future: such a time must not extend the bound.
+func testSessionRenewFutureCancel(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	s := sessionOf(t, h, &l)
+
+	if err := h.Canceler.CancelAged(t.Context(), l.c, -24*time.Hour); err != nil {
+		t.Fatalf("CancelAged: %v", err)
+	}
+
+	_, err := h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
+	wantErr(t, "SessionRenew of a cancel in the future", err, runner.ErrClaimLost)
+}
+
+// testSessionRenewRepeatedCancel proves that a second cancel keeps the time of
+// the first, so a repeated cancel cannot move the bound of a renewal.
+func testSessionRenewRepeatedCancel(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	s := sessionOf(t, h, &l)
+
+	if err := h.Canceler.CancelAged(t.Context(), l.c, runner.SessionCancelBound+time.Minute); err != nil {
+		t.Fatalf("CancelAged: %v", err)
+	}
+
+	if err := h.Canceler.Cancel(t.Context(), l.c); err != nil {
+		t.Fatalf("second Cancel: %v", err)
+	}
+
+	_, err := h.Sessions.SessionRenew(t.Context(), s.ID, l.f.fence, runner.DefaultLease)
+	wantErr(t, "SessionRenew after a repeated cancel", err, runner.ErrClaimLost)
+}
+
 // sessionRenewRefusal returns a case: setup changes the state of the claim of
 // the session, and SessionRenew with the lease d then fails with want. The id
 // that setup returns replaces the ID of the session.

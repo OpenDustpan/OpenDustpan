@@ -262,7 +262,12 @@ func TestCheckSessionRenew(t *testing.T) {
 			canceled.Add(runner.SessionCancelBound + time.Millisecond), runner.ErrClaimLost,
 		},
 		{"a day after the cancel", true, canceled, canceled.Add(24 * time.Hour), runner.ErrClaimLost},
-		{"a cancel later than now", true, canceled, canceled.Add(-time.Hour), nil},
+		{"a cancel later than now, within the skew", true, canceled, canceled.Add(-runner.SessionCancelSkew), nil},
+		{
+			"a cancel later than now, over the skew", true, canceled,
+			canceled.Add(-runner.SessionCancelSkew - time.Millisecond), runner.ErrClaimLost,
+		},
+		{"a cancel far in the future", true, canceled.Add(24 * 365 * time.Hour), canceled, runner.ErrClaimLost},
 		{"a cancel with no time", true, time.Time{}, canceled, runner.ErrClaimLost},
 	}
 

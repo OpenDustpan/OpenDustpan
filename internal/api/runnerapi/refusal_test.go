@@ -179,7 +179,7 @@ func TestJoinIsRefused(t *testing.T) {
 	// The clock of the server stands still, so that the time that a subtest
 	// waits for a parallel slot cannot make a runner that joined go offline
 	// before the second join of its name.
-	at := time.Now()
+	at := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
 	e := newEnvServing(t, openSQLite, func(_ stores, opts *serveOptions) {
 		opts.now = func() time.Time { return at }
 	})

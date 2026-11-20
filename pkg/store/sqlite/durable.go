@@ -646,8 +646,13 @@ func cancelDurable(ctx context.Context, q *db.Queries, id durable.ID) error {
 	case durable.StatePending:
 		row.State = string(durable.StateCanceled)
 	case durable.StateRunning:
+		// The time of the cancel is the time of the first request. A repeated
+		// cancel keeps it, so it cannot move the bound of a renewal.
+		if !row.CancelRequested {
+			row.CancelRequestedAtMs = now
+		}
+
 		row.CancelRequested = true
-		row.CancelRequestedAtMs = now
 	case durable.StateSucceeded, durable.StateFailed:
 		return durable.ErrFinished
 	case durable.StateCanceled:
@@ -935,6 +940,7 @@ func writeDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) e
 		State:               row.State,
 		Attempt:             row.Attempt,
 		Expiries:            row.Expiries,
+		DeadlineReleases:    row.DeadlineReleases,
 		Failures:            row.Failures,
 		LastError:           row.LastError,
 		ClaimOwner:          row.ClaimOwner,
@@ -942,7 +948,6 @@ func writeDurable(ctx context.Context, q *db.Queries, row db.DurableOperation) e
 		ClaimExpiresAtMs:    row.ClaimExpiresAtMs,
 		CancelRequested:     row.CancelRequested,
 		CancelRequestedAtMs: row.CancelRequestedAtMs,
-		DeadlineReleases:    row.DeadlineReleases,
 		NotBeforeMs:         row.NotBeforeMs,
 		UpdatedAtMs:         row.UpdatedAtMs,
 		ID:                  row.ID,

@@ -1351,6 +1351,10 @@ func (r *Runners) SessionRenew(
 		}
 
 		op, err := q.LockDurableOperation(ctx, string(c.Operation))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return runner.ErrClaimLost
+		}
+
 		if err != nil {
 			return fmt.Errorf("read durable operation: %w", err)
 		}

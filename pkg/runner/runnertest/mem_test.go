@@ -171,8 +171,23 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: o.expires}, nil
 }
 
-func (m *mem) Cancel(ctx context.Context, c durable.Claim) error {
-	return m.CancelAged(ctx, c, 0)
+// Cancel keeps the time of the first cancel: a repeated cancel does not move it.
+func (m *mem) Cancel(_ context.Context, c durable.Claim) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !liveClaim(m, c) {
+		return durable.ErrClaimLost
+	}
+
+	o := m.ops[c.Operation]
+	if !o.canceled {
+		o.canceled = true
+		o.canceledAt = time.Now()
+		m.ops[c.Operation] = o
+	}
+
+	return nil
 }
 
 func (m *mem) CancelUntimed(ctx context.Context, c durable.Claim) error {
@@ -190,16 +205,15 @@ func (m *mem) CancelUntimed(ctx context.Context, c durable.Claim) error {
 	return nil
 }
 
-func (m *mem) CancelAged(_ context.Context, c durable.Claim, age time.Duration) error {
+func (m *mem) CancelAged(ctx context.Context, c durable.Claim, age time.Duration) error {
+	if err := m.Cancel(ctx, c); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !liveClaim(m, c) {
-		return durable.ErrClaimLost
-	}
-
 	o := m.ops[c.Operation]
-	o.canceled = true
 	o.canceledAt = time.Now().Add(-age)
 	m.ops[c.Operation] = o
 

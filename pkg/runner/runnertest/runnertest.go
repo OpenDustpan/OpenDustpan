@@ -49,7 +49,7 @@ type Canceler interface {
 	Cancel(ctx context.Context, c durable.Claim) error
 	// CancelAged is Cancel with the time of the cancel set to age before the
 	// clock of the store, so a case reaches the bound of a renewal without a
-	// wait.
+	// wait. A negative age sets a time in the future.
 	CancelAged(ctx context.Context, c durable.Claim, age time.Duration) error
 	// CancelUntimed is Cancel with the time of the cancel unset, as a row
 	// that a server of another version wrote has it: a cancel is requested
@@ -133,6 +133,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a renewal shortly before the bound after a cancel is accepted", testSessionRenewBeforeCancelBound},
 		{"a renewal after the bound after a cancel is refused", testSessionRenewAfterCancelBound},
 		{"a renewal after a cancel with no time is refused", testSessionRenewCancelWithoutTime},
+		{"a renewal after a cancel in the far future is refused", testSessionRenewFutureCancel},
+		{"a repeated cancel does not move the bound of a renewal", testSessionRenewRepeatedCancel},
 		{"a session opens up to the session wait limit", testSessionNearWaitLimit},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
 		{"a recorded claim keeps the database time, the job and the phase", testRecordClaim},

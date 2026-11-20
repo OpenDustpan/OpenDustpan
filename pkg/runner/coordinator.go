@@ -171,6 +171,14 @@ func GraceFor(s *job.Step) time.Duration {
 // canceled.
 const SessionCancelBound = GraceChanges + ReportTime
 
+// SessionCancelSkew is the longest time that the time of a cancel may be later
+// than the time of a renewal. Both times come from the clock of the database,
+// so a gap is small: it comes from a clock step or a rounding of a timestamp.
+// One minute is far over such a gap and far under SessionCancelBound. A cancel
+// later than now plus this time is not a valid time of a cancel, and a renewal
+// of it is refused.
+const SessionCancelSkew = time.Minute
+
 // SessionCancel is the cancel state of the operation of a job session, as the
 // store holds it. Requested is true when a cancel is requested. At is the time
 // of the cancel on the clock of the store: the zero Time when the store holds
@@ -184,8 +192,10 @@ type SessionCancel struct {
 // returns nil when no cancel is requested. It returns ErrClaimLost when the cancel is older than
 // SessionCancelBound, and also when a cancel is requested but its time is the
 // zero Time: a cancel with no time is not a young cancel. A renewal at exactly
-// SessionCancelBound after the cancel passes. A cancel that is later than now
-// (clock skew between instances) counts as a cancel at now.
+// SessionCancelBound after the cancel passes. A cancel later than now by no
+// more than SessionCancelSkew counts as a cancel at now. A cancel later than
+// that is refused: a row from a restored backup or from another version can
+// hold any time, and a time in the future must not extend the bound.
 func CheckSessionRenew(cancel SessionCancel, now time.Time) error {
 	if !cancel.Requested {
 		return nil
@@ -197,6 +207,13 @@ func CheckSessionRenew(cancel SessionCancel, now time.Time) error {
 	// with no time a young cancel. It does not rely on the store adapters.
 	if cancel.At.IsZero() {
 		return fmt.Errorf("%w: the cancel has no time", ErrClaimLost)
+	}
+
+	// Defense in depth: the store adapters record the time of a cancel from
+	// the clock of the database, so a time in the future should not exist. This
+	// check stays so that a row with such a time cannot extend the bound.
+	if cancel.At.Sub(now) > SessionCancelSkew {
+		return fmt.Errorf("%w: the cancel is later than now", ErrClaimLost)
 	}
 
 	if now.Sub(cancel.At) > SessionCancelBound {
