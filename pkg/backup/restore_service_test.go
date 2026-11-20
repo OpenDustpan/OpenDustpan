@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // orderLog records the order of maintenance enter and pre-backup export
@@ -695,6 +696,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		sum: testSummary(), data: []byte("pre-backup-sql"), order: order, hook: atomic.Pointer[func()]{},
 	}
 	backups, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    backupRegs,
@@ -1365,6 +1367,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	live.maint = maint
 
 	backups, err := backup.NewService(backup.Config{
+		Jobs: jobcheck.Checker{},
 		Exporter: &stubBackupExporter{
 			sum: testSummary(), data: []byte("pre-backup-sql"), order: nil, hook: atomic.Pointer[func()]{},
 		},

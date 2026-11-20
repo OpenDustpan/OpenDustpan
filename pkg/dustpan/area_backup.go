@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -151,6 +152,7 @@ func newBackupService(in backupInputs) (*backup.Service, error) {
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
+		Jobs:        jobcheck.Checker{},
 		Kinds:       kinds,
 		Registry:    registry,
 		Blobs:       in.blobs,

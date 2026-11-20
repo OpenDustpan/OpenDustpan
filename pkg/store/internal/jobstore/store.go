@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -780,4 +781,17 @@ func noJob() job.Job {
 // the job store would refuse.
 func Decode(r *Row) (job.Job, error) {
 	return jobOf(r)
+}
+
+// CheckBackupRow is the one check of a job row of a backup. The restore calls
+// it on each staged row, and backup check calls it on each row of the backup
+// tables, so the two never disagree. It returns nil for a row that jobOf
+// reads, and a *backup.DamagedJobError with the job ID, the unit ID and the
+// reason for a row that it does not read.
+func CheckBackupRow(r *Row) error {
+	if _, err := jobOf(r); err != nil {
+		return backup.NewDamagedJobError(string(r.ID), r.UnitID, DamageReason(err))
+	}
+
+	return nil
 }

@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -178,6 +179,7 @@ func backupDev(t *testing.T, dir, targetDir string) string {
 	})
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    st,
 		Kinds:       st,
 		Registry:    st,

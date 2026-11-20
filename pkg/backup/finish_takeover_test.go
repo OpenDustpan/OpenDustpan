@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // finishGate holds a succeeded finish before the row write, after the caller
@@ -94,6 +95,7 @@ func gatedService(t *testing.T, d durableSetup, opts gatedSvcOpts) *backup.Servi
 	t.Helper()
 
 	svc, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    &stubExporter{sum: testSummary(), data: tableData, err: nil},
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    opts.reg,

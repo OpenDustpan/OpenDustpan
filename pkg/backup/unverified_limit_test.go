@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/store/jobcheck"
 )
 
 // unverifiedKeys returns n keys of blobs that rows name without a size and an
@@ -49,6 +50,7 @@ func newUnverifiedFixture(t *testing.T, exporter backup.PortableExporter, limit 
 	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	service, err := backup.NewService(backup.Config{
+		Jobs:        jobcheck.Checker{},
 		Exporter:    exporter,
 		Kinds:       fixedKind(installation.KindProduction),
 		Registry:    registry,

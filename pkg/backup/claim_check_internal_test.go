@@ -65,7 +65,7 @@ func pendingOp(id durable.ID, state durable.State) durable.Operation {
 // claimService returns a service whose operations return op or err from Get.
 func claimService(op durable.Operation, err error) *Service {
 	return &Service{
-		exporter: nil, kinds: nil, registry: nil, source: nil, opener: nil,
+		jobs: nil, exporter: nil, kinds: nil, registry: nil, source: nil, opener: nil,
 		target: nil, targetName: "", now: nil, version: "", maxSQL: 0, maxUnverified: 0,
 		runner: nil, operations: &fakeClaimOps{Store: nil, op: op, err: err}, lease: 0,
 		logger: slog.New(slog.DiscardHandler),
