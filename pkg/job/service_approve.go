@@ -60,8 +60,8 @@ func (s *service) Approve(
 
 	now := s.now().UTC()
 	ap := Approval{
-		Gate: GateApproval, Subject: a.Principal.Subject, Agent: string(a.Agent), Verdict: v, Comment: comment,
-		Plan: nil, At: now, Auth: "", AuthAt: time.Time{},
+		Gate: GateApproval, For: nil, Subject: a.Principal.Subject, Agent: string(a.Agent), Verdict: v,
+		Comment: comment, Plan: nil, At: now, Auth: "", AuthAt: time.Time{},
 	}
 
 	if v == VerdictApprove {
@@ -92,7 +92,7 @@ func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Ga
 		ap.Auth, ap.AuthAt = fresh.auth, fresh.at
 	}
 
-	err := s.checkApprover(ctx, j, a, gates)
+	err := s.checkApprover(ctx, j, a, gates, ap)
 	if err != nil {
 		return err
 	}
@@ -203,14 +203,15 @@ func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
 
 // checkApprover refuses an approval by an agent, by a subject that the policy
 // does not count, by the starter when no approval gate allows it, by a subject
-// that approved the phase already, and by a subject outside the groups of a
-// gate.
-func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Gate) error {
+// that approved the phase already, and by a subject outside the groups of
+// every gate. It sets ap.For to the names of the gates that the approval can
+// fill.
+func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Gate, ap *Approval) error {
 	if a.Agent != "" {
 		return fmt.Errorf("%w: agent %q cannot approve; only a person can", ErrAgentDenied, clip(string(a.Agent)))
 	}
 
-	// Defense in depth: Gate.Status does not count such a subject either, and
+	// Defense in depth: the matching does not count such a subject either, and
 	// the write paths of the rules refuse it. This check stays so that an
 	// approval that fills no slot is refused, not recorded in silence.
 	if !s.approvers.CountsAsSignature(a.Principal.Subject) {
@@ -222,7 +223,8 @@ func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Ga
 
 	// A user who started the job through an agent is the starter too, so the
 	// subject is the one test.
-	if a.Principal.Subject == j.StartedBy && !slices.ContainsFunc(gates, func(g Gate) bool { return g.AllowSelf }) {
+	starter := a.Principal.Subject == j.StartedBy
+	if starter && !slices.ContainsFunc(gates, func(g Gate) bool { return g.AllowSelf }) {
 		return fmt.Errorf("%w: ask another approver", ErrSelfApproval)
 	}
 
@@ -231,7 +233,27 @@ func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Ga
 		return fmt.Errorf("%w: wait for the other approvers", ErrAlreadyApproved)
 	}
 
-	return s.checkGroups(ctx, j, a.Principal.Subject, gates)
+	holding, err := s.checkGroups(ctx, j, a.Principal.Subject, gates)
+	if err != nil {
+		return err
+	}
+
+	// The starter fills only a gate that allows it.
+	if starter {
+		holding = slices.DeleteFunc(holding, func(name string) bool {
+			i := slices.IndexFunc(gates, func(g Gate) bool { return g.Name == name })
+
+			return i < 0 || !gates[i].AllowSelf
+		})
+
+		if len(holding) == 0 {
+			return fmt.Errorf("%w: ask another approver", ErrSelfApproval)
+		}
+	}
+
+	ap.For = holding
+
+	return nil
 }
 
 // approvedAlready reports whether subject has an approval on the phase.
@@ -241,49 +263,75 @@ func approvedAlready(p *Phase, subject string) bool {
 	})
 }
 
-// checkGroups refuses an approval by a subject that is not an enabled member of
-// the groups of each gate that names groups. The gate names its groups by ID,
-// so a group that someone renamed still matches, and a group that someone made
-// again with the old name does not. It is a *DeniedError on job:approve for a
-// non-member, for a failure of the reader, for no reader, and for a gate whose
-// names have no IDs (fail closed). A gate with no groups needs no reader.
+// checkGroups returns the names of the gates that hold subject: the gates
+// with no groups, and the gates whose groups have subject as an enabled
+// member. The gate names its groups by ID, so a group that someone renamed
+// still matches, and a group that someone made again with the old name does
+// not. It is a *DeniedError on job:approve for a subject that no gate holds,
+// for a failure of the reader, for no reader, and for a gate whose names have
+// no IDs (fail closed). The text of a refusal that holds no gate names the
+// requirements of the phase. A gate with no groups needs no reader.
 //
 // A rejection does not come here: any holder of job:approve can reject, because
 // a rejection only stops the change.
-func (s *service) checkGroups(ctx context.Context, j *Job, subject string, gates []Gate) error {
+func (s *service) checkGroups(ctx context.Context, j *Job, subject string, gates []Gate) ([]string, error) {
+	denied := func(reason string, cause error) error {
+		err := fmt.Errorf("%w: %s", identity.ErrDenied, reason)
+		if cause != nil {
+			err = fmt.Errorf("%w: %s: %w", identity.ErrDenied, reason, cause)
+		}
+
+		return &DeniedError{Action: ActionJobApprove, Object: j.Spec.Unit, Err: err}
+	}
+
+	var holding []string
+
 	for i := range gates {
 		g := &gates[i]
 		if len(g.Groups) == 0 && len(g.GroupIDs) == 0 {
+			holding = append(holding, g.Name)
+
 			continue
-		}
-
-		denied := func(reason string, cause error) error {
-			err := fmt.Errorf("%w: %s", identity.ErrDenied, reason)
-			if cause != nil {
-				err = fmt.Errorf("%w: %s: %w", identity.ErrDenied, reason, cause)
-			}
-
-			return &DeniedError{Action: ActionJobApprove, Object: j.Spec.Unit, Err: err}
 		}
 
 		switch {
 		case len(g.GroupIDs) != len(g.Groups) || len(g.GroupIDs) == 0:
-			return denied("the gate names groups with no group IDs", nil)
+			return nil, denied("the gate names groups with no group IDs", nil)
 		case s.groups == nil:
-			return denied("this server cannot read group membership", nil)
+			return nil, denied("this server cannot read group membership", nil)
 		}
 
 		member, err := s.groups.MemberOfAny(ctx, subject, g.GroupIDs)
 
 		switch {
 		case err != nil:
-			return denied("the group membership cannot be read", err)
-		case !member:
-			return denied("the subject is not a member of a group of the gate", nil)
+			return nil, denied("the group membership cannot be read", err)
+		case member:
+			holding = append(holding, g.Name)
 		}
 	}
 
-	return nil
+	if len(holding) == 0 {
+		return nil, denied("the subject is not a member of a group of any requirement: "+requirementNames(gates), nil)
+	}
+
+	return holding, nil
+}
+
+// requirementNames returns the names of gates for an error text, clipped.
+func requirementNames(gates []Gate) string {
+	names := make([]string, 0, len(gates))
+
+	for i := range gates {
+		name := gates[i].Name
+		if name == "" {
+			name = "default"
+		}
+
+		names = append(names, clip(name))
+	}
+
+	return strings.Join(names, ", ")
 }
 
 // checkPlan checks the binding of the approver to the stored plan of the plan
@@ -409,6 +457,12 @@ func (s *service) approvalEntry(
 	})
 	if err != nil {
 		return audit.Entry{}, err
+	}
+
+	if len(ap.For) > 0 {
+		changes = append(changes, audit.Change{
+			Key: "requirements", Old: nil, New: strings.Join(ap.For, ","), Layer: "", TakesEffect: "",
+		})
 	}
 
 	if ap.Plan != nil {

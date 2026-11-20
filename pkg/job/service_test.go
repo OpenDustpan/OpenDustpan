@@ -968,16 +968,16 @@ func TestStartGateOnFirstPhase(t *testing.T) {
 			Allow:         true,
 			Reason:        "",
 			PolicyVersion: "v1",
-			Gates: map[job.PhaseKind]job.Gate{
-				job.PhasePlan: {
-					Type:      "",
+			Gates: map[job.PhaseKind][]job.Gate{
+				job.PhasePlan: {{
+					Type: "", Name: "",
 					Approvals: 1,
 					Groups:    nil,
 					GroupIDs:  nil,
 					AllowSelf: false,
 					Timeout:   0,
 					BindPlan:  false,
-				},
+				}},
 			},
 		}
 	})
@@ -1639,16 +1639,16 @@ func TestStartIsAtomicAtTheFirstGate(t *testing.T) {
 	gated := func(_ *job.ServiceConfig, r *rig) {
 		r.decider.decision = job.Decision{
 			Allow: true, Reason: "", PolicyVersion: "v1",
-			Gates: map[job.PhaseKind]job.Gate{
-				job.PhasePlan: {
-					Type:      "",
+			Gates: map[job.PhaseKind][]job.Gate{
+				job.PhasePlan: {{
+					Type: "", Name: "",
 					Approvals: 1,
 					Groups:    nil,
 					GroupIDs:  nil,
 					AllowSelf: false,
 					Timeout:   0,
 					BindPlan:  false,
-				},
+				}},
 			},
 		}
 	}

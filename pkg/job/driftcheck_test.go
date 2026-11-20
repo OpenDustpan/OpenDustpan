@@ -367,16 +367,16 @@ func TestScheduledDriftCheckNeverWaitsForApproval(t *testing.T) {
 	needsApproval := func(_ *job.ServiceConfig, r *rig) {
 		r.decider.decision = job.Decision{
 			Allow: true, Reason: "", PolicyVersion: "v1",
-			Gates: map[job.PhaseKind]job.Gate{
-				job.PhaseApply: {
-					Type:      job.GateApproval,
+			Gates: map[job.PhaseKind][]job.Gate{
+				job.PhaseApply: {{
+					Type: job.GateApproval, Name: "",
 					Approvals: 1,
 					Groups:    nil,
 					GroupIDs:  nil,
 					AllowSelf: false,
 					Timeout:   0,
 					BindPlan:  true,
-				},
+				}},
 			},
 		}
 		r.authz.allow[string(job.ActionUnitRunApply)+" "+r.unit.String()] = true

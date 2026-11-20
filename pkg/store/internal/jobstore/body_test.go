@@ -76,7 +76,7 @@ func fullJob(t *testing.T) job.Job {
 			},
 			Gates: []job.Gate{
 				{
-					Type:      job.GateConfirmation,
+					Type: job.GateConfirmation, Name: "",
 					Approvals: 2,
 					Groups:    []string{"ops"},
 					GroupIDs:  nil,
@@ -86,7 +86,7 @@ func fullJob(t *testing.T) job.Job {
 				},
 			},
 			Approvals: []job.Approval{{
-				Gate: job.GateApproval, Subject: "bo", Agent: "dusty", Verdict: job.VerdictReject, Comment: "no",
+				Gate: job.GateApproval, For: nil, Subject: "bo", Agent: "dusty", Verdict: job.VerdictReject, Comment: "no",
 				Plan: &binding, At: at, Auth: job.ConfirmAuthMFA, AuthAt: at,
 			}},
 			StartedAt: at, FinishedAt: at,

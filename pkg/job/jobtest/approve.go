@@ -68,7 +68,7 @@ func awaitingApprovalFor(t *testing.T, h Harness, f fixture, op job.Operation) j
 		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}
 	j.Phases[1].Gates = []job.Gate{{
-		Type: job.GateApproval, Approvals: needApprovals, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
+		Type: job.GateApproval, Name: "", Approvals: needApprovals, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
 		BindPlan: true,
 	}}
 
@@ -144,7 +144,7 @@ func testDestroyApprovalProofStored(t *testing.T, h Harness) {
 func verdict(j *job.Job, subject string, v job.Verdict, ev job.Event) job.Change {
 	c := change(j, ev)
 	c.Approval = &job.Approval{
-		Gate: job.GateApproval, Subject: subject, Agent: "", Verdict: v, Comment: "ok", Plan: nil,
+		Gate: job.GateApproval, For: []string{""}, Subject: subject, Agent: "", Verdict: v, Comment: "ok", Plan: nil,
 		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
 	}
 
@@ -232,7 +232,7 @@ func testApprovalRecordedElsewhere(t *testing.T, h Harness) {
 
 	c := change(&queued, job.EventApprovalRecorded)
 	c.Approval = &job.Approval{
-		Gate: job.GateApproval, Subject: "cy", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
+		Gate: job.GateApproval, For: []string{""}, Subject: "cy", Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil,
 		At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
 	}
 

@@ -247,12 +247,12 @@ func checkGate(t *testing.T, tt gateCase) {
 		t.Fatalf("Decide() = %+v, %v; want allow", got, err)
 	}
 
-	if len(got.Gates) != 1 {
+	if len(got.Gates) != 1 || len(got.Gates[tt.kind]) != 1 {
 		t.Fatalf("gates = %+v, want one gate for %s", got.Gates, tt.kind)
 	}
 
-	g, ok := got.Gates[tt.kind]
-	if !ok || g.Type != job.GateApproval || g.Approvals != tt.count || g.AllowSelf || g.BindPlan != tt.bind ||
+	g := got.Gates[tt.kind][0]
+	if g.Type != job.GateApproval || g.Approvals != tt.count || g.AllowSelf || g.BindPlan != tt.bind ||
 		len(g.Groups) != tt.groups {
 		t.Fatalf("gate of %s = %+v, want %d approvals, %d groups, bind %t, no self approval", tt.kind, g,
 			tt.count, tt.groups, tt.bind)
@@ -278,10 +278,11 @@ func TestDecideNamesTheGroupsAndNeverCountsTheAuthor(t *testing.T) {
 		t.Fatalf("Decide() = %+v, %v; want allow", got, err)
 	}
 
-	g, ok := got.Gates[job.PhaseApply]
-	if !ok {
-		t.Fatalf("gates = %+v, want a gate on the apply phase", got.Gates)
+	if len(got.Gates[job.PhaseApply]) != 1 {
+		t.Fatalf("gates = %+v, want one gate on the apply phase", got.Gates)
 	}
+
+	g := got.Gates[job.PhaseApply][0]
 
 	if !slices.Equal(g.Groups, []string{"platform", "bo-team"}) {
 		t.Fatalf("groups = %v, want [platform bo-team]", g.Groups)

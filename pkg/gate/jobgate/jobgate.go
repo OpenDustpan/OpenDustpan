@@ -64,8 +64,9 @@ const PolicyVersion = "approval-defaults"
 // collection and the unit of the job. A plan phase gets none.
 //
 // It returns an error, and so the start fails, when the defaults need more
-// than this version enforces: more than one requirement, approvers that are
-// users or unit owners, a fresh authentication window, or an unless body.
+// than this version enforces: more than job.MaxApprovalGates requirements,
+// approvers that are users or unit owners, a fresh authentication window, or
+// an unless body.
 // The error wraps gate.ErrUnavailable. It also returns the errors of the
 // store.
 //
@@ -85,61 +86,61 @@ func (d *Decider) Decide(ctx context.Context, in job.DecisionInput) (job.Decisio
 		return allow(nil), nil
 	}
 
-	g, found, err := d.gateOfUnit(ctx, unit)
+	unitGates, err := d.gatesOfUnit(ctx, unit)
 	if err != nil {
 		return job.Decision{}, fmt.Errorf("approval defaults of %s: %w", unit.String(), err)
 	}
 
-	if !found {
+	if len(unitGates) == 0 {
 		return allow(nil), nil
 	}
 
-	gates := make(map[job.PhaseKind]job.Gate)
+	gates := make(map[job.PhaseKind][]job.Gate)
 
 	for i, k := range kinds {
-		if k.Changes() {
-			phaseGate := g
-			// A gate binds its approvals to the plan of the phase before.
-			phaseGate.BindPlan = i > 0 && kinds[i-1] == job.PhasePlan
-			gates[k] = phaseGate
+		if !k.Changes() {
+			continue
 		}
+
+		phaseGates := slices.Clone(unitGates)
+		for j := range phaseGates {
+			// A gate binds its approvals to the plan of the phase before.
+			phaseGates[j].BindPlan = i > 0 && kinds[i-1] == job.PhasePlan
+		}
+
+		gates[k] = phaseGates
 	}
 
 	return allow(gates), nil
 }
 
-// gateOfUnit reads the approval defaults of the scopes of unit and returns
-// their gate, and false when no default is set.
-func (d *Decider) gateOfUnit(ctx context.Context, unit identity.Object) (job.Gate, bool, error) {
+// gatesOfUnit reads the approval defaults of the scopes of unit and returns
+// their gates, one for each requirement, or none when no default is set.
+func (d *Decider) gatesOfUnit(ctx context.Context, unit identity.Object) ([]job.Gate, error) {
 	col, err := d.members.Collection(ctx, unit)
 	if err != nil && !errors.Is(err, gate.ErrNotFound) {
-		return job.Gate{}, false, fmt.Errorf("collection: %w", err)
+		return nil, fmt.Errorf("collection: %w", err)
 	}
 
 	chain, err := gate.UnitChain(unit, col)
 	if err != nil {
-		return job.Gate{}, false, fmt.Errorf("scopes: %w", err)
+		return nil, fmt.Errorf("scopes: %w", err)
 	}
 
 	snapshot, err := d.config.Snapshot(ctx, chain)
 	if err != nil {
-		return job.Gate{}, false, fmt.Errorf("read: %w", err)
+		return nil, fmt.Errorf("read: %w", err)
 	}
 
 	reqs, err := gate.DefaultRequirements(inChain(snapshot.ApprovalDefaults, chain))
 	if err != nil || len(reqs) == 0 {
-		return job.Gate{}, false, err
+		return nil, err
 	}
 
-	g, err := gateOf(reqs)
-	if err != nil {
-		return job.Gate{}, false, err
-	}
-
-	return g, true, nil
+	return gatesOf(reqs)
 }
 
-func allow(gates map[job.PhaseKind]job.Gate) job.Decision {
+func allow(gates map[job.PhaseKind][]job.Gate) job.Decision {
 	return job.Decision{Allow: true, Reason: "", Gates: gates, PolicyVersion: PolicyVersion}
 }
 
@@ -160,41 +161,53 @@ func inChain(defaults []gate.ApprovalDefault, chain []gate.Scope) []gate.Approva
 	return out
 }
 
-// gateOf returns the job gate for reqs. A job gate holds a count and groups,
-// and its approvers are distinct people of one requirement. So it expresses
-// one requirement of groups, and nothing else. For anything else it returns
-// an error that wraps gate.ErrUnavailable and says what to change.
-func gateOf(reqs []gate.Requirement) (job.Gate, error) {
-	if len(reqs) > 1 {
-		return job.Gate{}, fmt.Errorf("%w: %d approval requirements apply (%s), and a job enforces one; "+
-			"set the approval default in one scope only", gate.ErrUnavailable, len(reqs), names(reqs))
+// gatesOf returns the job gates for reqs, one for each requirement, with the
+// name of the requirement. A job gate holds a count and groups, and the
+// approvers of all gates of a phase are distinct people. So a gate expresses
+// one requirement of groups, and nothing else. For any other requirement it
+// returns an error that wraps gate.ErrUnavailable and says what to change.
+//
+// Defense in depth: the job service refuses a phase with more than
+// job.MaxApprovalGates gates, and the matching refuses it too. This check stays
+// so that the decider never gives a set that the other layers must refuse.
+func gatesOf(reqs []gate.Requirement) ([]job.Gate, error) {
+	if len(reqs) > job.MaxApprovalGates {
+		return nil, fmt.Errorf("%w: %d approval requirements apply (%s), and a job enforces at most %d; "+
+			"remove an approval default", gate.ErrUnavailable, len(reqs), names(reqs), job.MaxApprovalGates)
 	}
 
-	r := reqs[0]
+	out := make([]job.Gate, 0, len(reqs))
 
-	switch {
-	case len(r.Approvers.Users) > 0 || r.Approvers.UnitOwners:
-		return job.Gate{}, fmt.Errorf("%w: the requirement %s names users or unit owners, and a job enforces "+
-			"groups only; name groups instead", gate.ErrUnavailable, r.Name)
-	case r.FreshAuth.Set:
-		return job.Gate{}, fmt.Errorf("%w: the requirement %s asks for a fresh authentication, and a job "+
-			"approval does not enforce it; remove freshAuthSeconds", gate.ErrUnavailable, r.Name)
+	for i := range reqs {
+		r := &reqs[i]
+
+		switch {
+		case len(r.Approvers.Users) > 0 || r.Approvers.UnitOwners:
+			return nil, fmt.Errorf("%w: the requirement %s names users or unit owners, and a job enforces "+
+				"groups only; name groups instead", gate.ErrUnavailable, r.Name)
+		case r.FreshAuth.Set:
+			return nil, fmt.Errorf("%w: the requirement %s asks for a fresh authentication, and a job "+
+				"approval does not enforce it; remove freshAuthSeconds", gate.ErrUnavailable, r.Name)
+		}
+
+		if len(r.Approvers.GroupIDs) != len(r.Approvers.Groups) {
+			return nil, fmt.Errorf("%w: the requirement %s names groups that were saved without group IDs, "+
+				"and a job enforces groups by ID; save the rule again", gate.ErrUnavailable, r.Name)
+		}
+
+		out = append(out, job.Gate{
+			Type:      job.GateApproval,
+			Name:      string(r.Name),
+			Approvals: r.Count,
+			Groups:    slices.Clone(r.Approvers.Groups),
+			GroupIDs:  slices.Clone(r.Approvers.GroupIDs),
+			AllowSelf: r.AuthorMayApprove,
+			Timeout:   time.Duration(r.TimeoutSeconds) * time.Second,
+			BindPlan:  false,
+		})
 	}
 
-	if len(r.Approvers.GroupIDs) != len(r.Approvers.Groups) {
-		return job.Gate{}, fmt.Errorf("%w: the requirement %s names groups that were saved without group IDs, "+
-			"and a job enforces groups by ID; save the rule again", gate.ErrUnavailable, r.Name)
-	}
-
-	return job.Gate{
-		Type:      job.GateApproval,
-		Approvals: r.Count,
-		Groups:    slices.Clone(r.Approvers.Groups),
-		GroupIDs:  slices.Clone(r.Approvers.GroupIDs),
-		AllowSelf: r.AuthorMayApprove,
-		Timeout:   time.Duration(r.TimeoutSeconds) * time.Second,
-		BindPlan:  false,
-	}, nil
+	return out, nil
 }
 
 func names(reqs []gate.Requirement) string {
