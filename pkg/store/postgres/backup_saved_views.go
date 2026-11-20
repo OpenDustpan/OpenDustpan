@@ -21,14 +21,17 @@ func pgCopySavedViewTables() []pgCopyTable {
 }
 
 // checkStagedSavedViews checks each saved view row of a staged backup with the
-// rules of a new view. A row that fails makes the backup corrupt, so a restore
-// never brings in a view that the server would not have stored. It returns
-// backup.ErrCorrupt.
+// rules of a new view, and the number of views of its owner and of its
+// namespace against the limits of a create. The same query counts the views,
+// so the counts and the rows come from one read. A row or a count that fails
+// makes the backup corrupt, so a restore never brings in a view that the
+// server would not have stored. It returns backup.ErrCorrupt.
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedSavedViews(ctx context.Context, pool pgQuerier, staging string) error {
-	query := "SELECT v.id, n.name, v.owner, v.name, v.query_json, v.created_at_ms FROM " +
+	query := "SELECT v.id, n.name, v.owner, v.name, v.query_json, v.created_at_ms, " +
+		"COUNT(*) OVER (PARTITION BY v.namespace_id, v.owner), COUNT(*) OVER (PARTITION BY v.namespace_id) FROM " +
 		stagingTable(staging, "saved_views") + " AS v LEFT JOIN " + stagingTable(staging, "namespaces") +
 		" AS n ON n.id = v.namespace_id"
 
@@ -41,11 +44,14 @@ func checkStagedSavedViews(ctx context.Context, pool pgQuerier, staging string) 
 
 	for rows.Next() {
 		var (
-			row       viewstore.Row
-			namespace *string
+			row                  viewstore.Row
+			namespace            *string
+			ofOwner, inNamespace int64
 		)
 
-		scanErr := rows.Scan(&row.ID, &namespace, &row.Owner, &row.Name, &row.QueryJSON, &row.CreatedAtMs)
+		scanErr := rows.Scan(
+			&row.ID, &namespace, &row.Owner, &row.Name, &row.QueryJSON, &row.CreatedAtMs, &ofOwner, &inNamespace,
+		)
 		if scanErr != nil {
 			return fmt.Errorf("read staged saved views: %w", backup.ErrExportRead)
 		}
@@ -58,8 +64,13 @@ func checkStagedSavedViews(ctx context.Context, pool pgQuerier, staging string) 
 
 		row.Namespace = *namespace
 
-		if _, viewErr := viewstore.View(row); viewErr != nil {
+		view, viewErr := viewstore.View(row)
+		if viewErr != nil {
 			return fmt.Errorf("staged saved view %q is not valid: %w: %w", row.ID, viewErr, backup.ErrCorrupt)
+		}
+
+		if countErr := viewstore.CheckCounts(view, ofOwner, inNamespace); countErr != nil {
+			return fmt.Errorf("staged backup: %w: %w", countErr, backup.ErrCorrupt)
 		}
 	}
 
