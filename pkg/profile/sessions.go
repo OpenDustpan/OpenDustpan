@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -218,7 +219,7 @@ func checkSessionPaths(paths []string) error {
 // and LF, or an invalid byte.
 func hasControl(s string) bool {
 	for _, r := range s {
-		if r < ' ' || r == 0x7f || r == '�' {
+		if r < ' ' || r == 0x7f || r == utf8.RuneError {
 			return true
 		}
 	}
