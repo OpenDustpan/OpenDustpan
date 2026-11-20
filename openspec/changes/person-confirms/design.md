@@ -1,20 +1,31 @@
 ## Context
 
-Confirmation stays a human act on the change order. The server stores the delegator as immutable author at proposal time, binds each confirmation to one plan revision, checks revision and approved state atomically, and blocks apply and destroy jobs until the order is approved.
+Confirmation stays an act of a person. The change order package, the confirm route and the draft state are not on main and not decided (see the open questions of the proposal). This design holds only the points that ADR 344, ADR 354, ADR 385 and RFC 121 settle.
 
 ## Decisions
 
-1. **Author stored at proposal.** Store authorSubject at proposal time from the delegation subject and never change it; later revoke or expiry of the delegation does not change author.
-2. **Confirm route and state.** The NEW route POST /api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/confirm takes revisionId, needs the NEW action changeorder:confirm on the namespace object, and moves state in-review to approved only when the approval rule is met; else it records the confirmation and stays in-review.
-3. **Atomic revision and approval check.** Check revisionId match and approved state in one fenced transaction at apply and destroy start; a new revision or missing approval refuses with the NEW error code changeorder.not-ready.
-4. **Grant loss and queued jobs.** A queued destroy job that has not started is cancelled when a new revision arrives; the next approval check re-evaluates the grant of the confirmer.
+1. **Only a person confirms.** A request of an agent is refused and written as a denial entry (ADR 344 decision 2, ADR 299 decision 35).
+2. **The proposer is the person.** The draft stores the stable ID of the person. Four-eyes counts the person as the author, and a later end of the delegation does not change it (RFC 121 decision 26, ADR 362 decision 1).
+3. **A fresh step follows the setting.** The handler, the service and the store read one effective value of `freshAuthEnabled` (ADR 385 decision 2). An access token never gives the step.
+4. **The audit entry comes first.** The confirmation entry is written in the same transaction as the confirm, so no apply entry can come before it.
 
 ## Structure
 
-Unexported type confirmGate with constructor newConfirmGate that holds author subject, confirmer subject, revision ID and approval rule; only the constructor builds a valid check.
+The confirm check is built only by a constructor that needs the author, the confirmer and the approval rule. No other code path builds a valid check.
+
+## Contract
+
+The route, the action and the states are open question 1. This design adds no endpoint and no schema until the owner answers.
 
 ## Risks
 
-- Delegator counted as non-author breaks four-eyes.
-- Apply or destroy starts before any human confirmation.
-- Confirmation applies to a newer revision than the one the person read.
+- The delegator counted as a different person breaks four-eyes.
+- The apply starts before a person confirms.
+
+## Layers (defense in depth)
+
+| Layer | Guard | Hostile test |
+| --- | --- | --- |
+| service | The service refuses an agent confirmer, counts the delegator as the author and checks the fresh step when the setting is on. | An agent confirms with a delegation and with its own token. The delegator confirms and then approves under `authorMayApprove` false. Each is refused. |
+| port adapter | The adapter writes the confirm and its audit entry in one transaction and keeps the author fixed. | End the delegation after the draft and check that the author does not change. |
+| HTTP handler | The handler requires a console session when a fresh step is needed, and checks the action for the object. | Confirm with an access token while `freshAuthEnabled` is on and check `mfa.fresh-step-required`. |
