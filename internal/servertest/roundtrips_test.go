@@ -1570,11 +1570,11 @@ func restoreModel() costModel {
 // take the row from the backup. It does not grow with the units or the tables.
 const swappedSettingTrips = 1
 
-// eventReceiptTrips is the number of round trips that the table of the Git host
-// event receipts takes off the fixed part. A restore leaves the table empty and
-// reads it only for its column check, 1 round trip, so it costs 1 less than the
-// 2 that perOther gives.
-const eventReceiptTrips = 1
+// eventReceiptTrips is the number of round trips that the two tables of the Git
+// host event receipts take off the fixed part: the receipts and their counter.
+// A restore leaves each table empty and reads it only for its column check, 1
+// round trip, so each costs 1 less than the 2 that perOther gives.
+const eventReceiptTrips = 2
 
 // firstAdministratorTrips is the change in the fixed part for the two tables of
 // the first administrator. The measured restore makes 3 round trips fewer than
