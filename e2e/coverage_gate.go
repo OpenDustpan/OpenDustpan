@@ -86,43 +86,55 @@ func (coverageGateConfig) DeleteAccessLimit(context.Context, gate.ObjectRef, aud
 const approvalRuleCoveringTest = "TestApprovalRules"
 
 // approvalRuleAllowEntries returns the routes of the approval defaults and the
-// approval rules of a namespace. The steps of approvalRuleCoveringTest drive
-// each one through the real server on each store.
+// approval rules of a namespace, of a collection and of a unit, and the routes
+// of the approval rules of the installation. The steps of
+// approvalRuleCoveringTest drive each one through the real server on each
+// store.
 func approvalRuleAllowEntries() []AllowEntry {
 	reason := "Operator and console route: no CLI manages approval rules. " +
 		"The harness step calls it through the real server and checks the answer."
 
-	const (
-		defaultPath = "/api/dustpan/v1/namespaces/{namespace}/approval-default"
-		rulesPath   = "/api/dustpan/v1/namespaces/{namespace}/approval-rules"
-	)
+	const namespacePath = "/api/dustpan/v1/namespaces/{namespace}"
 
-	routes := []struct{ method, path string }{
-		{http.MethodGet, defaultPath},
-		{http.MethodPut, defaultPath},
-		{http.MethodDelete, defaultPath},
-		{http.MethodGet, rulesPath},
-		{http.MethodGet, rulesPath + "/{id}"},
-		{http.MethodPut, rulesPath + "/{id}"},
-		{http.MethodDelete, rulesPath + "/{id}"},
+	scopes := []string{
+		namespacePath,
+		namespacePath + "/collections/{collection}",
+		namespacePath + "/units/by-name/{tool}/{name}",
 	}
 
-	out := make([]AllowEntry, 0, len(routes))
-	for _, r := range routes {
+	var out []AllowEntry
+
+	add := func(method, path string) {
 		out = append(out, AllowEntry{
-			Method: r.method, Path: r.path, CoveringTest: approvalRuleCoveringTest, Reason: reason,
+			Method: method, Path: path, CoveringTest: approvalRuleCoveringTest, Reason: reason,
 		})
+	}
+
+	for _, scope := range scopes {
+		add(http.MethodGet, scope+"/approval-default")
+		add(http.MethodPut, scope+"/approval-default")
+		add(http.MethodDelete, scope+"/approval-default")
+	}
+
+	for _, scope := range append(scopes, installationPath) {
+		add(http.MethodGet, scope+"/approval-rules")
+		add(http.MethodGet, scope+"/approval-rules/{id}")
+		add(http.MethodPut, scope+"/approval-rules/{id}")
+		add(http.MethodDelete, scope+"/approval-rules/{id}")
 	}
 
 	return out
 }
+
+// installationPath is the scope of the routes of the installation.
+const installationPath = "/api/dustpan/v1"
 
 // gateObjectCoveringTest names the test that proves the gate and access limit
 // routes instead of a CLI: no CLI sets a gate.
 const gateObjectCoveringTest = "TestGateRoutes"
 
 // gateObjectAllowEntries returns the routes of the gates and the access limits
-// of a namespace, of a collection and of a unit. The steps of
+// of a namespace, of a collection, of a unit and of the installation. The steps of
 // gateObjectCoveringTest drive each one through the real server on each store.
 func gateObjectAllowEntries() []AllowEntry {
 	reason := "Operator and console route: no CLI manages gates or access limits. " +
@@ -134,6 +146,7 @@ func gateObjectAllowEntries() []AllowEntry {
 		namespacePath,
 		namespacePath + "/collections/{collection}",
 		namespacePath + "/units/by-name/{tool}/{name}",
+		installationPath,
 	}
 
 	const item = "/{id}"

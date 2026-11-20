@@ -73,6 +73,19 @@ func runApprovalRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkApprovalRefusals(ctx, t, ae)
 	checkApprovalNeedsSignIn(ctx, t, ae)
 	checkApprovalTokenWrites(ctx, t, ae)
+
+	// The rows of the collection and of the unit scope, and of the installation.
+	// The rules of a unit belong to the unit, so the stack of the unit scope
+	// exists before the first write.
+	env.SeedCatchAllPlacement(ctx, t, "approvals")
+
+	status, body, err := env.APIStatus(ctx, http.MethodPost, "/api/stacks/approvals/web", `{"stackName":"prod"}`)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("create the stack web/prod = %d, %v (%s)", status, err, body)
+	}
+
+	checkApprovalScopes(ctx, t, ae)
+	checkApprovalInstallation(ctx, t, ae)
 }
 
 // approvalEnv is the env with the person who administers the namespace. A
@@ -427,4 +440,120 @@ func checkApprovalTokenWrites(ctx context.Context, t *testing.T, env approvalEnv
 		step: "delete the default with the session", method: http.MethodDelete, path: def, body: "",
 		want: http.StatusNoContent,
 	})
+}
+
+// approvalScopeRule is a rule that the group platform can meet.
+const approvalScopeRule = `{"count":1,"approvers":{"groups":["platform"]}}`
+
+// checkApprovalScopes proves the approval rule and approval default routes of
+// a collection and of a unit: each scope lists the objects of its own scope
+// only, a narrower scope cannot take the ID of a rule of the namespace, an
+// access token never writes, and a reset with no default answers 204.
+func checkApprovalScopes(ctx context.Context, t *testing.T, env approvalEnv) {
+	t.Helper()
+
+	scopes := map[string]string{
+		"collection": approvalNamespaceBase + "/collections/payments",
+		"unit":       approvalNamespaceBase + "/units/by-name/pulumi/web%2Fprod",
+	}
+
+	step := func(name, method, path, body string, want int) string {
+		t.Helper()
+
+		return approvalCall(ctx, t, env, approvalStep{step: name, method: method, path: path, body: body, want: want})
+	}
+
+	for level, scope := range scopes {
+		rules := scope + "/approval-rules"
+		item := rules + "/review"
+		def := scope + "/approval-default"
+
+		wantBodyHas(t, level+" list before", step(level+" list before", http.MethodGet, rules, "", http.StatusOK), `"rules":[]`)
+
+		wantBodyHas(t, level+" set the rule",
+			step(level+" set the rule", http.MethodPut, item, approvalScopeRule, http.StatusOK),
+			`"id":"review"`, `"version":1`)
+		wantBodyHas(t, level+" list", step(level+" list", http.MethodGet, rules, "", http.StatusOK), `"id":"review"`)
+
+		// The list of the namespace does not show the rule of a narrower scope.
+		wantBodyHas(t, level+" namespace list",
+			step(level+" namespace list", http.MethodGet, approvalNamespaceBase+"/approval-rules", "", http.StatusOK),
+			`"rules":[]`)
+		step(level+" read through the namespace", http.MethodGet, approvalNamespaceBase+"/approval-rules/review", "",
+			http.StatusNotFound)
+
+		status, body, err := env.env.ServerAPIStatus(ctx, http.MethodPut, item, approvalScopeRule)
+		if err != nil || status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
+			t.Fatalf("%s write with a token = %d, %v (%s), want 403 that asks for a recent sign-in", level, status, err, body)
+		}
+
+		step(level+" delete the rule", http.MethodDelete, item, "", http.StatusNoContent)
+		step(level+" read the deleted rule", http.MethodGet, item, "", http.StatusNotFound)
+
+		// The ID of a rule of the namespace is final for a narrower scope.
+		step(level+" set the namespace rule", http.MethodPut, approvalNamespaceBase+"/approval-rules/shared",
+			approvalScopeRule, http.StatusOK)
+		step(level+" set the rule of the namespace ID", http.MethodPut, rules+"/shared", approvalScopeRule,
+			http.StatusConflict)
+		step(level+" delete the namespace rule", http.MethodDelete, approvalNamespaceBase+"/approval-rules/shared", "",
+			http.StatusNoContent)
+
+		step(level+" default before", http.MethodGet, def, "", http.StatusNotFound)
+		step(level+" reset with no default", http.MethodDelete, def, "", http.StatusNoContent)
+		wantBodyHas(t, level+" set the default",
+			step(level+" set the default", http.MethodPut, def, `{"count":2,"approvers":{"groups":["platform"]}}`,
+				http.StatusOK),
+			`"count":2`, `"version":1`)
+		step(level+" namespace default", http.MethodGet, approvalNamespaceBase+"/approval-default", "", http.StatusNotFound)
+		step(level+" reset the default", http.MethodDelete, def, "", http.StatusNoContent)
+		step(level+" default after", http.MethodGet, def, "", http.StatusNotFound)
+	}
+}
+
+// checkApprovalInstallation proves the approval rule routes of the
+// installation. The site administrator makes, replaces and deletes a rule with
+// a fresh session. The namespace administrator holds namespace:manage-gates
+// only, so its write answers 403 access.denied. An access token never writes.
+func checkApprovalInstallation(ctx context.Context, t *testing.T, env approvalEnv) {
+	t.Helper()
+
+	const base = "/api/dustpan/v1/approval-rules"
+
+	gateRoutesLifecycle(ctx, t, env.env, gateRoutesCase{level: "installation", list: base, doc: approvalScopeRule})
+
+	step := func(name, method, path, body string, want int) {
+		t.Helper()
+
+		approvalCall(ctx, t, env, approvalStep{step: name, method: method, path: path, body: body, want: want})
+	}
+
+	// The person with the admin role on the namespace is not an operator.
+	step("namespace administrator sets an installation rule", http.MethodPut, base+"/ops", approvalScopeRule,
+		http.StatusForbidden)
+	step("namespace administrator sets an installation gate", http.MethodPut, "/api/dustpan/v1/gates/ops",
+		gateRoutesGate, http.StatusForbidden)
+	step("namespace administrator deletes an installation access limit", http.MethodDelete,
+		"/api/dustpan/v1/access-limits/ops", "", http.StatusForbidden)
+
+	status, body, err := env.env.ServerAPIStatus(ctx, http.MethodPut, base+"/ops", approvalScopeRule)
+	if err != nil || status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
+		t.Fatalf("installation rule write with a token = %d, %v (%s), want 403 that asks for a recent sign-in",
+			status, err, body)
+	}
+
+	// The control call: the site administrator session reads the rules of the
+	// namespace and the rules of the installation with the same session.
+	for path, want := range map[string]string{
+		approvalNamespaceBase + "/approval-rules": `"rules":[]`,
+		base:                    `"rules":[]`,
+		"/api/dustpan/v1/gates": `"gates":[]`,
+		approvalNamespaceBase + "/collections/payments/approval-rules": `"rules":[]`,
+	} {
+		status, body = env.env.FreshAdminAPIStatus(
+			ctx, t, e2e.SessionRequest{Method: http.MethodGet, Path: path, Body: ""},
+		)
+		if status != http.StatusOK || !strings.Contains(body, want) {
+			t.Fatalf("GET %s with the session of the site administrator = %d (%s), want 200 with %s", path, status, body, want)
+		}
+	}
 }
