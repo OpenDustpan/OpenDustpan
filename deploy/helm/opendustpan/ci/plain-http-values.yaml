@@ -1,0 +1,13 @@
+# One instance with plain HTTP on the pod address: no TLS and no https
+# public URL, with the explicit opt-in. Use it only in a trusted network.
+database:
+  existingSecret:
+    name: opendustpan-database
+keyEncryptionKey:
+  existingSecret:
+    name: opendustpan-key-encryption-key
+adminToken:
+  existingSecret:
+    name: opendustpan-admin-token
+server:
+  allowPlainHTTP: true

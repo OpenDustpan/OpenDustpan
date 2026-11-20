@@ -36,7 +36,7 @@ export DUSTPAN_DATABASE=sqlite:dustpan.db
 The administrator signs in with the admin token. The key-encryption key
 protects secret values and OpenTofu state. Keep both values outside the server's data directory.
 The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
-`:8080`.
+`:8080` unless you set `--listen`.
 
 `serve` needs a key-encryption key and a database that you set. It has no
 default for either, and it makes no key. Without a key, or without a
@@ -51,11 +51,16 @@ OpenTofu state that the key encrypts, and nobody can recover them.
 
 ### Pulumi CLI
 
-Start the server:
+Start the server on loopback:
 
 ```sh
-./bin/opendustpan serve
+./bin/opendustpan serve --listen 127.0.0.1:8080
 ```
+
+`serve` refuses plain HTTP on an address that is not loopback. For such an
+address, set `--tls-cert` and `--tls-key`, or set `--public-url` to the
+`https` URL of the proxy that ends TLS, or set `--allow-plain-http`
+(`DUSTPAN_ALLOW_PLAIN_HTTP`). `dev` warns and does not refuse.
 
 A new installation has no namespace. In a second shell with the same
 `DUSTPAN_ADMIN_TOKEN`, create one. The server refuses a new stack that no
@@ -501,12 +506,20 @@ Run it for production. Mount a data directory and pass the two secrets. The cont
 must be able to write to the data directory. Start the server first, then
 create a namespace through the API before the first login, as above.
 
+In the container, the server listens on `:8080`, which is not a loopback
+address, so `serve` refuses plain HTTP. The command below publishes the port
+on the loopback address of the host only, and sets
+`DUSTPAN_ALLOW_PLAIN_HTTP=true`. Before you open the port to other hosts,
+set `DUSTPAN_TLS_CERT` and `DUSTPAN_TLS_KEY`, or put a proxy that ends TLS in
+front and set `DUSTPAN_PUBLIC_URL` to its `https` URL. Then do not set
+`DUSTPAN_ALLOW_PLAIN_HTTP`.
+
 ```sh
 mkdir -p data
 export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
-  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY opendustpan:dev
+  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY -e DUSTPAN_ALLOW_PLAIN_HTTP=true opendustpan:dev
 docker exec -e DUSTPAN_ADMIN_TOKEN dustpan /opendustpan namespace create --server http://localhost:8080 acme
 ```
 
@@ -518,7 +531,7 @@ flag to point at it:
 docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
   -v ./dustpan.key:/run/secrets/dustpan.key:ro \
   -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY_FILE=/run/secrets/dustpan.key \
-  opendustpan:dev
+  -e DUSTPAN_ALLOW_PLAIN_HTTP=true opendustpan:dev
 ```
 
 A key file next to the data does not protect a backup of that data. A backup
