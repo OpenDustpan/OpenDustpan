@@ -108,7 +108,8 @@ func TestJobActionRoutesCancelADamagedJob(t *testing.T) {
 }
 
 // TestJobRoutesRefuseADamagedJobExceptCancel proves that only the cancel route
-// resolves a damaged job: any other route answers with the error of the store.
+// serves a damaged job: any other route answers 409 with the code job.damaged
+// (the cases of each route are in damaged_read_test.go).
 func TestJobRoutesRefuseADamagedJobExceptCancel(t *testing.T) {
 	t.Parallel()
 
@@ -118,8 +119,8 @@ func TestJobRoutesRefuseADamagedJobExceptCancel(t *testing.T) {
 	rec := serve(t, h, request{
 		method: http.MethodGet, path: jobPath("acme", string(testJob)), token: testToken,
 	})
-	if rec.Code == http.StatusOK {
-		t.Fatalf("GET of a damaged job = %d, want an error", rec.Code)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("GET of a damaged job = %d, want %d", rec.Code, http.StatusConflict)
 	}
 
 	if n := len(svc.called()); n != 0 {

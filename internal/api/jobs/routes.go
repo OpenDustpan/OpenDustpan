@@ -42,6 +42,9 @@ type target struct {
 	ns  namespace.Namespace
 	job job.Job
 	obj identity.Object
+	// damaged is true when the stored row of the job cannot be read. The job
+	// then holds the ID and the unit of the row only, and no other value.
+	damaged bool
 }
 
 // TargetResolver finds the object of a request. It answers errNotFound for
@@ -101,6 +104,11 @@ type Route struct {
 	// ETag says that the answer holds the ETag header: the version of the
 	// job, in quotes.
 	ETag bool
+	// ServesDamaged says that the route serves a job whose stored row cannot
+	// be read. Only the cancel route does. The wrapper answers every other
+	// route with 409 and the code job.damaged, after the checks of Reads and
+	// Actions, so that a caller who may not read the job gets the 404.
+	ServesDamaged bool
 	// Resolve finds the object of the request.
 	Resolve TargetResolver
 	// Serve handles the request after the wrapper has enforced the row.
@@ -122,6 +130,7 @@ func (h *Handler) buildRoutes() []Route {
 			Writes:         nil,
 			IdempotencyKey: false,
 			ETag:           true,
+			ServesDamaged:  false,
 			Resolve:        h.resolveJob,
 			Serve:          h.getJob,
 		},
@@ -130,7 +139,7 @@ func (h *Handler) buildRoutes() []Route {
 			Method: http.MethodGet, Path: jobsPath,
 			Scope: ScopeAuthorized, Reads: nil, Actions: nil, Writes: nil,
 			Filters:        listFilters(),
-			IdempotencyKey: false, ETag: false, Resolve: h.resolveNamespace, Serve: h.listJobs,
+			IdempotencyKey: false, ETag: false, ServesDamaged: false, Resolve: h.resolveNamespace, Serve: h.listJobs,
 		},
 	}
 
@@ -140,7 +149,7 @@ func (h *Handler) buildRoutes() []Route {
 			Method: http.MethodGet, Path: logPath,
 			Scope: ScopeAuthorized, Reads: []identity.Action{identity.ActionJobRead},
 			Actions: []identity.Action{identity.ActionJobReadLogs}, Filters: nil, Writes: nil,
-			IdempotencyKey: false, ETag: false, Resolve: h.resolveJob, Serve: h.getLog,
+			IdempotencyKey: false, ETag: false, ServesDamaged: false, Resolve: h.resolveJob, Serve: h.getLog,
 		})
 	}
 
@@ -150,21 +159,21 @@ func (h *Handler) buildRoutes() []Route {
 		routes = append(routes, Route{
 			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil, Filters: nil,
 			Writes:         []identity.Action{identity.ActionUnitRunPlan},
-			IdempotencyKey: true, ETag: true, Resolve: h.resolveNamespace, Serve: h.startJob,
+			IdempotencyKey: true, ETag: true, ServesDamaged: false, Resolve: h.resolveNamespace, Serve: h.startJob,
 		}, Route{
 			// The service checks job:read and job:approve on the unit again, and
 			// the state, the approver, the plan and the MFA step of a destroy.
 			Method: http.MethodPost, Path: approvalsPath, Scope: ScopeAuthorized,
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobApprove},
 			Filters: nil, Writes: nil,
-			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.approveJob,
+			IdempotencyKey: false, ETag: true, ServesDamaged: false, Resolve: h.resolveJob, Serve: h.approveJob,
 		}, Route{
 			// The service checks job:read and job:cancel on the unit again, and
 			// the state of the job.
 			Method: http.MethodPost, Path: cancelPath, Scope: ScopeAuthorized,
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobCancel},
 			Filters: nil, Writes: nil,
-			IdempotencyKey: false, ETag: true, Resolve: h.resolveJobOrDamaged, Serve: h.cancelJob,
+			IdempotencyKey: false, ETag: true, ServesDamaged: true, Resolve: h.resolveJob, Serve: h.cancelJob,
 		}, Route{
 			// The start action of the job depends on its operation and executor, so
 			// the service picks it after it read the job. It checks job:read and
@@ -176,14 +185,14 @@ func (h *Handler) buildRoutes() []Route {
 				identity.ActionUnitRunPlan, identity.ActionUnitRunApply, identity.ActionUnitRunDestroy,
 				identity.ActionUnitWriteBack,
 			},
-			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.confirmJob,
+			IdempotencyKey: false, ETag: true, ServesDamaged: false, Resolve: h.resolveJob, Serve: h.confirmJob,
 		}, Route{
 			// The service checks job:read and unit:redact on the unit again, and the
 			// log version.
 			Method: http.MethodPost, Path: redactPath, Scope: ScopeAuthorized,
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionUnitRedact},
 			Filters: nil, Writes: nil,
-			IdempotencyKey: false, ETag: false, Resolve: h.resolveJob, Serve: h.redactLog,
+			IdempotencyKey: false, ETag: false, ServesDamaged: false, Resolve: h.resolveJob, Serve: h.redactLog,
 		})
 	}
 
@@ -273,26 +282,20 @@ func (h *Handler) resolveNamespace(r *http.Request) (target, error) {
 
 	var noJob job.Job
 
-	return target{ns: ns, job: noJob, obj: identity.NamespaceObject(ns.Name)}, nil
+	return target{ns: ns, job: noJob, obj: identity.NamespaceObject(ns.Name), damaged: false}, nil
 }
 
 // resolveJob finds the namespace of the path and the job of the path in it.
 // An invalid name or ID, an unknown namespace, an unknown job and a job of
 // another namespace answer errNotFound alike.
+//
+// A job whose stored body does not decode resolves to its unit, found from
+// the unit ID column of the row and not from the body, and the target is
+// marked damaged. The wrapper authorizes the caller on that unit first, and
+// then answers 409 for each route except cancel. A row whose namespace is
+// another one, or whose unit the handler cannot find or trust, answers
+// errNotFound, so that the answer never tells that the row exists.
 func (h *Handler) resolveJob(r *http.Request) (target, error) {
-	ns, id, err := h.pathJob(r)
-	if err != nil {
-		return target{}, err
-	}
-
-	return h.loadTarget(r.Context(), ns, id)
-}
-
-// resolveJobOrDamaged is resolveJob for the route that cancels a job. A job
-// whose stored body does not decode resolves to its unit, so that an operator
-// can cancel it by its ID. Every other route answers the damaged job with the
-// error of the store.
-func (h *Handler) resolveJobOrDamaged(r *http.Request) (target, error) {
 	ns, id, err := h.pathJob(r)
 	if err != nil {
 		return target{}, err
@@ -357,7 +360,7 @@ func (h *Handler) loadTarget(ctx context.Context, ns namespace.Namespace, id job
 		return target{}, errNotFound
 	}
 
-	return target{ns: ns, job: j, obj: j.Spec.Unit}, nil
+	return target{ns: ns, job: j, obj: j.Spec.Unit, damaged: false}, nil
 }
 
 // errRepaired is the answer when the row of a job was repaired between the
@@ -415,7 +418,7 @@ func (h *Handler) damagedTarget(ctx context.Context, ns namespace.Namespace, id 
 
 	stub.ID, stub.Spec.Unit = id, unit
 
-	return target{ns: ns, job: stub, obj: unit}, nil
+	return target{ns: ns, job: stub, obj: unit, damaged: true}, nil
 }
 
 // enforce wraps one route table row: it authenticates, finds the object,
@@ -459,6 +462,14 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		}
 		if err := g.AuthorizeObject(ctx, r, p, t.obj, checks); err != nil {
 			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		// The caller may read the unit, so the answer may tell the damage. Only
+		// the route that cancels serves a damaged job.
+		if t.damaged && !rt.ServesDamaged {
+			h.writeError(ctx, w, errDamaged)
 
 			return
 		}
