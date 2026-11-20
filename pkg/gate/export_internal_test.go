@@ -24,7 +24,7 @@ func ReadApproverPolicyForTest(ctx context.Context, kinds KindReader, isDev DevS
 func (s *ConfigService) PrepareGateForTest(
 	ctx context.Context, scope Scope, e audit.Entry,
 ) (namespace.Fence, audit.Entry, error) {
-	return s.prepare(ctx, scope, e, scope.Key()+"/gates/x", auditSetGate)
+	return s.prepare(ctx, scope, e, scope.Key()+"/gates/x", writeSetGate)
 }
 
 // PrepareApprovalDefaultForTest is prepare with the audit names of an approval
@@ -32,5 +32,5 @@ func (s *ConfigService) PrepareGateForTest(
 func (s *ConfigService) PrepareApprovalDefaultForTest(
 	ctx context.Context, scope Scope, e audit.Entry,
 ) (namespace.Fence, audit.Entry, error) {
-	return s.prepare(ctx, scope, e, scope.Key()+"/approval-default", auditSetApprovalDefault)
+	return s.prepare(ctx, scope, e, scope.Key()+"/approval-default", writeSetApprovalDefault)
 }

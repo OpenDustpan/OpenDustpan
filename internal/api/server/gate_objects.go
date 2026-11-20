@@ -349,7 +349,9 @@ func gateScopeOf(r *http.Request, obj identity.Object) (gate.Scope, error) {
 		// does not hold too. This check stays so that a new row cannot name
 		// a narrower scope on the installation object.
 		if r.PathValue("collection") != "" || r.PathValue("tool") != "" {
-			return gate.Scope{}, fmt.Errorf("%w: the installation has no collection or unit scope", identity.ErrInvalidObject)
+			return gate.Scope{}, fmt.Errorf(
+				"%w: the installation has no collection or unit scope", identity.ErrInvalidObject,
+			)
 		}
 
 		return gate.InstallationScope(), nil

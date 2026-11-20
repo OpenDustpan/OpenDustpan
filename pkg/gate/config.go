@@ -124,23 +124,53 @@ const (
 	AuditInstallationDeleteApprovalRule = "installation:delete-approval-rule"
 )
 
-// auditNames holds the audit action of one write for each level of scope. The
-// service picks the action from the level of the scope in prepare, so a write
-// at a level has no name of another level. An empty installation name means
-// that the installation holds no such write.
+// auditWrite names one write of the service. It picks the audit action in
+// prepare, from the level of the scope: auditNames holds the action of each
+// level, so a write at a level has no name of another level.
+type auditWrite int
+
+const (
+	writeSetApprovalDefault auditWrite = iota + 1
+	writeDeleteApprovalDefault
+	writeSetApprovalRule
+	writeDeleteApprovalRule
+	writeSetGate
+	writeDeleteGate
+	writeSetAccessLimit
+	writeDeleteAccessLimit
+)
+
+// auditNames holds the audit action of one write for each level of scope. An
+// empty installation name means that the installation holds no such write.
 type auditNames struct {
 	namespace    string
 	installation string
 }
 
-var (
-	auditSetApprovalDefault    = auditNames{namespace: AuditSetApprovalDefault, installation: ""}
-	auditDeleteApprovalDefault = auditNames{namespace: AuditDeleteApprovalDefault, installation: ""}
-	auditSetApprovalRule       = auditNames{namespace: AuditSetApprovalRule, installation: AuditInstallationSetApprovalRule}
-	auditDeleteApprovalRule    = auditNames{
-		namespace: AuditDeleteApprovalRule, installation: AuditInstallationDeleteApprovalRule,
+// names returns the audit actions of the write w. An unknown write has no
+// action at any level, so prepare refuses it.
+func (w auditWrite) names() auditNames {
+	switch w {
+	case writeSetApprovalDefault:
+		return auditNames{namespace: AuditSetApprovalDefault, installation: ""}
+	case writeDeleteApprovalDefault:
+		return auditNames{namespace: AuditDeleteApprovalDefault, installation: ""}
+	case writeSetApprovalRule:
+		return auditNames{namespace: AuditSetApprovalRule, installation: AuditInstallationSetApprovalRule}
+	case writeDeleteApprovalRule:
+		return auditNames{namespace: AuditDeleteApprovalRule, installation: AuditInstallationDeleteApprovalRule}
+	case writeSetGate:
+		return auditNames{namespace: AuditSetGate, installation: AuditInstallationSetGate}
+	case writeDeleteGate:
+		return auditNames{namespace: AuditDeleteGate, installation: AuditInstallationDeleteGate}
+	case writeSetAccessLimit:
+		return auditNames{namespace: AuditSetAccessLimit, installation: AuditInstallationSetAccessLimit}
+	case writeDeleteAccessLimit:
+		return auditNames{namespace: AuditDeleteAccessLimit, installation: AuditInstallationDeleteAccessLimit}
+	default:
+		return auditNames{namespace: "", installation: ""}
 	}
-)
+}
 
 // scopeUse says what a method does with a scope.
 type scopeUse int
@@ -202,7 +232,7 @@ func (s *ConfigService) PutApprovalDefault(
 
 	d.Approvers = approvers
 
-	fence, entry, err := s.prepare(ctx, d.Scope, e, d.Scope.Key()+"/approval-default", auditSetApprovalDefault)
+	fence, entry, err := s.prepare(ctx, d.Scope, e, d.Scope.Key()+"/approval-default", writeSetApprovalDefault)
 	if err != nil {
 		return ApprovalDefault{}, err
 	}
@@ -229,7 +259,7 @@ func (s *ConfigService) DeleteApprovalDefault(
 		return err
 	}
 
-	fence, entry, err := s.prepare(ctx, scope, e, scope.Key()+"/approval-default", auditDeleteApprovalDefault)
+	fence, entry, err := s.prepare(ctx, scope, e, scope.Key()+"/approval-default", writeDeleteApprovalDefault)
 	if err != nil {
 		return err
 	}
@@ -316,7 +346,7 @@ func (s *ConfigService) PutApprovalRule(
 
 	object := r.Scope.Key() + "/approval-rules/" + string(r.ID)
 
-	fence, entry, err := s.prepare(ctx, r.Scope, e, object, auditSetApprovalRule)
+	fence, entry, err := s.prepare(ctx, r.Scope, e, object, writeSetApprovalRule)
 	if err != nil {
 		return ApprovalRule{}, err
 	}
@@ -343,7 +373,7 @@ func (s *ConfigService) DeleteApprovalRule(ctx context.Context, ref ObjectRef, e
 
 	object := ref.Scope.Key() + "/approval-rules/" + string(ref.ID)
 
-	fence, entry, err := s.prepare(ctx, ref.Scope, e, object, auditDeleteApprovalRule)
+	fence, entry, err := s.prepare(ctx, ref.Scope, e, object, writeDeleteApprovalRule)
 	if err != nil {
 		return err
 	}
@@ -410,8 +440,10 @@ func (s *ConfigService) requireNamespace(ctx context.Context, scope Scope) error
 // has the name of another level. A level with no name for the write fails
 // with ErrInvalid.
 func (s *ConfigService) prepare(
-	ctx context.Context, scope Scope, e audit.Entry, object string, names auditNames,
+	ctx context.Context, scope Scope, e audit.Entry, object string, write auditWrite,
 ) (namespace.Fence, audit.Entry, error) {
+	names := write.names()
+
 	var (
 		fence  namespace.Fence
 		ns     namespace.Name
@@ -435,7 +467,11 @@ func (s *ConfigService) prepare(
 	}
 
 	if action == "" {
-		return namespace.Fence{}, audit.Entry{}, fmt.Errorf("%w: a %s scope takes no such write", ErrInvalid, scope.Level())
+		return namespace.Fence{}, audit.Entry{}, fmt.Errorf(
+			"%w: a %s scope takes no such write",
+			ErrInvalid,
+			scope.Level(),
+		)
 	}
 
 	e.At = s.now()

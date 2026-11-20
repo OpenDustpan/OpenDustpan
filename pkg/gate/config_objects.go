@@ -27,15 +27,6 @@ const (
 	AuditInstallationDeleteAccessLimit = "installation:delete-access-limit"
 )
 
-var (
-	auditSetGate           = auditNames{namespace: AuditSetGate, installation: AuditInstallationSetGate}
-	auditDeleteGate        = auditNames{namespace: AuditDeleteGate, installation: AuditInstallationDeleteGate}
-	auditSetAccessLimit    = auditNames{namespace: AuditSetAccessLimit, installation: AuditInstallationSetAccessLimit}
-	auditDeleteAccessLimit = auditNames{
-		namespace: AuditDeleteAccessLimit, installation: AuditInstallationDeleteAccessLimit,
-	}
-)
-
 // MaxMessageBytes bounds the message of a gate.
 const MaxMessageBytes = 1024
 
@@ -106,7 +97,7 @@ func (s *ConfigService) PutGate(ctx context.Context, g Gate, prev int64, reason 
 
 	object := g.Scope.Key() + "/gates/" + string(g.ID)
 
-	fence, entry, err := s.prepare(ctx, g.Scope, e, object, auditSetGate)
+	fence, entry, err := s.prepare(ctx, g.Scope, e, object, writeSetGate)
 	if err != nil {
 		return Gate{}, err
 	}
@@ -157,7 +148,7 @@ func (s *ConfigService) DeleteGate(ctx context.Context, ref ObjectRef, reason st
 	changes := withReason(deleteChanges("gate/"+string(ref.ID), ref.Version), reason)
 
 	return s.deleteObject(ctx, ref, e, deleteSpec{
-		segment: "gates", action: auditDeleteGate, noun: "gate", changes: changes,
+		segment: "gates", action: writeDeleteGate, noun: "gate", changes: changes,
 		remove: func(fence namespace.Fence, entry audit.Entry) error {
 			return s.store.Gates().Delete(ctx, ref, fence, entry)
 		},
@@ -214,7 +205,7 @@ func (s *ConfigService) PutAccessLimit(
 
 	object := l.Scope.Key() + "/access-limits/" + string(l.ID)
 
-	fence, entry, err := s.prepare(ctx, l.Scope, e, object, auditSetAccessLimit)
+	fence, entry, err := s.prepare(ctx, l.Scope, e, object, writeSetAccessLimit)
 	if err != nil {
 		return AccessLimit{}, err
 	}
@@ -236,7 +227,7 @@ func (s *ConfigService) PutAccessLimit(
 // ErrConflict for another version.
 func (s *ConfigService) DeleteAccessLimit(ctx context.Context, ref ObjectRef, e audit.Entry) error {
 	return s.deleteObject(ctx, ref, e, deleteSpec{
-		segment: "access-limits", action: auditDeleteAccessLimit, noun: "access limit",
+		segment: "access-limits", action: writeDeleteAccessLimit, noun: "access limit",
 		changes: deleteChanges("access-limit/"+string(ref.ID), ref.Version),
 		remove: func(fence namespace.Fence, entry audit.Entry) error {
 			return s.store.AccessLimits().Delete(ctx, ref, fence, entry)
@@ -248,7 +239,7 @@ func (s *ConfigService) DeleteAccessLimit(ctx context.Context, ref ObjectRef, e 
 type deleteSpec struct {
 	// segment is the path segment of the kind in the object of the entry.
 	segment string
-	action  auditNames
+	action  auditWrite
 	noun    string
 	changes []audit.Change
 	remove  func(namespace.Fence, audit.Entry) error

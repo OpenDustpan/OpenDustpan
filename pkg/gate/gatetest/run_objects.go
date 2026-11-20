@@ -353,7 +353,9 @@ func caseInstallationRefusals(t *testing.T, e *env, k kindOps) {
 		{"entry of a namespace", zeroFence(), entry("acme"), audit.ErrInvalidEntry},
 	}
 
-	for _, r := range refused {
+	for i := range refused {
+		r := &refused[i]
+
 		_, err := k.putWith(
 			e, &write{scope: e.fx.installation, id: "a", salt: "one", prev: 0, fence: r.fence, entry: r.entry},
 		)

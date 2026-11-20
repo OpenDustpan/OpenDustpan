@@ -332,8 +332,8 @@ func (h *Handler) writeApprovalDefault(
 		return
 	}
 
-	if err := in.Approvers.refuseHiddenUsers(); err != nil {
-		h.writeError(ctx, w, err)
+	if hiddenErr := in.Approvers.refuseHiddenUsers(); hiddenErr != nil {
+		h.writeError(ctx, w, hiddenErr)
 
 		return
 	}

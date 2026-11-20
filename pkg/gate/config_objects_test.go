@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -608,7 +609,249 @@ func newInstallationFixture(t *testing.T) installationFixture {
 
 // writes returns the writes that reached the stores of the three kinds.
 func (f installationFixture) writes() []write {
-	return append(append([]write{}, f.objects.writes...), f.rules.writes...)
+	return slices.Concat(f.objects.writes, f.rules.writes)
+}
+
+// installationWrite is one write of TestConfigInstallationScope: the scope, the
+// call, and the audit action and object that the entry must hold.
+type installationWrite struct {
+	name   string
+	scope  gate.Scope
+	run    func(f installationFixture, s gate.Scope) error
+	action string
+	object string
+}
+
+// installationWrites returns the writes of each kind at the installation, and
+// three writes at a namespace that must never write an installation: action.
+func installationWrites(t *testing.T) []installationWrite {
+	t.Helper()
+
+	ctx := t.Context()
+	inst, acme := gate.InstallationScope(), gate.NamespaceScope("acme")
+
+	setGate := func(f installationFixture, s gate.Scope) error {
+		_, err := f.svc.PutGate(ctx, goodGate(s), 0, "", callerEntry())
+
+		return err
+	}
+	deleteGate := func(f installationFixture, s gate.Scope) error {
+		return f.svc.DeleteGate(ctx, gate.ObjectRef{Scope: s, ID: "freeze", Version: 1}, "", callerEntry())
+	}
+	setLimit := func(f installationFixture, s gate.Scope) error {
+		_, err := f.svc.PutAccessLimit(ctx, goodLimit(s), 0, callerEntry())
+
+		return err
+	}
+	deleteLimit := func(f installationFixture, s gate.Scope) error {
+		return f.svc.DeleteAccessLimit(ctx, gate.ObjectRef{Scope: s, ID: "no-writes", Version: 1}, callerEntry())
+	}
+	setRule := func(f installationFixture, s gate.Scope) error {
+		_, err := f.svc.PutApprovalRule(ctx, goodRule(s), 0, callerEntry())
+
+		return err
+	}
+	deleteRule := func(f installationFixture, s gate.Scope) error {
+		return f.svc.DeleteApprovalRule(ctx, gate.ObjectRef{Scope: s, ID: "platform", Version: 1}, callerEntry())
+	}
+
+	return []installationWrite{
+		{"set gate", inst, setGate, "installation:set-gate", "installation/gates/freeze"},
+		{"delete gate", inst, deleteGate, "installation:delete-gate", "installation/gates/freeze"},
+		{"set access limit", inst, setLimit, "installation:set-access-limit", "installation/access-limits/no-writes"},
+		{
+			"delete access limit", inst, deleteLimit, "installation:delete-access-limit",
+			"installation/access-limits/no-writes",
+		},
+		{"set approval rule", inst, setRule, "installation:set-approval-rule", "installation/approval-rules/platform"},
+		{
+			"delete approval rule", inst, deleteRule, "installation:delete-approval-rule",
+			"installation/approval-rules/platform",
+		},
+		{"namespace set gate", acme, setGate, "namespace:set-gate", "namespace/acme/gates/freeze"},
+		{
+			"namespace delete access limit", acme, deleteLimit, "namespace:delete-access-limit",
+			"namespace/acme/access-limits/no-writes",
+		},
+		{
+			"namespace set approval rule", acme, setRule, "namespace:set-approval-rule",
+			"namespace/acme/approval-rules/platform",
+		},
+	}
+}
+
+// checkInstallationWrite runs one write and checks its fence, its entry and
+// the namespace reads that it made.
+func checkInstallationWrite(t *testing.T, tt installationWrite) {
+	t.Helper()
+
+	f := newInstallationFixture(t)
+	if err := tt.run(f, tt.scope); err != nil {
+		t.Fatalf("write = %v, want nil", err)
+	}
+
+	ws := f.writes()
+	if len(ws) != 1 {
+		t.Fatalf("stores got %d writes, want 1", len(ws))
+	}
+
+	w := &ws[0]
+	if w.entry.Action != tt.action || w.entry.Object != tt.object {
+		t.Errorf("entry action %q object %q; want %q and %q", w.entry.Action, w.entry.Object, tt.action, tt.object)
+	}
+
+	if tt.scope.Level() == gate.LevelInstallation {
+		zero := namespace.Fence{Namespace: "", FailoverVersion: 0}
+		if w.fence != zero || w.entry.Namespace != audit.ServerScope || f.reads.Load() != 0 {
+			t.Errorf("fence %+v, entry namespace %q, %d namespace reads; want the zero fence, @server and 0",
+				w.fence, w.entry.Namespace, f.reads.Load())
+		}
+
+		return
+	}
+
+	if w.fence.Namespace != "acme" || w.entry.Namespace != "acme" ||
+		strings.HasPrefix(w.entry.Action, "installation:") {
+		t.Errorf("namespace write has fence %+v, namespace %q, action %q", w.fence, w.entry.Namespace, w.entry.Action)
+	}
+}
+
+// checkInstallationReads reads each kind at the installation and checks that no
+// read touched a namespace.
+func checkInstallationReads(t *testing.T) {
+	t.Helper()
+
+	f := newInstallationFixture(t)
+	ctx := t.Context()
+	inst := gate.InstallationScope()
+
+	lists := map[string]func() error{
+		"Gates":         func() error { _, err := f.svc.Gates(ctx, inst); return err },
+		"AccessLimits":  func() error { _, err := f.svc.AccessLimits(ctx, inst); return err },
+		"ApprovalRules": func() error { _, err := f.svc.ApprovalRules(ctx, inst); return err },
+	}
+
+	for name, run := range lists {
+		if err := run(); err != nil {
+			t.Errorf("%s() = %v, want nil", name, err)
+		}
+	}
+
+	gets := map[string]func() error{
+		"Gate":         func() error { _, err := f.svc.Gate(ctx, inst, "x"); return err },
+		"AccessLimit":  func() error { _, err := f.svc.AccessLimit(ctx, inst, "x"); return err },
+		"ApprovalRule": func() error { _, err := f.svc.ApprovalRule(ctx, inst, "x"); return err },
+	}
+
+	for name, run := range gets {
+		if err := run(); !errors.Is(err, gate.ErrNotFound) {
+			t.Errorf("%s() = %v, want ErrNotFound", name, err)
+		}
+	}
+
+	if f.reads.Load() != 0 {
+		t.Errorf("an installation read made %d namespace reads, want 0", f.reads.Load())
+	}
+}
+
+// refusedCalls returns the calls that the service must refuse for a scope that
+// holds no gate, access limit or approval rule.
+func refusedCalls(t *testing.T, scope gate.Scope) map[string]func(f installationFixture) error {
+	t.Helper()
+
+	ctx := t.Context()
+
+	return map[string]func(f installationFixture) error{
+		"gates":         func(f installationFixture) error { _, err := f.svc.Gates(ctx, scope); return err },
+		"access limits": func(f installationFixture) error { _, err := f.svc.AccessLimits(ctx, scope); return err },
+		"approval rules": func(f installationFixture) error {
+			_, err := f.svc.ApprovalRules(ctx, scope)
+
+			return err
+		},
+		"set gate": func(f installationFixture) error {
+			_, err := f.svc.PutGate(ctx, goodGate(scope), 0, "", callerEntry())
+
+			return err
+		},
+		"set approval rule": func(f installationFixture) error {
+			_, err := f.svc.PutApprovalRule(ctx, goodRule(scope), 0, callerEntry())
+
+			return err
+		},
+		"delete approval rule": func(f installationFixture) error {
+			return f.svc.DeleteApprovalRule(
+				ctx,
+				gate.ObjectRef{Scope: scope, ID: "platform", Version: 1},
+				callerEntry(),
+			)
+		},
+	}
+}
+
+// checkRefused runs call and checks gate.ErrInvalid, and that no store was
+// called.
+func checkRefused(t *testing.T, name string, call func(f installationFixture) error) {
+	t.Helper()
+
+	f := newInstallationFixture(t)
+	if err := call(f); !errors.Is(err, gate.ErrInvalid) {
+		t.Errorf("%s = %v, want ErrInvalid", name, err)
+	}
+
+	if len(f.writes()) != 0 {
+		t.Errorf("%s reached the store %d times, want 0", name, len(f.writes()))
+	}
+}
+
+// checkRefusedScopes checks the blueprint, the profile and the empty scope.
+func checkRefusedScopes(t *testing.T) {
+	t.Helper()
+
+	blueprint, err := gate.BlueprintScope("web", 1)
+	if err != nil {
+		t.Fatalf("BlueprintScope() = %v", err)
+	}
+
+	scopes := map[string]gate.Scope{"blueprint": blueprint, "profile": profileScope(t), "empty": {}}
+
+	for scopeName, scope := range scopes {
+		for name, call := range refusedCalls(t, scope) {
+			checkRefused(t, name+" at a "+scopeName+" scope", call)
+		}
+	}
+}
+
+// checkNoInstallationDefault checks that the installation holds no approval
+// default: a read, a save and a delete give gate.ErrInvalid, call no store
+// and read no namespace.
+func checkNoInstallationDefault(t *testing.T) {
+	t.Helper()
+
+	ctx := t.Context()
+	inst := gate.InstallationScope()
+
+	calls := map[string]func(f installationFixture) error{
+		"read": func(f installationFixture) error { _, err := f.svc.ApprovalDefault(ctx, inst); return err },
+		"set": func(f installationFixture) error {
+			_, err := f.svc.PutApprovalDefault(ctx, goodDefault(inst), 0, callerEntry())
+
+			return err
+		},
+		"delete": func(f installationFixture) error { return f.svc.DeleteApprovalDefault(ctx, inst, 1, callerEntry()) },
+	}
+
+	for name, call := range calls {
+		f := newInstallationFixture(t)
+		if err := call(f); !errors.Is(err, gate.ErrInvalid) {
+			t.Errorf("approval default %s at the installation = %v, want ErrInvalid", name, err)
+		}
+
+		if len(f.writes()) != 0 || f.reads.Load() != 0 {
+			t.Errorf("approval default %s made %d writes and %d namespace reads, want 0 and 0",
+				name, len(f.writes()), f.reads.Load())
+		}
+	}
 }
 
 // TestConfigInstallationScope proves that the service reads, saves and
@@ -618,227 +861,25 @@ func (f installationFixture) writes() []write {
 func TestConfigInstallationScope(t *testing.T) {
 	t.Parallel()
 
-	inst := gate.InstallationScope()
-	acme := gate.NamespaceScope("acme")
-
 	t.Run("writes", func(t *testing.T) {
 		t.Parallel()
 
-		tests := []struct {
-			name   string
-			scope  gate.Scope
-			run    func(f installationFixture, s gate.Scope) error
-			action string
-			object string
-		}{
-			{"set gate", inst, func(f installationFixture, s gate.Scope) error {
-				_, err := f.svc.PutGate(t.Context(), goodGate(s), 0, "", callerEntry())
-
-				return err
-			}, "installation:set-gate", "installation/gates/freeze"},
-			{"delete gate", inst, func(f installationFixture, s gate.Scope) error {
-				return f.svc.DeleteGate(
-					t.Context(), gate.ObjectRef{Scope: s, ID: "freeze", Version: 1}, "", callerEntry(),
-				)
-			}, "installation:delete-gate", "installation/gates/freeze"},
-			{"set access limit", inst, func(f installationFixture, s gate.Scope) error {
-				_, err := f.svc.PutAccessLimit(t.Context(), goodLimit(s), 0, callerEntry())
-
-				return err
-			}, "installation:set-access-limit", "installation/access-limits/no-writes"},
-			{"delete access limit", inst, func(f installationFixture, s gate.Scope) error {
-				return f.svc.DeleteAccessLimit(
-					t.Context(), gate.ObjectRef{Scope: s, ID: "no-writes", Version: 1}, callerEntry(),
-				)
-			}, "installation:delete-access-limit", "installation/access-limits/no-writes"},
-			{"set approval rule", inst, func(f installationFixture, s gate.Scope) error {
-				_, err := f.svc.PutApprovalRule(t.Context(), goodRule(s), 0, callerEntry())
-
-				return err
-			}, "installation:set-approval-rule", "installation/approval-rules/platform"},
-			{"delete approval rule", inst, func(f installationFixture, s gate.Scope) error {
-				return f.svc.DeleteApprovalRule(
-					t.Context(), gate.ObjectRef{Scope: s, ID: "platform", Version: 1}, callerEntry(),
-				)
-			}, "installation:delete-approval-rule", "installation/approval-rules/platform"},
-			// A write at a namespace never writes an installation: action.
-			{"namespace set gate", acme, func(f installationFixture, s gate.Scope) error {
-				_, err := f.svc.PutGate(t.Context(), goodGate(s), 0, "", callerEntry())
-
-				return err
-			}, "namespace:set-gate", "namespace/acme/gates/freeze"},
-			{"namespace delete access limit", acme, func(f installationFixture, s gate.Scope) error {
-				return f.svc.DeleteAccessLimit(
-					t.Context(), gate.ObjectRef{Scope: s, ID: "no-writes", Version: 1}, callerEntry(),
-				)
-			}, "namespace:delete-access-limit", "namespace/acme/access-limits/no-writes"},
-			{"namespace set approval rule", acme, func(f installationFixture, s gate.Scope) error {
-				_, err := f.svc.PutApprovalRule(t.Context(), goodRule(s), 0, callerEntry())
-
-				return err
-			}, "namespace:set-approval-rule", "namespace/acme/approval-rules/platform"},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
-
-				f := newInstallationFixture(t)
-				if err := tt.run(f, tt.scope); err != nil {
-					t.Fatalf("write = %v, want nil", err)
-				}
-
-				ws := f.writes()
-				if len(ws) != 1 {
-					t.Fatalf("stores got %d writes, want 1", len(ws))
-				}
-
-				w := ws[0]
-				if w.entry.Action != tt.action || w.entry.Object != tt.object {
-					t.Errorf("entry action %q object %q; want %q and %q",
-						w.entry.Action, w.entry.Object, tt.action, tt.object)
-				}
-
-				if tt.scope.Level() == gate.LevelInstallation {
-					want := namespace.Fence{Namespace: "", FailoverVersion: 0}
-					if w.fence != want || w.entry.Namespace != audit.ServerScope || f.reads.Load() != 0 {
-						t.Errorf("fence %+v, entry namespace %q, %d namespace reads; want the zero fence, @server and 0",
-							w.fence, w.entry.Namespace, f.reads.Load())
-					}
-
-					return
-				}
-
-				if w.fence.Namespace != "acme" || w.entry.Namespace != "acme" ||
-					strings.HasPrefix(w.entry.Action, "installation:") {
-					t.Errorf("namespace write has fence %+v, namespace %q, action %q", w.fence, w.entry.Namespace, w.entry.Action)
-				}
-			})
+		for _, tt := range installationWrites(t) {
+			checkInstallationWrite(t, tt)
 		}
 	})
 
 	t.Run("reads", func(t *testing.T) {
 		t.Parallel()
 
-		f := newInstallationFixture(t)
-
-		if _, err := f.svc.Gates(t.Context(), inst); err != nil {
-			t.Errorf("Gates() = %v", err)
-		}
-
-		if _, err := f.svc.AccessLimits(t.Context(), inst); err != nil {
-			t.Errorf("AccessLimits() = %v", err)
-		}
-
-		if _, err := f.svc.ApprovalRules(t.Context(), inst); err != nil {
-			t.Errorf("ApprovalRules() = %v", err)
-		}
-
-		if _, err := f.svc.Gate(t.Context(), inst, "x"); !errors.Is(err, gate.ErrNotFound) {
-			t.Errorf("Gate() = %v, want ErrNotFound", err)
-		}
-
-		if _, err := f.svc.AccessLimit(t.Context(), inst, "x"); !errors.Is(err, gate.ErrNotFound) {
-			t.Errorf("AccessLimit() = %v, want ErrNotFound", err)
-		}
-
-		if _, err := f.svc.ApprovalRule(t.Context(), inst, "x"); !errors.Is(err, gate.ErrNotFound) {
-			t.Errorf("ApprovalRule() = %v, want ErrNotFound", err)
-		}
-
-		if f.reads.Load() != 0 {
-			t.Errorf("an installation read made %d namespace reads, want 0", f.reads.Load())
-		}
+		checkInstallationReads(t)
 	})
 
 	t.Run("refusals", func(t *testing.T) {
 		t.Parallel()
 
-		blueprint, err := gate.BlueprintScope("web", 1)
-		if err != nil {
-			t.Fatalf("BlueprintScope() = %v", err)
-		}
-
-		profile, err := gate.ProfileScope("acme", "base")
-		if err != nil {
-			t.Fatalf("ProfileScope() = %v", err)
-		}
-
-		scopes := []struct {
-			name  string
-			scope gate.Scope
-		}{{"blueprint", blueprint}, {"profile", profile}, {"empty", gate.Scope{}}}
-
-		for _, sc := range scopes {
-			tests := map[string]func(f installationFixture) error{
-				"gates":         func(f installationFixture) error { _, err := f.svc.Gates(t.Context(), sc.scope); return err },
-				"access limits": func(f installationFixture) error { _, err := f.svc.AccessLimits(t.Context(), sc.scope); return err },
-				"approval rules": func(f installationFixture) error {
-					_, err := f.svc.ApprovalRules(t.Context(), sc.scope)
-
-					return err
-				},
-				"set gate": func(f installationFixture) error {
-					_, err := f.svc.PutGate(t.Context(), goodGate(sc.scope), 0, "", callerEntry())
-
-					return err
-				},
-				"set approval rule": func(f installationFixture) error {
-					_, err := f.svc.PutApprovalRule(t.Context(), goodRule(sc.scope), 0, callerEntry())
-
-					return err
-				},
-				"delete approval rule": func(f installationFixture) error {
-					return f.svc.DeleteApprovalRule(
-						t.Context(), gate.ObjectRef{Scope: sc.scope, ID: "platform", Version: 1}, callerEntry(),
-					)
-				},
-			}
-
-			for name, run := range tests {
-				t.Run(sc.name+" "+name, func(t *testing.T) {
-					t.Parallel()
-
-					f := newInstallationFixture(t)
-					if err := run(f); !errors.Is(err, gate.ErrInvalid) {
-						t.Errorf("%s at a %s scope = %v, want ErrInvalid", name, sc.name, err)
-					}
-
-					if len(f.writes()) != 0 {
-						t.Errorf("a refused call reached the store %d times, want 0", len(f.writes()))
-					}
-				})
-			}
-		}
-
-		// The installation holds no approval default.
-		defaults := map[string]func(f installationFixture) error{
-			"read": func(f installationFixture) error { _, err := f.svc.ApprovalDefault(t.Context(), inst); return err },
-			"set": func(f installationFixture) error {
-				_, err := f.svc.PutApprovalDefault(t.Context(), goodDefault(inst), 0, callerEntry())
-
-				return err
-			},
-			"delete": func(f installationFixture) error {
-				return f.svc.DeleteApprovalDefault(t.Context(), inst, 1, callerEntry())
-			},
-		}
-
-		for name, run := range defaults {
-			t.Run("installation approval default "+name, func(t *testing.T) {
-				t.Parallel()
-
-				f := newInstallationFixture(t)
-				if err := run(f); !errors.Is(err, gate.ErrInvalid) {
-					t.Errorf("approval default %s at the installation = %v, want ErrInvalid", name, err)
-				}
-
-				if len(f.writes()) != 0 || f.reads.Load() != 0 {
-					t.Errorf("a refused call made %d writes and %d namespace reads, want 0 and 0",
-						len(f.writes()), f.reads.Load())
-				}
-			})
-		}
+		checkRefusedScopes(t)
+		checkNoInstallationDefault(t)
 	})
 }
 
@@ -849,39 +890,16 @@ func TestConfigInstallationScope(t *testing.T) {
 func TestPrepareLevelGuards(t *testing.T) {
 	t.Parallel()
 
-	ctx := t.Context()
-
 	t.Run("installation takes the zero fence and the installation name", func(t *testing.T) {
 		t.Parallel()
 
-		f := newInstallationFixture(t)
-
-		fence, e, err := f.svc.PrepareGateForTest(ctx, gate.InstallationScope(), callerEntry())
-		if err != nil {
-			t.Fatalf("prepare = %v", err)
-		}
-
-		if fence != (namespace.Fence{Namespace: "", FailoverVersion: 0}) || e.Namespace != audit.ServerScope ||
-			e.Action != gate.AuditInstallationSetGate || f.reads.Load() != 0 {
-			t.Errorf("fence %+v, namespace %q, action %q, %d reads; want the zero fence, @server, installation:set-gate, 0",
-				fence, e.Namespace, e.Action, f.reads.Load())
-		}
+		checkPrepareInstallation(t)
 	})
 
 	t.Run("a namespace takes its fence and the namespace name", func(t *testing.T) {
 		t.Parallel()
 
-		f := newInstallationFixture(t)
-
-		fence, e, err := f.svc.PrepareGateForTest(ctx, gate.NamespaceScope("acme"), callerEntry())
-		if err != nil {
-			t.Fatalf("prepare = %v", err)
-		}
-
-		if fence.Namespace != "acme" || e.Namespace != "acme" || e.Action != gate.AuditSetGate {
-			t.Errorf("fence %+v, namespace %q, action %q; want acme, acme, namespace:set-gate",
-				fence, e.Namespace, e.Action)
-		}
+		checkPrepareNamespace(t)
 	})
 
 	t.Run("the installation has no name for an approval default", func(t *testing.T) {
@@ -889,25 +907,60 @@ func TestPrepareLevelGuards(t *testing.T) {
 
 		f := newInstallationFixture(t)
 
-		_, _, err := f.svc.PrepareApprovalDefaultForTest(ctx, gate.InstallationScope(), callerEntry())
+		_, _, err := f.svc.PrepareApprovalDefaultForTest(t.Context(), gate.InstallationScope(), callerEntry())
 		if !errors.Is(err, gate.ErrInvalid) {
 			t.Errorf("prepare = %v, want ErrInvalid", err)
 		}
 	})
 
-	for name, scope := range map[string]gate.Scope{
-		"profile": profileScope(t), "empty": {},
-	} {
-		t.Run(name+" scope", func(t *testing.T) {
-			t.Parallel()
+	t.Run("a scope that holds no configuration", func(t *testing.T) {
+		t.Parallel()
 
-			f := newInstallationFixture(t)
+		f := newInstallationFixture(t)
 
-			_, _, err := f.svc.PrepareGateForTest(ctx, scope, callerEntry())
+		for name, scope := range map[string]gate.Scope{"profile": profileScope(t), "empty": {}} {
+			_, _, err := f.svc.PrepareGateForTest(t.Context(), scope, callerEntry())
 			if !errors.Is(err, gate.ErrInvalid) {
-				t.Errorf("prepare = %v, want ErrInvalid", err)
+				t.Errorf("prepare at the %s scope = %v, want ErrInvalid", name, err)
 			}
-		})
+		}
+	})
+}
+
+// checkPrepareInstallation checks the fence, the entry scope and the action
+// that prepare gives to a write at the installation.
+func checkPrepareInstallation(t *testing.T) {
+	t.Helper()
+
+	f := newInstallationFixture(t)
+
+	fence, e, err := f.svc.PrepareGateForTest(t.Context(), gate.InstallationScope(), callerEntry())
+	if err != nil {
+		t.Fatalf("prepare = %v", err)
+	}
+
+	if fence != (namespace.Fence{Namespace: "", FailoverVersion: 0}) || e.Namespace != audit.ServerScope ||
+		e.Action != gate.AuditInstallationSetGate || f.reads.Load() != 0 {
+		t.Errorf("fence %+v, namespace %q, action %q, %d reads; want the zero fence, @server, installation:set-gate, 0",
+			fence, e.Namespace, e.Action, f.reads.Load())
+	}
+}
+
+// checkPrepareNamespace checks the fence, the entry scope and the action that
+// prepare gives to a write at a namespace.
+func checkPrepareNamespace(t *testing.T) {
+	t.Helper()
+
+	f := newInstallationFixture(t)
+
+	fence, e, err := f.svc.PrepareGateForTest(t.Context(), gate.NamespaceScope("acme"), callerEntry())
+	if err != nil {
+		t.Fatalf("prepare = %v", err)
+	}
+
+	if fence.Namespace != "acme" || e.Namespace != "acme" || e.Action != gate.AuditSetGate {
+		t.Errorf("fence %+v, namespace %q, action %q; want the namespace acme and namespace:set-gate",
+			fence, e.Namespace, e.Action)
 	}
 }
 
