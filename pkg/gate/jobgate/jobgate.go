@@ -62,10 +62,13 @@ const PolicyVersion = "approval-defaults"
 // changes gets the gate of the approval defaults of the namespace, the
 // collection and the unit of the job. A plan phase gets none.
 //
-// It returns an error, and so the start fails, when the defaults need more
-// than this version enforces: more than three requirements,
-// approvers that are users or unit owners, a fresh authentication window, or
-// an unless body.
+// It returns an error, and so the start fails, when a requirement needs more
+// than this version enforces: approvers that are users or unit owners, a fresh
+// authentication window, groups with no IDs, or an unless body. The number of
+// requirements has no check here: a unit has one default for each of the
+// namespace, the collection and the unit, so the defaults give at most three
+// requirements, and the job service refuses a phase with more gates than
+// job.MaxApprovalGates.
 // The error wraps gate.ErrUnavailable. It also returns the errors of the
 // store.
 //

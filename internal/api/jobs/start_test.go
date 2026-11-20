@@ -671,6 +671,11 @@ func TestStartDeniedWritesTheAuditEntry(t *testing.T) {
 			"an enforced gate covers the unit",
 		},
 		{
+			"the approval defaults need more than a job enforces",
+			fmt.Errorf("policy: %w: the requirement default names users or unit owners", gate.ErrUnavailable),
+			http.StatusServiceUnavailable, "the approval defaults need more than a job enforces",
+		},
+		{
 			"zero pools or two pools", fmt.Errorf("%w: no default pool", job.ErrUnsupported),
 			http.StatusUnprocessableEntity, "the server cannot start this job",
 		},
