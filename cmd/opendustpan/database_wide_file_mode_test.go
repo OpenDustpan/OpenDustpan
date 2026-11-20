@@ -55,7 +55,7 @@ func TestServeRefusesWideDatabaseFileAndNamesTheFix(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), serveRefusalDeadline)
 	defer cancel()
 
-	err := serve(ctx, []string{"--database", "sqlite:" + path}, io.Discard)
+	err := serve(ctx, []string{"--database", "sqlite:" + path, "--listen", "127.0.0.1:0"}, io.Discard)
 	if err == nil {
 		t.Fatal("serve started on a database file with mode 0644, want a refusal")
 	}
@@ -108,7 +108,17 @@ func TestServeWithTheFlagStillRefusesASidecarFileThatIsNotRegular(t *testing.T) 
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	err := serve(t.Context(), []string{"--database", "sqlite:" + path, "--database-allow-wide-file-mode"}, io.Discard)
+	err := serve(
+		t.Context(),
+		[]string{
+			"--database",
+			"sqlite:" + path,
+			"--listen",
+			"127.0.0.1:0",
+			"--database-allow-wide-file-mode",
+		},
+		io.Discard,
+	)
 	if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
 		t.Fatalf("serve = %v, want the not-regular-file refusal", err)
 	}
