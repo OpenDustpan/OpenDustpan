@@ -69,7 +69,7 @@ func TestBackupCheckOfADamagedJobNamesTheCancel(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	err := client.BackupCheck(t.Context(), []string{"--server", srv.URL, "--backup", "bkp-aaa"}, &stdout, &stderr)
-	if !errors.Is(err, backup.ErrCorrupt) {
+	if err == nil || !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("check = %v, want ErrCorrupt", err)
 	}
 

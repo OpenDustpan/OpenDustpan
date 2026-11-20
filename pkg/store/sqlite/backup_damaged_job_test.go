@@ -153,7 +153,7 @@ func TestBackupCheckReportsADamagedJobRow(t *testing.T) {
 	checkErr := backups.Check(t.Context(), id)
 
 	damaged, ok := errors.AsType[*backup.DamagedJobError](checkErr)
-	if !ok || damaged == nil {
+	if checkErr == nil || !ok || damaged == nil {
 		t.Fatalf("check = %v, want a damaged job error", checkErr)
 	}
 
@@ -187,7 +187,7 @@ func TestBackupCheckReportsEachKindOfDamagedJobRow(t *testing.T) {
 	id, backups, restores := runDamagedBackup(t, rows)
 
 	checkErr := backups.Check(t.Context(), id)
-	if !errors.Is(checkErr, backup.ErrCorrupt) ||
+	if checkErr == nil || !errors.Is(checkErr, backup.ErrCorrupt) ||
 		!strings.Contains(checkErr.Error(), backup.DamagedJobPrefix+"job-dmg") {
 		t.Fatalf("check = %v, want ErrCorrupt that names a damaged job", checkErr)
 	}
