@@ -13,7 +13,7 @@ import (
 // count does not catch a new action constant that has no catalog entry:
 // the test still passes. The project accepts this risk, and no other
 // check covers it.
-const catalogCount = 132
+const catalogCount = 133
 
 // TestActionsCatalogIsComplete checks the catalog that Actions returns:
 // it holds one entry for each action of the core, sorted, with no

@@ -32,6 +32,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -120,6 +121,11 @@ type Config struct {
 	// upstream credential of the pool. Without it, the paths of the job proxy
 	// answer not-found.
 	Proxies *proxysessionsvc.Service
+	// Claims stores the apply claims of the claim routes. Without it, the
+	// claim routes are not registered and both paths answer 404 from the
+	// mux. A registry needs Workspaces and Versions; see
+	// workspace.NewClaimRegistry.
+	Claims *workspace.ClaimRegistry
 }
 
 // JobReader is the part of job.Store that the session exchange needs.
@@ -170,6 +176,8 @@ type Handler struct {
 	plans               job.PlanRecorder
 	artifacts           job.ArtifactReader
 	proxies             *proxysessionsvc.Service
+	claims              *workspace.ClaimRegistry
+	authenticator       identity.Authenticator
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -286,6 +294,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		plans:               cfg.Plans,
 		artifacts:           cfg.Artifacts,
 		proxies:             cfg.Proxies,
+		claims:              cfg.Claims,
+		authenticator:       cfg.Authenticator,
 	}
 
 	h.routes = h.buildRoutes()
