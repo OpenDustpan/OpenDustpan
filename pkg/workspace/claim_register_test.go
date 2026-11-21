@@ -439,6 +439,62 @@ func TestClaimSameJobRetryIdempotent(t *testing.T) {
 	}
 }
 
+// TestClaimWrapperRetryIsPerPrincipal proves that the local wrapper, which
+// registers with no job ID, never gets the claim of another person: after
+// the first claim ends, the same base and the same set from another
+// principal is a new claim, while a retry from the same principal keeps
+// the same claim ID.
+func TestClaimWrapperRetryIsPerPrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newClaimFixture()
+	r := f.registry(nil)
+
+	registerAs := func(principal string) workspace.Claim {
+		t.Helper()
+
+		claim, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+			WorkspaceID: f.ws,
+			Base:        f.base,
+			Addresses:   []string{"aws_instance.a"},
+			Principal:   principal,
+			JobID:       "",
+			Replace:     false,
+			Trigger:     "",
+		}, f.fence)
+		if err != nil {
+			t.Fatalf("register as %s: %v", principal, err)
+		}
+
+		return claim
+	}
+
+	first := registerAs("ada")
+	retry := registerAs("ada")
+
+	if retry.ID != first.ID {
+		t.Fatalf("retry ID = %q, want %q", retry.ID, first.ID)
+	}
+
+	if n := r.ExpireStale(t.Context(), first.StartedAt.Add(time.Minute)); n != 1 {
+		t.Fatalf("expired claims = %d, want 1", n)
+	}
+
+	other := registerAs("bob")
+
+	if other.ID == first.ID {
+		t.Fatalf("other principal ID = %q, want a new claim ID", other.ID)
+	}
+
+	if other.State != workspace.ClaimAccepted || other.Principal != "bob" {
+		t.Fatalf("other claim = %+v, want accepted with principal bob", other)
+	}
+
+	if got := r.List(t.Context(), f.ws); len(got) != 2 {
+		t.Fatalf("list holds %d claims, want 2", len(got))
+	}
+}
+
 // TestClaimAcceptAuditEntry proves that the server writes one audit entry
 // with the claim ID and the job ID when it accepts a claim, and that a
 // failing audit entry rolls the accept back.

@@ -76,6 +76,12 @@ var errClaimJobMismatch = errors.New("the job token names another job")
 // errClaimUnitMismatch reports a job token used on another unit.
 var errClaimUnitMismatch = errors.New("the job token names another unit")
 
+// errClaimTooLarge reports a register body whose address set is too large
+// for one call: more than maxClaimAddresses addresses, or an address of
+// more than maxClaimAddressLength bytes. It has its own error so the
+// answer names the bound instead of reporting an empty set.
+var errClaimTooLarge = errors.New("the claim address set is too large")
+
 // claimRegisterRequest is the body of a register call. Unknown fields are
 // refused, so a misspelled base or address set never passes quietly.
 type claimRegisterRequest struct {
@@ -181,7 +187,7 @@ func decodeRegisterBody(raw []byte, req *claimRegisterRequest) error {
 	if len(req.Addresses) > maxClaimAddresses {
 		return fmt.Errorf(
 			"%w: the claim holds %d addresses, at most %d",
-			workspace.ErrClaimEmptySet,
+			errClaimTooLarge,
 			len(req.Addresses),
 			maxClaimAddresses,
 		)
@@ -191,7 +197,7 @@ func decodeRegisterBody(raw []byte, req *claimRegisterRequest) error {
 		if len(a) > maxClaimAddressLength {
 			return fmt.Errorf(
 				"%w: an address holds more than %d bytes",
-				workspace.ErrClaimEmptySet,
+				errClaimTooLarge,
 				maxClaimAddressLength,
 			)
 		}

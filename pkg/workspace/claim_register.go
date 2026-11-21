@@ -327,7 +327,7 @@ func (r *ClaimRegistry) Register(
 		return Claim{}, err
 	}
 
-	if stored, ok := r.findRetry(w.ID, req.JobID, req.Base, normalized); ok {
+	if stored, ok := r.findRetry(w.ID, req.JobID, req.Principal, req.Base, normalized); ok {
 		return stored, nil
 	}
 
@@ -493,9 +493,11 @@ func (r *ClaimRegistry) checkBase(ctx context.Context, w Workspace, base StateVe
 }
 
 // findRetry returns the stored claim when the same job sends the same base
-// and the same normalized set again: the retry is idempotent.
+// and the same normalized set again: the retry is idempotent. The match
+// includes the principal, so the local wrapper, which registers with no
+// job ID, never gets the claim of another person.
 func (r *ClaimRegistry) findRetry(
-	workspaceID ID, jobID string, base StateVersionID, normalized []string,
+	workspaceID ID, jobID, principal string, base StateVersionID, normalized []string,
 ) (Claim, bool) {
 	for _, id := range r.order[workspaceID] {
 		stored := r.claimSet[id]
@@ -503,7 +505,8 @@ func (r *ClaimRegistry) findRetry(
 			continue
 		}
 
-		if stored.JobID == jobID && stored.Base == base && slices.Equal(stored.Addresses, normalized) {
+		if stored.JobID == jobID && stored.Principal == principal && stored.Base == base &&
+			slices.Equal(stored.Addresses, normalized) {
 			return *stored, true
 		}
 	}

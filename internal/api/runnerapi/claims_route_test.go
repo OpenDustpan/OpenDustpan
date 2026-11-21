@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -688,8 +689,7 @@ func TestClaimRegisterConflictRefusals(t *testing.T) {
 }
 
 // TestClaimRegisterRequestRefusals proves the refusal of each invalid
-// register call: an empty set and an unknown base answer 422, an unknown
-// field answers 400, and a missing credential answers 401.
+// register call: an empty set and an unknown base answer 422.
 func TestClaimRegisterRequestRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -724,9 +724,61 @@ func TestClaimRegisterRequestRefusals(t *testing.T) {
 	})
 }
 
+// TestClaimRegisterOversizeRefused proves the refusal of a register call
+// whose address set is too large for one call: more than 10,000 addresses
+// or an address longer than 1,024 bytes answers 422 with the unprocessable
+// code and names the bound.
+func TestClaimRegisterOversizeRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("too many addresses", func(t *testing.T) {
+		t.Parallel()
+
+		w := newClaimWorld(t, allowAllAuthorizer{})
+
+		addresses := make([]string, 0, 10_001)
+		for i := range 10_001 {
+			addresses = append(addresses, fmt.Sprintf("aws_instance.node_%d", i))
+		}
+
+		status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), w.bearer("job-1"),
+			map[string]any{"base": w.base, "addresses": addresses, "jobID": "job-1"})
+
+		if status != http.StatusUnprocessableEntity {
+			t.Fatalf("register too many addresses = %d %s, want 422", status, raw)
+		}
+
+		if refused := decodeClaimError(t, raw); refused.Code != "unprocessable" {
+			t.Errorf("code = %q, want unprocessable", refused.Code)
+		}
+	})
+
+	t.Run("address too long", func(t *testing.T) {
+		t.Parallel()
+
+		w := newClaimWorld(t, allowAllAuthorizer{})
+
+		status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), w.bearer("job-1"),
+			map[string]any{
+				"base":      w.base,
+				"addresses": []string{strings.Repeat("a", 1_025)},
+				"jobID":     "job-1",
+			})
+
+		if status != http.StatusUnprocessableEntity {
+			t.Fatalf("register address too long = %d %s, want 422", status, raw)
+		}
+
+		if refused := decodeClaimError(t, raw); refused.Code != "unprocessable" {
+			t.Errorf("code = %q, want unprocessable", refused.Code)
+		}
+	})
+}
+
 // TestClaimRegisterWorkspaceRefusals proves the refusal of a register call
 // on a bad workspace: missing answers 404, deleted answers 410 and locked
-// answers 422 with the claim-locked code.
+// answers 422 with the claim-locked code. An unknown field answers 400,
+// and a missing credential answers 401.
 func TestClaimRegisterWorkspaceRefusals(t *testing.T) {
 	t.Parallel()
 

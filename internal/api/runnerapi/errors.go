@@ -206,6 +206,12 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 		}, true
 	}
 
+	if errors.Is(err, errClaimTooLarge) {
+		return http.StatusUnprocessableEntity, protocol.Error{
+			Code: protocol.ErrorUnprocessable, Message: err.Error(), Supported: "",
+		}, true
+	}
+
 	if errors.Is(err, errClaimForbidden) {
 		msg := errClaimForbidden.Error()
 
