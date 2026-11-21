@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/outputsharestore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -503,6 +504,10 @@ func (s *Store) purgeUnit(
 			return err
 		}
 
+		if rulesErr := deleteUnitSharingRules(ctx, q, &e, fence.Namespace, u.id); rulesErr != nil {
+			return rulesErr
+		}
+
 		if err := insertBlobPurge(ctx, q, fence.Namespace, u, e.At); err != nil {
 			return err
 		}
@@ -520,6 +525,30 @@ func (s *Store) purgeUnit(
 
 		return appendInventoryChange(ctx, q, purged)
 	})
+}
+
+// deleteUnitSharingRules removes the sharing rules that name the unit by its
+// stable ID, as producer in its own namespace and as consumer in any
+// namespace, so that a new unit never matches a stale rule. The audit entry e
+// lists the removed rules.
+func deleteUnitSharingRules(ctx context.Context, q *db.Queries, e *audit.Entry, ns namespace.Name, id string) error {
+	rules, err := q.DeleteOutputSharingRulesOfUnit(ctx, db.DeleteOutputSharingRulesOfUnitParams{
+		Namespace: ns.String(), UnitID: id,
+	})
+	if err != nil {
+		return fmt.Errorf("delete sharing rules of the unit: %w", err)
+	}
+
+	removed := make([]string, len(rules))
+	for i := range rules {
+		removed[i] = rules[i].Namespace + "/" + rules[i].ID
+	}
+
+	if c, ok := outputsharestore.RemovedChange(removed); ok {
+		e.Changes = append(e.Changes, c)
+	}
+
+	return nil
 }
 
 // insertBlobPurge records the blob purge of the unit u under the ID of the

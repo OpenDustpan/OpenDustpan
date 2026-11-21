@@ -140,7 +140,11 @@ var devColumnDecisions = map[string]devDecision{
 	"job_freezes.created_by":        {strip: false, reason: "history text of who made the freeze"},
 	"notification_sinks.created_by": {strip: false, reason: "history text of who made the sink"},
 	"placement_rules.created_by":    {strip: false, reason: "history text of who made the placement rule"},
-	"notifications.subject":         {strip: false, reason: "history text of who caused the notification"},
+	"output_sharing_rules.created_by": {
+		strip:  false,
+		reason: "history text of who saved the sharing rule; the rule holds its own effect and the creator grants nothing",
+	},
+	"notifications.subject": {strip: false, reason: "history text of who caused the notification"},
 	"notification_subscriptions.created_by": {
 		strip: false,
 		reason: "subject of the last writer; a delivery checks the current grants of that principal " +

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/outputsharestore"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -115,11 +116,8 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
-		lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
-			Kind: string(manuallock.KindCollection), ObjectID: id,
-		})
-		if lockErr != nil {
-			return fmt.Errorf("delete manual lock of collection: %w", lockErr)
+		if rowsErr := deleteCollectionOwnRows(ctx, q, &e, ref.Namespace, id); rowsErr != nil {
+			return rowsErr
 		}
 
 		removed, gateErr := purgeCollectionGate(ctx, q, ref, audit.MaxChanges-len(e.Changes))
@@ -129,9 +127,9 @@ func (s *Store) DeleteCollection(
 
 		e.Changes = append(e.Changes, removed...)
 
-		rules, ruleErr := purgePlacementRules(ctx, q, ref, audit.MaxChanges-len(e.Changes))
-		if ruleErr != nil {
-			return ruleErr
+		rules, placementErr := purgePlacementRules(ctx, q, ref, audit.MaxChanges-len(e.Changes))
+		if placementErr != nil {
+			return placementErr
 		}
 
 		e.Changes = append(e.Changes, rules...)
@@ -437,4 +435,38 @@ func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection
 	}
 
 	return collection.ErrMoveOutOfLockedCollection
+}
+
+// deleteCollectionOwnRows removes the manual lock of the collection id, and the
+// sharing rules that name it by its stable ID: as producer in its own
+// namespace and as consumer by its namespace and ID. A collection made again with
+// the same name has a new ID, so it never matches a stale rule. The audit
+// entry e lists the removed rules.
+func deleteCollectionOwnRows(
+	ctx context.Context, q *db.Queries, e *audit.Entry, ns namespace.Name, id string,
+) error {
+	lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
+		Kind: string(manuallock.KindCollection), ObjectID: id,
+	})
+	if lockErr != nil {
+		return fmt.Errorf("delete manual lock of collection: %w", lockErr)
+	}
+
+	rows, err := q.DeleteOutputSharingRulesOfCollection(ctx, db.DeleteOutputSharingRulesOfCollectionParams{
+		Namespace: ns.String(), CollectionID: id,
+	})
+	if err != nil {
+		return fmt.Errorf("delete sharing rules of the collection: %w", err)
+	}
+
+	removed := make([]string, len(rows))
+	for i := range rows {
+		removed[i] = rows[i].Namespace + "/" + rows[i].ID
+	}
+
+	if c, ok := outputsharestore.RemovedChange(removed); ok {
+		e.Changes = append(e.Changes, c)
+	}
+
+	return nil
 }
