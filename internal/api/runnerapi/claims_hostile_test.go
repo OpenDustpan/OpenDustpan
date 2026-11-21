@@ -223,7 +223,13 @@ func TestClaimAuthorizerFailureIsNotADenial(t *testing.T) {
 
 		status, raw := w.call(t, call.method, call.path, auth, call.body)
 		if status < http.StatusInternalServerError {
-			t.Errorf("%s %s with a failing authorizer = %d %s, want a server error", call.method, call.path, status, raw)
+			t.Errorf(
+				"%s %s with a failing authorizer = %d %s, want a server error",
+				call.method,
+				call.path,
+				status,
+				raw,
+			)
 		}
 	}
 }

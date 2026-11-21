@@ -215,6 +215,7 @@ func newClaimEndFixture(t *testing.T) *claimEndFixture {
 		Manual:     nil,
 		Store:      workspace.NewMemoryClaimStore(spaces),
 		Now:        func() time.Time { return now },
+		Lease:      0,
 	})
 	if err != nil {
 		t.Fatalf("registry: %v", err)

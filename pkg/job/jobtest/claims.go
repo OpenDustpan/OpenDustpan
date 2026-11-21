@@ -30,7 +30,7 @@ func registerJobClaim(t *testing.T, h Harness, f fixture, jobID job.ID, address 
 	claim := workspace.Claim{
 		ID: id, WorkspaceID: wsID, Base: "sv-1", Addresses: []string{address}, Principal: "al", JobID: string(jobID),
 		Trigger: "", State: workspace.ClaimAccepted, StartedAt: time.Now().UTC().Truncate(time.Millisecond),
-		EndedAt: time.Time{},
+		EndedAt: time.Time{}, LeaseEndsAt: time.Time{}, RenewedAt: time.Time{},
 	}
 	e := entry(f.unit, identity.ActionUnitClaimRegister)
 	e.ObjectID = id
