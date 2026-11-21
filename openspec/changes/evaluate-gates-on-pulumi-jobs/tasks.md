@@ -12,7 +12,7 @@
 
 - [ ] 2.1 Wire the three job evaluations in pkg/job/service.go (the file with the change.propose point at line 61). Check: `go test ./pkg/job/... -count=1` passes
 - [ ] 2.2 Wire state.write in the update create handler in NEW file internal/api/pulumi/state_write.go, called from the update create route in the adapter of internal/api/pulumi. Check: `go test ./internal/api/pulumi/... -count=1` passes
-- [ ] 2.3 Add e2e steps in NEW file e2e/pulumi_gates_test.go with the real Pulumi CLI that run `pulumi up` against the route `POST /api/stacks/{owner}/{project}/{stack}/update/{kind}` with an access-token credential of a person, for a gate in enforce mode (403 shown by the CLI) and in evaluate mode (update runs, record written) Check: `make e2e` passes the new Pulumi enforce and evaluate steps. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 2.3 Add e2e steps in NEW file e2e/pulumi_gates_test.go with the real Pulumi CLI that run `pulumi up` against the route `POST /api/stacks/{owner}/{project}/{stack}/update/{kind}` with an access-token credential of a person, for a gate in enforce mode (403 shown by the CLI) and in evaluate mode (update runs, record written) Check: `make e2e` passes the new Pulumi enforce and evaluate steps.
 - [ ] 2.4 Ship the docs page in NEW file docs/user/gates-pulumi.md. Check: `make docs-lint` passes
 
 ## 3. Side effects (computed from main)
@@ -22,4 +22,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Check routes and authorization actions Check: The route test passes
-- [ ] 4.3 Run the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (evaluate-gates-on-pulumi-jobs 4.2)): Run the usability check Check: A developer completes the path from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.3 Run the full check Check: `make check` reports zero findings.

@@ -18,5 +18,6 @@
 
 - [ ] 3.1 Wire caps, cycle check and depth guard through the trigger routes and the job dispatcher. Check: PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id} with a namespace administrator access token returns 422 with cap number or loop path
 - [ ] 3.2 Prove serialization on each adapter. Check: conformance suite passes the concurrent closing-save case on SQLite and PostgreSQL
-- [ ] 3.3 Add an e2e step against the real server in NEW file `e2e/trigger_caps_test.go`. Check: make e2e: with a namespace administrator access token, POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers refuses the 21st trigger and PUT refuses a loop save; the depth 10 step is BLOCKED by write-state-version-unit-state-follows-trigger-start. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.3 Add an e2e step against the real server in NEW file `e2e/trigger_caps_test.go`. Check: make e2e: with a namespace administrator access token, POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers refuses the 21st trigger and PUT refuses a loop save; the depth 10 step is BLOCKED by write-state-version-unit-state-follows-trigger-start.
 - [ ] 3.4 Write the docs page for caps, cycle errors and the depth guard in NEW file `docs/guides/trigger-limits.md`. Check: make docs-lint passes on the page
+- [ ] 3.5 Run the full definition of done with a usability check from the docs page alone. Check: make check reports zero findings.

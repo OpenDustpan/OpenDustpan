@@ -17,6 +17,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step: BLOCKED by the trigger fire route of #901 and the rule routes of rest-routes-ownership-rules-create. After they land, use POST /api/dustpan/v1/namespaces/{}/units/{}/triggers/{}/fire with a service access token and the real CLI. Check: e2e step shows autoApply true for the schedule plan and a wait for a warn plan. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the docs page in the same pull request. Check: The commands on the page run as written. Confirmed by: CI (an e2e step in the NEW file e2e/add_ownership_rules_conditional_auto_docs_test.go runs each command of the docs page against the e2e test server).
-- [ ] 4.4 Run all checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add an e2e step: BLOCKED by the trigger fire route of #901 and the rule routes of rest-routes-ownership-rules-create. After they land, use POST /api/dustpan/v1/namespaces/{}/units/{}/triggers/{}/fire with a service access token and the real CLI. Check: e2e step shows autoApply true for the schedule plan and a wait for a warn plan.
+- [ ] 4.2 Write the docs page in the same pull request. Check: The commands on the page run as written.go runs each command of the docs page against the e2e test server).
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (add-ownership-rules-conditional-auto 4.3)): Run the usability check. Check: The persona completes the path from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.4 Run all checks. Check: `make check` reports zero findings.

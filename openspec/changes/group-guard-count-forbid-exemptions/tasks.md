@@ -22,3 +22,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Write the docs page NEW file docs/guides/group-guard-forbid-limits.md. It lists the rule for a widening membership change and the limit ID in the error. Do the usability check from this page alone. Check: the page exists and states the rule. `make docs-lint` passes on each edited guide.
+- [ ] 4.2 Write the e2e step in NEW file e2e/group_guard_forbid_test.go. It uses POST /api/server/groups/{group}/members with an access token of a person principal that has group rights only, over TLS, then a real Pulumi CLI read and a real OpenTofu read. Check: `make e2e` and `make check` with zero findings.

@@ -29,4 +29,4 @@ The start path (`pkg/job/service_start.go`) already writes the block on main. Ta
 ## 4. Definition of done
 
 - [x] 4.1 Run e2e audit read and chain verification over new and legacy entries. Check: GET /api/audit/check with an access token verifies the chain across both shapes.
-- [x] 4.3 Run full wiring, docs page and make check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.3 Run full wiring, docs page and make check. Check: `make check` with zero findings.

@@ -21,4 +21,4 @@
 
 - [ ] 4.1 Add one sentence to `docs/guides/notification-destinations.md`: a new namespace with the name of a deleted namespace gets no sinks, subscriptions, notifications or deliveries of the old one. Check: `make docs-lint` exits 0.
 - [ ] 4.2 In `Makefile`, run `go test ./pkg/notify/... ./internal/subscriptionsvc/... ./internal/api/notifications/...` and the store packages with `-timeout 60m`. Check: the packages pass.
-- [ ] 4.3 In `Makefile`, run `make check`. Check: zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 In `Makefile`, run `make check`. Check: zero findings.

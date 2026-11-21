@@ -4,11 +4,11 @@
 
 ## 1. E2e
 
-- [ ] 1.1 In e2e/ha_alternation_test.go (NEW) add make e2e-ha harness with three serve binaries on one PostgreSQL database and S3 service container behind round-robin TLS proxy; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation fails on main: proxy record lacks one instance for one tool. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 1.2 In e2e/ha_alternation_test.go (NEW) run the full milestone 1 Pulumi scenario through the proxy with shared registry URL key; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation runs the Pulumi scenario with exit 0 through the proxy. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 1.3 In e2e/ha_alternation_test.go (NEW) run the full milestone 2 OpenTofu scenario through the proxy with shared registry URL key; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation runs the OpenTofu scenario with exit 0 through the proxy. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 1.4 In e2e/ha_alternation_test.go (NEW) check the proxy forwarding record for alternation with no sticky session; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation asserts each instance served each tool and successive requests alternate; voids and retries at most 3 times naming the instance. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 1.5 In e2e/ha_alternation_test.go (NEW) cover lock handover across instances through the proxy; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternationLockHandover takes a workspace lock via one instance and releases it via another with exit 0. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.1 In e2e/ha_alternation_test.go (NEW) add make e2e-ha harness with three serve binaries on one PostgreSQL database and S3 service container behind round-robin TLS proxy; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation fails on main: proxy record lacks one instance for one tool.
+- [ ] 1.2 In e2e/ha_alternation_test.go (NEW) run the full milestone 1 Pulumi scenario through the proxy with shared registry URL key; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation runs the Pulumi scenario with exit 0 through the proxy.
+- [ ] 1.3 In e2e/ha_alternation_test.go (NEW) run the full milestone 2 OpenTofu scenario through the proxy with shared registry URL key; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation runs the OpenTofu scenario with exit 0 through the proxy.
+- [ ] 1.4 In e2e/ha_alternation_test.go (NEW) check the proxy forwarding record for alternation with no sticky session; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternation asserts each instance served each tool and successive requests alternate; voids and retries at most 3 times naming the instance.
+- [ ] 1.5 In e2e/ha_alternation_test.go (NEW) cover lock handover across instances through the proxy; the step calls ANY /api/server/instances, passes the /health/ready gate, uses an access token credential Check: TestE2EHAAlternationLockHandover takes a workspace lock via one instance and releases it via another with exit 0.
 
 ## 2. Side effects (computed from main)
 
@@ -17,3 +17,4 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Update docs/guides/high-availability.md with the three-instance proxy layout Check: High-availability guide names the alternation topology, proxy TLS trust setup for both CLIs, shared S3 bucket check, and the proxy record check. `make docs-lint` passes on each edited guide.
+- [ ] 3.2 Run full definition of done: wiring through proxy, real CLI traffic, docs page, usability check from docs page, make check Check: `make check` reports zero findings.

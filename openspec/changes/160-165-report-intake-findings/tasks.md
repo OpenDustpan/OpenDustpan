@@ -22,5 +22,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run an e2e step with `POST /runner/v1/session/sweep-report` using a session proof, then list findings with an access token. BLOCKED by 160-165-sweep-targets-lifecycle for the sweep claim. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Run an e2e step with `POST /runner/v1/session/sweep-report` using a session proof, then list findings with an access token. BLOCKED by 160-165-sweep-targets-lifecycle for the sweep claim. Check: `make e2e`.
+- [ ] 4.2 Write the NEW docs page docs/guides/sweep-reports.md and run the usability check. Check: `make docs-lint`.
+- [ ] 4.3 Run the full check. Check: `make check` with zero findings.

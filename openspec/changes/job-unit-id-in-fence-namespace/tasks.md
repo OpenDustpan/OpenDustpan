@@ -20,4 +20,4 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Tell the owner of the open pull request #2916 that its new job store suite case, which builds a job with a unit ID of another namespace through the harness, must expect `job.ErrInvalid` once this change lands. Write it in the pull request body of this change. Check: the pull request body names #2916 and the case.
-- [ ] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.2 Run the checks. Check: `make check` reports zero findings.

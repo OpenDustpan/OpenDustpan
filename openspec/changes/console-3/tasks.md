@@ -25,4 +25,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Run console browser gate in this repo against the real server Check: Browser suite in console repo runs against the real binary over TLS from the server of the suite
-- [ ] 4.3 Run full checks Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (console-3 4.2)): Usability check of the full create path Check: Developer completes catalog to unit path from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.3 Run full checks Check: `make check` with zero findings.

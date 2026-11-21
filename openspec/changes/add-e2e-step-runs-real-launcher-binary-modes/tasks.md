@@ -22,4 +22,5 @@
 
 - [ ] 3.1 Add the launcher docs page in the NEW file docs/guides/launcher.md. Check: make docs-lint
 - [ ] 3.2 Run mode tests on amd64 and arm64 builds and the license check. Check: make licenses
-- [ ] 3.4 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.3 Usability check: BLOCKED by the sibling part 3 change, which adds the real runner e2e step and the route and credential kind for it. Check: BLOCKED by add-e2e-step-runs-real-runner.
+- [ ] 3.4 Run make check. Check: `make check` reports zero findings.

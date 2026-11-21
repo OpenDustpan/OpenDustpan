@@ -76,6 +76,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 An e2e step `SignedRequestRecovery` in `e2e/signed_request_recovery_test.go` (NEW) against the real binary over TLS: one recovery, one replay, one bad signature. It calls `POST /api/dustpan/v1/recovery/signed-requests` (added by this change); credential: none, a public route (the signed request is the credential). Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 An e2e step `SignedRequestRecovery` in `e2e/signed_request_recovery_test.go` (NEW) against the real binary over TLS: one recovery, one replay, one bad signature. It calls `POST /api/dustpan/v1/recovery/signed-requests` (added by this change); credential: none, a public route (the signed request is the credential). Check: `make e2e` passes.
 - [ ] 4.2 The NEW docs page `docs/guides/signed-request-recovery.md`, with a plain statement of the risk (a theft of the private key alone gives a remote temporary administrator for a bounded time, and the notice to each site administrator and the review make the use visible), the always-on notice, the two recovery steps and the crash case. The page cites no ADR, RFC or issue. Check: a test runs each command of the page, and `rg -n -i -E '\b(ADR|RFC) ?[0-9]+|issues/[0-9]+' docs/guides/signed-request-recovery.md` finds no hit.
-- [ ] 4.4 Run all checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 The usability check from the docs page alone. Check: the operator recovers, and each error names one command.
+- [ ] 4.4 Run all checks. Check: `make check` reports zero findings.

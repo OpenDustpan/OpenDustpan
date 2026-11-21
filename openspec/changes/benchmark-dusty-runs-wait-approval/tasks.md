@@ -14,5 +14,5 @@
 ## 2. Definition of done
 
 - [ ] 2.1 Add the new file docs/explanation/dusty-wait-benchmark.md with method, numbers and recommendation. Check: The file exists and holds method, survey, tables, matrix and one recommended pattern.
-- [ ] 2.2 Check that the note repeats from the docs page alone. Check: A second reader repeats the setup from the note and reproduces each table. Confirmed by: CI (an e2e step in the NEW file e2e/benchmark_dusty_runs_wait_approval_docs_test.go runs each command of the docs page against the e2e test server).
-- [ ] 2.3 Run the docs lint. Check: `make docs-lint` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 2.2 Check that the note repeats from the docs page alone. Check: A second reader repeats the setup from the note and reproduces each table.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Run the docs lint. Check: `make docs-lint` reports zero findings.

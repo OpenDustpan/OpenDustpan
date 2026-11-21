@@ -19,5 +19,5 @@
 
 ## 4. Definition of done
 
-- [x] 4.1 Docs page for bundle and rules Check: a test runs the docs commands against a dev server. Confirmed by: CI (an e2e step in the NEW file e2e/mtls_trust_bundle_rules_docs_test.go runs each command of the docs page against the e2e test server).
-- [x] 4.3 Full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.1 Docs page for bundle and rules Check: a test runs the docs commands against a dev server.go runs each command of the docs page against the e2e test server).
+- [x] 4.3 Full check Check: `make check` reports zero findings.

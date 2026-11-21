@@ -20,6 +20,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step in NEW file e2e/trigger_outputs_changed_test.go with real CLI binaries: apply A twice, once with a changed output, then read `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal access token. Check: `make e2e` runs the step over TLS on SQLite and PostgreSQL and shows one follower plan only after the changed output. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add an e2e step in NEW file e2e/trigger_outputs_changed_test.go with real CLI binaries: apply A twice, once with a changed output, then read `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal access token. Check: `make e2e` runs the step over TLS on SQLite and PostgreSQL and shows one follower plan only after the changed output.
 - [ ] 4.2 Add the docs page for the when field in NEW file docs/guides/trigger-when-outputs-changed.md. Check: `make docs-lint` passes and the triggers page documents when outputs-changed.
-- [ ] 4.4 Run the full check. The route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` keeps its action, tested with a personal access token. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (write-state-version-unit-state-outputs-changed-filter 4.3)): Run the usability check of the path. Check: Developer follows the docs page alone and names the one command that explains a skipped start. Record the transcript in the pull request body.
+- [ ] 4.4 Run the full check. The route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` keeps its action, tested with a personal access token. Check: `make check` reports zero findings.

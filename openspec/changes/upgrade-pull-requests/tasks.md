@@ -18,7 +18,7 @@
 - [ ] 2.1 Build daily scanner with jitter, unique key, and suppression in NEW file internal/upgradesvc/scan.go. Check: Scanner compares unit settings pins with `GET /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions` and modules versions routes.
 - [ ] 2.2 Build writer with idempotency and audit record in NEW file internal/upgradesvc/writer.go. Check: Forge open through Forge port with branch lookup, audit entry with namespace service principal, credential reference, and reason.
 - [ ] 2.3 Wire plan start and forge status post in NEW file internal/upgradesvc/plan.go. Check: Plan start through milestone 5 plan path with `GET /api/dustpan/v1/namespaces/{namespace}/upgrade-requests/{id}` showing linked result.
-- [ ] 2.4 Write docs page in same pull request in NEW file docs/guides/upgrade-pull-requests.md. Check: Docs page upgrade-pull-requests runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/upgrade_pull_requests_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
+- [ ] 2.4 Write docs page in same pull request in NEW file docs/guides/upgrade-pull-requests.md. Check: Docs page upgrade-pull-requests runs as written.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
@@ -26,3 +26,5 @@
 - [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
+
+- [ ] 4.1 Wire the scanner into the server start. Add the two new upgrade-requests routes, both with action unit:read. The e2e step uses the existing route `PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}` to publish a newer release, with a personal access token that holds unit:manage and unit:read, then reads the request with `GET /api/dustpan/v1/namespaces/{namespace}/upgrade-requests/{id}` against the fake forge. Finish the docs page and the usability check. Check: Route test shows the unit:read action on both routes; e2e step with a personal access token passes against the fake forge; docs complete; `make check` with zero findings.

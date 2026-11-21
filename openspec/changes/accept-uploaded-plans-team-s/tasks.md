@@ -16,3 +16,5 @@
 - [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
+
+- [ ] 3.1 Wire the route with its authorization actions, the e2e step with the real OpenTofu CLI, the docs page and the usability check. The upload route is NEW; it does not exist on main. ADR 378 sets the hash binding. Declare the route in `internal/api/apidesc/openapi.json` and write its adapter in a NEW file under `internal/api/`. The e2e step is BLOCKED by the missing upload route and the missing credential kind for it: no existing route and no existing credential kind on main run the acceptance path. Check: `make check` with zero findings and `make e2e`.

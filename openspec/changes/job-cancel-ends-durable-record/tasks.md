@@ -13,4 +13,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Wire the job cancel route to the joint write. Add the e2e step that cancels a job on a real runner with the access token of a Developer who has the grant of the cancel action. Check: make e2e: POST of the existing job cancel route under /api/dustpan/v1/namespaces/{namespace}/jobs with a personal token, then GET of the job shows canceling, and canceled after the runner stops. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.1 Wire the job cancel route to the joint write. Add the e2e step that cancels a job on a real runner with the access token of a Developer who has the grant of the cancel action. Check: make e2e: POST of the existing job cancel route under /api/dustpan/v1/namespaces/{namespace}/jobs with a personal token, then GET of the job shows canceling, and canceled after the runner stops.
+- [ ] 3.2 Add the docs page in NEW file `docs/guides/job-cancel.md` and run the usability check from the page alone. Check: make docs-lint and make check with zero findings.

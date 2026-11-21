@@ -24,6 +24,7 @@
 
 - [x] 3.1 Comment on fresh() names mfa.fresh-step-required Check: rg -n 'mfa.fresh-step-required' pkg/breakglass/breakglass.go
 - [x] 3.2 Route keeps its authorization actions Check: Route test passes
-- [ ] 3.3 E2E step: POST /api/dustpan/v1/sign-in/providers/{provider}/password with a stale session cookie, then a guarded step, checks the 403 path Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.3 E2E step: POST /api/dustpan/v1/sign-in/providers/{provider}/password with a stale session cookie, then a guarded step, checks the 403 path Check: make e2e.
 - [x] 3.4 In docs/guides/console-sign-in.md, section "Tokens from a console session": list the 403 text for a session with an old sign-in (today the page says 401), and say that a window of 0 asks at each step and that the other values are 60 to 900 seconds (today the page says "0 turns the check off" and "60 to 604800"). Check: make docs-lint
-- [ ] 3.6 Run make check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.5 Usability check from the docs page alone Check: Site administrator completes the path.
+- [ ] 3.6 Run make check Check: `make check` with zero findings.

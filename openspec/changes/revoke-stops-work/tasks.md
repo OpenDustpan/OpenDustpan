@@ -30,4 +30,5 @@ Each scenario of the delta spec maps to one named test that fails on main.
 
 - [ ] 4.1 Extend `e2e/audit_export_test.go` with the revoke case, against the real binary over TLS on PostgreSQL: revoke through the route of `person-delegates-dusty`, read `GET /api/audit/entries`, and check that a request of the agent is refused. BLOCKED by the Dusty run job. Check: the step passes in CI.
 - [ ] 4.2 Extend `docs/guides/audit-log.md` with a revoke section and the exact verify command. Check: the e2e step of 4.1 runs each command as written, and `make docs-lint` passes.
-- [ ] 4.4 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Run the usability check of the revoke path from the docs page alone. Check: the person sees what stopped and what finished.
+- [ ] 4.4 Run the full check suite. Check: `make check` with zero findings.

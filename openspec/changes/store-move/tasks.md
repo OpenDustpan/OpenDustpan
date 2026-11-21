@@ -9,5 +9,5 @@
 - [ ] 3.1 Update `sqlc.yaml`, the Makefile, CI paths, `.golangci.yml`, the layout in `AGENTS.md`, the docs. Check: `sqlc diff` clean, `make docs-lint` exits 0.
 ## 4. Verify
 - [x] 4.0 Not applicable: the baselines `pkg/store/sqlite/migrations/0168_baseline.sql` and `pkg/store/postgres/migrations/0168_baseline.sql` have no `.sha256` file until the first tag (ADR 362 decision 4; remove-baseline-sha256-files deletes them), so the move carries none.
-- [x] 4.1 Run the targets `check` and `e2e` of the `Makefile`. No route: the test runs the existing suites only. Check: `make check` reports zero findings and `make e2e` passes. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.1 Run the targets `check` and `e2e` of the `Makefile`. No route: the test runs the existing suites only. Check: `make check` reports zero findings and `make e2e` passes.
 - [x] 4.2 Usability check: an embedder follows the SDK page `docs/reference/sdk.md` alone and starts a server with one store option. Check: the steps in the pull request. A person's step.

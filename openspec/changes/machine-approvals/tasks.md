@@ -1,6 +1,7 @@
 ## 0. Confirm against the code first
 
 - [ ] 0.1 Read each fact of "What main already does" and each cite of the design at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [ ] 0.2 Check the start conditions: the ADR that follows RFC 134 is on main, and `several-approval-requirements-one-change` task 5.4 is on main. Do not start before both. Check: the pull request body names the ADR number and the commit of task 5.4.
 
 ## 1. Failing tests first
 
@@ -27,8 +28,12 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step in `e2e/approval_rules_test.go` (or a new file when it is too large): a rule that names a service principal, a Pulumi CLI update that waits, and the approval by the service principal with its access token through `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals`. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add the e2e step in `e2e/approval_rules_test.go` (or a new file when it is too large): a rule that names a service principal, a Pulumi CLI update that waits, and the approval by the service principal with its access token through `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals`. Check: `make e2e`.
 - [ ] 4.2 In `docs/guides/approval-rules.md`: one section on `machineIds` (who may approve with a token, the four conditions, and the one command to list the entries). Each command runs in the e2e step of task 4.1. Check: `make docs-lint` passes.
-- [ ] 4.5 Run `make check`. Check: zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Usability check from the docs page alone. Check: an administrator names a bot and the bot approves a job.
+- [ ] 4.4 The Opus security review (rev2) is CLEAN on the exact head of each code pull request. Check: the verdict names the head sha.
+- [ ] 4.5 Run `make check`. Check: zero findings.
 
 ## 5. Records
+
+- [ ] 5.1 After each answer to an open question: the PM adds the repository record (the ADR, or an amendment), the week log entry and the answered section of the queue, and moves the question to "answered" in the proposal. Then the proposal reads "Open questions: none" and the tasks that waited start. Check: `scripts/check-ai-pr-spec.sh` accepts the proposal.

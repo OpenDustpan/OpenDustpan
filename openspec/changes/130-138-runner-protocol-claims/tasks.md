@@ -12,7 +12,7 @@
 
 - [ ] 2.1 Wire poll, heartbeat, and upload paths in NEW pkg/runner/protocol/claims.go (route declaration and adapter file) on the existing base route `ANY /runner/v1` with runner-key authorization, fence checks, and audit entries. Check: `GET /runner/v1` route test lists the three NEW runner protocol routes with runner-key authorization and fence checks.
 - [ ] 2.2 Build the NEW runner client poll and heartbeat loop in NEW pkg/runner/client/claims.go for the runner binary. Check: NEW runner client loop polls, heartbeats every 15 s, and stops on lost lease.
-- [ ] 2.3 Write the runner claims docs page in NEW docs/runner-claims.md with poll, heartbeat, and upload examples. Check: Docs page commands run as written against a dev server. Confirmed by: CI (an e2e step in the NEW file e2e/130_138_runner_protocol_claims_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Write the runner claims docs page in NEW docs/runner-claims.md with poll, heartbeat, and upload examples. Check: Docs page commands run as written against a dev server.go runs each command of the docs page against the e2e test server).
 
 - [ ] 2.4 SECURITY. Build the unexported type `claimLease` and its constructor `newClaimLease` (NEW names) in NEW pkg/runner/protocol/claimlease.go. The constructor rejects an empty holder, a stale fence and a non-positive expiry. Check: `go build ./pkg/runner/protocol` passes and no handler holds a separate expiry field.
 - [ ] 2.5 SECURITY. Add a hostile test in NEW pkg/runner/protocol/claimlease_test.go named `TestNewClaimLeaseRejectsHostileInput` that calls `newClaimLease` directly with an empty holder, a stale fence and a non-positive expiry. Check: the test passes and each call returns an error.
@@ -26,5 +26,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e step for claim poll and heartbeat in the NEW file e2e/130_138_runner_protocol_claims_docs_test.go on the NEW route `POST /runner/v1/claims` and the NEW route `POST /runner/v1/claims/heartbeat` with the runner key as credential; BLOCKED by NEW `POST /runner/v1/claims`. Check: E2E step polls existing base route `ANY /runner/v1` with a runner key and heartbeats to completion; BLOCKED by NEW `POST /runner/v1/claims`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run full checks, route authorization test, and audit verification. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add e2e step for claim poll and heartbeat in the NEW file e2e/130_138_runner_protocol_claims_docs_test.go on the NEW route `POST /runner/v1/claims` and the NEW route `POST /runner/v1/claims/heartbeat` with the runner key as credential; BLOCKED by NEW `POST /runner/v1/claims`. Check: E2E step polls existing base route `ANY /runner/v1` with a runner key and heartbeats to completion; BLOCKED by NEW `POST /runner/v1/claims`.
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (130-138-runner-protocol-claims 4.2)): Run usability check of the runner operator path. Check: Runner operator completes poll and heartbeat from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.3 Run full checks, route authorization test, and audit verification. Check: `make check` reports zero findings.

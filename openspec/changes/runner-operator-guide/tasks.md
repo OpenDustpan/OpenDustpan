@@ -18,4 +18,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.2 Wire the page into docs navigation with no route or schema change. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Agent pre-run (human run-through in person-steps (runner-operator-guide 4.1)): Run a usability check of the full path from the docs page. Check: A runner operator completes the full path from the docs page alone with an access token for pool work and a runner token for ANY /runner/v1 through the existing gates. Record the transcript in the pull request body.
+- [ ] 4.2 Wire the page into docs navigation with no route or schema change. Check: `make check` passes with zero findings.

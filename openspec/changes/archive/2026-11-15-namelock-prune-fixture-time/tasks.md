@@ -5,4 +5,4 @@
 
 ## 2. Definition of done
 
-- [x] 2.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Evidence: CI of #3156 was green on its merge.
+- [x] 2.1 Run the checks. Check: `make check` reports zero findings. Evidence: CI of #3156 was green on its merge.

@@ -23,4 +23,5 @@
 
 - [ ] 4.1 Refresh the SDK snapshot Check: `make sdk-surface` passes and adds the new file `internal/tools/sdksurface/api.txt` for the NEW constructors
 - [ ] 4.2 Run e2e smoke of the example server Check: GET /api/dustpan/v1/capabilities with an access token returns 200 against the NEW example server
-- [ ] 4.4 Run full checks Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (sdk-guide-for-embedders 4.3)): Run usability check of the guide Check: Embedder completes the path from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.4 Run full checks Check: `make check` with zero findings.

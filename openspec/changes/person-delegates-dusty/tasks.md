@@ -34,4 +34,5 @@ Each scenario of the delta spec maps to one named test. Each test fails on main 
 ## 4. Definition of done
 
 - [ ] 4.1 Add the NEW e2e file `e2e/delegation_to_dusty_test.go` against the real binary over TLS on PostgreSQL: sign in to the console, create a delegation, list, read, renew and revoke it, and read the entries. The existing `e2e/delegation_test.go` tests the act-as right and stays as it is. BLOCKED by the model connect change for the agent principal. Check: the step passes in CI.
-- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Run the usability check of the delegation path from the docs page alone. Check: a person completes create, list, read, renew and revoke, and each error names the one command that helps.
+- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings.
