@@ -86,7 +86,9 @@ A cursor is opaque. Do not change it. A cursor is valid:
 
 A cursor that breaks one of these rules answers 400 with the code
 `state.bad-path`. The server reads no state for a cursor that is too long.
-To start again, send the request with no cursor.
+To start again, send the request with no cursor. The server resolves the
+unit before it checks the cursor: a reference that has no state answers 404
+even with a cursor that another unit made.
 
 A cursor is valid only on the instance of the server that made it. Each
 instance makes its own signing key when it starts. If more than one instance
