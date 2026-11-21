@@ -238,6 +238,10 @@ func checkOtherValue(table, column string, value any) error {
 		return checkLocalUserValue(column, value)
 	}
 
+	if table == TableOutputSharingRules {
+		return checkOutputSharingRuleValue(column, value)
+	}
+
 	if (table == portTableWorkspaces || table == portTableInventory) && column == portColLastReleaseKind {
 		return checkLastReleaseKind(value)
 	}
@@ -527,4 +531,76 @@ func portableFileOf(files []PortableFile, table string) (PortableFile, bool) {
 	var none PortableFile
 
 	return none, false
+}
+
+// checkOutputSharingRuleValue runs the check of one column of a sharing rule
+// row: the rule ID, the two kinds of object, the stable ID of the consumer and the
+// principal that saved the rule. It returns ErrCorrupt, wrapped with outputshare.ErrInvalid. The error
+// does not hold the value.
+//
+// Defense in depth: the CHECK constraints of the table refuse the same values
+// at the copy, and the store leaves out a row that fails Rule.Validate at each
+// read. This check stays so that a restored backup fails before it reaches the
+// database.
+func checkOutputSharingRuleValue(column string, value any) error {
+	var err error
+
+	switch column {
+	case "id", "producer_kind", "consumer_kind", portColConsumerID, portColCreatedBy, portColConsumerNamespace:
+		err = checkRuleText(column, value)
+	default:
+		// The other columns hold the stable ID of the producer and the time. The table
+		// CHECKs and the store read check their shape.
+	}
+
+	if err != nil {
+		return fmt.Errorf("sharing rule row has an invalid %s: %w: %w", column, err, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkRuleConsumerText checks the stable ID and the namespace of the consumer
+// of a sharing rule row. A namespace consumer has no ID, so an empty ID passes
+// here and the CHECK of the table decides by the kind.
+func checkRuleConsumerText(column, text string) error {
+	if column == portColConsumerID {
+		if text != "" && !outputshare.ValidStableID(text) {
+			return fmt.Errorf("%w: the stable ID of the consumer", outputshare.ErrInvalid)
+		}
+
+		return nil
+	}
+
+	if _, err := namespace.ParseName(text); err != nil {
+		return fmt.Errorf("%w: the namespace of the consumer", outputshare.ErrInvalid)
+	}
+
+	return nil
+}
+
+// checkRuleText checks the text of one column of a sharing rule row that the
+// restore must not take as it is.
+func checkRuleText(column string, value any) error {
+	text, isText := value.(string)
+	if !isText {
+		return fmt.Errorf("%w: not text", outputshare.ErrInvalid)
+	}
+
+	switch column {
+	case "id":
+		return outputshare.ID(text).Validate()
+	case portColCreatedBy:
+		if text == "" {
+			return fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
+		}
+	case portColConsumerID, portColConsumerNamespace:
+		return checkRuleConsumerText(column, text)
+	default:
+		if text != "unit" && text != "collection" && text != "namespace" {
+			return fmt.Errorf("%w: kind of object", outputshare.ErrInvalid)
+		}
+	}
+
+	return nil
 }

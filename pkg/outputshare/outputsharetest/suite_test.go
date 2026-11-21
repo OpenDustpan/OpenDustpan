@@ -18,8 +18,13 @@ func TestSuiteOverAMemorySettingsStore(t *testing.T) {
 	outputsharetest.Run(t, func(t *testing.T) outputsharetest.Harness {
 		t.Helper()
 
+		// A rule case runs on a harness with no rule store and skips itself.
 		if !strings.HasPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/store:_") ||
 			!strings.Contains(t.Name(), "setting") {
+			if strings.HasPrefix(strings.TrimPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/"), "store:_") {
+				return newMemSettings().harness()
+			}
+
 			for _, prefix := range []string{"checker:", "latest:", "client-encrypted:", "states:", "outputs:"} {
 				if strings.HasPrefix(strings.TrimPrefix(t.Name(), "TestSuiteOverAMemorySettingsStore/"), prefix) {
 					t.Skip("the case needs the stores of the tools")

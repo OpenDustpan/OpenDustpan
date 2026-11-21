@@ -33,12 +33,20 @@ When a caller with `unit:manage-sharing` on a unit, a collection or a namespace 
 - **THEN** the save answers 400 or 404 and stores no rule.
 
 #### Scenario: Collection made again
-- **WHEN** a collection of the producer namespace is removed and made again with the same name
-- **THEN** the new collection does not match the old rule.
+- **WHEN** a collection is removed and made again with the same name, in any namespace
+- **THEN** the new collection does not match the old rule, and the removal deleted the old rule.
 
 #### Scenario: Consumer in another namespace
 - **WHEN** a rule names a unit or a collection of another namespace
-- **THEN** the store keeps the reference by name, and the answer is the same whether or not that object exists.
+- **THEN** the store keeps the namespace and the stable ID that the caller gives, checks the format of the ID only, and the answer is the same whether or not that object exists.
+
+#### Scenario: Consumer ID with a bad format
+- **WHEN** a rule names a unit or a collection with an ID that is empty, too long, or has a byte outside a-z, 0-9, "-" and "_"
+- **THEN** the save answers 400 and stores no rule.
+
+#### Scenario: Rename and make again in another namespace
+- **WHEN** the unit or the collection of another namespace that a rule names is renamed, or removed and made again with the same name
+- **THEN** a rename keeps the rule, and the object made again has a new ID and does not match.
 
 #### Scenario: Duplicate and limit
 - **WHEN** a rule with the same producer and consumer exists, or the producer has 100 rules
@@ -69,8 +77,8 @@ When a caller lists the rules of a producer, the server SHALL answer the rules w
 - **THEN** the answer is 404 and the rule stays.
 
 #### Scenario: Purge
-- **WHEN** a unit is purged
-- **THEN** the rules that name it as producer or as consumer in its namespace are removed.
+- **WHEN** a unit is purged, or a collection is deleted
+- **THEN** each rule that names its namespace and stable ID as producer or as consumer, in any producer namespace, is removed; a rule that names the same ID in another namespace stays in the same transaction, and the audit entry of the purge lists the removed rules.
 
 ### Requirement: Rule audit
 

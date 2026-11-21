@@ -1,0 +1,12 @@
+package outputsharestore_test
+
+import (
+	"testing"
+
+	"go.uber.org/goleak"
+)
+
+// TestMain fails the package when a test leaves a goroutine running.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
