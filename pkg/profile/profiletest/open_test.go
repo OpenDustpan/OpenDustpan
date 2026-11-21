@@ -27,6 +27,9 @@ type openFixture struct {
 	grants map[string][]identity.Action
 }
 
+// openNow is the fixed clock of the services of the open tests.
+func openNow() time.Time { return time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC) }
+
 func newOpenFixture(t *testing.T) openFixture {
 	t.Helper()
 
@@ -49,7 +52,7 @@ func newOpenFixture(t *testing.T) openFixture {
 
 	svc, err := profile.NewService(profile.Config{
 		Store: m, Namespaces: memNamespaces{m: m}, Sealer: scopedSealer{}, Audit: memAudit{m: m},
-		Authorizer: grantsFunc(grants), Sessions: memSessions{m: m}, Evaluator: eval, Now: nil,
+		Authorizer: grantsFunc(grants), Sessions: memSessions{m: m}, Evaluator: eval, Now: openNow,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -647,15 +650,13 @@ func TestOpenRefusalsDefaultDurationIs2Hours(t *testing.T) {
 
 	createOpenProfile(t, fx, "root", "schemaVersion: 1\nvalues:\n  x: 1\n")
 
-	before := time.Now()
 	opened, err := openRoot(t, fx)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 
-	if want := before.Add(2 * time.Hour); opened.ExpiresAt.Before(want.Add(-time.Minute)) ||
-		opened.ExpiresAt.After(want.Add(time.Minute)) {
-		t.Errorf("expiry = %s, want about %s", opened.ExpiresAt, want)
+	if want := openNow().Add(2 * time.Hour); !opened.ExpiresAt.Equal(want) {
+		t.Errorf("expiry = %s, want %s", opened.ExpiresAt, want)
 	}
 
 	if !strings.HasPrefix(opened.SessionID, profile.SessionIDPrefix) {
@@ -923,7 +924,7 @@ func withSealer(t *testing.T, fx openFixture, sealer profile.Sealer) *profile.Se
 
 	svc, err := profile.NewService(profile.Config{
 		Store: fx.m, Namespaces: memNamespaces{m: fx.m}, Sealer: sealer, Audit: memAudit{m: fx.m},
-		Authorizer: grantsFunc(fx.grants), Sessions: memSessions{m: fx.m}, Evaluator: eval, Now: nil,
+		Authorizer: grantsFunc(fx.grants), Sessions: memSessions{m: fx.m}, Evaluator: eval, Now: openNow,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -943,7 +944,7 @@ func withSessions(t *testing.T, fx openFixture, sessions profile.Sessions) *prof
 
 	svc, err := profile.NewService(profile.Config{
 		Store: fx.m, Namespaces: memNamespaces{m: fx.m}, Sealer: scopedSealer{}, Audit: memAudit{m: fx.m},
-		Authorizer: grantsFunc(fx.grants), Sessions: sessions, Evaluator: eval, Now: nil,
+		Authorizer: grantsFunc(fx.grants), Sessions: sessions, Evaluator: eval, Now: openNow,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -1254,7 +1255,7 @@ func TestReadSessionEndedAndForgedSessionsAreNotFound(t *testing.T) {
 		t.Fatalf("get namespace: %v", err)
 	}
 
-	at := time.Now().UTC()
+	at := openNow()
 	entry := audit.Entry{
 		At: at, Namespace: fx.ns, Subject: "admin", IDPSubject: "", TokenID: "", Action: "profile:open",
 		Object: "namespace:" + fx.ns.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
