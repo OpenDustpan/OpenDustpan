@@ -224,6 +224,10 @@ const (
 	// account administrator and the site administrator hold it as data
 	// actions.
 	ActionUnitManageSharing Action = "unit:manage-sharing"
+	// ActionUnitClaimRegister allows registering an apply claim on a unit:
+	// the reservation of the resource instances that one saved plan
+	// changes and reads. Its object is a unit.
+	ActionUnitClaimRegister Action = "unit:claim-register"
 	// ActionCallerRead allows reading the caller's own record, for example
 	// the current-user endpoint of a tool API. Its object is CallerObject.
 	ActionCallerRead Action = "caller:read"
@@ -697,7 +701,7 @@ func Actions() []Action {
 		ActionNamespaceSetOverrides, ActionNamespaceManageIPAllowlist,
 		ActionNamespaceReadGates, ActionNamespaceManageGates, ActionNamespaceManageProxyRules,
 		ActionUnitManageProxyRules, ActionUnitSetOverrides, ActionUnitReadSecrets,
-		ActionUnitReadOutputs, ActionUnitManageSharing, ActionCallerRead,
+		ActionUnitReadOutputs, ActionUnitManageSharing, ActionUnitClaimRegister, ActionCallerRead,
 		ActionServerBackup, ActionServerObserve, ActionServerReadInstances, ActionServerDeleteInstance,
 		ActionServerReadAudit, ActionServerMaintenance, ActionServerRestore, ActionServerReadSettings,
 		ActionInstallationStoreCheck, ActionInstallationReadGates, ActionInstallationManageGates,

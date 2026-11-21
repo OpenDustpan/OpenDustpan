@@ -55,7 +55,11 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		var err error
 
 		switch rt.Scope {
-		case ScopeJoinToken:
+		case ScopeJoinToken, ScopeJobToken:
+			// The handler of a job token route authenticates the bearer
+			// job token or the access token itself, because the token,
+			// not a runner or session key, carries the call. The wrapper
+			// checks the release and reads the body only.
 			err = h.checkProtocol(r, c)
 		case ScopeRunnerKey:
 			err = h.checkRunner(r, rt, c)

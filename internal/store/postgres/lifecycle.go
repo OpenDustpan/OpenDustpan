@@ -391,8 +391,8 @@ func purgeWorkspaceRows(
 	return purgeUnitContext(ctx, q, ns, id.String())
 }
 
-// deleteWorkspaceBlame deletes the resource change rows, the blame items and
-// the blame cursor of the workspace id.
+// deleteWorkspaceBlame deletes the resource change rows, the blame items, the
+// blame cursor, the claim touches and the claims of the workspace id.
 func deleteWorkspaceBlame(ctx context.Context, q *db.Queries, id workspace.ID) error {
 	if err := q.DeleteWorkspaceResourceChanges(ctx, id.String()); err != nil {
 		return fmt.Errorf("delete resource changes of workspace: %w", err)
@@ -404,6 +404,14 @@ func deleteWorkspaceBlame(ctx context.Context, q *db.Queries, id workspace.ID) e
 
 	if err := q.DeleteWorkspaceBlameCursor(ctx, id.String()); err != nil {
 		return fmt.Errorf("delete blame cursor of workspace: %w", err)
+	}
+
+	if err := q.DeleteWorkspaceClaimTouches(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete claim touches of workspace: %w", err)
+	}
+
+	if err := q.DeleteWorkspaceClaims(ctx, id.String()); err != nil {
+		return fmt.Errorf("delete claims of workspace: %w", err)
 	}
 
 	return nil

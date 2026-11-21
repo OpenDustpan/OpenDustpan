@@ -363,7 +363,7 @@ func protocolConfigFor(
 
 		Sweeps: nil, Recorder: nil, Jobs: nil, OnAuditFailure: nil, DenialLimiter: nil,
 		OnHandoffRefusalSuppressed: nil, Sessions: nil, Plans: nil, Artifacts: nil,
-		JobTokens: nil, Starters: nil, Proxies: nil,
+		JobTokens: nil, Starters: nil, Proxies: nil, Claims: nil,
 	}
 }
 

@@ -211,6 +211,7 @@ var families = map[identity.Action]Family{
 	identity.ActionUnitReadSecrets:                   FamilyData,
 	identity.ActionUnitReadOutputs:                   FamilyData,
 	identity.ActionUnitManageSharing:                 FamilyData,
+	identity.ActionUnitClaimRegister:                 FamilyData,
 	identity.ActionUnitMove:                          FamilyData,
 	identity.ActionUnitManageAccess:                  FamilyData,
 	identity.ActionUnitRestore:                       FamilyData,

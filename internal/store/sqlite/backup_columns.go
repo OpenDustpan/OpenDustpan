@@ -692,6 +692,17 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 				"final_job", "final_at_ms",
 			},
 		},
+		{
+			table:   backup.TableWorkspaceClaimTouches,
+			columns: []string{backupColWorkspaceID, backupColSeq, "version_id", "addresses"},
+		},
+		{
+			table: backup.TableWorkspaceClaims,
+			columns: []string{
+				"id", backupColWorkspaceID, backupColSeq, "base", "addresses", "principal", "job_id", "trigger_name",
+				backupColState, "started_at_ms", backupColEndedAtMs,
+			},
+		},
 	}
 }
 

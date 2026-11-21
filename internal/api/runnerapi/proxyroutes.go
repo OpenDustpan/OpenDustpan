@@ -13,7 +13,7 @@ const (
 	// handoff token and the signature of the new session key authenticate
 	// it, and the session holds identity.ActionRunnerClaim on the pool of its
 	// runner. A launcher handoff token never opens a proxy session.
-	ScopeProxyHandoffToken Scope = ScopeSessionKey + 1 + iota
+	ScopeProxyHandoffToken Scope = ScopeJobToken + 1 + iota
 	// ScopeProxySessionKey is a request of a job proxy: the proof of the key
 	// of its proxy session authenticates it. A launcher session never passes
 	// this scope, and a proxy session never passes ScopeSessionKey.

@@ -4568,6 +4568,24 @@ func (q *Queries) DeleteWorkspaceBlameItems(ctx context.Context, workspaceID str
 	return err
 }
 
+const deleteWorkspaceClaimTouches = `-- name: DeleteWorkspaceClaimTouches :exec
+DELETE FROM workspace_claim_touches WHERE workspace_id = ?
+`
+
+func (q *Queries) DeleteWorkspaceClaimTouches(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceClaimTouches, workspaceID)
+	return err
+}
+
+const deleteWorkspaceClaims = `-- name: DeleteWorkspaceClaims :exec
+DELETE FROM workspace_claims WHERE workspace_id = ?
+`
+
+func (q *Queries) DeleteWorkspaceClaims(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceClaims, workspaceID)
+	return err
+}
+
 const deleteWorkspaceResourceChanges = `-- name: DeleteWorkspaceResourceChanges :exec
 DELETE FROM workspace_resource_changes WHERE workspace_id = ?
 `
@@ -5009,6 +5027,28 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 	return result.RowsAffected()
 }
 
+const endWorkspaceClaimsByJob = `-- name: EndWorkspaceClaimsByJob :execrows
+UPDATE workspace_claims
+SET state = 'ended', ended_at_ms = ?1
+WHERE job_id = ?2 AND state = 'accepted'
+  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = ?3)
+`
+
+type EndWorkspaceClaimsByJobParams struct {
+	EndedAtMs int64
+	JobID     string
+	Namespace string
+}
+
+// Ends each accepted claim of a job in the workspaces of one namespace.
+func (q *Queries) EndWorkspaceClaimsByJob(ctx context.Context, arg EndWorkspaceClaimsByJobParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endWorkspaceClaimsByJob, arg.EndedAtMs, arg.JobID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const ensureGitHostEventReceiptCount = `-- name: EnsureGitHostEventReceiptCount :exec
 INSERT INTO git_host_event_receipt_count (id, receipts, max_receipts)
 VALUES (1, 0, ?1)
@@ -5097,6 +5137,28 @@ WHERE state = 'running' AND claim_owner = ?1
 func (q *Queries) ExpireRunnerClaimsWithoutSession(ctx context.Context, runnerID sql.NullString) error {
 	_, err := q.db.ExecContext(ctx, expireRunnerClaimsWithoutSession, runnerID)
 	return err
+}
+
+const expireWorkspaceClaims = `-- name: ExpireWorkspaceClaims :execrows
+UPDATE workspace_claims
+SET state = 'ended', ended_at_ms = ?1
+WHERE state = 'accepted' AND started_at_ms < ?2
+  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = ?3)
+`
+
+type ExpireWorkspaceClaimsParams struct {
+	EndedAtMs int64
+	CutoffMs  int64
+	Namespace string
+}
+
+// Ends each accepted claim of one namespace that started before the cutoff.
+func (q *Queries) ExpireWorkspaceClaims(ctx context.Context, arg ExpireWorkspaceClaimsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, expireWorkspaceClaims, arg.EndedAtMs, arg.CutoffMs, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const failEndedBackups = `-- name: FailEndedBackups :execrows
@@ -13432,6 +13494,65 @@ func (q *Queries) InsertWorkspaceBlameItem(ctx context.Context, arg InsertWorksp
 	return err
 }
 
+const insertWorkspaceClaim = `-- name: InsertWorkspaceClaim :exec
+INSERT INTO workspace_claims (
+    id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+)
+VALUES (
+    ?1, ?2,
+    (SELECT COALESCE(MAX(c.seq), 0) + 1 FROM workspace_claims AS c WHERE c.workspace_id = ?2),
+    ?3, ?4, ?5, ?6, ?7,
+    'accepted', ?8, 0
+)
+`
+
+type InsertWorkspaceClaimParams struct {
+	ID          string
+	WorkspaceID string
+	Base        string
+	Addresses   string
+	Principal   string
+	JobID       string
+	TriggerName string
+	StartedAtMs int64
+}
+
+// The sequence number is the next one of the workspace. The caller holds the
+// claim lock of the workspace, and the unique key refuses a repeat.
+func (q *Queries) InsertWorkspaceClaim(ctx context.Context, arg InsertWorkspaceClaimParams) error {
+	_, err := q.db.ExecContext(ctx, insertWorkspaceClaim,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Base,
+		arg.Addresses,
+		arg.Principal,
+		arg.JobID,
+		arg.TriggerName,
+		arg.StartedAtMs,
+	)
+	return err
+}
+
+const insertWorkspaceClaimTouch = `-- name: InsertWorkspaceClaimTouch :exec
+INSERT INTO workspace_claim_touches (workspace_id, seq, version_id, addresses)
+VALUES (
+    ?1,
+    (SELECT COALESCE(MAX(t.seq), 0) + 1 FROM workspace_claim_touches AS t WHERE t.workspace_id = ?1),
+    ?2, ?3
+)
+`
+
+type InsertWorkspaceClaimTouchParams struct {
+	WorkspaceID string
+	VersionID   string
+	Addresses   string
+}
+
+func (q *Queries) InsertWorkspaceClaimTouch(ctx context.Context, arg InsertWorkspaceClaimTouchParams) error {
+	_, err := q.db.ExecContext(ctx, insertWorkspaceClaimTouch, arg.WorkspaceID, arg.VersionID, arg.Addresses)
+	return err
+}
+
 const insertWorkspaceResourceChange = `-- name: InsertWorkspaceResourceChange :exec
 INSERT INTO workspace_resource_changes (
     workspace_id, state_version_id, address, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id,
@@ -19991,6 +20112,90 @@ func (q *Queries) ListWorkspaceBlameSummaries(ctx context.Context, arg ListWorks
 	return items, nil
 }
 
+const listWorkspaceClaimTouches = `-- name: ListWorkspaceClaimTouches :many
+SELECT version_id, addresses FROM workspace_claim_touches WHERE workspace_id = ? ORDER BY seq
+`
+
+type ListWorkspaceClaimTouchesRow struct {
+	VersionID string
+	Addresses string
+}
+
+func (q *Queries) ListWorkspaceClaimTouches(ctx context.Context, workspaceID string) ([]ListWorkspaceClaimTouchesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceClaimTouches, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceClaimTouchesRow
+	for rows.Next() {
+		var i ListWorkspaceClaimTouchesRow
+		if err := rows.Scan(&i.VersionID, &i.Addresses); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceClaims = `-- name: ListWorkspaceClaims :many
+SELECT id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+FROM workspace_claims WHERE workspace_id = ? ORDER BY seq
+`
+
+type ListWorkspaceClaimsRow struct {
+	ID          string
+	WorkspaceID string
+	Base        string
+	Addresses   string
+	Principal   string
+	JobID       string
+	TriggerName string
+	State       string
+	StartedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) ListWorkspaceClaims(ctx context.Context, workspaceID string) ([]ListWorkspaceClaimsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceClaims, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceClaimsRow
+	for rows.Next() {
+		var i ListWorkspaceClaimsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Base,
+			&i.Addresses,
+			&i.Principal,
+			&i.JobID,
+			&i.TriggerName,
+			&i.State,
+			&i.StartedAtMs,
+			&i.EndedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceResourceChangesOfItem = `-- name: ListWorkspaceResourceChangesOfItem :many
 SELECT address, ordinal, kind, at_ms, by_subject, by_token_id, by_job_id, changed_paths, restored, forced,
     lineage_changed
@@ -20177,6 +20382,24 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockWorkspaceForClaims = `-- name: LockWorkspaceForClaims :one
+SELECT id FROM workspaces WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL
+`
+
+type LockWorkspaceForClaimsParams struct {
+	ID        string
+	Namespace string
+}
+
+// The ID of a live workspace of a namespace. The write transaction of SQLite
+// is the claim lock.
+func (q *Queries) LockWorkspaceForClaims(ctx context.Context, arg LockWorkspaceForClaimsParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockWorkspaceForClaims, arg.ID, arg.Namespace)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const markMemberRemovalAlert = `-- name: MarkMemberRemovalAlert :exec
