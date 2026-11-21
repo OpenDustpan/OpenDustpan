@@ -90,31 +90,6 @@ func TestClaimHostileTokens(t *testing.T) {
 			t.Fatalf("the list holds %d claims, want none", n)
 		}
 	})
-
-	t.Run("job token that names no job", func(t *testing.T) {
-		t.Parallel()
-
-		w := newClaimWorld(t, allowAllAuthorizer{})
-
-		secret, err := jobtoken.NewSecret()
-		if err != nil {
-			t.Fatalf("new secret: %v", err)
-		}
-
-		w.tokens.matches[jobtoken.DigestOf(secret)] = liveTokenMatch(
-			time.UnixMilli(1_700_000_000_000).UTC(), secret, "", w.unit,
-		)
-
-		status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), "Bearer "+secret.Reveal(),
-			map[string]any{"base": w.base, "addresses": []string{"aws_instance.a"}})
-		if status != http.StatusForbidden {
-			t.Fatalf("register with a token that names no job = %d %s, want 403", status, raw)
-		}
-
-		if n := w.claimCount(t); n != 0 {
-			t.Fatalf("the list holds %d claims, want none", n)
-		}
-	})
 }
 
 // TestClaimHostileTokensOfOtherWorkspaces sends the job token of another

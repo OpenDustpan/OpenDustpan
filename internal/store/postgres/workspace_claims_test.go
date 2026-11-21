@@ -57,7 +57,7 @@ func TestClaimWaitsForTheWorkspaceRowLock(t *testing.T) {
 		})
 	}()
 
-	waitForLockWaiter(t, tx)
+	waitForLockWaiter(t, tx, done)
 
 	select {
 	case <-entered:
@@ -78,14 +78,21 @@ func TestClaimWaitsForTheWorkspaceRowLock(t *testing.T) {
 
 // waitForLockWaiter asks the database, through tx, until a backend waits for
 // a row lock in the statement that locks a workspace for its claims. Each
-// round trip is the pause between two asks, so the test reads no clock.
-func waitForLockWaiter(t *testing.T, tx pgx.Tx) {
+// round trip is the pause between two asks, so the test reads no clock; the
+// test timeout ends a wait that never comes.
+func waitForLockWaiter(t *testing.T, tx pgx.Tx, done <-chan error) {
 	t.Helper()
 
 	const ask = `SELECT count(*) FROM pg_stat_activity
 WHERE wait_event_type = 'Lock' AND query LIKE '%FROM workspaces WHERE id%FOR UPDATE%'`
 
-	for range 100_000 {
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("WithClaims returned %v while another transaction held the workspace row lock", err)
+		default:
+		}
+
 		var waiting int
 
 		if err := tx.QueryRow(t.Context(), ask).Scan(&waiting); err != nil {
@@ -96,8 +103,6 @@ WHERE wait_event_type = 'Lock' AND query LIKE '%FROM workspaces WHERE id%FOR UPD
 			return
 		}
 	}
-
-	t.Fatal("no backend waits for the workspace row lock")
 }
 
 // holdWorkspaceRowLock opens a second connection to the schema, takes the row
