@@ -699,10 +699,24 @@ type claimDialect struct {
 // claimDialects returns SQLite, and PostgreSQL when
 // DUSTPAN_TEST_POSTGRES_URL names a server.
 func claimDialects() []claimDialect {
-	list := []claimDialect{{name: "sqlite", open: openClaimSQLite}}
+	list := []claimDialect{{
+		name: "sqlite",
+		open: func(t *testing.T) claimDialectStore {
+			t.Helper()
+
+			return openClaimSQLite(t)
+		},
+	}}
 
 	if os.Getenv(claimPostgresEnv) != "" {
-		list = append(list, claimDialect{name: "postgres", open: openClaimPostgres})
+		list = append(list, claimDialect{
+			name: "postgres",
+			open: func(t *testing.T) claimDialectStore {
+				t.Helper()
+
+				return openClaimPostgres(t)
+			},
+		})
 	}
 
 	return list
@@ -713,9 +727,7 @@ func claimDialects() []claimDialect {
 const claimPostgresEnv = "DUSTPAN_TEST_POSTGRES_URL"
 
 // openClaimSQLite opens an empty SQLite store.
-//
-//nolint:ireturn // The dialect is chosen at runtime: SQLite here, PostgreSQL below.
-func openClaimSQLite(t *testing.T) claimDialectStore {
+func openClaimSQLite(t *testing.T) *sqlite.Store {
 	t.Helper()
 
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -733,9 +745,7 @@ func openClaimSQLite(t *testing.T) claimDialectStore {
 }
 
 // openClaimPostgres opens a PostgreSQL store on a schema of its own.
-//
-//nolint:ireturn // The dialect is chosen at runtime: PostgreSQL here, SQLite above.
-func openClaimPostgres(t *testing.T) claimDialectStore {
+func openClaimPostgres(t *testing.T) *postgres.Store {
 	t.Helper()
 
 	base := os.Getenv(claimPostgresEnv)

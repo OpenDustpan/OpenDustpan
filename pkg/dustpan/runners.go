@@ -156,6 +156,10 @@ func newRunnerHandler(
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
 		Plans: deps.plans.plans, Artifacts: deps.plans.artifacts, OnHandoffRefusalSuppressed: nil,
 		JobTokens: deps.issuer.tokens, Starters: deps.issuer.starters, Proxies: proxies,
+		// No claim routes on the server until a store adapter persists the apply
+		// claims: the registry holds them in memory only, so a restart would
+		// forget accepted claims and accept an overlapping claim.
+		Claims: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)
