@@ -77,6 +77,10 @@ func TestSessionFromRow(t *testing.T) {
 			change: func(*db.ProfileOpenSession) {}, now: rowStart().Add(2 * time.Hour), owner: rowOwner(),
 		},
 		{
+			name: "a row with paths null", wantErr: profile.ErrInvalid,
+			change: func(r *db.ProfileOpenSession) { r.Paths = "null" }, now: rowStart(), owner: rowOwner(),
+		},
+		{
 			name: "a row with paths that are not JSON", wantErr: profile.ErrInvalid,
 			change: func(r *db.ProfileOpenSession) { r.Paths = "not json" }, now: rowStart(), owner: rowOwner(),
 		},

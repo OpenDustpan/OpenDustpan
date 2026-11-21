@@ -99,6 +99,13 @@ func ProfileSessionFromRow(ns namespace.Name, r ProfileOpenSessionRow) (profile.
 		return profile.Session{}, fmt.Errorf("%w: stored session paths: %w", profile.ErrInvalid, err)
 	}
 
+	// Fail closed: the text null decodes with no error to nil paths, and nil
+	// paths means all paths. The writer stores an empty array for all paths,
+	// so a row that holds null is not a row that this server wrote.
+	if paths == nil {
+		return profile.Session{}, fmt.Errorf("%w: stored session paths are not a JSON array", profile.ErrInvalid)
+	}
+
 	return profile.NewSession(profile.SessionParams{
 		ID: r.ID, Namespace: ns, Root: profile.ID(r.RootProfileID),
 		Owner:    profile.SessionOwner{Kind: profile.OwnerKind(r.OwnerKind), ID: r.OwnerID},

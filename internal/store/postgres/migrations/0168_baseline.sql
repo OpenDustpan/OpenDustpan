@@ -1096,6 +1096,7 @@ CREATE TABLE profile_open_sessions (
     CONSTRAINT profile_open_sessions_id_check CHECK (((id ~~ 'pos-%'::text) AND (length(id) > 4))),
     CONSTRAINT profile_open_sessions_owner_id_check CHECK ((owner_id <> ''::text)),
     CONSTRAINT profile_open_sessions_owner_kind_check CHECK ((owner_kind = 'principal'::text)),
+    CONSTRAINT profile_open_sessions_paths_check CHECK ((jsonb_typeof((paths)::jsonb) = 'array'::text)),
     CONSTRAINT profile_open_sessions_sealed_check CHECK ((length(sealed) > 0))
 );
 

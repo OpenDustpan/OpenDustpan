@@ -731,7 +731,7 @@ CREATE TABLE profile_open_sessions (
     owner_kind      TEXT    NOT NULL CHECK (owner_kind = 'principal'),
     owner_id        TEXT    NOT NULL CHECK (owner_id <> ''),
     consumer        TEXT    NOT NULL CHECK (consumer IN ('api', 'console', 'pulumi')),
-    paths           TEXT    NOT NULL,
+    paths           TEXT    NOT NULL CHECK (json_valid(paths) AND json_type(paths) = 'array'),
     sealed          BLOB    NOT NULL CHECK (length(sealed) > 0),
     created_at_ms   INTEGER NOT NULL,
     expires_at_ms   INTEGER NOT NULL,

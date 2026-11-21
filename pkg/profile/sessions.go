@@ -208,11 +208,11 @@ func checkSessionPaths(paths []string) error {
 	return nil
 }
 
-// hasControl reports whether s holds a control character, which includes CR
-// and LF, or an invalid byte.
+// hasControl reports whether s holds a control character (C0, DEL or C1),
+// which includes CR and LF, or an invalid byte.
 func hasControl(s string) bool {
 	for _, r := range s {
-		if r < ' ' || r == 0x7f || r == utf8.RuneError {
+		if r < ' ' || (r >= 0x7f && r <= 0x9f) || r == utf8.RuneError {
 			return true
 		}
 	}
@@ -261,7 +261,7 @@ type SessionWritten struct {
 // Sessions persists open sessions.
 //
 // Put takes the fence of the namespace and the audit entries of the write.
-// The store checks the fence, the limit and the ID, stores the session and
+// The store checks the fence and the ID, stores the session and
 // appends each entry, in order, in one transaction: all commit, or none. When
 // the context carries an idempotency.Completion, Put stores the answer of the
 // request in that transaction and passes a SessionWritten, and returns

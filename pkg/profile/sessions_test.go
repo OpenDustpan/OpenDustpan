@@ -52,6 +52,10 @@ func TestNewSession(t *testing.T) {
 			false,
 		},
 		{"an owner with no subject", func(p *profile.SessionParams) { p.Owner = profile.PrincipalOwner("") }, false},
+		{"an owner with a DEL", func(p *profile.SessionParams) { p.Owner = profile.PrincipalOwner("al\x7fice") }, false},
+		{"an owner with a C1 control", func(p *profile.SessionParams) { p.Owner = profile.PrincipalOwner("al\u0080ice") }, false},
+		{"an owner with the last C1 control", func(p *profile.SessionParams) { p.Owner = profile.PrincipalOwner("al\u009fice") }, false},
+		{"an owner with invalid UTF-8", func(p *profile.SessionParams) { p.Owner = profile.PrincipalOwner("a\xffb") }, false},
 		{"an owner with a CR", func(p *profile.SessionParams) { p.Owner = profile.PrincipalOwner("al\rice") }, false},
 		{"an owner subject that is too long", func(p *profile.SessionParams) {
 			p.Owner = profile.PrincipalOwner(strings.Repeat("a", profile.MaxSessionOwnerBytes+1))
@@ -62,6 +66,11 @@ func TestNewSession(t *testing.T) {
 		{"an empty path", func(p *profile.SessionParams) { p.Paths = []string{"a", ""} }, false},
 		{"a path with a CR", func(p *profile.SessionParams) { p.Paths = []string{"a\rb"} }, false},
 		{"a path with an LF", func(p *profile.SessionParams) { p.Paths = []string{"a\nb"} }, false},
+		{"a path with a DEL", func(p *profile.SessionParams) { p.Paths = []string{"a\x7fb"} }, false},
+		{"a path with a C1 control", func(p *profile.SessionParams) { p.Paths = []string{"a\u0080b"} }, false},
+		{"a path with the last C1 control", func(p *profile.SessionParams) { p.Paths = []string{"a\u009fb"} }, false},
+		{"a path with invalid UTF-8", func(p *profile.SessionParams) { p.Paths = []string{"a\xffb"} }, false},
+		{"a path with a letter after the C1 range", func(p *profile.SessionParams) { p.Paths = []string{"a\u00a0b"} }, true},
 		{"a path with a NUL", func(p *profile.SessionParams) { p.Paths = []string{"a\x00b"} }, false},
 		{"a path that is too long", func(p *profile.SessionParams) { p.Paths = []string{long} }, false},
 		{"too many paths", func(p *profile.SessionParams) { p.Paths = manyPaths }, false},
