@@ -25,8 +25,8 @@ import (
 // of another namespace is that namespace plus the stable ID that the caller
 // gives. The store checks the format of that ID only: an answer must not tell
 // whether such an object exists. The purge of a unit or a collection removes
-// each rule that names its ID, in any namespace, in the transaction of the
-// purge.
+// each rule that names it by its namespace and stable ID, in the transaction of
+// the purge.
 //
 // The rule of a new unit is not a call of this port. When the setting of a
 // namespace is DefaultNamespace, the SQL adapter that makes a unit of any
@@ -75,7 +75,7 @@ type Store interface {
 	// returns ErrNotFound for an unknown rule and for a rule of another
 	// producer, ErrInvalid, and namespace.ErrFenced. On every error the store
 	// changes nothing. The purge of a unit removes each rule whose producer or
-	// consumer is that unit by stable ID, in any namespace.
+	// consumer is that unit by its namespace and stable ID.
 	Delete(ctx context.Context, producer identity.Object, id ID, fence namespace.Fence, e audit.Entry) error
 	// Find returns one rule that covers the producer and names the consumer.
 	// A rule covers the producer when its producer is the unit, the

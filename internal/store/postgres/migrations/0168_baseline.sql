@@ -2362,7 +2362,7 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions USING
 
 CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (namespace_id, object_kind, object_id, resource_key, source);
 
-CREATE INDEX output_sharing_rules_consumer ON output_sharing_rules USING btree (consumer_id) WHERE (consumer_id <> ''::text);
+CREATE INDEX output_sharing_rules_consumer ON output_sharing_rules USING btree (consumer_namespace, consumer_id) WHERE (consumer_id <> ''::text);
 
 CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules USING btree (namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id);
 

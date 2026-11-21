@@ -78,7 +78,7 @@ When a caller lists the rules of a producer, the server SHALL answer the rules w
 
 #### Scenario: Purge
 - **WHEN** a unit is purged, or a collection is deleted
-- **THEN** each rule that names its stable ID as producer or as consumer, in any namespace, is removed in the same transaction, and the audit entry of the purge lists the removed rules.
+- **THEN** each rule that names its namespace and stable ID as producer or as consumer, in any producer namespace, is removed; a rule that names the same ID in another namespace stays in the same transaction, and the audit entry of the purge lists the removed rules.
 
 ### Requirement: Rule audit
 

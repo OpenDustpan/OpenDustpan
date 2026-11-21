@@ -91,20 +91,26 @@ WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id)
 
 -- name: DeleteOutputSharingRulesOfCollection :many
 -- Removes the rules that name the collection by its stable ID, as producer in
--- its own namespace or as consumer in any namespace. It returns the namespace
--- and the ID of each rule that it removed, so that the caller records them.
+-- its own namespace or as consumer by its namespace and ID, in any producer
+-- namespace. A rule that names the same ID in another namespace stays. It
+-- returns the namespace and the ID of each rule that it removed, so that the
+-- caller records them.
 DELETE FROM output_sharing_rules
 WHERE (namespace = sqlc.arg(namespace) AND producer_kind = 'collection' AND producer_id = sqlc.arg(collection_id))
-    OR (consumer_kind = 'collection' AND consumer_id = sqlc.arg(collection_id))
+    OR (consumer_kind = 'collection' AND consumer_namespace = sqlc.arg(namespace)
+        AND consumer_id = sqlc.arg(collection_id))
 RETURNING namespace, id;
 
 -- name: DeleteOutputSharingRulesOfUnit :many
 -- Removes the rules that name the unit by its stable ID, as producer in its
--- own namespace or as consumer in any namespace. It returns the namespace and
--- the ID of each rule that it removed, so that the caller records them.
+-- own namespace or as consumer by its namespace and ID, in any producer
+-- namespace. A rule that names the same ID in another namespace stays. It
+-- returns the namespace and the ID of each rule that it removed, so that the
+-- caller records them.
 DELETE FROM output_sharing_rules
 WHERE (namespace = sqlc.arg(namespace) AND producer_kind = 'unit' AND producer_id = sqlc.arg(unit_id))
-    OR (consumer_kind = 'unit' AND consumer_id = sqlc.arg(unit_id))
+    OR (consumer_kind = 'unit' AND consumer_namespace = sqlc.arg(namespace)
+        AND consumer_id = sqlc.arg(unit_id))
 RETURNING namespace, id;
 
 -- name: ExistsOutputSharingCollection :one

@@ -425,7 +425,7 @@ func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection
 
 // deleteCollectionOwnRows removes the manual lock of the collection id, and the
 // sharing rules that name it by its stable ID: as producer in its own
-// namespace and as consumer in any namespace. A collection made again with
+// namespace and as consumer by its namespace and ID. A collection made again with
 // the same name has a new ID, so it never matches a stale rule. The audit
 // entry e lists the removed rules.
 func deleteCollectionOwnRows(

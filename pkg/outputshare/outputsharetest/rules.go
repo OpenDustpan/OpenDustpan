@@ -450,7 +450,15 @@ func ruleLifeCases() []suiteCase {
 			testRulePurgeCrossNamespace,
 			"store: the purge of a unit removes the rules of any namespace that name its stable ID",
 		},
+		{
+			testRulePurgeSameIDOtherNamespace,
+			"store: the purge of a unit keeps a rule that names the same ID in another namespace",
+		},
 		{testRuleCollectionDelete, "store: the delete of a collection removes the rules that name it in its namespace"},
+		{
+			testRuleCollectionDeleteSameIDOtherNamespace,
+			"store: the delete of a collection keeps a rule that names the same ID in another namespace",
+		},
 		{
 			testRuleCollectionDeleteCrossNamespace,
 			"store: the delete of a collection removes the rules of any namespace that name its stable ID",
@@ -1120,6 +1128,60 @@ func testRulePurgeCrossNamespace(t *testing.T, h Harness) {
 
 	if err := r.put(r.ruleFor(a.Unit, foreignUnit(globex, "ws-last"))); !errors.Is(err, outputshare.ErrLimit) {
 		t.Fatalf("Put after 100 rules = %v, want ErrLimit", err)
+	}
+}
+
+// thirdNamespace is a consumer namespace that no case makes: the store keeps a
+// consumer of another namespace with no look-up.
+const thirdNamespace = namespace.Name("initech")
+
+func testRulePurgeSameIDOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+	needHook(t, h, "PurgeUnit")
+
+	r := newRuleRig(t, h)
+	a := r.unit("a", "")
+	g := r.other("g", "")
+
+	named := r.linkTo(a.Unit, consumerOf(g.Unit))
+	// The same ID in a third namespace is another reference: the purge of the
+	// unit of globex must not remove it, and must not list it in its audit entry.
+	survivor := r.linkTo(a.Unit, foreignUnit(thirdNamespace, g.Unit.UnitID()))
+
+	h.PurgeUnit(t, g)
+
+	r.wantIDs(a.Unit, string(survivor.ID))
+
+	if _, err := h.Store.Get(t.Context(), a.Unit, named.ID); !errors.Is(err, outputshare.ErrNotFound) {
+		t.Fatalf("Get of the rule that named the purged unit = %v, want ErrNotFound", err)
+	}
+}
+
+func testRuleCollectionDeleteSameIDOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+	needHook(t, h, "RemakeCollection", "MoveUnit")
+
+	r := newRuleRig(t, h)
+	a := r.unit("a", "")
+	web := r.other("web", "shared")
+
+	named := r.linkTo(a.Unit, consumerOf(collectionOf(web)))
+	survivor := r.linkTo(
+		a.Unit,
+		outputshare.Consumer{
+			Kind:      outputshare.ConsumerCollection,
+			Namespace: thirdNamespace,
+			ID:        collectionOf(web).CollectionID(),
+		},
+	)
+
+	h.MoveUnit(t, web, "elsewhere")
+	h.RemakeCollection(t, globex, "shared")
+
+	r.wantIDs(a.Unit, string(survivor.ID))
+
+	if _, err := h.Store.Get(t.Context(), a.Unit, named.ID); !errors.Is(err, outputshare.ErrNotFound) {
+		t.Fatalf("Get of the rule that named the deleted collection = %v, want ErrNotFound", err)
 	}
 }
 

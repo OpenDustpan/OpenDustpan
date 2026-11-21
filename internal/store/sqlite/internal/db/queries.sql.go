@@ -4066,7 +4066,8 @@ func (q *Queries) DeleteOutputSharingRule(ctx context.Context, arg DeleteOutputS
 const deleteOutputSharingRulesOfCollection = `-- name: DeleteOutputSharingRulesOfCollection :many
 DELETE FROM output_sharing_rules
 WHERE (namespace = ?1 AND producer_kind = 'collection' AND producer_id = ?2)
-    OR (consumer_kind = 'collection' AND consumer_id = ?2)
+    OR (consumer_kind = 'collection' AND consumer_namespace = ?1
+        AND consumer_id = ?2)
 RETURNING namespace, id
 `
 
@@ -4081,8 +4082,10 @@ type DeleteOutputSharingRulesOfCollectionRow struct {
 }
 
 // Removes the rules that name the collection by its stable ID, as producer in
-// its own namespace or as consumer in any namespace. It returns the namespace
-// and the ID of each rule that it removed, so that the caller records them.
+// its own namespace or as consumer by its namespace and ID, in any producer
+// namespace. A rule that names the same ID in another namespace stays. It
+// returns the namespace and the ID of each rule that it removed, so that the
+// caller records them.
 func (q *Queries) DeleteOutputSharingRulesOfCollection(ctx context.Context, arg DeleteOutputSharingRulesOfCollectionParams) ([]DeleteOutputSharingRulesOfCollectionRow, error) {
 	rows, err := q.db.QueryContext(ctx, deleteOutputSharingRulesOfCollection, arg.Namespace, arg.CollectionID)
 	if err != nil {
@@ -4109,7 +4112,8 @@ func (q *Queries) DeleteOutputSharingRulesOfCollection(ctx context.Context, arg 
 const deleteOutputSharingRulesOfUnit = `-- name: DeleteOutputSharingRulesOfUnit :many
 DELETE FROM output_sharing_rules
 WHERE (namespace = ?1 AND producer_kind = 'unit' AND producer_id = ?2)
-    OR (consumer_kind = 'unit' AND consumer_id = ?2)
+    OR (consumer_kind = 'unit' AND consumer_namespace = ?1
+        AND consumer_id = ?2)
 RETURNING namespace, id
 `
 
@@ -4124,8 +4128,10 @@ type DeleteOutputSharingRulesOfUnitRow struct {
 }
 
 // Removes the rules that name the unit by its stable ID, as producer in its
-// own namespace or as consumer in any namespace. It returns the namespace and
-// the ID of each rule that it removed, so that the caller records them.
+// own namespace or as consumer by its namespace and ID, in any producer
+// namespace. A rule that names the same ID in another namespace stays. It
+// returns the namespace and the ID of each rule that it removed, so that the
+// caller records them.
 func (q *Queries) DeleteOutputSharingRulesOfUnit(ctx context.Context, arg DeleteOutputSharingRulesOfUnitParams) ([]DeleteOutputSharingRulesOfUnitRow, error) {
 	rows, err := q.db.QueryContext(ctx, deleteOutputSharingRulesOfUnit, arg.Namespace, arg.UnitID)
 	if err != nil {

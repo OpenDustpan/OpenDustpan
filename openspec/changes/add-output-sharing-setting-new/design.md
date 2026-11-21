@@ -35,7 +35,7 @@ The service keeps `outputshare.Store` as its only port, and takes `Authorizer` a
 ## Risks
 
 - A unit made with a setting that fails `Default.Validate` must refuse the create and write nothing (suite case "new unit: a setting that fails Validate refuses the create and writes nothing").
-- A purge that leaves a rule of a purged unit would leave a stale rule. The purge removes, in the same transaction, each rule that names the unit by stable ID, as producer in its namespace or as consumer in any namespace (`DeleteOutputSharingRulesOfUnit`). The delete of a collection does the same for the ID of the collection (`DeleteOutputSharingRulesOfCollection`). Both queries return the namespace and ID of each rule that they remove, and the audit entry of the purge or of the delete lists them in one change with the key `output-sharing-rules`, so an automatic removal leaves a record. A new index on `consumer_id` keeps the purge from scanning the table.
+- A purge that leaves a rule of a purged unit would leave a stale rule. The purge removes, in the same transaction, each rule that names the unit by stable ID, as producer in its namespace or as consumer by its namespace and ID, in any producer namespace (`DeleteOutputSharingRulesOfUnit`); a rule that names the same ID in another namespace stays. The delete of a collection does the same for the ID of the collection (`DeleteOutputSharingRulesOfCollection`). Both queries return the namespace and ID of each rule that they remove, and the audit entry of the purge or of the delete lists them in one change with the key `output-sharing-rules`, so an automatic removal leaves a record. A new index on `(consumer_namespace, consumer_id)` keeps the purge from scanning the table.
 - Both tool stores and both dialects must seed the same rule. The conformance suite runs the same cases on each.
 
 ## Diagrams
@@ -106,7 +106,7 @@ flowchart TB
 
 - Invariant: A rule names a unit, a collection or a namespace as producer and as consumer. It never names a principal or a whole other namespace.
 - Invariant: A rule keeps its producer and its consumer by stable ID and never by name. A consumer of another namespace is that namespace plus an ID with a valid format.
-- Purge: pre: a unit or a collection is purged. Post: no rule in any namespace names its stable ID, and the audit entry lists the removed rules.
+- Purge: pre: a unit or a collection is purged. Post: no rule names that namespace and stable ID as its consumer or producer, and the audit entry lists the removed rules.
 - `Put`: pre: the fence is current and the rule is valid. Post: the rule and its audit entry are stored in one transaction, or nothing is stored.
 - New unit: pre: the setting is `namespace`. Post: the unit, its one rule that names its namespace and the audit entry of that rule commit together, or none commits.
 
