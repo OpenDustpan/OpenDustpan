@@ -438,8 +438,11 @@ func TestSessionCredentialsStepEnd(t *testing.T) {
 
 	decode(t, body, &resp)
 
-	earliest := before.Add(time.Minute + runner.GraceOther)
-	latest := after.Add(time.Minute + runner.GraceOther)
+	// The handler clock cuts the time to the millisecond, so the expiry is
+	// the cut time plus the step and the grace. The bounds use the same
+	// cut: a bound with nanoseconds can lie above the cut time of the handler.
+	earliest := before.Truncate(time.Millisecond).Add(time.Minute + runner.GraceOther)
+	latest := after.Truncate(time.Millisecond).Add(time.Minute + runner.GraceOther)
 	if resp.ExpiresAt.Before(earliest) || resp.ExpiresAt.After(latest) {
 		t.Fatalf("expiry = %s, want the end of the step plus grace, between %s and %s",
 			resp.ExpiresAt, earliest, latest)
