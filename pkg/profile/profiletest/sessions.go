@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -42,10 +41,6 @@ func RunSessions(t *testing.T, newStore Factory) {
 		{"a read of another owner is not found", testSessionOtherOwner},
 		{"a read at or after the end is not found", testSessionEnded},
 		{"a read with an ID that is not a session ID is not found", testSessionForgedID},
-		{"the 101st live session of one owner is refused and leaves no row", testSessionLimit},
-		{"an ended session does not count for the limit", testSessionLimitEnded},
-		{"the limit is for each owner", testSessionLimitOwners},
-		{"101 concurrent puts of one owner leave 100", testSessionLimitConcurrent},
 		{"a stale fence refuses the put, with no row and no entry", testSessionFenced},
 		{"a put that is not valid changes nothing", testSessionInvalidPut},
 		{"a put with an ID in use is a conflict and leaves one row", testSessionConflict},
@@ -71,9 +66,6 @@ func RunSessions(t *testing.T, newStore Factory) {
 
 // firstSessionID is the ID of the session that most cases make.
 const firstSessionID = "pos-one"
-
-// maxOwnerSessions is profile.MaxLiveSessions for the cases.
-const maxOwnerSessions = profile.MaxLiveSessions
 
 // Times that the cases read at, after the end of a session of one minute or
 // one hour.
@@ -208,12 +200,13 @@ func (f openSessionFixture) get(s Store, id, owner string, now time.Time) (profi
 	return s.Sessions.Get(context.Background(), f.ns.Name, id, profile.PrincipalOwner(owner), now)
 }
 
-// wantFound checks that the live session id of owner is in the store.
-func (f openSessionFixture) wantFound(t *testing.T, s Store, id, owner string) {
+// wantFound checks that the live session id of the principal subject is in
+// the store.
+func (f openSessionFixture) wantFound(t *testing.T, s Store, id string) {
 	t.Helper()
 
-	if _, err := f.get(s, id, owner, epoch()); err != nil {
-		t.Errorf("session %s of %s: Get = %v, want the session", id, owner, err)
+	if _, err := f.get(s, id, subject, epoch()); err != nil {
+		t.Errorf("session %s of %s: Get = %v, want the session", id, subject, err)
 	}
 }
 
@@ -278,7 +271,7 @@ func testSessionOtherNamespace(t *testing.T, s Store) {
 		openEntries(other.Name))
 	wantErr(t, "Delete in another namespace", err, profile.ErrNotFound)
 
-	f.wantFound(t, s, firstSessionID, subject)
+	f.wantFound(t, s, firstSessionID)
 }
 
 func testSessionOtherOwner(t *testing.T, s Store) {
@@ -335,110 +328,7 @@ func testSessionForgedID(t *testing.T, s Store) {
 		wantErr(t, fmt.Sprintf("Delete of %q", id), err, profile.ErrNotFound)
 	}
 
-	f.wantFound(t, s, firstSessionID, subject)
-}
-
-// fillOwner stores n live sessions of owner, with the IDs pos-<prefix><n>.
-func (f openSessionFixture) fillOwner(t *testing.T, s Store, owner, prefix string, n int) {
-	t.Helper()
-
-	for i := range n {
-		f.put(t, s, f.session(t, fmt.Sprintf("pos-%s%d", prefix, i), owner))
-	}
-}
-
-func testSessionLimit(t *testing.T, s Store) {
-	t.Helper()
-
-	f := newOpenFixture(t, s)
-	f.fillOwner(t, s, subject, "a", maxOwnerSessions)
-
-	before := auditCount(t, s, f.ns.Name)
-	err := s.Sessions.Put(t.Context(), f.session(t, "pos-over", subject), f.ns.Fence(), openEntries(f.ns.Name))
-	wantErr(t, "the 101st put", err, profile.ErrSessionLimit)
-	wantErr(t, "the 101st put wraps ErrLimit", err, profile.ErrLimit)
-
-	f.wantGone(t, s, "pos-over", subject)
-
-	if after := auditCount(t, s, f.ns.Name); after != before {
-		t.Errorf("audit entries after the refused put = %d, want %d", after, before)
-	}
-}
-
-func testSessionLimitEnded(t *testing.T, s Store) {
-	t.Helper()
-
-	f := newOpenFixture(t, s)
-
-	for i := range maxOwnerSessions {
-		f.put(t, s, f.sessionAt(t, fmt.Sprintf("pos-old%d", i), subject, epoch(), time.Minute))
-	}
-
-	// All 100 ended before the start of the new session.
-	later := epoch().Add(afterEnd)
-	f.put(t, s, f.sessionAt(t, "pos-new", subject, later, time.Hour))
-
-	// A session that ends exactly at the start of the new one does not count.
-	if _, err := f.get(s, "pos-new", subject, later); err != nil {
-		t.Errorf("Get of the new session: %v", err)
-	}
-}
-
-func testSessionLimitOwners(t *testing.T, s Store) {
-	t.Helper()
-
-	f := newOpenFixture(t, s)
-	f.fillOwner(t, s, subject, "a", maxOwnerSessions)
-	f.put(t, s, f.session(t, "pos-bob", otherSubject))
-
-	f.wantFound(t, s, "pos-bob", otherSubject)
-}
-
-func testSessionLimitConcurrent(t *testing.T, s Store) {
-	t.Helper()
-
-	f := newOpenFixture(t, s)
-	attempts := maxOwnerSessions + 1
-	sessions := make([]profile.Session, attempts)
-
-	for i := range attempts {
-		sessions[i] = f.session(t, fmt.Sprintf("pos-c%d", i), subject)
-	}
-
-	var wg sync.WaitGroup
-
-	errs := make([]error, attempts)
-
-	for i := range attempts {
-		wg.Go(func() {
-			errs[i] = s.Sessions.Put(t.Context(), sessions[i], f.ns.Fence(), openEntries(f.ns.Name))
-		})
-	}
-
-	wg.Wait()
-
-	refused := 0
-
-	for _, err := range errs {
-		if err != nil {
-			wantErr(t, "a concurrent put", err, profile.ErrSessionLimit)
-
-			refused++
-		}
-	}
-
-	live := 0
-
-	for i := range attempts {
-		if _, err := f.get(s, fmt.Sprintf("pos-c%d", i), subject, epoch()); err == nil {
-			live++
-		}
-	}
-
-	if live != maxOwnerSessions || refused != 1 {
-		t.Errorf("after %d concurrent puts: live = %d, refused = %d, want %d and 1",
-			attempts, live, refused, maxOwnerSessions)
-	}
+	f.wantFound(t, s, firstSessionID)
 }
 
 func testSessionFenced(t *testing.T, s Store) {
@@ -581,7 +471,7 @@ func testSessionDeleteOtherOwner(t *testing.T, s Store) {
 	err := f.delete(s, firstSessionID, otherSubject)
 	wantErr(t, "Delete of another owner", err, profile.ErrNotFound)
 
-	f.wantFound(t, s, firstSessionID, subject)
+	f.wantFound(t, s, firstSessionID)
 }
 
 func testSessionPutOtherFence(t *testing.T, s Store) {
@@ -623,7 +513,7 @@ func testSessionDeleteInvalidOwner(t *testing.T, s Store) {
 		wantErr(t, fmt.Sprintf("Delete of owner %+v", owner), err, profile.ErrNotFound)
 	}
 
-	f.wantFound(t, s, firstSessionID, subject)
+	f.wantFound(t, s, firstSessionID)
 }
 
 func testSessionDeleteFenced(t *testing.T, s Store) {
@@ -641,7 +531,7 @@ func testSessionDeleteFenced(t *testing.T, s Store) {
 		openEntries(f.ns.Name))
 	wantErr(t, "Delete with a stale fence", err, namespace.ErrFenced)
 
-	f.wantFound(t, s, firstSessionID, subject)
+	f.wantFound(t, s, firstSessionID)
 
 	if after := auditCount(t, s, f.ns.Name); after != before {
 		t.Errorf("audit entries after the fenced delete = %d, want %d", after, before)
@@ -681,7 +571,7 @@ func testSessionDeleteAudit(t *testing.T, s Store) {
 	err = s.Sessions.Delete(t.Context(), "pos-two", profile.PrincipalOwner(subject), f.ns.Fence(), bad)
 	wantErr(t, "Delete with an invalid entry", err, audit.ErrInvalidEntry)
 
-	f.wantFound(t, s, "pos-two", subject)
+	f.wantFound(t, s, "pos-two")
 }
 
 func testSessionDelete(t *testing.T, s Store) {
@@ -747,7 +637,7 @@ func testSessionSweep(t *testing.T, s Store) {
 		t.Fatalf("Sweep = %d, %v, want 2 (one in each namespace), nil", n, err)
 	}
 
-	f.wantFound(t, s, "pos-live", subject)
+	f.wantFound(t, s, "pos-live")
 
 	n, err = s.Sessions.Sweep(t.Context(), epoch().Add(time.Minute), bigPage)
 	if err != nil || n != 0 {

@@ -29,7 +29,7 @@ func (s *Store) ProfileSessions() *ProfileSessions {
 }
 
 // Put implements profile.Sessions. The transaction holds the fence of the
-// namespace, so the count of live sessions and the insert are one step.
+// namespace, so the insert and its audit entries are one step.
 func (p *ProfileSessions) Put(
 	ctx context.Context, sess profile.Session, fence namespace.Fence, e []audit.Entry,
 ) error {
@@ -58,18 +58,6 @@ func (p *ProfileSessions) Put(
 			}
 
 			owner := sess.Owner()
-
-			live, countErr := q.CountLiveProfileOpenSessions(ctx, db.CountLiveProfileOpenSessionsParams{
-				NamespaceID: nsID, OwnerKind: string(owner.Kind), OwnerID: owner.ID,
-				NowMs: codec.Millis(sess.CreatedAt()),
-			})
-			if countErr != nil {
-				return fmt.Errorf("count open sessions: %w", countErr)
-			}
-
-			if live >= profile.MaxLiveSessions {
-				return profile.ErrSessionLimit
-			}
 
 			insertErr := q.InsertProfileOpenSession(ctx, db.InsertProfileOpenSessionParams{
 				NamespaceID: nsID, ID: sess.ID(), RootProfileID: string(sess.Root()), OwnerKind: string(owner.Kind),

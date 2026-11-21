@@ -1841,8 +1841,6 @@ CREATE INDEX inventory_labels_namespace ON inventory_labels (namespace, unit_id)
 
 CREATE INDEX profile_open_sessions_expiry ON profile_open_sessions (expires_at_ms);
 
-CREATE INDEX profile_open_sessions_owner ON profile_open_sessions (namespace_id, owner_kind, owner_id, expires_at_ms);
-
 CREATE UNIQUE INDEX profiles_live_name ON profiles (namespace_id, name) WHERE deleted_at_ms = 0;
 
 CREATE INDEX runner_join_tokens_pool ON runner_join_tokens (pool_id, created_at_ms, id);

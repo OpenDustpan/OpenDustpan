@@ -3792,13 +3792,6 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS INTEGER) = 0 OR latest = CAST(sqlc.arg(if_latest) AS INTEGER));
 
--- name: CountLiveProfileOpenSessions :one
--- The sessions of one owner in a namespace that have not ended at now_ms.
-SELECT COUNT(*)
-FROM profile_open_sessions
-WHERE namespace_id = sqlc.arg(namespace_id) AND owner_kind = sqlc.arg(owner_kind)
-  AND owner_id = sqlc.arg(owner_id) AND expires_at_ms > sqlc.arg(now_ms);
-
 -- name: DeleteEndedProfileOpenSessions :execrows
 -- Removes at most page_limit sessions that ended at or before now_ms, in any
 -- namespace, the oldest end first.

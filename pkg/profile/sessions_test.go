@@ -179,11 +179,3 @@ func TestParseOpenConsumer(t *testing.T) {
 		}
 	}
 }
-
-func TestSessionLimitWrapsErrLimit(t *testing.T) {
-	t.Parallel()
-
-	if !errors.Is(profile.ErrSessionLimit, profile.ErrLimit) {
-		t.Error("ErrSessionLimit does not wrap ErrLimit: the API maps ErrLimit to profile.limit")
-	}
-}

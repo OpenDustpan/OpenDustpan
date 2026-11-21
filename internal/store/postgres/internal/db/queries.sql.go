@@ -1674,33 +1674,6 @@ func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, err
 	return count, err
 }
 
-const countLiveProfileOpenSessions = `-- name: CountLiveProfileOpenSessions :one
-SELECT COUNT(*)
-FROM profile_open_sessions
-WHERE namespace_id = $1 AND owner_kind = $2
-  AND owner_id = $3 AND expires_at_ms > $4
-`
-
-type CountLiveProfileOpenSessionsParams struct {
-	NamespaceID string
-	OwnerKind   string
-	OwnerID     string
-	NowMs       int64
-}
-
-// The sessions of one owner in a namespace that have not ended at now_ms.
-func (q *Queries) CountLiveProfileOpenSessions(ctx context.Context, arg CountLiveProfileOpenSessionsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countLiveProfileOpenSessions,
-		arg.NamespaceID,
-		arg.OwnerKind,
-		arg.OwnerID,
-		arg.NowMs,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countLiveProfiles = `-- name: CountLiveProfiles :one
 SELECT COUNT(*)
 FROM profiles

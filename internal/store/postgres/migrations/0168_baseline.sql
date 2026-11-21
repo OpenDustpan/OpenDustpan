@@ -2383,8 +2383,6 @@ CREATE UNIQUE INDEX principals_subject ON principals USING btree (subject COLLAT
 
 CREATE INDEX profile_open_sessions_expiry ON profile_open_sessions USING btree (expires_at_ms);
 
-CREATE INDEX profile_open_sessions_owner ON profile_open_sessions USING btree (namespace_id, owner_kind, owner_id, expires_at_ms);
-
 CREATE UNIQUE INDEX profiles_live_name ON profiles USING btree (namespace_id, name) WHERE (deleted_at_ms = 0);
 
 CREATE INDEX quota_requests_window ON quota_requests USING btree (namespace_id, blueprint, kind, scope, at_ms);

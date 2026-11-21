@@ -17,9 +17,6 @@ import (
 const (
 	// SessionIDPrefix starts the ID of every open session.
 	SessionIDPrefix = "pos-"
-	// MaxLiveSessions is the largest number of live open sessions of one
-	// principal.
-	MaxLiveSessions = 100
 	// MinSessionDuration is the shortest duration of an open session.
 	MinSessionDuration = time.Minute
 	// MaxSessionDuration is the longest duration of an open session.
@@ -41,10 +38,6 @@ const (
 
 	maxSessionIDLength = 64
 )
-
-// ErrSessionLimit reports an open above MaxLiveSessions live sessions of one
-// owner. It wraps ErrLimit.
-var ErrSessionLimit = fmt.Errorf("%w: a principal holds at most %d live open sessions", ErrLimit, MaxLiveSessions)
 
 // OwnerKind says what kind of credential owns an open session. Only a
 // principal owns one.
@@ -285,8 +278,7 @@ type Sessions interface {
 	// Put stores s. It returns namespace.ErrFenced for a stale fence,
 	// namespace.ErrNotFound for an unknown namespace, ErrNotFound for a
 	// root profile that is not a live profile of the namespace,
-	// ErrSessionLimit when the owner already holds MaxLiveSessions live
-	// sessions at the start of s, ErrConflict for an ID in use,
+	// ErrConflict for an ID in use,
 	// audit.ErrInvalidEntry for an entry that fails validation or names
 	// another namespace, and ErrInvalid for the zero Session and for an
 	// empty slice of entries. It changes nothing on an error.

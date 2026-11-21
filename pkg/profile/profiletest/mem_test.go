@@ -410,18 +410,6 @@ func (s memSessions) Put(ctx context.Context, sess profile.Session, f namespace.
 		return err
 	}
 
-	live := 0
-
-	for _, other := range s.m.sessions[sess.Namespace()] {
-		if other.Owner() == sess.Owner() && other.Live(sess.CreatedAt()) {
-			live++
-		}
-	}
-
-	if live >= profile.MaxLiveSessions {
-		return profile.ErrSessionLimit
-	}
-
 	if _, used := s.m.sessions[sess.Namespace()][sess.ID()]; used {
 		return profile.ErrConflict
 	}
