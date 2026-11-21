@@ -19,6 +19,7 @@ func TestClaimFromRowRefusesDamagedRows(t *testing.T) {
 	good := codec.ClaimRow{
 		ID: "clm-1", WorkspaceID: "ws-1", Base: "sv-1", Addresses: `["a","b"]`, Principal: "ada", JobID: "job-1",
 		TriggerName: "", State: "accepted", StartedAtMs: 1_700_000_000_000, EndedAtMs: 0,
+		LeaseEndsAtMs: 0, RenewedAtMs: 0,
 	}
 
 	claim, err := codec.ClaimFromRow(good)
@@ -28,6 +29,15 @@ func TestClaimFromRowRefusesDamagedRows(t *testing.T) {
 
 	if claim.State != workspace.ClaimAccepted || len(claim.Addresses) != 2 || !claim.EndedAt.IsZero() {
 		t.Fatalf("claim = %+v, want an accepted claim with two addresses and no end time", claim)
+	}
+
+	wrapper := good
+	wrapper.JobID, wrapper.LeaseEndsAtMs, wrapper.RenewedAtMs = "", 1_700_000_090_000, 1_700_000_030_000
+
+	got, err := codec.ClaimFromRow(wrapper)
+	if err != nil || got.LeaseEndsAt.UnixMilli() != wrapper.LeaseEndsAtMs ||
+		got.RenewedAt.UnixMilli() != wrapper.RenewedAtMs {
+		t.Fatalf("wrapper row = %+v, %v, want its lease and renewal time", got, err)
 	}
 
 	for _, c := range []struct {
@@ -51,6 +61,11 @@ func TestClaimFromRowRefusesDamagedRows(t *testing.T) {
 		{"ended claim with no end time", func(r *codec.ClaimRow) { r.State = "ended"; r.EndedAtMs = 0 }},
 		{"empty principal", func(r *codec.ClaimRow) { r.Principal = "" }},
 		{"empty base", func(r *codec.ClaimRow) { r.Base = "" }},
+		{"empty ID", func(r *codec.ClaimRow) { r.ID = "" }},
+		{"empty workspace", func(r *codec.ClaimRow) { r.WorkspaceID = "" }},
+		{"claim of a job with a lease", func(r *codec.ClaimRow) { r.LeaseEndsAtMs = 1 }},
+		{"claim with no job and no lease", func(r *codec.ClaimRow) { r.JobID = "" }},
+		{"claim of a job with a renewal", func(r *codec.ClaimRow) { r.RenewedAtMs = 1 }},
 	} {
 		row := good
 		c.mutate(&row)

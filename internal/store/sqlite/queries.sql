@@ -3514,13 +3514,14 @@ UPDATE workspace_claims SET state = 'ended', ended_at_ms = ? WHERE id = ? AND st
 -- The sequence number is the next one of the workspace. The caller holds the
 -- claim lock of the workspace, and the unique key refuses a repeat.
 INSERT INTO workspace_claims (
-    id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+    id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+    lease_ends_at_ms
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id),
     (SELECT COALESCE(MAX(c.seq), 0) + 1 FROM workspace_claims AS c WHERE c.workspace_id = sqlc.arg(workspace_id)),
     sqlc.arg(base), sqlc.arg(addresses), sqlc.arg(principal), sqlc.arg(job_id), sqlc.arg(trigger_name),
-    'accepted', sqlc.arg(started_at_ms), 0
+    'accepted', sqlc.arg(started_at_ms), 0, sqlc.arg(lease_ends_at_ms)
 );
 
 -- name: InsertWorkspaceClaimTouch :exec
@@ -3537,12 +3538,15 @@ VALUES (
 SELECT deleted_at_ms IS NOT NULL AS deleted FROM workspaces WHERE id = ?;
 
 -- name: ListExpiredWorkspaceClaims :many
--- The accepted claims of one namespace that started before the cutoff, with
--- the name of their workspace.
+-- The accepted claims of one namespace whose lease ended before the time now,
+-- oldest lease first, at most max_rows, with the name of their workspace. A
+-- claim with no lease (lease_ends_at_ms of 0) is never listed.
 SELECT c.id, c.workspace_id, c.job_id, w.name
 FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
-WHERE c.state = 'accepted' AND c.started_at_ms < sqlc.arg(cutoff_ms) AND w.namespace = sqlc.arg(namespace)
-ORDER BY c.workspace_id, c.seq;
+WHERE c.state = 'accepted' AND c.lease_ends_at_ms > 0 AND c.lease_ends_at_ms < sqlc.arg(now_ms)
+  AND w.namespace = sqlc.arg(namespace)
+ORDER BY c.lease_ends_at_ms, c.id
+LIMIT sqlc.arg(max_rows);
 
 -- name: ListJobWorkspaceClaims :many
 -- The accepted claims of one job in one namespace, with the name of their
@@ -3556,13 +3560,23 @@ ORDER BY c.workspace_id, c.seq;
 SELECT version_id, addresses FROM workspace_claim_touches WHERE workspace_id = ? ORDER BY seq;
 
 -- name: ListWorkspaceClaims :many
-SELECT id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+SELECT id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+       lease_ends_at_ms, renewed_at_ms
 FROM workspace_claims WHERE workspace_id = ? ORDER BY seq;
 
 -- name: LockWorkspaceForClaims :one
 -- The ID of a live workspace of a namespace. The write transaction of SQLite
 -- is the claim lock.
 SELECT id FROM workspaces WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
+
+-- name: RenewWorkspaceClaim :one
+-- Extends the lease of one accepted claim of one principal that has a lease
+-- and whose lease has not ended, and records the time of the renewal. It matches no row for any other claim.
+UPDATE workspace_claims SET lease_ends_at_ms = sqlc.arg(lease_ends_at_ms), renewed_at_ms = sqlc.arg(now_ms)
+WHERE id = sqlc.arg(id) AND workspace_id = sqlc.arg(workspace_id) AND principal = sqlc.arg(principal)
+  AND state = 'accepted' AND lease_ends_at_ms > sqlc.arg(now_ms)
+RETURNING id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+          lease_ends_at_ms, renewed_at_ms;
 
 -- name: AdvanceWorkspaceBlameCursor :execrows
 -- Moves the blame cursor of a workspace up to an ordinal. It changes nothing,

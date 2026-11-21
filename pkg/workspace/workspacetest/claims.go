@@ -3,6 +3,7 @@ package workspacetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,12 +82,23 @@ type claimWorld struct {
 	backend ClaimBackend
 	// registry is the registry under test, over the backend.
 	registry *workspace.ClaimRegistry
-	acme     namespace.Fence
-	other    namespace.Fence
+	// clock is the time of the registries, in Unix milliseconds. A case moves
+	// it with advance.
+	clock *atomic.Int64
+	acme  namespace.Fence
+	other namespace.Fence
 	// wsAcme is a workspace of acme, wsOther a workspace of other.
-	wsAcme, wsOther     workspace.ID
+	wsAcme, wsOther workspace.ID
+	// wsAcme2 is a second workspace of acme.
+	wsAcme2             workspace.ID
 	baseAcme, baseOther workspace.StateVersionID
 }
+
+// now is the clock of the registries of the world.
+func (w *claimWorld) now() time.Time { return time.UnixMilli(w.clock.Load()).UTC() }
+
+// advance moves the clock of the registries forward by d.
+func (w *claimWorld) advance(d time.Duration) { w.clock.Add(d.Milliseconds()) }
 
 // RunClaimStore runs the conformance suite of the claim port, and of the
 // claim registry over it, against the backends that newBackend returns. Every
@@ -110,11 +122,17 @@ func RunClaimStore(t *testing.T, newBackend ClaimBackendFactory) {
 		{"hostile claim records", claimHostileRecords},
 		{"rollback on a failing transaction", claimRollback},
 		{"release by job", claimReleaseByJob},
-		{"expire by cutoff", claimExpire},
+		{"lease set at register", claimLeaseAtRegister},
+		{"expire by lease end", claimExpire},
+		{"expire is bounded", claimExpireBounded},
+		{"renew a lease", claimRenew},
+		{"renew by a clock that is behind", claimRenewClockBack},
 		{"touched base", claimTouchedBase},
 		{"ended claim frees its addresses", claimEndedFrees},
 		{"lock taken after the pre-check", claimLockAfterPreCheck},
 		{"manual lock taken after the pre-check", claimManualAfterPreCheck},
+		{"manual lock: a phase before the lock passes it", claimManualPhaseBeforeLock},
+		{"manual lock: a phase after the lock does not pass it", claimManualPhaseAfterLock},
 		{"manual lock store that fails", claimManualFailsClosed},
 		{"soft-deleted workspace", claimDeletedWorkspace},
 		{"parallel registrations", claimParallel},
@@ -135,13 +153,17 @@ func newClaimWorld(t *testing.T, b ClaimBackend) *claimWorld {
 
 	var noFence namespace.Fence
 
+	clock := new(atomic.Int64)
+	clock.Store(claimNowMs)
+
 	w := &claimWorld{
-		backend: b, registry: nil, acme: noFence, other: noFence, wsAcme: "", wsOther: "",
+		backend: b, registry: nil, clock: clock, acme: noFence, other: noFence, wsAcme: "", wsOther: "", wsAcme2: "",
 		baseAcme: "", baseOther: "",
 	}
 
 	w.acme, w.wsAcme, w.baseAcme = seedClaimNamespace(t, b, "acme", "ws-acme", "sv-acme")
 	w.other, w.wsOther, w.baseOther = seedClaimNamespace(t, b, "other", "ws-other", "sv-other")
+	w.wsAcme2 = w.wsAcme + "-2"
 
 	r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
 		Workspaces: b,
@@ -149,7 +171,8 @@ func newClaimWorld(t *testing.T, b ClaimBackend) *claimWorld {
 		Deleted:    b,
 		Manual:     nil,
 		Store:      b,
-		Now:        claimNow,
+		Now:        w.now,
+		Lease:      0,
 	})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -160,8 +183,9 @@ func newClaimWorld(t *testing.T, b ClaimBackend) *claimWorld {
 	return w
 }
 
-// seedClaimNamespace creates one namespace, one workspace and one base state
-// version, and returns the fence, the workspace ID and the base ID.
+// seedClaimNamespace creates one namespace, two workspaces and a base state
+// version on each, and returns the fence, the ID of the first workspace and
+// its base ID.
 func seedClaimNamespace(
 	t *testing.T, b ClaimBackend, name string, wsID workspace.ID, base workspace.StateVersionID,
 ) (namespace.Fence, workspace.ID, workspace.StateVersionID) {
@@ -182,6 +206,28 @@ func seedClaimNamespace(
 
 	fence := ns.Fence()
 
+	createClaimWorkspace(t, b, &ns, &claimSeed{id: wsID, name: "network", base: base})
+	// A second workspace in the namespace: a case sends the claim of one
+	// workspace to the other.
+	createClaimWorkspace(t, b, &ns, &claimSeed{id: wsID + "-2", name: "network-2", base: base + "-2"})
+
+	return fence, wsID, base
+}
+
+// claimSeed names a workspace that a case creates, and the base version on it.
+type claimSeed struct {
+	id   workspace.ID
+	name workspace.Name
+	base workspace.StateVersionID
+}
+
+// createClaimWorkspace creates the workspace of seed in the namespace ns, and
+// its base state version.
+func createClaimWorkspace(t *testing.T, b ClaimBackend, ns *namespace.Namespace, seed *claimSeed) {
+	t.Helper()
+
+	fence, wsID, name, base := ns.Fence(), seed.id, seed.name, seed.base
+
 	w := workspace.Workspace{
 		NamespaceID:  ns.ID,
 		CreatedAt:    claimNow(),
@@ -192,7 +238,7 @@ func seedClaimNamespace(
 		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
 		Origin:       identity.StateOrigin{Job: "", Commit: ""},
 		ID:           wsID,
-		Ref:          workspace.Ref{Namespace: ns.Name, Name: workspace.Name("network")},
+		Ref:          workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:     1,
 	}
 
@@ -229,8 +275,6 @@ func seedClaimNamespace(
 	if err := b.CreateStateVersion(t.Context(), sv, fence, workspace.DefaultMaxPendingVersions); err != nil {
 		t.Fatalf("create base version %s: %v", base, err)
 	}
-
-	return fence, wsID, base
 }
 
 // claimEntry returns a valid audit entry of an accept in the namespace of the
@@ -361,6 +405,7 @@ func (w *claimWorld) claimRecord(id string) workspace.Claim {
 	return workspace.Claim{
 		ID: id, WorkspaceID: w.wsAcme, Base: w.baseAcme, Addresses: []string{"a"}, Principal: claimPrincipal,
 		JobID: claimJob1, Trigger: "", State: workspace.ClaimAccepted, StartedAt: claimNow(), EndedAt: time.Time{},
+		LeaseEndsAt: time.Time{}, RenewedAt: time.Time{},
 	}
 }
 
@@ -429,7 +474,7 @@ func claimRetry(t *testing.T, w *claimWorld) {
 
 	// The same job with another principal is not a retry: it overlaps.
 	req := w.request(claimJob1, "aws_instance.a")
-	req.Principal = "bob"
+	req.Principal = claimBob
 
 	if _, err := w.registry.Register(t.Context(), req, w.acme); !errors.Is(err, workspace.ErrClaimOverlap) {
 		t.Fatalf("same job, other principal = %v, want ErrClaimOverlap", err)
@@ -594,9 +639,20 @@ func claimStaleFence(t *testing.T, w *claimWorld) {
 			return endErr
 		}},
 		{"ExpireClaims", func() error {
-			_, expErr := w.backend.ExpireClaims(t.Context(), stale, claimNow().Add(time.Hour))
+			_, expErr := w.backend.ExpireClaims(t.Context(), stale, claimNow().Add(time.Hour), claimBatch)
 
 			return expErr
+		}},
+		{"RenewClaim", func() error {
+			_, renewErr := w.backend.RenewClaim(t.Context(), stale, workspace.ClaimRenewal{
+				Workspace: w.wsAcme,
+				ClaimID:   "clm-x",
+				Principal: claimPrincipal,
+				Now:       claimNow(),
+				Lease:     workspace.ClaimLease,
+			})
+
+			return renewErr
 		}},
 		{"AddClaimTouch", func() error {
 			return w.backend.AddClaimTouch(t.Context(), stale, w.wsAcme, claimTouchVersion, []string{"aws_instance.b"})
@@ -685,6 +741,19 @@ func (w *claimWorld) hostileRecordCases() []recordCase {
 		{
 			"workspace of another transaction",
 			func(c *workspace.Claim) { c.WorkspaceID = w.wsOther },
+			workspace.ErrClaimInvalid,
+		},
+		{
+			"lease on the claim of a job",
+			func(c *workspace.Claim) { c.LeaseEndsAt = claimNow().Add(workspace.ClaimLease) },
+			workspace.ErrClaimInvalid,
+		},
+		{"no lease on a claim with no job", func(c *workspace.Claim) { c.JobID = "" }, workspace.ErrClaimInvalid},
+		{
+			"renewal time at insert",
+			func(c *workspace.Claim) {
+				c.JobID, c.LeaseEndsAt, c.RenewedAt = "", claimNow().Add(workspace.ClaimLease), claimNow()
+			},
 			workspace.ErrClaimInvalid,
 		},
 		{"ended at insert", func(c *workspace.Claim) { c.State = workspace.ClaimEnded }, workspace.ErrClaimInvalid},
@@ -798,34 +867,300 @@ func claimReleaseByJob(t *testing.T, w *claimWorld) {
 	w.wantEndEntry(t, firstJobClaim, workspace.ClaimEndedByJob, claimJob1)
 }
 
+// registerWrapper registers a claim with no job, the claim of the local
+// wrapper, which has a lease.
+func (w *claimWorld) registerWrapper(t *testing.T, addresses ...string) workspace.Claim {
+	t.Helper()
+
+	return w.register(t, "", addresses...)
+}
+
+func claimLeaseAtRegister(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	wrapper := w.registerWrapper(t, "aws_instance.a")
+	jobClaim := w.register(t, claimJob1, "aws_instance.b")
+
+	if want := w.now().Add(workspace.ClaimLease); !wrapper.LeaseEndsAt.Equal(want) {
+		t.Fatalf("lease end of a claim with no job = %v, want %v", wrapper.LeaseEndsAt, want)
+	}
+
+	if !jobClaim.LeaseEndsAt.IsZero() {
+		t.Fatalf("lease end of a claim of a job = %v, want none", jobClaim.LeaseEndsAt)
+	}
+
+	stored := w.list(t, w.wsAcme)
+
+	for i := range stored {
+		if c := &stored[i]; (c.JobID == "") == c.LeaseEndsAt.IsZero() {
+			t.Fatalf("stored claim %+v: a claim with no job has a lease, and a claim of a job has none", *c)
+		}
+	}
+}
+
+const (
+	// claimLockHolder and claimLockReason are the holder and the reason of the
+	// manual locks of the cases.
+	claimLockHolder = "ops"
+	claimLockReason = "freeze"
+	// claimBob is a second person.
+	claimBob = "bob"
+	// claimBatch is a limit that no case reaches.
+	claimBatch = 10
+	// claimRenewAfter is the time from a registration to a renewal.
+	claimRenewAfter = 60 * time.Second
+)
+
 func claimExpire(t *testing.T, w *claimWorld) {
 	t.Helper()
 
-	first := w.register(t, claimJob1, "aws_instance.a")
+	wrapper := w.registerWrapper(t, "aws_instance.a")
+	jobClaim := w.register(t, claimJob1, "aws_instance.b")
 
+	// Each step moves the clock and runs the expiry in one namespace.
 	for _, c := range []struct {
-		name   string
-		fence  namespace.Fence
-		cutoff time.Time
-		want   int
+		name    string
+		advance time.Duration
+		fence   namespace.Fence
+		want    int
 	}{
-		// A cutoff at the start does not expire the claim: it started at it.
-		{"at the start", w.acme, first.StartedAt, 0},
-		// The cutoff of the other namespace does not reach this claim.
-		{"in the other namespace", w.other, first.StartedAt.Add(time.Hour), 0},
-		{"after the start", w.acme, first.StartedAt.Add(time.Minute), 1},
+		{"before the lease ends", workspace.ClaimLease - time.Second, w.acme, 0},
+		{"at the lease end", time.Second, w.acme, 0},
+		{"after the lease end, in the other namespace", time.Second, w.other, 0},
+		{"after the lease end", 0, w.acme, 1},
+		{"again", 0, w.acme, 0},
 	} {
-		if n, err := w.registry.ExpireStale(t.Context(), c.fence, c.cutoff); err != nil || n != c.want {
+		w.advance(c.advance)
+
+		if n, err := w.registry.ExpireLeases(t.Context(), c.fence, claimBatch); err != nil || n != c.want {
 			t.Fatalf("expire %s = %d, %v, want %d", c.name, n, err, c.want)
 		}
 	}
 
-	got := w.list(t, w.wsAcme)
-	if len(got) != 1 || got[0].State != workspace.ClaimEnded || got[0].EndedAt.IsZero() {
-		t.Fatalf("claims after expiry = %+v, want one ended claim with an end time", got)
+	// The claim of a job stays: only its job ends it. The wrapper claim ended
+	// with an end time and one audit entry of the expiry.
+	wantClaimState(t, w, wrapper.ID, workspace.ClaimEnded)
+	wantClaimState(t, w, jobClaim.ID, workspace.ClaimAccepted)
+	w.wantEndEntry(t, wrapper.ID, workspace.ClaimEndedByExpiry, "")
+
+	// The expired claim frees its addresses.
+	again := w.registerWrapper(t, "aws_instance.a")
+	if again.ID == wrapper.ID || again.State != workspace.ClaimAccepted {
+		t.Fatalf("claim on the freed address = %+v, want a new accepted claim", again)
+	}
+}
+
+// wantClaimState fails the test unless the claim id has the state want.
+func wantClaimState(t *testing.T, w *claimWorld, id string, want workspace.ClaimState) {
+	t.Helper()
+
+	list := w.list(t, w.wsAcme)
+	for i := range list {
+		if list[i].ID == id {
+			if list[i].State != want {
+				t.Fatalf("claim %s is %s, want %s", id, list[i].State, want)
+			}
+
+			return
+		}
 	}
 
-	w.wantEndEntry(t, first.ID, workspace.ClaimEndedByExpiry, claimJob1)
+	t.Fatalf("claim %s is not on the workspace", id)
+}
+
+func claimExpireBounded(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	const total = 5
+
+	for i := range total {
+		w.registerWrapper(t, fmt.Sprintf("aws_instance.n%d", i))
+	}
+
+	w.advance(workspace.ClaimLease + time.Second)
+
+	for _, c := range []struct {
+		limit int
+		want  int
+	}{
+		{0, 0}, {-1, 0}, {2, 2}, {2, 2}, {2, 1}, {2, 0},
+	} {
+		if n, err := w.registry.ExpireLeases(t.Context(), w.acme, c.limit); err != nil || n != c.want {
+			t.Fatalf("expire with limit %d = %d, %v, want %d", c.limit, n, err, c.want)
+		}
+	}
+}
+
+// storedClaim returns the claim id of the workspace acme as the store lists it.
+func (w *claimWorld) storedClaim(t *testing.T, id string) workspace.Claim {
+	t.Helper()
+
+	list, err := w.registry.List(t.Context(), w.wsAcme)
+	if err != nil {
+		t.Fatalf("list claims: %v", err)
+	}
+
+	for i := range list {
+		if list[i].ID == id {
+			return list[i]
+		}
+	}
+
+	t.Errorf("the list misses claim %s", id)
+
+	var none workspace.Claim
+
+	return none
+}
+
+// renew renews claim id of workspace ws for the principal and returns the
+// error of the registry.
+func (w *claimWorld) renew(t *testing.T, ws workspace.ID, id, principal string) error {
+	t.Helper()
+
+	_, err := w.registry.Renew(t.Context(), ws, id, principal, w.acme)
+
+	return err
+}
+
+// wantStored fails the test unless the store holds the claim with the end of
+// the lease and the time of the renewal of want.
+func (w *claimWorld) wantStored(t *testing.T, want *workspace.Claim) {
+	t.Helper()
+
+	got := w.storedClaim(t, want.ID)
+	if !got.RenewedAt.Equal(want.RenewedAt) || !got.LeaseEndsAt.Equal(want.LeaseEndsAt) {
+		t.Fatalf("stored claim = %+v, want lease %v renewed %v", got, want.LeaseEndsAt, want.RenewedAt)
+	}
+}
+
+func claimRenew(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	claim := w.registerWrapper(t, "aws_instance.a")
+	jobClaim := w.register(t, claimJob1, "aws_instance.b")
+
+	// A renewal 60 seconds in extends the lease to 90 seconds from then.
+	w.advance(claimRenewAfter)
+
+	renewed, err := w.registry.Renew(t.Context(), w.wsAcme, claim.ID, claimPrincipal, w.acme)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+
+	w.wantRenewed(t, &claim, &renewed)
+
+	// Past the first lease end and inside the second: the claim lives.
+	w.advance(claimRenewAfter)
+
+	if n, expErr := w.registry.ExpireLeases(t.Context(), w.acme, claimBatch); expErr != nil || n != 0 {
+		t.Fatalf("expire after a renewal = %d, %v, want 0", n, expErr)
+	}
+
+	w.wantRenewalsRefused(t, claim.ID, jobClaim.ID)
+
+	// A refused renewal changes nothing: neither the lease nor the time of the
+	// last renewal of the claim.
+	w.wantStored(t, &renewed)
+
+	if got := w.storedClaim(t, jobClaim.ID); !got.LeaseEndsAt.IsZero() || !got.RenewedAt.IsZero() {
+		t.Fatalf("stored claim of a job = %+v, want no lease and no renewal", got)
+	}
+
+	w.wantNoRenewalAfterTheLease(t, claim.ID)
+}
+
+// claimRenewClockBack proves that a claim that one instance ended is not
+// renewed by an instance whose clock is behind: the clock reads a time before
+// the end of the lease, and the claim is ended, so the renewal is refused.
+func claimRenewClockBack(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	claim := w.registerWrapper(t, "aws_instance.a")
+
+	w.advance(workspace.ClaimLease + time.Second)
+
+	if n, err := w.registry.ExpireLeases(t.Context(), w.acme, claimBatch); err != nil || n != 1 {
+		t.Fatalf("expire = %d, %v, want 1", n, err)
+	}
+
+	w.advance(-2 * time.Second)
+
+	if err := w.renew(t, w.wsAcme, claim.ID, claimPrincipal); !errors.Is(err, workspace.ErrClaimEnded) {
+		t.Fatalf("renew of an ended claim by a clock that is behind = %v, want ErrClaimEnded", err)
+	}
+
+	if got := w.storedClaim(t, claim.ID); got.State != workspace.ClaimEnded || !got.RenewedAt.IsZero() {
+		t.Fatalf("stored claim = %+v, want an ended claim that no one renewed", got)
+	}
+}
+
+// wantRenewed checks the claim that a renewal returned and the stored claim:
+// the lease runs one lease from the time of the renewal, and the time of the
+// renewal is set.
+func (w *claimWorld) wantRenewed(t *testing.T, before, renewed *workspace.Claim) {
+	t.Helper()
+
+	wantEnd := w.now().Add(workspace.ClaimLease)
+	if !renewed.LeaseEndsAt.Equal(wantEnd) || !renewed.LeaseEndsAt.After(before.LeaseEndsAt) {
+		t.Fatalf(
+			"lease end after the renewal = %v, want %v, after %v",
+			renewed.LeaseEndsAt,
+			wantEnd,
+			before.LeaseEndsAt,
+		)
+	}
+
+	if !before.RenewedAt.IsZero() || !renewed.RenewedAt.Equal(w.now()) {
+		t.Fatalf("renewal time = %v before, %v after, want none and %v", before.RenewedAt, renewed.RenewedAt, w.now())
+	}
+
+	// The store keeps the end of the lease and the time of the renewal.
+	w.wantStored(t, renewed)
+}
+
+// wantRenewalsRefused sends the hostile renewals: another principal, an
+// unknown claim, a claim of a job, and a claim on another workspace.
+func (w *claimWorld) wantRenewalsRefused(t *testing.T, claimID, jobClaimID string) {
+	t.Helper()
+
+	for _, c := range []struct {
+		name      string
+		ws        workspace.ID
+		id        string
+		principal string
+		want      error
+	}{
+		{"another principal", w.wsAcme, claimID, claimBob, workspace.ErrClaimNotFound},
+		{"unknown claim", w.wsAcme, "clm-unknown", claimPrincipal, workspace.ErrClaimNotFound},
+		{"claim of a job", w.wsAcme, jobClaimID, claimPrincipal, workspace.ErrClaimInvalid},
+		{"claim on a workspace of another namespace", w.wsOther, claimID, claimPrincipal, workspace.ErrClaimNotFound},
+		{"claim on another workspace of the namespace", w.wsAcme2, claimID, claimPrincipal, workspace.ErrClaimNotFound},
+	} {
+		if err := w.renew(t, c.ws, c.id, c.principal); !errors.Is(err, c.want) {
+			t.Errorf("renew of %s = %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+// wantNoRenewalAfterTheLease proves that a lease that ended is gone, before
+// and after the expiry runs.
+func (w *claimWorld) wantNoRenewalAfterTheLease(t *testing.T, claimID string) {
+	t.Helper()
+
+	w.advance(workspace.ClaimLease)
+
+	if err := w.renew(t, w.wsAcme, claimID, claimPrincipal); !errors.Is(err, workspace.ErrClaimEnded) {
+		t.Fatalf("renew after the lease end = %v, want ErrClaimEnded", err)
+	}
+
+	if n, err := w.registry.ExpireLeases(t.Context(), w.acme, claimBatch); err != nil || n != 1 {
+		t.Fatalf("expire after the lease end = %d, %v, want 1", n, err)
+	}
+
+	if err := w.renew(t, w.wsAcme, claimID, claimPrincipal); !errors.Is(err, workspace.ErrClaimEnded) {
+		t.Fatalf("renew of an ended claim = %v, want ErrClaimEnded", err)
+	}
 }
 
 func claimTouchedBase(t *testing.T, w *claimWorld) {
@@ -951,6 +1286,8 @@ func (s *hookClaimStore) WithClaims(
 type switchManual struct {
 	on  atomic.Bool
 	err error
+	// phase is when the phase of any job started, or the zero time.
+	phase time.Time
 }
 
 func (m *switchManual) CoveringFor(context.Context, manuallock.Unit, string) (manuallock.Lock, error) {
@@ -961,7 +1298,12 @@ func (m *switchManual) CoveringFor(context.Context, manuallock.Unit, string) (ma
 	}
 
 	if m.on.Load() {
-		return manuallock.Lock{Since: claimNow(), Target: noTarget(), Holder: "ops", Reason: "freeze"}, nil
+		return manuallock.Lock{
+			Since:  claimNow(),
+			Target: noTarget(),
+			Holder: claimLockHolder,
+			Reason: claimLockReason,
+		}, nil
 	}
 
 	var none manuallock.Lock
@@ -982,9 +1324,7 @@ func (m *switchManual) NamespaceLockFor(
 }
 
 func (m *switchManual) PhaseStart(context.Context, manuallock.Unit, string) time.Time {
-	var none time.Time
-
-	return none
+	return m.phase
 }
 
 // registryOver returns a registry over the world backend, with the store st
@@ -997,7 +1337,8 @@ func (w *claimWorld) registryOver(
 	t.Helper()
 
 	r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
-		Workspaces: w.backend, Versions: w.backend, Deleted: w.backend, Manual: manual, Store: st, Now: claimNow,
+		Workspaces: w.backend, Versions: w.backend, Deleted: w.backend, Manual: manual, Store: st, Now: w.now,
+		Lease: 0,
 	})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -1020,7 +1361,7 @@ func claimLockAfterPreCheck(t *testing.T, w *claimWorld) {
 			return
 		}
 
-		ws.Lock = workspace.Lock{LockedAt: claimNow(), ID: "lock-1", Holder: "bob", Reason: "plan"}
+		ws.Lock = workspace.Lock{LockedAt: claimNow(), ID: "lock-1", Holder: claimBob, Reason: "plan"}
 		ws.Revision++
 
 		if err = w.backend.SaveWorkspace(t.Context(), ws, w.acme); err != nil {
@@ -1043,11 +1384,37 @@ func claimLockAfterPreCheck(t *testing.T, w *claimWorld) {
 func claimManualAfterPreCheck(t *testing.T, w *claimWorld) {
 	t.Helper()
 
-	manual := &switchManual{on: atomic.Bool{}, err: nil}
+	w.registerAfterManualLock(t, time.Time{}, workspace.ErrClaimLocked)
+}
+
+// claimManualPhaseBeforeLock proves the rule of the phase under the claim lock:
+// a job whose phase started before the lock passes it.
+func claimManualPhaseBeforeLock(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	w.registerAfterManualLock(t, claimNow().Add(-time.Hour), nil)
+}
+
+// claimManualPhaseAfterLock proves the other half: a job whose phase started
+// after the lock does not pass it.
+func claimManualPhaseAfterLock(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	w.registerAfterManualLock(t, claimNow().Add(time.Hour), workspace.ErrClaimLocked)
+}
+
+// registerAfterManualLock registers a claim of a job whose phase started at
+// phase, while a hook puts a manual lock of the namespace after the checks that
+// run before the transaction. It fails the test unless the register ends with
+// want, and the workspace holds a claim only when want is nil.
+func (w *claimWorld) registerAfterManualLock(t *testing.T, phase time.Time, want error) {
+	t.Helper()
+
+	manual := &switchManual{on: atomic.Bool{}, err: nil, phase: phase}
 
 	hook := &hookClaimStore{ClaimStore: w.backend, before: func() {
 		target := manuallock.NamespaceTarget(w.acme.Namespace)
-		l := manuallock.Lock{Since: claimNow(), Target: target, Holder: "ops", Reason: "freeze"}
+		l := manuallock.Lock{Since: claimNow(), Target: target, Holder: claimLockHolder, Reason: claimLockReason}
 
 		if err := w.backend.PutLock(t.Context(), l, w.acme, claimEntry(w.acme)); err != nil {
 			t.Errorf("put the manual lock: %v", err)
@@ -1061,8 +1428,18 @@ func claimManualAfterPreCheck(t *testing.T, w *claimWorld) {
 	req := w.request(claimJob1, "aws_instance.a")
 
 	_, err := r.Register(t.Context(), req, w.acme)
-	if !errors.Is(err, workspace.ErrClaimLocked) {
-		t.Fatalf("register after the manual lock = %v, want ErrClaimLocked", err)
+	if want == nil {
+		if err != nil {
+			t.Fatalf("register of a phase before the manual lock = %v, want nil", err)
+		}
+
+		w.wantCount(t, w.wsAcme, 1)
+
+		return
+	}
+
+	if !errors.Is(err, want) {
+		t.Fatalf("register after the manual lock = %v, want %v", err, want)
 	}
 
 	w.wantCount(t, w.wsAcme, 0)
@@ -1073,7 +1450,7 @@ var errClaimManual = errors.New("the manual lock store does not answer")
 func claimManualFailsClosed(t *testing.T, w *claimWorld) {
 	t.Helper()
 
-	r := w.registryOver(t, w.backend, &switchManual{on: atomic.Bool{}, err: errClaimManual})
+	r := w.registryOver(t, w.backend, &switchManual{on: atomic.Bool{}, err: errClaimManual, phase: time.Time{}})
 
 	req := w.request(claimJob1, "aws_instance.a")
 

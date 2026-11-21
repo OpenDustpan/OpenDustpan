@@ -40,13 +40,24 @@ func NewMemoryClaimBackend() *MemoryClaimBackend {
 		deleted:          make(map[workspace.ID]bool),
 	}
 	b.MemoryClaimStore = workspace.NewMemoryClaimStore(b)
-	b.SetManualLocked(func(ctx context.Context, ws workspace.ID) bool {
+	b.SetManualLocks(func(ctx context.Context, ws workspace.ID) []manuallock.Lock {
 		w, err := b.GetWorkspaceByID(ctx, ws)
 
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		return err == nil && b.locked[w.Ref.Namespace]
+		if err != nil || !b.locked[w.Ref.Namespace] {
+			return nil
+		}
+
+		return []manuallock.Lock{
+			{
+				Since:  claimNow(),
+				Target: manuallock.NamespaceTarget(w.Ref.Namespace),
+				Holder: claimLockHolder,
+				Reason: claimLockReason,
+			},
+		}
 	})
 
 	return b

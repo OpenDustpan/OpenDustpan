@@ -23,6 +23,9 @@ const (
 	// PathWorkspaceClaims registers and lists the apply claims of one
 	// workspace, by its stable workspace ID.
 	PathWorkspaceClaims = "/runner/v1/workspaces/{id}/claims"
+	// PathWorkspaceClaimRenew renews the lease of one claim of the local
+	// wrapper, by its stable claim ID.
+	PathWorkspaceClaimRenew = "/runner/v1/workspaces/{id}/claims/{claimID}/renew"
 )
 
 // maxClaimAddresses bounds the address set of one register call. A longer
@@ -56,12 +59,15 @@ func (h *Handler) claimRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Serve:   h.listClaims,
 		},
+		{
+			Method:  http.MethodPost,
+			Path:    PathWorkspaceClaimRenew,
+			Scope:   ScopeJobToken,
+			Actions: []identity.Action{identity.ActionUnitClaimRegister},
+			Serve:   h.renewClaim,
+		},
 	}
 }
-
-// errClaimForbidden reports a caller without the action on the workspace.
-// The answer names the missing action on the workspace.
-var errClaimForbidden = errors.New("the caller lacks the action on the workspace")
 
 // claimTarget is the workspace of a claims call: its stable ID, its unit
 // object for authorization and token binding, and the fence of its
@@ -112,6 +118,12 @@ type claimResponse struct {
 	State       string     `json:"state"`
 	StartedAt   time.Time  `json:"startedAt"`
 	EndedAt     *time.Time `json:"endedAt,omitempty"`
+	// LeaseEndsAt is when the lease of a claim with no job ends. A claim of a
+	// job has none.
+	LeaseEndsAt *time.Time `json:"leaseEndsAt,omitempty"`
+	// RenewedAt is when the wrapper last renewed the lease. A claim that no
+	// one renewed has none.
+	RenewedAt *time.Time `json:"renewedAt,omitempty"`
 }
 
 // claimListResponse lists the claims of a workspace in accept order.
@@ -148,7 +160,7 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 		return
 	}
 
-	if bindErr := caller.bindRegister(target, req.JobID); bindErr != nil {
+	if bindErr := caller.bindList(target); bindErr != nil {
 		h.writeError(ctx, w, bindErr)
 
 		return
@@ -156,14 +168,16 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 
 	wsID, unit, fence := target.id, target.unit, target.fence
 
-	authErr := h.authorizer.Authorize(ctx, caller.principal, identity.ActionUnitClaimRegister, unit)
-	if authErr != nil {
-		h.writeError(ctx, w, fmt.Errorf(
-			"%w: unit:claim-register on %s: %w",
-			errClaimForbidden,
-			unit,
-			authErr,
-		))
+	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitClaimRegister, unit); authErr != nil {
+		h.writeError(ctx, w, authErr)
+
+		return
+	}
+
+	// The job comes after the action: a caller without the action learns
+	// nothing about the workspace from a refusal of its job.
+	if jobErr := caller.bindJob(req.JobID); jobErr != nil {
+		h.writeError(ctx, w, jobErr)
 
 		return
 	}
@@ -186,6 +200,54 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 	}
 
 	h.writeJSON(ctx, w, http.StatusCreated, newClaimResponse(claim))
+}
+
+// renewClaim serves POST on the renew path: the local wrapper extends the
+// lease of its claim. The guards run in this order: the credential (401), the
+// workspace (404, 410), the action (404, as for a workspace that does not exist), then the claim of the principal
+// (404) and its state (409). A job token is refused with the answer for a
+// claim that is not known: the claim of a job has no lease and ends with its
+// job.
+func (h *Handler) renewClaim(w http.ResponseWriter, r *http.Request, _ *call) {
+	ctx := r.Context()
+
+	caller, err := h.authenticateClaimCaller(ctx, r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	target, err := h.claimWorkspace(ctx, r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// Defense in depth: the registry also refuses a claim of a job, and the
+	// principal check of the store also refuses a job token. This check stays
+	// so that a job token never reaches the registry on this route.
+	if caller.viaJobToken {
+		h.writeError(ctx, w, fmt.Errorf("%w: a job token renews no claim", workspace.ErrClaimNotFound))
+
+		return
+	}
+
+	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitClaimRegister, target.unit); authErr != nil {
+		h.writeError(ctx, w, authErr)
+
+		return
+	}
+
+	claim, err := h.claims.Renew(ctx, target.id, r.PathValue("claimID"), caller.principal.Subject, target.fence)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, newClaimResponse(claim))
 }
 
 // decodeRegisterBody decodes a register body and bounds it: an unknown
@@ -251,13 +313,8 @@ func (h *Handler) listClaims(w http.ResponseWriter, r *http.Request, _ *call) {
 
 	wsID, unit := target.id, target.unit
 
-	if authErr := h.authorizer.Authorize(ctx, caller.principal, identity.ActionUnitRead, unit); authErr != nil {
-		h.writeError(ctx, w, fmt.Errorf(
-			"%w: unit:read on %s: %w",
-			errClaimForbidden,
-			unit,
-			authErr,
-		))
+	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitRead, unit); authErr != nil {
+		h.writeError(ctx, w, authErr)
 
 		return
 	}
@@ -397,16 +454,16 @@ func (c claimCaller) bindList(target claimTarget) error {
 	return nil
 }
 
-// bindRegister checks the caller of a register call against the workspace
-// and the job. A job token must name the stable ID of the workspace and its
-// own job: an empty or another job is refused, so no claim is stored without
-// a job that ends it. An access token registers no job claim.
+// bindJob checks the job of a register call against the caller. A job token
+// must name its own job: an empty or another job is refused, so no claim is
+// stored without a job that ends it. An access token registers no job claim.
+// The caller has passed bindList and the check of the action first.
 //
 // Defense in depth: the token service binds the token to its job and unit,
 // and the registry refuses a job-token claim with no job. These checks stay
-// so that a new caller cannot use a token on another workspace or job, and
-// they do not rely on the other layers.
-func (c claimCaller) bindRegister(target claimTarget, jobID string) error {
+// so that a new caller cannot use a token on another job, and they do not rely
+// on the other layers.
+func (c claimCaller) bindJob(jobID string) error {
 	if !c.viaJobToken {
 		if jobID != "" {
 			return fmt.Errorf("%w: an access token registers no job claim", errClaimJobMismatch)
@@ -415,15 +472,30 @@ func (c claimCaller) bindRegister(target claimTarget, jobID string) error {
 		return nil
 	}
 
-	if err := c.bindList(target); err != nil {
-		return err
-	}
-
 	if jobID == "" || c.principal.JobID != jobID {
 		return fmt.Errorf("%w: the token names job %q", errClaimJobMismatch, c.principal.JobID)
 	}
 
 	return nil
+}
+
+// authorizeClaim checks that the caller may do action on the unit. A caller
+// that lacks the action gets the answer for a workspace that does not exist
+// (404): a 403 would tell a caller with a valid credential that the workspace
+// exists. A failure of the authorizer is not a denial and is not hidden.
+func (h *Handler) authorizeClaim(
+	ctx context.Context, caller *claimCaller, action identity.Action, unit identity.Object,
+) error {
+	err := h.authorizer.Authorize(ctx, caller.principal, action, unit)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, identity.ErrDenied):
+		return fmt.Errorf("%w: the caller lacks %s on the workspace", workspace.ErrClaimNotFound, action)
+	default:
+		return fmt.Errorf("authorize %s: %w", action, err)
+	}
 }
 
 // newClaimResponse renders a stored claim for the wire.
@@ -439,12 +511,26 @@ func newClaimResponse(claim workspace.Claim) claimResponse {
 		State:       string(claim.State),
 		StartedAt:   claim.StartedAt,
 		EndedAt:     nil,
+		LeaseEndsAt: nil,
+		RenewedAt:   nil,
 	}
 
 	if !claim.EndedAt.IsZero() {
 		ended := claim.EndedAt
 
 		out.EndedAt = &ended
+	}
+
+	if !claim.LeaseEndsAt.IsZero() {
+		lease := claim.LeaseEndsAt
+
+		out.LeaseEndsAt = &lease
+	}
+
+	if !claim.RenewedAt.IsZero() {
+		renewed := claim.RenewedAt
+
+		out.RenewedAt = &renewed
 	}
 
 	return out

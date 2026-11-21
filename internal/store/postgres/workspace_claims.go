@@ -86,19 +86,16 @@ func (t *workspaceClaimTx) Workspace(ctx context.Context) (workspace.Workspace, 
 	return w, nil
 }
 
-// ManualLocked implements workspace.ClaimTx. A workspace that the inventory
-// does not hold is an error, so the check fails closed.
-func (t *workspaceClaimTx) ManualLocked(ctx context.Context) (bool, error) {
+// ManualLocks implements workspace.ClaimTx. It reads the locks through the
+// queries of the transaction, never through the lock service. A workspace that
+// the inventory does not hold is an error, so the check fails closed.
+func (t *workspaceClaimTx) ManualLocks(ctx context.Context) ([]manuallock.Lock, error) {
 	locks, err := coveringLocksOfUnitID(ctx, t.q, t.fence.Namespace, t.ws.String())
-
-	switch {
-	case errors.Is(err, manuallock.ErrNotLocked):
-		return false, nil
-	case err != nil:
-		return false, err
-	default:
-		return len(locks) > 0, nil
+	if errors.Is(err, manuallock.ErrNotLocked) {
+		return nil, nil
 	}
+
+	return locks, err
 }
 
 // Claims implements workspace.ClaimTx.
@@ -155,14 +152,15 @@ func (t *workspaceClaimTx) Insert(ctx context.Context, c workspace.Claim, entry 
 	}
 
 	err = t.q.InsertWorkspaceClaim(ctx, db.InsertWorkspaceClaimParams{
-		ID:          c.ID,
-		WorkspaceID: c.WorkspaceID.String(),
-		Base:        c.Base.String(),
-		Addresses:   addresses,
-		Principal:   c.Principal,
-		JobID:       c.JobID,
-		TriggerName: c.Trigger,
-		StartedAtMs: codec.Millis(c.StartedAt),
+		ID:            c.ID,
+		WorkspaceID:   c.WorkspaceID.String(),
+		Base:          c.Base.String(),
+		Addresses:     addresses,
+		Principal:     c.Principal,
+		JobID:         c.JobID,
+		TriggerName:   c.Trigger,
+		StartedAtMs:   codec.Millis(c.StartedAt),
+		LeaseEndsAtMs: codec.LeaseMillis(c.LeaseEndsAt),
 	})
 	if err != nil {
 		return fmt.Errorf("insert claim: %w", err)
@@ -228,12 +226,18 @@ func (s *Store) EndClaimsByJob(
 
 // ExpireClaims implements workspace.ClaimStore. Each ended claim writes an
 // audit entry in the same transaction.
-func (s *Store) ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff time.Time) (int, error) {
+func (s *Store) ExpireClaims(
+	ctx context.Context, fence namespace.Fence, now time.Time, limit int,
+) (int, error) {
+	if limit < 1 {
+		return 0, nil
+	}
+
 	var n int
 
 	err := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		rows, listErr := q.ListExpiredWorkspaceClaims(ctx, db.ListExpiredWorkspaceClaimsParams{
-			CutoffMs: codec.Millis(cutoff), Namespace: fence.Namespace.String(),
+			NowMs: codec.Millis(now), Namespace: fence.Namespace.String(), MaxRows: int64(limit),
 		})
 		if listErr != nil {
 			return fmt.Errorf("select expired claims: %w", listErr)
@@ -246,13 +250,7 @@ func (s *Store) ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff 
 
 		var endErr error
 
-		n, endErr = endClaims(
-			ctx,
-			q,
-			fence.Namespace,
-			ending,
-			claimEnd{at: cutoff, cause: workspace.ClaimEndedByExpiry},
-		)
+		n, endErr = endClaims(ctx, q, fence.Namespace, ending, claimEnd{at: now, cause: workspace.ClaimEndedByExpiry})
 
 		return endErr
 	})
@@ -261,6 +259,71 @@ func (s *Store) ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff 
 	}
 
 	return n, nil
+}
+
+// RenewClaim implements workspace.ClaimStore. It runs under the claim lock of
+// the workspace, so a renewal and an expiry of one claim run one after the
+// other. The update statement holds the rules itself (the workspace, the
+// principal, the state and a lease that did not end) and returns the claim, so
+// a claim that the rules refuse is not changed; the check of the rules only
+// chooses the error.
+func (s *Store) RenewClaim(
+	ctx context.Context, fence namespace.Fence, r workspace.ClaimRenewal,
+) (workspace.Claim, error) {
+	var out workspace.Claim
+
+	err := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+		if lockErr := lockWorkspaceForClaims(ctx, q, r.Workspace, fence); lockErr != nil {
+			return lockErr
+		}
+
+		row, updErr := q.RenewWorkspaceClaim(ctx, db.RenewWorkspaceClaimParams{
+			LeaseEndsAtMs: codec.Millis(r.Now.Add(r.Lease)), ID: r.ClaimID, WorkspaceID: r.Workspace.String(),
+			Principal: r.Principal, NowMs: codec.Millis(r.Now),
+		})
+		if updErr == nil {
+			claim, convErr := codec.ClaimFromRow(codec.ClaimRow(row))
+			out = claim
+
+			return convErr
+		}
+
+		if !errors.Is(updErr, sql.ErrNoRows) {
+			return fmt.Errorf("renew claim: %w", updErr)
+		}
+
+		return explainRefusedRenewal(ctx, q, r)
+	})
+	if err != nil {
+		return workspace.Claim{}, err
+	}
+
+	return out, nil
+}
+
+// explainRefusedRenewal returns the error for a renewal that changed no row:
+// the claim is not on the workspace, or the check of the rules names why the
+// statement refused it. It fails closed: a claim that the check accepts,
+// although the statement did not renew it, is an ended claim.
+func explainRefusedRenewal(ctx context.Context, q *db.Queries, r workspace.ClaimRenewal) error {
+	claims, err := readWorkspaceClaims(ctx, q, r.Workspace)
+	if err != nil {
+		return err
+	}
+
+	for i := range claims {
+		if claims[i].ID != r.ClaimID {
+			continue
+		}
+
+		if checkErr := workspace.CheckRenewable(&claims[i], r); checkErr != nil {
+			return checkErr
+		}
+
+		return fmt.Errorf("%w: claim %s", workspace.ErrClaimEnded, r.ClaimID)
+	}
+
+	return fmt.Errorf("%w: claim %s", workspace.ErrClaimNotFound, r.ClaimID)
 }
 
 // claimEnd is when and why claims end.

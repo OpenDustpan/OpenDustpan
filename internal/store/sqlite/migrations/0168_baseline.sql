@@ -930,10 +930,14 @@ CREATE TABLE workspace_claims (
     state         TEXT    NOT NULL CHECK (state IN ('accepted', 'ended')),
     started_at_ms INTEGER NOT NULL,
     ended_at_ms   INTEGER NOT NULL DEFAULT 0,
+    lease_ends_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (lease_ends_at_ms >= 0),
+    renewed_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (renewed_at_ms >= 0),
     UNIQUE (workspace_id, seq)
 ) STRICT;
 
 CREATE INDEX workspace_claims_job ON workspace_claims (job_id) WHERE state = 'accepted';
+
+CREATE INDEX workspace_claims_lease ON workspace_claims (lease_ends_at_ms) WHERE state = 'accepted' AND lease_ends_at_ms > 0;
 
 CREATE TABLE workspace_resource_changes (
     workspace_id     TEXT    NOT NULL,

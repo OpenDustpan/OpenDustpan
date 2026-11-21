@@ -213,18 +213,6 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 		}, true
 	}
 
-	if errors.Is(err, errClaimForbidden) {
-		msg := errClaimForbidden.Error()
-
-		if denied, _ := errors.AsType[*identity.DeniedError](err); denied != nil {
-			msg = fmt.Sprintf("%s: %s on %s", errClaimForbidden, denied.Action, denied.Object)
-		}
-
-		return http.StatusForbidden, protocol.Error{
-			Code: protocol.ErrorForbidden, Message: msg, Supported: "",
-		}, true
-	}
-
 	for _, row := range []struct {
 		status    int
 		code      string
@@ -235,6 +223,7 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 			[]error{errClaimJobMismatch, identity.ErrDenied},
 		},
 		{http.StatusConflict, protocol.ErrorClaimClosureUnproven, []error{workspace.ErrClaimReplace}},
+		{http.StatusConflict, protocol.ErrorClaimEnded, []error{workspace.ErrClaimEnded}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimEmptySet, []error{workspace.ErrClaimEmptySet}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimBadBase, []error{workspace.ErrClaimBadBase}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimLocked, []error{workspace.ErrClaimLocked}},

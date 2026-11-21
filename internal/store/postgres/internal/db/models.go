@@ -1604,17 +1604,19 @@ type WorkspaceBlameItem struct {
 }
 
 type WorkspaceClaim struct {
-	ID          string
-	WorkspaceID string
-	Seq         int64
-	Base        string
-	Addresses   string
-	Principal   string
-	JobID       string
-	TriggerName string
-	State       string
-	StartedAtMs int64
-	EndedAtMs   int64
+	ID            string
+	WorkspaceID   string
+	Seq           int64
+	Base          string
+	Addresses     string
+	Principal     string
+	JobID         string
+	TriggerName   string
+	State         string
+	StartedAtMs   int64
+	EndedAtMs     int64
+	LeaseEndsAtMs int64
+	RenewedAtMs   int64
 }
 
 type WorkspaceClaimTouch struct {

@@ -744,7 +744,7 @@ func sqliteClaimBackupTables() []sqliteBackupTable {
 			table: backup.TableWorkspaceClaims,
 			columns: []string{
 				"id", backupColWorkspaceID, backupColSeq, "base", "addresses", "principal", "job_id", "trigger_name",
-				backupColState, "started_at_ms", backupColEndedAtMs,
+				backupColState, "started_at_ms", backupColEndedAtMs, "lease_ends_at_ms", "renewed_at_ms",
 			},
 		},
 	}

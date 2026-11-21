@@ -1735,9 +1735,13 @@ CREATE TABLE workspace_claims (
     state text NOT NULL,
     started_at_ms bigint NOT NULL,
     ended_at_ms bigint DEFAULT 0 NOT NULL,
+    lease_ends_at_ms bigint DEFAULT 0 NOT NULL,
+    renewed_at_ms bigint DEFAULT 0 NOT NULL,
     CONSTRAINT workspace_claims_base_check CHECK ((base <> ''::text)),
     CONSTRAINT workspace_claims_id_check CHECK ((id <> ''::text)),
+    CONSTRAINT workspace_claims_lease_ends_at_ms_check CHECK ((lease_ends_at_ms >= 0)),
     CONSTRAINT workspace_claims_principal_check CHECK ((principal <> ''::text)),
+    CONSTRAINT workspace_claims_renewed_at_ms_check CHECK ((renewed_at_ms >= 0)),
     CONSTRAINT workspace_claims_seq_check CHECK ((seq >= 1)),
     CONSTRAINT workspace_claims_state_check CHECK ((state = ANY (ARRAY['accepted'::text, 'ended'::text])))
 );
@@ -2501,6 +2505,8 @@ CREATE UNIQUE INDEX updates_one_running ON updates USING btree (stack_id) WHERE 
 CREATE INDEX used_tickets_until ON used_tickets USING btree (until_ms);
 
 CREATE INDEX workspace_claims_job ON workspace_claims USING btree (job_id) WHERE (state = 'accepted'::text);
+
+CREATE INDEX workspace_claims_lease ON workspace_claims USING btree (lease_ends_at_ms) WHERE ((state = 'accepted'::text) AND (lease_ends_at_ms > 0));
 
 CREATE INDEX workspace_resource_changes_address ON workspace_resource_changes USING btree (workspace_id, address, ordinal DESC);
 

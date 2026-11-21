@@ -123,6 +123,7 @@ func newClaimRegistry(cfg *settings, svc services, store workspace.ClaimStore) (
 		Manual:     manual,
 		Store:      store,
 		Now:        cfg.now,
+		Lease:      cfg.claimTiming.lease,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("claim registry: %w", err)

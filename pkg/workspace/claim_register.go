@@ -68,6 +68,12 @@ const MaxClaimAddresses = 10_000
 // MaxClaimAddressLength bounds one address of a claim, in bytes.
 const MaxClaimAddressLength = 1_024
 
+// ClaimLease is the lease of a claim that has no job: the claim of the local
+// wrapper. The wrapper renews it before it ends; a lease that nobody renews
+// ends the claim at the next run of the expiry. A claim of a runner job has no
+// lease: it lives as long as its job.
+const ClaimLease = 90 * time.Second
+
 // ClaimIDPrefix prefixes the stable ID of each apply claim.
 const ClaimIDPrefix = "clm-"
 
@@ -112,6 +118,12 @@ type Claim struct {
 	// EndedAt is when the job of the claim ended or its lease expired.
 	// It is zero while the claim is accepted.
 	EndedAt time.Time
+	// LeaseEndsAt is when the lease of a claim with no job ends. It is zero
+	// for the claim of a runner job, which ends with its job.
+	LeaseEndsAt time.Time
+	// RenewedAt is when the wrapper last renewed the lease. It is zero for a
+	// claim that no one renewed.
+	RenewedAt time.Time
 }
 
 // OverlapError is the refusal of a claim that shares an address with an
@@ -218,6 +230,9 @@ type ClaimRegistryConfig struct {
 	Store ClaimStore
 	// Now is the clock. Nil means the real time.
 	Now func() time.Time
+	// Lease is the lease of a claim with no job. Zero means ClaimLease. Only
+	// a test sets another value; no setting of a user reaches it.
+	Lease time.Duration
 }
 
 // ClaimRegistry checks each registration against the accepted claims of the
@@ -226,6 +241,7 @@ type ClaimRegistryConfig struct {
 // same accepted set. The domain rules live here; the store only persists.
 type ClaimRegistry struct {
 	now        func() time.Time
+	lease      time.Duration
 	workspaces ClaimWorkspaces
 	versions   ClaimVersions
 	deleted    ClaimDeleted
@@ -250,8 +266,14 @@ func NewClaimRegistry(cfg ClaimRegistryConfig) (*ClaimRegistry, error) {
 		now = time.Now
 	}
 
+	lease := cfg.Lease
+	if lease <= 0 {
+		lease = ClaimLease
+	}
+
 	return &ClaimRegistry{
 		now:        now,
+		lease:      lease,
 		workspaces: cfg.Workspaces,
 		versions:   cfg.Versions,
 		deleted:    cfg.Deleted,
@@ -298,8 +320,13 @@ func (r *ClaimRegistry) Register(
 
 	var out Claim
 
+	// The start of the phase of the job comes from the lock service, which has
+	// a store of its own: read it here, before the transaction, so that the
+	// check under the claim lock calls no service.
+	call := &registerCall{req: req, normalized: normalized, phaseStart: r.phaseStart(ctx, w, req.JobID)}
+
 	err = r.store.WithClaims(ctx, w.ID, fence, func(tx ClaimTx) error {
-		claim, txErr := r.registerIn(ctx, tx, w, req, normalized)
+		claim, txErr := r.registerIn(ctx, tx, w, call)
 		out = claim
 
 		return txErr
@@ -352,18 +379,40 @@ func (r *ClaimRegistry) ReleaseByJob(
 	return n, nil
 }
 
-// ExpireStale marks each accepted claim that started before the cutoff
-// ended, for lease expiry after a crash. It returns the count of claims it
-// ended.
-func (r *ClaimRegistry) ExpireStale(
-	ctx context.Context, fence namespace.Fence, cutoff time.Time,
-) (int, error) {
-	n, err := r.store.ExpireClaims(ctx, fence, cutoff)
+// ExpireLeases marks each accepted claim whose lease ended on the clock of the
+// registry as ended, in the namespace of the fence. It ends at most limit
+// claims, oldest lease first, so one run stays bounded; the next run ends the
+// rest. It returns the count of claims it ended.
+func (r *ClaimRegistry) ExpireLeases(ctx context.Context, fence namespace.Fence, limit int) (int, error) {
+	n, err := r.store.ExpireClaims(ctx, fence, r.now(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("expire claims: %w", err)
 	}
 
 	return n, nil
+}
+
+// Renew extends the lease of the claim of the workspace ws to ClaimLease from
+// now, for the principal that registered it. It returns the claim. It returns
+// an error that matches ErrClaimNotFound for a claim that does not exist on the
+// workspace or that another principal registered, ErrClaimEnded for a claim
+// that ended or whose lease ended, and ErrClaimInvalid for a claim of a job,
+// which has no lease.
+func (r *ClaimRegistry) Renew(
+	ctx context.Context, ws ID, claimID, principal string, fence namespace.Fence,
+) (Claim, error) {
+	claim, err := r.store.RenewClaim(ctx, fence, ClaimRenewal{
+		Workspace: ws, ClaimID: claimID, Principal: principal, Now: r.now(), Lease: r.lease,
+	})
+	if errors.Is(err, ErrNotFound) {
+		return Claim{}, fmt.Errorf("%w: claim %s: %w", ErrClaimNotFound, claimID, err)
+	}
+
+	if err != nil {
+		return Claim{}, fmt.Errorf("renew claim %s: %w", claimID, err)
+	}
+
+	return claim, nil
 }
 
 // NoteCommitted records that version id committed on the workspace with
@@ -380,13 +429,35 @@ func (r *ClaimRegistry) NoteCommitted(
 	return nil
 }
 
+// registerCall is what a register call carries into its transaction: the
+// request, its normalized set and the start of the phase of its job.
+type registerCall struct {
+	req        *RegisterClaimRequest
+	normalized []string
+	// phaseStart is when the phase of the job started, or the zero time.
+	phaseStart time.Time
+}
+
+// phaseStart returns when the phase of the job started on the workspace, for
+// the rule that a phase that started before a manual lock passes it. It is the
+// zero time, which passes no lock, without a lock service or a job.
+func (r *ClaimRegistry) phaseStart(ctx context.Context, w Workspace, jobID string) time.Time {
+	if r.manual == nil || jobID == "" {
+		return time.Time{}
+	}
+
+	return r.manual.PhaseStart(ctx, manuallockUnit(w), jobID)
+}
+
 // registerIn runs the claim rules inside the transaction tx: a retry of the
 // same job returns its claim, a set that shares an address with an accepted
 // claim or a touch is refused, and any other set is stored.
 func (r *ClaimRegistry) registerIn(
-	ctx context.Context, tx ClaimTx, w Workspace, req *RegisterClaimRequest, normalized []string,
+	ctx context.Context, tx ClaimTx, w Workspace, call *registerCall,
 ) (Claim, error) {
-	if err := r.checkLocksIn(ctx, tx, req); err != nil {
+	req, normalized := call.req, call.normalized
+
+	if err := r.checkLocksIn(ctx, tx, call.phaseStart); err != nil {
 		return Claim{}, err
 	}
 
@@ -416,7 +487,7 @@ func (r *ClaimRegistry) registerIn(
 // came after the checks of checkRequest refuses the claim here. Defense in
 // depth: checkRequest reads the same locks before the transaction opens, to
 // refuse early; this check does not rely on it. A store error fails closed.
-func (r *ClaimRegistry) checkLocksIn(ctx context.Context, tx ClaimTx, req *RegisterClaimRequest) error {
+func (r *ClaimRegistry) checkLocksIn(ctx context.Context, tx ClaimTx, phaseStart time.Time) error {
 	w, err := tx.Workspace(ctx)
 	if err != nil {
 		return fmt.Errorf("read the workspace: %w", err)
@@ -430,18 +501,26 @@ func (r *ClaimRegistry) checkLocksIn(ctx context.Context, tx ClaimTx, req *Regis
 		return nil
 	}
 
-	locked, err := tx.ManualLocked(ctx)
+	locks, err := tx.ManualLocks(ctx)
 	if err != nil {
 		return fmt.Errorf("read the manual locks: %w", err)
 	}
 
-	if !locked {
+	// A job whose phase started before every lock passes them, as the rule of
+	// the lock service says. The rule is a function of the locks and the start
+	// time: this check calls no lock service under the claim lock, because the
+	// service reads its own store, and that read can wait for a lock that this
+	// transaction holds.
+	covering, err := manuallock.LockForPhase(locks, phaseStart)
+
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: manual lock of %q covers the workspace", ErrClaimLocked, covering.Holder)
+	case !errors.Is(err, manuallock.ErrNotLocked):
+		return fmt.Errorf("apply the rule of the phase to the manual locks: %w", err)
+	default:
 		return nil
 	}
-
-	// A manual lock covers the workspace now. A job whose phase started before
-	// the lock passes it, as the rule of the lock service says.
-	return r.checkManual(ctx, w, req.JobID)
 }
 
 // checkRequest checks a register request before the store transaction: the
@@ -561,7 +640,10 @@ func findClaimRetry(
 	for i := range claims {
 		stored := &claims[i]
 
-		if stored.JobID == jobID && stored.Principal == principal && stored.Base == base &&
+		// An ended claim is no claim to retry: a claim whose lease ended is
+		// registered again as a new claim.
+		if stored.State == ClaimAccepted && stored.JobID == jobID && stored.Principal == principal &&
+			stored.Base == base &&
 			slices.Equal(stored.Addresses, normalized) {
 			return *stored, true
 		}
@@ -612,6 +694,12 @@ func (r *ClaimRegistry) insert(
 		State:       ClaimAccepted,
 		StartedAt:   now,
 		EndedAt:     time.Time{},
+		LeaseEndsAt: time.Time{},
+		RenewedAt:   time.Time{},
+	}
+
+	if claim.JobID == "" {
+		claim.LeaseEndsAt = now.Add(r.lease)
 	}
 
 	entry := req.Audit

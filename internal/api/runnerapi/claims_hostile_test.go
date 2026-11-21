@@ -35,6 +35,21 @@ func (onlyAuthorizer) ListObjects(
 	return none, nil
 }
 
+// failingAuthorizer fails every call with a failure that is not a denial.
+type failingAuthorizer struct{}
+
+func (failingAuthorizer) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return errAuthorizerDown
+}
+
+func (failingAuthorizer) ScopeExact() bool { return false }
+
+func (failingAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	var none identity.Scope
+
+	return none, errAuthorizerDown
+}
+
 // claimCount returns the count of claims that the list shows, read with the
 // access token of the administrator.
 func (w *claimWorld) claimCount(t *testing.T) int {
@@ -147,14 +162,28 @@ func TestClaimHostileAccessAndActions(t *testing.T) {
 		}
 	})
 
+	t.Run("access token that names a job, without the action", func(t *testing.T) {
+		t.Parallel()
+
+		w := newClaimWorld(t, onlyAuthorizer{allowed: identity.ActionUnitRead})
+
+		// The action comes before the job: the caller learns nothing about the
+		// workspace from a refusal of its job.
+		status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), "token "+adminToken,
+			registerBody(w, "job-1", "aws_instance.a"))
+		if status != http.StatusNotFound {
+			t.Fatalf("register with an access token, a job and no action = %d %s, want 404", status, raw)
+		}
+	})
+
 	t.Run("list without unit:read", func(t *testing.T) {
 		t.Parallel()
 
 		w := newClaimWorld(t, onlyAuthorizer{allowed: identity.ActionUnitClaimRegister})
 
 		status, raw := w.call(t, http.MethodGet, claimPath(w.wsID), w.bearer("job-1"), nil)
-		if status != http.StatusForbidden {
-			t.Fatalf("list without unit:read = %d %s, want 403", status, raw)
+		if status != http.StatusNotFound {
+			t.Fatalf("list without unit:read = %d %s, want 404", status, raw)
 		}
 	})
 
@@ -165,10 +194,38 @@ func TestClaimHostileAccessAndActions(t *testing.T) {
 
 		status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), w.bearer("job-1"),
 			registerBody(w, "job-1", "aws_instance.a"))
-		if status != http.StatusForbidden {
-			t.Fatalf("register without unit:claim-register = %d %s, want 403", status, raw)
+		if status != http.StatusNotFound {
+			t.Fatalf("register without unit:claim-register = %d %s, want 404", status, raw)
 		}
 	})
+}
+
+// TestClaimAuthorizerFailureIsNotADenial proves that an authorizer that fails
+// is not answered as a workspace that does not exist: the caller gets a server
+// error on each route, and the server stores no claim.
+func TestClaimAuthorizerFailureIsNotADenial(t *testing.T) {
+	t.Parallel()
+
+	w := newClaimWorld(t, failingAuthorizer{})
+
+	for _, call := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodPost, claimPath(w.wsID), registerBody(w, "job-1", "aws_instance.a")},
+		{http.MethodGet, claimPath(w.wsID), nil},
+		{http.MethodPost, renewPath(w.wsID, "clm-x"), nil},
+	} {
+		auth := w.bearer("job-1")
+		if call.path != claimPath(w.wsID) {
+			auth = "token " + adminToken
+		}
+
+		status, raw := w.call(t, call.method, call.path, auth, call.body)
+		if status < http.StatusInternalServerError {
+			t.Errorf("%s %s with a failing authorizer = %d %s, want a server error", call.method, call.path, status, raw)
+		}
+	}
 }
 
 // TestClaimUnauthenticatedLearnsNothing proves that a caller with no valid

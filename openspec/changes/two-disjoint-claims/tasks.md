@@ -24,6 +24,7 @@
 - [x] 2.3 Wire the two claim routes with actions in internal/api/runnerapi. Check: Route test shows POST and GET claims declare unit:claim-register and unit:read.
 - [x] 2.4 Add the claim store port (`workspace.ClaimStore`), its in-memory implementation and the SQLite and PostgreSQL adapters (tables `workspace_claims` and `workspace_claim_touches` in both baselines, queries in both `queries.sql`, purge and backup coverage). Check: `go test ./pkg/workspace -run TestMemoryClaimStoreConformance`, `go test ./internal/store/sqlite -run TestClaimStoreConformance` and `go test ./internal/store/postgres -run TestClaimStoreConformance` pass; `sqlc diff` is clean.
 - [x] 2.5 Wire the claim registry over the built-in store in `pkg/dustpan` and end the claims of a job when the job ends. Check: `go test ./pkg/dustpan -run TestClaimReleasingClaimer` passes, and the e2e step of 4.1 reaches the routes on a real server.
+- [x] 2.6 Give a claim of the local wrapper a lease: store the end of the lease and the time of the last renewal (`lease_ends_at_ms` and `renewed_at_ms` in both baselines), add `POST /runner/v1/workspaces/{id}/claims/{claimID}/renew` (action `unit:claim-register`), and end the claims whose lease passed on a schedule of the server (`claim-expire`, every 30 seconds, at most 500 claims in one run), with an audit entry by the server for each end. Check: `go test ./pkg/workspace ./internal/api/runnerapi ./internal/store/codec ./pkg/dustpan -run 'Claim'` passes, and `go test ./internal/store/sqlite ./internal/store/postgres -run TestClaimStoreConformance` passes.
 
 ## 3. Side effects (computed from main)
 
@@ -32,6 +33,7 @@
 ## 4. Definition of done
 
 - [x] 4.1 E2e step in NEW file e2e/claims_disjoint_test.go against POST and GET /runner/v1/workspaces/{id}/claims with the access token of the local wrapper (the harness issues no runner job token). Check: `go test -tags e2e ./e2e -run TestJobsAPI` passes on SQLite and PostgreSQL: two claim records in state accepted, an overlapping third claim refused with 409. The step does not count the state versions; the claims route has no path that writes one.
+- [x] 4.1b E2e step in NEW file e2e/claims_expiry_test.go: the wrapper registers a claim, renews it, an overlapping claim is refused, the sweep ends the claim after the lease, and the overlapping claim is then accepted. The server of the test sets a lease of 5 seconds and a sweep period of 500 milliseconds through a test option. Check: `go test -tags e2e ./e2e -run TestClaimsLeaseExpires` passes on SQLite and PostgreSQL.
 - [x] 4.2 Write the docs page for claims in NEW file docs/guides/claims.md. Check: Docs page lists register and list calls with exact output. `make docs-lint` passes on each edited guide.
 - [ ] 4.3 (agent pre-run done, a person is still due) Agent pre-run (human run-through in person-steps (two-disjoint-claims 4.3)): Run usability check. Check: Developer completes the path from the docs page alone. Record the transcript in the pull request body.
 - [ ] 4.4 Run full check. Check: make check reports zero findings.

@@ -62,11 +62,9 @@ func TestClaimCallerBinding(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		var got error
-		if c.register {
-			got = c.caller.bindRegister(target, c.jobID)
-		} else {
-			got = c.caller.bindList(target)
+		got := c.caller.bindList(target)
+		if got == nil && c.register {
+			got = c.caller.bindJob(c.jobID)
 		}
 
 		if !errors.Is(got, c.want) && (c.want != nil || got != nil) {

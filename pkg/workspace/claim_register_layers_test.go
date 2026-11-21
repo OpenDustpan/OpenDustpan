@@ -131,6 +131,7 @@ func TestClaimRegistryGuardsRefuseBeforeTheStore(t *testing.T) {
 			r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
 				Workspaces: f.workspaces, Versions: f.versions, Deleted: f.deleted, Manual: c.manual,
 				Store: counting, Now: time.Now,
+				Lease: 0,
 			})
 			if err != nil {
 				t.Fatalf("registry: %v", err)

@@ -57,6 +57,21 @@ type ClaimRow struct {
 	State       string
 	StartedAtMs int64
 	EndedAtMs   int64
+	// LeaseEndsAtMs is the end of the lease, or 0 for a claim of a job.
+	LeaseEndsAtMs int64
+	// RenewedAtMs is the time of the last renewal, or 0 for a claim that no
+	// one renewed.
+	RenewedAtMs int64
+}
+
+// LeaseMillis returns the stored form of the end of a lease: Unix
+// milliseconds, or 0 for no lease.
+func LeaseMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+
+	return Millis(t)
 }
 
 // ClaimFromRow reads a claim from its row. An unknown state or a damaged
@@ -76,9 +91,21 @@ func ClaimFromRow(r ClaimRow) (workspace.Claim, error) {
 		return workspace.Claim{}, err
 	}
 
-	var ended time.Time
+	if fieldsErr := checkClaimFields(&r); fieldsErr != nil {
+		return workspace.Claim{}, fieldsErr
+	}
+
+	var ended, lease, renewed time.Time
 	if r.EndedAtMs != 0 {
 		ended = FromMillis(r.EndedAtMs)
+	}
+
+	if r.LeaseEndsAtMs != 0 {
+		lease = FromMillis(r.LeaseEndsAtMs)
+	}
+
+	if r.RenewedAtMs != 0 {
+		renewed = FromMillis(r.RenewedAtMs)
 	}
 
 	return workspace.Claim{
@@ -92,6 +119,8 @@ func ClaimFromRow(r ClaimRow) (workspace.Claim, error) {
 		State:       state,
 		StartedAt:   FromMillis(r.StartedAtMs),
 		EndedAt:     ended,
+		LeaseEndsAt: lease,
+		RenewedAt:   renewed,
 	}, nil
 }
 
@@ -122,8 +151,15 @@ func checkClaimSet(addresses []string) error {
 	return nil
 }
 
-// checkClaimState checks that the state of a row agrees with its end time and
-// that the fields that a claim always has are not empty. It returns the state.
+// leaseDamaged reports a row whose lease does not fit its job: a claim of a job
+// has no lease, a claim with no job has one, and only a claim with a lease has
+// a renewal time.
+func leaseDamaged(r *ClaimRow) bool {
+	return (r.JobID == "") == (r.LeaseEndsAtMs == 0) || (r.RenewedAtMs != 0 && r.LeaseEndsAtMs == 0)
+}
+
+// checkClaimState checks that the state of a row is known and agrees with its
+// end time. It returns the state.
 func checkClaimState(r *ClaimRow) (workspace.ClaimState, error) {
 	state := workspace.ClaimState(r.State)
 
@@ -134,9 +170,20 @@ func checkClaimState(r *ClaimRow) (workspace.ClaimState, error) {
 		return "", fmt.Errorf("%w: an accepted claim has an end time", ErrClaimRow)
 	case state == workspace.ClaimEnded && r.EndedAtMs == 0:
 		return "", fmt.Errorf("%w: an ended claim has no end time", ErrClaimRow)
-	case r.ID == "" || r.WorkspaceID == "" || r.Base == "" || r.Principal == "":
-		return "", fmt.Errorf("%w: a claim has an empty ID, workspace, base or principal", ErrClaimRow)
 	default:
 		return state, nil
+	}
+}
+
+// checkClaimFields checks that the lease of a row agrees with its job and that
+// the fields that a claim always has are not empty.
+func checkClaimFields(r *ClaimRow) error {
+	switch {
+	case leaseDamaged(r):
+		return fmt.Errorf("%w: the lease of the claim does not agree with its job", ErrClaimRow)
+	case r.ID == "" || r.WorkspaceID == "" || r.Base == "" || r.Principal == "":
+		return fmt.Errorf("%w: a claim has an empty ID, workspace, base or principal", ErrClaimRow)
+	default:
+		return nil
 	}
 }

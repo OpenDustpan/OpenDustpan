@@ -659,7 +659,7 @@ func pgCopyClaimTables() []pgCopyTable {
 			table: backup.TableWorkspaceClaims,
 			columns: []string{
 				"id", pgColWorkspaceID, pgColSeq, "base", "addresses", sinkColPrincipal, "job_id", "trigger_name",
-				pgColState, "started_at_ms", pgColEndedAtMs,
+				pgColState, "started_at_ms", pgColEndedAtMs, "lease_ends_at_ms", "renewed_at_ms",
 			},
 			orderBy: []string{"id"},
 		},

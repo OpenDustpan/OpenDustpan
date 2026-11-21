@@ -14649,25 +14649,27 @@ func (q *Queries) InsertWorkspaceBlameItem(ctx context.Context, arg InsertWorksp
 
 const insertWorkspaceClaim = `-- name: InsertWorkspaceClaim :exec
 INSERT INTO workspace_claims (
-    id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+    id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+    lease_ends_at_ms
 )
 VALUES (
     $1, $2,
     (SELECT COALESCE(MAX(c.seq), 0) + 1 FROM workspace_claims AS c WHERE c.workspace_id = $2),
     $3, $4, $5, $6, $7,
-    'accepted', $8, 0
+    'accepted', $8, 0, $9
 )
 `
 
 type InsertWorkspaceClaimParams struct {
-	ID          string
-	WorkspaceID string
-	Base        string
-	Addresses   string
-	Principal   string
-	JobID       string
-	TriggerName string
-	StartedAtMs int64
+	ID            string
+	WorkspaceID   string
+	Base          string
+	Addresses     string
+	Principal     string
+	JobID         string
+	TriggerName   string
+	StartedAtMs   int64
+	LeaseEndsAtMs int64
 }
 
 // The sequence number is the next one of the workspace. The caller holds the
@@ -14682,6 +14684,7 @@ func (q *Queries) InsertWorkspaceClaim(ctx context.Context, arg InsertWorkspaceC
 		arg.JobID,
 		arg.TriggerName,
 		arg.StartedAtMs,
+		arg.LeaseEndsAtMs,
 	)
 	return err
 }
@@ -16092,13 +16095,16 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 const listExpiredWorkspaceClaims = `-- name: ListExpiredWorkspaceClaims :many
 SELECT c.id, c.workspace_id, c.job_id, w.name
 FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
-WHERE c.state = 'accepted' AND c.started_at_ms < $1 AND w.namespace = $2
-ORDER BY c.workspace_id, c.seq
+WHERE c.state = 'accepted' AND c.lease_ends_at_ms > 0 AND c.lease_ends_at_ms < $1
+  AND w.namespace = $2
+ORDER BY c.lease_ends_at_ms, c.id
+LIMIT $3::bigint
 `
 
 type ListExpiredWorkspaceClaimsParams struct {
-	CutoffMs  int64
+	NowMs     int64
 	Namespace string
+	MaxRows   int64
 }
 
 type ListExpiredWorkspaceClaimsRow struct {
@@ -16108,10 +16114,11 @@ type ListExpiredWorkspaceClaimsRow struct {
 	Name        string
 }
 
-// The accepted claims of one namespace that started before the cutoff, with
-// the name of their workspace.
+// The accepted claims of one namespace whose lease ended before the time now,
+// oldest lease first, at most max_rows, with the name of their workspace. A
+// claim with no lease (lease_ends_at_ms of 0) is never listed.
 func (q *Queries) ListExpiredWorkspaceClaims(ctx context.Context, arg ListExpiredWorkspaceClaimsParams) ([]ListExpiredWorkspaceClaimsRow, error) {
-	rows, err := q.db.Query(ctx, listExpiredWorkspaceClaims, arg.CutoffMs, arg.Namespace)
+	rows, err := q.db.Query(ctx, listExpiredWorkspaceClaims, arg.NowMs, arg.Namespace, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -21239,21 +21246,24 @@ func (q *Queries) ListWorkspaceClaimTouches(ctx context.Context, workspaceID str
 }
 
 const listWorkspaceClaims = `-- name: ListWorkspaceClaims :many
-SELECT id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+SELECT id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+       lease_ends_at_ms, renewed_at_ms
 FROM workspace_claims WHERE workspace_id = $1 ORDER BY seq
 `
 
 type ListWorkspaceClaimsRow struct {
-	ID          string
-	WorkspaceID string
-	Base        string
-	Addresses   string
-	Principal   string
-	JobID       string
-	TriggerName string
-	State       string
-	StartedAtMs int64
-	EndedAtMs   int64
+	ID            string
+	WorkspaceID   string
+	Base          string
+	Addresses     string
+	Principal     string
+	JobID         string
+	TriggerName   string
+	State         string
+	StartedAtMs   int64
+	EndedAtMs     int64
+	LeaseEndsAtMs int64
+	RenewedAtMs   int64
 }
 
 func (q *Queries) ListWorkspaceClaims(ctx context.Context, workspaceID string) ([]ListWorkspaceClaimsRow, error) {
@@ -21276,6 +21286,8 @@ func (q *Queries) ListWorkspaceClaims(ctx context.Context, workspaceID string) (
 			&i.State,
 			&i.StartedAtMs,
 			&i.EndedAtMs,
+			&i.LeaseEndsAtMs,
+			&i.RenewedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -23475,6 +23487,65 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const renewWorkspaceClaim = `-- name: RenewWorkspaceClaim :one
+UPDATE workspace_claims SET lease_ends_at_ms = $1, renewed_at_ms = $2
+WHERE id = $3 AND workspace_id = $4 AND principal = $5
+  AND state = 'accepted' AND lease_ends_at_ms > $2
+RETURNING id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+          lease_ends_at_ms, renewed_at_ms
+`
+
+type RenewWorkspaceClaimParams struct {
+	LeaseEndsAtMs int64
+	NowMs         int64
+	ID            string
+	WorkspaceID   string
+	Principal     string
+}
+
+type RenewWorkspaceClaimRow struct {
+	ID            string
+	WorkspaceID   string
+	Base          string
+	Addresses     string
+	Principal     string
+	JobID         string
+	TriggerName   string
+	State         string
+	StartedAtMs   int64
+	EndedAtMs     int64
+	LeaseEndsAtMs int64
+	RenewedAtMs   int64
+}
+
+// Extends the lease of one accepted claim of one principal that has a lease
+// and whose lease has not ended, and records the time of the renewal. It matches no row for any other claim.
+func (q *Queries) RenewWorkspaceClaim(ctx context.Context, arg RenewWorkspaceClaimParams) (RenewWorkspaceClaimRow, error) {
+	row := q.db.QueryRow(ctx, renewWorkspaceClaim,
+		arg.LeaseEndsAtMs,
+		arg.NowMs,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Principal,
+	)
+	var i RenewWorkspaceClaimRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Base,
+		&i.Addresses,
+		&i.Principal,
+		&i.JobID,
+		&i.TriggerName,
+		&i.State,
+		&i.StartedAtMs,
+		&i.EndedAtMs,
+		&i.LeaseEndsAtMs,
+		&i.RenewedAtMs,
+	)
+	return i, err
 }
 
 const replaceFirstAdministratorCode = `-- name: ReplaceFirstAdministratorCode :exec

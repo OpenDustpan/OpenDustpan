@@ -3,11 +3,13 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -45,9 +47,17 @@ type ClaimStore interface {
 	// ends nothing.
 	EndClaimsByJob(ctx context.Context, fence namespace.Fence, jobID string, at time.Time) (int, error)
 	// ExpireClaims marks each accepted claim of the namespace of the fence
-	// that started before the cutoff ended at the time cutoff, in one fenced
-	// transaction. It returns the count of claims it ended.
-	ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff time.Time) (int, error)
+	// whose lease ended before now as ended at now, in one fenced transaction,
+	// with one audit entry for each. A claim with no lease (a claim of a job)
+	// never expires here. It ends at most limit claims, and returns the count; a
+	// SQL adapter ends the oldest lease first. A limit below 1 ends none.
+	ExpireClaims(ctx context.Context, fence namespace.Fence, now time.Time, limit int) (int, error)
+	// RenewClaim extends the lease of one claim in one fenced transaction under
+	// the claim lock of its workspace, and returns the claim. It returns
+	// ErrClaimNotFound for a claim that is not on the workspace or that another
+	// principal registered, ErrClaimEnded for a claim that ended or whose lease
+	// ended before r.Now, and ErrClaimInvalid for a claim with no lease.
+	RenewClaim(ctx context.Context, fence namespace.Fence, r ClaimRenewal) (Claim, error)
 	// AddClaimTouch records that the version committed on the workspace ws
 	// with the addresses, in one fenced transaction. It returns ErrNotFound
 	// for a workspace that is not in the namespace of the fence.
@@ -56,16 +66,35 @@ type ClaimStore interface {
 	) error
 }
 
+// ClaimRenewal asks a store to extend the lease of one claim.
+type ClaimRenewal struct {
+	// Workspace is the workspace of the claim.
+	Workspace ID
+	// ClaimID is the ID of the claim.
+	ClaimID string
+	// Principal is the subject that registered the claim.
+	Principal string
+	// Now is the time of the renewal on the clock of the caller.
+	Now time.Time
+	// Lease is how long the claim lives from Now.
+	Lease time.Duration
+}
+
 // ClaimTx is the view of one workspace inside WithClaims.
 type ClaimTx interface {
 	// Workspace reads the workspace as the transaction sees it, under the
 	// claim lock: its lock columns are the ones that a claim must respect. It
 	// returns ErrNotFound for a workspace that is gone.
 	Workspace(ctx context.Context) (Workspace, error)
-	// ManualLocked reports whether a manual lock covers the workspace, as the
-	// transaction reads the locks. It does not apply the rule that a phase
-	// that started before the lock passes it: the caller does.
-	ManualLocked(ctx context.Context) (bool, error)
+	// ManualLocks returns every manual lock that covers the workspace, as the
+	// transaction reads the locks, and nil when none does. A workspace that the
+	// inventory does not hold is an error, so the check fails closed. It does
+	// not apply the rule that a phase that started before a lock passes it:
+	// the caller does, with manuallock.LockForPhase. An implementation reads
+	// the locks in the transaction and calls no service that has a store of
+	// its own: such a call under the claim lock can wait for a lock that this
+	// transaction holds.
+	ManualLocks(ctx context.Context) ([]manuallock.Lock, error)
 	// Claims returns every claim of the workspace in accept order.
 	Claims(ctx context.Context) ([]Claim, error)
 	// Touches returns every recorded touch of the workspace, oldest first.
@@ -87,9 +116,9 @@ type MemoryClaimStore struct {
 	entries []audit.Entry
 	// fences holds the failover version first seen for each namespace.
 	fences map[namespace.Name]int64
-	// manualLocked tells whether a manual lock covers a workspace. Nil means
+	// manualLocks returns the manual locks that cover a workspace. Nil means
 	// that none does.
-	manualLocked func(ctx context.Context, ws ID) bool
+	manualLocks func(ctx context.Context, ws ID) []manuallock.Lock
 	// workspaces resolves the namespace of a workspace, so a fence of
 	// another namespace is refused as an adapter with a workspaces table
 	// refuses it.
@@ -100,24 +129,24 @@ type MemoryClaimStore struct {
 // namespace of each workspace from workspaces.
 func NewMemoryClaimStore(workspaces ClaimWorkspaces) *MemoryClaimStore {
 	return &MemoryClaimStore{
-		mu:           sync.Mutex{},
-		claims:       make(map[ID][]Claim),
-		touches:      make(map[ID][]ClaimTouch),
-		entries:      nil,
-		fences:       make(map[namespace.Name]int64),
-		workspaces:   workspaces,
-		manualLocked: nil,
+		mu:          sync.Mutex{},
+		claims:      make(map[ID][]Claim),
+		touches:     make(map[ID][]ClaimTouch),
+		entries:     nil,
+		fences:      make(map[namespace.Name]int64),
+		workspaces:  workspaces,
+		manualLocks: nil,
 	}
 }
 
-// SetManualLocked sets the function that tells which workspaces a manual
-// lock covers, for the tests of the check under the claim lock. Call it
-// before the first use.
-func (m *MemoryClaimStore) SetManualLocked(covers func(ctx context.Context, ws ID) bool) {
+// SetManualLocks sets the function that returns the manual locks that cover a
+// workspace, for the tests of the check under the claim lock. Call it before
+// the first use.
+func (m *MemoryClaimStore) SetManualLocks(covering func(ctx context.Context, ws ID) []manuallock.Lock) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.manualLocked = covers
+	m.manualLocks = covering
 }
 
 // Entries returns a copy of the audit entries that the store appended.
@@ -199,18 +228,83 @@ func (m *MemoryClaimStore) EndClaimsByJob(
 ) (int, error) {
 	ended := at.UTC().Truncate(time.Millisecond)
 
-	return m.endWhere(ctx, fence, ended, ClaimEndedByJob, func(c *Claim) bool {
-		return jobID != "" && c.JobID == jobID && c.State == ClaimAccepted
+	return m.endWhere(ctx, fence, &endSpec{
+		at: ended, cause: ClaimEndedByJob, limit: math.MaxInt,
+		match: func(c *Claim) bool { return jobID != "" && c.JobID == jobID && c.State == ClaimAccepted },
 	})
 }
 
 // ExpireClaims implements ClaimStore.
-func (m *MemoryClaimStore) ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff time.Time) (int, error) {
-	ended := cutoff.UTC().Truncate(time.Millisecond)
+func (m *MemoryClaimStore) ExpireClaims(
+	ctx context.Context, fence namespace.Fence, now time.Time, limit int,
+) (int, error) {
+	ended := now.UTC().Truncate(time.Millisecond)
 
-	return m.endWhere(ctx, fence, ended, ClaimEndedByExpiry, func(c *Claim) bool {
-		return c.State == ClaimAccepted && c.StartedAt.Before(cutoff)
+	return m.endWhere(ctx, fence, &endSpec{
+		at: ended, cause: ClaimEndedByExpiry, limit: limit,
+		match: func(c *Claim) bool {
+			return c.State == ClaimAccepted && !c.LeaseEndsAt.IsZero() && c.LeaseEndsAt.Before(now)
+		},
 	})
+}
+
+// RenewClaim implements ClaimStore.
+func (m *MemoryClaimStore) RenewClaim(
+	ctx context.Context, fence namespace.Fence, r ClaimRenewal,
+) (Claim, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return Claim{}, err
+	}
+
+	w, err := m.workspaces.GetWorkspaceByID(ctx, r.Workspace)
+	if err != nil {
+		return Claim{}, err
+	}
+
+	if w.Ref.Namespace != fence.Namespace {
+		return Claim{}, fmt.Errorf("%w: workspace %s is not in namespace %q", ErrNotFound, r.Workspace, fence.Namespace)
+	}
+
+	list := m.claims[r.Workspace]
+	for i := range list {
+		if list[i].ID != r.ClaimID {
+			continue
+		}
+
+		if checkErr := CheckRenewable(&list[i], r); checkErr != nil {
+			return Claim{}, checkErr
+		}
+
+		list[i].LeaseEndsAt = r.Now.Add(r.Lease).UTC().Truncate(time.Millisecond)
+		list[i].RenewedAt = r.Now.UTC().Truncate(time.Millisecond)
+
+		return cloneClaims(list[i : i+1])[0], nil
+	}
+
+	return Claim{}, fmt.Errorf("%w: claim %s", ErrClaimNotFound, r.ClaimID)
+}
+
+// CheckRenewable returns the error of RenewClaim for a claim that cannot be
+// renewed as r asks, or nil. The adapters of ClaimStore call it, so each
+// refuses the same claims as MemoryClaimStore: a claim of another principal is
+// ErrClaimNotFound, a claim that ended or whose lease ended is ErrClaimEnded,
+// and a claim with no lease is ErrClaimInvalid.
+func CheckRenewable(c *Claim, r ClaimRenewal) error {
+	switch {
+	case c.Principal != r.Principal:
+		return fmt.Errorf("%w: claim %s", ErrClaimNotFound, c.ID)
+	case c.State != ClaimAccepted:
+		return fmt.Errorf("%w: claim %s", ErrClaimEnded, c.ID)
+	case c.LeaseEndsAt.IsZero():
+		return fmt.Errorf("%w: claim %s has no lease", ErrClaimInvalid, c.ID)
+	case !c.LeaseEndsAt.After(r.Now):
+		return fmt.Errorf("%w: the lease of claim %s ended", ErrClaimEnded, c.ID)
+	default:
+		return nil
+	}
 }
 
 // AddClaimTouch implements ClaimStore.
@@ -245,10 +339,19 @@ func (m *MemoryClaimStore) AddClaimTouch(
 	return nil
 }
 
-// endWhere ends each claim that match accepts, in the workspaces of the
-// namespace of the fence.
+// endSpec says which claims endWhere ends, when and why.
+type endSpec struct {
+	at    time.Time
+	cause string
+	// limit is the most claims that one call ends.
+	limit int
+	match func(c *Claim) bool
+}
+
+// endWhere ends each claim that the match of spec accepts, in the workspaces
+// of the namespace of the fence, up to the limit of spec.
 func (m *MemoryClaimStore) endWhere(
-	ctx context.Context, fence namespace.Fence, ended time.Time, cause string, match func(c *Claim) bool,
+	ctx context.Context, fence namespace.Fence, spec *endSpec,
 ) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -266,20 +369,20 @@ func (m *MemoryClaimStore) endWhere(
 		}
 
 		for i := range list {
-			if !match(&list[i]) {
+			if count >= spec.limit || !spec.match(&list[i]) {
 				continue
 			}
 
 			entry, err := ClaimEndEntry(&ClaimEnd{
 				Namespace: fence.Namespace, Workspace: w.Ref.Name, ClaimID: list[i].ID, JobID: list[i].JobID,
-				Cause: cause, At: ended,
+				Cause: spec.cause, At: spec.at,
 			})
 			if err != nil {
 				return 0, err
 			}
 
 			list[i].State = ClaimEnded
-			list[i].EndedAt = ended
+			list[i].EndedAt = spec.at
 			m.entries = append(m.entries, entry)
 			count++
 		}
@@ -326,9 +429,13 @@ func (t *memoryClaimTx) Workspace(ctx context.Context) (Workspace, error) {
 	return t.store.workspaces.GetWorkspaceByID(ctx, t.ws)
 }
 
-// ManualLocked implements ClaimTx.
-func (t *memoryClaimTx) ManualLocked(ctx context.Context) (bool, error) {
-	return t.store.manualLocked != nil && t.store.manualLocked(ctx, t.ws), nil
+// ManualLocks implements ClaimTx.
+func (t *memoryClaimTx) ManualLocks(ctx context.Context) ([]manuallock.Lock, error) {
+	if t.store.manualLocks == nil {
+		return nil, nil
+	}
+
+	return t.store.manualLocks(ctx, t.ws), nil
 }
 
 // Claims implements ClaimTx.
@@ -435,6 +542,10 @@ func ValidateNewClaim(c Claim) error {
 		return fmt.Errorf("%w: ID, workspace, base and principal are required", ErrClaimInvalid)
 	case c.State != ClaimAccepted || !c.EndedAt.IsZero():
 		return fmt.Errorf("%w: a new claim is accepted and has no end time", ErrClaimInvalid)
+	case (c.JobID == "") == c.LeaseEndsAt.IsZero():
+		return fmt.Errorf("%w: a claim of a job has no lease, and a claim with no job has one", ErrClaimInvalid)
+	case !c.RenewedAt.IsZero():
+		return fmt.Errorf("%w: a new claim has no renewal time", ErrClaimInvalid)
 	case len(c.Addresses) == 0:
 		return ErrClaimEmptySet
 	}

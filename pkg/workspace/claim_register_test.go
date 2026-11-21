@@ -181,6 +181,7 @@ func (f *claimFixture) registry() *workspace.ClaimRegistry {
 		Manual:     nil,
 		Store:      f.store,
 		Now:        func() time.Time { return now },
+		Lease:      0,
 	})
 	if err != nil {
 		panic(err)
@@ -514,7 +515,10 @@ func TestClaimWrapperRetryIsPerPrincipal(t *testing.T) {
 		t.Fatalf("retry ID = %q, want %q", retry.ID, first.ID)
 	}
 
-	if n, err := r.ExpireStale(t.Context(), f.fence, first.StartedAt.Add(time.Minute)); err != nil || n != 1 {
+	expireAt := first.LeaseEndsAt.Add(time.Second)
+
+	n, err := f.store.ExpireClaims(t.Context(), f.fence, expireAt, 10)
+	if err != nil || n != 1 {
 		t.Fatalf("expired claims = %d, %v, want 1", n, err)
 	}
 

@@ -231,6 +231,7 @@ const (
 	ErrorClaimEmptySet        = "claim-empty-set"        // 422: the claim holds no resource address
 	ErrorClaimBadBase         = "claim-bad-base"         // 422: the claim names an unknown base version
 	ErrorClaimLocked          = "claim-locked"           // 422: the workspace of the claim is locked
+	ErrorClaimEnded           = "claim-ended"            // 409: the claim ended; register a new claim
 	ErrorUnprocessable        = "unprocessable"          // 422: the request is well formed but cannot run
 	ErrorForbidden            = "forbidden"              // 403: the caller lacks the action on the object
 	ErrorGone                 = "gone"                   // 410: the object is deleted
