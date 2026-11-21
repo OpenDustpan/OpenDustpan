@@ -39,7 +39,7 @@ func newOpenFixture(t *testing.T) openFixture {
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
-	eval, err := expr.New(expr.NewLimiter())
+	eval, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
 	if err != nil {
 		t.Fatalf("expr evaluator: %v", err)
 	}
@@ -917,7 +917,7 @@ func (f faultSessions) Delete(
 func withSealer(t *testing.T, fx openFixture, sealer profile.Sealer) *profile.Service {
 	t.Helper()
 
-	eval, err := expr.New(expr.NewLimiter())
+	eval, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
 	if err != nil {
 		t.Fatalf("expr evaluator: %v", err)
 	}
@@ -937,7 +937,7 @@ func withSealer(t *testing.T, fx openFixture, sealer profile.Sealer) *profile.Se
 func withSessions(t *testing.T, fx openFixture, sessions profile.Sessions) *profile.Service {
 	t.Helper()
 
-	eval, err := expr.New(expr.NewLimiter())
+	eval, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
 	if err != nil {
 		t.Fatalf("expr evaluator: %v", err)
 	}

@@ -92,6 +92,32 @@ func New(limiter *Limiter) (*Evaluator, error) {
 	return &Evaluator{timeout: selfservice.ExprTimeoutMillis * time.Millisecond, limiter: limiter}, nil
 }
 
+// NewWithTimeout returns an Evaluator with the time limit d in place of
+// selfservice.ExprTimeoutMillis. It is for tests: a test that is not about
+// the time limit passes a high d, so that the load of a slow machine cannot
+// end a run, and a test of the time limit passes a low d. The work budget
+// still ends a run that does not stop. Production code calls New, which keeps
+// the limit of selfservice.ExprTimeoutMillis. It returns ErrNoLimiter for a
+// nil limiter and ErrTimeout for a d that is not above zero.
+func NewWithTimeout(limiter *Limiter, d time.Duration) (*Evaluator, error) {
+	if d <= 0 {
+		return nil, ErrTimeout
+	}
+
+	e, err := New(limiter)
+	if err != nil {
+		return nil, err
+	}
+
+	e.timeout = d
+
+	return e, nil
+}
+
+// ErrTimeout reports a call of NewWithTimeout with a limit that is not above
+// zero.
+var ErrTimeout = errors.New("an Evaluator needs a time limit above zero")
+
 // Version returns the version of the Expr library in the build, for example
 // "v1.17.8". It is empty only for a binary built with no module information.
 func (*Evaluator) Version() string {

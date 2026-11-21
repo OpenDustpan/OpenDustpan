@@ -158,7 +158,7 @@ func (c *testClock) Advance(d time.Duration) {
 func testEvaluator(t *testing.T) *expr.Evaluator {
 	t.Helper()
 
-	eval, err := expr.New(expr.NewLimiter())
+	eval, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
 	if err != nil {
 		t.Fatalf("expr evaluator: %v", err)
 	}
