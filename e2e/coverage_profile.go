@@ -25,6 +25,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Sessions:   struct{ profile.Sessions }{nil},
 		Evaluator:  struct{ profile.Evaluator }{nil},
 		Now:        nil,
+		Logger:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile service: %v", err)

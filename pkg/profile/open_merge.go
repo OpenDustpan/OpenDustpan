@@ -184,8 +184,8 @@ func (r *openResolver) computeTemplate(
 				)
 			}
 
-			s, n := tree.marksOf(ref)
-			secret, never = secret || s, never || n
+			marks := tree.marksOf(ref)
+			secret, never = secret || marks.secret, never || marks.never
 		}
 
 		out, err := r.svc.evaluator.Eval(ctx, inner, values)
@@ -236,23 +236,27 @@ func pathExists(values map[string]any, ref []string) bool {
 	return true
 }
 
+// leafMarks are the marks of the leaves under a path.
+type leafMarks struct {
+	secret bool
+	never  bool
+}
+
 // marksOf answers the secret and never-store marks of the leaves at or under
 // ref: an expression that reads a secret feeds a secret result.
-//
-//nolint:revive // Unnamed two-boolean result per nonamedreturns; order is secret, never.
-func (t *profileTree) marksOf(ref []string) (bool, bool) {
-	var secret, never bool
+func (t *profileTree) marksOf(ref []string) leafMarks {
+	var marks leafMarks
 
 	prefix := strings.Join(ref, "\x00")
 
 	for _, leaf := range t.leaves {
 		joined := strings.Join(leaf.segments, "\x00")
 		if joined == prefix || strings.HasPrefix(joined, prefix+"\x00") {
-			secret, never = secret || leaf.secret, never || leaf.never
+			marks.secret, marks.never = marks.secret || leaf.secret, marks.never || leaf.never
 		}
 	}
 
-	return secret, never
+	return marks
 }
 
 // toMap rebuilds the nested values of the tree.

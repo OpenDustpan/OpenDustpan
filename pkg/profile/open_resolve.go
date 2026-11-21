@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -128,6 +129,12 @@ func parseAskedPaths(paths []string) (map[string][]string, error) {
 	asked := map[string][]string{}
 
 	for _, p := range paths {
+		// The same check as the session read: length, control characters and
+		// segments, before any read or decrypt.
+		if err := checkOpenPath(p); err != nil {
+			return nil, err
+		}
+
 		segs, err := splitOpenPath(p)
 		if err != nil {
 			return nil, err
@@ -159,6 +166,13 @@ func (r *openResolver) authorize(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// recheck checks profile:open again before the open reads a revision. A grant
+// that ends during a long open stops the open at the next read: it fails
+// closed with identity.ErrDenied, and Open writes the denied entry.
+func (r *openResolver) recheck(ctx context.Context) error {
+	return r.svc.require(ctx, r.actor, r.ns, identity.ActionProfileOpen)
 }
 
 // recordDenied writes the denied entry of a refused open. A profile that is
@@ -227,6 +241,17 @@ func (s *Service) accessRefusedEntry(a *Actor, ns namespace.Name, root Profile, 
 	return e
 }
 
+// appendRefused writes the entry of a denied or refused open. A failed write
+// is not the answer: the denial or the refusal is. The failure goes to the log
+// as a warning with no value and no error text, so that the missing entry is
+// not silent.
+func (s *Service) appendRefused(ctx context.Context, fence namespace.Fence, e audit.Entry) {
+	if _, err := s.audit.Append(ctx, fence, e); err != nil {
+		s.logger.WarnContext(ctx, "profile open: the audit entry of a refusal was not written",
+			slog.String("action", string(identity.ActionProfileOpen)), slog.String("outcome", string(e.Outcome)))
+	}
+}
+
 // recordAccessRefused writes the audit entry of a denied or refused open:
 // the kind access with the outcome and no value.
 func (s *Service) recordAccessRefused(
@@ -239,12 +264,15 @@ func (s *Service) recordAccessRefused(
 
 	e := s.accessRefusedEntry(a, ns, root, outcome)
 
-	// A failed entry write is not the answer: the denial or the refusal is.
-	_, _ = s.audit.Append(ctx, fence, e) //nolint:errcheck // A failed entry write is not the answer.
+	s.appendRefused(ctx, fence, e)
 }
 
 // resolveRoot resolves the root profile and its imports.
 func (r *openResolver) resolveRoot(ctx context.Context, root Profile) (*profileTree, error) {
+	if err := r.recheck(ctx); err != nil {
+		return nil, err
+	}
+
 	rev, err := r.svc.store.Revision(ctx, r.ns, root.ID, At{Number: 0})
 	if err != nil {
 		return nil, fmt.Errorf("read revision of %s: %w", root.Name, err)
@@ -276,6 +304,10 @@ func (r *openResolver) resolve(ctx context.Context, id ID, depth int) (*profileT
 	p, err := r.svc.store.Get(ctx, r.ns, RefByID(id))
 	if err != nil {
 		return nil, fmt.Errorf("get profile %s: %w", id, err)
+	}
+
+	if recheckErr := r.recheck(ctx); recheckErr != nil {
+		return nil, recheckErr
 	}
 
 	rev, err := r.svc.store.Revision(ctx, r.ns, id, At{Number: 0})

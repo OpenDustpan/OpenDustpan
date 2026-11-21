@@ -260,7 +260,7 @@ func buildFixtureWith(
 	svc, err := profile.NewService(profile.Config{
 		Store: store.Profiles(), Namespaces: store, Sealer: secrets, Audit: store, Authorizer: authz,
 		Sessions:  countingSessions{Sessions: store.ProfileSessions(), reads: reads},
-		Evaluator: testEvaluator(t), Now: nil,
+		Evaluator: testEvaluator(t), Now: nil, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("profile service: %v", err)

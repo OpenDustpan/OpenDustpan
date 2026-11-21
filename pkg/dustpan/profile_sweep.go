@@ -44,7 +44,7 @@ func (s *Server) sweepProfileSessions(ctx context.Context) {
 // logs no error text, which may hold driver detail, and the next run tries
 // again.
 func (s *Server) sweepProfileSessionsOnce(ctx context.Context) {
-	n, err := s.profileSessions.Sweep(ctx, time.Now(), profileSessionSweepLimit)
+	n, err := s.profileSessions.Sweep(ctx, s.now(), profileSessionSweepLimit)
 
 	switch {
 	case err != nil && !errors.Is(ctx.Err(), context.Canceled):

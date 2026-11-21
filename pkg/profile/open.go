@@ -80,7 +80,7 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 
 	tree, err := resolver.resolveRoot(ctx, root)
 	if err != nil {
-		s.recordAccessRefused(ctx, a, in.Namespace, root, audit.OutcomeFailure)
+		s.recordAccessRefused(ctx, a, in.Namespace, root, refusalOutcome(err))
 
 		return Opened{}, err
 	}
@@ -109,6 +109,16 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 	o := openStore{fence: fence, root: root, duration: resolver.duration, reads: resolver.reads}
 
 	return s.storeOpen(ctx, a, in, o, text)
+}
+
+// refusalOutcome answers the outcome of the entry of a refused open: denied
+// for a grant that ended during the open, failure for the rest.
+func refusalOutcome(err error) audit.Outcome {
+	if errors.Is(err, identity.ErrDenied) {
+		return audit.OutcomeDenied
+	}
+
+	return audit.OutcomeFailure
 }
 
 // openStore is what Open hands to storeOpen: the fence, the root profile, the
@@ -197,10 +207,14 @@ func (s *Service) ReadSession(
 	// not found too; this check stays so that a hostile ID never reaches it.
 	sid, idErr := ParseSessionID(id)
 	if idErr != nil {
-		return SessionData{}, fmt.Errorf("open session %s: %w", id, ErrNotFound)
+		return SessionData{}, fmt.Errorf("open session %q: %w", id, ErrNotFound)
 	}
 
 	id = sid
+
+	if len(paths) > MaxSessionPaths {
+		return SessionData{}, fmt.Errorf("%w: a read asks at most %d paths", ErrInvalid, MaxSessionPaths)
+	}
 
 	for _, p := range paths {
 		if err := checkOpenPath(p); err != nil {
@@ -258,7 +272,11 @@ func (s *Service) denySessionRead(ctx context.Context, a *Actor, ns namespace.Na
 	// The delete is best effort: the denial is the answer either way.
 	entry := s.accessRefusedEntry(a, ns, p, audit.OutcomeDenied)
 
-	_ = s.sessions.Delete(ctx, id, owner, fence, []audit.Entry{entry}) //nolint:errcheck // The denial is the answer.
+	if delErr := s.sessions.Delete(ctx, id, owner, fence, []audit.Entry{entry}); delErr != nil {
+		// The delete and its entry share one transaction, so a failed delete
+		// wrote no entry. The denial still needs its record: write it alone.
+		s.appendRefused(ctx, fence, entry)
+	}
 
 	return denied
 }
@@ -317,6 +335,10 @@ func errOrInvalid(err error) error {
 func checkOpenPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: a path is not empty", ErrInvalid)
+	}
+
+	if len(path) > MaxSessionPathBytes {
+		return fmt.Errorf("%w: a path has at most %d bytes", ErrInvalid, MaxSessionPathBytes)
 	}
 
 	if hasControl(path) {

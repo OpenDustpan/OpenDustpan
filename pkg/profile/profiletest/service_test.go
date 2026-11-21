@@ -91,7 +91,7 @@ func newFixture(t *testing.T) fixture {
 			"writeonly":  {write},
 			"manageonly": {manage},
 		},
-		Sessions: memSessions{m: m}, Evaluator: stubEvaluator{}, Now: nil,
+		Sessions: memSessions{m: m}, Evaluator: stubEvaluator{}, Now: nil, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)

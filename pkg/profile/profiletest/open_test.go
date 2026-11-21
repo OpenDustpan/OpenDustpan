@@ -52,7 +52,7 @@ func newOpenFixture(t *testing.T) openFixture {
 
 	svc, err := profile.NewService(profile.Config{
 		Store: m, Namespaces: memNamespaces{m: m}, Sealer: scopedSealer{}, Audit: memAudit{m: m},
-		Authorizer: grantsFunc(grants), Sessions: memSessions{m: m}, Evaluator: eval, Now: openNow,
+		Authorizer: grantsFunc(grants), Sessions: memSessions{m: m}, Evaluator: eval, Now: openNow, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -924,7 +924,7 @@ func withSealer(t *testing.T, fx openFixture, sealer profile.Sealer) *profile.Se
 
 	svc, err := profile.NewService(profile.Config{
 		Store: fx.m, Namespaces: memNamespaces{m: fx.m}, Sealer: sealer, Audit: memAudit{m: fx.m},
-		Authorizer: grantsFunc(fx.grants), Sessions: memSessions{m: fx.m}, Evaluator: eval, Now: openNow,
+		Authorizer: grantsFunc(fx.grants), Sessions: memSessions{m: fx.m}, Evaluator: eval, Now: openNow, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -944,7 +944,7 @@ func withSessions(t *testing.T, fx openFixture, sessions profile.Sessions) *prof
 
 	svc, err := profile.NewService(profile.Config{
 		Store: fx.m, Namespaces: memNamespaces{m: fx.m}, Sealer: scopedSealer{}, Audit: memAudit{m: fx.m},
-		Authorizer: grantsFunc(fx.grants), Sessions: sessions, Evaluator: eval, Now: openNow,
+		Authorizer: grantsFunc(fx.grants), Sessions: sessions, Evaluator: eval, Now: openNow, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -1066,6 +1066,13 @@ func TestReadSessionJobTokenReadsNothing(t *testing.T) {
 	}
 }
 
+// pathSpec is an open of the root profile that asks one path.
+func pathSpec(path string) openSpec {
+	return openSpec{
+		ref: profile.RefByName("root"), paths: []string{path}, consumer: profile.OpenConsumerAPI, duration: 0,
+	}
+}
+
 // TestOpenRefusesBeforeAnyRead fails when the consumer check or the path count
 // check of the resolver goes. The session constructor checks both again, but
 // it runs after the reads and writes a failure entry, so a refusal of the
@@ -1085,6 +1092,12 @@ func TestOpenRefusesBeforeAnyRead(t *testing.T) {
 	for name, spec := range map[string]openSpec{
 		"unknown consumer": {ref: profile.RefByName("root"), paths: nil, consumer: "other", duration: 0},
 		"too many paths":   {ref: profile.RefByName("root"), paths: many, consumer: profile.OpenConsumerAPI, duration: 0},
+		"NUL in a path":    pathSpec("a\x00b"),
+		"DEL in a path":    pathSpec("a\x7fb"),
+		"C1 in a path":     pathSpec("a\u0085b"),
+		"bad UTF-8":        pathSpec("a\xffb"),
+		"CR in a path":     pathSpec("a\rb"),
+		"long path":        pathSpec(strings.Repeat("a", profile.MaxSessionPathBytes+1)),
 	} {
 		before := len(accessEntries(fx, fx.ns))
 

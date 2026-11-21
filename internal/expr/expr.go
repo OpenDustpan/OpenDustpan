@@ -100,7 +100,7 @@ func New(limiter *Limiter) (*Evaluator, error) {
 // the limit of selfservice.ExprTimeoutMillis. It returns ErrNoLimiter for a
 // nil limiter and ErrTimeout for a d that is not above zero.
 func NewWithTimeout(limiter *Limiter, d time.Duration) (*Evaluator, error) {
-	if d <= 0 {
+	if d <= 0 || d > MaxTestTimeout {
 		return nil, ErrTimeout
 	}
 
@@ -114,9 +114,12 @@ func NewWithTimeout(limiter *Limiter, d time.Duration) (*Evaluator, error) {
 	return e, nil
 }
 
+// MaxTestTimeout is the longest limit that NewWithTimeout takes.
+const MaxTestTimeout = time.Minute
+
 // ErrTimeout reports a call of NewWithTimeout with a limit that is not above
-// zero.
-var ErrTimeout = errors.New("an Evaluator needs a time limit above zero")
+// zero or is above MaxTestTimeout.
+var ErrTimeout = errors.New("an Evaluator needs a time limit above zero and at most one minute")
 
 // Version returns the version of the Expr library in the build, for example
 // "v1.17.8". It is empty only for a binary built with no module information.

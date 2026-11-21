@@ -107,6 +107,7 @@ func newProfileHandler(in profileInputs) (http.Handler, error) {
 		Sessions:   in.openSessions,
 		Evaluator:  evaluator,
 		Now:        in.now,
+		Logger:     in.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile service: %w", err)

@@ -47,13 +47,15 @@ func (e *Evaluator) Eval(ctx context.Context, source string, values map[string]a
 
 	env := map[string]any{valueEnvKey: values}
 
+	// The time limit starts before the compile, and the meter of the compile
+	// reads the same context, as run does in expr.go.
+	ctx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
+
 	prog, err := compileValues(source, env, newMeter(ctx.Err))
 	if err != nil {
 		return profile.Evaluation{}, err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, e.timeout)
-	defer cancel()
 
 	select {
 	case e.limiter.slots <- struct{}{}:
@@ -64,32 +66,14 @@ func (e *Evaluator) Eval(ctx context.Context, source string, values map[string]a
 	// The virtual machine of Expr has no way to stop a run from outside. The
 	// channel has room for the result, so the goroutine always ends: at the
 	// end of the program, or at its next counted call after the time limit
-	// (see the package comment). It gives its slot back when it ends, not
-	// when the caller stops waiting.
+	// (see the package comment). It gives its slot back before it sends the
+	// result, so a caller that has the result also has a free slot.
 	done := make(chan runResult, 1)
 
 	go func() {
-		defer func() { <-e.limiter.slots }()
+		out, runErr := runValues(prog, env)
 
-		var out any
-
-		var runErr error
-
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					runErr = fmt.Errorf("%w: %v", profile.ErrReference, r)
-				}
-			}()
-
-			machine := vm.VM{
-				Stack:        nil,
-				Scopes:       nil,
-				Variables:    nil,
-				MemoryBudget: selfservice.ExprMemoryBudget,
-			}
-			out, runErr = machine.Run(prog, env)
-		}()
+		<-e.limiter.slots
 
 		done <- runResult{out: out, err: runErr}
 	}()
@@ -101,13 +85,57 @@ func (e *Evaluator) Eval(ctx context.Context, source string, values map[string]a
 		}
 
 		if r.err != nil {
-			return profile.Evaluation{}, fmt.Errorf("%w: %s", profile.ErrReference, firstLine(clip(r.err).Error()))
+			return profile.Evaluation{}, r.err
 		}
 
 		return profile.Evaluation{Value: r.out, Kind: profile.EvalKindOf(r.out), Paths: valuePaths(source)}, nil
 	case <-ctx.Done():
 		return profile.Evaluation{}, fmt.Errorf("%w: %w", profile.ErrReference, ctx.Err())
 	}
+}
+
+// errValueRun is the text of a run that fails or panics. It never holds the
+// text of the engine: the text of a failed run can quote a value of the
+// merged profile, for example the secret that int(values.password) names.
+const errValueRun = "the expression failed when it ran"
+
+// runValues runs prog on env. A failure or a panic answers profile.ErrReference
+// with the fixed text errValueRun, never the text of the engine or the panic.
+func runValues(prog *vm.Program, env map[string]any) (any, error) {
+	var (
+		out any
+		err error
+	)
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				out, err = nil, fmt.Errorf("%w: %s", profile.ErrReference, errValueRun)
+			}
+		}()
+
+		out, err = runMachine(prog, env)
+	}()
+
+	return out, err
+}
+
+// runMachine runs prog on env. A failed run answers profile.ErrReference with
+// the fixed text errValueRun.
+func runMachine(prog *vm.Program, env map[string]any) (any, error) {
+	machine := vm.VM{
+		Stack:        nil,
+		Scopes:       nil,
+		Variables:    nil,
+		MemoryBudget: selfservice.ExprMemoryBudget,
+	}
+
+	out, runErr := machine.Run(prog, env)
+	if runErr != nil {
+		return nil, fmt.Errorf("%w: %s", profile.ErrReference, errValueRun)
+	}
+
+	return out, nil
 }
 
 // checkValueSource refuses an empty or oversize source and the names that

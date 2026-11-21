@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -38,6 +39,10 @@ type Config struct {
 	// fails without it.
 	Evaluator Evaluator
 	Now       func() time.Time
+	// Logger receives the warning of an audit entry that could not be
+	// written. Nil means that the warning goes nowhere. A warning holds no
+	// value and no error text.
+	Logger *slog.Logger
 }
 
 // Service implements the profile use cases. Each method checks the actions
@@ -53,6 +58,7 @@ type Service struct {
 	sessions   Sessions
 	evaluator  Evaluator
 	now        func() time.Time
+	logger     *slog.Logger
 }
 
 // Actor is the caller of a use case. By is the template of the audit entry:
@@ -139,9 +145,14 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, audit: cfg.Audit, authz: cfg.Authorizer,
-		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now,
+		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now, logger: logger,
 	}, nil
 }
 
