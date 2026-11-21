@@ -93,6 +93,12 @@ WHERE wait_event_type = 'Lock' AND query LIKE '%FROM workspaces WHERE id%FOR UPD
 		default:
 		}
 
+		// The activity view is cached for the life of a transaction: drop the
+		// cache, or the first answer stays.
+		if _, err := tx.Exec(t.Context(), `SELECT pg_stat_clear_snapshot()`); err != nil {
+			t.Fatalf("clear the activity snapshot: %v", err)
+		}
+
 		var waiting int
 
 		if err := tx.QueryRow(t.Context(), ask).Scan(&waiting); err != nil {
