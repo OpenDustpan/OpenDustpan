@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors of the output sharing model and its ports.
@@ -159,6 +160,13 @@ func (r AttachmentRef) Validate() error {
 	return nil
 }
 
+// ValidStableID reports whether s has the format of the stable ID of a unit or
+// a collection: 1 to MaxIDBytes bytes from a-z, 0-9, "-" and "_". It checks the
+// format only. It does not tell whether such an object exists.
+func ValidStableID(s string) bool {
+	return validRefPart(s, MaxIDBytes, "_")
+}
+
 // validRefPart reports whether s has 1 to limit bytes from a-z, 0-9, "-" and
 // the bytes of extra.
 func validRefPart(s string, limit int, extra string) bool {
@@ -204,6 +212,71 @@ func (d Default) Validate() error {
 	}
 }
 
+// ConsumerKind is the kind of object that a rule names as its consumer.
+type ConsumerKind string
+
+// The kinds of consumer.
+const (
+	// ConsumerUnit is one unit, by its stable ID.
+	ConsumerUnit ConsumerKind = "unit"
+	// ConsumerCollection is one collection, by its stable ID.
+	ConsumerCollection ConsumerKind = "collection"
+	// ConsumerNamespace is the namespace of the producer. It has no ID.
+	ConsumerNamespace ConsumerKind = "namespace"
+)
+
+// Consumer is the object whose units read the outputs. It is always a stable
+// reference: a name never decides a match. A unit or a collection of another
+// namespace is the namespace plus the stable ID that the caller gives. The
+// store checks the format of that ID only, because an answer must not tell
+// whether an object of another namespace exists.
+type Consumer struct {
+	// Kind is the kind of the consumer.
+	Kind ConsumerKind
+	// Namespace is the namespace of the consumer. For ConsumerNamespace it is
+	// the namespace of the producer.
+	Namespace namespace.Name
+	// ID is the stable ID of the unit or of the collection. It is empty for
+	// ConsumerNamespace.
+	ID string
+}
+
+// String returns a short form of c for messages.
+func (c Consumer) String() string {
+	if c.ID == "" {
+		return string(c.Kind) + " " + c.Namespace.String()
+	}
+
+	return string(c.Kind) + " " + c.Namespace.String() + "/" + c.ID
+}
+
+// Validate returns an error that wraps ErrInvalid when c is not a consumer: a
+// kind that is not in the allowlist, a namespace that namespace.ParseName
+// refuses, an ID that is empty, too long or has a byte outside a-z, 0-9, "-"
+// and "_" for a unit or a collection, or an ID on a namespace consumer.
+func (c Consumer) Validate() error {
+	if _, err := namespace.ParseName(c.Namespace.String()); err != nil {
+		return fmt.Errorf("%w: the namespace of the consumer", ErrInvalid)
+	}
+
+	switch c.Kind {
+	case ConsumerUnit, ConsumerCollection:
+		if !ValidStableID(c.ID) {
+			return fmt.Errorf("%w: the stable ID of the consumer %s", ErrInvalid, c.Kind)
+		}
+
+		return nil
+	case ConsumerNamespace:
+		if c.ID != "" {
+			return fmt.Errorf("%w: a namespace consumer has no ID", ErrInvalid)
+		}
+
+		return nil
+	default:
+		return fmt.Errorf("%w: the consumer kind %q is not a unit, a collection or a namespace", ErrInvalid, c.Kind)
+	}
+}
+
 // Rule is one sharing rule.
 type Rule struct {
 	// CreatedAt is the time of the save. The store sets it.
@@ -216,26 +289,24 @@ type Rule struct {
 	// collection or a namespace. A collection or a namespace covers each unit
 	// that it holds at the time of a check.
 	Producer identity.Object
-	// Consumer is the object whose units read the outputs: a unit, a
-	// collection, or the namespace of the producer. A unit or a collection
-	// of another namespace is valid, as a reference by name with no stable
-	// ID. A whole other namespace is not.
-	Consumer identity.Object
+	// Consumer is the object whose units read the outputs: a unit or a
+	// collection by stable ID, in any namespace, or the namespace of the
+	// producer. A whole other namespace is not valid.
+	Consumer Consumer
 }
 
 // Validate returns an error that wraps ErrInvalid when r is not a valid rule.
-// It checks the ID, the kinds of both objects, that a consumer namespace is
-// the namespace of the producer, that each unit and each collection of the
-// producer namespace has its stable ID, and that a consumer of another
-// namespace has none. It allows the kinds of objects that it
-// lists and refuses each other kind, so a new kind of object is refused until
-// a decision adds it.
+// It checks the ID, the kind of the producer, that the producer has its
+// stable ID, and the consumer: an allowlisted kind, a valid namespace and a
+// valid stable ID, and that a namespace consumer is the namespace of the
+// producer. It refuses each other kind, so a new kind of object is refused
+// until a decision adds it.
 //
 // Defense in depth: the HTTP adapter checks the same request, the store runs
 // Validate at each write, and the checker runs it on each rule that it reads.
 // Each check stays, so that a new caller, a row that another version wrote or
-// a restored backup cannot make a rule that names a principal or a whole other
-// namespace.
+// a restored backup cannot make a rule that names a principal, a whole other
+// namespace or an object by name.
 func (r Rule) Validate() error {
 	if err := r.ID.Validate(); err != nil {
 		return err
@@ -249,33 +320,18 @@ func (r Rule) Validate() error {
 		return fmt.Errorf("%w: the producer %q is not a unit, a collection or a namespace", ErrInvalid, r.Producer)
 	}
 
-	if !scopeObject(r.Consumer) {
-		return fmt.Errorf("%w: the consumer %q is not a unit, a collection or a namespace", ErrInvalid, r.Consumer)
-	}
-
-	if r.Consumer.IsNamespace() && r.Consumer.Namespace() != r.Producer.Namespace() {
-		return fmt.Errorf(
-			"%w: the consumer %q is another namespace; name a unit or a collection of it", ErrInvalid, r.Consumer,
-		)
-	}
-
 	if !stableIn(r.Producer) {
 		return fmt.Errorf("%w: the producer %q has no stable ID", ErrInvalid, r.Producer)
 	}
 
-	if r.CrossNamespace() {
-		// A consumer of another namespace is a reference by name. A stable ID
-		// on it would come from a resolve of an object of another namespace,
-		// which the save never does.
-		if r.Consumer.UnitID() != "" || r.Consumer.CollectionID() != "" {
-			return fmt.Errorf("%w: the consumer %q of another namespace has a stable ID", ErrInvalid, r.Consumer)
-		}
-
-		return nil
+	if err := r.Consumer.Validate(); err != nil {
+		return err
 	}
 
-	if !stableIn(r.Consumer) {
-		return fmt.Errorf("%w: the consumer %q has no stable ID", ErrInvalid, r.Consumer)
+	if r.Consumer.Kind == ConsumerNamespace && r.Consumer.Namespace != r.Producer.Namespace() {
+		return fmt.Errorf(
+			"%w: the consumer %s is another namespace; name a unit or a collection of it", ErrInvalid, r.Consumer,
+		)
 	}
 
 	return nil
@@ -298,7 +354,7 @@ func stableIn(o identity.Object) bool {
 // CrossNamespace reports whether the consumer of r is in another namespace
 // than the producer.
 func (r Rule) CrossNamespace() bool {
-	return r.Consumer.Namespace() != r.Producer.Namespace()
+	return r.Consumer.Namespace != r.Producer.Namespace()
 }
 
 // scopeObject reports whether o is a unit, a collection or a namespace. It
@@ -314,12 +370,9 @@ func scopeObject(o identity.Object) bool {
 // Placement is a unit with the collection that holds it at the time of a
 // check. Unit is a unit reference with its stable ID. Collection is the
 // reference of its collection with its stable ID, or the zero object when
-// the unit has no collection. A rule that names a collection of the producer
-// namespace matches by the stable ID, so a collection of that namespace that
-// is deleted and made again with the same name does not get the rules of the
-// old one. A rule that names a collection of another namespace matches by
-// name, so a collection of that namespace made again with the old name gets
-// the rule.
+// the unit has no collection. A rule matches a unit or a collection by its stable ID in
+// every namespace, so a unit or a collection that someone deletes and makes
+// again with the same name does not get the rules of the old one.
 type Placement struct {
 	Unit       identity.Object
 	Collection identity.Object

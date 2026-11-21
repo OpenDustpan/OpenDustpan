@@ -1553,7 +1553,7 @@ func restoreModel() costModel {
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedGrantIDCheckTrips + stagedStackTagCheckTrips + stagedTriggerClockTrips +
 			unitStateTrips +
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips +
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips + firstAdministratorTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
@@ -1701,6 +1701,12 @@ const droppedRunnerCredentialTrips = 2
 // makes 5 round trips for it, 2 fewer than perTable gives, as for
 // group_mappings.
 const proxyRuleSetTrips = -2
+
+// sharingRuleTrips is the change in the fixed part for the table
+// output_sharing_rules, a table of Tables that the dev strip never counts. The
+// run makes 5 round trips for it, 2 fewer than perTable gives, as for
+// proxy_rule_sets.
+const sharingRuleTrips = -2
 
 // poolProxySettingsTrips is the change in the fixed part for the table
 // runner_pool_proxy_settings, a table of Tables that the dev strip never

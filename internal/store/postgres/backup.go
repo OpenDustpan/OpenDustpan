@@ -117,6 +117,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyUpdateTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyCollectionTables()...)
+	tables = append(tables, pgCopyOutputSharingTables()...)
 	tables = append(tables, pgCopyGateTables()...)
 	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
@@ -288,6 +289,20 @@ func pgCopyScopeTables() []pgCopyTable {
 			table:   "inventory_deleted",
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
+		},
+	}
+}
+
+// pgCopyOutputSharingTables holds the COPY columns of the sharing rules.
+func pgCopyOutputSharingTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableOutputSharingRules,
+			columns: []string{
+				pgColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
+				"consumer_id", "created_by", pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, "id"},
 		},
 	}
 }

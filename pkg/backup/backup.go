@@ -108,6 +108,9 @@ const (
 	// process. The rows describe the processes that run now, so a restore
 	// keeps the live rows.
 	TableInstanceVersions = "instance_versions"
+	// TableOutputSharingRules holds the sharing rules of the producers of a
+	// namespace.
+	TableOutputSharingRules = "output_sharing_rules"
 	// TableStoreChecks holds the rows of the store checks of the installation.
 	// A check describes the store of this installation at the time of the
 	// check, so a restore keeps the live rows and a backup leaves them out.
@@ -148,6 +151,7 @@ var Tables = []string{
 	"collections",
 	"collection_members",
 	"placement_rules",
+	TableOutputSharingRules,
 	"object_context",
 	"object_context_owners",
 	"gate_objects",

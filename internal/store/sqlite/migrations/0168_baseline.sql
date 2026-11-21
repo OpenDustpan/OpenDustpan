@@ -435,6 +435,31 @@ CREATE TABLE oidc_providers (
     created_at_ms INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE output_sharing_rules (
+    namespace          TEXT    NOT NULL REFERENCES namespaces (name),
+    id                 TEXT    NOT NULL CHECK (length(id) >= 1 AND length(id) <= 64 AND id NOT GLOB '*[^a-z0-9_-]*'),
+    producer_kind      TEXT    NOT NULL CHECK (producer_kind IN ('unit', 'collection', 'namespace')),
+    producer_id        TEXT    NOT NULL DEFAULT '',
+    consumer_kind      TEXT    NOT NULL,
+    consumer_namespace TEXT    NOT NULL,
+    consumer_id        TEXT    NOT NULL DEFAULT '',
+    created_by         TEXT    NOT NULL CHECK (created_by <> ''),
+    created_at_ms      INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    PRIMARY KEY (namespace, id),
+    CHECK ((producer_kind = 'namespace') = (producer_id = '')),
+    CHECK (
+        (consumer_kind = 'namespace' AND consumer_namespace = namespace AND consumer_id = '')
+        OR (consumer_kind IN ('unit', 'collection') AND consumer_id <> '')
+    )
+) STRICT;
+
+-- The purge of a unit or a collection finds the rules that name its namespace and ID.
+CREATE INDEX output_sharing_rules_consumer ON output_sharing_rules (consumer_namespace, consumer_id) WHERE consumer_id <> '';
+
+CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules (
+    namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id
+);
+
 CREATE TABLE installation_secret_keys (
     scope_id      TEXT    NOT NULL PRIMARY KEY,
     wrapper_id    TEXT    NOT NULL,
