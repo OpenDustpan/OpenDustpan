@@ -102,7 +102,8 @@ func TestClaimHostileTokens(t *testing.T) {
 		}
 
 		w.tokens.matches[jobtoken.DigestOf(secret)] = liveTokenMatch(
-			time.UnixMilli(1_700_000_000_000).UTC(), secret, "", w.unit)
+			time.UnixMilli(1_700_000_000_000).UTC(), secret, "", w.unit,
+		)
 
 		status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), "Bearer "+secret.Reveal(),
 			map[string]any{"base": w.base, "addresses": []string{"aws_instance.a"}})
@@ -114,6 +115,13 @@ func TestClaimHostileTokens(t *testing.T) {
 			t.Fatalf("the list holds %d claims, want none", n)
 		}
 	})
+}
+
+// TestClaimHostileTokensOfOtherWorkspaces sends the job token of another
+// workspace to both routes: each answers as for a workspace that does not
+// exist, and stores no claim.
+func TestClaimHostileTokensOfOtherWorkspaces(t *testing.T) {
+	t.Parallel()
 
 	t.Run("job token of another workspace registers", func(t *testing.T) {
 		t.Parallel()

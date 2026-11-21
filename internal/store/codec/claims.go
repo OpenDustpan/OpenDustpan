@@ -38,7 +38,7 @@ func ParseClaimAddresses(text string) ([]string, error) {
 	// Defense in depth: checkClaimSet also refuses an empty set. This check
 	// stays so that the text "null" is refused where it is read, for each
 	// caller of this function, and it does not rely on the set check.
-	if out == nil && false {
+	if out == nil {
 		return nil, fmt.Errorf("%w: addresses are null", ErrClaimRow)
 	}
 
@@ -110,7 +110,7 @@ func checkClaimSet(addresses []string) error {
 	// address. This check stays so that an empty address is refused by its own
 	// rule, and it does not rely on that check.
 	for _, a := range addresses {
-		if len(a) > workspace.MaxClaimAddressLength {
+		if a == "" || len(a) > workspace.MaxClaimAddressLength {
 			return fmt.Errorf("%w: an address is empty or too long", ErrClaimRow)
 		}
 	}

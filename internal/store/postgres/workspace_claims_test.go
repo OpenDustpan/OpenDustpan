@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -58,26 +57,47 @@ func TestClaimWaitsForTheWorkspaceRowLock(t *testing.T) {
 		})
 	}()
 
+	waitForLockWaiter(t, tx)
+
 	select {
 	case <-entered:
 		t.Fatal("WithClaims ran while another transaction held the workspace row lock")
 	case err := <-done:
 		t.Fatalf("WithClaims returned %v while another transaction held the workspace row lock", err)
-	case <-time.After(750 * time.Millisecond):
+	default:
 	}
 
 	if err := tx.Rollback(t.Context()); err != nil {
 		t.Fatalf("release the lock: %v", err)
 	}
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("WithClaims after the lock went = %v, want nil", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("WithClaims did not run after the lock went")
+	if err := <-done; err != nil {
+		t.Fatalf("WithClaims after the lock went = %v, want nil", err)
 	}
+}
+
+// waitForLockWaiter asks the database, through tx, until a backend waits for
+// a row lock in the statement that locks a workspace for its claims. Each
+// round trip is the pause between two asks, so the test reads no clock.
+func waitForLockWaiter(t *testing.T, tx pgx.Tx) {
+	t.Helper()
+
+	const ask = `SELECT count(*) FROM pg_stat_activity
+WHERE wait_event_type = 'Lock' AND query LIKE '%FROM workspaces WHERE id%FOR UPDATE%'`
+
+	for range 100_000 {
+		var waiting int
+
+		if err := tx.QueryRow(t.Context(), ask).Scan(&waiting); err != nil {
+			t.Fatalf("ask for the lock waiters: %v", err)
+		}
+
+		if waiting > 0 {
+			return
+		}
+	}
+
+	t.Fatal("no backend waits for the workspace row lock")
 }
 
 // holdWorkspaceRowLock opens a second connection to the schema, takes the row
