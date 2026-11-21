@@ -26,4 +26,4 @@
 
 - [ ] 4.1 Add the e2e step in e2e/e2e_test.go: a local person signs in with a passkey and gets both cookies, and a request with the access cookie of another person gets no fresh fact. Check: `make e2e` passes the step
 - [ ] 4.2 Update the existing file docs/guides/approval-rules.md with the fresh fact of the session and how a step is made. Check: `make docs-lint` is clean
-- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings.

@@ -19,6 +19,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Write the docs in the same pull request as the server tests: docs/guides/access-tokens.md (:233) says that the console shows a banner for the tokens that expire within 14 days, and names `status=expiring`. Check: `make docs-lint` passes. No route: the test runs each new command of the page as written only.
-- [ ] 4.2 Add an e2e step in e2e/tokenexpiry_test.go: the route is `GET /api/dustpan/v1/me/tokens?status=expiring` and the credential is a personal access token; create a token with a 10 day expiry and a token with a 60 day expiry, list, and check that only the first is in the list with `expiryWarning` soon. Check: the e2e step runs on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run the usability check. Check: a Developer finds the banner and the token that ends from the page alone. A person's step.
-- [ ] 4.4 Run the full check. Check: `make check` reports zero findings in this repository, and `npm run check` in the console. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Add an e2e step in e2e/tokenexpiry_test.go: the route is `GET /api/dustpan/v1/me/tokens?status=expiring` and the credential is a personal access token; create a token with a 10 day expiry and a token with a 60 day expiry, list, and check that only the first is in the list with `expiryWarning` soon. Check: the e2e step runs on SQLite and PostgreSQL.
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (token-life-cycle-expiry-email-expiry-warning-display 4.3)): Run the usability check. Check: a Developer finds the banner and the token that ends from the page alone. Record the transcript in the pull request body.
+- [ ] 4.4 Run the full check. Check: `make check` reports zero findings in this repository, and `npm run check` in the console.

@@ -28,4 +28,4 @@
 
 - [x] 4.1 Run e2e backup plus check against the real directory: `POST /api/dustpan/v1/backups`, poll `GET /api/dustpan/v1/backups/{id}`, then `GET /api/dustpan/v1/backups/{id}/check`, each with the administrator bearer token (`Authorization: Bearer <token>`, the credential of the helpers in e2e/dev_backup_test.go), with a stale holder delete replayed after finish. Check: `GET /api/dustpan/v1/backups/{id}/check` with the administrator bearer token reports complete after a stale-holder run against the real directory
 - [x] 4.2 Update the existing file docs/guides/several-instances.md for the attempt layout and the cleanup. Check: docs/guides/several-instances.md shows the attempt layout, the fixed pointer `live.json` and the orphan cleanup by the live holder. `make docs-lint` passes on the edited guide (sentence cap 25 words).
-- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings.

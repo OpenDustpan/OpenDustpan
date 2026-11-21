@@ -23,5 +23,5 @@
 
 ## 4. definition of done
 
-- [ ] 4.1 E2E step: with a personal access token of a namespace administrator, send PUT then GET to /api/dustpan/v1/namespaces/{namespace}/path-sets/{id} (routes that this change adds), then check the facts for modules/net/a.tf. BLOCKED by the path-sets routes until the implementation tasks land. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Wiring, route, docs page and usability check from the docs page alone. Check: `make check`. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 E2E step: with a personal access token of a namespace administrator, send PUT then GET to /api/dustpan/v1/namespaces/{namespace}/path-sets/{id} (routes that this change adds), then check the facts for modules/net/a.tf. BLOCKED by the path-sets routes until the implementation tasks land. Check: `make e2e`.
+- [ ] 4.2 Wiring, route, docs page and usability check from the docs page alone. Check: `make check`.

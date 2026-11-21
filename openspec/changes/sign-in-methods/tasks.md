@@ -26,4 +26,4 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Route actions, docs pages, usability walk. Check: `make check` has zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Route actions, docs pages, usability walk. Check: `make check` has zero findings.

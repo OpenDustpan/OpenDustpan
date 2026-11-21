@@ -29,6 +29,6 @@
 ## 4. definition of done
 
 - [ ] 4.1 Wire route ANY /api/dustpan/v1/restores with authorization actions and worker check with access token. Check: `GET ANY /api/dustpan/v1/restores/{}` with access token shows fenced steps and staging name.
-- [ ] 4.2 Add e2e step in NEW file e2e/restore_kill_test.go against real directory with kill during restore on `ANY /api/dustpan/v1/restores` with access token. Check: E2e step on `ANY /api/dustpan/v1/restores` with access token kills holder during restore and restore ends succeeded on taker. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add e2e step in NEW file e2e/restore_kill_test.go against real directory with kill during restore on `ANY /api/dustpan/v1/restores` with access token. Check: E2e step on `ANY /api/dustpan/v1/restores` with access token kills holder during restore and restore ends succeeded on taker.
 - [ ] 4.3 Write docs page for several-instances restore path. Check: Docs page for durable restore in docs/guides/several-instances.md runs each command as written. `make docs-lint` passes on each edited guide.
-- [ ] 4.4 Run usability check and `make check` with zero findings. Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.4 Run usability check and `make check` with zero findings. Check: `make check` reports zero findings.

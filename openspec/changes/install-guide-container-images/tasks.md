@@ -6,9 +6,9 @@
 
 ## 2. The docs test
 
-- [x] 2.1 Write the e2e step `TestInstallGuideCommands` in the NEW file `e2e/install_guide_docs_test.go`: it reads `docs/guides/install.md`, takes the `helm install` command of the page, and runs `helm template` of `deploy/helm/opendustpan` with the same `--set` values. No route: the test renders the chart only. Check: `go test -tags e2e -count=1 -run TestInstallGuideCommands ./e2e/` passes. Confirmed by: CI (the agent writes the e2e test). `make docs-lint` passes on each edited guide.
+- [x] 2.1 Write the e2e step `TestInstallGuideCommands` in the NEW file `e2e/install_guide_docs_test.go`: it reads `docs/guides/install.md`, takes the `helm install` command of the page, and runs `helm template` of `deploy/helm/opendustpan` with the same `--set` values. No route: the test renders the chart only. Check: `go test -tags e2e -count=1 -run TestInstallGuideCommands ./e2e/` passes. `make docs-lint` passes on each edited guide.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Usability check: an operator follows `docs/guides/install.md` alone, pulls the image by tag and by digest, makes the two Secrets and installs the chart on a cluster. Check: the steps in the pull request. A person's step.
-- [ ] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Agent pre-run (human run-through in person-steps (install-guide-container-images 3.1)): Usability check: an operator follows `docs/guides/install.md` alone, pulls the image by tag and by digest, makes the two Secrets and installs the chart on a cluster. Check: the steps in the pull request. Record the transcript in the pull request body.
+- [ ] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings.

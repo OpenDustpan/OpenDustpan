@@ -27,6 +27,6 @@
 ## 4. Definition of done
 
 - [x] 4.1 Wire the block into the server. The route GET /api/audit/entries (declared and served in `internal/api/audit/audit.go`) keeps its audit read action and uses an access token. Check: TestAuditEntriesRouteKeepsItsAction
-- [x] 4.2 Add an e2e step in the NEW file `e2e/audit_agent_block_test.go` that starts a job with the real CLI and reads the entry. It calls the existing route `GET /api/audit/entries` with an access token, and passes the audit read action of the namespace. The agent writes the test; CI runs it. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
+- [x] 4.2 Add an e2e step in the NEW file `e2e/audit_agent_block_test.go` that starts a job with the real CLI and reads the entry. It calls the existing route `GET /api/audit/entries` with an access token, and passes the audit read action of the namespace. The agent writes the test; CI runs it. Check: make e2e.
 - [x] 4.3 Update the audit docs page `docs/guides/audit-log.md` and check that each error names its command. Check: make docs-lint
-- [x] 4.4 Run the full check. Check: make check with zero findings: no hugeParam finding for Entry or the four structs that embed it, and `make nilaway` reports no possible nil dereference of Entry.Origin. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.4 Run the full check. Check: make check with zero findings: no hugeParam finding for Entry or the four structs that embed it, and `make nilaway` reports no possible nil dereference of Entry.Origin.

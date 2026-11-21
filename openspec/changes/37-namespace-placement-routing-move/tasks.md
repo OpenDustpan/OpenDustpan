@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run an e2e step with two dev installations. It calls the NEW moves routes with an access token of the Operator and a fresh step. BLOCKED by the NEW moves routes until they are built. Check: make e2e step namespace-move passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Run an e2e step with two dev installations. It calls the NEW moves routes with an access token of the Operator and a fresh step. BLOCKED by the NEW moves routes until they are built. Check: make e2e step namespace-move passes.
 - [ ] 4.2 Add the docs page for moves in NEW docs/guides/namespace-move.md. It covers the target, the write block, the name conflicts and the rollback. Check: The commands of the page run in a test. `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Do the usability check: an operator completes a move from the docs page alone. Check: Each error names the one command that helps. A person's step.
-- [ ] 4.4 Run all checks. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (37-namespace-placement-routing-move 4.3)): Do the usability check: an operator completes a move from the docs page alone. Check: Each error names the one command that helps. Record the transcript in the pull request body.
+- [ ] 4.4 Run all checks. Check: make check with zero findings.

@@ -25,7 +25,7 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the route with its authorization actions in the route declaration internal/api/server/passkeysignin.go:122 and its adapter file internal/api/server/passkeysignin.go. Check: The route test lists the sign-in route with its actions
-- [ ] 4.2 Add an e2e step in the NEW file e2e/break_glass_sign_in_test.go. BLOCKED by passkey sign-in for local users (issue 607). Then it drives `POST /api/dustpan/v1/sign-in/passkey/finish` with a passkey credential and a typed reason, with the break-glass account passkey credential, and reads the flag from the principals route. Check: `make e2e` drives the sign-in with the real binary over TLS and reads the flag. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add an e2e step in the NEW file e2e/break_glass_sign_in_test.go. BLOCKED by passkey sign-in for local users (issue 607). Then it drives `POST /api/dustpan/v1/sign-in/passkey/finish` with a passkey credential and a typed reason, with the break-glass account passkey credential, and reads the flag from the principals route. Check: `make e2e` drives the sign-in with the real binary over TLS and reads the flag.
 - [ ] 4.3 Add the docs page in the same pull request, in the NEW file docs/guides/break-glass-sign-in.md. Check: `make docs-lint` and a test that runs each command
-- [ ] 4.4 Run the usability check. Check: The persona completes the path from the docs page and each error names one command. A person's step.
-- [ ] 4.5 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.4 Agent pre-run (human run-through in person-steps (break-glass-sign-in-typed 4.4)): Run the usability check. Check: The persona completes the path from the docs page and each error names one command. Record the transcript in the pull request body.
+- [ ] 4.5 Run the full check. Check: `make check` reports zero findings.

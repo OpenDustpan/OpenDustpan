@@ -2,8 +2,7 @@
 
 - [ ] 1.1 Edit `specs/job-actions/spec.md` of this change as written: `job:cancel`, `job:approve`, the start action for a confirmation, `unit:redact`, `job.not-found`. Spec text only.
   - Check: `npx @fission-ai/openspec@1.15.0 validate job-artifact-store-redaction`
-  - Confirmed by: CI (the merge queue runs `make docs-lint` and the validation)
-  - OpenDustpan: `openspec/changes/job-artifact-store-redaction/specs/job-actions/spec.md`
+  -md`
 
 ## 2. The SQL redaction log (can land first as its own pull request)
 

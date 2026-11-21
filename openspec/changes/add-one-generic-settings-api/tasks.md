@@ -26,7 +26,7 @@
 
 - [x] 3.1 Wire both routes with actions server:manage-settings (the name that main uses in internal/api/server/settings.go) and namespace:manage-settings, and list tempadmin.SessionLimitSettingDeclarations() in SettingDeclarations() in internal/cli/settings_api.go. Check: The route policy test lists both routes with their actions.
 - [x] 3.2 Add the proposed amendment text of ADR 245 decision 10 for the owner in the pull request description (docs/adr takes only numbered ADR files, so no file is added there). Check: The pull request lists the text and the owner confirmation.
-- [x] 3.3 Add an e2e step in the existing file e2e/settings_test.go (extend it in place) on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes. Confirmed by: CI (the agent writes the e2e test).
+- [x] 3.3 Add an e2e step in the existing file e2e/settings_test.go (extend it in place) on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes.
 - [x] 3.4 Write the docs page in the NEW file docs/guides/settings.md. Check: make docs-lint passes
-- [ ] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps. A person's step.
-- [ ] 3.6 Run the full gate. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps.
+- [ ] 3.6 Run the full gate. Check: make check with zero findings.

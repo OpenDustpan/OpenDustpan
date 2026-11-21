@@ -5,4 +5,4 @@
 
 ## 2. Definition of done
 
-- [x] 2.1 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Done: the CI run of this pull request passes make check
+- [x] 2.1 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Done: the CI run of this pull request passes make check

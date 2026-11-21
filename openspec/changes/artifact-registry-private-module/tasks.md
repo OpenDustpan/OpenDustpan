@@ -12,7 +12,7 @@
 
 - [x] 2.1 Not applicable: module publish checks and module serve routes with namespace grants and audit exist on main in (read only) `internal/registry/service/module.go` line 54 and (read only) `internal/api/tfe/registry_modules.go` line 49. Check: the pull request body lists the differences found in task 0.1, or says that there are none.
 - [x] 2.2 Not applicable: the routes are wired and the e2e step exists on main in (read only) `e2e/registry_module_test.go` line 109 (TestRegistryModuleTofuInit): the e2e step `tofu init` with an access token calls GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions on the real binary and installs the private module. Check: the pull request body names the test.
-- [ ] 2.3 Add the test that runs each command of the section "Publish a module" of `docs/guides/private-registry.md` as written, in NEW file e2e/artifact_registry_private_module_docs_test.go, and fix each command in the guide that fails. Check: e2e step: TestPrivateModuleGuideCommands parses the sh blocks of the section "Publish a module" and sends the request of each command to a test server, with the host, namespace, token, Idempotency-Key and archive substituted; a changed command in the guide fails the test. The test sends PUT /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions/{} with an access token, and `make docs-lint` passes on each edited guide. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 2.3 Add the test that runs each command of the section "Publish a module" of `docs/guides/private-registry.md` as written, in NEW file e2e/artifact_registry_private_module_docs_test.go, and fix each command in the guide that fails. Check: e2e step: TestPrivateModuleGuideCommands parses the sh blocks of the section "Publish a module" and sends the request of each command to a test server, with the host, namespace, token, Idempotency-Key and archive substituted; a changed command in the guide fails the test. The test sends PUT /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions/{} with an access token, and `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
@@ -20,4 +20,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Confirm wiring, route actions, e2e, docs, audit entries, and usability. Check: Route GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions with an access token passes e2e on SQLite and PostgreSQL; routes declare authorization actions; usability check passes; `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Confirm wiring, route actions, e2e, docs, audit entries, and usability. Check: Route GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions with an access token passes e2e on SQLite and PostgreSQL; routes declare authorization actions; usability check passes; `make check` passes with zero findings.

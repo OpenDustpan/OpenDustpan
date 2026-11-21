@@ -19,10 +19,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds store adapters and no route. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
+- [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds store adapters and no route. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged.
 - [x] 3.2 Regenerate `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run make check with PostgreSQL cases against DUSTPAN_TEST_POSTGRES_URL with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Run make check with PostgreSQL cases against DUSTPAN_TEST_POSTGRES_URL with zero findings. Check: `make check` reports zero findings.
 - [ ] 4.2 Prove the backup holds the quota tables: the coverage check `pkg/backup/coverage.go:104` (func CheckColumns) passes with the four tables of task 2.1. Check: `go test -timeout 60m -race ./pkg/backup/... ./pkg/store/...` passes

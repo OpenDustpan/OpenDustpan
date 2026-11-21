@@ -65,4 +65,4 @@ Each task runs its tests first (tasks 1.16 to 1.21), then its build.
 
 ## 5. Definition of done
 
-- [ ] 5.1 Run the fast checks of the agent and push. CI runs the rest. The pull request body holds the output of the checks, the removal proofs of tasks 1.12 to 1.17 and the line that the Claude security review (rev2) is needed on the exact head. Check: `make test-changed` passes. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 5.1 Run the fast checks of the agent and push. CI runs the rest. The pull request body holds the output of the checks, the removal proofs of tasks 1.12 to 1.17 and the line that the Claude security review (rev2) is needed on the exact head. Check: `make test-changed` passes.
