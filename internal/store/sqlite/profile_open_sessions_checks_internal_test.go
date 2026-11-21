@@ -75,6 +75,10 @@ func TestProfileOpenSessionChecksRefuseABadRow(t *testing.T) {
 		{"paths string", func(r *openSessionRow) { r.paths = `"x"` }},
 		{"paths number", func(r *openSessionRow) { r.paths = "1" }},
 		{"paths invalid JSON", func(r *openSessionRow) { r.paths = "[" }},
+		// json_type() reads JSON5, and json_valid() without flags reads only RFC 8259. These
+		// two arrays give json_type = array and json_valid = 0, so only json_valid refuses them.
+		{"paths JSON5 with a trailing comma", func(r *openSessionRow) { r.paths = `["a",]` }},
+		{"paths JSON5 with single quotes", func(r *openSessionRow) { r.paths = `['a']` }},
 		{"empty sealed", func(r *openSessionRow) { r.sealed = []byte{} }},
 		{"expiry equal to creation", func(r *openSessionRow) { r.expiresMS = r.createdMS }},
 		{"expiry before creation", func(r *openSessionRow) { r.expiresMS = r.createdMS - 1 }},
