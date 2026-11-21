@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"sync"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -19,6 +22,8 @@ type MemoryClaimBackend struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	workspaces map[workspace.ID]workspace.Workspace
 	versions   map[workspace.StateVersionID]workspace.StateVersion
+	locked     map[namespace.Name]bool
+	deleted    map[workspace.ID]bool
 }
 
 var _ ClaimBackend = (*MemoryClaimBackend)(nil)
@@ -31,8 +36,18 @@ func NewMemoryClaimBackend() *MemoryClaimBackend {
 		namespaces:       make(map[namespace.Name]namespace.Namespace),
 		workspaces:       make(map[workspace.ID]workspace.Workspace),
 		versions:         make(map[workspace.StateVersionID]workspace.StateVersion),
+		locked:           make(map[namespace.Name]bool),
+		deleted:          make(map[workspace.ID]bool),
 	}
 	b.MemoryClaimStore = workspace.NewMemoryClaimStore(b)
+	b.SetManualLocked(func(ctx context.Context, ws workspace.ID) bool {
+		w, err := b.GetWorkspaceByID(ctx, ws)
+
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		return err == nil && b.locked[w.Ref.Namespace]
+	})
 
 	return b
 }
@@ -102,4 +117,55 @@ func (b *MemoryClaimBackend) GetWorkspaceStateVersion(
 	}
 
 	return sv, nil
+}
+
+// SaveWorkspace implements ClaimBackend.
+func (b *MemoryClaimBackend) SaveWorkspace(_ context.Context, w workspace.Workspace, _ namespace.Fence) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.workspaces[w.ID] = w
+
+	return nil
+}
+
+// DeleteWorkspace implements ClaimBackend: a deleted workspace is missing.
+func (b *MemoryClaimBackend) DeleteWorkspace(
+	_ context.Context, ref workspace.Ref, _ namespace.Fence, _ inventory.Deletion,
+) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for id := range b.workspaces {
+		if b.workspaces[id].Ref == ref {
+			delete(b.workspaces, id)
+
+			b.deleted[id] = true
+		}
+	}
+
+	return nil
+}
+
+// PutLock implements ClaimBackend: a manual lock covers each workspace of its
+// namespace.
+func (b *MemoryClaimBackend) PutLock(
+	_ context.Context, l manuallock.Lock, fence namespace.Fence, _ audit.Entry,
+) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.locked[fence.Namespace] = true
+
+	_ = l
+
+	return nil
+}
+
+// IsDeleted implements workspace.ClaimDeleted.
+func (b *MemoryClaimBackend) IsDeleted(_ context.Context, id workspace.ID) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.deleted[id], nil
 }

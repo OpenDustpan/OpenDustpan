@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -43,55 +44,71 @@ func TestClaimRegistryGuardsRefuseBeforeTheStore(t *testing.T) {
 
 	cases := []struct {
 		name   string
+		manual workspace.ManualLocks
 		mutate func(f *claimFixture, req *workspace.RegisterClaimRequest)
 		want   error
 	}{
 		{
-			"empty set",
+			"manual lock that covers the workspace",
+			fakeClaimManual{lock: true, err: nil},
+			func(*claimFixture, *workspace.RegisterClaimRequest) {}, workspace.ErrClaimLocked,
+		},
+		{
+			"manual lock store that fails",
+			fakeClaimManual{lock: false, err: errClaimManualStore},
+			func(*claimFixture, *workspace.RegisterClaimRequest) {}, errClaimManualStore,
+		},
+		{
+			"empty set", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Addresses = nil },
 			workspace.ErrClaimEmptySet,
 		},
 		{
-			"blank addresses",
+			"blank addresses", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Addresses = []string{" ", ""} },
 			workspace.ErrClaimEmptySet,
 		},
 		{
-			"replace",
+			"job token with no job", nil,
+			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.ViaJobToken = true; r.JobID = "" },
+			workspace.ErrClaimInvalid,
+		},
+		{
+			"replace", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Replace = true },
 			workspace.ErrClaimReplace,
 		},
 		{
-			"oversize address list",
+			"oversize address list", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Addresses = many },
 			workspace.ErrClaimTooLarge,
 		},
 		{
-			"address too long",
+			"address too long", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) {
 				r.Addresses = []string{strings.Repeat("a", workspace.MaxClaimAddressLength+1)}
 			},
 			workspace.ErrClaimTooLarge,
 		},
 		{
-			"unknown base",
+			"unknown base", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Base = "sv-missing" },
 			workspace.ErrClaimBadBase,
 		},
 		{
-			"unknown workspace",
+			"unknown workspace", nil,
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.WorkspaceID = "ws-missing" },
 			workspace.ErrClaimNotFound,
 		},
 		{
-			"fence of another namespace",
+			"fence of another namespace", nil,
 			func(f *claimFixture, _ *workspace.RegisterClaimRequest) {
 				f.fence = namespace.Fence{Namespace: "elsewhere", FailoverVersion: f.fence.FailoverVersion}
 			},
 			namespace.ErrFenced,
 		},
 		{
-			"locked workspace",
+			"locked workspace", nil,
 			func(f *claimFixture, _ *workspace.RegisterClaimRequest) {
 				w := f.workspaces.spaces[f.ws]
 				w.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "lock-1", Holder: "bob", Reason: ""}
@@ -112,7 +129,7 @@ func TestClaimRegistryGuardsRefuseBeforeTheStore(t *testing.T) {
 			}
 
 			r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
-				Workspaces: f.workspaces, Versions: f.versions, Deleted: f.deleted, Manual: nil,
+				Workspaces: f.workspaces, Versions: f.versions, Deleted: f.deleted, Manual: c.manual,
 				Store: counting, Now: time.Now,
 			})
 			if err != nil {
@@ -120,7 +137,8 @@ func TestClaimRegistryGuardsRefuseBeforeTheStore(t *testing.T) {
 			}
 
 			req := &workspace.RegisterClaimRequest{
-				Audit: claimAudit(), WorkspaceID: f.ws, Base: f.base, Addresses: []string{"aws_instance.a"},
+				ViaJobToken: false,
+				Audit:       claimAudit(), WorkspaceID: f.ws, Base: f.base, Addresses: []string{"aws_instance.a"},
 				Replace: false, Principal: "ada", JobID: "job-1", Trigger: "",
 			}
 			c.mutate(f, req)
@@ -134,4 +152,51 @@ func TestClaimRegistryGuardsRefuseBeforeTheStore(t *testing.T) {
 			}
 		})
 	}
+}
+
+var errClaimManualStore = errors.New("the manual lock store does not answer")
+
+// fakeClaimManual is a ManualLocks fake: it covers each unit when lock is set,
+// and answers err when err is set.
+type fakeClaimManual struct {
+	lock bool
+	err  error
+}
+
+func (f fakeClaimManual) CoveringFor(context.Context, manuallock.Unit, string) (manuallock.Lock, error) {
+	var none manuallock.Lock
+
+	switch {
+	case f.err != nil:
+		return none, f.err
+	case f.lock:
+		return manuallock.Lock{Since: time.Time{}, Target: noTarget(), Holder: "ops", Reason: "freeze"}, nil
+	default:
+		return none, manuallock.ErrNotLocked
+	}
+}
+
+func (f fakeClaimManual) NamespaceLock(context.Context, namespace.Name) (manuallock.Lock, error) {
+	var none manuallock.Lock
+
+	return none, manuallock.ErrNotLocked
+}
+
+func (f fakeClaimManual) NamespaceLockFor(
+	ctx context.Context, unit manuallock.Unit, jobID string,
+) (manuallock.Lock, error) {
+	return f.CoveringFor(ctx, unit, jobID)
+}
+
+func (f fakeClaimManual) PhaseStart(context.Context, manuallock.Unit, string) time.Time {
+	var none time.Time
+
+	return none
+}
+
+// noTarget returns the zero manual lock target.
+func noTarget() manuallock.Target {
+	var t manuallock.Target
+
+	return t
 }

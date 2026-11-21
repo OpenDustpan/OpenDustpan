@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -63,9 +64,13 @@ func ClaimFromRow(r ClaimRow) (workspace.Claim, error) {
 		return workspace.Claim{}, err
 	}
 
-	state := workspace.ClaimState(r.State)
-	if state != workspace.ClaimAccepted && state != workspace.ClaimEnded {
-		return workspace.Claim{}, fmt.Errorf("%w: unknown state %q", ErrClaimRow, r.State)
+	if setErr := checkClaimSet(addresses); setErr != nil {
+		return workspace.Claim{}, setErr
+	}
+
+	state, err := checkClaimState(&r)
+	if err != nil {
+		return workspace.Claim{}, err
 	}
 
 	var ended time.Time
@@ -85,4 +90,47 @@ func ClaimFromRow(r ClaimRow) (workspace.Claim, error) {
 		StartedAt:   FromMillis(r.StartedAtMs),
 		EndedAt:     ended,
 	}, nil
+}
+
+// checkClaimSet checks that the stored address set of a claim is what the
+// registry stores: not empty, within the bounds, with no empty address, and
+// trimmed, sorted and without duplicates. A row that is not is ErrClaimRow.
+func checkClaimSet(addresses []string) error {
+	switch {
+	case len(addresses) == 0:
+		return fmt.Errorf("%w: the address set is empty", ErrClaimRow)
+	case len(addresses) > workspace.MaxClaimAddresses:
+		return fmt.Errorf("%w: the address set holds %d addresses", ErrClaimRow, len(addresses))
+	}
+
+	for _, a := range addresses {
+		if a == "" || len(a) > workspace.MaxClaimAddressLength {
+			return fmt.Errorf("%w: an address is empty or too long", ErrClaimRow)
+		}
+	}
+
+	if !slices.Equal(addresses, workspace.NormalizeClaimAddresses(addresses)) {
+		return fmt.Errorf("%w: the address set is not normalized", ErrClaimRow)
+	}
+
+	return nil
+}
+
+// checkClaimState checks that the state of a row agrees with its end time and
+// that the fields that a claim always has are not empty. It returns the state.
+func checkClaimState(r *ClaimRow) (workspace.ClaimState, error) {
+	state := workspace.ClaimState(r.State)
+
+	switch {
+	case state != workspace.ClaimAccepted && state != workspace.ClaimEnded:
+		return "", fmt.Errorf("%w: unknown state %q", ErrClaimRow, r.State)
+	case state == workspace.ClaimAccepted && r.EndedAtMs != 0:
+		return "", fmt.Errorf("%w: an accepted claim has an end time", ErrClaimRow)
+	case state == workspace.ClaimEnded && r.EndedAtMs == 0:
+		return "", fmt.Errorf("%w: an ended claim has no end time", ErrClaimRow)
+	case r.ID == "" || r.WorkspaceID == "" || r.Base == "" || r.Principal == "":
+		return "", fmt.Errorf("%w: a claim has an empty ID, workspace, base or principal", ErrClaimRow)
+	default:
+		return state, nil
+	}
 }

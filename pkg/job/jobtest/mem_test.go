@@ -31,6 +31,7 @@ func TestMemConformance(t *testing.T) {
 		db := newMemDB()
 
 		return jobtest.Harness{
+			Claims:     nil,
 			Jobs:       db,
 			Durable:    db.durable,
 			Freezes:    db,

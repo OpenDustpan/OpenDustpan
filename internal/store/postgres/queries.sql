@@ -3975,19 +3975,9 @@ DELETE FROM workspace_claim_touches WHERE workspace_id = $1;
 -- name: DeleteWorkspaceClaims :exec
 DELETE FROM workspace_claims WHERE workspace_id = $1;
 
--- name: EndWorkspaceClaimsByJob :execrows
--- Ends each accepted claim of a job in the workspaces of one namespace.
-UPDATE workspace_claims
-SET state = 'ended', ended_at_ms = sqlc.arg(ended_at_ms)
-WHERE job_id = sqlc.arg(job_id) AND state = 'accepted'
-  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = sqlc.arg(namespace));
-
--- name: ExpireWorkspaceClaims :execrows
--- Ends each accepted claim of one namespace that started before the cutoff.
-UPDATE workspace_claims
-SET state = 'ended', ended_at_ms = sqlc.arg(ended_at_ms)
-WHERE state = 'accepted' AND started_at_ms < sqlc.arg(cutoff_ms)
-  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = sqlc.arg(namespace));
+-- name: EndWorkspaceClaim :execrows
+-- Ends one accepted claim. A claim that is not accepted stays as it is.
+UPDATE workspace_claims SET state = 'ended', ended_at_ms = $1 WHERE id = $2 AND state = 'accepted';
 
 -- name: InsertWorkspaceClaim :exec
 -- The sequence number is the next one of the workspace. The caller holds the
@@ -4009,6 +3999,27 @@ VALUES (
     (SELECT COALESCE(MAX(t.seq), 0) + 1 FROM workspace_claim_touches AS t WHERE t.workspace_id = sqlc.arg(workspace_id)),
     sqlc.arg(version_id), sqlc.arg(addresses)
 );
+
+-- name: IsWorkspaceDeleted :one
+-- Whether the workspace is soft-deleted. A workspace that does not exist
+-- returns no row.
+SELECT (deleted_at_ms IS NOT NULL)::boolean AS deleted FROM workspaces WHERE id = $1;
+
+-- name: ListExpiredWorkspaceClaims :many
+-- The accepted claims of one namespace that started before the cutoff, with
+-- the name of their workspace.
+SELECT c.id, c.workspace_id, c.job_id, w.name
+FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
+WHERE c.state = 'accepted' AND c.started_at_ms < sqlc.arg(cutoff_ms) AND w.namespace = sqlc.arg(namespace)
+ORDER BY c.workspace_id, c.seq;
+
+-- name: ListJobWorkspaceClaims :many
+-- The accepted claims of one job in one namespace, with the name of their
+-- workspace.
+SELECT c.id, c.workspace_id, c.job_id, w.name
+FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
+WHERE c.job_id = sqlc.arg(job_id) AND c.state = 'accepted' AND w.namespace = sqlc.arg(namespace)
+ORDER BY c.workspace_id, c.seq;
 
 -- name: ListWorkspaceClaimTouches :many
 SELECT version_id, addresses FROM workspace_claim_touches WHERE workspace_id = $1 ORDER BY seq;

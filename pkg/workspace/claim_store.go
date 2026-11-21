@@ -58,6 +58,14 @@ type ClaimStore interface {
 
 // ClaimTx is the view of one workspace inside WithClaims.
 type ClaimTx interface {
+	// Workspace reads the workspace as the transaction sees it, under the
+	// claim lock: its lock columns are the ones that a claim must respect. It
+	// returns ErrNotFound for a workspace that is gone.
+	Workspace(ctx context.Context) (Workspace, error)
+	// ManualLocked reports whether a manual lock covers the workspace, as the
+	// transaction reads the locks. It does not apply the rule that a phase
+	// that started before the lock passes it: the caller does.
+	ManualLocked(ctx context.Context) (bool, error)
 	// Claims returns every claim of the workspace in accept order.
 	Claims(ctx context.Context) ([]Claim, error)
 	// Touches returns every recorded touch of the workspace, oldest first.
@@ -79,6 +87,9 @@ type MemoryClaimStore struct {
 	entries []audit.Entry
 	// fences holds the failover version first seen for each namespace.
 	fences map[namespace.Name]int64
+	// manualLocked tells whether a manual lock covers a workspace. Nil means
+	// that none does.
+	manualLocked func(ctx context.Context, ws ID) bool
 	// workspaces resolves the namespace of a workspace, so a fence of
 	// another namespace is refused as an adapter with a workspaces table
 	// refuses it.
@@ -89,13 +100,24 @@ type MemoryClaimStore struct {
 // namespace of each workspace from workspaces.
 func NewMemoryClaimStore(workspaces ClaimWorkspaces) *MemoryClaimStore {
 	return &MemoryClaimStore{
-		mu:         sync.Mutex{},
-		claims:     make(map[ID][]Claim),
-		touches:    make(map[ID][]ClaimTouch),
-		entries:    nil,
-		fences:     make(map[namespace.Name]int64),
-		workspaces: workspaces,
+		mu:           sync.Mutex{},
+		claims:       make(map[ID][]Claim),
+		touches:      make(map[ID][]ClaimTouch),
+		entries:      nil,
+		fences:       make(map[namespace.Name]int64),
+		workspaces:   workspaces,
+		manualLocked: nil,
 	}
+}
+
+// SetManualLocked sets the function that tells which workspaces a manual
+// lock covers, for the tests of the check under the claim lock. Call it
+// before the first use.
+func (m *MemoryClaimStore) SetManualLocked(covers func(ctx context.Context, ws ID) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.manualLocked = covers
 }
 
 // Entries returns a copy of the audit entries that the store appended.
@@ -104,6 +126,24 @@ func (m *MemoryClaimStore) Entries() []audit.Entry {
 	defer m.mu.Unlock()
 
 	return slices.Clone(m.entries)
+}
+
+// List returns the audit entries that the store appended in the namespace ns,
+// as the audit port of a SQL store reads them. It ignores the page: the
+// store holds few entries.
+func (m *MemoryClaimStore) List(_ context.Context, ns namespace.Name, _ audit.Page) (audit.Listing, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out audit.Listing
+
+	for i := range m.entries {
+		if m.entries[i].Namespace == ns {
+			out.Entries = append(out.Entries, m.entries[i])
+		}
+	}
+
+	return out, nil
 }
 
 // WithClaims implements ClaimStore.
@@ -159,7 +199,7 @@ func (m *MemoryClaimStore) EndClaimsByJob(
 ) (int, error) {
 	ended := at.UTC().Truncate(time.Millisecond)
 
-	return m.endWhere(ctx, fence, ended, func(c *Claim) bool {
+	return m.endWhere(ctx, fence, ended, ClaimEndedByJob, func(c *Claim) bool {
 		return jobID != "" && c.JobID == jobID && c.State == ClaimAccepted
 	})
 }
@@ -168,7 +208,7 @@ func (m *MemoryClaimStore) EndClaimsByJob(
 func (m *MemoryClaimStore) ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff time.Time) (int, error) {
 	ended := cutoff.UTC().Truncate(time.Millisecond)
 
-	return m.endWhere(ctx, fence, ended, func(c *Claim) bool {
+	return m.endWhere(ctx, fence, ended, ClaimEndedByExpiry, func(c *Claim) bool {
 		return c.State == ClaimAccepted && c.StartedAt.Before(cutoff)
 	})
 }
@@ -208,7 +248,7 @@ func (m *MemoryClaimStore) AddClaimTouch(
 // endWhere ends each claim that match accepts, in the workspaces of the
 // namespace of the fence.
 func (m *MemoryClaimStore) endWhere(
-	ctx context.Context, fence namespace.Fence, ended time.Time, match func(c *Claim) bool,
+	ctx context.Context, fence namespace.Fence, ended time.Time, cause string, match func(c *Claim) bool,
 ) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -226,11 +266,22 @@ func (m *MemoryClaimStore) endWhere(
 		}
 
 		for i := range list {
-			if match(&list[i]) {
-				list[i].State = ClaimEnded
-				list[i].EndedAt = ended
-				count++
+			if !match(&list[i]) {
+				continue
 			}
+
+			entry, err := ClaimEndEntry(&ClaimEnd{
+				Namespace: fence.Namespace, Workspace: w.Ref.Name, ClaimID: list[i].ID, JobID: list[i].JobID,
+				Cause: cause, At: ended,
+			})
+			if err != nil {
+				return 0, err
+			}
+
+			list[i].State = ClaimEnded
+			list[i].EndedAt = ended
+			m.entries = append(m.entries, entry)
+			count++
 		}
 	}
 
@@ -268,6 +319,16 @@ type memoryClaimTx struct {
 	fence   namespace.Fence
 	pending []Claim
 	entry   []*audit.Entry
+}
+
+// Workspace implements ClaimTx.
+func (t *memoryClaimTx) Workspace(ctx context.Context) (Workspace, error) {
+	return t.store.workspaces.GetWorkspaceByID(ctx, t.ws)
+}
+
+// ManualLocked implements ClaimTx.
+func (t *memoryClaimTx) ManualLocked(ctx context.Context) (bool, error) {
+	return t.store.manualLocked != nil && t.store.manualLocked(ctx, t.ws), nil
 }
 
 // Claims implements ClaimTx.

@@ -314,6 +314,7 @@ func TestRecorderPutPlanCommitError(t *testing.T) {
 
 	h := jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 		Harness: jobtest.Harness{
+			Claims:     nil,
 			Jobs:       db,
 			Durable:    db.durable,
 			Freezes:    db,

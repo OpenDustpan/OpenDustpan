@@ -5657,22 +5657,18 @@ func (q *Queries) EndTempAdmin(ctx context.Context, arg EndTempAdminParams) (int
 	return result.RowsAffected(), nil
 }
 
-const endWorkspaceClaimsByJob = `-- name: EndWorkspaceClaimsByJob :execrows
-UPDATE workspace_claims
-SET state = 'ended', ended_at_ms = $1
-WHERE job_id = $2 AND state = 'accepted'
-  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = $3)
+const endWorkspaceClaim = `-- name: EndWorkspaceClaim :execrows
+UPDATE workspace_claims SET state = 'ended', ended_at_ms = $1 WHERE id = $2 AND state = 'accepted'
 `
 
-type EndWorkspaceClaimsByJobParams struct {
+type EndWorkspaceClaimParams struct {
 	EndedAtMs int64
-	JobID     string
-	Namespace string
+	ID        string
 }
 
-// Ends each accepted claim of a job in the workspaces of one namespace.
-func (q *Queries) EndWorkspaceClaimsByJob(ctx context.Context, arg EndWorkspaceClaimsByJobParams) (int64, error) {
-	result, err := q.db.Exec(ctx, endWorkspaceClaimsByJob, arg.EndedAtMs, arg.JobID, arg.Namespace)
+// Ends one accepted claim. A claim that is not accepted stays as it is.
+func (q *Queries) EndWorkspaceClaim(ctx context.Context, arg EndWorkspaceClaimParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endWorkspaceClaim, arg.EndedAtMs, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -5829,28 +5825,6 @@ WHERE state = 'running' AND claim_owner = $1::text
 func (q *Queries) ExpireRunnerClaimsWithoutSession(ctx context.Context, runnerID string) error {
 	_, err := q.db.Exec(ctx, expireRunnerClaimsWithoutSession, runnerID)
 	return err
-}
-
-const expireWorkspaceClaims = `-- name: ExpireWorkspaceClaims :execrows
-UPDATE workspace_claims
-SET state = 'ended', ended_at_ms = $1
-WHERE state = 'accepted' AND started_at_ms < $2
-  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = $3)
-`
-
-type ExpireWorkspaceClaimsParams struct {
-	EndedAtMs int64
-	CutoffMs  int64
-	Namespace string
-}
-
-// Ends each accepted claim of one namespace that started before the cutoff.
-func (q *Queries) ExpireWorkspaceClaims(ctx context.Context, arg ExpireWorkspaceClaimsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, expireWorkspaceClaims, arg.EndedAtMs, arg.CutoffMs, arg.Namespace)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const extendDurableClaim = `-- name: ExtendDurableClaim :exec
@@ -14639,6 +14613,19 @@ func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertW
 	return err
 }
 
+const isWorkspaceDeleted = `-- name: IsWorkspaceDeleted :one
+SELECT (deleted_at_ms IS NOT NULL)::boolean AS deleted FROM workspaces WHERE id = $1
+`
+
+// Whether the workspace is soft-deleted. A workspace that does not exist
+// returns no row.
+func (q *Queries) IsWorkspaceDeleted(ctx context.Context, id string) (bool, error) {
+	row := q.db.QueryRow(ctx, isWorkspaceDeleted, id)
+	var deleted bool
+	err := row.Scan(&deleted)
+	return deleted, err
+}
+
 const journalBatchRefs = `-- name: JournalBatchRefs :many
 SELECT blob_key, sha256, size FROM update_journal
 WHERE stack_id = $1 AND update_id = $2
@@ -15956,6 +15943,52 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.UnlockedWrite,
 			&i.OriginJob,
 			&i.ClientEncrypted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredWorkspaceClaims = `-- name: ListExpiredWorkspaceClaims :many
+SELECT c.id, c.workspace_id, c.job_id, w.name
+FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
+WHERE c.state = 'accepted' AND c.started_at_ms < $1 AND w.namespace = $2
+ORDER BY c.workspace_id, c.seq
+`
+
+type ListExpiredWorkspaceClaimsParams struct {
+	CutoffMs  int64
+	Namespace string
+}
+
+type ListExpiredWorkspaceClaimsRow struct {
+	ID          string
+	WorkspaceID string
+	JobID       string
+	Name        string
+}
+
+// The accepted claims of one namespace that started before the cutoff, with
+// the name of their workspace.
+func (q *Queries) ListExpiredWorkspaceClaims(ctx context.Context, arg ListExpiredWorkspaceClaimsParams) ([]ListExpiredWorkspaceClaimsRow, error) {
+	rows, err := q.db.Query(ctx, listExpiredWorkspaceClaims, arg.CutoffMs, arg.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExpiredWorkspaceClaimsRow
+	for rows.Next() {
+		var i ListExpiredWorkspaceClaimsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.JobID,
+			&i.Name,
 		); err != nil {
 			return nil, err
 		}
@@ -17648,6 +17681,52 @@ func (q *Queries) ListJobPlanIDs(ctx context.Context, arg ListJobPlanIDsParams) 
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobWorkspaceClaims = `-- name: ListJobWorkspaceClaims :many
+SELECT c.id, c.workspace_id, c.job_id, w.name
+FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
+WHERE c.job_id = $1 AND c.state = 'accepted' AND w.namespace = $2
+ORDER BY c.workspace_id, c.seq
+`
+
+type ListJobWorkspaceClaimsParams struct {
+	JobID     string
+	Namespace string
+}
+
+type ListJobWorkspaceClaimsRow struct {
+	ID          string
+	WorkspaceID string
+	JobID       string
+	Name        string
+}
+
+// The accepted claims of one job in one namespace, with the name of their
+// workspace.
+func (q *Queries) ListJobWorkspaceClaims(ctx context.Context, arg ListJobWorkspaceClaimsParams) ([]ListJobWorkspaceClaimsRow, error) {
+	rows, err := q.db.Query(ctx, listJobWorkspaceClaims, arg.JobID, arg.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJobWorkspaceClaimsRow
+	for rows.Next() {
+		var i ListJobWorkspaceClaimsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.JobID,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

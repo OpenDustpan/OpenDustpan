@@ -10,11 +10,15 @@ import (
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-var _ workspace.ClaimStore = (*Store)(nil)
+var (
+	_ workspace.ClaimStore   = (*Store)(nil)
+	_ workspace.ClaimDeleted = (*Store)(nil)
+)
 
 // WithClaims implements workspace.ClaimStore. The write transaction of
 // SQLite orders the calls: only one write transaction runs at a time, so two
@@ -56,6 +60,40 @@ type workspaceClaimTx struct {
 	q     *db.Queries
 	ws    workspace.ID
 	fence namespace.Fence
+}
+
+// Workspace implements workspace.ClaimTx. It reads the row in the
+// transaction, after the claim lock, so a lock that committed before the claim
+// lock is in it.
+func (t *workspaceClaimTx) Workspace(ctx context.Context) (workspace.Workspace, error) {
+	row, err := t.q.ReadWorkspaceByID(ctx, t.ws.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return workspace.Workspace{}, workspace.ErrNotFound
+	}
+
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("select workspace: %w", err)
+	}
+
+	w := workspaceFromRow(row.Workspace, row.NamespaceID)
+	w.InCollection = row.InCollection
+
+	return w, nil
+}
+
+// ManualLocked implements workspace.ClaimTx. A workspace that the inventory
+// does not hold is an error, so the check fails closed.
+func (t *workspaceClaimTx) ManualLocked(ctx context.Context) (bool, error) {
+	locks, err := coveringLocksOfUnitID(ctx, t.q, t.fence.Namespace, t.ws.String())
+
+	switch {
+	case errors.Is(err, manuallock.ErrNotLocked):
+		return false, nil
+	case err != nil:
+		return false, err
+	default:
+		return len(locks) > 0, nil
+	}
 }
 
 // Claims implements workspace.ClaimTx.
@@ -161,7 +199,8 @@ func (s *Store) ListClaims(ctx context.Context, ws workspace.ID) ([]workspace.Cl
 	return readWorkspaceClaims(ctx, s.queries, ws)
 }
 
-// EndClaimsByJob implements workspace.ClaimStore.
+// EndClaimsByJob implements workspace.ClaimStore. Each ended claim writes an
+// audit entry in the same transaction.
 func (s *Store) EndClaimsByJob(
 	ctx context.Context, fence namespace.Fence, jobID string, at time.Time,
 ) (int, error) {
@@ -172,45 +211,134 @@ func (s *Store) EndClaimsByJob(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var n int64
+	var n int
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		var execErr error
+		var endErr error
 
-		n, execErr = q.EndWorkspaceClaimsByJob(ctx, db.EndWorkspaceClaimsByJobParams{
-			EndedAtMs: codec.Millis(at), JobID: jobID, Namespace: fence.Namespace.String(),
-		})
+		n, endErr = endJobClaims(ctx, q, fence.Namespace, jobID, at)
 
-		return execErr
+		return endErr
 	})
 	if err != nil {
 		return 0, fmt.Errorf("end claims of job: %w", err)
 	}
 
-	return int(n), nil
+	return n, nil
 }
 
-// ExpireClaims implements workspace.ClaimStore.
+// ExpireClaims implements workspace.ClaimStore. Each ended claim writes an
+// audit entry in the same transaction.
 func (s *Store) ExpireClaims(ctx context.Context, fence namespace.Fence, cutoff time.Time) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var n int64
+	var n int
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		var execErr error
-
-		n, execErr = q.ExpireWorkspaceClaims(ctx, db.ExpireWorkspaceClaimsParams{
-			EndedAtMs: codec.Millis(cutoff), CutoffMs: codec.Millis(cutoff), Namespace: fence.Namespace.String(),
+		rows, listErr := q.ListExpiredWorkspaceClaims(ctx, db.ListExpiredWorkspaceClaimsParams{
+			CutoffMs: codec.Millis(cutoff), Namespace: fence.Namespace.String(),
 		})
+		if listErr != nil {
+			return fmt.Errorf("select expired claims: %w", listErr)
+		}
 
-		return execErr
+		ending := make([]endingClaim, len(rows))
+		for i := range rows {
+			ending[i] = endingClaim(rows[i])
+		}
+
+		var endErr error
+
+		n, endErr = endClaims(
+			ctx,
+			q,
+			fence.Namespace,
+			ending,
+			claimEnd{at: cutoff, cause: workspace.ClaimEndedByExpiry},
+		)
+
+		return endErr
 	})
 	if err != nil {
 		return 0, fmt.Errorf("expire claims: %w", err)
 	}
 
-	return int(n), nil
+	return n, nil
+}
+
+// claimEnd is when and why claims end.
+type claimEnd struct {
+	at    time.Time
+	cause string
+}
+
+// endingClaim is an accepted claim that an automatic end closes: its ID, its
+// workspace, its job and the name of its workspace.
+type endingClaim struct {
+	ID          string
+	WorkspaceID string
+	JobID       string
+	Name        string
+}
+
+// endJobClaims ends each accepted claim of the job in the namespace ns, in
+// the transaction of q, with one audit entry for each. It returns the count.
+// The store of jobs calls it in the transaction that moves a job to a
+// terminal state, so a claim never outlives its job.
+func endJobClaims(
+	ctx context.Context, q *db.Queries, ns namespace.Name, jobID string, at time.Time,
+) (int, error) {
+	rows, err := q.ListJobWorkspaceClaims(ctx, db.ListJobWorkspaceClaimsParams{
+		JobID: jobID, Namespace: ns.String(),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("select claims of job: %w", err)
+	}
+
+	ending := make([]endingClaim, len(rows))
+	for i := range rows {
+		ending[i] = endingClaim(rows[i])
+	}
+
+	return endClaims(ctx, q, ns, ending, claimEnd{at: at, cause: workspace.ClaimEndedByJob})
+}
+
+// endClaims ends each claim of ending that is still accepted and appends one
+// audit entry for each end, in the transaction of q.
+func endClaims(
+	ctx context.Context, q *db.Queries, ns namespace.Name, ending []endingClaim, why claimEnd,
+) (int, error) {
+	ended := 0
+
+	for i := range ending {
+		c := &ending[i]
+
+		n, err := q.EndWorkspaceClaim(ctx, db.EndWorkspaceClaimParams{EndedAtMs: codec.Millis(why.at), ID: c.ID})
+		if err != nil {
+			return 0, fmt.Errorf("end claim: %w", err)
+		}
+
+		if n == 0 {
+			continue
+		}
+
+		entry, err := workspace.ClaimEndEntry(&workspace.ClaimEnd{
+			Namespace: ns, Workspace: workspace.Name(c.Name), ClaimID: c.ID, JobID: c.JobID, Cause: why.cause,
+			At: why.at,
+		})
+		if err != nil {
+			return 0, err
+		}
+
+		if _, err = appendAuditEntry(ctx, q, entry); err != nil {
+			return 0, fmt.Errorf("append audit entry: %w", err)
+		}
+
+		ended++
+	}
+
+	return ended, nil
 }
 
 // AddClaimTouch implements workspace.ClaimStore.
@@ -238,4 +366,22 @@ func (s *Store) AddClaimTouch(
 			WorkspaceID: ws.String(), VersionID: version.String(), Addresses: text,
 		})
 	})
+}
+
+// IsDeleted implements workspace.ClaimDeleted: it reports whether id names a
+// soft-deleted workspace. A workspace that does not exist is not deleted.
+func (s *Store) IsDeleted(ctx context.Context, id workspace.ID) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	deleted, err := s.queries.IsWorkspaceDeleted(ctx, id.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("select workspace deleted: %w", err)
+	}
+
+	return deleted, nil
 }

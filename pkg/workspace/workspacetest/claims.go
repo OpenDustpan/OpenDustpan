@@ -7,12 +7,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -25,9 +28,29 @@ type ClaimBackend interface {
 	workspace.ClaimStore
 	workspace.ClaimWorkspaces
 	workspace.ClaimVersions
+	workspace.ClaimDeleted
+	claimAuditReader
+	claimSeeder
+}
+
+// claimAuditReader reads the audit entries of a namespace, newest first, as
+// the audit port of a store does.
+type claimAuditReader interface {
+	List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
+}
+
+// claimSeeder is the part of a backend that seeds the rows of the cases: a
+// namespace, a workspace, a base state version, a lock and a delete.
+type claimSeeder interface {
 	CreateNamespace(ctx context.Context, ns namespace.Namespace) error
 	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
 	CreateStateVersion(ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int) error
+	// SaveWorkspace stores w, for the case that locks a workspace.
+	SaveWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
+	// DeleteWorkspace soft-deletes the workspace of ref.
+	DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence, d inventory.Deletion) error
+	// PutLock puts a manual lock, as the lock store does.
+	PutLock(ctx context.Context, l manuallock.Lock, fence namespace.Fence, e audit.Entry) error
 }
 
 // ClaimBackendFactory returns an empty backend for one test. The adapter
@@ -90,6 +113,10 @@ func RunClaimStore(t *testing.T, newBackend ClaimBackendFactory) {
 		{"expire by cutoff", claimExpire},
 		{"touched base", claimTouchedBase},
 		{"ended claim frees its addresses", claimEndedFrees},
+		{"lock taken after the pre-check", claimLockAfterPreCheck},
+		{"manual lock taken after the pre-check", claimManualAfterPreCheck},
+		{"manual lock store that fails", claimManualFailsClosed},
+		{"soft-deleted workspace", claimDeletedWorkspace},
 		{"parallel registrations", claimParallel},
 	}
 
@@ -119,7 +146,7 @@ func newClaimWorld(t *testing.T, b ClaimBackend) *claimWorld {
 	r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
 		Workspaces: b,
 		Versions:   b,
-		Deleted:    nil,
+		Deleted:    b,
 		Manual:     nil,
 		Store:      b,
 		Now:        claimNow,
@@ -221,6 +248,7 @@ func claimEntry(fence namespace.Fence) audit.Entry {
 // request returns a register request on the acme workspace.
 func (w *claimWorld) request(job string, addresses ...string) *workspace.RegisterClaimRequest {
 	return &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		WorkspaceID: w.wsAcme,
 		Base:        w.baseAcme,
 		Addresses:   addresses,
@@ -255,6 +283,67 @@ func (w *claimWorld) list(t *testing.T, ws workspace.ID) []workspace.Claim {
 	}
 
 	return got
+}
+
+// entriesOf returns the audit entries of the acme namespace that name the
+// claim id.
+func (w *claimWorld) entriesOf(t *testing.T, id string) []audit.Entry {
+	t.Helper()
+
+	var out []audit.Entry
+
+	for before := int64(0); ; {
+		listing, err := w.backend.List(
+			t.Context(),
+			w.acme.Namespace,
+			audit.Page{Size: audit.MaxPageSize, Before: before},
+		)
+		if err != nil {
+			t.Fatalf("list audit entries: %v", err)
+		}
+
+		for i := range listing.Entries {
+			if listing.Entries[i].ObjectID == id {
+				out = append(out, listing.Entries[i])
+			}
+		}
+
+		if n := len(listing.Entries); n > 0 {
+			before = listing.Entries[n-1].Sequence
+		}
+
+		if !listing.More {
+			return out
+		}
+	}
+}
+
+// wantEndEntry fails the test unless the audit log holds, for the claim id,
+// the entry of its accept and exactly one entry of its end by the server with
+// the cause and the job.
+func (w *claimWorld) wantEndEntry(t *testing.T, id, cause, jobID string) {
+	t.Helper()
+
+	var accepts, ends int
+
+	entries := w.entriesOf(t, id)
+
+	for i := range entries {
+		e := &entries[i]
+
+		switch {
+		case e.Subject == "@server" && strings.Contains(e.Reason, cause) && e.JobID == jobID:
+			ends++
+		case e.Subject == claimPrincipal:
+			accepts++
+		default:
+		}
+	}
+
+	if accepts != 1 || ends != 1 {
+		t.Fatalf("claim %s has %d accept entries and %d end entries by the server (cause %q), want 1 and 1",
+			id, accepts, ends, cause)
+	}
 }
 
 // wantCount fails the test unless the workspace holds n claims.
@@ -679,7 +768,7 @@ func (w *claimWorld) checkReleased(t *testing.T, end time.Time) {
 func claimReleaseByJob(t *testing.T, w *claimWorld) {
 	t.Helper()
 
-	w.register(t, claimJob1, "aws_instance.a")
+	firstJobClaim := w.register(t, claimJob1, "aws_instance.a").ID
 	w.register(t, claimJob2, "aws_instance.b")
 
 	if _, err := w.registry.Register(t.Context(), w.otherRequest(claimJob1, "aws_instance.a"), w.other); err != nil {
@@ -705,6 +794,8 @@ func claimReleaseByJob(t *testing.T, w *claimWorld) {
 	}
 
 	w.checkReleased(t, end)
+
+	w.wantEndEntry(t, firstJobClaim, workspace.ClaimEndedByJob, claimJob1)
 }
 
 func claimExpire(t *testing.T, w *claimWorld) {
@@ -733,6 +824,8 @@ func claimExpire(t *testing.T, w *claimWorld) {
 	if len(got) != 1 || got[0].State != workspace.ClaimEnded || got[0].EndedAt.IsZero() {
 		t.Fatalf("claims after expiry = %+v, want one ended claim with an end time", got)
 	}
+
+	w.wantEndEntry(t, first.ID, workspace.ClaimEndedByExpiry, claimJob1)
 }
 
 func claimTouchedBase(t *testing.T, w *claimWorld) {
@@ -835,4 +928,221 @@ func claimParallel(t *testing.T, w *claimWorld) {
 	}
 
 	w.wantCount(t, w.wsAcme, callers+1)
+}
+
+// hookClaimStore runs before just before each transaction of the store opens,
+// after the registry made its checks outside the transaction.
+type hookClaimStore struct {
+	workspace.ClaimStore
+
+	before func()
+}
+
+func (s *hookClaimStore) WithClaims(
+	ctx context.Context, ws workspace.ID, fence namespace.Fence, fn func(tx workspace.ClaimTx) error,
+) error {
+	s.before()
+
+	return s.ClaimStore.WithClaims(ctx, ws, fence, fn)
+}
+
+// switchManual is a ManualLocks fake: it covers each unit once on is set, and
+// answers err when err is set.
+type switchManual struct {
+	on  atomic.Bool
+	err error
+}
+
+func (m *switchManual) CoveringFor(context.Context, manuallock.Unit, string) (manuallock.Lock, error) {
+	if m.err != nil {
+		var none manuallock.Lock
+
+		return none, m.err
+	}
+
+	if m.on.Load() {
+		return manuallock.Lock{Since: claimNow(), Target: noTarget(), Holder: "ops", Reason: "freeze"}, nil
+	}
+
+	var none manuallock.Lock
+
+	return none, manuallock.ErrNotLocked
+}
+
+func (m *switchManual) NamespaceLock(context.Context, namespace.Name) (manuallock.Lock, error) {
+	var none manuallock.Lock
+
+	return none, manuallock.ErrNotLocked
+}
+
+func (m *switchManual) NamespaceLockFor(
+	ctx context.Context, unit manuallock.Unit, jobID string,
+) (manuallock.Lock, error) {
+	return m.CoveringFor(ctx, unit, jobID)
+}
+
+func (m *switchManual) PhaseStart(context.Context, manuallock.Unit, string) time.Time {
+	var none time.Time
+
+	return none
+}
+
+// registryOver returns a registry over the world backend, with the store st
+// and the manual lock source manual.
+func (w *claimWorld) registryOver(
+	t *testing.T,
+	st workspace.ClaimStore,
+	manual workspace.ManualLocks,
+) *workspace.ClaimRegistry {
+	t.Helper()
+
+	r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
+		Workspaces: w.backend, Versions: w.backend, Deleted: w.backend, Manual: manual, Store: st, Now: claimNow,
+	})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	return r
+}
+
+func claimLockAfterPreCheck(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	// The lock arrives after the registry read the workspace and before the
+	// transaction opens: the checks of the registry outside the transaction
+	// passed, and only the check under the claim lock sees the lock.
+	hook := &hookClaimStore{ClaimStore: w.backend, before: func() {
+		ws, err := w.backend.GetWorkspaceByID(t.Context(), w.wsAcme)
+		if err != nil {
+			t.Errorf("read the workspace: %v", err)
+
+			return
+		}
+
+		ws.Lock = workspace.Lock{LockedAt: claimNow(), ID: "lock-1", Holder: "bob", Reason: "plan"}
+		ws.Revision++
+
+		if err = w.backend.SaveWorkspace(t.Context(), ws, w.acme); err != nil {
+			t.Errorf("lock the workspace: %v", err)
+		}
+	}}
+
+	r := w.registryOver(t, hook, nil)
+
+	req := w.request(claimJob1, "aws_instance.a")
+
+	_, err := r.Register(t.Context(), req, w.acme)
+	if !errors.Is(err, workspace.ErrClaimLocked) {
+		t.Fatalf("register after the lock = %v, want ErrClaimLocked", err)
+	}
+
+	w.wantCount(t, w.wsAcme, 0)
+}
+
+func claimManualAfterPreCheck(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	manual := &switchManual{on: atomic.Bool{}, err: nil}
+
+	hook := &hookClaimStore{ClaimStore: w.backend, before: func() {
+		target := manuallock.NamespaceTarget(w.acme.Namespace)
+		l := manuallock.Lock{Since: claimNow(), Target: target, Holder: "ops", Reason: "freeze"}
+
+		if err := w.backend.PutLock(t.Context(), l, w.acme, claimEntry(w.acme)); err != nil {
+			t.Errorf("put the manual lock: %v", err)
+		}
+
+		manual.on.Store(true)
+	}}
+
+	r := w.registryOver(t, hook, manual)
+
+	req := w.request(claimJob1, "aws_instance.a")
+
+	_, err := r.Register(t.Context(), req, w.acme)
+	if !errors.Is(err, workspace.ErrClaimLocked) {
+		t.Fatalf("register after the manual lock = %v, want ErrClaimLocked", err)
+	}
+
+	w.wantCount(t, w.wsAcme, 0)
+}
+
+var errClaimManual = errors.New("the manual lock store does not answer")
+
+func claimManualFailsClosed(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	r := w.registryOver(t, w.backend, &switchManual{on: atomic.Bool{}, err: errClaimManual})
+
+	req := w.request(claimJob1, "aws_instance.a")
+
+	_, err := r.Register(t.Context(), req, w.acme)
+	if !errors.Is(err, errClaimManual) {
+		t.Fatalf("register with a failing manual lock store = %v, want its error", err)
+	}
+
+	w.wantCount(t, w.wsAcme, 0)
+}
+
+func claimDeletedWorkspace(t *testing.T, w *claimWorld) {
+	t.Helper()
+
+	// A workspace with no state version, so that its delete is allowed.
+	gone := workspace.Workspace{
+		NamespaceID: "", CreatedAt: claimNow(), UpdatedAt: claimNow(),
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease: workspace.NoRelease(), InCollection: false,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:    identity.StateOrigin{Job: "", Commit: ""}, ID: "ws-gone",
+		Ref: workspace.Ref{Namespace: w.acme.Namespace, Name: "gone"}, Revision: 1,
+	}
+
+	if err := w.backend.CreateWorkspace(t.Context(), gone, w.acme); err != nil {
+		t.Fatalf("create the workspace: %v", err)
+	}
+
+	d := inventory.Deletion{Entry: claimEntry(w.acme), PurgeAfter: claimNow().Add(time.Hour)}
+
+	if err := w.backend.DeleteWorkspace(t.Context(), gone.Ref, w.acme, d); err != nil {
+		t.Fatalf("delete the workspace: %v", err)
+	}
+
+	// Straight to the store, as if the registry failed: a soft-deleted
+	// workspace is missing under the claim lock.
+	err := w.backend.WithClaims(t.Context(), gone.ID, w.acme, func(workspace.ClaimTx) error { return nil })
+	if !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("WithClaims on a deleted workspace = %v, want ErrNotFound", err)
+	}
+
+	err = w.backend.AddClaimTouch(t.Context(), w.acme, gone.ID, claimTouchVersion, []string{"a"})
+	if !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("AddClaimTouch on a deleted workspace = %v, want ErrNotFound", err)
+	}
+
+	req := w.request(claimJob1, "aws_instance.a")
+	req.WorkspaceID = gone.ID
+
+	if _, err = w.registry.Register(t.Context(), req, w.acme); !errors.Is(err, workspace.ErrClaimDeleted) {
+		t.Fatalf("register on a deleted workspace = %v, want ErrClaimDeleted", err)
+	}
+}
+
+// SeedClaimWorkspace creates the namespace acme with the workspace ws-acme and
+// one base state version in b, and returns the fence and the workspace ID. A
+// test of one adapter uses it to set up a case that the suite cannot run on
+// every adapter.
+func SeedClaimWorkspace(t *testing.T, b ClaimBackend) (namespace.Fence, workspace.ID) {
+	t.Helper()
+
+	fence, ws, _ := seedClaimNamespace(t, b, "acme", "ws-acme", "sv-acme")
+
+	return fence, ws
+}
+
+// noTarget returns the zero manual lock target.
+func noTarget() manuallock.Target {
+	var t manuallock.Target
+
+	return t
 }

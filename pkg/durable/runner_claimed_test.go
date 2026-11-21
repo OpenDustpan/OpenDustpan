@@ -235,6 +235,7 @@ func (f *claimEndFixture) register(t *testing.T, jobID string) {
 	t.Helper()
 
 	_, err := f.registry.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       claimEndAudit(f.fence.Namespace),
 		WorkspaceID: f.wsID,
 		Base:        f.base,

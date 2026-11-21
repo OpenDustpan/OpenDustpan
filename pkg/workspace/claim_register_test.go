@@ -238,6 +238,7 @@ func (f *claimFixture) register(
 	t.Helper()
 
 	claim, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
@@ -296,6 +297,7 @@ func TestClaimOverlapRefused(t *testing.T) {
 	first := f.register(t, r, "job-1", "aws_instance.a", "aws_instance.b")
 
 	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
@@ -334,6 +336,7 @@ func TestClaimEmptySetRejected(t *testing.T) {
 		r := f.registry()
 
 		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
 			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
@@ -365,6 +368,7 @@ func TestClaimTouchedBaseRejected(t *testing.T) {
 	f.noteCommitted(t, r, "sv-2", "aws_instance.a")
 
 	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
@@ -420,6 +424,7 @@ func TestClaimReplaceRefused(t *testing.T) {
 	r := f.registry()
 
 	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
@@ -485,6 +490,7 @@ func TestClaimWrapperRetryIsPerPrincipal(t *testing.T) {
 		t.Helper()
 
 		claim, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
 			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
@@ -552,6 +558,7 @@ func TestClaimAcceptAuditEntry(t *testing.T) {
 	var invalid audit.Entry
 
 	_, err := fr.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       invalid,
 		WorkspaceID: failing.ws,
 		Base:        failing.base,
@@ -584,6 +591,7 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		r := f.registry()
 
 		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
 			Audit:       claimAudit(),
 			WorkspaceID: "ws-missing",
 			Base:        f.base,
@@ -608,6 +616,7 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		r := f.registry()
 
 		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
 			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
@@ -633,6 +642,7 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		r := f.registry()
 
 		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
 			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
@@ -655,6 +665,7 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		r := f.registry()
 
 		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
 			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        "sv-unknown",
@@ -689,6 +700,7 @@ func TestClaimStaleFenceRefused(t *testing.T) {
 	stale.FailoverVersion++
 
 	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
 		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,

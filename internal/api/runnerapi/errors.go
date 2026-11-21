@@ -232,7 +232,7 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 	}{
 		{
 			http.StatusForbidden, protocol.ErrorForbidden,
-			[]error{errClaimJobMismatch, errClaimUnitMismatch, identity.ErrDenied},
+			[]error{errClaimJobMismatch, identity.ErrDenied},
 		},
 		{http.StatusConflict, protocol.ErrorClaimClosureUnproven, []error{workspace.ErrClaimReplace}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimEmptySet, []error{workspace.ErrClaimEmptySet}},

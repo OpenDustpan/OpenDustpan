@@ -277,7 +277,7 @@ func newClaimWorld(t *testing.T, authz identity.Authorizer) *claimWorld {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	unit = unit.WithUnitID("unit-claims-1")
+	unit = unit.WithUnitID(string(wsID))
 
 	tokens := &fakeJobTokenStore{matches: make(map[jobtoken.Digest]jobtoken.Match)}
 	secrets := make(map[string]string)

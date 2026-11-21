@@ -78,6 +78,7 @@ func newStoredBlobRig(base string) storetest.StoredBlobBackupFactory {
 		return &storetest.StoredBlobBackupRig{
 			Recorder: jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 				Harness: jobtest.Harness{
+					Claims:     nil,
 					Jobs:       jobs,
 					Durable:    ops,
 					Freezes:    jobs,

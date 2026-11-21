@@ -109,10 +109,17 @@ func newClaimRegistry(cfg *settings, svc services, store workspace.ClaimStore) (
 		manual = svc.manualLocks
 	}
 
+	// A store that reports soft-deleted workspaces gives a deleted workspace
+	// the answer 410; any other store answers 404 for it.
+	var deleted workspace.ClaimDeleted
+	if d, ok := store.(workspace.ClaimDeleted); ok {
+		deleted = d
+	}
+
 	registry, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
 		Workspaces: cfg.workspaceStore,
 		Versions:   cfg.stateStore,
-		Deleted:    nil,
+		Deleted:    deleted,
 		Manual:     manual,
 		Store:      store,
 		Now:        cfg.now,
@@ -184,7 +191,7 @@ func newRunnerHandler(
 			return nil, claimErr
 		}
 
-		claimer = newClaimReleasingClaimer(cfg, claims, cfg.jobClaimer(guard))
+		claimer = cfg.jobClaimer(guard)
 	}
 
 	deps, err := sessionDepsOf(cfg, svc)

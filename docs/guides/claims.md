@@ -18,9 +18,12 @@ The examples use the host `dustpan.example.com` and these variables:
 
 ## Register a claim
 
-A runner job registers its non-replace claim with its job token. The token
-is bound to the job and its apply claim: a request with the token of
-another job, or with the token of an ended claim, is refused.
+A runner job registers its non-replace claim with its job token, and names
+its own job in `jobID`. The server refuses a request with no job ID, with the
+job ID of another job, or with the token of a job whose operation ended. A
+token of another workspace answers 404, as a workspace that does not exist.
+The server checks the credential before it reads the workspace, so a request
+with no valid credential answers 401 whether the workspace exists or not.
 
 | Route | Action | Object |
 | --- | --- | --- |
@@ -94,10 +97,14 @@ job ID, start time and end time, oldest first:
 | Principal lacks unit:claim-register on the workspace. | Server answers 403 and names the missing action on the workspace. Ask a namespace administrator for the grant, then register again. | `GET /api/server/principals/{}/grants` |
 | Claim holds an empty resource set. | Server answers 422 and changes nothing. Plan with at least one non-replace resource change, then register again. | `tofu plan` |
 | Claim holds more than 10,000 addresses or an address longer than 1,024 bytes. | Server answers 422 with the bound and stores no claim. Send a smaller address set, then register again. | `tofu plan` |
-| Claim names a missing, deleted or locked workspace or an unknown base. | Server answers 404 for a missing or deleted workspace and 422 for a locked workspace or an unknown base version. Use the current workspace and base, then register again. | `GET /runner/v1/workspaces/{id}/claims` |
+| Claim names a missing, deleted or locked workspace or an unknown base. | Server answers 404 for a missing workspace, 410 for a deleted workspace and 422 for a locked workspace or an unknown base version. Use the current workspace and base, then register again. | `GET /runner/v1/workspaces/{id}/claims` |
 
 Each accepted claim writes one audit entry, in the same transaction that
 stores the claim. The server keeps the claims in its database, so a restart
-does not lose them. A claim ends, with an end time, when its job reaches a
-terminal state. A backup does not hold claims, and a restore leaves them
+does not lose them. A claim of a runner job ends, with an end time, in the
+same transaction that moves its job to a terminal state, whichever path ends
+the job, and each end writes an audit entry by the server with the job ID. A
+claim of the local wrapper has no job, so no job end ends it: it ends only by
+lease expiry, which writes an audit entry too. The server does not call the
+expiry on a schedule yet, so a claim of the local wrapper stays accepted. A backup does not hold claims, and a restore leaves them
 empty.

@@ -124,14 +124,14 @@ type claimListResponse struct {
 func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
 
-	target, err := h.claimWorkspace(ctx, r)
+	// The credential comes first: a caller with no valid credential learns
+	// nothing about the workspace, not even whether it exists.
+	caller, err := h.authenticateClaimCaller(ctx, r)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
-
-	wsID, unit, fence := target.id, target.unit, target.fence
 
 	var req claimRegisterRequest
 
@@ -141,14 +141,23 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 		return
 	}
 
-	principal, err := h.claimPrincipal(ctx, r, req.JobID, unit)
+	target, err := h.claimWorkspace(ctx, r)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	if authErr := h.authorizer.Authorize(ctx, principal, identity.ActionUnitClaimRegister, unit); authErr != nil {
+	if bindErr := caller.bindRegister(target, req.JobID); bindErr != nil {
+		h.writeError(ctx, w, bindErr)
+
+		return
+	}
+
+	wsID, unit, fence := target.id, target.unit, target.fence
+
+	authErr := h.authorizer.Authorize(ctx, caller.principal, identity.ActionUnitClaimRegister, unit)
+	if authErr != nil {
 		h.writeError(ctx, w, fmt.Errorf(
 			"%w: unit:claim-register on %s: %w",
 			errClaimForbidden,
@@ -164,10 +173,11 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 		Base:        workspace.StateVersionID(req.Base),
 		Addresses:   req.Addresses,
 		Replace:     req.Replace,
-		Principal:   principal.Subject,
+		Principal:   caller.principal.Subject,
 		JobID:       req.JobID,
 		Trigger:     req.Trigger,
-		Audit:       h.claimEntry(r, fence.Namespace, principal, unit),
+		ViaJobToken: caller.viaJobToken,
+		Audit:       h.claimEntry(r, fence.Namespace, caller.principal, unit),
 	}, fence)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -219,6 +229,13 @@ func decodeRegisterBody(raw []byte, req *claimRegisterRequest) error {
 func (h *Handler) listClaims(w http.ResponseWriter, r *http.Request, _ *call) {
 	ctx := r.Context()
 
+	caller, err := h.authenticateClaimCaller(ctx, r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	target, err := h.claimWorkspace(ctx, r)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -226,16 +243,15 @@ func (h *Handler) listClaims(w http.ResponseWriter, r *http.Request, _ *call) {
 		return
 	}
 
-	wsID, unit := target.id, target.unit
-
-	principal, principalErr := h.claimPrincipal(ctx, r, "", unit)
-	if principalErr != nil {
-		h.writeError(ctx, w, principalErr)
+	if bindErr := caller.bindList(target); bindErr != nil {
+		h.writeError(ctx, w, bindErr)
 
 		return
 	}
 
-	if authErr := h.authorizer.Authorize(ctx, principal, identity.ActionUnitRead, unit); authErr != nil {
+	wsID, unit := target.id, target.unit
+
+	if authErr := h.authorizer.Authorize(ctx, caller.principal, identity.ActionUnitRead, unit); authErr != nil {
 		h.writeError(ctx, w, fmt.Errorf(
 			"%w: unit:read on %s: %w",
 			errClaimForbidden,
@@ -287,6 +303,10 @@ func (h *Handler) claimWorkspace(
 		return claimTarget{}, fmt.Errorf("unit of workspace %s: %w", wsID, err)
 	}
 
+	// The object names the stable ID of the workspace, so a grant by ID and
+	// the binding of a job token compare the same value.
+	unit = unit.WithUnitID(string(got.ID))
+
 	ns, err := h.namespaces.Get(ctx, got.Ref.Namespace)
 	if err != nil {
 		return claimTarget{}, fmt.Errorf(
@@ -299,27 +319,31 @@ func (h *Handler) claimWorkspace(
 	return claimTarget{id: wsID, unit: unit, fence: ns.Fence()}, nil
 }
 
-// claimPrincipal authenticates the credential of a claims call. A bearer
-// secret goes to the job token service: the token is bound to its job and
-// its apply claim, so a request with the token of another job, or with the
-// token of an ended claim, is refused. A token secret goes to the access
-// token authenticator, for the local wrapper, which acts as the person who
-// signed in and registers no job ID.
-//
-// wantJob is the job of a register call, or empty for a list call, which
-// takes either credential.
-func (h *Handler) claimPrincipal(
-	ctx context.Context, r *http.Request, wantJob string, unit identity.Object,
-) (identity.Principal, error) {
+// claimCaller is a caller whose credential the handler authenticated.
+type claimCaller struct {
+	principal identity.Principal
+	// viaJobToken is true for a bearer job token, false for an access token.
+	viaJobToken bool
+	// tokenUnit is the unit that a job token names. It is zero for an
+	// access token.
+	tokenUnit identity.Object
+}
+
+// authenticateClaimCaller authenticates the credential of a claims call and
+// nothing else: it reads no workspace. A bearer secret goes to the job token
+// service. A token secret goes to the access token authenticator, for the
+// local wrapper, which acts as the person who signed in and registers no job
+// ID.
+func (h *Handler) authenticateClaimCaller(ctx context.Context, r *http.Request) (claimCaller, error) {
 	raw := r.Header.Get("Authorization")
 
 	if secret, ok := strings.CutPrefix(raw, "Bearer "); ok && secret != "" {
-		return h.jobTokenPrincipal(ctx, secret, wantJob, unit)
+		return h.authenticateJobToken(ctx, secret)
 	}
 
 	if secret, ok := strings.CutPrefix(raw, "token "); ok && secret != "" {
 		if h.authenticator == nil {
-			return identity.Principal{}, fmt.Errorf(
+			return claimCaller{}, fmt.Errorf(
 				"%w: the server has no access token authenticator",
 				identity.ErrUnauthenticated,
 			)
@@ -327,34 +351,24 @@ func (h *Handler) claimPrincipal(
 
 		principal, err := h.authenticator.AuthenticateToken(ctx, secret)
 		if err != nil {
-			return identity.Principal{}, err
+			return claimCaller{}, err
 		}
 
-		if wantJob != "" {
-			return identity.Principal{}, fmt.Errorf(
-				"%w: an access token registers no job claim",
-				errClaimJobMismatch,
-			)
-		}
-
-		return principal, nil
+		return claimCaller{principal: principal, viaJobToken: false, tokenUnit: identity.Object{}}, nil
 	}
 
-	return identity.Principal{}, fmt.Errorf(
+	return claimCaller{}, fmt.Errorf(
 		"%w: the request names no bearer job token or access token",
 		identity.ErrUnauthenticated,
 	)
 }
 
-// jobTokenPrincipal authenticates a bearer job token and binds it to the
-// call: the token names the job of a register call and the unit of the
-// workspace. A token of another job, of another unit, or of an ended
+// authenticateJobToken authenticates a bearer job token. The token service
+// binds the token to its job and its apply claim: the token of an ended
 // claim is refused.
-func (h *Handler) jobTokenPrincipal(
-	ctx context.Context, secret, wantJob string, unit identity.Object,
-) (identity.Principal, error) {
+func (h *Handler) authenticateJobToken(ctx context.Context, secret string) (claimCaller, error) {
 	if h.tokens == nil {
-		return identity.Principal{}, fmt.Errorf(
+		return claimCaller{}, fmt.Errorf(
 			"%w: the server issues no job tokens",
 			identity.ErrUnauthenticated,
 		)
@@ -362,30 +376,54 @@ func (h *Handler) jobTokenPrincipal(
 
 	principal, tokenUnit, err := h.tokens.Authenticate(ctx, secret)
 	if err != nil {
-		return identity.Principal{}, err
+		return claimCaller{}, err
 	}
 
-	// Defense in depth: the token service binds the token to its job and
-	// unit; these checks stay so that a new caller cannot use a token of
-	// another job or unit on this route.
-	if wantJob != "" && principal.JobID != wantJob {
-		return identity.Principal{}, fmt.Errorf(
-			"%w: the token names job %q",
-			errClaimJobMismatch,
-			principal.JobID,
-		)
+	return claimCaller{principal: principal, viaJobToken: true, tokenUnit: tokenUnit}, nil
+}
+
+// bindList checks the caller of a list call against the workspace: a job
+// token must name the stable ID of the workspace, and a token of another
+// workspace answers as a workspace that does not exist.
+//
+// Defense in depth: the token service binds the token to its job and unit.
+// This check stays so that a new caller cannot use a token on another
+// workspace, and it does not rely on the other layers.
+func (c claimCaller) bindList(target claimTarget) error {
+	if c.viaJobToken && c.tokenUnit.UnitID() != string(target.id) {
+		return fmt.Errorf("%w: %w", workspace.ErrClaimNotFound, errClaimUnitMismatch)
 	}
 
-	if tokenUnit.Tool() != unit.Tool() || tokenUnit.Namespace() != unit.Namespace() ||
-		tokenUnit.UnitName() != unit.UnitName() {
-		return identity.Principal{}, fmt.Errorf(
-			"%w: the token names unit %s",
-			errClaimUnitMismatch,
-			tokenUnit,
-		)
+	return nil
+}
+
+// bindRegister checks the caller of a register call against the workspace
+// and the job. A job token must name the stable ID of the workspace and its
+// own job: an empty or another job is refused, so no claim is stored without
+// a job that ends it. An access token registers no job claim.
+//
+// Defense in depth: the token service binds the token to its job and unit,
+// and the registry refuses a job-token claim with no job. These checks stay
+// so that a new caller cannot use a token on another workspace or job, and
+// they do not rely on the other layers.
+func (c claimCaller) bindRegister(target claimTarget, jobID string) error {
+	if !c.viaJobToken {
+		if jobID != "" {
+			return fmt.Errorf("%w: an access token registers no job claim", errClaimJobMismatch)
+		}
+
+		return nil
 	}
 
-	return principal, nil
+	if err := c.bindList(target); err != nil {
+		return err
+	}
+
+	if jobID == "" || c.principal.JobID != jobID {
+		return fmt.Errorf("%w: the token names job %q", errClaimJobMismatch, c.principal.JobID)
+	}
+
+	return nil
 }
 
 // newClaimResponse renders a stored claim for the wire.

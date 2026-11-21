@@ -2,6 +2,8 @@ package codec_test
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/store/codec"
@@ -38,6 +40,17 @@ func TestClaimFromRowRefusesDamagedRows(t *testing.T) {
 		{"addresses that are no array", func(r *codec.ClaimRow) { r.Addresses = `{"a":1}` }},
 		{"addresses of numbers", func(r *codec.ClaimRow) { r.Addresses = `[1,2]` }},
 		{"text that is no JSON", func(r *codec.ClaimRow) { r.Addresses = "a,b" }},
+		{"empty set", func(r *codec.ClaimRow) { r.Addresses = "[]" }},
+		{"empty address", func(r *codec.ClaimRow) { r.Addresses = `[""]` }},
+		{"unsorted set", func(r *codec.ClaimRow) { r.Addresses = `["b","a"]` }},
+		{"duplicate address", func(r *codec.ClaimRow) { r.Addresses = `["a","a"]` }},
+		{"untrimmed address", func(r *codec.ClaimRow) { r.Addresses = `[" a"]` }},
+		{"address too long", func(r *codec.ClaimRow) { r.Addresses = `["` + strings.Repeat("a", 1025) + `"]` }},
+		{"oversize set", func(r *codec.ClaimRow) { r.Addresses = oversizeSet() }},
+		{"accepted claim with an end time", func(r *codec.ClaimRow) { r.EndedAtMs = 1 }},
+		{"ended claim with no end time", func(r *codec.ClaimRow) { r.State = "ended"; r.EndedAtMs = 0 }},
+		{"empty principal", func(r *codec.ClaimRow) { r.Principal = "" }},
+		{"empty base", func(r *codec.ClaimRow) { r.Base = "" }},
 	} {
 		row := good
 		c.mutate(&row)
@@ -46,4 +59,14 @@ func TestClaimFromRowRefusesDamagedRows(t *testing.T) {
 			t.Errorf("%s: ClaimFromRow = %v, want ErrClaimRow", c.name, err)
 		}
 	}
+}
+
+// oversizeSet returns the stored text of a set one address over the bound.
+func oversizeSet() string {
+	parts := make([]string, workspace.MaxClaimAddresses+1)
+	for i := range parts {
+		parts[i] = `"` + strconv.Itoa(1_000_000+i) + `"`
+	}
+
+	return "[" + strings.Join(parts, ",") + "]"
 }

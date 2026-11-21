@@ -190,6 +190,10 @@ type RegisterClaimRequest struct {
 	JobID string
 	// Trigger names what started the job, or empty.
 	Trigger string
+	// ViaJobToken is true when the caller authenticated with a job token.
+	// Such a claim names its job, so that the end of the job ends the claim:
+	// the registry refuses an empty JobID with ErrClaimInvalid.
+	ViaJobToken bool
 	// Audit is the audit entry of the accept. The registry sets its time, its
 	// object ID and its job ID. The store appends it in the transaction that
 	// stores the claim: an invalid entry stores no claim.
@@ -382,6 +386,10 @@ func (r *ClaimRegistry) NoteCommitted(
 func (r *ClaimRegistry) registerIn(
 	ctx context.Context, tx ClaimTx, w Workspace, req *RegisterClaimRequest, normalized []string,
 ) (Claim, error) {
+	if err := r.checkLocksIn(ctx, tx, req); err != nil {
+		return Claim{}, err
+	}
+
 	claims, err := tx.Claims(ctx)
 	if err != nil {
 		return Claim{}, fmt.Errorf("read claims: %w", err)
@@ -403,6 +411,39 @@ func (r *ClaimRegistry) registerIn(
 	return r.insert(ctx, tx, w, req, normalized)
 }
 
+// checkLocksIn reads the locks again inside the transaction, under the claim
+// lock of the workspace: the workspace lock and the manual locks. A lock that
+// came after the checks of checkRequest refuses the claim here. Defense in
+// depth: checkRequest reads the same locks before the transaction opens, to
+// refuse early; this check does not rely on it. A store error fails closed.
+func (r *ClaimRegistry) checkLocksIn(ctx context.Context, tx ClaimTx, req *RegisterClaimRequest) error {
+	w, err := tx.Workspace(ctx)
+	if err != nil {
+		return fmt.Errorf("read the workspace: %w", err)
+	}
+
+	if w.Lock.Locked() {
+		return fmt.Errorf("%w: %s", ErrClaimLocked, w.Lock.Holder)
+	}
+
+	if r.manual == nil {
+		return nil
+	}
+
+	locked, err := tx.ManualLocked(ctx)
+	if err != nil {
+		return fmt.Errorf("read the manual locks: %w", err)
+	}
+
+	if !locked {
+		return nil
+	}
+
+	// A manual lock covers the workspace now. A job whose phase started before
+	// the lock passes it, as the rule of the lock service says.
+	return r.checkManual(ctx, w, req.JobID)
+}
+
 // checkRequest checks a register request before the store transaction: the
 // set is not empty, holds no replace and stays in bounds, and the workspace
 // and the base are valid. It returns the normalized set.
@@ -417,6 +458,14 @@ func (r *ClaimRegistry) checkRequest(
 
 	if req.Replace {
 		return Workspace{}, nil, ErrClaimReplace
+	}
+
+	// Defense in depth: the handler binds a job token to its job too. This
+	// check stays so that a new caller cannot store a claim of a job token
+	// with no job: nothing would end it, and a retry could take the claim of
+	// the person who started the job.
+	if req.ViaJobToken && req.JobID == "" {
+		return Workspace{}, nil, fmt.Errorf("%w: a job token registers a claim for its job", ErrClaimInvalid)
 	}
 
 	// Defense in depth: the handler bounds the raw set too. This check stays
@@ -466,25 +515,31 @@ func (r *ClaimRegistry) checkRegistration(
 		return Workspace{}, fmt.Errorf("%w: %s", ErrClaimLocked, w.Lock.Holder)
 	}
 
+	// The handler does not check manual locks, so this is the first check of
+	// them. The transaction checks them again under the claim lock.
 	if r.manual != nil {
-		// Defense in depth: the handler checks the whole-unit lock too;
-		// this check stays so that a new caller cannot skip the manual
-		// lock. A store error fails closed.
-		covering, coverErr := r.manual.CoveringFor(ctx, manuallockUnit(w), req.JobID)
-
-		switch {
-		case coverErr == nil:
-			return Workspace{}, fmt.Errorf(
-				"%w: manual lock of %q covers the workspace",
-				ErrClaimLocked,
-				covering.Holder,
-			)
-		case !errors.Is(coverErr, manuallock.ErrNotLocked):
-			return Workspace{}, coverErr
+		if err := r.checkManual(ctx, w, req.JobID); err != nil {
+			return Workspace{}, err
 		}
 	}
 
 	return w, nil
+}
+
+// checkManual refuses a workspace that a manual lock covers for the job. A
+// store error fails closed. The rule that a phase that started before the
+// lock passes it lives in the lock service that CoveringFor calls.
+func (r *ClaimRegistry) checkManual(ctx context.Context, w Workspace, jobID string) error {
+	covering, err := r.manual.CoveringFor(ctx, manuallockUnit(w), jobID)
+
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: manual lock of %q covers the workspace", ErrClaimLocked, covering.Holder)
+	case !errors.Is(err, manuallock.ErrNotLocked):
+		return err
+	default:
+		return nil
+	}
 }
 
 // checkBase refuses an unknown base state version.
