@@ -6,9 +6,15 @@ the reservation of the resource instances that one saved plan changes and
 reads. The server accepts a second claim only when its address set shares
 no address with each accepted claim.
 
-The examples use a token in `$TOKEN` and the host `dustpan.example.com`.
-`$WS` is the stable workspace ID, `$BASE` the state version that the plan
-used, and `$JOB` the job that registers the claim.
+The examples use the host `dustpan.example.com` and these variables:
+
+| Variable | Value |
+| --- | --- |
+| `$TOKEN` | The credential of the caller. A runner job sends its job token. The local wrapper sends an access token. |
+| `$RELEASE` | The release of the caller, for example `0.4.0`. The server refuses a release that is newer than its own with the status 426. |
+| `$WS` | The stable ID of the workspace: `data.id` in the answer of `GET /api/v2/organizations/{namespace}/workspaces/{name}`. |
+| `$BASE` | The state version that the plan used: `data.id` in the answer of `GET /api/v2/workspaces/$WS/current-state-version`. |
+| `$JOB` | The ID of the job that registers the claim. |
 
 ## Register a claim
 
@@ -23,7 +29,7 @@ another job, or with the token of an ended claim, is refused.
 
 ```sh
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H "Dustpan-Release: 0.4.0" \
+  -H "Dustpan-Release: $RELEASE" \
   https://dustpan.example.com/runner/v1/workspaces/$WS/claims \
   -d '{"base":"'"$BASE"'","addresses":["aws_instance.a"],"jobID":"'"$JOB"'"}'
 ```
@@ -45,14 +51,16 @@ The answer holds the claim with state accepted, start time and principal:
 
 A second job registers its disjoint claim through the same route. The
 local wrapper registers with an access token and no job ID, and acts as
-the person who signed in. The same job with the same base and the same
+the person who signed in. It sends the access token in the header
+`Authorization: token $TOKEN`, not `Authorization: Bearer $TOKEN`: the
+server reads a bearer secret as a job token. The same job with the same base and the same
 set gets the same claim ID with no second record.
 
 ## List claims
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" \
-  -H "Dustpan-Release: 0.4.0" \
+  -H "Dustpan-Release: $RELEASE" \
   https://dustpan.example.com/runner/v1/workspaces/$WS/claims
 ```
 

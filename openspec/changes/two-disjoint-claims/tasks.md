@@ -33,5 +33,5 @@
 
 - [x] 4.1 E2e step in NEW file e2e/claims_disjoint_test.go against POST and GET /runner/v1/workspaces/{id}/claims with the access token of the local wrapper (the harness issues no runner job token). Check: `go test -tags e2e ./e2e -run TestJobsAPI` passes on SQLite and PostgreSQL: two claim records in state accepted, an overlapping third claim refused with 409. The step does not count the state versions; the claims route has no path that writes one.
 - [x] 4.2 Write the docs page for claims in NEW file docs/guides/claims.md. Check: Docs page lists register and list calls with exact output. `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Agent pre-run (human run-through in person-steps (two-disjoint-claims 4.3)): Run usability check. Check: Developer completes the path from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.3 (agent pre-run done, a person is still due) Agent pre-run (human run-through in person-steps (two-disjoint-claims 4.3)): Run usability check. Check: Developer completes the path from the docs page alone. Record the transcript in the pull request body.
 - [ ] 4.4 Run full check. Check: make check reports zero findings.
