@@ -23,6 +23,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e steps in the NEW file e2e/cover_flagged_edges_test.go with a site administrator access token, through the existing routes POST /api/server/grants, POST /api/server/groups/{id}/members and POST /api/server/principals/{id}/tokens, and the NEW routes GET /api/dustpan/v1/flagged-edges with acknowledge and revoke. The routes are declared in internal/api/server/operations.go and internal/api/server/flagged_edges.go (NEW), and the adapter files are internal/api/server/tokens.go and internal/api/server/flagged_edges.go (NEW). BLOCKED by the groups-roles-grants change for the reach function. Check: make e2e passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add e2e steps in the NEW file e2e/cover_flagged_edges_test.go with a site administrator access token, through the existing routes POST /api/server/grants, POST /api/server/groups/{id}/members and POST /api/server/principals/{id}/tokens, and the NEW routes GET /api/dustpan/v1/flagged-edges with acknowledge and revoke. The routes are declared in internal/api/server/operations.go and internal/api/server/flagged_edges.go (NEW), and the adapter files are internal/api/server/tokens.go and internal/api/server/flagged_edges.go (NEW). BLOCKED by the groups-roles-grants change for the reach function. Check: make e2e passes.
 - [ ] 4.2 Write the NEW docs page docs/guides/act-as-reach-and-flagged-edges.md about act-as reach and flagged edges, and walk the user path from it. Check: make docs-lint passes
-- [ ] 4.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Run the full check. Check: make check with zero findings.

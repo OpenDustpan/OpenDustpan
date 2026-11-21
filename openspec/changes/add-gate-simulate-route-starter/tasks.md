@@ -22,6 +22,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the routes with their authorization actions. Check: Route declares its authorization actions and passes the route test.
-- [ ] 4.2 Add an e2e step in NEW file e2e/gate_simulate_test.go against the real server and the real directory with a personal access token, for the route POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and the pack install route. Check: e2e step posts drafts to POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and installs one pack with a personal access token against the real server. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run the usability check from the docs page. Check: Persona follows the docs page alone and each error names the one command that helps. A person's step.
-- [ ] 4.4 Run make check with zero findings. Check: make check passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Add an e2e step in NEW file e2e/gate_simulate_test.go against the real server and the real directory with a personal access token, for the route POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and the pack install route. Check: e2e step posts drafts to POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and installs one pack with a personal access token against the real server.
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (add-gate-simulate-route-starter 4.3)): Run the usability check from the docs page. Check: Persona follows the docs page alone and each error names the one command that helps. Record the transcript in the pull request body.
+- [ ] 4.4 Run make check with zero findings. Check: make check passes with zero findings.

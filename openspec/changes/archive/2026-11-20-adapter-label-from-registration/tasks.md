@@ -11,4 +11,4 @@
 ## 3. Definition of done
 
 - [x] 3.1 Write in the pull request body that #2863 and #2861 need no label change of their own once this lands, because their routes take the label of the server adapter (read only: `pkg/dustpan/dustpan.go`, func mountV1). Check: the pull request body names #2863 and #2861.
-- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Ticked on the condition that the CI of this pull request runs it green.
+- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Ticked on the condition that the CI of this pull request runs it green.

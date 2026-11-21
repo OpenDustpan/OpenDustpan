@@ -14,4 +14,4 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Publish the note, read it from the docs page alone, and run all checks. Check: `make check` passes with zero findings and `make docs-lint` passes. Confirmed by: CI (an e2e step in the NEW file e2e/research_default_model_dusty_on_docs_test.go runs each command of the docs page against the e2e test server). Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Publish the note, read it from the docs page alone, and run all checks. Check: `make check` passes with zero findings and `make docs-lint` passes.go runs each command of the docs page against the e2e test server).

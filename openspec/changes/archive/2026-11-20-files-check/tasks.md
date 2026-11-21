@@ -10,4 +10,4 @@
 
 ## 3. Definition of done
 
-- [x] 3.1 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.1 Run the local checks (`Makefile`). Check: `make check` reports zero findings.

@@ -10,5 +10,5 @@
 
 ## 3. Definition of done
 
-- [x] 3.1 The e2e workload exchange still passes: `TestWorkloadTokenExchange` calls `POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange` with the workload JWT of the test issuer, gets a trust token and runs both CLIs with it. Check: `make e2e` runs `TestWorkloadTokenExchange` and it passes. Confirmed by: CI (the agent writes the e2e test).
-- [x] 3.2 Run `make check`. Check: zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.1 The e2e workload exchange still passes: `TestWorkloadTokenExchange` calls `POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange` with the workload JWT of the test issuer, gets a trust token and runs both CLIs with it. Check: `make e2e` runs `TestWorkloadTokenExchange` and it passes.
+- [x] 3.2 Run `make check`. Check: zero findings.

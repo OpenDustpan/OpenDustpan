@@ -23,5 +23,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Write the configuration reference for profileProviderNetworks and profileCACertificates in NEW file docs/reference/profile-provider-settings.md, and the provider port guide in NEW file docs/guides/profile-provider-port.md, in the same pull request. Check: `make docs-lint` passes
-- [ ] 4.2 Run an e2e step that starts the real server, then calls `GET /api/dustpan/v1/settings` with an administrator access token and checks both settings. Check: `make e2e` passes with the settings step. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Run an e2e step that starts the real server, then calls `GET /api/dustpan/v1/settings` with an administrator access token and checks both settings. Check: `make e2e` passes with the settings step.
+- [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings.

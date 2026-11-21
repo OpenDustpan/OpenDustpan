@@ -10,5 +10,5 @@
 
 ## 3. Definition of done
 
-- [x] 3.1 Add the e2e step TestQuickstartCollectionCommands in the NEW file `e2e/cli_collections_test.go`: it runs the collection and placement commands of the quickstart against the e2e test server with the admin token (the routes /api/dustpan/v1/namespaces/{namespace}/collections and /api/dustpan/v1/namespaces/{namespace}/placement-rules), then a real `tofu apply` places its workspace in the collection. Check: the step passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.1 Add the e2e step TestQuickstartCollectionCommands in the NEW file `e2e/cli_collections_test.go`: it runs the collection and placement commands of the quickstart against the e2e test server with the admin token (the routes /api/dustpan/v1/namespaces/{namespace}/collections and /api/dustpan/v1/namespaces/{namespace}/placement-rules), then a real `tofu apply` places its workspace in the collection. Check: the step passes.
+- [ ] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings.

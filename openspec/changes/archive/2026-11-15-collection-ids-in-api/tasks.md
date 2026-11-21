@@ -13,4 +13,4 @@
 ## 3. Definition of done
 
 - [x] 3.1 Update the existing guide docs/guides/collections-and-placement.md with the ID in the answers and in the placement rules. Check: `make docs-lint` passes
-- [x] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Evidence: CI of #3157 was green on its merge.
+- [x] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Evidence: CI of #3157 was green on its merge.

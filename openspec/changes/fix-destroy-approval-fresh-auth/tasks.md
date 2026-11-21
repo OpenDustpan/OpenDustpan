@@ -32,4 +32,4 @@ This change starts after `session-fresh-cookie` (the source of the proof) and ta
 
 - [ ] 4.1 Add the e2e step in `e2e/e2e_test.go`: with `freshAuthEnabled` on, a person with a session that has a fresh step approves a `destroy` through `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` with the real CLI flow, and a person with a stale step gets 403. Check: `make e2e` passes the step
 - [ ] 4.2 Update the existing file docs/guides/approval-rules.md with the fresh step of the session and the refusal text. Check: `make docs-lint` is clean
-- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings.

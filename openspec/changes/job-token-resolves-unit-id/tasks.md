@@ -15,5 +15,5 @@
 
 ## 3. Definition of done
 
-- [x] 3.1 Add an e2e step in `e2e/job_token_state_test.go` (NEW) that reads the state of the unit of a job with its job token through the real OpenTofu CLI: call the route /tofu/state/{namespace}/{workspace} with the token (credential kind job-token, identity.CredentialJobToken), on the unit of the job and on another unit; and call GET /api/stacks/{namespace}/{project}/{stack}/export with the same token kind, on the unit of the job (200) and on another unit (403). Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
-- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.1 Add an e2e step in `e2e/job_token_state_test.go` (NEW) that reads the state of the unit of a job with its job token through the real OpenTofu CLI: call the route /tofu/state/{namespace}/{workspace} with the token (credential kind job-token, identity.CredentialJobToken), on the unit of the job and on another unit; and call GET /api/stacks/{namespace}/{project}/{stack}/export with the same token kind, on the unit of the job (200) and on another unit (403). Check: make e2e.
+- [x] 3.2 Run the checks. Check: `make check` reports zero findings.

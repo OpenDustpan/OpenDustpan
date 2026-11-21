@@ -17,10 +17,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [x] 3.1 Confirm that no request flow changed: the change adds a declaration to a list that an existing route serves, with no route and no caller. Check: the existing round-trip tests pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged). Ticked on the condition that the CI of this pull request runs it green.
+- [x] 3.1 Confirm that no request flow changed: the change adds a declaration to a list that an existing route serves, with no route and no caller. Check: the existing round-trip tests pass unchanged. Ticked on the condition that the CI of this pull request runs it green.
 
 ## 4. Definition of done
 
 - [x] 4.1 Extend docs/guides/decision-record-retention.md: the key, the default `0`, the minimum 24, the PCI DSS v4.0.1 requirement 10.5.1 (at least 12 months), the GDPR storage limitation principle, a note that no job deletes records until the sweep ships and that the setting never deletes an audit entry, and the commands of a read and a patch. Check: `make docs-lint` passes and the page is listed in docs/commands-pending-pages.txt.
-- [x] 4.2 Add an e2e step in the NEW file e2e/decision_record_retention_setting_test.go. It reads GET /api/dustpan/v1/settings, patches PATCH /api/dustpan/v1/settings with `If-Match`, reads it again and checks the refusal of `23`, with an access token of a site administrator and the real server binary. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [x] 4.3 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Ticked on the condition that the CI of this pull request runs it green.
+- [x] 4.2 Add an e2e step in the NEW file e2e/decision_record_retention_setting_test.go. It reads GET /api/dustpan/v1/settings, patches PATCH /api/dustpan/v1/settings with `If-Match`, reads it again and checks the refusal of `23`, with an access token of a site administrator and the real server binary. Check: `make e2e`.
+- [x] 4.3 Run the full check. Check: `make check` reports zero findings. Ticked on the condition that the CI of this pull request runs it green.

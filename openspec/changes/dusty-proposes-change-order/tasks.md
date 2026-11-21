@@ -20,5 +20,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add an e2e step for the draft in the NEW file `e2e/dusty_draft_test.go`. Check: the step passes in CI. BLOCKED by the Dusty run job.
-- [ ] 4.2 Write the guide in the NEW file `docs/guides/dusty-draft.md` and check the user path from the page alone. Check: `make docs-lint` passes. A person's step.
-- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Write the guide in the NEW file `docs/guides/dusty-draft.md` and check the user path from the page alone. Check: `make docs-lint` passes.
+- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings.

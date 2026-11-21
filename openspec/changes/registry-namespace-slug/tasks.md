@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the slug rules and the way to list the slug to the registry publish page, NEW section in docs/guides/registry-publish.md (the page that the parent change adds). Check: Docs page commands run as written for slug lookup and install under the slug. Confirmed by: CI (an e2e step in the NEW file e2e/registry_namespace_slug_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
-- [ ] 4.2 Add an e2e step that installs a provider with tofu init under the slug of a namespace with a name outside the safe subset, and again after a rename of the namespace, in NEW file e2e/registry_namespace_slug_test.go. Check: `make e2e` runs the step against the real CLI. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run usability check of the install path under the slug. Check: Namespace administrator completes publish and tofu init from the docs page alone; each error names its one command. A person's step.
-- [ ] 4.4 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add the slug rules and the way to list the slug to the registry publish page, NEW section in docs/guides/registry-publish.md (the page that the parent change adds). Check: Docs page commands run as written for slug lookup and install under the slug.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
+- [ ] 4.2 Add an e2e step that installs a provider with tofu init under the slug of a namespace with a name outside the safe subset, and again after a rename of the namespace, in NEW file e2e/registry_namespace_slug_test.go. Check: `make e2e` runs the step against the real CLI.
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (registry-namespace-slug 4.3)): Run usability check of the install path under the slug. Check: Namespace administrator completes publish and tofu init from the docs page alone; each error names its one command. Record the transcript in the pull request body.
+- [ ] 4.4 Pass the full check Check: `make check` reports zero findings.
