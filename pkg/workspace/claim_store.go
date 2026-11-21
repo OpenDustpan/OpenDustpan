@@ -287,6 +287,24 @@ func (m *MemoryClaimStore) RenewClaim(
 	return Claim{}, fmt.Errorf("%w: claim %s", ErrClaimNotFound, r.ClaimID)
 }
 
+// CheckRenewed checks a claim that a renewal returned, against the renewal
+// that asked for it: it must be the claim of the request, on the workspace of
+// the request, of the principal of the request, and it must hold a lease. A
+// claim that is not is a claim that the caller may not renew, and the answer
+// is ErrClaimNotFound, as for a claim that does not exist. It reads no store.
+//
+// Defense in depth: the renew statement holds the same rules in its WHERE
+// clause, and the store checks the rules before the statement. Each layer
+// applies this check to the row that the layer below gave, so a row of another
+// principal never leaves a layer that was handed one.
+func CheckRenewed(c *Claim, r ClaimRenewal) error {
+	if c.ID != r.ClaimID || c.WorkspaceID != r.Workspace || c.Principal != r.Principal || c.LeaseEndsAt.IsZero() {
+		return fmt.Errorf("%w: claim %s", ErrClaimNotFound, r.ClaimID)
+	}
+
+	return nil
+}
+
 // CheckRenewable returns the error of RenewClaim for a claim that cannot be
 // renewed as r asks, or nil. The adapters of ClaimStore call it, so each
 // refuses the same claims as MemoryClaimStore: a claim of another principal is

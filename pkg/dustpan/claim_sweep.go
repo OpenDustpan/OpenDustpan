@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // The schedule of the expiry of the leases of apply claims.
@@ -55,16 +55,24 @@ type claimNamespaces interface {
 	List(ctx context.Context) ([]namespace.Namespace, error)
 }
 
+// claimExpirer ends the claims of one namespace whose lease ended, at most
+// limit of them. The claim registry is one.
+type claimExpirer interface {
+	ExpireLeases(ctx context.Context, fence namespace.Fence, limit int) (int, error)
+}
+
 // claimSweeper ends the apply claims whose lease ended. A claim of a runner
 // job has no lease: its job ends it in the store of jobs. The claims with a
 // lease are the claims of the local wrapper, which renews them while it runs.
 type claimSweeper struct {
-	claims     *workspace.ClaimRegistry
+	claims     claimExpirer
 	namespaces claimNamespaces
 	logger     *slog.Logger
 	maxPerRun  int
 	// every is the period of the sweep.
 	every time.Duration
+	// cursor counts the runs, so that each run starts at another namespace.
+	cursor atomic.Int64
 }
 
 // newClaimSweeper returns the sweeper of the server, or nil when the server
@@ -77,7 +85,7 @@ func newClaimSweeper(cfg *settings, svc services) (*claimSweeper, error) {
 
 	return &claimSweeper{
 		claims: claims, namespaces: svc.namespaces, logger: cfg.logger, maxPerRun: claimSweepMaxPerRun,
-		every: cfg.claimTiming.sweepEvery(),
+		every: cfg.claimTiming.sweepEvery(), cursor: atomic.Int64{},
 	}, nil
 }
 
@@ -108,9 +116,20 @@ func (c *claimSweeper) sweepOnce(ctx context.Context) {
 		return
 	}
 
+	if len(list) == 0 {
+		return
+	}
+
 	budget, ended := c.maxPerRun, 0
 
-	for i := range list {
+	// Each run starts at the next namespace of the list, so that a namespace
+	// with many claims cannot use the whole budget of every run and starve the
+	// namespaces after it.
+	start := int((c.cursor.Add(1) - 1) % int64(len(list)))
+
+	for k := range list {
+		i := (start + k) % len(list)
+
 		n, expErr := c.claims.ExpireLeases(ctx, list[i].Fence(), budget)
 		if expErr != nil && !errors.Is(ctx.Err(), context.Canceled) {
 			c.logger.WarnContext(

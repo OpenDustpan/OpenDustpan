@@ -23,7 +23,7 @@ type MemoryClaimBackend struct {
 	workspaces map[workspace.ID]workspace.Workspace
 	versions   map[workspace.StateVersionID]workspace.StateVersion
 	locked     map[namespace.Name]bool
-	deleted    map[workspace.ID]bool
+	deleted    map[workspace.ID]workspace.Workspace
 }
 
 var _ ClaimBackend = (*MemoryClaimBackend)(nil)
@@ -37,7 +37,7 @@ func NewMemoryClaimBackend() *MemoryClaimBackend {
 		workspaces:       make(map[workspace.ID]workspace.Workspace),
 		versions:         make(map[workspace.StateVersionID]workspace.StateVersion),
 		locked:           make(map[namespace.Name]bool),
-		deleted:          make(map[workspace.ID]bool),
+		deleted:          make(map[workspace.ID]workspace.Workspace),
 	}
 	b.MemoryClaimStore = workspace.NewMemoryClaimStore(b)
 	b.SetManualLocks(func(ctx context.Context, ws workspace.ID) []manuallock.Lock {
@@ -149,9 +149,8 @@ func (b *MemoryClaimBackend) DeleteWorkspace(
 
 	for id := range b.workspaces {
 		if b.workspaces[id].Ref == ref {
+			b.deleted[id] = b.workspaces[id]
 			delete(b.workspaces, id)
-
-			b.deleted[id] = true
 		}
 	}
 
@@ -173,10 +172,12 @@ func (b *MemoryClaimBackend) PutLock(
 	return nil
 }
 
-// IsDeleted implements workspace.ClaimDeleted.
-func (b *MemoryClaimBackend) IsDeleted(_ context.Context, id workspace.ID) (bool, error) {
+// DeletedWorkspace implements workspace.ClaimDeleted.
+func (b *MemoryClaimBackend) DeletedWorkspace(_ context.Context, id workspace.ID) (workspace.Workspace, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.deleted[id], nil
+	gone, ok := b.deleted[id]
+
+	return gone, ok, nil
 }

@@ -124,7 +124,7 @@ job ID, start time, end time, lease end and renewal time, oldest first:
 | Principal lacks unit:claim-register on the workspace, or unit:read for the list. | Server answers 404, as for a workspace that does not exist: a 403 would tell a caller that the workspace exists. Check the workspace ID, ask a namespace administrator for the grant, then register again. | `GET /api/server/principals/{}/grants` |
 | Claim holds an empty resource set. | Server answers 422 and changes nothing. Plan with at least one non-replace resource change, then register again. | `tofu plan` |
 | Claim holds more than 10,000 addresses or an address longer than 1,024 bytes. | Server answers 422 with the bound and stores no claim. Send a smaller address set, then register again. | `tofu plan` |
-| Claim names a missing, deleted or locked workspace or an unknown base. | Server answers 404 for a missing workspace, 410 for a deleted workspace and 422 for a locked workspace or an unknown base version. Use the current workspace and base, then register again. | `GET /runner/v1/workspaces/{id}/claims` |
+| Claim names a missing, deleted or locked workspace or an unknown base. | Server answers 404 for a missing workspace, 410 for a deleted workspace (a caller without the right on the workspace gets 404 for a deleted workspace too) and 422 for a locked workspace or an unknown base version. Use the current workspace and base, then register again. | `GET /runner/v1/workspaces/{id}/claims` |
 
 Each accepted claim writes one audit entry, in the same transaction that
 stores the claim. The server keeps the claims in its database, so a restart

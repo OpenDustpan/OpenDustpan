@@ -2,11 +2,19 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
+	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 	"opendustpan.org/opendustpan/pkg/workspace/workspacetest"
 )
@@ -138,4 +146,206 @@ func holdWorkspaceRowLock(t *testing.T, schemaURL string, ws workspace.ID) pgx.T
 	}
 
 	return tx
+}
+
+// TestRenewStatementHoldsItsRules sends hostile parameters straight to the
+// renew statement, below every check of the store, the registry and the
+// handler: another principal, another workspace, an unknown claim and a lease
+// that ended each match no row and change nothing.
+func TestRenewStatementHoldsItsRules(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+	s := openURL(t, schemaURL)
+	fence, ws := workspacetest.SeedClaimWorkspace(t, s)
+
+	registry, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
+		Workspaces: s, Versions: s, Deleted: s, Manual: nil, Store: s, Now: nil, Lease: 0,
+	})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	claim, err := registry.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false, WorkspaceID: ws, Base: "sv-acme", Addresses: []string{"aws_instance.a"}, Replace: false,
+		Principal: "ada", JobID: "", Trigger: "", Audit: workspacetest.AcceptEntry(fence),
+	}, fence)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Errorf("close the connection: %v", closeErr)
+		}
+	})
+
+	q := db.New(conn)
+
+	ok := db.RenewWorkspaceClaimParams{
+		LeaseEndsAtMs: claim.LeaseEndsAt.Add(time.Hour).UnixMilli(), NowMs: claim.StartedAt.UnixMilli(), ID: claim.ID,
+		WorkspaceID: ws.String(), Principal: "ada",
+	}
+
+	wantRenewalsRefused(t, q, &claim, ok)
+
+	got, err := registry.List(t.Context(), ws)
+	if err != nil || len(got) != 1 || !got[0].LeaseEndsAt.Equal(claim.LeaseEndsAt) || !got[0].RenewedAt.IsZero() {
+		t.Fatalf("claims after the hostile renewals = %+v, %v, want the claim as registered", got, err)
+	}
+
+	if _, renewErr := q.RenewWorkspaceClaim(t.Context(), ok); renewErr != nil {
+		t.Fatalf("the statement with the rules met = %v, want a row", renewErr)
+	}
+}
+
+// TestClaimTableRefusesALeaseThatDisagreesWithItsJob sends rows that break the
+// CHECK of the table straight to the database: a claim of a job with a lease,
+// and a claim with no job and no lease. A good row of each kind goes in.
+func TestClaimTableRefusesALeaseThatDisagreesWithItsJob(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+	s := openURL(t, schemaURL)
+	_, ws := workspacetest.SeedClaimWorkspace(t, s)
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(context.Background()); closeErr != nil {
+			t.Errorf("close the connection: %v", closeErr)
+		}
+	})
+
+	const insert = `INSERT INTO workspace_claims
+(id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms,
+ lease_ends_at_ms, renewed_at_ms)
+VALUES ($1, $2, $3, 'sv-acme', '["a"]', 'ada', $4, '', 'accepted', 1, 0, $5, 0)`
+
+	for i, c := range []struct {
+		name  string
+		job   string
+		lease int64
+		ok    bool
+	}{
+		{"claim of a job with a lease", "job-1", 90, false},
+		{"claim with no job and no lease", "", 0, false},
+		{"claim of a job", "job-1", 0, true},
+		{"claim with no job and a lease", "", 90, true},
+	} {
+		_, execErr := conn.Exec(t.Context(), insert, "clm-"+c.name, ws.String(), i+1, c.job, c.lease)
+		if (execErr == nil) != c.ok {
+			t.Errorf("%s: insert = %v, want ok %v", c.name, execErr, c.ok)
+		}
+	}
+}
+
+// TestClaimsOnTwoWorkspacesOfOneNamespaceInParallel proves that parallel
+// registrations on two workspaces of one namespace all succeed and leave the
+// audit chain of the namespace valid: the namespace row lock orders the audit
+// appends of both workspaces.
+func TestClaimsOnTwoWorkspacesOfOneNamespaceInParallel(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	s := open(t, base)
+	fence, first := workspacetest.SeedClaimWorkspace(t, s)
+	second := workspace.ID(first.String() + "-2")
+
+	registry, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
+		Workspaces: s, Versions: s, Deleted: s, Manual: nil, Store: s, Now: nil, Lease: 0,
+	})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	const perWorkspace = 6
+
+	targets := []struct {
+		ws   workspace.ID
+		base workspace.StateVersionID
+	}{{first, "sv-acme"}, {second, "sv-acme-2"}}
+
+	errs := make([]error, perWorkspace*len(targets))
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+
+	for i := range errs {
+		target := targets[i%len(targets)]
+
+		wg.Go(func() {
+			<-start
+
+			_, errs[i] = registry.Register(t.Context(), &workspace.RegisterClaimRequest{
+				ViaJobToken: false, WorkspaceID: target.ws, Base: target.base,
+				Addresses: []string{"aws_instance.n" + strconv.Itoa(i)}, Replace: false, Principal: "ada", JobID: "",
+				Trigger: "", Audit: workspacetest.AcceptEntry(fence),
+			}, fence)
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	for i, regErr := range errs {
+		if regErr != nil {
+			t.Errorf("registration %d: %v", i, regErr)
+		}
+	}
+
+	for _, target := range targets {
+		got, listErr := registry.List(t.Context(), target.ws)
+		if listErr != nil || len(got) != perWorkspace {
+			t.Errorf("claims of %s = %d, %v, want %d", target.ws, len(got), listErr, perWorkspace)
+		}
+	}
+
+	invalid, err := audit.CheckScopes(t.Context(), s, []namespace.Name{fence.Namespace})
+	if err != nil || invalid != 0 {
+		t.Fatalf("audit chain of the namespace: %d breaks, %v, want none", invalid, err)
+	}
+}
+
+// wantRenewalsRefused sends hostile parameters to the renew statement, one
+// change of ok each, and fails the test for each that does not match no row.
+func wantRenewalsRefused(t *testing.T, q *db.Queries, claim *workspace.Claim, ok db.RenewWorkspaceClaimParams) {
+	t.Helper()
+
+	for name, mutate := range map[string]func(p *db.RenewWorkspaceClaimParams){
+		"another principal": func(p *db.RenewWorkspaceClaimParams) { p.Principal = "bob" },
+		"another workspace": func(p *db.RenewWorkspaceClaimParams) { p.WorkspaceID += "-2" },
+		"unknown claim":     func(p *db.RenewWorkspaceClaimParams) { p.ID = "clm-unknown" },
+		"lease that ended":  func(p *db.RenewWorkspaceClaimParams) { p.NowMs = claim.LeaseEndsAt.UnixMilli() },
+	} {
+		p := ok
+		mutate(&p)
+
+		if _, renewErr := q.RenewWorkspaceClaim(t.Context(), p); !errors.Is(renewErr, pgx.ErrNoRows) &&
+			!errors.Is(renewErr, sql.ErrNoRows) {
+			t.Errorf("%s: statement = %v, want no rows", name, renewErr)
+		}
+	}
 }

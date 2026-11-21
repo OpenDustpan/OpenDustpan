@@ -156,8 +156,13 @@ type testClaimDeleted struct {
 	deleted map[workspace.ID]bool
 }
 
-func (f *testClaimDeleted) IsDeleted(_ context.Context, id workspace.ID) (bool, error) {
-	return f.deleted[id], nil
+func (f *testClaimDeleted) DeletedWorkspace(_ context.Context, id workspace.ID) (workspace.Workspace, bool, error) {
+	var gone workspace.Workspace
+
+	gone.ID = id
+	gone.Ref = workspace.Ref{Namespace: "acme", Name: "network"}
+
+	return gone, f.deleted[id], nil
 }
 
 // claimDoc is one claim of a register or list answer.

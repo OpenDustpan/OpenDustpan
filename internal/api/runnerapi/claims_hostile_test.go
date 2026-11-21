@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/jobtoken"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // onlyAuthorizer allows one action on every object and denies the others.
@@ -198,6 +199,65 @@ func TestClaimHostileAccessAndActions(t *testing.T) {
 			t.Fatalf("register without unit:claim-register = %d %s, want 404", status, raw)
 		}
 	})
+}
+
+// deleteTheWorkspace soft-deletes the workspace of the world: the workspace
+// store no longer finds it, and the deleted store reports it.
+func (w *claimWorld) deleteTheWorkspace() {
+	w.deleted.deleted[workspace.ID(w.wsID)] = true
+	delete(w.spaces.spaces, workspace.ID(w.wsID))
+}
+
+// TestClaimDeletedWorkspaceAnswersByTheRightOfTheCaller proves that 410 is
+// only for a caller with the action: a caller without it gets 404 for a deleted
+// workspace, as for a missing one, on register, list and renew.
+func TestClaimDeletedWorkspaceAnswersByTheRightOfTheCaller(t *testing.T) {
+	t.Parallel()
+
+	calls := []struct {
+		name         string
+		method, path func(w *claimWorld) string
+		body         func(w *claimWorld) any
+	}{
+		{
+			"register", func(*claimWorld) string { return http.MethodPost },
+			func(w *claimWorld) string { return claimPath(w.wsID) },
+			func(w *claimWorld) any {
+				return map[string]any{"base": w.base, "addresses": []string{"aws_instance.a"}}
+			},
+		},
+		{
+			"list", func(*claimWorld) string { return http.MethodGet },
+			func(w *claimWorld) string { return claimPath(w.wsID) }, func(*claimWorld) any { return nil },
+		},
+		{
+			"renew", func(*claimWorld) string { return http.MethodPost },
+			func(w *claimWorld) string { return renewPath(w.wsID, "clm-x") }, func(*claimWorld) any { return nil },
+		},
+	}
+
+	for _, c := range calls {
+		for _, tc := range []struct {
+			name  string
+			authz identity.Authorizer
+			want  int
+		}{
+			{"caller with the action", allowAllAuthorizer{}, http.StatusGone},
+			{"caller without the action", denyAllAuthorizer{}, http.StatusNotFound},
+		} {
+			t.Run(c.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				w := newClaimWorld(t, tc.authz)
+				w.deleteTheWorkspace()
+
+				status, raw := w.call(t, c.method(w), c.path(w), "token "+adminToken, c.body(w))
+				if status != tc.want {
+					t.Fatalf("%s on a deleted workspace = %d %s, want %d", c.name, status, raw, tc.want)
+				}
+			})
+		}
+	}
 }
 
 // TestClaimAuthorizerFailureIsNotADenial proves that an authorizer that fails

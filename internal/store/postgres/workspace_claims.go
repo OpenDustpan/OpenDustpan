@@ -21,16 +21,23 @@ var (
 )
 
 // WithClaims implements workspace.ClaimStore. The transaction takes the
-// namespace row FOR UPDATE (the fence and the audit chain) and then the
-// workspace row FOR UPDATE, so two registrations on one workspace run one
-// after the other and the second reads the claims that the first committed.
+// namespace row FOR UPDATE (the fence, and the order of the audit appends of
+// the namespace) and then the workspace row FOR UPDATE, so two registrations on
+// one workspace run one after the other and the second reads the claims that
+// the first committed.
 //
-// Defense in depth: each of the two locks orders the registrations alone. The
-// namespace row lock comes from the audit append, and the workspace row lock
-// stays so that the claims of one workspace stay ordered if the helper of the
-// audited write changes its lock. Neither lock relies on the other, and the
-// unique key of the claim sequence refuses a second insert with the same
-// number.
+// The namespace row lock also orders the audit appends: every registration of
+// the namespace, on any of its workspaces, waits for the one before it, so each
+// entry reads the last entry of the chain that the one before it committed. The
+// claims of two workspaces of one namespace therefore run one after the other
+// too, and the chain stays valid.
+//
+// Defense in depth: each of the two locks orders the registrations of one
+// workspace alone. The namespace row lock comes from the audited write, and the
+// workspace row lock stays so that the claims of one workspace stay ordered if
+// the helper of the audited write changes its lock. Neither lock relies on the
+// other, and the unique key of the claim sequence refuses a second insert with
+// the same number.
 func (s *Store) WithClaims(
 	ctx context.Context, ws workspace.ID, fence namespace.Fence, fn func(tx workspace.ClaimTx) error,
 ) error {
@@ -277,19 +284,15 @@ func (s *Store) RenewClaim(
 			return lockErr
 		}
 
-		row, updErr := q.RenewWorkspaceClaim(ctx, db.RenewWorkspaceClaimParams{
-			LeaseEndsAtMs: codec.Millis(r.Now.Add(r.Lease)), ID: r.ClaimID, WorkspaceID: r.Workspace.String(),
-			Principal: r.Principal, NowMs: codec.Millis(r.Now),
-		})
+		claim, updErr := renewClaimRow(ctx, q, r)
 		if updErr == nil {
-			claim, convErr := codec.ClaimFromRow(codec.ClaimRow(row))
 			out = claim
 
-			return convErr
+			return nil
 		}
 
 		if !errors.Is(updErr, sql.ErrNoRows) {
-			return fmt.Errorf("renew claim: %w", updErr)
+			return updErr
 		}
 
 		return explainRefusedRenewal(ctx, q, r)
@@ -299,6 +302,43 @@ func (s *Store) RenewClaim(
 	}
 
 	return out, nil
+}
+
+// claimRenewer is the part of the queries that a renewal uses. A test gives
+// it a layer that returns a row that the statement would not.
+type claimRenewer interface {
+	RenewWorkspaceClaim(ctx context.Context, arg db.RenewWorkspaceClaimParams) (db.RenewWorkspaceClaimRow, error)
+}
+
+// renewClaimRow runs the renew statement and returns the claim of its row. It
+// returns sql.ErrNoRows when the statement changed no row. Defense in depth:
+// the statement holds the rules of the renewal in its WHERE clause; this
+// function checks the row that came back again, so that a row of another
+// principal, a job claim or a claim of another workspace is refused here and
+// not relied on from the statement. The error rolls the transaction back.
+func renewClaimRow(ctx context.Context, q claimRenewer, r workspace.ClaimRenewal) (workspace.Claim, error) {
+	row, err := q.RenewWorkspaceClaim(ctx, db.RenewWorkspaceClaimParams{
+		LeaseEndsAtMs: codec.Millis(r.Now.Add(r.Lease)), ID: r.ClaimID, WorkspaceID: r.Workspace.String(),
+		Principal: r.Principal, NowMs: codec.Millis(r.Now),
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return workspace.Claim{}, err
+		}
+
+		return workspace.Claim{}, fmt.Errorf("renew claim: %w", err)
+	}
+
+	claim, err := codec.ClaimFromRow(codec.ClaimRow(row))
+	if err != nil {
+		return workspace.Claim{}, err
+	}
+
+	if checkErr := workspace.CheckRenewed(&claim, r); checkErr != nil {
+		return workspace.Claim{}, checkErr
+	}
+
+	return claim, nil
 }
 
 // explainRefusedRenewal returns the error for a renewal that changed no row:
@@ -424,17 +464,32 @@ func (s *Store) AddClaimTouch(
 	})
 }
 
-// IsDeleted implements workspace.ClaimDeleted: it reports whether id names a
-// soft-deleted workspace. A workspace that does not exist is not deleted.
-func (s *Store) IsDeleted(ctx context.Context, id workspace.ID) (bool, error) {
-	deleted, err := s.queries.IsWorkspaceDeleted(ctx, id.String())
+// DeletedWorkspace implements workspace.ClaimDeleted: it returns the reference
+// of the soft-deleted workspace id, with the name that it had when it was
+// deleted. A workspace that does not exist, or is not deleted, is not found.
+func (s *Store) DeletedWorkspace(ctx context.Context, id workspace.ID) (workspace.Workspace, bool, error) {
+	row, err := s.queries.GetDeletedWorkspaceRefByID(ctx, id.String())
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		var none workspace.Workspace
+
+		return none, false, nil
 	}
 
 	if err != nil {
-		return false, fmt.Errorf("select workspace deleted: %w", err)
+		var none workspace.Workspace
+
+		return none, false, fmt.Errorf("select deleted workspace: %w", err)
 	}
 
-	return deleted, nil
+	name := row.Name
+	if row.DeletedName.Valid {
+		name = row.DeletedName.String
+	}
+
+	var gone workspace.Workspace
+
+	gone.ID = id
+	gone.Ref = workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(name)}
+
+	return gone, true, nil
 }

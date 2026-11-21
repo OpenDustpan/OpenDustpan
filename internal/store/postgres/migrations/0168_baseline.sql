@@ -1740,6 +1740,7 @@ CREATE TABLE workspace_claims (
     CONSTRAINT workspace_claims_base_check CHECK ((base <> ''::text)),
     CONSTRAINT workspace_claims_id_check CHECK ((id <> ''::text)),
     CONSTRAINT workspace_claims_lease_ends_at_ms_check CHECK ((lease_ends_at_ms >= 0)),
+    CONSTRAINT workspace_claims_lease_job_check CHECK (((job_id = ''::text) = (lease_ends_at_ms > 0))),
     CONSTRAINT workspace_claims_principal_check CHECK ((principal <> ''::text)),
     CONSTRAINT workspace_claims_renewed_at_ms_check CHECK ((renewed_at_ms >= 0)),
     CONSTRAINT workspace_claims_seq_check CHECK ((seq >= 1)),

@@ -72,8 +72,12 @@ type claimDeleted struct {
 	deleted map[workspace.ID]bool
 }
 
-func (f *claimDeleted) IsDeleted(_ context.Context, id workspace.ID) (bool, error) {
-	return f.deleted[id], nil
+func (f *claimDeleted) DeletedWorkspace(_ context.Context, id workspace.ID) (workspace.Workspace, bool, error) {
+	var gone workspace.Workspace
+
+	gone.ID = id
+
+	return gone, f.deleted[id], nil
 }
 
 // claimFixture holds one live workspace and one base version.

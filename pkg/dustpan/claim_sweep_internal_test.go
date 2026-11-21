@@ -133,6 +133,7 @@ func (w *sweepWorld) sweeper(list fakeSweepNamespaces, perRun int) *claimSweeper
 		namespaces: list,
 		logger:     slog.New(slog.DiscardHandler),
 		maxPerRun:  perRun,
+		cursor:     atomic.Int64{},
 		every:      time.Second,
 	}
 }
@@ -183,5 +184,78 @@ func TestClaimSweeperSurvivesAFailingNamespaceList(t *testing.T) {
 
 	if got := w.accepted(t); got != 0 {
 		t.Fatalf("accepted claims after a run = %d, want 0", got)
+	}
+}
+
+// pendingExpirer is a claim expirer with a count of claims to end in each
+// namespace. It records the order in which a run asked the namespaces.
+type pendingExpirer struct {
+	pending map[namespace.Name]int
+	asked   []namespace.Name
+}
+
+func (p *pendingExpirer) ExpireLeases(_ context.Context, fence namespace.Fence, limit int) (int, error) {
+	p.asked = append(p.asked, fence.Namespace)
+
+	n := min(limit, p.pending[fence.Namespace])
+	p.pending[fence.Namespace] -= n
+
+	return n, nil
+}
+
+// TestClaimSweeperRotatesTheFirstNamespace proves that no namespace starves the
+// others: three namespaces with five claims each, and a budget of two claims in
+// each run. A run that always started at the first namespace would end claims
+// of that namespace only, until it had none; with the rotation, each of the
+// three namespaces has its claims ended in the first three runs.
+func TestClaimSweeperRotatesTheFirstNamespace(t *testing.T) {
+	t.Parallel()
+
+	names := []namespace.Name{"a", "b", "c"}
+	expirer := &pendingExpirer{pending: map[namespace.Name]int{"a": 5, "b": 5, "c": 5}, asked: nil}
+
+	list := make([]namespace.Namespace, 0, len(names))
+	for _, name := range names {
+		list = append(list, namespace.Namespace{
+			CreatedAt: time.Time{}, ID: "", Name: name, PrimaryInstallation: "",
+			Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
+		})
+	}
+
+	s := &claimSweeper{
+		claims: expirer, namespaces: fakeSweepNamespaces{list: list, err: nil}, logger: slog.New(slog.DiscardHandler),
+		maxPerRun: 2, every: time.Second, cursor: atomic.Int64{},
+	}
+
+	for range 3 {
+		s.sweepOnce(t.Context())
+	}
+
+	for _, name := range names {
+		if got := expirer.pending[name]; got != 3 {
+			t.Errorf("claims left in %s after three runs = %d, want 3: every namespace gets a first turn", name, got)
+		}
+	}
+
+	if got := expirer.asked[0]; got != "a" {
+		t.Errorf("first namespace asked = %q, want a", got)
+	}
+}
+
+// TestClaimSweeperWithNoNamespace proves that a run over an empty list ends
+// nothing and does not divide by zero.
+func TestClaimSweeperWithNoNamespace(t *testing.T) {
+	t.Parallel()
+
+	expirer := &pendingExpirer{pending: map[namespace.Name]int{}, asked: nil}
+	s := &claimSweeper{
+		claims: expirer, namespaces: fakeSweepNamespaces{list: nil, err: nil}, logger: slog.New(slog.DiscardHandler),
+		maxPerRun: 2, every: time.Second, cursor: atomic.Int64{},
+	}
+
+	s.sweepOnce(t.Context())
+
+	if len(expirer.asked) != 0 {
+		t.Fatalf("namespaces asked = %v, want none", expirer.asked)
 	}
 }

@@ -277,6 +277,10 @@ func createClaimWorkspace(t *testing.T, b ClaimBackend, ns *namespace.Namespace,
 	}
 }
 
+// AcceptEntry returns a valid audit entry of an accept in the namespace of the
+// fence, for a test of one adapter that registers a claim.
+func AcceptEntry(fence namespace.Fence) audit.Entry { return claimEntry(fence) }
+
 // claimEntry returns a valid audit entry of an accept in the namespace of the
 // fence. The registry sets its time, its object ID and its job ID.
 func claimEntry(fence namespace.Fence) audit.Entry {

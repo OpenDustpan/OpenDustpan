@@ -6497,6 +6497,32 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 	return deleted_name, err
 }
 
+const getDeletedWorkspaceRefByID = `-- name: GetDeletedWorkspaceRefByID :one
+SELECT id, namespace, name, deleted_name FROM workspaces WHERE id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type GetDeletedWorkspaceRefByIDRow struct {
+	ID          string
+	Namespace   string
+	Name        string
+	DeletedName sql.NullString
+}
+
+// The reference of a soft-deleted workspace: its namespace, its name and the
+// name it had when it was deleted. A workspace that does not exist, or that is
+// not deleted, returns no row.
+func (q *Queries) GetDeletedWorkspaceRefByID(ctx context.Context, id string) (GetDeletedWorkspaceRefByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getDeletedWorkspaceRefByID, id)
+	var i GetDeletedWorkspaceRefByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.DeletedName,
+	)
+	return i, err
+}
+
 const getDriftResult = `-- name: GetDriftResult :one
 SELECT d.unit_id, n.name AS namespace, d.tool, d.job_id, d.status, d.checked_at_ms, d.truncated, d.resources_json
 FROM drift_results AS d
@@ -13987,19 +14013,6 @@ func (q *Queries) InsertWorkspaceResourceChange(ctx context.Context, arg InsertW
 	return err
 }
 
-const isWorkspaceDeleted = `-- name: IsWorkspaceDeleted :one
-SELECT deleted_at_ms IS NOT NULL AS deleted FROM workspaces WHERE id = ?
-`
-
-// Whether the workspace is soft-deleted. A workspace that does not exist
-// returns no row.
-func (q *Queries) IsWorkspaceDeleted(ctx context.Context, id string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, isWorkspaceDeleted, id)
-	var deleted bool
-	err := row.Scan(&deleted)
-	return deleted, err
-}
-
 const journalBatchRefs = `-- name: JournalBatchRefs :many
 SELECT blob_key, sha256, size FROM update_journal
 WHERE stack_id = ? AND update_id = ?
@@ -15312,7 +15325,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 const listExpiredWorkspaceClaims = `-- name: ListExpiredWorkspaceClaims :many
 SELECT c.id, c.workspace_id, c.job_id, w.name
 FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
-WHERE c.state = 'accepted' AND c.lease_ends_at_ms > 0 AND c.lease_ends_at_ms < ?1
+WHERE c.state = 'accepted' AND c.job_id = '' AND c.lease_ends_at_ms > 0 AND c.lease_ends_at_ms < ?1
   AND w.namespace = ?2
 ORDER BY c.lease_ends_at_ms, c.id
 LIMIT ?3

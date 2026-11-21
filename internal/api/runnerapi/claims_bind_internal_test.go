@@ -22,7 +22,7 @@ func TestClaimCallerBinding(t *testing.T) {
 	}
 
 	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
-	target := claimTarget{id: "ws-1", unit: unit.WithUnitID("ws-1"), fence: fence}
+	target := claimTarget{id: "ws-1", unit: unit.WithUnitID("ws-1"), fence: fence, deleted: nil}
 
 	var person identity.Principal
 

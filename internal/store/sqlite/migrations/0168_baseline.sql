@@ -932,6 +932,7 @@ CREATE TABLE workspace_claims (
     ended_at_ms   INTEGER NOT NULL DEFAULT 0,
     lease_ends_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (lease_ends_at_ms >= 0),
     renewed_at_ms INTEGER NOT NULL DEFAULT 0 CHECK (renewed_at_ms >= 0),
+    CHECK ((job_id = '') = (lease_ends_at_ms > 0)),
     UNIQUE (workspace_id, seq)
 ) STRICT;
 

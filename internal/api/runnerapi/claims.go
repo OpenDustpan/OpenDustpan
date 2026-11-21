@@ -76,6 +76,9 @@ type claimTarget struct {
 	id    workspace.ID
 	unit  identity.Object
 	fence namespace.Fence
+	// deleted is the error of a soft-deleted workspace, or nil. The handler
+	// answers it after the check of the action.
+	deleted error
 }
 
 // errClaimJobMismatch reports a job token used for another job.
@@ -168,7 +171,7 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 
 	wsID, unit, fence := target.id, target.unit, target.fence
 
-	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitClaimRegister, unit); authErr != nil {
+	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitClaimRegister, &target); authErr != nil {
 		h.writeError(ctx, w, authErr)
 
 		return
@@ -234,7 +237,7 @@ func (h *Handler) renewClaim(w http.ResponseWriter, r *http.Request, _ *call) {
 		return
 	}
 
-	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitClaimRegister, target.unit); authErr != nil {
+	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitClaimRegister, &target); authErr != nil {
 		h.writeError(ctx, w, authErr)
 
 		return
@@ -311,9 +314,9 @@ func (h *Handler) listClaims(w http.ResponseWriter, r *http.Request, _ *call) {
 		return
 	}
 
-	wsID, unit := target.id, target.unit
+	wsID := target.id
 
-	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitRead, unit); authErr != nil {
+	if authErr := h.authorizeClaim(ctx, &caller, identity.ActionUnitRead, &target); authErr != nil {
 		h.writeError(ctx, w, authErr)
 
 		return
@@ -350,9 +353,20 @@ func (h *Handler) claimWorkspace(
 		)
 	}
 
+	// A soft-deleted workspace comes back with its reference and an error that
+	// matches ErrClaimDeleted. The caller checks the right of its own caller
+	// first and answers 410 after that, so that a caller without the right gets
+	// the same 404 for a deleted and for a missing workspace.
 	got, err := h.claims.Workspace(ctx, wsID)
-	if err != nil {
+
+	var deletedErr error
+
+	switch {
+	case errors.Is(err, workspace.ErrClaimDeleted):
+		deletedErr = err
+	case err != nil:
 		return claimTarget{}, err
+	default:
 	}
 
 	unit, err := identity.UnitObject("opentofu", got.Ref.Namespace, got.Ref.Name.String())
@@ -373,7 +387,7 @@ func (h *Handler) claimWorkspace(
 		)
 	}
 
-	return claimTarget{id: wsID, unit: unit, fence: ns.Fence()}, nil
+	return claimTarget{id: wsID, unit: unit, fence: ns.Fence(), deleted: deletedErr}, nil
 }
 
 // claimCaller is a caller whose credential the handler authenticated.
@@ -479,22 +493,25 @@ func (c claimCaller) bindJob(jobID string) error {
 	return nil
 }
 
-// authorizeClaim checks that the caller may do action on the unit. A caller
-// that lacks the action gets the answer for a workspace that does not exist
-// (404): a 403 would tell a caller with a valid credential that the workspace
-// exists. A failure of the authorizer is not a denial and is not hidden.
+// authorizeClaim checks that the caller may do action on the unit of the
+// target, and then answers for a soft-deleted workspace. A caller that lacks the
+// action gets the answer for a workspace that does not exist (404), whether the
+// workspace is missing, deleted or live: a 403 would tell a caller with a valid
+// credential that the workspace exists, and a 410 would tell it that the
+// workspace existed. Only a caller with the action learns that the workspace is
+// gone (410). A failure of the authorizer is not a denial and is not hidden.
 func (h *Handler) authorizeClaim(
-	ctx context.Context, caller *claimCaller, action identity.Action, unit identity.Object,
+	ctx context.Context, caller *claimCaller, action identity.Action, target *claimTarget,
 ) error {
-	err := h.authorizer.Authorize(ctx, caller.principal, action, unit)
+	err := h.authorizer.Authorize(ctx, caller.principal, action, target.unit)
 
 	switch {
-	case err == nil:
-		return nil
 	case errors.Is(err, identity.ErrDenied):
 		return fmt.Errorf("%w: the caller lacks %s on the workspace", workspace.ErrClaimNotFound, action)
-	default:
+	case err != nil:
 		return fmt.Errorf("authorize %s: %w", action, err)
+	default:
+		return target.deleted
 	}
 }
 

@@ -174,12 +174,15 @@ type ClaimVersions interface {
 	) (StateVersion, error)
 }
 
-// ClaimDeleted reports whether a workspace ID names a soft-deleted
-// workspace. It is optional: a nil ClaimDeleted reads every missing
-// workspace as missing, never as deleted.
+// ClaimDeleted reads a soft-deleted workspace by its ID. It is optional: a nil
+// ClaimDeleted reads every missing workspace as missing, never as deleted.
 type ClaimDeleted interface {
-	// IsDeleted reports whether id names a soft-deleted workspace.
-	IsDeleted(ctx context.Context, id ID) (bool, error)
+	// DeletedWorkspace returns the soft-deleted workspace with id: its ID, its
+	// namespace and its name as they were. The caller needs them to check the
+	// right of a caller before it says that the workspace is gone. The bool is
+	// false for a workspace that does not exist and for one that is not
+	// deleted.
+	DeletedWorkspace(ctx context.Context, id ID) (Workspace, bool, error)
 }
 
 // RegisterClaimRequest asks the registry to store one apply claim.
@@ -344,11 +347,13 @@ func (r *ClaimRegistry) Register(
 
 // Workspace returns the workspace with id, for route resolution. It
 // returns an error that matches ErrClaimNotFound for a missing workspace,
-// or ErrClaimDeleted for a soft-deleted one.
+// or ErrClaimDeleted for a soft-deleted one. For a soft-deleted workspace it
+// also returns the workspace as it was, so that the caller checks the right of
+// its own caller before it answers that the workspace is gone.
 func (r *ClaimRegistry) Workspace(ctx context.Context, id ID) (Workspace, error) {
 	w, err := r.workspaces.GetWorkspaceByID(ctx, id)
 	if err != nil {
-		return Workspace{}, r.missingWorkspace(ctx, id, err)
+		return r.missingWorkspace(ctx, id, err)
 	}
 
 	return w, nil
@@ -401,15 +406,23 @@ func (r *ClaimRegistry) ExpireLeases(ctx context.Context, fence namespace.Fence,
 func (r *ClaimRegistry) Renew(
 	ctx context.Context, ws ID, claimID, principal string, fence namespace.Fence,
 ) (Claim, error) {
-	claim, err := r.store.RenewClaim(ctx, fence, ClaimRenewal{
-		Workspace: ws, ClaimID: claimID, Principal: principal, Now: r.now(), Lease: r.lease,
-	})
+	renewal := ClaimRenewal{Workspace: ws, ClaimID: claimID, Principal: principal, Now: r.now(), Lease: r.lease}
+
+	claim, err := r.store.RenewClaim(ctx, fence, renewal)
 	if errors.Is(err, ErrNotFound) {
 		return Claim{}, fmt.Errorf("%w: claim %s: %w", ErrClaimNotFound, claimID, err)
 	}
 
 	if err != nil {
 		return Claim{}, fmt.Errorf("renew claim %s: %w", claimID, err)
+	}
+
+	// Defense in depth: the store and its statement hold the same rules. This
+	// check stays so that a store that hands back the claim of another
+	// principal, a job claim or a claim of another workspace never reaches the
+	// caller, and it does not rely on them.
+	if checkErr := CheckRenewed(&claim, renewal); checkErr != nil {
+		return Claim{}, fmt.Errorf("renew claim %s: %w", claimID, checkErr)
 	}
 
 	return claim, nil
@@ -578,7 +591,9 @@ func (r *ClaimRegistry) checkRegistration(
 ) (Workspace, error) {
 	w, err := r.workspaces.GetWorkspaceByID(ctx, req.WorkspaceID)
 	if err != nil {
-		return Workspace{}, r.missingWorkspace(ctx, req.WorkspaceID, err)
+		_, missingErr := r.missingWorkspace(ctx, req.WorkspaceID, err)
+
+		return Workspace{}, missingErr
 	}
 
 	if fence.Namespace != w.Ref.Namespace {
@@ -715,27 +730,29 @@ func (r *ClaimRegistry) insert(
 }
 
 // missingWorkspace maps a workspace lookup failure to 404 or 410: a
-// soft-deleted workspace reads as deleted when the registry knows deleted
-// workspaces, else as missing.
-func (r *ClaimRegistry) missingWorkspace(ctx context.Context, id ID, err error) error {
+// soft-deleted workspace is gone (ErrClaimDeleted), any other missing one is
+// ErrClaimNotFound. For a deleted workspace it also returns the workspace as it
+// was, so that a caller can check the right of its own caller before it says
+// which of the two answers is true.
+func (r *ClaimRegistry) missingWorkspace(ctx context.Context, id ID, err error) (Workspace, error) {
 	if !errors.Is(err, ErrNotFound) {
-		return err
+		return Workspace{}, err
 	}
 
 	if r.deleted == nil {
-		return fmt.Errorf("%w: %s", ErrClaimNotFound, id)
+		return Workspace{}, fmt.Errorf("%w: %s", ErrClaimNotFound, id)
 	}
 
-	deleted, delErr := r.deleted.IsDeleted(ctx, id)
+	gone, deleted, delErr := r.deleted.DeletedWorkspace(ctx, id)
 	if delErr != nil {
-		return delErr
+		return Workspace{}, delErr
 	}
 
 	if deleted {
-		return fmt.Errorf("%w: %s", ErrClaimDeleted, id)
+		return gone, fmt.Errorf("%w: %s", ErrClaimDeleted, id)
 	}
 
-	return fmt.Errorf("%w: %s", ErrClaimNotFound, id)
+	return Workspace{}, fmt.Errorf("%w: %s", ErrClaimNotFound, id)
 }
 
 // manuallockUnit returns the manual lock unit of the workspace.

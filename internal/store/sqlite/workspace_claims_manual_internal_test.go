@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -123,7 +124,7 @@ func newQueuedWriterWorld(t *testing.T, phase fixedPhase) *manualWorld {
 func buildManualWorld(t *testing.T, phase fixedPhase, reader lockReader) *manualWorld {
 	t.Helper()
 
-	s := openInternalTemplated(t)
+	s := openStoreThatMayDeadlock(t)
 	fence, ws := workspacetest.SeedClaimWorkspace(t, s)
 	armed := new(atomic.Bool)
 
@@ -157,6 +158,37 @@ func buildManualWorld(t *testing.T, phase fixedPhase, reader lockReader) *manual
 	}
 
 	return &manualWorld{registry: registry, fence: fence, ws: ws}
+}
+
+// openStoreThatMayDeadlock opens a fresh store from the template, as
+// openInternalTemplated does, and closes it at the end of a test that passed.
+// A test that failed by a deadlock leaves a transaction that holds the read lock
+// of the store for good, and Close waits for that lock: the store is left open
+// then, so that the test ends with its failure and does not wait for the
+// timeout of the test binary.
+func openStoreThatMayDeadlock(t *testing.T) *Store {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyInternalTemplate(t, path)
+
+	s, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	return s
 }
 
 // manualEntry returns a valid audit entry for a lock of target.

@@ -4001,10 +4001,11 @@ VALUES (
     sqlc.arg(version_id), sqlc.arg(addresses)
 );
 
--- name: IsWorkspaceDeleted :one
--- Whether the workspace is soft-deleted. A workspace that does not exist
--- returns no row.
-SELECT (deleted_at_ms IS NOT NULL)::boolean AS deleted FROM workspaces WHERE id = $1;
+-- name: GetDeletedWorkspaceRefByID :one
+-- The reference of a soft-deleted workspace: its namespace, its name and the
+-- name it had when it was deleted. A workspace that does not exist, or that is
+-- not deleted, returns no row.
+SELECT id, namespace, name, deleted_name FROM workspaces WHERE id = $1 AND deleted_at_ms IS NOT NULL;
 
 -- name: ListExpiredWorkspaceClaims :many
 -- The accepted claims of one namespace whose lease ended before the time now,
@@ -4012,7 +4013,7 @@ SELECT (deleted_at_ms IS NOT NULL)::boolean AS deleted FROM workspaces WHERE id 
 -- claim with no lease (lease_ends_at_ms of 0) is never listed.
 SELECT c.id, c.workspace_id, c.job_id, w.name
 FROM workspace_claims AS c JOIN workspaces AS w ON w.id = c.workspace_id
-WHERE c.state = 'accepted' AND c.lease_ends_at_ms > 0 AND c.lease_ends_at_ms < sqlc.arg(now_ms)
+WHERE c.state = 'accepted' AND c.job_id = '' AND c.lease_ends_at_ms > 0 AND c.lease_ends_at_ms < sqlc.arg(now_ms)
   AND w.namespace = sqlc.arg(namespace)
 ORDER BY c.lease_ends_at_ms, c.id
 LIMIT sqlc.arg(max_rows)::bigint;
