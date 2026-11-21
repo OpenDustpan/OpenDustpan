@@ -2737,9 +2737,14 @@
           "principal.reserved-subject",
           "principal.unsupported",
           "profile.conflict",
+          "profile.final",
+          "profile.import-cycle",
           "profile.invalid",
           "profile.limit",
+          "profile.never-store",
           "profile.not-found",
+          "profile.provider",
+          "profile.reference",
           "profile.routing-change-needs-open",
           "profile.schema-version",
           "registry.archive-set-refused",
@@ -5683,6 +5688,41 @@
         ],
         "type": "object"
       },
+      "OpenProfileRequest": {
+        "properties": {
+          "consumer": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "consumer"
+        ],
+        "type": "object"
+      },
+      "OpenProfileResponse": {
+        "properties": {
+          "expiresAt": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "sessionId"
+        ],
+        "type": "object"
+      },
       "OutputSharing": {
         "properties": {
           "newUnitDefault": {
@@ -6550,6 +6590,20 @@
         ],
         "type": "object"
       },
+      "ProfileSessionValue": {
+        "properties": {
+          "secret": {
+            "type": "boolean"
+          },
+          "value": {
+            "description": "Any JSON value."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "ProviderRelease": {
         "properties": {
           "files": {
@@ -6803,6 +6857,23 @@
         },
         "required": [
           "namespace"
+        ],
+        "type": "object"
+      },
+      "ReadProfileSessionResponse": {
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ProfileSessionValue"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "values"
         ],
         "type": "object"
       },
@@ -17920,6 +17991,69 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session}": {
+      "get": {
+        "operationId": "readProfileSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Reads only this path of the open session.",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadProfileSessionResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "profiles"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "profile:open",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/profiles": {
       "get": {
         "operationId": "listProfiles",
@@ -18179,6 +18313,73 @@
         "x-dustpan-actions": [
           {
             "action": "profile:read",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open": {
+      "post": {
+        "operationId": "openProfile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenProfileResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "profiles"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "profile:open",
             "object": "namespace"
           }
         ]

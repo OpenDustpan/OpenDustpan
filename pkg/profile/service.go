@@ -31,7 +31,13 @@ type Config struct {
 	Sealer     Sealer
 	Audit      audit.Store
 	Authorizer identity.Authorizer
-	Now        func() time.Time
+	// Sessions persists open sessions. It is required: Open and ReadSession
+	// fail without it.
+	Sessions Sessions
+	// Evaluator computes the expressions of an open. It is required: Open
+	// fails without it.
+	Evaluator Evaluator
+	Now       func() time.Time
 }
 
 // Service implements the profile use cases. Each method checks the actions
@@ -44,6 +50,8 @@ type Service struct {
 	sealer     Sealer
 	audit      audit.Store
 	authz      identity.Authorizer
+	sessions   Sessions
+	evaluator  Evaluator
 	now        func() time.Time
 }
 
@@ -118,8 +126,12 @@ type View struct {
 // NewService returns a Service. It returns ErrMissingDependency when a port
 // is missing. A nil Now uses time.Now.
 func NewService(cfg Config) (*Service, error) {
-	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer == nil || cfg.Audit == nil || cfg.Authorizer == nil {
-		return nil, fmt.Errorf("%w: store, namespaces, sealer, audit and authorizer", ErrMissingDependency)
+	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer == nil || cfg.Audit == nil || cfg.Authorizer == nil ||
+		cfg.Sessions == nil || cfg.Evaluator == nil {
+		return nil, fmt.Errorf(
+			"%w: store, namespaces, sealer, audit, authorizer, sessions and evaluator",
+			ErrMissingDependency,
+		)
 	}
 
 	now := cfg.Now
@@ -129,7 +141,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, audit: cfg.Audit, authz: cfg.Authorizer,
-		now: now,
+		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now,
 	}, nil
 }
 

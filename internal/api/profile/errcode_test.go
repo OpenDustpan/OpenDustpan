@@ -58,6 +58,20 @@ func TestErrorsHaveCodes(t *testing.T) {
 		},
 		{"unknown profile", profile.ErrNotFound, http.StatusNotFound, errcode.ProfileNotFound},
 		{"schema version", profile.ErrSchemaVersion, http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion},
+		{"provider block", profile.ErrProvider, http.StatusUnprocessableEntity, errcode.ProfileProvider},
+		{
+			"never-store path", profile.ErrNeverStore,
+			http.StatusUnprocessableEntity, errcode.ProfileNeverStore,
+		},
+		{"final value", profile.ErrFinal, http.StatusUnprocessableEntity, errcode.ProfileFinal},
+		{
+			"unknown expression name", profile.ErrReference,
+			http.StatusUnprocessableEntity, errcode.ProfileReference,
+		},
+		{
+			"import cycle", profile.ErrImportCycle,
+			http.StatusUnprocessableEntity, errcode.ProfileImportCycle,
+		},
 		{"over a limit", profile.ErrLimit, http.StatusUnprocessableEntity, errcode.ProfileLimit},
 		{"invalid profile", profile.ErrInvalid, http.StatusBadRequest, errcode.ProfileInvalid},
 		{"changed profile", profile.ErrConflict, http.StatusConflict, errcode.ProfileConflict},

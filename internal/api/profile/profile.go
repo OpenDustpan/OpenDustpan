@@ -133,6 +133,30 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: profileErrors}.Write(ctx, w, err)
 }
 
+// profileErrorRow maps one sentinel of the profile service to its answer.
+type profileErrorRow struct {
+	sentinel error
+	status   int
+	code     string
+}
+
+// profileErrorTable lists the answers of the profile service, with the open
+// rows first. A table keeps the mapping free of one branch per sentinel.
+//
+//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
+var profileErrorTable = []profileErrorRow{
+	{sentinel: profile.ErrProvider, status: http.StatusUnprocessableEntity, code: errcode.ProfileProvider},
+	{sentinel: profile.ErrNeverStore, status: http.StatusUnprocessableEntity, code: errcode.ProfileNeverStore},
+	{sentinel: profile.ErrFinal, status: http.StatusUnprocessableEntity, code: errcode.ProfileFinal},
+	{sentinel: profile.ErrReference, status: http.StatusUnprocessableEntity, code: errcode.ProfileReference},
+	{sentinel: profile.ErrImportCycle, status: http.StatusUnprocessableEntity, code: errcode.ProfileImportCycle},
+	{sentinel: profile.ErrNotFound, status: http.StatusNotFound, code: errcode.ProfileNotFound},
+	{sentinel: profile.ErrSchemaVersion, status: http.StatusUnprocessableEntity, code: errcode.ProfileSchemaVersion},
+	{sentinel: profile.ErrLimit, status: http.StatusUnprocessableEntity, code: errcode.ProfileLimit},
+	{sentinel: profile.ErrInvalid, status: http.StatusBadRequest, code: errcode.ProfileInvalid},
+	{sentinel: profile.ErrConflict, status: http.StatusConflict, code: errcode.ProfileConflict},
+}
+
 // profileErrors maps the errors of the profile service and of the fresh
 // sign-in that a profile change needs.
 func profileErrors(err error) (problem.Problem, bool) {
@@ -140,20 +164,13 @@ func profileErrors(err error) (problem.Problem, bool) {
 		return p, true
 	}
 
-	switch {
-	case errors.Is(err, profile.ErrNotFound):
-		return problem.New(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
-	case errors.Is(err, profile.ErrSchemaVersion):
-		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
-	case errors.Is(err, profile.ErrLimit):
-		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
-	case errors.Is(err, profile.ErrInvalid):
-		return problem.New(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
-	case errors.Is(err, profile.ErrConflict):
-		return problem.New(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
-	default:
-		return problem.Pass()
+	for _, row := range profileErrorTable {
+		if errors.Is(err, row.sentinel) {
+			return problem.New(row.status, row.code, err.Error()), true
+		}
 	}
+
+	return problem.Pass()
 }
 
 // keepDenied answers the one class of the profile API that wraps a denial and

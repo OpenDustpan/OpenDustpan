@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -106,13 +107,39 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			return probe(t, http.MethodGet, path+"/revisions/1", "", etag)
 		},
+		"openProfile": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			path, _ := fresh(t)
+
+			p := probe(t, http.MethodPost, path+"/open", openBody(t), "")
+			p.Replayed = replayNamesSession
+
+			return p
+		},
+		"readProfileSession": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			path, _ := fresh(t)
+
+			opened := f.do(t, send("admin", http.MethodPost, path+"/open", openBody(t)))
+			if opened.code != http.StatusCreated {
+				t.Fatalf("open: %d %s", opened.code, opened.body)
+			}
+
+			var wire openWire
+			if err := json.Unmarshal([]byte(opened.body), &wire); err != nil {
+				t.Fatalf("decode open: %v", err)
+			}
+
+			return probe(t, http.MethodGet, sessionBase+"/"+wire.SessionID, "", "")
+		},
 	}
 
 	ops := f.handler.Operations()
 	if len(ops) != len(scenarios) {
 		t.Errorf("the handler has %d operations and the test has %d scenarios", len(ops), len(scenarios))
 	}
-
 	for _, op := range ops {
 		t.Run(op.ID, func(t *testing.T) {
 			t.Parallel()
@@ -127,4 +154,36 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 			headertest.Check(t, op, scenario, headertest.Options{RefusesKey: true})
 		})
 	}
+}
+
+// sessionBase is the session collection of the fixture namespace.
+const sessionBase = "/api/dustpan/v1/namespaces/acme/profile-sessions"
+
+// openBody is the body of an open with the API consumer and the defaults.
+func openBody(t *testing.T) string {
+	t.Helper()
+
+	return jsonString(t, map[string]string{"consumer": "api"})
+}
+
+// openWire is the part of an open answer that the tests read.
+type openWire struct {
+	SessionID string `json:"sessionId"` //nolint:tagliatelle // The apidesc camelCase rule spells an ID as Id; sessionId is the wire name.
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// replayNamesSession reports whether again is the replay of an open whose
+// answer holds a secret: 409 that names the session of the first answer and
+// holds no value.
+func replayNamesSession(first, again headertest.Answer) bool {
+	if again.Status != http.StatusConflict {
+		return false
+	}
+
+	var wire openWire
+	if err := json.Unmarshal([]byte(first.Body), &wire); err != nil {
+		return false
+	}
+
+	return wire.SessionID != "" && strings.Contains(again.Body, wire.SessionID)
 }

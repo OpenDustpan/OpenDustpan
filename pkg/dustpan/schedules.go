@@ -471,6 +471,7 @@ func (s *Server) startSweeps(ctx context.Context, sweeps *sync.WaitGroup) error 
 		sweeps.Go(func() { s.sweepDeleted(ctx) })
 		sweeps.Go(func() { s.pruneSignInRequests(ctx) })
 		sweeps.Go(func() { s.sweepIdempotency(ctx) })
+		sweeps.Go(func() { s.sweepProfileSessions(ctx) })
 
 		return nil
 	}

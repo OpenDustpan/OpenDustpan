@@ -55,6 +55,7 @@ docs/reference/configuration.md
 docs/reference/gate-config-api.md
 docs/reference/inventory-api.md
 docs/reference/preferences-api.md
+docs/reference/profiles-api.md
 docs/reference/s3-latency-benchmark.md
 docs/reference/settings-api.md
 docs/reference/typescript-client.md

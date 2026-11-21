@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/expr"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -135,6 +136,18 @@ func (c *testClock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+// testEvaluator returns the real expression engine of the profile service.
+func testEvaluator(t *testing.T) *expr.Evaluator {
+	t.Helper()
+
+	eval, err := expr.New(expr.NewLimiter())
+	if err != nil {
+		t.Fatalf("expr evaluator: %v", err)
+	}
+
+	return eval
+}
+
 // newFixture returns a handler that takes the Idempotency-Key header.
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
 	t.Helper()
@@ -225,7 +238,8 @@ func buildFixtureWith(
 	authz := testAuthz{deny: denied}
 
 	svc, err := profile.NewService(profile.Config{
-		Store: store.Profiles(), Namespaces: store, Sealer: secrets, Audit: store, Authorizer: authz, Now: nil,
+		Store: store.Profiles(), Namespaces: store, Sealer: secrets, Audit: store, Authorizer: authz,
+		Sessions: store.Sessions(), Evaluator: testEvaluator(t), Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("profile service: %v", err)
@@ -686,6 +700,7 @@ func TestEscapedSlashNames(t *testing.T) {
 		{"list revisions", http.MethodGet, "/revisions", "reader", "", false, http.StatusOK},
 		{"get revision 1", http.MethodGet, "/revisions/1", "reader", "", false, http.StatusOK},
 		{"save revision", http.MethodPost, "/revisions", "writer", body, true, http.StatusCreated},
+		{"open", http.MethodPost, "/open", "admin", `{"consumer":"api"}`, false, http.StatusCreated},
 		{"delete", http.MethodDelete, "", "admin", "", false, http.StatusNoContent},
 	}
 

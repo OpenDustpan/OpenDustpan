@@ -174,6 +174,7 @@ func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 	one := profilesBase + "/" + tag.id
 
 	profileReads(t, env, one, tool)
+	profileOpenFlow(t, env, one, tool)
 	profileWrites(t, env, one, &tag)
 	profileKeyedCreate(t, env, tool)
 	profileProxyExport(t, env, tool)

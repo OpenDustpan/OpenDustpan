@@ -36,12 +36,20 @@ type Route struct {
 	// Answer makes the answer of a route that takes the key from the result
 	// of its write. It is nil for a route that does not take the key.
 	Answer func(obj identity.Object) answerFunc
+	// SecretAnswer is set when the answer holds a secret or a credential.
+	// It returns the ID of the object that the write made, from the result
+	// that Answer gets. The replay record keeps that ID in place of the
+	// answer, and a replay answers 409 with the ID and no value.
+	SecretAnswer func(result any) (objectID string)
 }
 
 const (
 	profilesPath  = v1Prefix + "/namespaces/{namespace}/profiles"
 	profilePath   = profilesPath + "/{profile}"
 	revisionsPath = profilePath + "/revisions"
+	openPath      = profilePath + "/open"
+	sessionsPath  = v1Prefix + "/namespaces/{namespace}/profile-sessions"
+	sessionPath   = sessionsPath + "/{session}"
 )
 
 // buildRoutes returns the route table. It is the single source of the
@@ -50,6 +58,7 @@ func (h *Handler) buildRoutes() []Route {
 	read := []identity.Action{identity.ActionProfileRead}
 	write := []identity.Action{identity.ActionProfileWrite}
 	manage := []identity.Action{identity.ActionProfileManage}
+	open := []identity.Action{identity.ActionProfileOpen}
 
 	return []Route{
 		h.readRoute(profilesPath, read, h.list),
@@ -63,6 +72,14 @@ func (h *Handler) buildRoutes() []Route {
 			return savedAnswer(http.StatusCreated)
 		}),
 		h.readRoute(revisionsPath+"/{revision}", read, h.readRevision),
+		h.keyedSecretRoute(
+			http.MethodPost,
+			openPath,
+			open,
+			h.open,
+			secretRouteSpec{answer: openAnswer, secret: openSecretID},
+		),
+		h.readRoute(sessionPath, open, h.readSession),
 	}
 }
 
@@ -72,7 +89,7 @@ func (*Handler) readRoute(path string, actions []identity.Action, serve RouteHan
 	return Route{
 		Method: http.MethodGet, Path: path, Scope: route.ScopeAuthorized, Actions: actions,
 		Resolve: resolveNamespace, Serve: serve,
-		IdempotencyKey: false, Answer: nil,
+		IdempotencyKey: false, Answer: nil, SecretAnswer: nil,
 	}
 }
 
@@ -84,7 +101,27 @@ func (*Handler) keyedRoute(
 	return Route{
 		Method: method, Path: path, Scope: route.ScopeAuthorized, Actions: actions,
 		Resolve: resolveNamespace, Serve: serve,
-		IdempotencyKey: true, Answer: answer,
+		IdempotencyKey: true, Answer: answer, SecretAnswer: nil,
+	}
+}
+
+// secretRouteSpec holds the answer and the secret ID of a keyed row whose
+// answer holds a secret.
+type secretRouteSpec struct {
+	answer func(identity.Object) answerFunc
+	secret func(result any) (objectID string)
+}
+
+// keyedSecretRoute makes one authorized row that takes the Idempotency-Key
+// header and whose answer holds a secret. A replay of the key answers 409
+// with the ID of the object that the first request made and no value.
+func (*Handler) keyedSecretRoute(
+	method, path string, actions []identity.Action, serve RouteHandler, spec secretRouteSpec,
+) Route {
+	return Route{
+		Method: method, Path: path, Scope: route.ScopeAuthorized, Actions: actions,
+		Resolve: resolveNamespace, Serve: serve,
+		IdempotencyKey: true, Answer: spec.answer, SecretAnswer: spec.secret,
 	}
 }
 
@@ -159,7 +196,7 @@ func (h *Handler) serveKeyed(
 	err := h.idem.Handle(w, r, idempotent.Call{
 		Principal:    p.Subject,
 		Build:        rt.Answer(obj),
-		SecretAnswer: nil,
+		SecretAnswer: rt.SecretAnswer,
 		Required:     false,
 		Serve:        func(w http.ResponseWriter, r *http.Request) { rt.Serve(w, r, p, obj) },
 	})
