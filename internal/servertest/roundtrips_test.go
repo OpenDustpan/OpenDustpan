@@ -1554,7 +1554,8 @@ func restoreModel() costModel {
 			unitStateTrips +
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
-			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips + firstAdministratorTrips,
+			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips - profileOpenSessionTrips +
+			firstAdministratorTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1582,6 +1583,12 @@ const settingChangeEntryTrips = 2
 // A restore leaves each table empty and reads it only for its column check, 1
 // round trip, so each costs 1 less than the 2 that perOther gives.
 const eventReceiptTrips = 2
+
+// profileOpenSessionTrips is the number of round trips that the table of the
+// open sessions of profiles takes off the fixed part. A restore leaves the
+// table empty and reads it only for its column check, 1 round trip, so it
+// costs 1 less than the 2 that perOther gives.
+const profileOpenSessionTrips = 1
 
 // firstAdministratorTrips is the change in the fixed part for the two tables of
 // the first administrator. The measured restore makes 3 round trips fewer than

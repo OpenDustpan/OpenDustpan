@@ -3735,6 +3735,32 @@ func (q *Queries) DeleteDriftResult(ctx context.Context, arg DeleteDriftResultPa
 	return err
 }
 
+const deleteEndedProfileOpenSessions = `-- name: DeleteEndedProfileOpenSessions :execrows
+DELETE FROM profile_open_sessions
+WHERE (namespace_id, id) IN (
+    SELECT s.namespace_id, s.id
+    FROM profile_open_sessions AS s
+    WHERE s.expires_at_ms <= $1
+    ORDER BY s.expires_at_ms, s.namespace_id, s.id
+    LIMIT $2::BIGINT
+)
+`
+
+type DeleteEndedProfileOpenSessionsParams struct {
+	NowMs     int64
+	PageLimit int64
+}
+
+// Removes at most page_limit sessions that ended at or before now_ms, in any
+// namespace, the oldest end first.
+func (q *Queries) DeleteEndedProfileOpenSessions(ctx context.Context, arg DeleteEndedProfileOpenSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEndedProfileOpenSessions, arg.NowMs, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteEndedTicket = `-- name: DeleteEndedTicket :execrows
 DELETE FROM used_tickets WHERE provider_id = $1 AND ticket_digest = $2 AND until_ms <= $3
 `
@@ -4669,6 +4695,34 @@ type DeletePrincipalParams struct {
 // statement of the second one reads the commit of the first.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteProfileOpenSession = `-- name: DeleteProfileOpenSession :execrows
+DELETE FROM profile_open_sessions
+WHERE namespace_id = $1 AND id = $2
+  AND owner_kind = $3 AND owner_id = $4
+`
+
+type DeleteProfileOpenSessionParams struct {
+	NamespaceID string
+	ID          string
+	OwnerKind   string
+	OwnerID     string
+}
+
+// Removes the session of the owner, ended or not. No row removed means that
+// the session does not exist or belongs to another owner.
+func (q *Queries) DeleteProfileOpenSession(ctx context.Context, arg DeleteProfileOpenSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProfileOpenSession,
+		arg.NamespaceID,
+		arg.ID,
+		arg.OwnerKind,
+		arg.OwnerID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -9481,6 +9535,48 @@ func (q *Queries) GetPrincipalState(ctx context.Context, id string) (GetPrincipa
 	return i, err
 }
 
+const getProfileOpenSession = `-- name: GetProfileOpenSession :one
+SELECT namespace_id, id, root_profile_id, owner_kind, owner_id, consumer, paths, sealed,
+       created_at_ms, expires_at_ms
+FROM profile_open_sessions
+WHERE namespace_id = $1 AND id = $2
+  AND owner_kind = $3 AND owner_id = $4
+  AND expires_at_ms > $5
+`
+
+type GetProfileOpenSessionParams struct {
+	NamespaceID string
+	ID          string
+	OwnerKind   string
+	OwnerID     string
+	NowMs       int64
+}
+
+// The session of the owner that has not ended at now_ms.
+func (q *Queries) GetProfileOpenSession(ctx context.Context, arg GetProfileOpenSessionParams) (ProfileOpenSession, error) {
+	row := q.db.QueryRow(ctx, getProfileOpenSession,
+		arg.NamespaceID,
+		arg.ID,
+		arg.OwnerKind,
+		arg.OwnerID,
+		arg.NowMs,
+	)
+	var i ProfileOpenSession
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ID,
+		&i.RootProfileID,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.Consumer,
+		&i.Paths,
+		&i.Sealed,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
 const getProfileRevision = `-- name: GetProfileRevision :one
 SELECT namespace_id, profile_id, number, document, document_sha256, author, created_at_ms, reason
 FROM profile_revisions
@@ -13556,6 +13652,45 @@ func (q *Queries) InsertProfile(ctx context.Context, arg InsertProfileParams) er
 		arg.CreatedBy,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertProfileOpenSession = `-- name: InsertProfileOpenSession :exec
+INSERT INTO profile_open_sessions (
+    namespace_id, id, root_profile_id, owner_kind, owner_id, consumer, paths, sealed,
+    created_at_ms, expires_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10
+)
+`
+
+type InsertProfileOpenSessionParams struct {
+	NamespaceID   string
+	ID            string
+	RootProfileID string
+	OwnerKind     string
+	OwnerID       string
+	Consumer      string
+	Paths         string
+	Sealed        []byte
+	CreatedAtMs   int64
+	ExpiresAtMs   int64
+}
+
+func (q *Queries) InsertProfileOpenSession(ctx context.Context, arg InsertProfileOpenSessionParams) error {
+	_, err := q.db.Exec(ctx, insertProfileOpenSession,
+		arg.NamespaceID,
+		arg.ID,
+		arg.RootProfileID,
+		arg.OwnerKind,
+		arg.OwnerID,
+		arg.Consumer,
+		arg.Paths,
+		arg.Sealed,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
 	)
 	return err
 }

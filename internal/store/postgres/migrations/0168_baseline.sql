@@ -1098,6 +1098,26 @@ CREATE TABLE principals (
     break_glass boolean DEFAULT false NOT NULL
 );
 
+CREATE TABLE profile_open_sessions (
+    namespace_id text NOT NULL,
+    id text NOT NULL,
+    root_profile_id text NOT NULL,
+    owner_kind text NOT NULL,
+    owner_id text NOT NULL,
+    consumer text NOT NULL,
+    paths text NOT NULL,
+    sealed bytea NOT NULL,
+    created_at_ms bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    CONSTRAINT profile_open_sessions_check CHECK ((expires_at_ms > created_at_ms)),
+    CONSTRAINT profile_open_sessions_consumer_check CHECK ((consumer = ANY (ARRAY['api'::text, 'console'::text, 'pulumi'::text]))),
+    CONSTRAINT profile_open_sessions_id_check CHECK (((id ~~ 'pos-%'::text) AND (length(id) > 4))),
+    CONSTRAINT profile_open_sessions_owner_id_check CHECK ((owner_id <> ''::text)),
+    CONSTRAINT profile_open_sessions_owner_kind_check CHECK ((owner_kind = 'principal'::text)),
+    CONSTRAINT profile_open_sessions_paths_check CHECK ((jsonb_typeof((paths)::jsonb) = 'array'::text)),
+    CONSTRAINT profile_open_sessions_sealed_check CHECK ((length(sealed) > 0))
+);
+
 CREATE TABLE profile_revisions (
     namespace_id text NOT NULL,
     profile_id text NOT NULL,
@@ -2039,6 +2059,9 @@ ALTER TABLE ONLY principal_session_generations
 ALTER TABLE ONLY principals
     ADD CONSTRAINT principals_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY profile_open_sessions
+    ADD CONSTRAINT profile_open_sessions_pkey PRIMARY KEY (namespace_id, id);
+
 ALTER TABLE ONLY profile_revisions
     ADD CONSTRAINT profile_revisions_pkey PRIMARY KEY (namespace_id, profile_id, number);
 
@@ -2384,6 +2407,8 @@ CREATE INDEX principals_namespace ON principals USING btree (namespace, subject 
 
 CREATE UNIQUE INDEX principals_subject ON principals USING btree (subject COLLATE "C") WHERE (deleted_at_ms IS NULL);
 
+CREATE INDEX profile_open_sessions_expiry ON profile_open_sessions USING btree (expires_at_ms);
+
 CREATE UNIQUE INDEX profiles_live_name ON profiles USING btree (namespace_id, name) WHERE (deleted_at_ms = 0);
 
 CREATE INDEX quota_requests_window ON quota_requests USING btree (namespace_id, blueprint, kind, scope, at_ms);
@@ -2570,6 +2595,12 @@ ALTER TABLE ONLY placement_rules
 
 ALTER TABLE ONLY principal_session_generations
     ADD CONSTRAINT principal_session_generations_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
+
+ALTER TABLE ONLY profile_open_sessions
+    ADD CONSTRAINT profile_open_sessions_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY profile_open_sessions
+    ADD CONSTRAINT profile_open_sessions_namespace_id_root_profile_id_fkey FOREIGN KEY (namespace_id, root_profile_id) REFERENCES profiles(namespace_id, id);
 
 ALTER TABLE ONLY profile_revisions
     ADD CONSTRAINT profile_revisions_namespace_id_profile_id_fkey FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles(namespace_id, id);

@@ -28,6 +28,9 @@ type Store struct {
 	// Records is the store of replay records that completes in the
 	// transaction of a write.
 	Records idempotency.Store
+	// Sessions is the store of open sessions. A store that leaves it nil skips
+	// the cases of the sessions.
+	Sessions profile.Sessions
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -68,6 +71,10 @@ func Run(t *testing.T, newStore Factory) {
 	}
 
 	runCases(t, newStore, cases)
+
+	// The cases of the sessions run on a store that holds Sessions. A store
+	// with no Sessions skips them.
+	RunSessions(t, newStore)
 }
 
 // runCases runs each case as a parallel subtest on a fresh store.
@@ -91,6 +98,9 @@ const epochMillis = 1_700_000_000_000
 
 // subject is the principal of every write of the suite.
 const subject = "alice"
+
+// otherSubject is a second principal.
+const otherSubject = "bob"
 
 // doc is a small valid document.
 const doc = "schemaVersion: 1\nvalues:\n  region: eu-west-1\n"
@@ -184,7 +194,7 @@ func nextRevision(p profile.Profile, text string) profile.Revision {
 	n := p.Latest + 1
 
 	return profile.Revision{
-		Profile: p.ID, Number: n, Document: []byte(text), SHA256: sha(n), Author: "bob",
+		Profile: p.ID, Number: n, Document: []byte(text), SHA256: sha(n), Author: otherSubject,
 		CreatedAt: epoch().Add(time.Second), Reason: "",
 	}
 }

@@ -133,6 +133,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		},
 		{name: "a restore leaves no replay record", test: testRestoreEmptiesIdempotencyRecords},
 		{name: "a restore leaves no job token", test: testRestoreEmptiesJobTokens},
+		{name: "a backup holds no open session and a restore leaves none", test: testRestoreEmptiesOpenSessions},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},
 		{
@@ -2159,6 +2160,63 @@ func testRestoreEmptiesJobTokens(t *testing.T, newStore RestoreFactory) {
 	for _, d := range []jobtoken.Digest{srcDigest, dstDigest} {
 		if dstTokens.HasJobToken(t, d) {
 			t.Fatalf("the restore kept the job token %s", d)
+		}
+	}
+}
+
+// OpenSessionHolder is an optional store capability for the open session case
+// of the restore suite: it makes a namespace with a profile and a live open
+// session of that profile through the store, and reports whether the store
+// holds a session.
+type OpenSessionHolder interface {
+	PutRestoreOpenSession(t *testing.T, ns namespace.Name) string
+	HasRestoreOpenSession(t *testing.T, ns namespace.Name, id string) bool
+}
+
+// testRestoreEmptiesOpenSessions proves that a backup holds no open session
+// and that a restore leaves none: a session holds a result that ends within
+// hours, and a restored session would let a caller read it after the end that
+// the caller was told.
+func testRestoreEmptiesOpenSessions(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	dst := newStore(t)
+
+	srcSessions, ok := src.(OpenSessionHolder)
+	if !ok {
+		t.Skip("the store keeps no open sessions")
+	}
+
+	dstSessions, ok := dst.(OpenSessionHolder)
+	if !ok {
+		t.Skip("the store keeps no open sessions")
+	}
+
+	srcID := srcSessions.PutRestoreOpenSession(t, "acme")
+	dstID := dstSessions.PutRestoreOpenSession(t, "acme")
+
+	ps := portableRestoreStores(t, src, dst)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	for _, f := range files {
+		if f.Table == backup.TableProfileOpenSessions {
+			t.Errorf("the backup holds the file %q of the table %q", f.Path, f.Table)
+		}
+	}
+
+	if _, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files, StageAs(t, ps.dst)); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(t.Context()); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	for _, id := range []string{srcID, dstID} {
+		if dstSessions.HasRestoreOpenSession(t, "acme", id) {
+			t.Fatalf("the restore kept the open session %s", id)
 		}
 	}
 }
