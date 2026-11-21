@@ -148,7 +148,7 @@ licenses: ## Each module linked into the binary has a license file to ship, on e
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
 STE_LINT  := python3 -I .agents/skills/asd-ste100/scripts/ste-lint.py
-DOCS      := $(wildcard README.md CLAUDE.md .agents/skills/adr/SKILL.md pkg/store/AGENTS.md internal/api/AGENTS.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md docs/explanation/*.md)
+DOCS      := $(wildcard README.md CLAUDE.md .agents/skills/adr/SKILL.md internal/store/AGENTS.md internal/api/AGENTS.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md docs/explanation/*.md)
 DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 
 # Words that claim quality instead of showing it, and emoji. The list and its
@@ -283,7 +283,7 @@ RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
 	go test $(RACE_TEST_FLAGS) -timeout $(TEST_TIMEOUT) ./...
 
-test-changed: ## Quick local check, not complete; CI runs all checks. go build ./..., the fast repository checks, golangci-lint and nilaway on the packages changed since the merge base with BASE (default origin/main), and go test without -race on them and on the packages whose tests import them. The store suites run only when pkg/store/ changes.
+test-changed: ## Quick local check, not complete; CI runs all checks. go build ./..., the fast repository checks, golangci-lint and nilaway on the packages changed since the merge base with BASE (default origin/main), and go test without -race on them and on the packages whose tests import them. The store suites run only when pkg/store/ or internal/store/ changes.
 	python3 -I scripts/test-changed.py --base '$(BASE)' --timeout $(GO_TEST_TIMEOUT)
 
 test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
