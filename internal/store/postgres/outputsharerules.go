@@ -153,15 +153,12 @@ func (o OutputSharingStore) Find(
 	}
 
 	rows, err := o.s.queries.ListOutputSharingRulesThatCover(ctx, db.ListOutputSharingRulesThatCoverParams{
-		Namespace:              args.Namespace,
-		ProducerUnitID:         args.ProducerUnitID,
-		ProducerCollectionID:   args.ProducerCollectionID,
-		ConsumerNamespace:      args.ConsumerNamespace,
-		ConsumerUnitID:         args.ConsumerUnitID,
-		ConsumerCollectionID:   args.ConsumerCollectionID,
-		ConsumerTool:           args.ConsumerTool,
-		ConsumerUnitName:       args.ConsumerUnitName,
-		ConsumerCollectionName: args.ConsumerCollectionName,
+		Namespace:            args.Namespace,
+		ProducerUnitID:       args.ProducerUnitID,
+		ProducerCollectionID: args.ProducerCollectionID,
+		ConsumerNamespace:    args.ConsumerNamespace,
+		ConsumerUnitID:       args.ConsumerUnitID,
+		ConsumerCollectionID: args.ConsumerCollectionID,
 	})
 	if err != nil {
 		return outputshare.Rule{}, fmt.Errorf("select covering sharing rules: %w", err)
@@ -186,6 +183,28 @@ type ruleTx struct {
 }
 
 var _ outputsharestore.Lookup = ruleTx{q: nil}
+
+// UnitExists implements outputsharestore.Lookup.
+func (t ruleTx) UnitExists(ctx context.Context, ns namespace.Name, id string) (bool, error) {
+	found, err := t.q.ExistsOutputSharingUnit(ctx, db.ExistsOutputSharingUnitParams{Namespace: ns.String(), ID: id})
+	if err != nil {
+		return false, fmt.Errorf("select inventory unit by ID: %w", err)
+	}
+
+	return found, nil
+}
+
+// CollectionExists implements outputsharestore.Lookup.
+func (t ruleTx) CollectionExists(ctx context.Context, ns namespace.Name, id string) (bool, error) {
+	found, err := t.q.ExistsOutputSharingCollection(ctx, db.ExistsOutputSharingCollectionParams{
+		Namespace: ns.String(), ID: id,
+	})
+	if err != nil {
+		return false, fmt.Errorf("select collection by ID: %w", err)
+	}
+
+	return found, nil
+}
 
 // UnitID implements outputsharestore.Lookup.
 func (t ruleTx) UnitID(ctx context.Context, ns namespace.Name, tool, name string) (string, bool, error) {

@@ -906,8 +906,6 @@ type OutputSharingRule struct {
 	ConsumerKind      string
 	ConsumerNamespace string
 	ConsumerID        string
-	ConsumerTool      string
-	ConsumerName      string
 	CreatedBy         string
 	CreatedAtMs       int64
 }

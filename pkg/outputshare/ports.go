@@ -19,14 +19,14 @@ import (
 // of the producer, it changes nothing in the other namespace, and it writes
 // no audit entry there.
 //
-// The store keys a unit and a collection of the producer namespace by their
-// stable IDs, so a rename keeps the rule and a deleted and re-created name
-// does not get it. A consumer of another namespace is kept as its reference
-// by name, because the save does not resolve an object of another namespace:
-// an answer must not tell whether such an object exists. Find matches that
-// reference against the consumer at each check, so a rename in the other
-// namespace ends the match, and a new unit or a new collection with the old
-// name matches.
+// The store keeps every unit and every collection that a rule names by its
+// stable ID, never by name. A rename keeps the rule, and a unit or a
+// collection that someone deletes and makes again does not get it. A consumer
+// of another namespace is that namespace plus the stable ID that the caller
+// gives. The store checks the format of that ID only: an answer must not tell
+// whether such an object exists. The purge of a unit or a collection removes
+// each rule that names its ID, in any namespace, in the transaction of the
+// purge.
 //
 // The rule of a new unit is not a call of this port. When the setting of a
 // namespace is DefaultNamespace, the SQL adapter that makes a unit of any
@@ -40,18 +40,18 @@ import (
 // reach a rule of another producer.
 type Store interface {
 	// Put creates the rule r. In one transaction it checks the fence, runs
-	// r.Validate, checks that each unit and each collection of the producer
-	// namespace that r names exists with its stable ID, counts the rules of
+	// r.Validate, checks that the producer, and a consumer of the producer
+	// namespace, exist with their stable IDs, counts the rules of
 	// r.Producer, writes the rule and appends the audit entry e. The caller
 	// stamps the time and the actor on e. A consumer of another namespace is
-	// not resolved: its reference is kept as it is.
+	// not resolved: its ID is kept as it is.
 	//
 	// It returns:
-	//   - ErrInvalid when r.Validate fails, for example for a unit or a
-	//     collection of the producer namespace with no stable ID.
-	//   - ErrUnknownObject when a unit or a collection of the producer
-	//     namespace that r names does not exist, or when its stable ID and
-	//     its name point to different objects.
+	//   - ErrInvalid when r.Validate fails, for example for a producer with no
+	//     stable ID or a consumer ID with a byte outside the allowlist.
+	//   - ErrUnknownObject when the producer, or a consumer of the producer
+	//     namespace, does not exist, or when the stable ID and the name of the
+	//     producer point to different objects.
 	//   - ErrAlreadyExists when a rule with the same producer and the same
 	//     consumer exists.
 	//   - ErrLimit when r.Producer already has MaxRulesPerProducer rules.
@@ -74,16 +74,15 @@ type Store interface {
 	// Get matches it, and appends the audit entry e in the transaction. It
 	// returns ErrNotFound for an unknown rule and for a rule of another
 	// producer, ErrInvalid, and namespace.ErrFenced. On every error the store
-	// changes nothing. The purge of a unit removes each rule whose producer
-	// or consumer in the same namespace is that unit.
+	// changes nothing. The purge of a unit removes each rule whose producer or
+	// consumer is that unit by stable ID, in any namespace.
 	Delete(ctx context.Context, producer identity.Object, id ID, fence namespace.Fence, e audit.Entry) error
 	// Find returns one rule that covers the producer and names the consumer.
 	// A rule covers the producer when its producer is the unit, the
 	// collection of the unit or the namespace of the unit. A rule names the
-	// consumer when its consumer is the unit, the collection of the unit or,
-	// for a consumer of the producer namespace, that namespace. A consumer of
-	// another namespace matches a rule that names its unit or its collection
-	// by name. Of several matches it returns the one with the lowest ID.
+	// consumer when its consumer is the unit or the collection of the unit,
+	// by stable ID in any namespace, or the namespace of the producer for a
+	// unit of that namespace. A name never matches. Of several matches it returns the one with the lowest ID.
 	//
 	// A producer whose unit has no stable ID is a producer that the adapter
 	// could not resolve. Find runs the same query for it and returns

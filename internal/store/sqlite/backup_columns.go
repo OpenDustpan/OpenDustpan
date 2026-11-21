@@ -506,7 +506,7 @@ func sqliteOutputSharingBackupTables() []sqliteBackupTable {
 			table: backup.TableOutputSharingRules,
 			columns: []string{
 				backupColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
-				"consumer_id", "consumer_tool", "consumer_name", "created_by", backupColCreatedAtMs,
+				"consumer_id", "created_by", backupColCreatedAtMs,
 			},
 		},
 	}

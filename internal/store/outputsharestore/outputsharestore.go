@@ -25,26 +25,22 @@ const (
 	KindNamespace  = "namespace"
 )
 
-// Row is one rule row with the names that its stable IDs have now. The fields
+// Row is one rule row with the names that the stable IDs of its producer have
+// now. The consumer stays an ID. The fields
 // and their order are those of the rows that sqlc makes for the queries of
 // each dialect, so each adapter converts its row type to Row directly.
 type Row struct {
-	ID                        string
-	ProducerKind              string
-	ProducerID                string
-	ConsumerKind              string
-	ConsumerNamespace         string
-	ConsumerID                string
-	ConsumerTool              string
-	ConsumerName              string
-	CreatedBy                 string
-	CreatedAtMs               int64
-	ProducerUnitTool          string
-	ProducerUnitName          string
-	ProducerCollectionName    string
-	ConsumerUnitToolNow       string
-	ConsumerUnitNameNow       string
-	ConsumerCollectionNameNow string
+	ID                     string
+	ProducerKind           string
+	ProducerID             string
+	ConsumerKind           string
+	ConsumerNamespace      string
+	ConsumerID             string
+	CreatedBy              string
+	CreatedAtMs            int64
+	ProducerUnitTool       string
+	ProducerUnitName       string
+	ProducerCollectionName string
 }
 
 // Insert is the columns of a new rule row.
@@ -56,8 +52,6 @@ type Insert struct {
 	ConsumerKind      string
 	ConsumerNamespace string
 	ConsumerID        string
-	ConsumerTool      string
-	ConsumerName      string
 	CreatedBy         string
 	CreatedAtMs       int64
 }
@@ -109,6 +103,11 @@ func CheckKeyID(id outputshare.ID) error {
 // Lookup resolves the objects of the producer namespace inside the
 // transaction of a write.
 type Lookup interface {
+	// UnitExists reports whether the namespace holds a unit with the stable ID.
+	UnitExists(ctx context.Context, ns namespace.Name, id string) (bool, error)
+	// CollectionExists reports whether the namespace holds a collection with
+	// the stable ID.
+	CollectionExists(ctx context.Context, ns namespace.Name, id string) (bool, error)
 	// UnitID returns the stable ID of the unit, and false when the namespace
 	// holds no such unit.
 	UnitID(ctx context.Context, ns namespace.Name, tool, name string) (string, bool, error)
@@ -155,38 +154,11 @@ func CheckPut(r outputshare.Rule, fence namespace.Fence, e audit.Entry) (Insert,
 		ID:                string(r.ID),
 		ProducerKind:      producer.Kind,
 		ProducerID:        producer.ID,
-		ConsumerKind:      "",
-		ConsumerNamespace: r.Consumer.Namespace().String(),
-		ConsumerID:        "",
-		ConsumerTool:      "",
-		ConsumerName:      "",
+		ConsumerKind:      string(r.Consumer.Kind),
+		ConsumerNamespace: r.Consumer.Namespace.String(),
+		ConsumerID:        r.Consumer.ID,
 		CreatedBy:         r.CreatedBy,
 		CreatedAtMs:       e.At.UnixMilli(),
-	}
-
-	cross := r.CrossNamespace()
-
-	switch {
-	case r.Consumer.IsUnit():
-		row.ConsumerKind = KindUnit
-
-		if cross {
-			row.ConsumerTool = r.Consumer.Tool()
-			row.ConsumerName = r.Consumer.UnitName()
-		} else {
-			row.ConsumerID = r.Consumer.UnitID()
-		}
-	case r.Consumer.IsCollection():
-		row.ConsumerKind = KindCollection
-
-		if cross {
-			// The name of a collection compares in lower case.
-			row.ConsumerName = strings.ToLower(r.Consumer.CollectionName())
-		} else {
-			row.ConsumerID = r.Consumer.CollectionID()
-		}
-	default:
-		row.ConsumerKind = KindNamespace
 	}
 
 	return row, nil
@@ -200,8 +172,10 @@ func Put(ctx context.Context, tx Lookup, r outputshare.Rule, row Insert) error {
 		return err
 	}
 
+	// A consumer of another namespace is not resolved: the answer must not
+	// tell whether an object of another namespace exists.
 	if !r.CrossNamespace() {
-		if err := checkObject(ctx, tx, r.Consumer); err != nil {
+		if err := checkConsumer(ctx, tx, r.Consumer); err != nil {
 			return err
 		}
 	}
@@ -224,6 +198,40 @@ func Put(ctx context.Context, tx Lookup, r outputshare.Rule, row Insert) error {
 
 	if n == 0 {
 		return outputshare.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// checkConsumer returns ErrUnknownObject unless the unit or the collection that
+// c names exists in its namespace under that stable ID. A namespace consumer
+// needs no check: the fence names it.
+func checkConsumer(ctx context.Context, tx Lookup, c outputshare.Consumer) error {
+	var (
+		found bool
+		err   error
+	)
+
+	switch c.Kind {
+	case outputshare.ConsumerUnit:
+		found, err = tx.UnitExists(ctx, c.Namespace, c.ID)
+	case outputshare.ConsumerCollection:
+		found, err = tx.CollectionExists(ctx, c.Namespace, c.ID)
+	case outputshare.ConsumerNamespace:
+		// A namespace consumer needs no check.
+		return nil
+	default:
+		// Defense in depth: Rule.Validate refuses any other kind. This branch
+		// stays so that a new kind fails closed here too.
+		return fmt.Errorf("%w: the consumer kind", outputshare.ErrInvalid)
+	}
+
+	if err != nil {
+		return fmt.Errorf("look up the consumer of the sharing rule: %w", err)
+	}
+
+	if !found {
+		return outputshare.ErrUnknownObject
 	}
 
 	return nil
@@ -259,23 +267,23 @@ func checkObject(ctx context.Context, tx Lookup, o identity.Object) error {
 	return nil
 }
 
-// ErrDangling reports a row whose unit or collection has no name now. A reader
-// leaves such a row out, so it matches nothing.
+// ErrDangling reports a row whose producer unit or collection has no name
+// now. A reader leaves such a row out, so it matches nothing.
 var ErrDangling = errors.New("sharing rule names an object that no longer exists")
 
 // Rule converts a stored row of the namespace ns to a rule. The row names its
-// unit and its collection by the names that their stable IDs have now. It
-// returns an error for a row that fails Validate and for a row that names an
-// object that no longer exists, so a caller leaves such a row out.
+// producer by the name that its stable ID has now. The consumer is the stable
+// ID as stored. It returns an error for a row that fails Validate and for a
+// row whose producer no longer exists, so a caller leaves such a row out.
 func (row Row) Rule(ns namespace.Name) (outputshare.Rule, error) {
 	producer, err := row.producer(ns)
 	if err != nil {
 		return outputshare.Rule{}, err
 	}
 
-	consumer, err := row.consumer(ns)
+	cns, err := namespace.ParseName(row.ConsumerNamespace)
 	if err != nil {
-		return outputshare.Rule{}, err
+		return outputshare.Rule{}, fmt.Errorf("%w: consumer namespace", outputshare.ErrInvalid)
 	}
 
 	r := outputshare.Rule{
@@ -283,7 +291,11 @@ func (row Row) Rule(ns namespace.Name) (outputshare.Rule, error) {
 		ID:        outputshare.ID(row.ID),
 		CreatedBy: row.CreatedBy,
 		Producer:  producer,
-		Consumer:  consumer,
+		Consumer: outputshare.Consumer{
+			Kind:      outputshare.ConsumerKind(row.ConsumerKind),
+			Namespace: cns,
+			ID:        row.ConsumerID,
+		},
 	}
 
 	// Defense in depth: the CHECK constraints of the table refuse a row of the
@@ -322,63 +334,14 @@ func (row Row) producer(ns namespace.Name) (identity.Object, error) {
 	}
 }
 
-func (row Row) consumer(ns namespace.Name) (identity.Object, error) {
-	cns, err := namespace.ParseName(row.ConsumerNamespace)
-	if err != nil {
-		return identity.Object{}, fmt.Errorf("%w: consumer namespace", outputshare.ErrInvalid)
-	}
-
-	cross := cns != ns
-
-	switch row.ConsumerKind {
-	case KindUnit:
-		if cross {
-			o, unitErr := identity.UnitObject(row.ConsumerTool, cns, row.ConsumerName)
-			if unitErr != nil {
-				return identity.Object{}, fmt.Errorf("%w: consumer unit", outputshare.ErrInvalid)
-			}
-
-			return o, nil
-		}
-
-		if row.ConsumerUnitNameNow == "" {
-			return identity.Object{}, ErrDangling
-		}
-
-		o, unitErr := identity.UnitObject(row.ConsumerUnitToolNow, ns, row.ConsumerUnitNameNow)
-		if unitErr != nil {
-			return identity.Object{}, fmt.Errorf("%w: consumer unit", outputshare.ErrInvalid)
-		}
-
-		return o.WithUnitID(row.ConsumerID), nil
-	case KindCollection:
-		if cross {
-			return identity.CollectionObject(cns, row.ConsumerName), nil
-		}
-
-		if row.ConsumerCollectionNameNow == "" {
-			return identity.Object{}, ErrDangling
-		}
-
-		return identity.CollectionObject(ns, row.ConsumerCollectionNameNow).WithCollectionID(row.ConsumerID), nil
-	case KindNamespace:
-		return identity.NamespaceObject(cns), nil
-	default:
-		return identity.Object{}, fmt.Errorf("%w: consumer kind", outputshare.ErrInvalid)
-	}
-}
-
 // CoverArgs are the arguments of the cover query of Find.
 type CoverArgs struct {
-	Namespace              string
-	ProducerUnitID         string
-	ProducerCollectionID   string
-	ConsumerNamespace      string
-	ConsumerUnitID         string
-	ConsumerCollectionID   string
-	ConsumerTool           string
-	ConsumerUnitName       string
-	ConsumerCollectionName string
+	Namespace            string
+	ProducerUnitID       string
+	ProducerCollectionID string
+	ConsumerNamespace    string
+	ConsumerUnitID       string
+	ConsumerCollectionID string
 }
 
 // FindArgs checks the producer and the consumer of Find and returns the
@@ -407,19 +370,12 @@ func FindArgs(producer, consumer outputshare.Placement) (CoverArgs, namespace.Na
 	}
 
 	args := CoverArgs{
-		Namespace:              ns.String(),
-		ProducerUnitID:         producer.Unit.UnitID(),
-		ProducerCollectionID:   producer.Collection.CollectionID(),
-		ConsumerNamespace:      consumer.Unit.Namespace().String(),
-		ConsumerUnitID:         consumer.Unit.UnitID(),
-		ConsumerCollectionID:   consumer.Collection.CollectionID(),
-		ConsumerTool:           consumer.Unit.Tool(),
-		ConsumerUnitName:       consumer.Unit.UnitName(),
-		ConsumerCollectionName: "",
-	}
-
-	if consumer.Collection.IsCollection() {
-		args.ConsumerCollectionName = strings.ToLower(consumer.Collection.CollectionName())
+		Namespace:            ns.String(),
+		ProducerUnitID:       producer.Unit.UnitID(),
+		ProducerCollectionID: producer.Collection.CollectionID(),
+		ConsumerNamespace:    consumer.Unit.Namespace().String(),
+		ConsumerUnitID:       consumer.Unit.UnitID(),
+		ConsumerCollectionID: consumer.Collection.CollectionID(),
 	}
 
 	if unresolved {
@@ -427,4 +383,35 @@ func FindArgs(producer, consumer outputshare.Placement) (CoverArgs, namespace.Na
 	}
 
 	return args, ns, nil
+}
+
+// RemovedKey is the key of the audit change that lists the sharing rules that
+// the purge of a unit or the delete of a collection removed.
+const RemovedKey = "output-sharing-rules"
+
+// maxListedRemoved bounds the rules that one change lists, so that an entry
+// never grows without a bound.
+const maxListedRemoved = 1000
+
+// RemovedChange returns the audit change that lists the removed rules, one
+// "namespace/ruleID" on each line, and false when the purge removed none. The
+// removal is an automatic action: this change is its record, so a rule never
+// disappears without a trace. A list longer than the bound ends with the count
+// of the rules that it leaves out.
+func RemovedChange(removed []string) (audit.Change, bool) {
+	if len(removed) == 0 {
+		return audit.Change{Key: "", Old: nil, New: "", Layer: "", TakesEffect: ""}, false
+	}
+
+	listed := removed
+	if len(listed) > maxListedRemoved {
+		listed = listed[:maxListedRemoved]
+	}
+
+	text := strings.Join(listed, "\n")
+	if left := len(removed) - len(listed); left > 0 {
+		text += fmt.Sprintf("\n(%d more)", left)
+	}
+
+	return audit.Change{Key: RemovedKey, Old: &text, New: "", Layer: "", TakesEffect: ""}, true
 }

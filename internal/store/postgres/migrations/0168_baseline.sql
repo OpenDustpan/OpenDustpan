@@ -987,11 +987,9 @@ CREATE TABLE output_sharing_rules (
     consumer_kind text NOT NULL,
     consumer_namespace text NOT NULL,
     consumer_id text DEFAULT ''::text NOT NULL,
-    consumer_tool text DEFAULT ''::text NOT NULL,
-    consumer_name text DEFAULT ''::text NOT NULL,
     created_by text NOT NULL,
     created_at_ms bigint NOT NULL,
-    CONSTRAINT output_sharing_rules_consumer_check CHECK ((((consumer_kind = 'namespace'::text) AND (consumer_namespace = namespace) AND (consumer_id = ''::text) AND (consumer_tool = ''::text) AND (consumer_name = ''::text)) OR ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text])) AND (consumer_namespace = namespace) AND (consumer_id <> ''::text) AND (consumer_tool = ''::text) AND (consumer_name = ''::text)) OR ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text])) AND (consumer_namespace <> namespace) AND (consumer_id = ''::text) AND (consumer_name <> ''::text) AND ((consumer_kind = 'unit'::text) = (consumer_tool <> ''::text))))),
+    CONSTRAINT output_sharing_rules_consumer_check CHECK ((((consumer_kind = 'namespace'::text) AND (consumer_namespace = namespace) AND (consumer_id = ''::text)) OR ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text])) AND (consumer_id <> ''::text)))),
     CONSTRAINT output_sharing_rules_created_at_ms_check CHECK ((created_at_ms >= 0)),
     CONSTRAINT output_sharing_rules_created_by_check CHECK ((created_by <> ''::text)),
     CONSTRAINT output_sharing_rules_id_check CHECK (((length(id) >= 1) AND (length(id) <= 64) AND (id ~ '^[a-z0-9_-]+$'::text))),
@@ -2364,7 +2362,9 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions USING
 
 CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (namespace_id, object_kind, object_id, resource_key, source);
 
-CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules USING btree (namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id, consumer_tool, consumer_name);
+CREATE INDEX output_sharing_rules_consumer ON output_sharing_rules USING btree (consumer_id) WHERE (consumer_id <> ''::text);
+
+CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules USING btree (namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
 

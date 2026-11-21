@@ -452,8 +452,8 @@ func TestOutputSharingSettingSurvivesABackupRestore(t *testing.T) {
 
 // TestSharingRuleTableRefusesAnotherKind proves the layer of the table alone:
 // the CHECK constraints refuse a rule that names a principal, a whole other
-// namespace, an object with no stable ID or a consumer of another namespace
-// with a stable ID, also when the store code is skipped.
+// namespace, an object with no stable ID or a namespace consumer with an ID,
+// also when the store code is skipped.
 func TestSharingRuleTableRefusesAnotherKind(t *testing.T) {
 	t.Parallel()
 
@@ -466,7 +466,7 @@ func TestSharingRuleTableRefusesAnotherKind(t *testing.T) {
 
 			_, err := rawSettingDB(t, path).ExecContext(t.Context(), outputsharetest.RawRuleInsertSQLite(),
 				tc.Row[0], tc.Row[1], tc.Row[2], tc.Row[3], tc.Row[4], tc.Row[5], tc.Row[6], tc.Row[7],
-				tc.Row[8], tc.Row[9], int64(1))
+				int64(1))
 
 			switch {
 			case tc.OK && err != nil:

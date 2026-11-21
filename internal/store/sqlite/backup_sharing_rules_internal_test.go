@@ -49,7 +49,7 @@ func TestPortableBackupKeepsSharingRules(t *testing.T) {
 		ID:        "rule-001",
 		CreatedBy: "tester",
 		Producer:  mustUnit(t, "acme", "a").WithUnitID("ws-a"),
-		Consumer:  mustUnit(t, "globex", "web"),
+		Consumer:  outputshare.Consumer{Kind: outputshare.ConsumerUnit, Namespace: "globex", ID: "ws-web"},
 	}
 
 	_, err = s.conn.ExecContext(t.Context(), outputsharetest.RawRuleInsertSQLite(), outputsharetest.RawRuleRow(rule)...)

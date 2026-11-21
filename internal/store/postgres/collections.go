@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/store/codec"
+	"opendustpan.org/opendustpan/internal/store/outputsharestore"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -104,7 +105,7 @@ func (s *Store) DeleteCollection(
 			return revokeErr
 		}
 
-		if rowsErr := deleteCollectionOwnRows(ctx, q, ref.Namespace, id); rowsErr != nil {
+		if rowsErr := deleteCollectionOwnRows(ctx, q, &e, ref.Namespace, id); rowsErr != nil {
 			return rowsErr
 		}
 
@@ -423,10 +424,13 @@ func checkLeaveLockedCollection(ctx context.Context, q *db.Queries, m collection
 }
 
 // deleteCollectionOwnRows removes the manual lock of the collection id, and the
-// sharing rules that name it as producer or as consumer in its own namespace,
-// so that a collection made again with the same name never matches a stale
-// rule.
-func deleteCollectionOwnRows(ctx context.Context, q *db.Queries, ns namespace.Name, id string) error {
+// sharing rules that name it by its stable ID: as producer in its own
+// namespace and as consumer in any namespace. A collection made again with
+// the same name has a new ID, so it never matches a stale rule. The audit
+// entry e lists the removed rules.
+func deleteCollectionOwnRows(
+	ctx context.Context, q *db.Queries, e *audit.Entry, ns namespace.Name, id string,
+) error {
 	lockErr := q.DeleteManualLocksOfObject(ctx, db.DeleteManualLocksOfObjectParams{
 		Kind: string(manuallock.KindCollection), ObjectID: id,
 	})
@@ -434,11 +438,20 @@ func deleteCollectionOwnRows(ctx context.Context, q *db.Queries, ns namespace.Na
 		return fmt.Errorf("delete manual lock of collection: %w", lockErr)
 	}
 
-	err := q.DeleteOutputSharingRulesOfCollection(ctx, db.DeleteOutputSharingRulesOfCollectionParams{
+	rows, err := q.DeleteOutputSharingRulesOfCollection(ctx, db.DeleteOutputSharingRulesOfCollectionParams{
 		Namespace: ns.String(), CollectionID: id,
 	})
 	if err != nil {
 		return fmt.Errorf("delete sharing rules of the collection: %w", err)
+	}
+
+	removed := make([]string, len(rows))
+	for i := range rows {
+		removed[i] = rows[i].Namespace + "/" + rows[i].ID
+	}
+
+	if c, ok := outputsharestore.RemovedChange(removed); ok {
+		e.Changes = append(e.Changes, c)
 	}
 
 	return nil

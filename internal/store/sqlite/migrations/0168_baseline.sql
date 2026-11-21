@@ -443,24 +443,21 @@ CREATE TABLE output_sharing_rules (
     consumer_kind      TEXT    NOT NULL,
     consumer_namespace TEXT    NOT NULL,
     consumer_id        TEXT    NOT NULL DEFAULT '',
-    consumer_tool      TEXT    NOT NULL DEFAULT '',
-    consumer_name      TEXT    NOT NULL DEFAULT '',
     created_by         TEXT    NOT NULL CHECK (created_by <> ''),
     created_at_ms      INTEGER NOT NULL CHECK (created_at_ms >= 0),
     PRIMARY KEY (namespace, id),
     CHECK ((producer_kind = 'namespace') = (producer_id = '')),
     CHECK (
-        (consumer_kind = 'namespace' AND consumer_namespace = namespace AND consumer_id = ''
-            AND consumer_tool = '' AND consumer_name = '')
-        OR (consumer_kind IN ('unit', 'collection') AND consumer_namespace = namespace AND consumer_id <> ''
-            AND consumer_tool = '' AND consumer_name = '')
-        OR (consumer_kind IN ('unit', 'collection') AND consumer_namespace <> namespace AND consumer_id = ''
-            AND consumer_name <> '' AND ((consumer_kind = 'unit') = (consumer_tool <> '')))
+        (consumer_kind = 'namespace' AND consumer_namespace = namespace AND consumer_id = '')
+        OR (consumer_kind IN ('unit', 'collection') AND consumer_id <> '')
     )
 ) STRICT;
 
+-- The purge of a unit or a collection finds the rules that name its ID in any namespace.
+CREATE INDEX output_sharing_rules_consumer ON output_sharing_rules (consumer_id) WHERE consumer_id <> '';
+
 CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules (
-    namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id, consumer_tool, consumer_name
+    namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id
 );
 
 CREATE TABLE installation_secret_keys (

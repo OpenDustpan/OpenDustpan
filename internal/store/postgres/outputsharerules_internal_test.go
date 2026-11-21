@@ -18,8 +18,8 @@ func TestRuleInsertMapsATableRefusalToErrInvalid(t *testing.T) {
 	seed := newPlacementSeed(t)
 	good := outputsharestore.Insert{
 		Namespace: seed.alpha.Name.String(), ID: "rule-001", ProducerKind: "namespace", ProducerID: "",
-		ConsumerKind: "unit", ConsumerNamespace: "globex", ConsumerID: "", ConsumerTool: "opentofu",
-		ConsumerName: "web", CreatedBy: "tester", CreatedAtMs: 1,
+		ConsumerKind: "unit", ConsumerNamespace: "globex", ConsumerID: "ws-web",
+		CreatedBy: "tester", CreatedAtMs: 1,
 	}
 
 	noCreator := good

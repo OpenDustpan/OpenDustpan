@@ -34,7 +34,12 @@ func TestCheckOutputSharingRuleValueRefusesHostileColumns(t *testing.T) {
 		{"a consumer namespace", "consumer_namespace", "globex", true},
 		{"a consumer namespace that no namespace can have", "consumer_namespace", "bad name!", false},
 		{"an empty consumer namespace", "consumer_namespace", "", false},
-		{"a name is left to the CHECKs", "consumer_name", "web", true},
+		{"a consumer stable ID", "consumer_id", "stk-abc123", true},
+		{"no consumer ID for a namespace consumer", "consumer_id", "", true},
+		{"a consumer ID with a capital", "consumer_id", "Stk", false},
+		{"a consumer ID with a slash", "consumer_id", "a/b", false},
+		{"a consumer ID of 65 characters", "consumer_id", strings.Repeat("a", 65), false},
+		{"a consumer ID that is not text", "consumer_id", int64(1), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

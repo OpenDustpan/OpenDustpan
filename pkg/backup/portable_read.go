@@ -534,8 +534,8 @@ func portableFileOf(files []PortableFile, table string) (PortableFile, bool) {
 }
 
 // checkOutputSharingRuleValue runs the check of one column of a sharing rule
-// row: the rule ID, the two kinds of object and the principal that saved the
-// rule. It returns ErrCorrupt, wrapped with outputshare.ErrInvalid. The error
+// row: the rule ID, the two kinds of object, the stable ID of the consumer and the
+// principal that saved the rule. It returns ErrCorrupt, wrapped with outputshare.ErrInvalid. The error
 // does not hold the value.
 //
 // Defense in depth: the CHECK constraints of the table refuse the same values
@@ -546,15 +546,34 @@ func checkOutputSharingRuleValue(column string, value any) error {
 	var err error
 
 	switch column {
-	case "id", "producer_kind", "consumer_kind", portColCreatedBy, portColConsumerNamespace:
+	case "id", "producer_kind", "consumer_kind", portColConsumerID, portColCreatedBy, portColConsumerNamespace:
 		err = checkRuleText(column, value)
 	default:
-		// The other columns hold names, stable IDs and the time. The table
+		// The other columns hold the stable ID of the producer and the time. The table
 		// CHECKs and the store read check their shape.
 	}
 
 	if err != nil {
 		return fmt.Errorf("sharing rule row has an invalid %s: %w: %w", column, err, ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkRuleConsumerText checks the stable ID and the namespace of the consumer
+// of a sharing rule row. A namespace consumer has no ID, so an empty ID passes
+// here and the CHECK of the table decides by the kind.
+func checkRuleConsumerText(column, text string) error {
+	if column == portColConsumerID {
+		if text != "" && !outputshare.ValidStableID(text) {
+			return fmt.Errorf("%w: the stable ID of the consumer", outputshare.ErrInvalid)
+		}
+
+		return nil
+	}
+
+	if _, err := namespace.ParseName(text); err != nil {
+		return fmt.Errorf("%w: the namespace of the consumer", outputshare.ErrInvalid)
 	}
 
 	return nil
@@ -575,10 +594,8 @@ func checkRuleText(column string, value any) error {
 		if text == "" {
 			return fmt.Errorf("%w: no principal saved the rule", outputshare.ErrInvalid)
 		}
-	case portColConsumerNamespace:
-		if _, err := namespace.ParseName(text); err != nil {
-			return fmt.Errorf("%w: the namespace of the consumer", outputshare.ErrInvalid)
-		}
+	case portColConsumerID, portColConsumerNamespace:
+		return checkRuleConsumerText(column, text)
 	default:
 		if text != "unit" && text != "collection" && text != "namespace" {
 			return fmt.Errorf("%w: kind of object", outputshare.ErrInvalid)

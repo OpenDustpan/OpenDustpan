@@ -4481,12 +4481,11 @@ func (q *Queries) DeleteOutputSharingRule(ctx context.Context, arg DeleteOutputS
 	return result.RowsAffected(), nil
 }
 
-const deleteOutputSharingRulesOfCollection = `-- name: DeleteOutputSharingRulesOfCollection :exec
+const deleteOutputSharingRulesOfCollection = `-- name: DeleteOutputSharingRulesOfCollection :many
 DELETE FROM output_sharing_rules
-WHERE namespace = $1
-    AND ((producer_kind = 'collection' AND producer_id = $2)
-        OR (consumer_kind = 'collection' AND consumer_namespace = namespace
-            AND consumer_id = $2))
+WHERE (namespace = $1 AND producer_kind = 'collection' AND producer_id = $2)
+    OR (consumer_kind = 'collection' AND consumer_id = $2)
+RETURNING namespace, id
 `
 
 type DeleteOutputSharingRulesOfCollectionParams struct {
@@ -4494,19 +4493,39 @@ type DeleteOutputSharingRulesOfCollectionParams struct {
 	CollectionID string
 }
 
-// Removes the rules that name the collection as producer or as consumer in its
-// own namespace. A rule that names a collection of another namespace by name
-// stays.
-func (q *Queries) DeleteOutputSharingRulesOfCollection(ctx context.Context, arg DeleteOutputSharingRulesOfCollectionParams) error {
-	_, err := q.db.Exec(ctx, deleteOutputSharingRulesOfCollection, arg.Namespace, arg.CollectionID)
-	return err
+type DeleteOutputSharingRulesOfCollectionRow struct {
+	Namespace string
+	ID        string
 }
 
-const deleteOutputSharingRulesOfUnit = `-- name: DeleteOutputSharingRulesOfUnit :exec
+// Removes the rules that name the collection by its stable ID, as producer in
+// its own namespace or as consumer in any namespace. It returns the namespace
+// and the ID of each rule that it removed, so that the caller records them.
+func (q *Queries) DeleteOutputSharingRulesOfCollection(ctx context.Context, arg DeleteOutputSharingRulesOfCollectionParams) ([]DeleteOutputSharingRulesOfCollectionRow, error) {
+	rows, err := q.db.Query(ctx, deleteOutputSharingRulesOfCollection, arg.Namespace, arg.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DeleteOutputSharingRulesOfCollectionRow
+	for rows.Next() {
+		var i DeleteOutputSharingRulesOfCollectionRow
+		if err := rows.Scan(&i.Namespace, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteOutputSharingRulesOfUnit = `-- name: DeleteOutputSharingRulesOfUnit :many
 DELETE FROM output_sharing_rules
-WHERE namespace = $1
-    AND ((producer_kind = 'unit' AND producer_id = $2)
-        OR (consumer_kind = 'unit' AND consumer_namespace = namespace AND consumer_id = $2))
+WHERE (namespace = $1 AND producer_kind = 'unit' AND producer_id = $2)
+    OR (consumer_kind = 'unit' AND consumer_id = $2)
+RETURNING namespace, id
 `
 
 type DeleteOutputSharingRulesOfUnitParams struct {
@@ -4514,11 +4533,32 @@ type DeleteOutputSharingRulesOfUnitParams struct {
 	UnitID    string
 }
 
-// Removes the rules that name the unit as producer or as consumer in its own
-// namespace. A rule that names a unit of another namespace by name stays.
-func (q *Queries) DeleteOutputSharingRulesOfUnit(ctx context.Context, arg DeleteOutputSharingRulesOfUnitParams) error {
-	_, err := q.db.Exec(ctx, deleteOutputSharingRulesOfUnit, arg.Namespace, arg.UnitID)
-	return err
+type DeleteOutputSharingRulesOfUnitRow struct {
+	Namespace string
+	ID        string
+}
+
+// Removes the rules that name the unit by its stable ID, as producer in its
+// own namespace or as consumer in any namespace. It returns the namespace and
+// the ID of each rule that it removed, so that the caller records them.
+func (q *Queries) DeleteOutputSharingRulesOfUnit(ctx context.Context, arg DeleteOutputSharingRulesOfUnitParams) ([]DeleteOutputSharingRulesOfUnitRow, error) {
+	rows, err := q.db.Query(ctx, deleteOutputSharingRulesOfUnit, arg.Namespace, arg.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DeleteOutputSharingRulesOfUnitRow
+	for rows.Next() {
+		var i DeleteOutputSharingRulesOfUnitRow
+		if err := rows.Scan(&i.Namespace, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deletePasskey = `-- name: DeletePasskey :execrows
@@ -5678,6 +5718,40 @@ func (q *Queries) EnsureQuotaKey(ctx context.Context, arg EnsureQuotaKeyParams) 
 		arg.Scope,
 	)
 	return err
+}
+
+const existsOutputSharingCollection = `-- name: ExistsOutputSharingCollection :one
+SELECT EXISTS (SELECT 1 FROM collections WHERE namespace = $1 AND id = $2)
+`
+
+type ExistsOutputSharingCollectionParams struct {
+	Namespace string
+	ID        string
+}
+
+// Whether the namespace holds a collection with the stable ID.
+func (q *Queries) ExistsOutputSharingCollection(ctx context.Context, arg ExistsOutputSharingCollectionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, existsOutputSharingCollection, arg.Namespace, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const existsOutputSharingUnit = `-- name: ExistsOutputSharingUnit :one
+SELECT EXISTS (SELECT 1 FROM inventory WHERE namespace = $1 AND unit_id = $2)
+`
+
+type ExistsOutputSharingUnitParams struct {
+	Namespace string
+	ID        string
+}
+
+// Whether the namespace holds a unit with the stable ID.
+func (q *Queries) ExistsOutputSharingUnit(ctx context.Context, arg ExistsOutputSharingUnitParams) (bool, error) {
+	row := q.db.QueryRow(ctx, existsOutputSharingUnit, arg.Namespace, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const expireRunnerClaims = `-- name: ExpireRunnerClaims :exec
@@ -9027,24 +9101,15 @@ func (q *Queries) GetOIDCProviderIssuer(ctx context.Context, providerID string) 
 
 const getOutputSharingRule = `-- name: GetOutputSharingRule :one
 SELECT r.id, r.producer_kind, r.producer_id, r.consumer_kind, r.consumer_namespace, r.consumer_id,
-    r.consumer_tool, r.consumer_name, r.created_by, r.created_at_ms,
+    r.created_by, r.created_at_ms,
     COALESCE(pu.tool, ''::text)::text AS producer_unit_tool,
     COALESCE(pu.name, ''::text)::text AS producer_unit_name,
-    COALESCE(pc.name, ''::text)::text AS producer_collection_name,
-    COALESCE(cu.tool, ''::text)::text AS consumer_unit_tool_now,
-    COALESCE(cu.name, ''::text)::text AS consumer_unit_name_now,
-    COALESCE(cc.name, ''::text)::text AS consumer_collection_name_now
+    COALESCE(pc.name, ''::text)::text AS producer_collection_name
 FROM output_sharing_rules AS r
 LEFT JOIN inventory AS pu
     ON r.producer_kind = 'unit' AND pu.namespace = r.namespace AND pu.unit_id = r.producer_id
 LEFT JOIN collections AS pc
     ON r.producer_kind = 'collection' AND pc.namespace = r.namespace AND pc.id = r.producer_id
-LEFT JOIN inventory AS cu
-    ON r.consumer_kind = 'unit' AND r.consumer_namespace = r.namespace
-    AND cu.namespace = r.namespace AND cu.unit_id = r.consumer_id
-LEFT JOIN collections AS cc
-    ON r.consumer_kind = 'collection' AND r.consumer_namespace = r.namespace
-    AND cc.namespace = r.namespace AND cc.id = r.consumer_id
 WHERE r.namespace = $1 AND r.id = $2
     AND r.producer_kind = $3 AND r.producer_id = $4
 `
@@ -9057,26 +9122,21 @@ type GetOutputSharingRuleParams struct {
 }
 
 type GetOutputSharingRuleRow struct {
-	ID                        string
-	ProducerKind              string
-	ProducerID                string
-	ConsumerKind              string
-	ConsumerNamespace         string
-	ConsumerID                string
-	ConsumerTool              string
-	ConsumerName              string
-	CreatedBy                 string
-	CreatedAtMs               int64
-	ProducerUnitTool          string
-	ProducerUnitName          string
-	ProducerCollectionName    string
-	ConsumerUnitToolNow       string
-	ConsumerUnitNameNow       string
-	ConsumerCollectionNameNow string
+	ID                     string
+	ProducerKind           string
+	ProducerID             string
+	ConsumerKind           string
+	ConsumerNamespace      string
+	ConsumerID             string
+	CreatedBy              string
+	CreatedAtMs            int64
+	ProducerUnitTool       string
+	ProducerUnitName       string
+	ProducerCollectionName string
 }
 
-// One rule by ID, when its producer is the producer of the call. The names
-// are the names that the stable IDs have now.
+// One rule by ID, when its producer is the producer of the call. The producer
+// names are the names that its stable ID has now.
 func (q *Queries) GetOutputSharingRule(ctx context.Context, arg GetOutputSharingRuleParams) (GetOutputSharingRuleRow, error) {
 	row := q.db.QueryRow(ctx, getOutputSharingRule,
 		arg.Namespace,
@@ -9092,16 +9152,11 @@ func (q *Queries) GetOutputSharingRule(ctx context.Context, arg GetOutputSharing
 		&i.ConsumerKind,
 		&i.ConsumerNamespace,
 		&i.ConsumerID,
-		&i.ConsumerTool,
-		&i.ConsumerName,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
 		&i.ProducerUnitTool,
 		&i.ProducerUnitName,
 		&i.ProducerCollectionName,
-		&i.ConsumerUnitToolNow,
-		&i.ConsumerUnitNameNow,
-		&i.ConsumerCollectionNameNow,
 	)
 	return i, err
 }
@@ -13426,11 +13481,10 @@ func (q *Queries) InsertObjectOwner(ctx context.Context, arg InsertObjectOwnerPa
 const insertOutputSharingRule = `-- name: InsertOutputSharingRule :execrows
 INSERT INTO output_sharing_rules (
     namespace, id, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id,
-    consumer_tool, consumer_name, created_by, created_at_ms
+    created_by, created_at_ms
 ) VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8, $9,
-    $10, $11
+    $6, $7, $8, $9
 )
 ON CONFLICT DO NOTHING
 `
@@ -13443,8 +13497,6 @@ type InsertOutputSharingRuleParams struct {
 	ConsumerKind      string
 	ConsumerNamespace string
 	ConsumerID        string
-	ConsumerTool      string
-	ConsumerName      string
 	CreatedBy         string
 	CreatedAtMs       int64
 }
@@ -13460,8 +13512,6 @@ func (q *Queries) InsertOutputSharingRule(ctx context.Context, arg InsertOutputS
 		arg.ConsumerKind,
 		arg.ConsumerNamespace,
 		arg.ConsumerID,
-		arg.ConsumerTool,
-		arg.ConsumerName,
 		arg.CreatedBy,
 		arg.CreatedAtMs,
 	)
@@ -18377,24 +18427,15 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrph
 
 const listOutputSharingRulesOfProducer = `-- name: ListOutputSharingRulesOfProducer :many
 SELECT r.id, r.producer_kind, r.producer_id, r.consumer_kind, r.consumer_namespace, r.consumer_id,
-    r.consumer_tool, r.consumer_name, r.created_by, r.created_at_ms,
+    r.created_by, r.created_at_ms,
     COALESCE(pu.tool, ''::text)::text AS producer_unit_tool,
     COALESCE(pu.name, ''::text)::text AS producer_unit_name,
-    COALESCE(pc.name, ''::text)::text AS producer_collection_name,
-    COALESCE(cu.tool, ''::text)::text AS consumer_unit_tool_now,
-    COALESCE(cu.name, ''::text)::text AS consumer_unit_name_now,
-    COALESCE(cc.name, ''::text)::text AS consumer_collection_name_now
+    COALESCE(pc.name, ''::text)::text AS producer_collection_name
 FROM output_sharing_rules AS r
 LEFT JOIN inventory AS pu
     ON r.producer_kind = 'unit' AND pu.namespace = r.namespace AND pu.unit_id = r.producer_id
 LEFT JOIN collections AS pc
     ON r.producer_kind = 'collection' AND pc.namespace = r.namespace AND pc.id = r.producer_id
-LEFT JOIN inventory AS cu
-    ON r.consumer_kind = 'unit' AND r.consumer_namespace = r.namespace
-    AND cu.namespace = r.namespace AND cu.unit_id = r.consumer_id
-LEFT JOIN collections AS cc
-    ON r.consumer_kind = 'collection' AND r.consumer_namespace = r.namespace
-    AND cc.namespace = r.namespace AND cc.id = r.consumer_id
 WHERE r.namespace = $1 AND r.producer_kind = $2
     AND r.producer_id = $3
 ORDER BY r.id
@@ -18407,22 +18448,17 @@ type ListOutputSharingRulesOfProducerParams struct {
 }
 
 type ListOutputSharingRulesOfProducerRow struct {
-	ID                        string
-	ProducerKind              string
-	ProducerID                string
-	ConsumerKind              string
-	ConsumerNamespace         string
-	ConsumerID                string
-	ConsumerTool              string
-	ConsumerName              string
-	CreatedBy                 string
-	CreatedAtMs               int64
-	ProducerUnitTool          string
-	ProducerUnitName          string
-	ProducerCollectionName    string
-	ConsumerUnitToolNow       string
-	ConsumerUnitNameNow       string
-	ConsumerCollectionNameNow string
+	ID                     string
+	ProducerKind           string
+	ProducerID             string
+	ConsumerKind           string
+	ConsumerNamespace      string
+	ConsumerID             string
+	CreatedBy              string
+	CreatedAtMs            int64
+	ProducerUnitTool       string
+	ProducerUnitName       string
+	ProducerCollectionName string
 }
 
 // The rules whose producer is exactly the producer of the call, ordered by ID.
@@ -18442,16 +18478,11 @@ func (q *Queries) ListOutputSharingRulesOfProducer(ctx context.Context, arg List
 			&i.ConsumerKind,
 			&i.ConsumerNamespace,
 			&i.ConsumerID,
-			&i.ConsumerTool,
-			&i.ConsumerName,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
 			&i.ProducerUnitTool,
 			&i.ProducerUnitName,
 			&i.ProducerCollectionName,
-			&i.ConsumerUnitToolNow,
-			&i.ConsumerUnitNameNow,
-			&i.ConsumerCollectionNameNow,
 		); err != nil {
 			return nil, err
 		}
@@ -18465,77 +18496,54 @@ func (q *Queries) ListOutputSharingRulesOfProducer(ctx context.Context, arg List
 
 const listOutputSharingRulesThatCover = `-- name: ListOutputSharingRulesThatCover :many
 SELECT r.id, r.producer_kind, r.producer_id, r.consumer_kind, r.consumer_namespace, r.consumer_id,
-    r.consumer_tool, r.consumer_name, r.created_by, r.created_at_ms,
+    r.created_by, r.created_at_ms,
     COALESCE(pu.tool, ''::text)::text AS producer_unit_tool,
     COALESCE(pu.name, ''::text)::text AS producer_unit_name,
-    COALESCE(pc.name, ''::text)::text AS producer_collection_name,
-    COALESCE(cu.tool, ''::text)::text AS consumer_unit_tool_now,
-    COALESCE(cu.name, ''::text)::text AS consumer_unit_name_now,
-    COALESCE(cc.name, ''::text)::text AS consumer_collection_name_now
+    COALESCE(pc.name, ''::text)::text AS producer_collection_name
 FROM output_sharing_rules AS r
 LEFT JOIN inventory AS pu
     ON r.producer_kind = 'unit' AND pu.namespace = r.namespace AND pu.unit_id = r.producer_id
 LEFT JOIN collections AS pc
     ON r.producer_kind = 'collection' AND pc.namespace = r.namespace AND pc.id = r.producer_id
-LEFT JOIN inventory AS cu
-    ON r.consumer_kind = 'unit' AND r.consumer_namespace = r.namespace
-    AND cu.namespace = r.namespace AND cu.unit_id = r.consumer_id
-LEFT JOIN collections AS cc
-    ON r.consumer_kind = 'collection' AND r.consumer_namespace = r.namespace
-    AND cc.namespace = r.namespace AND cc.id = r.consumer_id
 WHERE r.namespace = $1
     AND ((r.producer_kind = 'unit' AND r.producer_id = $2)
         OR (r.producer_kind = 'collection' AND $3::text <> ''
             AND r.producer_id = $3)
         OR r.producer_kind = 'namespace')
-    AND ((r.consumer_namespace = r.namespace AND $4 = r.namespace
-            AND (r.consumer_kind = 'namespace'
-                OR (r.consumer_kind = 'unit' AND r.consumer_id = $5)
-                OR (r.consumer_kind = 'collection' AND $6::text <> ''
-                    AND r.consumer_id = $6)))
-        OR (r.consumer_namespace <> r.namespace AND r.consumer_namespace = $4
-            AND ((r.consumer_kind = 'unit' AND r.consumer_tool = $7
-                    AND r.consumer_name = $8)
-                OR (r.consumer_kind = 'collection' AND $9::text <> ''
-                    AND r.consumer_name = $9))))
+    AND r.consumer_namespace = $4
+    AND (r.consumer_kind = 'namespace'
+        OR (r.consumer_kind = 'unit' AND r.consumer_id = $5)
+        OR (r.consumer_kind = 'collection' AND $6::text <> ''
+            AND r.consumer_id = $6))
 ORDER BY r.id
 `
 
 type ListOutputSharingRulesThatCoverParams struct {
-	Namespace              string
-	ProducerUnitID         string
-	ProducerCollectionID   string
-	ConsumerNamespace      string
-	ConsumerUnitID         string
-	ConsumerCollectionID   string
-	ConsumerTool           string
-	ConsumerUnitName       string
-	ConsumerCollectionName string
+	Namespace            string
+	ProducerUnitID       string
+	ProducerCollectionID string
+	ConsumerNamespace    string
+	ConsumerUnitID       string
+	ConsumerCollectionID string
 }
 
 type ListOutputSharingRulesThatCoverRow struct {
-	ID                        string
-	ProducerKind              string
-	ProducerID                string
-	ConsumerKind              string
-	ConsumerNamespace         string
-	ConsumerID                string
-	ConsumerTool              string
-	ConsumerName              string
-	CreatedBy                 string
-	CreatedAtMs               int64
-	ProducerUnitTool          string
-	ProducerUnitName          string
-	ProducerCollectionName    string
-	ConsumerUnitToolNow       string
-	ConsumerUnitNameNow       string
-	ConsumerCollectionNameNow string
+	ID                     string
+	ProducerKind           string
+	ProducerID             string
+	ConsumerKind           string
+	ConsumerNamespace      string
+	ConsumerID             string
+	CreatedBy              string
+	CreatedAtMs            int64
+	ProducerUnitTool       string
+	ProducerUnitName       string
+	ProducerCollectionName string
 }
 
 // The rules of the producer namespace that cover the producer unit, the
 // collection of the unit or the namespace, and name the consumer. A consumer
-// of the producer namespace matches by stable ID. A consumer of another
-// namespace matches by the name of its unit or its collection.
+// matches by stable ID, in any namespace. A name never matches.
 func (q *Queries) ListOutputSharingRulesThatCover(ctx context.Context, arg ListOutputSharingRulesThatCoverParams) ([]ListOutputSharingRulesThatCoverRow, error) {
 	rows, err := q.db.Query(ctx, listOutputSharingRulesThatCover,
 		arg.Namespace,
@@ -18544,9 +18552,6 @@ func (q *Queries) ListOutputSharingRulesThatCover(ctx context.Context, arg ListO
 		arg.ConsumerNamespace,
 		arg.ConsumerUnitID,
 		arg.ConsumerCollectionID,
-		arg.ConsumerTool,
-		arg.ConsumerUnitName,
-		arg.ConsumerCollectionName,
 	)
 	if err != nil {
 		return nil, err
@@ -18562,16 +18567,11 @@ func (q *Queries) ListOutputSharingRulesThatCover(ctx context.Context, arg ListO
 			&i.ConsumerKind,
 			&i.ConsumerNamespace,
 			&i.ConsumerID,
-			&i.ConsumerTool,
-			&i.ConsumerName,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
 			&i.ProducerUnitTool,
 			&i.ProducerUnitName,
 			&i.ProducerCollectionName,
-			&i.ConsumerUnitToolNow,
-			&i.ConsumerUnitNameNow,
-			&i.ConsumerCollectionNameNow,
 		); err != nil {
 			return nil, err
 		}

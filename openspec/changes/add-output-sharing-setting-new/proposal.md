@@ -43,7 +43,7 @@ Evidence for the claims above:
 Out of scope:
 
 - The read check of a job token against the stored rules, the check of the starter grants and of the last saver of a trigger, and the denial audit of a read by a job. The change `output-sharing` owns them, and it reads the rules that this change stores.
-- Sharing between namespaces as a new feature: the store keeps and matches a consumer of another namespace as ADR 273 decision 3 says, and the routes accept it.
+- Sharing between namespaces as a new feature: the store keeps and matches a consumer of another namespace by its namespace and stable ID (ADR 391), and the routes accept it.
 - Console pages for sharing.
 - A move of the setting into the generic settings API (decision 2 of the design).
 
@@ -63,7 +63,7 @@ Is depended on by:
 
 Where the path still costs the person time or surprises them:
 
-- An administrator may expect a rule to follow a collection name. The docs say that a rule follows the stable ID of a collection of its own namespace, and that a rule that names a collection of another namespace follows the name, as ADR 273 decision 3 says.
+- An administrator may expect a rule to follow a collection name. The docs say that a rule follows the stable ID of a collection, in its own namespace and in another one, and that a collection that someone deletes and makes again with the same name does not get the rule.
 - The setting changes only the units that the namespace makes later. The docs say so next to the setting.
 
 ## What main already does
@@ -111,8 +111,8 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 - Decisions that apply: 1 (current).
 - Changed by: none in `docs/adr/INDEX.md`. Current rule: this ADR.
 - Quote (decision 1): "Every stored reference to an entity uses the stable ID of the entity when a user can rename the entity, or delete and recreate it. A name is a label for people only."
-- Effect: A rule of this change stores a producer, and a consumer of the producer namespace, by stable ID. It meets decision 1 for them. The consumer of another namespace is the open item (see "Open questions").
-- Conflict: one, parked. See "Open questions".
+- Effect: A rule of this change stores its producer and its consumer by stable ID, in any namespace. It meets decision 1.
+- Conflict: none. ADR 391 (owner, 2026-11-20) settles the consumer of another namespace.
 
 **ADR 322: No migrations or compatibility code before the first tag** (owner decisions 1, 2, 4 and 5).
 
@@ -140,9 +140,7 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 
 ## Open questions
 
-Open questions: one, parked. No task depends on it. The build follows ADR 273 decision 3, which main already implements (`pkg/outputshare/outputshare.go:239`, `Rule.Validate`: a consumer of another namespace is a reference by name and carries no stable ID).
-
-- Parked, non-blocking follow-up: the name match of a consumer in another namespace. ADR 273 decision 3 says: "So the store keeps the reference of such a consumer, and matches it at each read. A rename in the other namespace ends the match. A new unit or a new collection with the old name matches." ADR 362 decision 1 (owner, 2026-11-08) says: "Every stored reference to an entity uses the stable ID of the entity when a user can rename the entity, or delete and recreate it." No ADR changes decision 3 of ADR 273 (the only ADR that changes ADR 273 is ADR 286, for renames), and the follow-up list of ADR 362 does not name ADR 273. So the two texts are not reconciled by an ADR. ADR 273 decision 3 gives its reason: the save must not tell whether an object of another namespace exists (ADR 220 decision 11), and a stable ID would need that look-up. The owner did not answer this question (owner, 2026-11-20). This change keeps the behavior of ADR 273 decision 3. A later RFC may change it. No task or requirement here depends on the answer.
+Open questions: none. The owner decided on 2026-11-20 (ADR 391): "Stable ID always. No entities should be keyed by name." The rule store keeps a consumer of another namespace as that namespace plus a unit or collection ID that the caller gives, checks the format only, and removes the rule when the purge or the delete of that unit or collection runs. ADR 273 decision 3 stays for the rest: the producer decides alone, and the save does not tell whether an object of another namespace exists.
 
 Questions answered by the owner:
 
@@ -155,6 +153,7 @@ Questions considered and answered:
 - Do the rules use the output-sharing route or a new path? ADR 273 decision 10: separate paths under `sharing-rules`. The output-sharing route keeps the setting.
 - Does the setting move to the settings API of #897? No. The ADR names the output-sharing route, main serves it with its own port and audit entry, and the generic API has no per-feature key until a feature adds it (`openspec/changes/add-one-generic-settings-api/proposal.md`, "Out of scope"). A move is a new decision and needs an RFC.
 - Which action covers the save and the removal? `unit:manage-sharing` on the object of the route (ADR 273 decision 10). The change adds no action.
-- Does a collection that is made again with the old name get an old rule? In the namespace of the producer, no: the rule names its stable ID. A collection of another namespace is kept by name, and a new one with the old name matches, as ADR 273 decision 3 says.
+- Does a collection that is made again with the old name get an old rule? No, in any namespace: the rule names its stable ID (ADR 391).
+- How does the save learn the stable ID of a consumer in another namespace? The caller gives it, and the save checks the format only (ADR 391, "Not decided here"). The body of the route and the way a person finds the ID are decided in the API part of this change.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs, and rewritten against main in November 2026. Every quote, path and ADR citation was checked by code.

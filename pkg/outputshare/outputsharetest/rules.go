@@ -23,8 +23,6 @@ const (
 	kindUnit       = "unit"
 	kindCollection = "collection"
 	kindNamespace  = "namespace"
-	// webName is the name of the unit that the cases of another namespace use.
-	webName = "web"
 	// crossRules is the number of rules of the case of the consumers of another
 	// namespace.
 	crossRules = 4
@@ -86,7 +84,58 @@ func (r *ruleRig) ruleWithID(id string, producer, consumer identity.Object) outp
 	r.t.Helper()
 
 	return outputshare.Rule{
-		CreatedAt: time.Time{}, ID: outputshare.ID(id), CreatedBy: tester, Producer: producer, Consumer: consumer,
+		CreatedAt: time.Time{},
+		ID:        outputshare.ID(id),
+		CreatedBy: tester,
+		Producer:  producer,
+		Consumer:  consumerOf(consumer),
+	}
+}
+
+// ruleFor returns a rule with a new ID whose consumer is c.
+func (r *ruleRig) ruleFor(producer identity.Object, c outputshare.Consumer) outputshare.Rule {
+	r.t.Helper()
+
+	rule := r.rule(producer, identity.Object{})
+	rule.Consumer = c
+
+	return rule
+}
+
+// linkTo saves a rule that names the producer and the consumer c.
+func (r *ruleRig) linkTo(producer identity.Object, c outputshare.Consumer) outputshare.Rule {
+	r.t.Helper()
+
+	return r.mustPut(r.ruleFor(producer, c))
+}
+
+// foreignUnit returns the consumer that is the unit with the stable ID id in
+// the namespace ns. The store does not resolve it.
+func foreignUnit(ns namespace.Name, id string) outputshare.Consumer {
+	return outputshare.Consumer{Kind: outputshare.ConsumerUnit, Namespace: ns, ID: id}
+}
+
+// foreignCollection returns the consumer that is the collection with the
+// stable ID id in the namespace globex. The store does not resolve it.
+func foreignCollection(id string) outputshare.Consumer {
+	return outputshare.Consumer{Kind: outputshare.ConsumerCollection, Namespace: globex, ID: id}
+}
+
+// consumerOf returns the stable reference of the unit, the collection or the
+// namespace o: its namespace and its stable ID. The zero object gives the zero
+// consumer.
+func consumerOf(o identity.Object) outputshare.Consumer {
+	switch {
+	case o.IsUnit():
+		return outputshare.Consumer{Kind: outputshare.ConsumerUnit, Namespace: o.Namespace(), ID: o.UnitID()}
+	case o.IsCollection():
+		return outputshare.Consumer{
+			Kind: outputshare.ConsumerCollection, Namespace: o.Namespace(), ID: o.CollectionID(),
+		}
+	case o.IsNamespace():
+		return outputshare.Consumer{Kind: outputshare.ConsumerNamespace, Namespace: o.Namespace(), ID: ""}
+	default:
+		return outputshare.Consumer{Kind: "", Namespace: "", ID: ""}
 	}
 }
 
@@ -237,7 +286,11 @@ func (r *ruleRig) del(producer identity.Object, id outputshare.ID) error {
 
 	fence := r.fence()
 	e := ruleEntry(fence, outputshare.Rule{
-		CreatedAt: time.Time{}, ID: id, CreatedBy: "", Producer: producer, Consumer: identity.Object{},
+		CreatedAt: time.Time{},
+		ID:        id,
+		CreatedBy: "",
+		Producer:  producer,
+		Consumer:  outputshare.Consumer{Kind: "", Namespace: "", ID: ""},
 	})
 
 	return r.h.Store.Delete(r.t.Context(), producer, id, fence, e)
@@ -269,7 +322,11 @@ func collectionOf(p outputshare.Placement) identity.Object {
 // emptyRule returns a rule with no field set.
 func emptyRule() *outputshare.Rule {
 	return &outputshare.Rule{
-		CreatedAt: time.Time{}, ID: "", CreatedBy: "", Producer: identity.Object{}, Consumer: identity.Object{},
+		CreatedAt: time.Time{},
+		ID:        "",
+		CreatedBy: "",
+		Producer:  identity.Object{},
+		Consumer:  outputshare.Consumer{Kind: "", Namespace: "", ID: ""},
 	}
 }
 
@@ -327,7 +384,13 @@ func needHook(t *testing.T, h Harness, hooks ...string) {
 	}
 }
 
+// ruleCases are the cases of the rule store.
 func ruleCases() []suiteCase {
+	return slices.Concat(rulePutCases(), ruleLifeCases())
+}
+
+// rulePutCases are the cases of the write, the read and the delete of a rule.
+func rulePutCases() []suiteCase {
 	return []suiteCase{
 		{testRuleRoundTrip, "store: put and get round trip a rule on a unit, a collection and a namespace"},
 		{testRuleRefusesInvalid, "store: put refuses a rule that fails Validate and changes nothing"},
@@ -341,7 +404,7 @@ func ruleCases() []suiteCase {
 			"store: put refuses a consumer unit or collection of the namespace that does not exist",
 		},
 		{testRuleMismatchedID, "store: put refuses a stable ID that names another object than the name"},
-		{testRuleCrossWithID, "store: put refuses a consumer of another namespace with a stable ID"},
+		{testRuleCrossIDFormat, "store: put refuses a consumer ID of another namespace with a bad format"},
 		{
 			testRuleCrossSameAnswer,
 			"store: put of a consumer of another namespace answers the same whether it exists or not",
@@ -365,24 +428,40 @@ func ruleCases() []suiteCase {
 		{testRuleDeleteStaleFence, "store: delete refuses a stale fence"},
 		{testRuleListOrder, "store: list returns the rules of one producer ordered by ID"},
 		{testRuleOtherNamespace, "store: a rule is invisible to another namespace"},
+	}
+}
+
+// ruleLifeCases are the cases of the rules over the life of the objects that
+// they name (rename, made again, purge and delete), and the cases of Find.
+func ruleLifeCases() []suiteCase {
+	return []suiteCase{
 		{testRuleRename, "store: a rename of the producer or of a consumer in the namespace keeps the rule"},
+		{testRuleCrossUnitRename, "store: a rename of a consumer unit in another namespace keeps the rule"},
 		{
 			testRuleCollectionMadeAgain,
 			"store: a collection of the namespace made again with the old name does not get the rules",
 		},
 		{
 			testRuleCrossCollectionMadeAgain,
-			"store: a collection of another namespace made again with the old name matches the rule",
+			"store: a collection of another namespace made again with the old name does not get the rule",
 		},
 		{testRulePurge, "store: the purge of a unit removes the rules that name it in its namespace"},
+		{
+			testRulePurgeCrossNamespace,
+			"store: the purge of a unit removes the rules of any namespace that name its stable ID",
+		},
 		{testRuleCollectionDelete, "store: the delete of a collection removes the rules that name it in its namespace"},
+		{
+			testRuleCollectionDeleteCrossNamespace,
+			"store: the delete of a collection removes the rules of any namespace that name its stable ID",
+		},
 		{testFindProducerLevels, "store: find matches a rule on the unit, its collection and its namespace"},
 		{
 			testFindConsumerLevels,
 			"store: find matches a consumer unit, its collection and the namespace of the producer",
 		},
 		{testFindNoNamespaceAcross, "store: find never matches a namespace rule for a consumer of another namespace"},
-		{testFindCrossByName, "store: find matches a consumer of another namespace by its reference"},
+		{testFindCrossByID, "store: find matches a consumer of another namespace by its stable ID, never by name"},
 		{testFindAfterMove, "store: find after a move of the consumer to another collection"},
 		{testFindNoRule, "store: find returns ErrNoRule when no rule matches"},
 		{
@@ -480,13 +559,9 @@ func testRuleKeepsCrossNamespace(t *testing.T, h Harness) {
 	r := newRuleRig(t, h)
 	a := r.unit("a", "")
 
-	unit, err := identity.UnitObject(ToolOpenTofu, globex, "web")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
-
-	byUnit := r.link(a.Unit, unit)
-	byCollection := r.link(a.Unit, identity.CollectionObject(globex, "shared"))
+	// The IDs name no object: the store keeps the ID that the caller gives.
+	byUnit := r.linkTo(a.Unit, foreignUnit(globex, "ws-other"))
+	byCollection := r.linkTo(a.Unit, foreignCollection("col-other"))
 
 	for _, want := range []*outputshare.Rule{&byUnit, &byCollection} {
 		got, getErr := h.Store.Get(t.Context(), a.Unit, want.ID)
@@ -494,13 +569,8 @@ func testRuleKeepsCrossNamespace(t *testing.T, h Harness) {
 			t.Fatalf("Get(%s): %v", want.ID, getErr)
 		}
 
-		if got.Consumer != want.Consumer || got.Consumer.UnitID() != "" || got.Consumer.CollectionID() != "" {
-			t.Fatalf(
-				"Get(%s).Consumer = %+v, want the reference %s with no stable ID",
-				want.ID,
-				got.Consumer,
-				want.Consumer,
-			)
+		if got.Consumer != want.Consumer {
+			t.Fatalf("Get(%s).Consumer = %+v, want the stable reference %+v", want.ID, got.Consumer, want.Consumer)
 		}
 	}
 }
@@ -570,20 +640,38 @@ func testRuleMismatchedID(t *testing.T, h Harness) {
 	oneWithTwo := collectionOf(a).WithCollectionID(collectionOf(b).CollectionID())
 
 	r.wantPutErr(r.rule(aWithB, b.Unit), outputshare.ErrUnknownObject)
-	r.wantPutErr(r.rule(b.Unit, aWithB), outputshare.ErrUnknownObject)
 	r.wantPutErr(r.rule(oneWithTwo, b.Unit), outputshare.ErrUnknownObject)
-	r.wantPutErr(r.rule(a.Unit, oneWithTwo), outputshare.ErrUnknownObject)
 }
 
-func testRuleCrossWithID(t *testing.T, h Harness) {
+func testRuleCrossIDFormat(t *testing.T, h Harness) {
 	t.Helper()
 
 	r := newRuleRig(t, h)
 	a := r.unit("a", "")
-	web := r.other("web", "shared")
 
-	r.wantPutErr(r.rule(a.Unit, web.Unit), outputshare.ErrInvalid)
-	r.wantPutErr(r.rule(a.Unit, collectionOf(web)), outputshare.ErrInvalid)
+	// Only the format of the ID of a consumer of another namespace is checked.
+	// Each value below is refused alone, as if the handler had passed it.
+	for _, id := range []string{
+		"", "Upper", "a/b", "a b", "a\nb", "../x", "a.b", "a:b", "caf\u00e9", "a\x00b",
+		strings.Repeat("a", outputshare.MaxIDBytes+1),
+	} {
+		r.wantPutErr(r.ruleFor(a.Unit, foreignUnit(globex, id)), outputshare.ErrInvalid)
+		r.wantPutErr(r.ruleFor(a.Unit, foreignCollection(id)), outputshare.ErrInvalid)
+	}
+
+	for _, ns := range []namespace.Name{"", "Bad Name", "a/b"} {
+		r.wantPutErr(r.ruleFor(a.Unit, foreignUnit(ns, "ws-ok")), outputshare.ErrInvalid)
+	}
+
+	r.wantPutErr(r.ruleFor(a.Unit, outputshare.Consumer{Kind: "principal", Namespace: globex, ID: "ws-ok"}),
+		outputshare.ErrInvalid)
+	r.wantPutErr(r.ruleFor(a.Unit, outputshare.Consumer{Kind: outputshare.ConsumerNamespace, Namespace: r.ns, ID: "x"}),
+		outputshare.ErrInvalid)
+
+	r.wantIDs(a.Unit)
+
+	r.linkTo(a.Unit, foreignUnit(globex, strings.Repeat("a", outputshare.MaxIDBytes)))
+	r.linkTo(a.Unit, foreignUnit(globex, "ws_ok-1"))
 }
 
 func testRuleCrossSameAnswer(t *testing.T, h Harness) {
@@ -591,24 +679,20 @@ func testRuleCrossSameAnswer(t *testing.T, h Harness) {
 
 	r := newRuleRig(t, h)
 	a := r.unit("a", "")
-	r.other("web", "shared")
+	web := r.other("web", "shared")
 
-	known, err := identity.UnitObject(ToolOpenTofu, globex, "web")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
-
-	unknown, err := identity.UnitObject(ToolOpenTofu, globex, "ghost")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
-
-	consumers := []identity.Object{
-		known, unknown, identity.CollectionObject(globex, "shared"), identity.CollectionObject(globex, "ghost"),
+	// An ID of an object that exists and an ID of one that does not get the
+	// same answer: the save never tells whether an object of another namespace
+	// exists.
+	consumers := []outputshare.Consumer{
+		foreignUnit(globex, web.Unit.UnitID()),
+		foreignUnit(globex, "ws-ghost"),
+		foreignCollection(web.Collection.CollectionID()),
+		foreignCollection("col-ghost"),
 	}
 
 	for i := range consumers {
-		r.link(a.Unit, consumers[i])
+		r.linkTo(a.Unit, consumers[i])
 	}
 
 	if got := len(r.list(a.Unit)); got != crossRules {
@@ -643,24 +727,16 @@ func testRuleLimit(t *testing.T, h Harness) {
 	a := r.unit("a", "")
 
 	for i := range outputshare.MaxRulesPerProducer {
-		unit, err := identity.UnitObject(ToolOpenTofu, globex, fmt.Sprintf("web-%03d", i))
-		if err != nil {
-			t.Fatalf("unit object: %v", err)
-		}
-
-		r.link(a.Unit, unit)
+		r.linkTo(a.Unit, foreignUnit(globex, fmt.Sprintf("ws-other-%03d", i)))
 	}
 
-	over, err := identity.UnitObject(ToolOpenTofu, globex, "web-over")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
+	over := foreignUnit(globex, "ws-over")
 
-	r.wantPutErr(r.rule(a.Unit, over), outputshare.ErrLimit)
+	r.wantPutErr(r.ruleFor(a.Unit, over), outputshare.ErrLimit)
 
 	// The limit holds for each producer apart.
 	b := r.unit("b", "")
-	r.link(b.Unit, over)
+	r.linkTo(b.Unit, over)
 }
 
 func testRuleStaleFence(t *testing.T, h Harness) {
@@ -694,15 +770,10 @@ func testRuleCrossFence(t *testing.T, h Harness) {
 	a := r.unit("a", "")
 	other := h.Namespace(t, globex.String())
 
-	unit, err := identity.UnitObject(ToolOpenTofu, globex, "web")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
-
-	rule := r.rule(a.Unit, unit)
+	rule := r.ruleFor(a.Unit, foreignUnit(globex, "ws-other"))
 
 	// The fence of the consumer namespace does not write the rule.
-	if err = h.Store.Put(t.Context(), rule, other, ruleEntry(other, rule)); !errors.Is(err, namespace.ErrFenced) {
+	if err := h.Store.Put(t.Context(), rule, other, ruleEntry(other, rule)); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("Put with the fence of the consumer namespace = %v, want namespace.ErrFenced", err)
 	}
 
@@ -913,8 +984,11 @@ func testRuleRename(t *testing.T, h Harness) {
 		t.Fatalf("List after the rename = %+v, want the rule %s", got, rule.ID)
 	}
 
-	if got[0].Producer.UnitName() != "proj/a2" || got[0].Consumer.UnitName() != "proj/b2" {
-		t.Fatalf("the rule names %s and %s after the rename, want the new names", got[0].Producer, got[0].Consumer)
+	if got[0].Producer.UnitName() != "proj/a2" || got[0].Consumer != consumerOf(b.Unit) {
+		t.Fatalf(
+			"the rule names %s and %+v after the rename, want the new producer name and the same consumer ID",
+			got[0].Producer, got[0].Consumer,
+		)
 	}
 
 	r.wantFind(a2, b2, rule.ID)
@@ -957,14 +1031,33 @@ func testRuleCrossCollectionMadeAgain(t *testing.T, h Harness) {
 	a := r.unit("a", "")
 	web := r.other("web", "shared")
 
-	rule := r.link(a.Unit, identity.CollectionObject(globex, "shared"))
+	rule := r.linkTo(a.Unit, consumerOf(collectionOf(web)))
 	r.wantFind(a, web, rule.ID)
 
 	h.MoveUnit(t, web, "elsewhere")
 	h.RemakeCollection(t, globex, "shared")
 
+	// The collection that someone makes again with the old name has a new ID,
+	// so it does not get the rule.
 	fresh := r.other("web2", "shared")
-	r.wantFind(a, fresh, rule.ID)
+	r.wantNoRule(a, fresh)
+}
+
+func testRuleCrossUnitRename(t *testing.T, h Harness) {
+	t.Helper()
+	needHook(t, h, "RenameUnit")
+
+	r := newRuleRig(t, h)
+	a := r.unit("a", "")
+	r.h.Namespace(t, globex.String())
+	web := r.h.Unit(t, ToolPulumi, globex, "proj/web", "")
+
+	rule := r.linkTo(a.Unit, consumerOf(web.Unit))
+	r.wantFind(a, web, rule.ID)
+
+	// A rename in the other namespace changes no rule.
+	renamed := h.RenameUnit(t, web, "web2")
+	r.wantFind(a, renamed, rule.ID)
 }
 
 func testRulePurge(t *testing.T, h Harness) {
@@ -977,18 +1070,13 @@ func testRulePurge(t *testing.T, h Harness) {
 	r.link(a.Unit, b.Unit)
 	r.link(c.Unit, a.Unit)
 	keep := r.link(c.Unit, b.Unit)
-	cross, err := identity.UnitObject(ToolOpenTofu, globex, "a")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
-
-	byName := r.link(b.Unit, cross)
+	byID := r.linkTo(b.Unit, foreignUnit(globex, "ws-other"))
 
 	h.PurgeUnit(t, a)
 
 	r.wantIDs(a.Unit)
 	r.wantIDs(c.Unit, string(keep.ID))
-	r.wantIDs(b.Unit, string(byName.ID))
+	r.wantIDs(b.Unit, string(byID.ID))
 
 	// The reader leaves out a rule of a unit that is gone, so the count of the
 	// limit shows whether the purge removed it. The producer c holds the rule
@@ -997,20 +1085,42 @@ func testRulePurge(t *testing.T, h Harness) {
 	const others = outputshare.MaxRulesPerProducer - 2
 
 	for i := range others {
-		unit, unitErr := identity.UnitObject(ToolOpenTofu, globex, fmt.Sprintf("web-%03d", i))
-		if unitErr != nil {
-			t.Fatalf("unit object: %v", unitErr)
-		}
-
-		r.link(c.Unit, unit)
+		r.linkTo(c.Unit, foreignUnit(globex, fmt.Sprintf("ws-other-%03d", i)))
 	}
 
-	last, err := identity.UnitObject(ToolOpenTofu, globex, "web-last")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
+	r.linkTo(c.Unit, foreignUnit(globex, "ws-other-last"))
+}
+
+func testRulePurgeCrossNamespace(t *testing.T, h Harness) {
+	t.Helper()
+	needHook(t, h, "PurgeUnit")
+
+	r := newRuleRig(t, h)
+	a := r.unit("a", "")
+	g := r.other("g", "")
+	other := r.other("h", "")
+
+	named := r.linkTo(a.Unit, consumerOf(g.Unit))
+	kept := r.linkTo(a.Unit, consumerOf(other.Unit))
+
+	// The purge of a unit of globex removes each rule of acme that names its
+	// ID, in the transaction of the purge.
+	h.PurgeUnit(t, g)
+
+	r.wantIDs(a.Unit, string(kept.ID))
+
+	if _, err := h.Store.Get(t.Context(), a.Unit, named.ID); !errors.Is(err, outputshare.ErrNotFound) {
+		t.Fatalf("Get of the rule that named the purged unit = %v, want ErrNotFound", err)
 	}
 
-	r.link(c.Unit, last)
+	// The rule row is gone, not only hidden: the limit counts rows.
+	for i := range outputshare.MaxRulesPerProducer - 1 {
+		r.linkTo(a.Unit, foreignUnit(globex, fmt.Sprintf("ws-other-%03d", i)))
+	}
+
+	if err := r.put(r.ruleFor(a.Unit, foreignUnit(globex, "ws-last"))); !errors.Is(err, outputshare.ErrLimit) {
+		t.Fatalf("Put after 100 rules = %v, want ErrLimit", err)
+	}
 }
 
 func testRuleCollectionDelete(t *testing.T, h Harness) {
@@ -1035,20 +1145,30 @@ func testRuleCollectionDelete(t *testing.T, h Harness) {
 	// rules after the loop only when the rule that named the old collection is
 	// gone, and so has room for the last one.
 	for i := range outputshare.MaxRulesPerProducer - 1 {
-		unit, unitErr := identity.UnitObject(ToolOpenTofu, globex, fmt.Sprintf("web-%03d", i))
-		if unitErr != nil {
-			t.Fatalf("unit object: %v", unitErr)
-		}
-
-		r.link(c.Unit, unit)
+		r.linkTo(c.Unit, foreignUnit(globex, fmt.Sprintf("ws-other-%03d", i)))
 	}
 
-	last, err := identity.UnitObject(ToolOpenTofu, globex, "web-last")
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
+	r.linkTo(c.Unit, foreignUnit(globex, "ws-other-last"))
+}
+
+func testRuleCollectionDeleteCrossNamespace(t *testing.T, h Harness) {
+	t.Helper()
+	needHook(t, h, "RemakeCollection", "MoveUnit")
+
+	r := newRuleRig(t, h)
+	a := r.unit("a", "")
+	web := r.other("web", "shared")
+
+	named := r.linkTo(a.Unit, consumerOf(collectionOf(web)))
+
+	h.MoveUnit(t, web, "elsewhere")
+	h.RemakeCollection(t, globex, "shared")
+
+	if _, err := h.Store.Get(t.Context(), a.Unit, named.ID); !errors.Is(err, outputshare.ErrNotFound) {
+		t.Fatalf("Get of the rule that named the deleted collection = %v, want ErrNotFound", err)
 	}
 
-	r.link(c.Unit, last)
+	r.wantIDs(a.Unit)
 }
 
 func testFindProducerLevels(t *testing.T, h Harness) {
@@ -1105,7 +1225,7 @@ func testFindNoNamespaceAcross(t *testing.T, h Harness) {
 	r.wantNoRule(a, r.other("web2", "shared"))
 }
 
-func testFindCrossByName(t *testing.T, h Harness) {
+func testFindCrossByID(t *testing.T, h Harness) {
 	t.Helper()
 
 	r := newRuleRig(t, h)
@@ -1124,8 +1244,8 @@ func testFindCrossByName(t *testing.T, h Harness) {
 		"",
 	)
 
-	byUnit := r.link(a1.Unit, web.Unit.WithUnitID(""))
-	byCollection := r.link(a2.Unit, identity.CollectionObject(globex, "Shared"))
+	byUnit := r.link(a1.Unit, web.Unit)
+	byCollection := r.link(a2.Unit, collectionOf(inShared))
 
 	r.wantFind(a1, web, byUnit.ID)
 	r.wantNoRule(a1, other)
@@ -1247,9 +1367,9 @@ func RawRuleInsertPostgres() string {
 // rawRuleInsert builds the statement with the placeholder of the dialect.
 func rawRuleInsert(placeholder func(i int) string) string {
 	cols := "namespace, id, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id, " +
-		"consumer_tool, consumer_name, created_by, created_at_ms"
+		"created_by, created_at_ms"
 
-	const columns = 11
+	const columns = 9
 
 	marks := make([]string, 0, columns)
 
@@ -1284,21 +1404,10 @@ func RawRuleRow(r outputshare.Rule) []any {
 		return o.CollectionID()
 	}
 
-	row := []any{
+	return []any{
 		r.Producer.Namespace().String(), string(r.ID), kind(r.Producer), stable(r.Producer),
-		kind(r.Consumer), r.Consumer.Namespace().String(), "", "", "", r.CreatedBy, int64(1),
+		string(r.Consumer.Kind), r.Consumer.Namespace.String(), r.Consumer.ID, r.CreatedBy, int64(1),
 	}
-
-	switch {
-	case r.CrossNamespace() && r.Consumer.IsUnit():
-		row[7], row[8] = r.Consumer.Tool(), r.Consumer.UnitName()
-	case r.CrossNamespace() && r.Consumer.IsCollection():
-		row[8] = strings.ToLower(r.Consumer.CollectionName())
-	default:
-		row[6] = stable(r.Consumer)
-	}
-
-	return row
 }
 
 // HostileRuleRow is one row for the table test of the CHECK constraints.
@@ -1306,21 +1415,21 @@ type HostileRuleRow struct {
 	// Name says what the row names.
 	Name string
 	// Row holds the namespace, the rule ID, the kind and the stable ID of the
-	// producer, the kind, the namespace, the stable ID, the tool and the name
-	// of the consumer, and the principal that saved the rule.
-	Row [10]string
-	// OK is true for the one row that the table accepts.
+	// producer, the kind, the namespace and the stable ID of the consumer, and
+	// the principal that saved the rule.
+	Row [8]string
+	// OK is true for the rows that the table accepts.
 	OK bool
 }
 
 // HostileRuleRows are rows that the CHECK constraints of the rule table
-// refuse, each for one reason, and the one row that they accept.
+// refuse, each for one reason, and the rows that they accept.
 func HostileRuleRows() []HostileRuleRow {
 	acmeName, globexName := acme.String(), globex.String()
 	longID := strings.Repeat("a", outputshare.MaxIDBytes+1)
 
 	row := func(name string, ok bool, cols ...string) HostileRuleRow {
-		r := HostileRuleRow{Name: name, Row: [10]string{}, OK: ok}
+		r := HostileRuleRow{Name: name, Row: [8]string{}, OK: ok}
 		copy(r.Row[:], cols)
 
 		return r
@@ -1328,40 +1437,40 @@ func HostileRuleRows() []HostileRuleRow {
 
 	return []HostileRuleRow{
 		row("a unit that names a unit of its namespace", true,
-			acmeName, "r1", kindUnit, "u1", kindUnit, acmeName, "u2", "", "", tester),
-		row("a unit that names a unit of another namespace by name", true,
-			acmeName, "r2", kindUnit, "u1", kindUnit, globexName, "", ToolOpenTofu, webName, tester),
+			acmeName, "r1", kindUnit, "u1", kindUnit, acmeName, "u2", tester),
+		row("a unit that names a unit of another namespace by its ID", true,
+			acmeName, "r2", kindUnit, "u1", kindUnit, globexName, "u9", tester),
+		row("a unit that names a collection of another namespace by its ID", true,
+			acmeName, "r2b", kindUnit, "u1", kindCollection, globexName, "c9", tester),
+		row("a unit that names the namespace of the producer", true,
+			acmeName, "r2c", kindUnit, "u1", kindNamespace, acmeName, "", tester),
 		row("a producer that is a principal", false,
-			acmeName, "r3", "principal", "p1", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, "r3", "principal", "p1", kindUnit, acmeName, "u2", tester),
 		row("a consumer that is a principal", false,
-			acmeName, "r4", kindUnit, "u1", "principal", acmeName, "p1", "", "", tester),
+			acmeName, "r4", kindUnit, "u1", "principal", acmeName, "p1", tester),
 		row("a namespace producer with a stable ID", false,
-			acmeName, "r5", kindNamespace, "x", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, "r5", kindNamespace, "x", kindUnit, acmeName, "u2", tester),
 		row("a unit producer with no stable ID", false,
-			acmeName, "r6", kindUnit, "", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, "r6", kindUnit, "", kindUnit, acmeName, "u2", tester),
 		row("a whole other namespace as the consumer", false,
-			acmeName, "r7", kindUnit, "u1", kindNamespace, globexName, "", "", "", tester),
+			acmeName, "r7", kindUnit, "u1", kindNamespace, globexName, "", tester),
+		row("a namespace consumer with an ID", false,
+			acmeName, "r7b", kindUnit, "u1", kindNamespace, acmeName, "u2", tester),
 		row("a consumer of the namespace with no stable ID", false,
-			acmeName, "r8", kindUnit, "u1", kindUnit, acmeName, "", "", "", tester),
-		row("a consumer of the namespace with a name", false,
-			acmeName, "r9", kindUnit, "u1", kindUnit, acmeName, "u2", ToolOpenTofu, webName, tester),
-		row("a consumer of another namespace with a stable ID", false,
-			acmeName, "r10", kindUnit, "u1", kindUnit, globexName, "u2", ToolOpenTofu, webName, tester),
-		row("a unit consumer of another namespace with no tool", false,
-			acmeName, "r11", kindUnit, "u1", kindUnit, globexName, "", "", webName, tester),
-		row("a collection consumer of another namespace with a tool", false,
-			acmeName, "r12", kindUnit, "u1", kindCollection, globexName, "", ToolOpenTofu, webName, tester),
-		row("a consumer of another namespace with no name", false,
-			acmeName, "r13", kindUnit, "u1", kindUnit, globexName, "", ToolOpenTofu, "", tester),
+			acmeName, "r8", kindUnit, "u1", kindUnit, acmeName, "", tester),
+		row("a consumer of another namespace with no stable ID", false,
+			acmeName, "r10", kindUnit, "u1", kindUnit, globexName, "", tester),
+		row("a collection consumer of another namespace with no stable ID", false,
+			acmeName, "r12", kindUnit, "u1", kindCollection, globexName, "", tester),
 		row("a rule with no creator", false,
-			acmeName, "r14", kindUnit, "u1", kindUnit, acmeName, "u2", "", "", ""),
+			acmeName, "r14", kindUnit, "u1", kindUnit, acmeName, "u2", ""),
 		row("a rule ID with a capital letter", false,
-			acmeName, "R15", kindUnit, "u1", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, "R15", kindUnit, "u1", kindUnit, acmeName, "u2", tester),
 		row("a rule ID with a space", false,
-			acmeName, "r 16", kindUnit, "u1", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, "r 16", kindUnit, "u1", kindUnit, acmeName, "u2", tester),
 		row("a rule ID that is empty", false,
-			acmeName, "", kindUnit, "u1", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, "", kindUnit, "u1", kindUnit, acmeName, "u2", tester),
 		row("a rule ID that is too long", false,
-			acmeName, longID, kindUnit, "u1", kindUnit, acmeName, "u2", "", "", tester),
+			acmeName, longID, kindUnit, "u1", kindUnit, acmeName, "u2", tester),
 	}
 }

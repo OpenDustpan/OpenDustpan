@@ -300,7 +300,7 @@ func pgCopyOutputSharingTables() []pgCopyTable {
 			table: backup.TableOutputSharingRules,
 			columns: []string{
 				pgColNamespace, "id", "producer_kind", "producer_id", "consumer_kind", "consumer_namespace",
-				"consumer_id", "consumer_tool", "consumer_name", "created_by", pgColCreatedAtMs,
+				"consumer_id", "created_by", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, "id"},
 		},
