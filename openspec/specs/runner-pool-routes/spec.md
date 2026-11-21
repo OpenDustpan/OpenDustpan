@@ -1,7 +1,7 @@
 # runner-pool-routes Specification
 
 ## Purpose
-TBD - created by archiving change add-e2e-step-runs-real-runner-pool-route-move. Update Purpose after archive.
+Runner pool routes let a namespace administrator create, list, read, update, and delete runner pools, and manage their join tokens, draining, and retirement. Each route checks the namespace fence and the runner management actions. The routes do not run jobs and do not hand out work; claims and job tokens belong to the runner protocol.
 
 ## Requirements
 
