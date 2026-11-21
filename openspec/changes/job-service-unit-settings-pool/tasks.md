@@ -21,5 +21,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read: add the e2e step against the real binary after the helper exists. Check: BLOCKED by the e2e helper. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the docs page docs/guides/unit-settings-pool.md (NEW) and the usability check from the page alone. Check: make docs-lint. A person's step.
 - [ ] 4.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

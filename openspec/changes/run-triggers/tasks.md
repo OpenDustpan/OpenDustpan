@@ -24,5 +24,4 @@
 
 - [ ] 4.1 Confirm the route wiring. Check: GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with an access token of a person returns 200
 - [ ] 4.2 Confirm the e2e step: POST .../triggers/{trigger_id}/fire with an access token of a person starts a plan job on the real server. BLOCKED by the runners change for the job run. Check: make e2e E2E_RUN=triggers passes on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Confirm the docs page usability check. Check: docs page command runs as written. A person's step.
 - [ ] 4.4 Confirm make check. Check: make check reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

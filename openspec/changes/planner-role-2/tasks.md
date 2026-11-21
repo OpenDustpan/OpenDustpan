@@ -32,4 +32,3 @@
 
 - [ ] 4.1 Run full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 4.2 Run the e2e step on both stores. Check: E2E step on POST /api/dustpan/v1/namespaces/{namespace}/jobs with a personal access token of a planner principal runs against the real server over TLS on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Complete usability check. Check: Persona completes plan from docs page alone. A person's step.

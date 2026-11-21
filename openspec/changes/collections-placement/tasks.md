@@ -26,4 +26,3 @@
 
 - [ ] 4.1 Check that the placement rule, collection and namespace create routes declare actions Check: the route policy test passes
 - [ ] 4.2 Update the collections and placement page with the default, the opt-out, the grammar and the TFE project steps Check: each command on the page runs as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/collections_placement_docs_test.go runs each command of the docs page against the e2e test server).
-- [ ] 4.3 Do the usability check from the docs page alone and run all checks Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

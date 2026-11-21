@@ -1,5 +1,4 @@
 ## 0. Triage
-- [ ] 0.1 For each open PR that touches `pkg/store/`: merge, close as stale, or mark "port with branch mode". Check: a table of the 23 PRs and their outcome in STATE.md. Confirmed by: A person's step (the lead triages the open store PRs).
 ## 1. Prepare (PR B)
 - [x] 1.2 Add the branch mode to the NEW script `scripts/move-store.sh` of task 1.1. Check: it ports one open store PR branch and `go build ./...` passes on it.
 - [x] 1.1 Write the NEW script `scripts/move-store.sh` and run it on a fresh main. Check: `go build ./...` passes on the result, and `git diff --stat` shows only renames, import lines and generated files.

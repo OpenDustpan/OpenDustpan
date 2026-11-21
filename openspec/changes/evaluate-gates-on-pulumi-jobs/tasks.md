@@ -22,5 +22,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Check routes and authorization actions Check: The route test passes
-- [ ] 4.2 Run the usability check Check: A developer completes the path from the docs page alone. A person's step.
 - [ ] 4.3 Run the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

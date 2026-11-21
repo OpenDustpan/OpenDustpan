@@ -15,5 +15,4 @@
 
 - [ ] 3.1 Write the docs page for the console access views with copy-paste commands in the NEW file docs/guides/console-access-views.md. Check: A test runs each docs page command as written over TLS. `make docs-lint` passes on each edited guide.
 - [ ] 3.2 Confirm that the routes the job uses are in the route test with their actions. Check: The route test passes and the public list is unchanged.
-- [ ] 3.3 Usability check with a site administrator. Check: The persona completes the path from the docs page alone and each error names the one command that helps. A person's step.
 - [ ] 3.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

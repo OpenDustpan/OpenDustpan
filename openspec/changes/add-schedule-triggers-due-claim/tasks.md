@@ -23,5 +23,4 @@
 
 - [ ] 4.1 Check the trigger routes declare their actions, and that the tick has no public route. Check: Route test lists the actions
 - [ ] 4.2 Add an e2e step in the NEW file e2e/schedule_trigger_test.go: save a daily trigger with `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal token of a namespace administrator, then read the job with `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}`. Check: e2e step shows one plan job with source kind schedule. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run a usability check of the docs page, with each error naming one command. Check: The persona follows the page alone. A person's step.
 - [ ] 4.4 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

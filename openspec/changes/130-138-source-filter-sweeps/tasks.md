@@ -31,5 +31,4 @@
 - [ ] 4.1 Wire the checks into the existing routes and declare their actions. Check: TestRouteHookReadsTheScopeAndTheEnforcedFields passes
 - [ ] 4.2 Add an e2e step to the existing file e2e/source_filter_test.go: PUT /api/dustpan/v1/namespaces/{namespace}/source-filter with an access token, then create a job outside the filter and expect 403 source.filter-invalid. Check: make e2e step passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Add an e2e step in the NEW file e2e/sweep_claim_test.go: claim a sweep on /runner/v1 with a runner key and send a header outside the target. BLOCKED by 130-138-runner-protocol-claims, which adds the claim route. Check: make e2e step passes once the claim route exists. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.4 Run the usability check from the guide alone. Check: Each error names its one command. A person's step.
 - [ ] 4.5 Run make check and make docs-lint. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

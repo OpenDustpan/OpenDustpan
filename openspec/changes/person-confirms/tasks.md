@@ -25,5 +25,4 @@
 
 - [ ] 4.1 In the NEW file `e2e/change_order_confirm_test.go`, confirm a draft with a console session, then read the audit log through the route of open question 3 and check that the confirm entry comes before any apply entry. Check: the step passes in CI. BLOCKED by the change order package.
 - [ ] 4.2 In the existing file `e2e/approval_rules_test.go`, add the step that sets `authorMayApprove` false and checks that the delegator is refused as second approver. Check: the step passes in CI.
-- [ ] 4.3 Run the usability check of the confirm path. Check: the persona completes the confirm from the docs page alone and each error names the one command that helps. A person's step.
 - [ ] 4.4 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

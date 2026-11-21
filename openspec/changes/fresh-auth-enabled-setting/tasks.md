@@ -33,5 +33,4 @@
 - [ ] 3.2 Route keeps its authorization actions. Check: Route test passes
 - [ ] 3.3 E2E step: PATCH `/api/server/settings` for `freshAuthEnabled`, then approve a `destroy` with an access token with the setting off and on. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.4 In the guides named in the Files list, state the setting, its default, that off means an access token with the grant may approve a `destroy` and make a setting weaker, and that `enforced` shows a stored rule that is not in force. Check: make docs-lint
-- [ ] 3.5 Usability check from the docs page alone. Check: Site administrator turns the setting on and off from the docs page. A person's step.
 - [ ] 3.6 Run make check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

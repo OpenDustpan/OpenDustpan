@@ -24,5 +24,4 @@
 
 - [ ] 4.1 Run the e2e step against the real binary and the real directory through `ANY /runner/v1` with a runner token; BLOCKED by the NEW change-order apply-start route. Check: The NEW test `TestTerragruntRunAllOnRunnerDependencyOrder` passes on Linux on PostgreSQL through `ANY /runner/v1` with a runner token; BLOCKED by the NEW change-order apply-start route. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Write the NEW file `docs/guides/terragrunt-run-all.md` with the runner fan-out flow. Check: The NEW file `docs/guides/terragrunt-run-all.md` lists the runner fan-out flow and each command runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/run_all_on_runner_dependency_gated_apply_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Do a usability check of the ordered apply path from the guide alone. Check: A Developer follows the guide alone and each error names the one command that helps. A person's step.
 - [ ] 4.4 Run the full check suite. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).

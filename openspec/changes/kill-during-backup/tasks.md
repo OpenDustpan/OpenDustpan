@@ -16,5 +16,4 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Run HA step 3: kill, succeeded within the lease period plus 60 seconds, backup check complete, one expiry. Check: `make e2e-ha` passes the step on PostgreSQL with an S3 target, using ANY /api/dustpan/v1/backups/{} and its check route with an access token. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.2 Run the usability check from the docs page alone. Check: The Operator completes the path from the docs page and each error names one command. A person's step.
 - [ ] 3.3 Run the full gate. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

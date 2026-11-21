@@ -30,5 +30,4 @@ Each security test below sends hostile input to one layer, as if the other layer
 ## 5. Definition of done
 
 - [ ] 5.1 Extend the e2e step with the real Pulumi CLI and OpenTofu (`e2e/ipallow_test.go`), which calls `GET /api/dustpan/v1/namespaces/{namespace}/units` with an access token credential: a namespace list set through the view, from an allowed and a denied address, with the setting alone turning the lists on. Check: `TestIPAllowlists` passes with the new cases. Confirmed by: CI.
-- [ ] 5.2 Do the usability check from the docs page alone. Check: the site administrator completes the path of the proposal, from the settings call to the denied sign-in. A person's step.
 - [ ] 5.3 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs `make test-changed` only).

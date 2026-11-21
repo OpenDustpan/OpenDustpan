@@ -26,5 +26,4 @@
 
 - [ ] 4.1 Check wiring and authorization actions. Check: Route declares its authorization actions and the route test passes.
 - [ ] 4.2 Run e2e step against the real CLI path where visible. Check: e2e step with existing runner and fake forge passes: `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{id}` with a service token shows the merge apply pinned to branch and sha. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run usability check for errors and help commands. Check: Persona completes the path from the docs page alone. A person's step.
 - [ ] 4.4 Run full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

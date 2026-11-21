@@ -20,5 +20,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Run an e2e step with a forbid gate on context.principal.kind == agent through ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token. Check: E2E gate scenario through ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token denies an agent-gated write for an agent caller with gate.denied. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Complete the usability check for the namespace administrator path. Check: Usability check: a namespace administrator writes the agent gate from the docs page alone and predicts the outcome for each kind. A person's step.
 - [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

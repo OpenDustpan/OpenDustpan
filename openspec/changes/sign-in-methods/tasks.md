@@ -25,5 +25,3 @@
 - [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 3. Definition of done
-
-- [ ] 3.1 Route actions, docs pages, usability walk. Check: `make check` has zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

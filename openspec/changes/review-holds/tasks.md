@@ -28,5 +28,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Run e2e step against the real CLI and the real directory with the recording provider. Check: BLOCKED by NEW route POST /api/dustpan/v1/change-orders/{id}/apply-request: e2e step on Linux on PostgreSQL over TLS with access token shows 3 plan jobs gated and 3 apply jobs only after the apply request. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Complete usability check of the review path. Check: Developer completes the review path from the docs page alone and each error names the one command that helps. A person's step.
 - [ ] 4.3 Run full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

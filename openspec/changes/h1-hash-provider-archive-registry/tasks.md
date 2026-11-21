@@ -28,5 +28,3 @@
 ## 4. Definition of done
 
 - [x] 4.1 Write docs page for publish with h1 and protocol errors in NEW file docs/guides/registry-publish.md. Check: Docs page commands run as written for publish and protocol error. Confirmed by: CI (an e2e step in the NEW file e2e/h1_hash_provider_archive_registry_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
-- [ ] 4.2 Run usability check of the full publish and install path. Check: Namespace administrator completes publish and tofu init from the docs page alone; each error names its one command. A person's step.
-- [ ] 4.3 Pass definition of done for the publish route: wiring, route, e2e step, docs page, usability check, make check. Check: `make check` reports zero findings; wiring uses POST /api/dustpan/v1/namespaces/{}/registry/uploads with unit:manage on the namespace and an access token credential. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

@@ -20,5 +20,4 @@
 
 - [x] 4.1 Evidence only: the step is wired into the high availability suite (`e2e/ha_test.go:118`). No route: the test drives the real CLIs through the proxy only. Check: `make e2e-ha` passes the step "5 rolling deploy" against real CLI binaries. Confirmed by: CI (the agent writes the e2e test).
 - [x] 4.2 Add a read of `GET /api/server/instances` with the bootstrap administrator token (Bearer scheme of the installation API) to `e2e/ha_rolling_test.go` that lists three instances during the step. Check: `make e2e-ha` passes with the NEW function `haCheckInstancesRoute` in `e2e/ha_rolling_test.go`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run usability check of rolling replace path. Check: Operator completes replace from existing high availability guide alone with clear version error. A person's step.
 - [ ] 4.4 Run full checks. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

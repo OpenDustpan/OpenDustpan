@@ -28,5 +28,4 @@
 
 - [ ] 4.1 Wiring and route with authorization actions Check: Route table lists each new route with its action; public list unchanged
 - [ ] 4.2 E2e step with the real Pulumi CLI and the real OpenTofu CLI on both dialects Check: `make e2e` step uses `POST /api/dustpan/v1/me/factors/totp/enroll` and `POST /api/dustpan/v1/me/factors/step-up` with a personal access token of a plain OAuth person; BLOCKED by the mfa change that ships the factor store. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Docs page and usability check Check: Docs page commands run as written and each error names the one command that helps. A person's step.
 - [ ] 4.4 Full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

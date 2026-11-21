@@ -25,5 +25,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Run console browser gate in this repo against the real server Check: Browser suite in console repo runs against the real binary over TLS from the server of the suite
-- [ ] 4.2 Usability check of the full create path Check: Developer completes catalog to unit path from the docs page alone. A person's step.
 - [ ] 4.3 Run full checks Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

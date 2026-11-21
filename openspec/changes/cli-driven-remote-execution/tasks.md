@@ -20,4 +20,3 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Run make check with zero findings. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
-- [ ] 4.2 Confirm wiring, route actions, e2e step, docs page and usability check. The path uses the existing route /api/v2/workspaces/{} (declared in the route table of its adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand), adapter in internal/api/tfe/remoteplan.go) and the access token of a Developer. Check: The persona follows the docs page alone from setup to tofu plan with an access token, and each error names the one command that helps. A person's step. Confirmed by: CI (the agent writes the e2e test).

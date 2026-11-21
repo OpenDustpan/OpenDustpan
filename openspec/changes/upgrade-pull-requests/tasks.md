@@ -26,5 +26,3 @@
 - [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
-
-- [ ] 4.1 Wire the scanner into the server start. Add the two new upgrade-requests routes, both with action unit:read. The e2e step uses the existing route `PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}` to publish a newer release, with a personal access token that holds unit:manage and unit:read, then reads the request with `GET /api/dustpan/v1/namespaces/{namespace}/upgrade-requests/{id}` against the fake forge. Finish the docs page and the usability check. Check: Route test shows the unit:read action on both routes; e2e step with a personal access token passes against the fake forge; docs complete; `make check` with zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

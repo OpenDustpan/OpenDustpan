@@ -21,6 +21,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write docs page in the existing file docs/guides/notification-destinations.md: extend it with create sink, subscribe with type filter, rotate signing secret, redeliver, read deliveries, order by sequence. Check: Docs page commands run as written in a fresh install. Confirmed by: CI (an e2e step in the NEW file e2e/events_notifications_docs_test.go runs each command of the docs page against the e2e test server). A person's step. `make docs-lint` passes on each edited guide.
-- [ ] 4.2 Usability check with namespace administrator and recorded errors. Check: Persona completes sink to signed delivery from the docs page alone. A person's step.
 - [ ] 4.3 Route actions, route test, audit entries, and conformance suites pass. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

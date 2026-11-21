@@ -26,5 +26,4 @@
 - [ ] 4.1 Route test lists each route with its action Check: route test passes
 - [ ] 4.2 e2e step with the real Pulumi CLI and OpenTofu: publish through POST /api/dustpan/v1/self-service/blueprints/{}/{}/versions, submit through the NEW POST /api/dustpan/v1/namespaces/{namespace}/self-service/requests with an access token, a runner applies Check: `make e2e` passes on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Docs page commands run as written Check: docs/guides/publish-a-blueprint.md commands run in a test. Confirmed by: CI (an e2e step in the NEW file e2e/blueprints_docs_test.go runs each command of the docs page against the e2e test server).
-- [ ] 4.4 Usability check from the docs page alone Check: Each error names one command. A person's step.
 - [ ] 4.5 Run make check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

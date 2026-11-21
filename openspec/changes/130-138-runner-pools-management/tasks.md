@@ -29,4 +29,3 @@
 
 - [ ] 4.1 Run e2e step against the real CLI: create pool, create token, join with dustpan-runner, retire, delete refused in use. Check: GET ANY /api/runners/{}/pools with access token of a namespace admin. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Add user docs page for pools and join tokens in the NEW file docs/guides/runner-pools.md in the same pull request. Check: docs page docs/guides/runner-pools.md runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/130_138_runner_pools_management_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Run usability check, route action test TestActionsWithoutRoutesAreUnclassified, and make check. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

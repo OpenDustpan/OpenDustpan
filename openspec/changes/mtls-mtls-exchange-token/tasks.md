@@ -40,4 +40,3 @@ The work goes in two reviewable commits. The Opus security review (rev2) covers 
 - [x] 3.2a Add the two new fields of `trustrulesapi.Config` (the mTLS exchanger and the guard) as nil values in the literal in `e2e/coverage_trustrule.go`, line 42, so that the exhaustruct linter passes. Check: `golangci-lint run ./e2e/...` reports nothing.
 - [ ] 3.3 SECURITY. A Claude Opus security review (rev2) on the exact head, next to the cross-provider review, on the exact head of each of the two commits, before the pull request is queued. Check: the review verdict CLEAN is in the pull request.
 - [ ] 3.4 `make check` with zero findings. Check: `make check`. Confirmed by: CI (the agent runs the fast checks only).
-- [ ] 3.5 Usability check from the docs draft. Check: The persona completes the path and each error names one command. A person's step.

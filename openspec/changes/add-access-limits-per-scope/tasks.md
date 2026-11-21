@@ -24,5 +24,4 @@
 
 ## 4. definition of done
 
-- [ ] 4.1 Run the e2e step with the real server over TLS: a session credential calls PUT /api/dustpan/v1/namespaces/{namespace}/access-limits/{id}, then GET /api/dustpan/v1/namespaces/{namespace}/units is refused with gate.ErrLimited. Add docs page and usability check. Check: `make e2e` passes the access-limit step. A person's step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

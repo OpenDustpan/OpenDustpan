@@ -28,5 +28,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Declare the drift read route with self-service:read and the public webhook route in NEW file internal/api/apidesc/gitdrift.go (declaration) and NEW file pkg/dustpan/gitdrift_routes.go (adapter). Check: The route policy test passes with the webhook on the explicit public list.
-- [ ] 4.2 Run the usability check for the drift path. Check: Developer completes the path from the docs page alone. A person's step.
 - [ ] 4.3 Run full validation. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

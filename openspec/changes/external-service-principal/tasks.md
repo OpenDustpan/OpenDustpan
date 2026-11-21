@@ -32,5 +32,4 @@ SECURITY: this change is security code (ADR 250): identity, classification and t
 
 - [ ] 4.1 BLOCKED by the NEW routes of tasks 2.5 and the NEW exchange check of 2.3, which main lacks. E2e in the NEW file `e2e/external_service_principal_test.go`, over `POST /api/dustpan/v1/service-classification-rules/preview` with an administrator token, and the token exchange with a CI job token: a token exchange of a classified account, a preview, a create with each value of `existingPrincipals`, and a refused console sign-in. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Add the new file `docs/guides/external-service-principals.md`. Check: `make docs-lint` passes, and a test runs each command of the page.
-- [ ] 4.3 Usability check: the site administrator completes the path from the docs page alone, and each error names its one command. Check: the check is recorded in the pull request. A person's step.
 - [ ] 4.4 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

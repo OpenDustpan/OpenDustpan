@@ -23,5 +23,4 @@
 
 - [ ] 4.1 e2e step against the real tofu CLI for overlap wait and disjoint side-by-side apply. BLOCKED by the claim register route and the wrapper credential kind of two-disjoint-claims Check: make e2e with real tofu CLI on PostgreSQL and a fake provider time log for both local cases. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Docs page for the wrapper wait, progress output, and timeout flag with values from ADR 368 decision 5 Check: make docs-lint
-- [ ] 4.3 Usability check from the docs page alone Check: A Developer completes both cases from the docs page alone, and each error names the one command that helps. A person's step.
 - [ ] 4.4 Run make check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

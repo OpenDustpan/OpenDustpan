@@ -27,5 +27,4 @@
 
 - [ ] 4.1 Write the docs in the same pull request: docs/guides/access-tokens.md gets the two warning times, the recipient, the dependencies for SMTP and the fact that service tokens get no email. Check: `make docs-lint` passes.
 - [ ] 4.2 BLOCKED until 0.2 passes: add an e2e step in e2e/tokenexpiry_test.go over the built server on SQLite and PostgreSQL. The credential is a personal access token created through `POST /api/dustpan/v1/me/tokens`, the CLI is the Pulumi CLI, the test SMTP server runs over TLS: create a token with a 10 day expiry, run the job, check one email at the level soon, advance to 2 days, check one email at the level imminent. Check: the e2e step runs on both stores. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run the usability check. Check: a Developer finds the two emails in the guide and the reason of a skipped delivery. A person's step.
 - [ ] 4.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). The notification carries token metadata to a person: the change needs the Claude security review (rev2) on the exact head before the merge queue.

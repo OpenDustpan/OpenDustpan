@@ -34,5 +34,4 @@ Order: do task 3.0 (the move into `internal/api/runnerpools`) first, as a no-beh
 
 - [ ] 4.1 Wire the routes with their authorization actions Check: The route test shows each action
 - [x] 4.2 Change the docs that carry the old paths: docs/guides/backup-restore-upgrade.md:355-357, docs/reference/api-description.md:170, docs/reference/forbidden-error-codes.md:54 and docs/reference/runner-api.md:13 and :74 (the runner JSON field `keyID` is now `keyIdentifier`). Write the docs page for pool, drain, retire and join-token management in NEW file docs/guides/runner-pools.md Check: Docs commands run as written against a dev server. Confirmed by: CI (an e2e step in the NEW file e2e/add_e2e_step_runs_real_runner_pool_route_move_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Run the usability check Check: A runner operator completes pool and token work from the docs page; each error names one command. A person's step.
 - [x] 4.4 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

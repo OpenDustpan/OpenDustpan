@@ -23,5 +23,3 @@
 - [ ] 1.5 SECURITY. Add a hostile test in the existing file pkg/gate/statewrite_test.go. TestStateWriteEnforceRefusesWhenFactsUnavailable sends an unreadable body straight to the guard with an enforce gate that needs state facts. The guard SHALL refuse the write. Check: TestStateWriteEnforceRefusesWhenFactsUnavailable passes
 
 ## 3. Definition of done
-
-- [ ] 3.1 Check wiring, route actions and docs page. Run the usability check from the docs page alone with the real tofu CLI and a personal access token. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

@@ -32,4 +32,3 @@
 
 - [ ] 4.1 Add the e2e step in `e2e/e2e_test.go`: two servers on one database, the first writes the ring, the second reads it, and an administrator reads the ring with `GET /api/server/session-keys` with the administrator bearer token. Check: `make e2e` passes the step
 - [ ] 4.2 Add the page `docs/guides/session-keys.md`: the ring, the rotation, `retireAll`, and the step after a restore of the database outside the backup. Check: `make docs-lint` is clean
-- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

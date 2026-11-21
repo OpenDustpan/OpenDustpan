@@ -29,5 +29,4 @@ Each security test below sends hostile input to one layer, as if the other layer
 
 - [ ] 4.1 Extend the e2e step with the real Pulumi CLI and OpenTofu (`e2e/ipallow_test.go`): an access token with its own list from an allowed and a denied address; the same token narrows its own list and is refused when it widens it. Check: `TestIPAllowlists` passes with the new cases. Confirmed by: CI.
 - [ ] 4.2 Regenerate `internal/api/apidesc/openapi.json`, the clients (`make clients-generate`), `sqlc` output (`make generate`) and the golden files of `internal/errcode/testdata/catalog` with their generators. Never edit a generated file by hand. Do not change `info.version` or `internal/api/apidesc/openapi.pin`. Check: the named files change in the same pull request, `sqlc diff` is clean and `make pin-frozen` passes.
-- [ ] 4.3 Do the usability check from the docs page alone. Check: the site administrator sets a token list and sees the denial from an outside address. A person's step.
 - [ ] 4.4 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs `make test-changed` only).

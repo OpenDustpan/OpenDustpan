@@ -35,6 +35,5 @@
 
 - [ ] 5.1 `make e2e-journal` passes: each of v3.250.0, v3.262.0 and v3.268.0 runs with journaling on and off with equal normalized exports, on SQLite and PostgreSQL. Check: the CI job `e2e-journal` is green on the pull request. Confirmed by: CI.
 - [ ] 5.2 `make e2e` passes with the default matrix: v3.262.0 and v3.250.0 journal in the on run, v3.200.0 answers 0. Check: the CI job `e2e` is green on the pull request. Confirmed by: CI.
-- [ ] 5.3 Usability check: an operator follows `docs/reference/journaling.md` alone, turns journaling off with `DUSTPAN_DISABLE_PULUMI_JOURNALING=true`, restarts, and a `pulumi up` saves checkpoints. Check: `TestPulumiJournalingBothModes` covers the off run with that variable; the pull request body records the walk of the page. A person's step.
 - [ ] 5.4 `make check` passes with zero findings. Check: the CI jobs of `make check` are green. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 5.5 Close #2041 with the pull request. Keep #423 open until the first-tag item of 4.3 is ticked. Check: the pull request body has "Closes #2041" and "Part of #423".

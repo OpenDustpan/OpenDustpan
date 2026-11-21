@@ -24,4 +24,3 @@
 - [ ] 4.1 Check authorization actions on the trigger routes Check: route test passes; make check reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 4.2 Add e2e step against the real CLI in the NEW file e2e/follows_trigger_test.go, with route POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers and a personal access token. Check: e2e with real OpenTofu: POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with a personal access token, run tofu apply on workspace A, then GET the trigger shows one plan job of workspace B; a repeat event starts nothing. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Write the user docs page in the NEW file docs/guides/follows-triggers.md. Check: make docs-lint passes
-- [ ] 4.4 Run the usability check Check: persona completes the path from the docs page alone; each error names one command. A person's step.

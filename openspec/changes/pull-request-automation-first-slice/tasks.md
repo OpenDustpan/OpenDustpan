@@ -18,5 +18,3 @@
 - [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
-
-- [ ] 4.1 Run the wiring, authorization, e2e, docs and usability checks. Route: GET /api/dustpan/v1/namespaces/{namespace}/units with an access token of a principal that can read units; no new route is added. BLOCKED by the three depends_on changes for the e2e part. Check: `make check` with zero findings; e2e step plus docs usability check pass. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

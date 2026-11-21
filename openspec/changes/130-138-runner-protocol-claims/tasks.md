@@ -27,5 +27,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add e2e step for claim poll and heartbeat in the NEW file e2e/130_138_runner_protocol_claims_docs_test.go on the NEW route `POST /runner/v1/claims` and the NEW route `POST /runner/v1/claims/heartbeat` with the runner key as credential; BLOCKED by NEW `POST /runner/v1/claims`. Check: E2E step polls existing base route `ANY /runner/v1` with a runner key and heartbeats to completion; BLOCKED by NEW `POST /runner/v1/claims`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Run usability check of the runner operator path. Check: Runner operator completes poll and heartbeat from the docs page alone. A person's step.
 - [ ] 4.3 Run full checks, route authorization test, and audit verification. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

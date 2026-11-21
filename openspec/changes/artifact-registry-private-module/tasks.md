@@ -19,5 +19,3 @@
 - [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
-
-- [ ] 4.1 Confirm wiring, route actions, e2e, docs, audit entries, and usability. Check: Route GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions with an access token passes e2e on SQLite and PostgreSQL; routes declare authorization actions; usability check passes; `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

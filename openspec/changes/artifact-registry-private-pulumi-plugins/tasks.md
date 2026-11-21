@@ -21,5 +21,3 @@
 - [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
-
-- [ ] 4.1 Run wiring check, route authorization check, docs page, usability walk, and full check set. The routes are the new plugin download route under /api/dustpan/v1/namespaces/{}/registry (declared in internal/api/apidesc/routes_plugins.go (NEW), adapter in internal/registrysvc/plugin_http.go (NEW)) and the existing route PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}; the credential kind is a personal access token. Check: Route test shows registry read actions on the new plugin download route (personal access token); the e2e step above passes; docs test passes; `make check` reports zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

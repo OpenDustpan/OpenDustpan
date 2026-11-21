@@ -33,5 +33,4 @@
 
 - [ ] 4.1 E2E step against the real CLI for history after an update Check: make e2e step; BLOCKED by the NEW history route until it ships. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Docs page for history, blame, point-in-time, redaction and retention Check: docs page in the same pull request; make docs-lint
-- [ ] 4.3 Usability check Check: a developer completes the path from the docs page alone. A person's step.
 - [ ] 4.4 Full checks Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

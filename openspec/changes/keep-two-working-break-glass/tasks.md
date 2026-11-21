@@ -26,4 +26,3 @@
 
 - [ ] 4.1 Add an e2e step with the real CLI over TLS in the existing file e2e/break_glass_test.go (extend it). It calls the route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate and the disable route with an access token of a site administrator. BLOCKED by passkey sign-in for local users, which is not on main. Check: The steps pass on sqlite and postgres: a refused disable, an atomic rotation, a refused restore and first setup with two accounts. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Ship the docs page and run its commands as written. Check: The docs test runs each command.
-- [ ] 4.3 Check the wiring, the route actions, the audit entries and the usability walk-through. Check: `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

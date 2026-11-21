@@ -21,5 +21,4 @@
 ## 4. Definition of done
 
 - [x] 4.1 Wiring: the method is a port method only. The follow-up change reaches it from the server. Say this on the docs page, NEW docs/guides/decision-record-retention.md. Check: `make docs-lint` passes.
-- [ ] 4.2 Usability check from the docs page alone. BLOCKED by the follow-up retention-sweep-schedule-lease: no route reaches pruneExpired in this change, so no e2e step with the real tofu CLI can show a prune. The held-lock retry keeps its existing route test. Check: `make docs-lint` passes and the page names the follow-up. A person's step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

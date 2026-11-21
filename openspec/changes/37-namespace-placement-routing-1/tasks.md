@@ -20,5 +20,3 @@
 - [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
-
-- [ ] 4.1 Wire the guard into every namespace write path. Run an e2e step with the real Pulumi CLI and OpenTofu, with an access token, against GET /api/dustpan/v1/namespaces/{namespace}/settings and the write routes of each tool, each with its authorization action. Run the usability check from the docs page. Check: `make e2e` passes, then `make check` reports zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

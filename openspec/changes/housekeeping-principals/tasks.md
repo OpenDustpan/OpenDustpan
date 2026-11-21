@@ -22,5 +22,4 @@ Order: this part (part 3) starts after `housekeeping-principals-install` and `ho
 
 - [ ] 3.1 E2e: use an administrator access token. List the principals with the existing `GET /api/server/principals?kind=service&source=builtin`, read the grants with the existing `GET /api/server/principals/{principal}/grants`, revoke with the existing `/api/server/principals/{principal}/grants/{id}` route, and see the denial of the next run, in `e2e/principals_test.go`. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.2 Add the new file `docs/explanation/housekeeping-principals.md`: each housekeeping principal, its purpose, its role and its schedule, and how to revoke and grant again. Check: `make docs-lint` passes, and a test runs each command of the page.
-- [ ] 3.3 Usability check: the operator finds who ran each sweep from the docs page alone. Check: the check is recorded in the pull request. A person's step.
 - [ ] 3.4 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
