@@ -3040,7 +3040,6 @@ decisions:
   scope:
   - "CLAUDE.md"
   - "GLOSSARY.md"
-  - "clients/typescript/src"
   - "docs/guides/connect-github.md"
   - "docs/guides/oidc-issuer.md"
   - "docs/guides/several-instances.md"
@@ -4284,7 +4283,6 @@ decisions:
   decision: "1. **The generated files have no line that every change of the description must edit (owner, 2026-11-15).** The generator writes the embedded description as many lines, or as a separate file that the package reads. The digest and the client version are not in a committed file. The publish step writes them. The design check of the digest and of the transport rule (the default transport uses the global `fetch` and `JSON` only) is part of the change.\n2. **The repository has a `.gitattributes` file (owner, 2026-11-15).** It marks the generated paths `linguist-generated=true`, so that the review diff hides them. It sets no merge driver, because a merge driver is in the Git configuration of a machine and a server-side merge does not run it.\n3. **The resolve run of the bot is not canceled by a newer push to `main` (owner, 2026-11-15).** The run uses the newest `main` and a newer push starts one more run after it. The bot never leaves a pull request that it found with no run.\n4. **The definition of done does not change (owner, 2026-11-15).** A pull request commits its generated files, and `make check` passes on each pull request. ADR 275 decision 2 and ADR 323 decision 3 hold. A conflict in a generated file is still resolved by a new run of its generator.\n5. **A tooling change has no OpenSpec change (owner, 2026-11-15).** The lanes start from this ADR and RFC 131.\n\nLater changes, from the status line of ADR 383: Decided by the project owner, who accepted the first and the third point of the proposal of RFC 131 (\"both\") on 15 November 2026."
   reason: "RFC 131 found that `clients/typescript/src/description.ts` holds the whole API description as one string on one line, and that `metadata.ts` holds the digest of that string. Git merges by line, so two pull requests that change the description always conflict in these two files. The bot of the repository (`auto-regen-resolve.yml`) resolves such a conflict, but a newer push to `main` cancels its run, so a busy period starves it. A resolve run for one pull request needed three starts and about 10 minutes."
   scope:
-  - "clients/typescript/src/description.ts"
   - "internal/clientgen/typescript"
   - "scripts/auto-regen.sh"
   currency: "active"
