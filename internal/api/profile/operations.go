@@ -53,6 +53,16 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithQuery(showSecretsQuery).
 		WithBodies(apidesc.NoBody, apidesc.Typed[revisionEntry]("ProfileRevision", profileNames...)),
+	apidesc.Pattern(http.MethodPost, openPath): apidesc.Name("openProfile", tagProfiles).
+		WithStatus(http.StatusCreated).
+		On(apidesc.KindNamespace).
+		WithBodies(apidesc.Typed[openBody]("OpenProfileRequest"), apidesc.Typed[openResponse]("OpenProfileResponse")),
+	apidesc.Pattern(http.MethodGet, sessionPath): apidesc.Name("readProfileSession", tagProfiles).
+		On(apidesc.KindNamespace).
+		WithQuery(
+			apidesc.StringParam("path", "Reads only this path of the open session."),
+		).
+		WithBodies(apidesc.NoBody, apidesc.Typed[sessionResponse]("ReadProfileSessionResponse", openProfileNames...)),
 }
 
 // showSecretsQuery is the query parameter of a read of a profile that shows
@@ -62,6 +72,15 @@ var operationLabels = map[string]apidesc.Label{
 var showSecretsQuery = apidesc.BooleanParam(
 	"showSecrets", "Shows the values of the secrets. The caller needs the permission to reveal them.",
 )
+
+// openProfileNames declares the JSON forms inside the open bodies: a session
+// value holds any JSON value.
+//
+//nolint:gochecknoglobals // Fixed values; Go has no constant slices.
+var openProfileNames = []apidesc.Declaration{
+	apidesc.Named[sessionValue]("ProfileSessionValue"),
+	apidesc.Declare[jsonValue](map[string]any{"description": "Any JSON value."}),
+}
 
 // queryOf returns the query of a request, as the label of its route allows
 // the handler to read it.

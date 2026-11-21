@@ -52,12 +52,15 @@ const (
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
+	pgColOwnerKind   = "owner_kind"
+	pgColOwnerID     = "owner_id"
 	pgColReason      = "reason"
 	pgColSeq         = "seq"
 	pgColBlobKey     = "blob_key"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
+	pgColSealed      = "sealed"
 	pgColWrapperID   = "wrapper_id"
 	pgColScopeID     = "scope_id"
 	pgColStartedAtMs = "started_at_ms"
@@ -599,6 +602,11 @@ func pgEmptiedTables() []pgCopyTable {
 			orderBy: []string{"digest"},
 		},
 		{
+			table:   backup.TableProfileOpenSessions,
+			columns: pgProfileOpenSessionColumns(),
+			orderBy: []string{"namespace_id", "id"},
+		},
+		{
 			table: backup.TableUnitState,
 			columns: []string{
 				pgColUnitID, pgColNamespaceID, "version_id", "final_version_id", "final_commit", "final_job",
@@ -606,6 +614,15 @@ func pgEmptiedTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColUnitID},
 		},
+	}
+}
+
+// pgProfileOpenSessionColumns lists the COPY columns of the table of open
+// profile sessions.
+func pgProfileOpenSessionColumns() []string {
+	return []string{
+		pgColNamespaceID, "id", "root_profile_id", pgColOwnerKind, pgColOwnerID, "consumer", "paths",
+		pgColSealed, pgColCreatedAtMs, pgColExpiresAtMs,
 	}
 }
 

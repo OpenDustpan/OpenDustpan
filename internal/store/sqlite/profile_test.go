@@ -22,3 +22,20 @@ func TestProfileConformance(t *testing.T) {
 		}
 	})
 }
+
+func TestProfileSessionsConformance(t *testing.T) {
+	t.Parallel()
+
+	profiletest.RunSessions(t, func(t *testing.T) profiletest.SessionStore {
+		t.Helper()
+
+		s := open(t)
+
+		wrapper := idempotencytest.TestWrapper(t, 1)
+
+		return profiletest.SessionStore{
+			Profiles: s.Profiles(), Sessions: s.Sessions(), Namespaces: s, Audit: s,
+			Records: s.Idempotency(wrapper),
+		}
+	})
+}

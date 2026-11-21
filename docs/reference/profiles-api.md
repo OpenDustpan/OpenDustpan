@@ -2,7 +2,8 @@
 
 A profile is a named set of config values and secrets in one namespace. This
 page describes the routes that create, read, list, change and delete
-profiles. No tool reads a profile through these routes
+profiles, and the routes that open a profile and read the open session. No
+tool reads a profile through these routes
 yet. A client that manages profiles, for example a script or the console,
 uses this API.
 
@@ -20,6 +21,8 @@ relative to `/api/dustpan/v1/namespaces/{namespace}`.
 | `GET /profiles/{profile}/revisions` | `profile:read` | One page of the revisions, newest first |
 | `POST /profiles/{profile}/revisions` | `profile:write` | The profile, with the new revision |
 | `GET /profiles/{profile}/revisions/{revision}` | `profile:read` | The document and the entries of one revision. `revision` is a number or `latest`. |
+| `POST /profiles/{profile}/open` | `profile:open` | The session ID and its end. Never a value |
+| `GET /profile-sessions/{session}` | `profile:open` | The values of the session, with the secrets |
 
 A write or a delete does not need `profile:read`. A caller with only
 `profile:write` can save a revision, and a caller with only `profile:manage`
@@ -164,6 +167,65 @@ audit entry.
   that lacks `profile:open` answers 403, and the server writes an audit
   entry of the kind `reveal` with the outcome `denied`.
 
+## Open a profile
+
+An open merges the profile with its imports, computes the `${ }` values and
+seals the result with a data key of the profile. The answer holds the session
+ID and its end, never a value. The session ID starts with `pos-`. `SERVER` is
+the public URL of the server, and `TOKEN` is a personal token of a person:
+
+```sh
+SERVER=https://dustpan.example
+TOKEN=<personal-token>
+
+curl -s -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+  -d '{"consumer":"api"}' \
+  "$SERVER/api/dustpan/v1/namespaces/acme/profiles/web/open"
+```
+
+The body has three fields:
+
+| Field | Meaning |
+| --- | --- |
+| `paths` | The joined paths to read, for example `["region", "db.password"]`. Empty means all paths. At most 1,024 paths. |
+| `consumer` | `api`, `console` or `pulumi`. Required. |
+| `duration` | The life of the session, for example `"90m"`. Empty means 2 hours. From 1 minute to 12 hours. |
+
+A later import wins over an earlier one: a map merges key by key, a list or
+a scalar replaces, and a `null` deletes. A value that is `$final` in an
+import cannot change: the open answers 422. An expression reads `values`
+only: any other name answers 422. A profile with a provider block answers
+422, because no provider runs yet.
+
+An open needs `profile:open` only, with no fresh sign-in. A personal token
+opens with no recent sign-in. A job token answers 403. This differs from the
+reveal, which needs a console session with a recent sign-in. An open writes
+one audit entry of the kind `access` with the consumer, the paths and the
+profiles that it read, and never a value. A denial writes one entry with the
+outcome `denied`.
+
+An open reads at most 64 revisions, follows imports at most 16 levels deep,
+and answers at most 4 MiB. An owner holds at most 100 live sessions.
+
+## Read an open session
+
+Only the principal that opened the session reads it. The answer maps each
+path to its value and its secret mark. A read writes no audit entry. `SESSION`
+is the session ID of the open:
+
+```sh
+curl -s -H "Authorization: token $TOKEN" \
+  "$SERVER/api/dustpan/v1/namespaces/acme/profile-sessions/$SESSION"
+```
+
+`?path=region` reads one path. An unknown path answers 404. The answer has
+`Cache-Control: no-store`, because it can hold secrets.
+
+A read checks `profile:open` again. After the grant ends, the read answers
+403 and deletes the session. A read by another principal answers 404: it never
+shows that the session exists. A session that ended answers 404. A forged ID
+answers 404.
+
 ## Routing changes
 
 A change of a provider block, a rotator block, `imports` or `exports`
@@ -199,8 +261,9 @@ revisions takes the same two values.
 ## The key for a safe retry
 
 Each write takes the header `Idempotency-Key`. The write routes are the
-create (`POST /profiles`), the save (`POST /profiles/{profile}/revisions`) and
-the delete (`DELETE /profiles/{profile}`). The header is optional. A client
+create (`POST /profiles`), the save (`POST /profiles/{profile}/revisions`),
+the delete (`DELETE /profiles/{profile}`) and the open
+(`POST /profiles/{profile}/open`). The header is optional. A client
 that retries a call that timed out sends the same key again, and the server
 does the write one time.
 
@@ -227,6 +290,10 @@ does the write one time.
   that succeeded. It does not keep an error answer, so a retry with the same
   key after the client fixes the cause does the write. The server never keeps
   400, 401, 403, 404, 409, 412, 422, 423, 429 or 5xx.
+- **The open keeps the session ID only.** The answer of an open can hold
+  secrets, so the server never keeps it. A replay of the key answers 409 with
+  the error code `request.idempotency-key-replayed-secret` and the session ID
+  in `objectID`. Read the session, or send a new key to open again.
 - **For how long.** 24 hours from the first request. A restore of a backup
   deletes all keys. A change of the key-encryption key, or the loss of it,
   deletes all keys too: the server cannot open the key of its hashes, so it
@@ -249,10 +316,12 @@ errors, `errorCode`.
 | 400 | A bad name, document, body or query value |
 | 401 | No valid token |
 | 403 | The caller lacks the action (`access.denied`). The IP allowlist refuses the address (`access.ip-not-allowed`). A session check fails (`session.csrf`, `session.other-site`). A routing change lacks `profile:open` (`profile.routing-change-needs-open`). A console session has an old sign-in (`mfa.fresh-step-required`) |
-| 404 | An unknown namespace, profile or revision |
-| 409 | A name in use, or a request with a key whose first request has not ended |
+| 404 | An unknown namespace, profile, revision or session |
+| 409 | A name in use, a request with a key whose first request has not ended, or a replay of an open key (`request.idempotency-key-replayed-secret`) |
 | 412 | `If-Match` does not match the newest revision |
 | 422 | A document above a limit, a `schemaVersion` above 1, or a key that a request with another body used |
+| 422 | An open that a provider block stops (`profile.provider`), a never-store path (`profile.never-store`), or a changed final value (`profile.final`) |
+| 422 | An open that reads outside `values` (`profile.reference`), an import cycle (`profile.import-cycle`), or a result above a limit (`profile.limit`) |
 | 428 | A write with no `If-Match` |
 
 ## Backups and deletes
@@ -260,3 +329,6 @@ errors, `errorCode`.
 The profiles and their revisions are part of each backup. A delete frees the
 name at once and hides the profile. The revisions stay in the database. No
 route restores or purges a deleted profile yet.
+
+Open sessions are part of no backup. A restore empties the table. The server
+deletes each ended session on a schedule.

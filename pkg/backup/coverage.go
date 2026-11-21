@@ -90,6 +90,7 @@ var EmptiedTables = []string{
 	TableJobTokens,
 	TableLocalUserResets,
 	TablePasskeyChallenges,
+	TableProfileOpenSessions,
 	TableUnitState,
 }
 

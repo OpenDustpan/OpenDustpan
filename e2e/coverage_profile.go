@@ -22,6 +22,8 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Sealer:     struct{ profile.Sealer }{nil},
 		Audit:      struct{ audit.Store }{nil},
 		Authorizer: coverageAuthorizer{},
+		Sessions:   struct{ profile.Sessions }{nil},
+		Evaluator:  struct{ profile.Evaluator }{nil},
 		Now:        nil,
 	})
 	if err != nil {

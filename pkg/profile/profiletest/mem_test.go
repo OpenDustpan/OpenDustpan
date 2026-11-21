@@ -47,6 +47,7 @@ type mem struct {
 	mu         sync.Mutex
 	namespaces map[namespace.Name]namespace.Namespace
 	profiles   map[profile.ID]*memProfile
+	sessions   map[string]profile.Session
 	entries    map[namespace.Name][]audit.Entry
 	// failAppend makes the audit port refuse an Append, for a test.
 	failAppend bool
@@ -58,6 +59,7 @@ func newMem() *mem {
 		mu:         sync.Mutex{},
 		namespaces: map[namespace.Name]namespace.Namespace{},
 		profiles:   map[profile.ID]*memProfile{},
+		sessions:   map[string]profile.Session{},
 		entries:    map[namespace.Name][]audit.Entry{},
 		failAppend: false,
 		records:    idempotencytest.NewMemory(),
@@ -97,6 +99,16 @@ func (memNamespaces) Ping(context.Context) error { return nil }
 
 // errAppend is what the audit port answers when failAppend is set.
 var errAppend = errors.New("audit store is down")
+
+// stubEvaluator refuses every expression. Tests of Open use the real
+// Evaluator of internal/expr instead.
+type stubEvaluator struct{}
+
+func (stubEvaluator) Eval(
+	_ context.Context, _ string, _ map[string]any,
+) (profile.Evaluation, error) {
+	return profile.Evaluation{}, profile.ErrReference
+}
 
 type memAudit struct{ m *mem }
 

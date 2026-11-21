@@ -987,6 +987,19 @@ type Profile struct {
 	DeletedAtMs int64
 }
 
+type ProfileOpenSession struct {
+	NamespaceID   string
+	ID            string
+	RootProfileID string
+	OwnerKind     string
+	OwnerID       string
+	Consumer      string
+	Paths         string
+	Sealed        []byte
+	CreatedAtMs   int64
+	ExpiresAtMs   int64
+}
+
 type ProfileRevision struct {
 	NamespaceID    string
 	ProfileID      string

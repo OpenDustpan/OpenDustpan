@@ -88,6 +88,7 @@ func newModuleServer(t *testing.T, extra ...dustpan.Option) *dustpan.Server {
 		dustpan.WithSavedViewStore(p.st.SavedViews()),
 		dustpan.WithSettings(p.st.SettingStore(), settingtest.Declarations(), nil),
 		dustpan.WithProfileStore(p.st.Profiles()),
+		dustpan.WithProfileSessions(p.st.Sessions()),
 		dustpan.WithIssuerStore(p.st.Issuer()),
 		dustpan.WithGitHostStore(p.st.GitHost()),
 		dustpan.WithRegistry(p.st.Registry(), p.st.RegistryKeys()),
