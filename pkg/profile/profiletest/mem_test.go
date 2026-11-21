@@ -29,6 +29,7 @@ func TestMemoryStore(t *testing.T) {
 
 		return profiletest.Store{
 			Profiles: m, Namespaces: memNamespaces{m: m}, Audit: memAudit{m: m}, Records: m.records,
+			Sessions: memSessions{m: m},
 		}
 	})
 }
@@ -51,6 +52,7 @@ type mem struct {
 	// failAppend makes the audit port refuse an Append, for a test.
 	failAppend bool
 	records    idempotency.Store
+	sessions   map[namespace.Name]map[string]*profile.Session
 }
 
 func newMem() *mem {
@@ -61,6 +63,7 @@ func newMem() *mem {
 		entries:    map[namespace.Name][]audit.Entry{},
 		failAppend: false,
 		records:    idempotencytest.NewMemory(),
+		sessions:   map[namespace.Name]map[string]*profile.Session{},
 	}
 }
 
@@ -377,7 +380,7 @@ func (m *mem) live(ns namespace.Name, id profile.ID) (*memProfile, error) {
 
 // finish stores the answer of the Completion that ctx carries, as the SQL
 // stores do in their transaction. It runs after every check of the write.
-func (m *mem) finish(ctx context.Context, w profile.Written) error {
+func (m *mem) finish(ctx context.Context, w any) error {
 	c, ok := idempotency.CompletionFrom(ctx)
 	if !ok {
 		return nil
@@ -386,4 +389,101 @@ func (m *mem) finish(ctx context.Context, w profile.Written) error {
 	return c.Finish(w, func(token string, a idempotency.Answer) error {
 		return m.records.Complete(ctx, c.Ref, token, a)
 	})
+}
+
+// memSessions is the reference store of open sessions on the maps of mem.
+type memSessions struct{ m *mem }
+
+func (s memSessions) Put(ctx context.Context, sess profile.Session, f namespace.Fence, es []audit.Entry) error {
+	s.m.mu.Lock()
+	defer s.m.mu.Unlock()
+
+	if sess.ID() == "" || sess.Namespace() != f.Namespace {
+		return fmt.Errorf("%w: a session belongs to the namespace of the fence", profile.ErrInvalid)
+	}
+
+	if err := s.m.begin(f, es); err != nil {
+		return err
+	}
+
+	if _, err := s.m.live(sess.Namespace(), sess.Root()); err != nil {
+		return err
+	}
+
+	if _, used := s.m.sessions[sess.Namespace()][sess.ID()]; used {
+		return profile.ErrConflict
+	}
+
+	if err := s.m.finish(ctx, profile.SessionWritten{Session: sess}); err != nil {
+		return err
+	}
+
+	byID, ok := s.m.sessions[sess.Namespace()]
+	if !ok {
+		byID = map[string]*profile.Session{}
+		s.m.sessions[sess.Namespace()] = byID
+	}
+
+	byID[sess.ID()] = &sess
+	s.m.entries[f.Namespace] = append(s.m.entries[f.Namespace], es...)
+
+	return nil
+}
+
+func (s memSessions) Get(
+	_ context.Context, ns namespace.Name, id string, owner profile.SessionOwner, now time.Time,
+) (profile.Session, error) {
+	s.m.mu.Lock()
+	defer s.m.mu.Unlock()
+
+	sess, ok := s.m.sessions[ns][id]
+	if !ok || sess.Owner() != owner || !sess.Live(now) {
+		return profile.Session{}, profile.ErrNotFound
+	}
+
+	return *sess, nil
+}
+
+func (s memSessions) Delete(
+	_ context.Context, id string, owner profile.SessionOwner, f namespace.Fence, es []audit.Entry,
+) error {
+	s.m.mu.Lock()
+	defer s.m.mu.Unlock()
+
+	if err := s.m.begin(f, es); err != nil {
+		return err
+	}
+
+	sess, ok := s.m.sessions[f.Namespace][id]
+	if !ok || sess.Owner() != owner {
+		return profile.ErrNotFound
+	}
+
+	delete(s.m.sessions[f.Namespace], id)
+	s.m.entries[f.Namespace] = append(s.m.entries[f.Namespace], es...)
+
+	return nil
+}
+
+func (s memSessions) Sweep(_ context.Context, now time.Time, limit int) (int, error) {
+	if limit < 1 {
+		return 0, profile.ErrInvalid
+	}
+
+	s.m.mu.Lock()
+	defer s.m.mu.Unlock()
+
+	n := 0
+
+	for ns, byID := range s.m.sessions {
+		for id, sess := range byID {
+			if n < limit && !sess.Live(now) {
+				delete(s.m.sessions[ns], id)
+
+				n++
+			}
+		}
+	}
+
+	return n, nil
 }

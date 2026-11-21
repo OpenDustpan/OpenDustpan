@@ -428,6 +428,16 @@ func (p *Profiles) inAuditedTx(
 	ctx context.Context, fence namespace.Fence, es []audit.Entry, written *profile.Written,
 	fn func(q *db.Queries) error,
 ) error {
+	return p.store.inAuditedWrite(ctx, fence, es, func() any { return *written }, fn)
+}
+
+// inAuditedWrite runs fn and appends each entry of es in the same fenced
+// transaction of the store. It checks every entry before the transaction starts.
+// When ctx carries an idempotency.Completion, the transaction also stores its
+// answer for the value that result returns after fn.
+func (s *Store) inAuditedWrite(
+	ctx context.Context, fence namespace.Fence, es []audit.Entry, result func() any, fn func(q *db.Queries) error,
+) error {
 	if len(es) == 0 {
 		return fmt.Errorf("%w: a write needs at least one audit entry", profile.ErrInvalid)
 	}
@@ -446,7 +456,7 @@ func (p *Profiles) inAuditedTx(
 	// The store appends the last entry after fn, so fn appends the others.
 	last := es[len(es)-1]
 
-	return p.store.inFencedAuditedTx(ctx, fence, &last, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &last, func(q *db.Queries) error {
 		if err := fn(q); err != nil {
 			return err
 		}
@@ -457,6 +467,6 @@ func (p *Profiles) inAuditedTx(
 			}
 		}
 
-		return finishCompletion(ctx, q, *written)
+		return finishCompletion(ctx, q, result())
 	})
 }

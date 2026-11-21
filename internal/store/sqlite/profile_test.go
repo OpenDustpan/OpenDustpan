@@ -19,6 +19,7 @@ func TestProfileConformance(t *testing.T) {
 
 		return profiletest.Store{
 			Profiles: s.Profiles(), Namespaces: s, Audit: s, Records: s.Idempotency(wrapper),
+			Sessions: s.ProfileSessions(),
 		}
 	})
 }
