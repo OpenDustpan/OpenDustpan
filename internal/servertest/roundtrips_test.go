@@ -916,10 +916,13 @@ func requestFlows() []requestFlow {
 			h.measure(h.lock)
 			h.unlock()
 		}},
-		// The budget is 48. The cancel reads the job and its pool, ends the
+		// The budget is 49. The cancel reads the job and its pool, ends the
 		// durable operation of the job, writes the job row and its audit entry
-		// in one transaction, and reads the pool again for the answer.
-		{"job cancel", 48, func(h *rtHarness) {
+		// in one transaction, and reads the pool again for the answer. The write
+		// of a job row that moves the job to a terminal state also reads the
+		// accepted claims of the job, 1 round trip, to end them in the same
+		// transaction.
+		{"job cancel", 49, func(h *rtHarness) {
 			jobID := h.startPlanJob()
 			h.measure(func() {
 				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
