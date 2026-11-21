@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-20. Decided by the project owner (owner, 2026-11-20). The owner chose ADR 362 decision 1. The name match of ADR 273 decision 3 ends
 
+Changed by:
+
+- ADR 393 supersedes decisions 1 and 3: for output sharing, a rule stores a reader identity. It stores no consumer unit or collection of another namespace. It answers the open item of ADR 391 on how a save learns the stable ID. The request of a linked unit carries it.
+
 Changes:
 
 - Changes ADR 273 decision 3: a stored reference to a consumer unit or collection of another namespace is its stable ID, never its name. A name match is not a stored reference.
