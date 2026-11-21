@@ -1,7 +1,7 @@
 # sdk Specification
 
 ## Purpose
-The SDK lets a Go developer open a built-in store and wire it into a new server binary. It covers OpenStore, WithBuiltinStore, WithSQLite, and WithPostgreSQL. Store adapters and ports stay under their own packages; the SDK only exposes the constructors and options that the conformance suites pin.
+The SDK lets a Go developer open a built-in store and wire it into a new server binary. It covers OpenStore, WithBuiltinStore, WithSQLite, and WithPostgreSQL. Store adapters and ports stay under their own packages. The SDK only exposes the constructors and options that the conformance suites pin.
 
 ## Requirements
 
