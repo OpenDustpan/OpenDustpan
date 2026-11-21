@@ -1,7 +1,7 @@
 # runner-pool-routes Specification
 
 ## Purpose
-Runner pool routes let a namespace administrator create, list, read, update, and delete runner pools, and manage their join tokens, draining, and retirement. Each route checks the namespace fence and the runner management actions. The routes do not run jobs and do not hand out work; claims and job tokens belong to the runner protocol.
+Runner pool routes let a namespace administrator create, list, read, update, and delete runner pools, and manage their join tokens, draining, and retirement. Each route checks the namespace fence and the runner management actions. The routes do not run jobs and do not hand out work. Claims and job tokens belong to the runner protocol.
 
 ## Requirements
 
@@ -63,7 +63,7 @@ When a principal with namespace:manage-runners drains or retires a runner, the s
 
 ### Requirement: Create join token
 
-When a principal with namespace:manage-runners creates a join token, the server SHALL return the secret once at create and never on a later read or list.
+When a principal with namespace:manage-runners creates a join token, the server SHALL return the secret once at create. A later read or list SHALL never show the secret.
 
 #### Scenario: Create join token
 - **WHEN** a principal creates a join token
