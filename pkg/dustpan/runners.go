@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // RunnerStores are the ports of runner pools, runners, join tokens and job
@@ -98,6 +99,45 @@ func claimGates(cfg *settings, gates stateWriteGates) (claimGuard, error) {
 	return claimGuard{gates: jobGates{snapshots: store, members: newInventoryFacts(cfg)}, offReason: ""}, nil
 }
 
+// newClaimRegistry builds the registry of apply claims over the workspace
+// store, the state store and the claim store. A store that WithWorkspaceStore
+// sets and that does not implement workspace.ClaimStore gets no claim routes;
+// a built-in store always keeps claims.
+func newClaimRegistry(cfg *settings, svc services, store workspace.ClaimStore) (*workspace.ClaimRegistry, error) {
+	var manual workspace.ManualLocks
+	if svc.manualLocks != nil {
+		manual = svc.manualLocks
+	}
+
+	registry, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
+		Workspaces: cfg.workspaceStore,
+		Versions:   cfg.stateStore,
+		Deleted:    nil,
+		Manual:     manual,
+		Store:      store,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim registry: %w", err)
+	}
+
+	return registry, nil
+}
+
+// newClaims builds the claim registry. The claim routes need a workspace
+// store that keeps claims and a state store. Without them it returns a nil
+// registry, and both claim paths answer 404 from the mux.
+func newClaims(cfg *settings, svc services) (*workspace.ClaimRegistry, error) {
+	var none *workspace.ClaimRegistry
+
+	store, ok := cfg.workspaceStore.(workspace.ClaimStore)
+	if !ok || cfg.stateStore == nil {
+		return none, nil
+	}
+
+	return newClaimRegistry(cfg, svc, store)
+}
+
 // WithJobRecorder sets the recorder that the steps and the log chunks of a
 // launcher call. It replaces the recorder that the server builds itself
 // (see newDurableRecorder). The session exchange also needs WithJobStore.
@@ -131,6 +171,11 @@ func newRunnerHandler(
 
 	// The claimer gets the guard of the rule of the state.write gates, the
 	// rule of the tool adapters.
+	claims, err := newClaims(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
 	var claimer job.Claimer
 
 	if cfg.jobClaimer != nil {
@@ -139,7 +184,7 @@ func newRunnerHandler(
 			return nil, claimErr
 		}
 
-		claimer = cfg.jobClaimer(guard)
+		claimer = newClaimReleasingClaimer(cfg, claims, cfg.jobClaimer(guard))
 	}
 
 	deps, err := sessionDepsOf(cfg, svc)
@@ -156,10 +201,7 @@ func newRunnerHandler(
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
 		Plans: deps.plans.plans, Artifacts: deps.plans.artifacts, OnHandoffRefusalSuppressed: nil,
 		JobTokens: deps.issuer.tokens, Starters: deps.issuer.starters, Proxies: proxies,
-		// No claim routes on the server until a store adapter persists the apply
-		// claims: the registry holds them in memory only, so a restart would
-		// forget accepted claims and accept an overlapping claim.
-		Claims: nil,
+		Claims: claims,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)

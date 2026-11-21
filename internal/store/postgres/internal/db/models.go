@@ -1578,6 +1578,27 @@ type WorkspaceBlameItem struct {
 	ResourceCount  int64
 }
 
+type WorkspaceClaim struct {
+	ID          string
+	WorkspaceID string
+	Seq         int64
+	Base        string
+	Addresses   string
+	Principal   string
+	JobID       string
+	TriggerName string
+	State       string
+	StartedAtMs int64
+	EndedAtMs   int64
+}
+
+type WorkspaceClaimTouch struct {
+	WorkspaceID string
+	Seq         int64
+	VersionID   string
+	Addresses   string
+}
+
 type WorkspaceResourceChange struct {
 	WorkspaceID    string
 	StateVersionID string

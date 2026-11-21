@@ -3384,6 +3384,59 @@ WHERE id = sqlc.arg(id);
 -- period keeps.
 SELECT id FROM workspaces WHERE id = ? AND namespace = ?;
 
+-- name: DeleteWorkspaceClaimTouches :exec
+DELETE FROM workspace_claim_touches WHERE workspace_id = ?;
+
+-- name: DeleteWorkspaceClaims :exec
+DELETE FROM workspace_claims WHERE workspace_id = ?;
+
+-- name: EndWorkspaceClaimsByJob :execrows
+-- Ends each accepted claim of a job in the workspaces of one namespace.
+UPDATE workspace_claims
+SET state = 'ended', ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE job_id = sqlc.arg(job_id) AND state = 'accepted'
+  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = sqlc.arg(namespace));
+
+-- name: ExpireWorkspaceClaims :execrows
+-- Ends each accepted claim of one namespace that started before the cutoff.
+UPDATE workspace_claims
+SET state = 'ended', ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE state = 'accepted' AND started_at_ms < sqlc.arg(cutoff_ms)
+  AND workspace_id IN (SELECT id FROM workspaces WHERE namespace = sqlc.arg(namespace));
+
+-- name: InsertWorkspaceClaim :exec
+-- The sequence number is the next one of the workspace. The caller holds the
+-- claim lock of the workspace, and the unique key refuses a repeat.
+INSERT INTO workspace_claims (
+    id, workspace_id, seq, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(workspace_id),
+    (SELECT COALESCE(MAX(c.seq), 0) + 1 FROM workspace_claims AS c WHERE c.workspace_id = sqlc.arg(workspace_id)),
+    sqlc.arg(base), sqlc.arg(addresses), sqlc.arg(principal), sqlc.arg(job_id), sqlc.arg(trigger_name),
+    'accepted', sqlc.arg(started_at_ms), 0
+);
+
+-- name: InsertWorkspaceClaimTouch :exec
+INSERT INTO workspace_claim_touches (workspace_id, seq, version_id, addresses)
+VALUES (
+    sqlc.arg(workspace_id),
+    (SELECT COALESCE(MAX(t.seq), 0) + 1 FROM workspace_claim_touches AS t WHERE t.workspace_id = sqlc.arg(workspace_id)),
+    sqlc.arg(version_id), sqlc.arg(addresses)
+);
+
+-- name: ListWorkspaceClaimTouches :many
+SELECT version_id, addresses FROM workspace_claim_touches WHERE workspace_id = ? ORDER BY seq;
+
+-- name: ListWorkspaceClaims :many
+SELECT id, workspace_id, base, addresses, principal, job_id, trigger_name, state, started_at_ms, ended_at_ms
+FROM workspace_claims WHERE workspace_id = ? ORDER BY seq;
+
+-- name: LockWorkspaceForClaims :one
+-- The ID of a live workspace of a namespace. The write transaction of SQLite
+-- is the claim lock.
+SELECT id FROM workspaces WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
+
 -- name: AdvanceWorkspaceBlameCursor :execrows
 -- Moves the blame cursor of a workspace up to an ordinal. It changes nothing,
 -- and affects no row, when the cursor is already at or past the ordinal.

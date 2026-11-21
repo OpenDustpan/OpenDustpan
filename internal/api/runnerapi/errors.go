@@ -206,7 +206,8 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 		}, true
 	}
 
-	if errors.Is(err, errClaimTooLarge) {
+	if errors.Is(err, errClaimTooLarge) || errors.Is(err, workspace.ErrClaimTooLarge) ||
+		errors.Is(err, workspace.ErrClaimInvalid) {
 		return http.StatusUnprocessableEntity, protocol.Error{
 			Code: protocol.ErrorUnprocessable, Message: err.Error(), Supported: "",
 		}, true

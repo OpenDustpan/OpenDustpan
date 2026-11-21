@@ -22,6 +22,8 @@
 - [x] 2.1 Implement claim record, normalization and release in NEW file pkg/workspace/claim_register.go. Start only after ADR 368 and ADR 369 are on main. Check: go test ./pkg/workspace/...
 - [x] 2.2 Add concurrency test on each dialect, in NEW file pkg/workspace/claim_register_test.go. Check: Parallel registration test passes on SQLite and PostgreSQL.
 - [x] 2.3 Wire the two claim routes with actions in internal/api/runnerapi. Check: Route test shows POST and GET claims declare unit:claim-register and unit:read.
+- [x] 2.4 Add the claim store port (`workspace.ClaimStore`), its in-memory implementation and the SQLite and PostgreSQL adapters (tables `workspace_claims` and `workspace_claim_touches` in both baselines, queries in both `queries.sql`, purge and backup coverage). Check: `go test ./pkg/workspace -run TestMemoryClaimStoreConformance`, `go test ./internal/store/sqlite -run TestClaimStoreConformance` and `go test ./internal/store/postgres -run TestClaimStoreConformance` pass; `sqlc diff` is clean.
+- [x] 2.5 Wire the claim registry over the built-in store in `pkg/dustpan` and end the claims of a job when the job ends. Check: `go test ./pkg/dustpan -run TestClaimReleasingClaimer` passes, and the e2e step of 4.1 reaches the routes on a real server.
 
 ## 3. Side effects (computed from main)
 
@@ -29,7 +31,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 BLOCKED by the missing claims routes and the missing real OpenTofu e2e harness on main. E2e step in NEW file e2e/claims_disjoint_test.go against POST and GET /api/dustpan/v1/workspaces/{id}/claims with a runner job token credential. Check: e2e finds two claim records in state accepted and no additional version.
+- [x] 4.1 E2e step in NEW file e2e/claims_disjoint_test.go against POST and GET /runner/v1/workspaces/{id}/claims with the access token of the local wrapper (the harness issues no runner job token). Check: `go test -tags e2e ./e2e -run TestJobsAPI` passes on SQLite and PostgreSQL: two claim records in state accepted, an overlapping third claim refused with 409. The step does not count the state versions; the claims route has no path that writes one.
 - [x] 4.2 Write the docs page for claims in NEW file docs/guides/claims.md. Check: Docs page lists register and list calls with exact output. `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Agent pre-run (human run-through in person-steps (two-disjoint-claims 4.3)): Run usability check. Check: Developer completes the path from the docs page alone. Record the transcript in the pull request body.
 - [ ] 4.4 Run full check. Check: make check reports zero findings.

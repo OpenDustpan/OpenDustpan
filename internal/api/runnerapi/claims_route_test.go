@@ -297,7 +297,7 @@ func newClaimWorld(t *testing.T, authz identity.Authorizer) *claimWorld {
 		Versions:   versions,
 		Deleted:    deleted,
 		Manual:     nil,
-		OnAccept:   nil,
+		Store:      workspace.NewMemoryClaimStore(spaces),
 		Now:        func() time.Time { return now },
 	})
 	if err != nil {
@@ -748,8 +748,15 @@ func TestClaimRegisterOversizeRefused(t *testing.T) {
 			t.Fatalf("register too many addresses = %d %s, want 422", status, raw)
 		}
 
-		if refused := decodeClaimError(t, raw); refused.Code != "unprocessable" {
+		refused := decodeClaimError(t, raw)
+		if refused.Code != "unprocessable" {
 			t.Errorf("code = %q, want unprocessable", refused.Code)
+		}
+
+		// The handler guard words the refusal, so the registry guard alone
+		// would give another message.
+		if !strings.Contains(refused.Message, "the claim holds 10001 addresses, at most 10000") {
+			t.Errorf("message = %q, want the handler refusal that names the bound", refused.Message)
 		}
 	})
 
@@ -769,8 +776,13 @@ func TestClaimRegisterOversizeRefused(t *testing.T) {
 			t.Fatalf("register address too long = %d %s, want 422", status, raw)
 		}
 
-		if refused := decodeClaimError(t, raw); refused.Code != "unprocessable" {
+		refused := decodeClaimError(t, raw)
+		if refused.Code != "unprocessable" {
 			t.Errorf("code = %q, want unprocessable", refused.Code)
+		}
+
+		if !strings.Contains(refused.Message, "an address holds more than 1024 bytes") {
+			t.Errorf("message = %q, want the handler refusal that names the bound", refused.Message)
 		}
 	})
 }

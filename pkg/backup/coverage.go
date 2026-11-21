@@ -62,7 +62,8 @@ var ControlTables = []string{
 // a restore leaves empty: the replay records of the Idempotency-Key header and
 // the server key of their fingerprints, the heartbeats of the workers, the
 // reset codes and set-up codes of local users, the open passkey ceremonies,
-// the job tokens, the event receipts of the Git host and their counter, and the state version of each unit.
+// the job tokens, the event receipts of the Git host and their counter, the state version of each unit, and the apply
+// claims with their touches.
 // A reset code that a restore
 // brought back would set a password that an administrator gave out before
 // the time of the restore. A ceremony lives 300 seconds, and a restore that
@@ -91,6 +92,8 @@ var EmptiedTables = []string{
 	TableLocalUserResets,
 	TablePasskeyChallenges,
 	TableUnitState,
+	TableWorkspaceClaimTouches,
+	TableWorkspaceClaims,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

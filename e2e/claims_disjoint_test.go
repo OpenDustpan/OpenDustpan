@@ -47,24 +47,22 @@ type disjointWorkspaceDoc struct {
 	Data disjointWorkspaceData `json:"data"`
 }
 
-// TestDisjointClaimsAccepted runs the e2e step for two disjoint claims.
-//
-// BLOCKED: the claims routes are not wired into the production server
-// mux, and no real OpenTofu e2e harness issues runner job tokens for the
-// claims route yet. The skip stays until both land; the sequence below is
-// the step to enable then.
-func TestDisjointClaimsAccepted(t *testing.T) {
-	t.Parallel()
-
-	t.Skip("blocked: the claims routes are not on the production server and no e2e harness issues job tokens for them")
-
-	aDisjointClaimsAccepted(t.Context(), t, nil)
+// disjointStateVersionDoc is the part of a state version answer that the
+// step reads.
+type disjointStateVersionDoc struct {
+	Data disjointWorkspaceData `json:"data"`
 }
 
-// aDisjointClaimsAccepted proves that two runner jobs with real OpenTofu
-// plan one workspace, register disjoint non-replace claims through the
-// claims route with their runner job token credential, and the list shows
-// two claim records in state accepted with no additional state version.
+// claimsRelease is the release that the claim calls send. The claim routes
+// check the Dustpan-Release header, as every runner protocol route does.
+const claimsRelease = "0.0.1"
+
+// aDisjointClaimsAccepted proves that two disjoint apply claims on one
+// workspace are both accepted through the claim route, that the list shows
+// two claim records in state accepted, that an overlapping third claim is
+// refused with 409 and no record, and that the claims add no state version.
+// The calls use the access token of the harness, the credential of the local
+// wrapper: it registers with no job ID and acts as the person who signed in.
 func aDisjointClaimsAccepted(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -95,32 +93,89 @@ func aDisjointClaimsAccepted(ctx context.Context, t *testing.T, env *e2e.Env) {
 		},
 	})
 
-	// Runner job tokens come from the credentials path of a real runner
-	// job. The harness for that path is missing, so the tokens below are
-	// empty until it lands.
-	tokenA, tokenB := "", ""
+	base := disjointBase(ctx, t, env, &wsID)
+	path := func() string { return "/runner/v1/workspaces/" + wsID + "/claims" }
+	headers := map[string]string{"Dustpan-Release": claimsRelease, "Content-Type": "application/json"}
 
-	for name, pair := range map[string][2]string{
-		"first":  {tokenA, "aws_instance.a"},
-		"second": {tokenB, "aws_instance.b"},
-	} {
-		token, address := pair[0], pair[1]
+	register := func(name string, addresses []string, want int, check func(string) error) {
+		env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+			UserAgent: claimsAgent, Name: "disjoint claims: " + name, Method: http.MethodPost, Path: path(),
+			Body: `{"base":` + fmt.Sprintf("%q", *base) + `,"addresses":` + addressesJSON(addresses) + `}`,
+			Want: want, Scheme: "token", Check: check,
+		}, headers)
+	}
+
+	register("register the first claim", []string{"aws_instance.a"}, http.StatusCreated, nil)
+	register("register the second claim", []string{"aws_instance.b"}, http.StatusCreated, nil)
+	register(
+		"refuse an overlapping claim",
+		[]string{"aws_instance.a", "aws_instance.c"},
+		http.StatusConflict,
+		func(body string) error {
+			if !strings.Contains(body, "claim-overlap") {
+				return fmt.Errorf("%w: the refusal names no claim-overlap code: %s", errDisjointClaims, body)
+			}
+
+			return nil
+		},
+	)
+
+	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: claimsAgent, Name: "disjoint claims: list both claims", Method: http.MethodGet, Path: path(),
+		Body: "", Want: http.StatusOK, Scheme: "token", Check: checkDisjointList,
+	}, headers)
+}
+
+// addressesJSON returns the JSON array of the addresses.
+func addressesJSON(addresses []string) string {
+	raw, err := json.Marshal(addresses)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(raw)
+}
+
+// disjointBase locks the workspace, creates one state version on it as the
+// base of the claims, and unlocks it again. It returns a pointer to the base
+// ID that the create step fills in.
+func disjointBase(ctx context.Context, t *testing.T, env *e2e.Env, wsID *string) *string {
+	t.Helper()
+
+	base := new(string)
+	*base = "sv-missing"
+
+	lock := func(action string) {
 		env.APIStepA(ctx, t, e2e.APIStepSpec{
-			UserAgent: claimsAgent, Name: "disjoint claims: register the " + name + " claim",
-			Method: http.MethodPost, Path: "/runner/v1/workspaces/" + wsID + "/claims",
-			Body: `{"base":"sv-base","addresses":[` + fmt.Sprintf("%q", address) + `],"jobID":` +
-				fmt.Sprintf("%q", name) + `}`,
-			Want: http.StatusCreated, Scheme: "",
-			Check: bearerCheck(token),
+			UserAgent: claimsAgent, Name: "disjoint claims: " + action + " the workspace", Method: http.MethodPost,
+			Path: "/api/v2/workspaces/" + *wsID + "/actions/" + action,
+			Body: `{"data":{}}`, Want: http.StatusOK, Scheme: "", Check: nil,
 		})
 	}
 
+	lock("lock")
+
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: claimsAgent, Name: "disjoint claims: list both claims", Method: http.MethodGet,
-		Path: "/runner/v1/workspaces/" + wsID + "/claims",
-		Body: "", Want: http.StatusOK, Scheme: "",
-		Check: checkDisjointList,
+		UserAgent: claimsAgent, Name: "disjoint claims: create the base state version", Method: http.MethodPost,
+		Path: "/api/v2/workspaces/" + *wsID + "/state-versions",
+		Body: `{"data":{"type":"state-versions","attributes":{"serial":1,"lineage":"claims-lineage",` +
+			`"md5":"d41d8cd98f00b204e9800998ecf8427e"}}}`,
+		Want: http.StatusCreated, Scheme: "",
+		Check: func(body string) error {
+			var doc disjointStateVersionDoc
+			if err := json.Unmarshal([]byte(body), &doc); err != nil {
+				return fmt.Errorf("%w: decode state version: %w", errDisjointClaims, err)
+			}
+
+			*base = doc.Data.ID
+
+			return nil
+		},
 	})
+
+	lock("unlock")
+
+	return base
 }
 
 // checkDisjointList proves that the list holds two accepted claims with
@@ -147,12 +202,5 @@ func checkDisjointList(body string) error {
 		return fmt.Errorf("%w: the list holds no disjoint address sets", errDisjointClaims)
 	}
 
-	return nil
-}
-
-// bearerCheck returns a check placeholder for a bearer credential. The
-// harness sends its own Authorization header; until the job token harness
-// lands, the token is empty and the step above stays skipped.
-func bearerCheck(_ string) func(body string) error {
 	return nil
 }

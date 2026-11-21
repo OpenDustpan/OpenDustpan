@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -47,10 +47,26 @@ var (
 	// ErrClaimBadBase reports a claim with an unknown base state version.
 	// The server answers 422.
 	ErrClaimBadBase = errors.New("unknown base state version")
+	// ErrClaimTooLarge reports a claim whose address set holds more than
+	// MaxClaimAddresses addresses, or an address longer than
+	// MaxClaimAddressLength bytes. The server answers 422 and stores no
+	// claim.
+	ErrClaimTooLarge = errors.New("claim address set is too large")
+	// ErrClaimInvalid reports a claim record that a store refuses: an empty
+	// ID, base or principal, an address set that is not normalized, or a
+	// state other than accepted at insert.
+	ErrClaimInvalid = errors.New("claim record is not valid")
 	// ErrClaimEnded reports a use of a claim that already ended. The server
 	// refuses the request.
 	ErrClaimEnded = errors.New("claim already ended")
 )
+
+// MaxClaimAddresses bounds the address set of one claim. The registry, the
+// stores and the HTTP handler each check the bound alone.
+const MaxClaimAddresses = 10_000
+
+// MaxClaimAddressLength bounds one address of a claim, in bytes.
+const MaxClaimAddressLength = 1_024
 
 // ClaimIDPrefix prefixes the stable ID of each apply claim.
 const ClaimIDPrefix = "clm-"
@@ -174,10 +190,14 @@ type RegisterClaimRequest struct {
 	JobID string
 	// Trigger names what started the job, or empty.
 	Trigger string
+	// Audit is the audit entry of the accept. The registry sets its time, its
+	// object ID and its job ID. The store appends it in the transaction that
+	// stores the claim: an invalid entry stores no claim.
+	Audit audit.Entry
 }
 
 // ClaimRegistryConfig holds the dependencies of a ClaimRegistry. Every
-// port but Deleted, Manual and OnAccept is required.
+// port but Deleted and Manual is required.
 type ClaimRegistryConfig struct {
 	// Workspaces reads the workspace of a claim.
 	Workspaces ClaimWorkspaces
@@ -189,65 +209,36 @@ type ClaimRegistryConfig struct {
 	// Manual refuses a claim on a workspace that a manual lock covers.
 	// Nil turns the check off.
 	Manual ManualLocks
-	// OnAccept runs after the registry stores an accepted claim. An error
-	// rolls the store back, so no claim goes without its audit entry. Nil
-	// records nothing.
-	OnAccept func(ctx context.Context, c Claim) error
+	// Store persists the claims. It is required: the registry has no
+	// default store, so a server never holds claims in memory by accident.
+	Store ClaimStore
 	// Now is the clock. Nil means the real time.
 	Now func() time.Time
 }
 
-// ClaimRegistry stores apply claims and checks each registration against
-// the accepted claims of the workspace in one critical section, so two
-// registrations that race cannot both pass over the same accepted set.
-// The mutex serializes registrations: the registry answers under
-// contention, and a parallel registration test proves that two disjoint
-// registrations both land and that an overlap loses.
-//
-// A SQL adapter will hold the workspace row lock and write the claim in
-// the same transaction; this registry is the domain behavior that the
-// adapter will persist.
+// ClaimRegistry checks each registration against the accepted claims of the
+// workspace inside one ClaimStore transaction that holds the claim lock of
+// the workspace, so two registrations that race cannot both pass over the
+// same accepted set. The domain rules live here; the store only persists.
 type ClaimRegistry struct {
 	now        func() time.Time
 	workspaces ClaimWorkspaces
 	versions   ClaimVersions
 	deleted    ClaimDeleted
 	manual     ManualLocks
-	onAccept   func(ctx context.Context, c Claim) error
-
-	mu sync.Mutex
-	// claimSet holds every stored claim by its ID. The field is
-	// unexported: callers list claims through List, never by reaching
-	// into the set.
-	claimSet map[string]*Claim
-	// order holds the claim IDs of each workspace in accept order, so
-	// List reads oldest first.
-	order map[ID][]string
-	// touches holds the committed versions of each workspace after the
-	// registry started, oldest first. NoteCommitted records them; the
-	// touched-base check reads them. Versions committed outside the
-	// registry are unknown to it, and the merge check of the commit path
-	// refuses those instead.
-	touches map[ID][]versionTouch
-	// fences holds the failover version first seen for each namespace. A
-	// fence with another version is stale, as in the fenced stores.
-	fences map[namespace.Name]int64
-}
-
-// versionTouch is one committed version with the addresses it touched.
-type versionTouch struct {
-	id        StateVersionID
-	addresses []string
+	store      ClaimStore
 }
 
 // NewClaimRegistry returns a ClaimRegistry. It returns an error that
-// matches ErrMissingDependency when Workspaces or Versions is nil.
+// matches ErrMissingDependency when Workspaces, Versions or Store is nil.
 func NewClaimRegistry(cfg ClaimRegistryConfig) (*ClaimRegistry, error) {
 	switch {
 	case cfg.Workspaces == nil:
 		return nil, fmt.Errorf("%w: claim workspace store", ErrMissingDependency)
 	case cfg.Versions == nil:
 		return nil, fmt.Errorf("%w: claim version store", ErrMissingDependency)
+	case cfg.Store == nil:
+		return nil, fmt.Errorf("%w: claim store", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -261,12 +252,7 @@ func NewClaimRegistry(cfg ClaimRegistryConfig) (*ClaimRegistry, error) {
 		versions:   cfg.Versions,
 		deleted:    cfg.Deleted,
 		manual:     cfg.Manual,
-		onAccept:   cfg.OnAccept,
-		mu:         sync.Mutex{},
-		claimSet:   make(map[string]*Claim),
-		order:      make(map[ID][]string),
-		touches:    make(map[ID][]versionTouch),
-		fences:     make(map[namespace.Name]int64),
+		store:      cfg.Store,
 	}, nil
 }
 
@@ -299,52 +285,36 @@ func NormalizeClaimAddresses(addresses []string) []string {
 // OverlapError for a shared address, a TouchedBaseError for a base that
 // a later version touched, or namespace.ErrFenced for a stale fence.
 func (r *ClaimRegistry) Register(
-	ctx context.Context, req RegisterClaimRequest, fence namespace.Fence,
+	ctx context.Context, req *RegisterClaimRequest, fence namespace.Fence,
 ) (Claim, error) {
-	normalized := NormalizeClaimAddresses(req.Addresses)
-
-	if len(normalized) == 0 {
-		return Claim{}, ErrClaimEmptySet
-	}
-
-	if req.Replace {
-		return Claim{}, ErrClaimReplace
-	}
-
-	if err := ctx.Err(); err != nil {
-		return Claim{}, fmt.Errorf("register claim: %w", err)
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	w, err := r.checkRegistration(ctx, req, fence)
+	w, normalized, err := r.checkRequest(ctx, req, fence)
 	if err != nil {
 		return Claim{}, err
 	}
 
-	if err := r.checkBase(ctx, w, req.Base); err != nil {
+	var out Claim
+
+	err = r.store.WithClaims(ctx, w.ID, fence, func(tx ClaimTx) error {
+		claim, txErr := r.registerIn(ctx, tx, w, req, normalized)
+		out = claim
+
+		return txErr
+	})
+	if errors.Is(err, ErrNotFound) {
+		return Claim{}, fmt.Errorf("%w: %s: %w", ErrClaimNotFound, w.ID, err)
+	}
+
+	if err != nil {
 		return Claim{}, err
 	}
 
-	if stored, ok := r.findRetry(w.ID, req.JobID, req.Principal, req.Base, normalized); ok {
-		return stored, nil
-	}
-
-	if err := r.checkDisjoint(w.ID, normalized); err != nil {
-		return Claim{}, err
-	}
-
-	return r.store(ctx, w, req, normalized)
+	return out, nil
 }
 
 // Workspace returns the workspace with id, for route resolution. It
 // returns an error that matches ErrClaimNotFound for a missing workspace,
 // or ErrClaimDeleted for a soft-deleted one.
 func (r *ClaimRegistry) Workspace(ctx context.Context, id ID) (Workspace, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	w, err := r.workspaces.GetWorkspaceByID(ctx, id)
 	if err != nil {
 		return Workspace{}, r.missingWorkspace(ctx, id, err)
@@ -353,97 +323,131 @@ func (r *ClaimRegistry) Workspace(ctx context.Context, id ID) (Workspace, error)
 	return w, nil
 }
 
-// List returns the claims of the workspace in accept order, oldest first.
-// It returns no sentinel errors: a workspace without claims reads as an
-// empty list.
-func (r *ClaimRegistry) List(_ context.Context, workspace ID) []Claim {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	ids := r.order[workspace]
-	out := make([]Claim, 0, len(ids))
-
-	for _, id := range ids {
-		stored := r.claimSet[id]
-		if stored == nil {
-			continue
-		}
-
-		out = append(out, *stored)
+// List returns the claims of the workspace in accept order, oldest first. A
+// workspace without claims reads as an empty list. A store error fails the
+// call: a list never answers empty for a store that it could not read.
+func (r *ClaimRegistry) List(ctx context.Context, workspace ID) ([]Claim, error) {
+	claims, err := r.store.ListClaims(ctx, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("list claims: %w", err)
 	}
 
-	return out
+	return claims, nil
 }
 
 // ReleaseByJob marks each accepted claim of the job ended at the time now,
 // for the end of its job. It returns the count of claims it ended.
-func (r *ClaimRegistry) ReleaseByJob(_ context.Context, jobID string, now time.Time) int {
-	if jobID == "" {
-		return 0
+func (r *ClaimRegistry) ReleaseByJob(
+	ctx context.Context, fence namespace.Fence, jobID string, now time.Time,
+) (int, error) {
+	n, err := r.store.EndClaimsByJob(ctx, fence, jobID, now)
+	if err != nil {
+		return 0, fmt.Errorf("release claims of job %s: %w", jobID, err)
 	}
 
-	ended := now.UTC().Truncate(time.Millisecond)
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	count := 0
-
-	for _, claim := range r.claimSet {
-		if claim.JobID == jobID && claim.State == ClaimAccepted {
-			claim.State = ClaimEnded
-			claim.EndedAt = ended
-			count++
-		}
-	}
-
-	return count
+	return n, nil
 }
 
 // ExpireStale marks each accepted claim that started before the cutoff
-// ended, for lease expiry after a crash. It returns the count of claims
-// it ended.
-func (r *ClaimRegistry) ExpireStale(_ context.Context, cutoff time.Time) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	count := 0
-
-	for _, claim := range r.claimSet {
-		if claim.State == ClaimAccepted && claim.StartedAt.Before(cutoff) {
-			claim.State = ClaimEnded
-			claim.EndedAt = cutoff.UTC().Truncate(time.Millisecond)
-			count++
-		}
+// ended, for lease expiry after a crash. It returns the count of claims it
+// ended.
+func (r *ClaimRegistry) ExpireStale(
+	ctx context.Context, fence namespace.Fence, cutoff time.Time,
+) (int, error) {
+	n, err := r.store.ExpireClaims(ctx, fence, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("expire claims: %w", err)
 	}
 
-	return count
+	return n, nil
 }
 
 // NoteCommitted records that version id committed on the workspace with
 // the touched addresses, so later claims with an older base fail the
 // touched-base check. The merge path calls it in its commit transaction;
 // tests call it to stand in for a later version.
-func (r *ClaimRegistry) NoteCommitted(_ context.Context, workspace ID, id StateVersionID, addresses []string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.touches[workspace] = append(r.touches[workspace], versionTouch{
-		id:        id,
-		addresses: NormalizeClaimAddresses(addresses),
-	})
-}
-
-// checkRegistration checks the fence and the workspace of a register
-// call: the fence is current and names the namespace of the workspace,
-// the workspace exists and is live, and no lock covers it.
-func (r *ClaimRegistry) checkRegistration(
-	ctx context.Context, req RegisterClaimRequest, fence namespace.Fence,
-) (Workspace, error) {
-	if err := r.checkFence(fence); err != nil {
-		return Workspace{}, err
+func (r *ClaimRegistry) NoteCommitted(
+	ctx context.Context, fence namespace.Fence, workspace ID, id StateVersionID, addresses []string,
+) error {
+	if err := r.store.AddClaimTouch(ctx, fence, workspace, id, addresses); err != nil {
+		return fmt.Errorf("note committed version %s: %w", id, err)
 	}
 
+	return nil
+}
+
+// registerIn runs the claim rules inside the transaction tx: a retry of the
+// same job returns its claim, a set that shares an address with an accepted
+// claim or a touch is refused, and any other set is stored.
+func (r *ClaimRegistry) registerIn(
+	ctx context.Context, tx ClaimTx, w Workspace, req *RegisterClaimRequest, normalized []string,
+) (Claim, error) {
+	claims, err := tx.Claims(ctx)
+	if err != nil {
+		return Claim{}, fmt.Errorf("read claims: %w", err)
+	}
+
+	if stored, ok := findClaimRetry(claims, req.JobID, req.Principal, req.Base, normalized); ok {
+		return stored, nil
+	}
+
+	touches, err := tx.Touches(ctx)
+	if err != nil {
+		return Claim{}, fmt.Errorf("read touches: %w", err)
+	}
+
+	if disjointErr := checkClaimDisjoint(claims, touches, normalized); disjointErr != nil {
+		return Claim{}, disjointErr
+	}
+
+	return r.insert(ctx, tx, w, req, normalized)
+}
+
+// checkRequest checks a register request before the store transaction: the
+// set is not empty, holds no replace and stays in bounds, and the workspace
+// and the base are valid. It returns the normalized set.
+func (r *ClaimRegistry) checkRequest(
+	ctx context.Context, req *RegisterClaimRequest, fence namespace.Fence,
+) (Workspace, []string, error) {
+	normalized := NormalizeClaimAddresses(req.Addresses)
+
+	if len(normalized) == 0 {
+		return Workspace{}, nil, ErrClaimEmptySet
+	}
+
+	if req.Replace {
+		return Workspace{}, nil, ErrClaimReplace
+	}
+
+	// Defense in depth: the handler bounds the raw set too. This check stays
+	// so that a new caller of the registry cannot store a set that no store
+	// accepts, and the stores check the bound again.
+	if err := checkClaimBounds(normalized); err != nil {
+		return Workspace{}, nil, err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return Workspace{}, nil, fmt.Errorf("register claim: %w", err)
+	}
+
+	w, err := r.checkRegistration(ctx, req, fence)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+
+	if baseErr := r.checkBase(ctx, w, req.Base); baseErr != nil {
+		return Workspace{}, nil, baseErr
+	}
+
+	return w, normalized, nil
+}
+
+// checkRegistration checks the workspace of a register call: the fence
+// names the namespace of the workspace (the store checks the failover version),
+// the workspace exists and is live, and no lock covers it.
+func (r *ClaimRegistry) checkRegistration(
+	ctx context.Context, req *RegisterClaimRequest, fence namespace.Fence,
+) (Workspace, error) {
 	w, err := r.workspaces.GetWorkspaceByID(ctx, req.WorkspaceID)
 	if err != nil {
 		return Workspace{}, r.missingWorkspace(ctx, req.WorkspaceID, err)
@@ -492,18 +496,15 @@ func (r *ClaimRegistry) checkBase(ctx context.Context, w Workspace, base StateVe
 	return nil
 }
 
-// findRetry returns the stored claim when the same job sends the same base
-// and the same normalized set again: the retry is idempotent. The match
-// includes the principal, so the local wrapper, which registers with no
-// job ID, never gets the claim of another person.
-func (r *ClaimRegistry) findRetry(
-	workspaceID ID, jobID, principal string, base StateVersionID, normalized []string,
+// findClaimRetry returns the stored claim when the same job sends the same
+// base and the same normalized set again: the retry is idempotent. The match
+// includes the principal, so the local wrapper, which registers with no job
+// ID, never gets the claim of another person.
+func findClaimRetry(
+	claims []Claim, jobID, principal string, base StateVersionID, normalized []string,
 ) (Claim, bool) {
-	for _, id := range r.order[workspaceID] {
-		stored := r.claimSet[id]
-		if stored == nil {
-			continue
-		}
+	for i := range claims {
+		stored := &claims[i]
 
 		if stored.JobID == jobID && stored.Principal == principal && stored.Base == base &&
 			slices.Equal(stored.Addresses, normalized) {
@@ -516,37 +517,32 @@ func (r *ClaimRegistry) findRetry(
 	return missing, false
 }
 
-// checkDisjoint refuses a set that shares an address with an accepted
+// checkClaimDisjoint refuses a set that shares an address with an accepted
 // claim, or with a version committed after the base of the call.
-func (r *ClaimRegistry) checkDisjoint(workspaceID ID, normalized []string) error {
-	for _, id := range r.order[workspaceID] {
-		stored := r.claimSet[id]
-		if stored == nil {
+func checkClaimDisjoint(claims []Claim, touches []ClaimTouch, normalized []string) error {
+	for i := range claims {
+		if claims[i].State != ClaimAccepted {
 			continue
 		}
 
-		if stored.State != ClaimAccepted {
-			continue
-		}
-
-		if shared := firstShared(stored.Addresses, normalized); shared != "" {
-			return &OverlapError{Blocker: stored.ID}
+		if shared := firstShared(claims[i].Addresses, normalized); shared != "" {
+			return &OverlapError{Blocker: claims[i].ID}
 		}
 	}
 
-	for _, touch := range r.touches[workspaceID] {
-		if firstShared(touch.addresses, normalized) != "" {
-			return &TouchedBaseError{Version: touch.id}
+	for _, touch := range touches {
+		if firstShared(touch.Addresses, normalized) != "" {
+			return &TouchedBaseError{Version: touch.Version}
 		}
 	}
 
 	return nil
 }
 
-// store appends one accepted claim and runs the accept hook. A failing
-// hook rolls the store back, so no claim goes without its audit entry.
-func (r *ClaimRegistry) store(
-	ctx context.Context, w Workspace, req RegisterClaimRequest, normalized []string,
+// insert builds one accepted claim and stores it with its audit entry in the
+// transaction tx. A store error, an invalid entry included, stores no claim.
+func (r *ClaimRegistry) insert(
+	ctx context.Context, tx ClaimTx, w Workspace, req *RegisterClaimRequest, normalized []string,
 ) (Claim, error) {
 	now := r.now().UTC().Truncate(time.Millisecond)
 
@@ -563,42 +559,16 @@ func (r *ClaimRegistry) store(
 		EndedAt:     time.Time{},
 	}
 
-	r.claimSet[claim.ID] = &claim
-	r.order[w.ID] = append(r.order[w.ID], claim.ID)
+	entry := req.Audit
+	entry.At = now
+	entry.ObjectID = claim.ID
+	entry.JobID = claim.JobID
 
-	if r.onAccept != nil {
-		if hookErr := r.onAccept(ctx, claim); hookErr != nil {
-			delete(r.claimSet, claim.ID)
-			r.order[w.ID] = r.order[w.ID][:len(r.order[w.ID])-1]
-
-			return Claim{}, fmt.Errorf("record the accept of claim %s: %w", claim.ID, hookErr)
-		}
+	if err := tx.Insert(ctx, claim, entry); err != nil {
+		return Claim{}, fmt.Errorf("record the accept of claim %s: %w", claim.ID, err)
 	}
 
 	return claim, nil
-}
-
-// checkFence refuses a fence whose failover version differs from the one
-// first seen for its namespace, as the fenced stores do. The first fence
-// of a namespace sets the version.
-func (r *ClaimRegistry) checkFence(fence namespace.Fence) error {
-	seen, ok := r.fences[fence.Namespace]
-	if !ok {
-		r.fences[fence.Namespace] = fence.FailoverVersion
-
-		return nil
-	}
-
-	if fence.FailoverVersion != seen {
-		return fmt.Errorf(
-			"%w: fence carries failover version %d, want %d",
-			namespace.ErrFenced,
-			fence.FailoverVersion,
-			seen,
-		)
-	}
-
-	return nil
 }
 
 // missingWorkspace maps a workspace lookup failure to 404 or 410: a

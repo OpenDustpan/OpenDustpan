@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -157,7 +159,7 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 		return
 	}
 
-	claim, err := h.claims.Register(ctx, workspace.RegisterClaimRequest{
+	claim, err := h.claims.Register(ctx, &workspace.RegisterClaimRequest{
 		WorkspaceID: wsID,
 		Base:        workspace.StateVersionID(req.Base),
 		Addresses:   req.Addresses,
@@ -165,6 +167,7 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 		Principal:   principal.Subject,
 		JobID:       req.JobID,
 		Trigger:     req.Trigger,
+		Audit:       h.claimEntry(r, fence.Namespace, principal, unit),
 	}, fence)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -179,6 +182,11 @@ func (h *Handler) registerClaim(w http.ResponseWriter, r *http.Request, c *call)
 // field, an oversize set and an oversize address are refused before they
 // reach the registry, so a forged request cannot grow memory with one
 // call.
+//
+// Defense in depth: the registry and the stores check the same bounds. These
+// checks stay so that the handler refuses a hostile body with its own
+// message before it builds a request, and they do not rely on the other
+// layers.
 func decodeRegisterBody(raw []byte, req *claimRegisterRequest) error {
 	if err := decodeBody(raw, req); err != nil {
 		return err
@@ -238,7 +246,13 @@ func (h *Handler) listClaims(w http.ResponseWriter, r *http.Request, _ *call) {
 		return
 	}
 
-	claims := h.claims.List(ctx, wsID)
+	claims, err := h.claims.List(ctx, wsID)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	out := claimListResponse{Claims: make([]claimResponse, 0, len(claims))}
 
 	for i := range claims {
@@ -396,4 +410,19 @@ func newClaimResponse(claim workspace.Claim) claimResponse {
 	}
 
 	return out
+}
+
+// claimEntry returns the audit entry of an accepted claim: who registered it
+// and on which unit. The registry sets the time, the claim ID and the job ID.
+// The entry holds IDs and names, never a token.
+func (h *Handler) claimEntry(
+	r *http.Request, ns namespace.Name, principal identity.Principal, unit identity.Object,
+) audit.Entry {
+	e := h.entry(r, ns, principal.Subject, runner.AuditRule{
+		Action: identity.ActionUnitClaimRegister, Kind: audit.KindChange,
+	}, h.now())
+	e.Object = unit.String()
+	e.TokenID = principal.TokenID
+
+	return e
 }

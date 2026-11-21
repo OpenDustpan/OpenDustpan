@@ -91,6 +91,15 @@ const (
 	// The swap keeps the live rows, so the restore waits for the deleters.
 	TableBlobDeleteLeases = "blob_delete_leases"
 	TableUnitState        = "unit_state"
+	// TableWorkspaceClaimTouches holds the addresses that later versions
+	// touched, for the stale-base check of an apply claim. A restore leaves
+	// it empty: it describes the running installation.
+	TableWorkspaceClaimTouches = "workspace_claim_touches"
+	// TableWorkspaceClaims holds the apply claims of runner jobs. A claim is
+	// a lease of a job that runs now, so a backup leaves it out and a restore
+	// leaves it empty: a restored claim would block a workspace for a job
+	// that no longer runs.
+	TableWorkspaceClaims = "workspace_claims"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides
