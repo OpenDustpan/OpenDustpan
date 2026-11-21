@@ -223,7 +223,7 @@ func advanceQuote(quote byte, escaped bool, c byte) (byte, bool) {
 // limits and the syntax, as compile does. An unknown name fails with
 // profile.ErrReference, because the environment holds values only. Any other
 // failure fails with profile.ErrReference too: an expression that does not
-// compute never opens, per ADR 228. A tree above the node limit fails with
+// compute never opens. A tree above the node limit fails with
 // profile.ErrLimit.
 func compileValues(source string, env map[string]any, m *meter) (*vm.Program, error) {
 	options := []exprlang.Option{

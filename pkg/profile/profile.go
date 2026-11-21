@@ -5,9 +5,10 @@
 //
 // The package is tool-neutral. It imports no tool package, no transport and
 // no store adapter. This version holds the create, read, list, save and
-// delete of profiles, the document rules for entries, the sealing of secrets
-// and the rule for a routing change. The open of a profile, the provider
-// blocks, the drafts and the rotation are not in it.
+// delete of profiles, the document rules for entries, the sealing of secrets,
+// the rule for a routing change, the open of a profile and its sessions. The
+// provider blocks, the drafts and the rotation are not in it: an open refuses
+// a profile that holds a provider block.
 package profile
 
 import (

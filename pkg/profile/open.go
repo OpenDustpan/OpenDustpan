@@ -209,7 +209,7 @@ func (s *Service) ReadSession(
 		return SessionData{}, fmt.Errorf("read open session: %w", err)
 	}
 
-	return s.openSessionValues(ctx, a, ns, sess, paths)
+	return s.openSessionValues(ctx, ns, sess, paths)
 }
 
 // denySessionRead deletes the session after a refused read and answers the
@@ -250,7 +250,7 @@ func (s *Service) denySessionRead(ctx context.Context, a *Actor, ns namespace.Na
 
 // openSessionValues opens the sealed answer of sess and selects paths.
 func (s *Service) openSessionValues(
-	ctx context.Context, a *Actor, ns namespace.Name, sess Session, paths []string,
+	ctx context.Context, ns namespace.Name, sess Session, paths []string,
 ) (SessionData, error) {
 	sc, err := scopeOf(ns, sess.Root)
 	if err != nil {
@@ -266,8 +266,6 @@ func (s *Service) openSessionValues(
 	if err = json.Unmarshal(plain[0], &payload); err != nil {
 		return SessionData{}, fmt.Errorf("open session: stored answer is not valid: %w", ErrInvalid)
 	}
-
-	_ = a
 
 	out := SessionData{Values: map[string]any{}, Secrets: map[string]bool{}}
 
