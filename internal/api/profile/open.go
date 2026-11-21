@@ -165,7 +165,9 @@ func (h *Handler) readSession(
 	}
 
 	id := r.PathValue("session")
-	if !validOpenSessionID(id) {
+	// Defense in depth: the service and the store reject a bad session ID
+	// too; this check stays so that a forged ID never leaves the handler.
+	if _, idErr := profile.ParseSessionID(id); idErr != nil {
 		h.writeError(ctx, w, profileSessionNotFound(id))
 
 		return
@@ -191,23 +193,6 @@ func (h *Handler) readSession(
 
 	w.Header().Set("Cache-Control", noStore)
 	h.writeJSON(ctx, w, http.StatusOK, resp)
-}
-
-// validOpenSessionID reports whether id can name an open session: the pos-
-// prefix and the ID alphabet.
-func validOpenSessionID(id string) bool {
-	if len(id) <= len(profile.SessionIDPrefix) || id[:len(profile.SessionIDPrefix)] != profile.SessionIDPrefix {
-		return false
-	}
-
-	for i := len(profile.SessionIDPrefix); i < len(id); i++ {
-		c := id[i]
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-			return false
-		}
-	}
-
-	return true
 }
 
 // profileSessionNotFound answers ErrNotFound for a session ID that has no

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -679,6 +680,10 @@ func TestOpenRefusalsBadPaths(t *testing.T) {
 		"empty path":   {""},
 		"CR in path":   {"a\rb"},
 		"LF in path":   {"a\nb"},
+		"NUL in path":  {"a\x00b"},
+		"DEL in path":  {"a\x7fb"},
+		"C1 in path":   {"a\u0085b"},
+		"bad UTF-8":    {"a\xffb"},
 		"unknown path": {"absent"},
 	} {
 		_, err := openAs(
@@ -995,6 +1000,133 @@ func TestReadSessionReadOnePath(t *testing.T) {
 		[]string{"absent"})
 	if !errors.Is(err, profile.ErrNotFound) {
 		t.Errorf("unknown path: read error = %v, want ErrNotFound", err)
+	}
+}
+
+// getCounter counts the reads of a Sessions store.
+type getCounter struct {
+	profile.Sessions
+
+	gets atomic.Int64
+}
+
+func (c *getCounter) Get(
+	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner, now time.Time,
+) (profile.Session, error) {
+	c.gets.Add(1)
+
+	return c.Sessions.Get(ctx, ns, id, owner, now)
+}
+
+// TestReadSessionHostileIDsNeverReachTheStore fails when the ID check of
+// ReadSession goes: the store reads a bad ID as not found too, so only a count
+// of its reads shows the layer.
+func TestReadSessionHostileIDsNeverReachTheStore(t *testing.T) {
+	t.Parallel()
+
+	fx := newOpenFixture(t)
+	counter := &getCounter{Sessions: memSessions{m: fx.m}, gets: atomic.Int64{}}
+	svc := withSessions(t, fx, counter)
+
+	for _, id := range []string{"", "pos-", "ses-0001", "pos-%2F", "pos-../x", "pos-A", "pos-a\nb", "pos-a\x00"} {
+		_, err := svc.ReadSession(t.Context(), openActor("admin"), fx.ns, id, nil)
+		if !errors.Is(err, profile.ErrNotFound) {
+			t.Errorf("id %q: read error = %v, want ErrNotFound", id, err)
+		}
+	}
+
+	if n := counter.gets.Load(); n != 0 {
+		t.Errorf("store reads = %d, want 0", n)
+	}
+}
+
+// TestReadSessionJobTokenReadsNothing fails when the job token check of
+// ReadSession goes: the job token holds the grant here, so only the check
+// refuses it.
+func TestReadSessionJobTokenReadsNothing(t *testing.T) {
+	t.Parallel()
+
+	fx := newOpenFixture(t)
+
+	createOpenProfile(t, fx, "root", docWithSecret())
+
+	opened, err := openRoot(t, fx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	data, err := fx.svc.ReadSession(t.Context(), openJobActor("admin"), fx.ns, opened.SessionID, nil)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("read error = %v, want a denial", err)
+	}
+
+	if len(data.Values) != 0 || len(data.Secrets) != 0 {
+		t.Errorf("a refused read answered %v", data)
+	}
+}
+
+// TestOpenRefusesBeforeAnyRead fails when the consumer check or the path count
+// check of the resolver goes. The session constructor checks both again, but
+// it runs after the reads and writes a failure entry, so a refusal of the
+// resolver leaves no entry.
+func TestOpenRefusesBeforeAnyRead(t *testing.T) {
+	t.Parallel()
+
+	fx := newOpenFixture(t)
+
+	createOpenProfile(t, fx, "root", "schemaVersion: 1\nvalues:\n  x: 1\n")
+
+	many := make([]string, profile.MaxSessionPaths+1)
+	for i := range many {
+		many[i] = "x"
+	}
+
+	for name, spec := range map[string]openSpec{
+		"unknown consumer": {ref: profile.RefByName("root"), paths: nil, consumer: "other", duration: 0},
+		"too many paths":   {ref: profile.RefByName("root"), paths: many, consumer: profile.OpenConsumerAPI, duration: 0},
+	} {
+		before := len(accessEntries(fx, fx.ns))
+
+		if _, err := openAs(t, fx, "admin", spec); !errors.Is(err, profile.ErrInvalid) {
+			t.Errorf("%s: open error = %v, want ErrInvalid", name, err)
+		}
+
+		if after := len(accessEntries(fx, fx.ns)); after != before {
+			t.Errorf("%s: %d new entries, want 0", name, after-before)
+		}
+	}
+}
+
+// TestReadSessionHostilePaths sends hostile paths straight to the service,
+// as if the handler did not check them. Each row fails when the path check of
+// ReadSession goes.
+func TestReadSessionHostilePaths(t *testing.T) {
+	t.Parallel()
+
+	fx := newOpenFixture(t)
+
+	createOpenProfile(t, fx, "root", docWithSecret())
+
+	opened, err := openRoot(t, fx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	for name, path := range map[string]string{
+		"empty":         "",
+		"CR":            "a\rb",
+		"LF":            "a\nb",
+		"NUL":           "a\x00b",
+		"DEL":           "a\x7fb",
+		"C1":            "a\u0085b",
+		"bad UTF-8":     "a\xffb",
+		"empty segment": "a..b",
+		"bad escape":    "a\\b",
+	} {
+		_, err = fx.svc.ReadSession(t.Context(), openActor("admin"), fx.ns, opened.SessionID, []string{path})
+		if !errors.Is(err, profile.ErrInvalid) {
+			t.Errorf("%s: read error = %v, want ErrInvalid", name, err)
+		}
 	}
 }
 

@@ -77,6 +77,7 @@ func TestOpenRoutes(t *testing.T) {
 	t.Run("denied open stores nothing and names no value", testOpenDeniedStoresNothing)
 	t.Run("key replay answers 409 with the session and no value", testOpenKeyReplay)
 	t.Run("forged sessions are not found", testOpenForgedSessions)
+	t.Run("hostile read paths are refused", testOpenHostileReadPaths)
 	t.Run("key on a read is refused", testOpenKeyOnRead)
 	t.Run("read after revoke is denied and deletes the session", testOpenReadAfterRevoke)
 }
@@ -214,6 +215,30 @@ func openRefusalRows() []openRefusalRow {
 			http.StatusBadRequest, errcode.ProfileInvalid,
 		},
 		{
+			"unknown field", "schemaVersion: 1\nvalues:\n  x: 1\n",
+			`{"consumer":"api","extra":1}`, http.StatusBadRequest, errcode.RequestBodyInvalid,
+		},
+		{
+			"trailing JSON", "schemaVersion: 1\nvalues:\n  x: 1\n",
+			`{"consumer":"api"}{"consumer":"api"}`, http.StatusBadRequest, errcode.RequestBodyInvalid,
+		},
+		{
+			"path with a C1 character", "schemaVersion: 1\nvalues:\n  x: 1\n",
+			`{"consumer":"api","paths":["a\u0085b"]}`, http.StatusBadRequest, errcode.ProfileInvalid,
+		},
+		{
+			"path with NUL", "schemaVersion: 1\nvalues:\n  x: 1\n",
+			`{"consumer":"api","paths":["a\u0000b"]}`, http.StatusBadRequest, errcode.ProfileInvalid,
+		},
+		{
+			"path with DEL", "schemaVersion: 1\nvalues:\n  x: 1\n",
+			`{"consumer":"api","paths":["a\u007fb"]}`, http.StatusBadRequest, errcode.ProfileInvalid,
+		},
+		{
+			"empty path", "schemaVersion: 1\nvalues:\n  x: 1\n",
+			`{"consumer":"api","paths":[""]}`, http.StatusBadRequest, errcode.ProfileInvalid,
+		},
+		{
 			"body that is no JSON",
 			"schemaVersion: 1\nvalues:\n  x: 1\n",
 			`{`, http.StatusBadRequest, errcode.RequestBodyInvalid,
@@ -340,9 +365,41 @@ func testOpenForgedSessions(t *testing.T) {
 
 	id := openSession(t, f, openBody(t))
 
-	for _, forged := range []string{"", "pos-", "ses-0001", "pos-%2F", id + "x"} {
+	// An ID that the handler refuses never reaches the store: the service
+	// and the store refuse it too, so only a count of reads shows the layer.
+	before := f.sessionReads.Load()
+
+	for _, forged := range []string{"", "pos-", "ses-0001", "pos-%2F", "pos-A"} {
 		got := readSession(t, f, forged, "")
 		wantCode(t, "session "+forged, got, http.StatusNotFound)
+	}
+
+	if n := f.sessionReads.Load() - before; n != 0 {
+		t.Errorf("the store read %d forged IDs, want 0", n)
+	}
+
+	got := readSession(t, f, id+"x", "")
+	wantCode(t, "session "+id+"x", got, http.StatusNotFound)
+}
+
+// testOpenHostileReadPaths checks that a hostile path in the query of a read
+// answers 400 and names no value.
+func testOpenHostileReadPaths(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.create(t, "root", secretDoc)
+
+	id := openSession(t, f, openBody(t))
+
+	for _, raw := range []string{"%00", "%0d", "%0a", "%7f", "%c2%85", "%ff", "a..b", "a%5Cb"} {
+		got := readSession(t, f, id, "?path="+raw)
+
+		wantCode(t, "path "+raw, got, http.StatusBadRequest)
+
+		if strings.Contains(got.body, "hunter2") {
+			t.Errorf("path %s names a value: %s", raw, got.body)
+		}
 	}
 }
 

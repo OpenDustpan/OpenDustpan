@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,6 +115,23 @@ type fixture struct {
 	// while no request runs.
 	denied map[identity.Action]bool
 	clock  *testClock
+	// sessionReads counts the reads of the open session store.
+	sessionReads *atomic.Int64
+}
+
+// countingSessions counts the reads of an open session store.
+type countingSessions struct {
+	profile.Sessions
+
+	reads *atomic.Int64
+}
+
+func (c countingSessions) Get(
+	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner, now time.Time,
+) (profile.Session, error) {
+	c.reads.Add(1)
+
+	return c.Sessions.Get(ctx, ns, id, owner, now)
 }
 
 // testClock is the clock of the Idempotency-Key middleware.
@@ -237,9 +255,12 @@ func buildFixtureWith(
 
 	authz := testAuthz{deny: denied}
 
+	reads := &atomic.Int64{}
+
 	svc, err := profile.NewService(profile.Config{
 		Store: store.Profiles(), Namespaces: store, Sealer: secrets, Audit: store, Authorizer: authz,
-		Sessions: store.ProfileSessions(), Evaluator: testEvaluator(t), Now: nil,
+		Sessions:  countingSessions{Sessions: store.ProfileSessions(), reads: reads},
+		Evaluator: testEvaluator(t), Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("profile service: %v", err)
@@ -278,6 +299,8 @@ func buildFixtureWith(
 		store:   store,
 		denied:  denied,
 		clock:   clock,
+
+		sessionReads: reads,
 	}
 }
 

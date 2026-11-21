@@ -91,7 +91,8 @@ func (s *Service) newOpenResolver(a *Actor, in OpenInput) (*openResolver, error)
 		return nil, err
 	}
 
-	if _, err = ParseOpenConsumer(string(in.Consumer)); err != nil {
+	consumer, err := ParseOpenConsumer(string(in.Consumer))
+	if err != nil {
 		return nil, err
 	}
 
@@ -106,7 +107,7 @@ func (s *Service) newOpenResolver(a *Actor, in OpenInput) (*openResolver, error)
 	}
 
 	return &openResolver{
-		svc: s, actor: a, ns: in.Namespace, ref: in.Ref, consumer: in.Consumer,
+		svc: s, actor: a, ns: in.Namespace, ref: in.Ref, consumer: consumer,
 		asked: nilIfEmpty(asked), duration: duration,
 		revisions: 0, visiting: nil, names: nil, cache: map[ID]*profileTree{}, reads: nil,
 	}, nil
@@ -185,7 +186,9 @@ func (s *Service) accessEntry(a *Actor, in OpenInput, root Profile, reads []prof
 	})
 
 	changes := make([]audit.Change, 0, len(reads)+openAccessFixedChanges)
-	changes = append(changes, audit.Change{Key: "consumer", Old: nil, New: string(in.Consumer), Layer: "", TakesEffect: ""})
+	changes = append(changes, audit.Change{
+		Key: "consumer", Old: nil, New: string(in.Consumer), Layer: "", TakesEffect: "",
+	})
 
 	paths := "all"
 	if len(in.Paths) > 0 {

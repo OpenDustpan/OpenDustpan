@@ -106,8 +106,28 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 			ErrLimit, root.Name, len(text), MaxResultBytes)
 	}
 
+	o := openStore{fence: fence, root: root, duration: resolver.duration, reads: resolver.reads}
+
+	return s.storeOpen(ctx, a, in, o, text)
+}
+
+// openStore is what Open hands to storeOpen: the fence, the root profile, the
+// life of the session and the profiles that the open read.
+type openStore struct {
+	fence    namespace.Fence
+	root     Profile
+	duration time.Duration
+	reads    []profileRead
+}
+
+// storeOpen seals text and stores the session with its audit entry. A
+// failure writes one entry with the outcome failure and no value.
+func (s *Service) storeOpen(
+	ctx context.Context, a *Actor, in OpenInput, o openStore, text []byte,
+) (Opened, error) {
+	fence, root := o.fence, o.root
 	now := s.now().UTC()
-	expiry := now.Add(resolver.duration)
+	expiry := now.Add(o.duration)
 
 	sealed, err := s.sealOpen(ctx, in.Namespace, root.ID, text)
 	if err != nil {
@@ -127,7 +147,7 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 		return Opened{}, fmt.Errorf("make session of %s: %w", root.Name, err)
 	}
 
-	entry := s.accessEntry(a, in, root, resolver.reads)
+	entry := s.accessEntry(a, in, root, o.reads)
 
 	if err = s.sessions.Put(ctx, sess, fence, []audit.Entry{entry}); err != nil {
 		return Opened{}, fmt.Errorf("store open of %s: %w", root.Name, err)
@@ -175,9 +195,12 @@ func (s *Service) ReadSession(
 
 	// Defense in depth: the store reads an ID that is not a session ID as
 	// not found too; this check stays so that a hostile ID never reaches it.
-	if _, err := ParseSessionID(id); err != nil {
+	sid, idErr := ParseSessionID(id)
+	if idErr != nil {
 		return SessionData{}, fmt.Errorf("open session %s: %w", id, ErrNotFound)
 	}
+
+	id = sid
 
 	for _, p := range paths {
 		if err := checkOpenPath(p); err != nil {
@@ -233,7 +256,9 @@ func (s *Service) denySessionRead(ctx context.Context, a *Actor, ns namespace.Na
 	// the namespace, so a refused read cannot remove a session of another
 	// owner or namespace.
 	// The delete is best effort: the denial is the answer either way.
-	_ = s.sessions.Delete(ctx, id, owner, fence, []audit.Entry{s.accessRefusedEntry(a, ns, p, audit.OutcomeDenied)}) //nolint:errcheck // The denial is the answer.
+	entry := s.accessRefusedEntry(a, ns, p, audit.OutcomeDenied)
+
+	_ = s.sessions.Delete(ctx, id, owner, fence, []audit.Entry{entry}) //nolint:errcheck // The denial is the answer.
 
 	return denied
 }
