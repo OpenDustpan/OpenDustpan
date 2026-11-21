@@ -1,7 +1,7 @@
 # sdk Specification
 
 ## Purpose
-TBD - created by archiving change store-move. Update Purpose after archive.
+The SDK lets a Go developer open a built-in store and wire it into a new server binary. It covers OpenStore, WithBuiltinStore, WithSQLite, and WithPostgreSQL. Store adapters and ports stay under their own packages; the SDK only exposes the constructors and options that the conformance suites pin.
 
 ## Requirements
 
