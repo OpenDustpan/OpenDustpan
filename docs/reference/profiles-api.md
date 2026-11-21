@@ -187,7 +187,7 @@ The body has three fields:
 
 | Field | Meaning |
 | --- | --- |
-| `paths` | The joined paths to read, for example `["region", "db.password"]`. Empty means all paths. At most 1,024 paths. |
+| `paths` | The joined paths to read, for example `["region", "db.password"]`. Empty means all paths. At most 1,024 paths. A path has 1 to 1,024 bytes and no control character. |
 | `consumer` | `api`, `console` or `pulumi`. Required. |
 | `duration` | The life of the session, for example `"90m"`. Empty means 2 hours. From 1 minute to 12 hours. |
 
