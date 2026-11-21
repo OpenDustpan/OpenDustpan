@@ -6,6 +6,7 @@ Changes:
 
 - Supersedes ADR 273 decision 3: a sharing rule no longer names a unit or a collection of another namespace as its consumer. A rule names a reader by issuer and stable IDs, and a linked unit carries the read across a boundary.
 - Changes ADR 273 decision 5: check 2 (the starter holds `unit:read-outputs` on the producer) applies to reads inside one namespace only. A read from another namespace is decided by the unit identity.
+- Supersedes ADR 391 decisions 1 and 3: for output sharing, a rule stores a reader identity. It stores no consumer unit or collection of another namespace. It answers the open item of ADR 391 on how a save learns the stable ID. The request of a linked unit carries it.
 - Changes ADR 216 decision 8: for output sharing, the producer rule and the reader linked unit are the acceptance of both sides. A namespace link and a dependency edge across namespaces still follow decision 8.
 - Changes ADR 220 decision 12: the same change as for ADR 216 decision 8. A namespace backup and a blueprint never cross namespaces, as before.
 
@@ -51,7 +52,7 @@ The owner decided on 21 November 2026, in session. OpenDustpan has no users, so 
 These points follow from the decisions. They are not words of the owner.
 
 - The read of a remote reader is security code. It needs one table of hostile cases for each layer, and a test for each guard (ADR 250).
-- ADR 391 leaves open how a save learns the stable ID of a consumer in another namespace. This does not apply to output sharing. The request of a linked unit carries the IDs of the reader.
+- This answers the open item of ADR 391 on how a save learns the stable ID of a consumer in another namespace. The request of a linked unit carries the IDs of the reader. A rule no longer names a consumer unit or collection of another namespace.
 - A trigger that follows a linked unit can use the events of decision 9. This needs no new decision.
 - The reader namespace can see a producer only through the outputs that a rule shares. It never reads the state of the producer.
 - A linked unit needs its own storage of the last version, the pin and the run records. The implementation change plans it.
