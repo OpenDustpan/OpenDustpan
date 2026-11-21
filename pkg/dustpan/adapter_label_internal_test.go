@@ -60,7 +60,7 @@ func newLabelTestServerWith(t *testing.T, extra ...Option) *Server {
 		WithSecretWrapper(wrapper), WithWorkspaceStore(st), WithStateStore(st),
 		WithBlobStore(blobs), WithInventoryReader(st), WithAuthenticator(authn),
 		WithProfileStore(st.Profiles()), WithIssuerStore(st.Issuer()),
-		WithProfileSessions(st.Sessions()), WithIssuerStore(st.Issuer()),
+		WithProfileSessions(st.ProfileSessions()), WithIssuerStore(st.Issuer()),
 		WithRegistry(st.Registry(), st.RegistryKeys()), WithSinkStore(st.NotificationSinks()),
 		WithRunners(st.Runners()), WithGitHostStore(st.GitHost()),
 	}

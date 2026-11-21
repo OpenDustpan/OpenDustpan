@@ -106,7 +106,7 @@ func createOpenProfile(t *testing.T, fx openFixture, name, doc string) profile.P
 type openSpec struct {
 	ref      profile.Ref
 	paths    []string
-	consumer string
+	consumer profile.OpenConsumer
 	duration time.Duration
 }
 
@@ -602,14 +602,14 @@ func TestOpenRefusalsUnknownConsumer(t *testing.T) {
 			t,
 			fx,
 			"admin",
-			openSpec{ref: profile.RefByName("root"), paths: nil, consumer: consumer, duration: 0},
+			openSpec{ref: profile.RefByName("root"), paths: nil, consumer: profile.OpenConsumer(consumer), duration: 0},
 		)
 		if !errors.Is(err, profile.ErrInvalid) {
 			t.Errorf("consumer %q: open error = %v, want ErrInvalid", consumer, err)
 		}
 	}
 
-	for _, consumer := range []string{profile.OpenConsumerAPI, profile.OpenConsumerConsole, profile.OpenConsumerPulumi} {
+	for _, consumer := range []profile.OpenConsumer{profile.OpenConsumerAPI, profile.OpenConsumerConsole, profile.OpenConsumerPulumi} {
 		_, err := openAs(t, fx, "admin", openSpec{
 			ref: profile.RefByName("root"), paths: nil, consumer: consumer, duration: 0,
 		})
@@ -669,7 +669,7 @@ func TestOpenRefusalsBadPaths(t *testing.T) {
 
 	createOpenProfile(t, fx, "root", "schemaVersion: 1\nvalues:\n  x: 1\n")
 
-	many := make([]string, profile.MaxOpenPaths+1)
+	many := make([]string, profile.MaxSessionPaths+1)
 	for i := range many {
 		many[i] = "x"
 	}
@@ -898,13 +898,13 @@ func (f faultSessions) Put(
 }
 
 func (f faultSessions) Delete(
-	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner,
+	ctx context.Context, id string, owner profile.SessionOwner, fence namespace.Fence, e []audit.Entry,
 ) error {
 	if f.delErr != nil {
 		return f.delErr
 	}
 
-	return f.Sessions.Delete(ctx, ns, id, owner)
+	return f.Sessions.Delete(ctx, id, owner, fence, e)
 }
 
 // withSealer rebuilds the service of fx with sealer.
@@ -1130,11 +1130,14 @@ func TestReadSessionEndedAndForgedSessionsAreNotFound(t *testing.T) {
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "", Origin: nil,
 	}
-	ended := profile.Session{
+	ended, err := profile.NewSession(profile.SessionParams{
 		ID: "pos-ended00000000000001", Namespace: fx.ns, Root: got.ID,
-		Owner: profile.SessionOwner{Kind: profile.OwnerPrincipal, ID: "admin"}, Consumer: "api",
+		Owner: profile.PrincipalOwner("admin"), Consumer: profile.OpenConsumerAPI,
 		Paths: nil, Sealed: []byte("sealed"), CreatedAt: at.Add(-2 * time.Hour),
 		ExpiresAt: at.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("make ended session: %v", err)
 	}
 
 	if err = (memSessions{m: fx.m}).Put(t.Context(), ended, full.Fence(), []audit.Entry{entry}); err != nil {

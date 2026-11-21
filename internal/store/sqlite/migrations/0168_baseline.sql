@@ -711,22 +711,6 @@ CREATE TABLE inventory_labels (
     PRIMARY KEY (unit_id, label_key)
 ) STRICT;
 
-CREATE TABLE profile_open_sessions (
-    namespace_id    TEXT    NOT NULL REFERENCES namespaces (id),
-    id              TEXT    NOT NULL CHECK (substr(id, 1, 4) = 'pos-' AND length(id) > 4),
-    root_profile_id TEXT    NOT NULL,
-    owner_kind      TEXT    NOT NULL CHECK (owner_kind = 'principal'),
-    owner_id        TEXT    NOT NULL CHECK (owner_id <> ''),
-    consumer        TEXT    NOT NULL CHECK (consumer IN ('api', 'console', 'pulumi')),
-    paths           TEXT    NOT NULL,
-    sealed          BLOB    NOT NULL CHECK (length(sealed) > 0),
-    created_at_ms   INTEGER NOT NULL,
-    expires_at_ms   INTEGER NOT NULL,
-    PRIMARY KEY (namespace_id, id),
-    FOREIGN KEY (namespace_id, root_profile_id) REFERENCES profiles (namespace_id, id),
-    CHECK (expires_at_ms > created_at_ms)
-) STRICT;
-
 CREATE TABLE profiles (
     namespace_id  TEXT    NOT NULL,
     id            TEXT    NOT NULL,
@@ -738,6 +722,22 @@ CREATE TABLE profiles (
     deleted_at_ms INTEGER NOT NULL,
     PRIMARY KEY (namespace_id, id),
     CHECK (latest >= 1)
+) STRICT;
+
+CREATE TABLE profile_open_sessions (
+    namespace_id    TEXT    NOT NULL REFERENCES namespaces (id),
+    id              TEXT    NOT NULL CHECK (substr(id, 1, 4) = 'pos-' AND length(id) > 4),
+    root_profile_id TEXT    NOT NULL,
+    owner_kind      TEXT    NOT NULL CHECK (owner_kind = 'principal'),
+    owner_id        TEXT    NOT NULL CHECK (owner_id <> ''),
+    consumer        TEXT    NOT NULL CHECK (consumer IN ('api', 'console', 'pulumi')),
+    paths           TEXT    NOT NULL CHECK (json_valid(paths) AND json_type(paths) = 'array'),
+    sealed          BLOB    NOT NULL CHECK (length(sealed) > 0),
+    created_at_ms   INTEGER NOT NULL,
+    expires_at_ms   INTEGER NOT NULL,
+    PRIMARY KEY (namespace_id, id),
+    FOREIGN KEY (namespace_id, root_profile_id) REFERENCES profiles (namespace_id, id),
+    CHECK (expires_at_ms > created_at_ms)
 ) STRICT;
 
 CREATE TABLE profile_revisions (
@@ -1840,8 +1840,6 @@ CREATE INDEX import_ledger_order ON import_ledger (namespace_id, import_id, impo
 CREATE INDEX inventory_labels_namespace ON inventory_labels (namespace, unit_id);
 
 CREATE INDEX profile_open_sessions_expiry ON profile_open_sessions (expires_at_ms);
-
-CREATE INDEX profile_open_sessions_owner ON profile_open_sessions (namespace_id, owner_kind, owner_id, expires_at_ms);
 
 CREATE UNIQUE INDEX profiles_live_name ON profiles (namespace_id, name) WHERE deleted_at_ms = 0;
 

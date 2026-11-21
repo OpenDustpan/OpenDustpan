@@ -25,7 +25,7 @@ type openResolver struct {
 	actor    *Actor
 	ns       namespace.Name
 	ref      Ref
-	consumer string
+	consumer OpenConsumer
 	// asked maps each asked joined path to its segments. Nil means all paths.
 	asked    map[string][]string
 	duration time.Duration
@@ -82,8 +82,8 @@ func (s *Service) newOpenResolver(a *Actor, in OpenInput) (*openResolver, error)
 		return nil, fmt.Errorf("%w: an open needs a profile", ErrInvalid)
 	}
 
-	if len(in.Paths) > MaxOpenPaths {
-		return nil, fmt.Errorf("%w: an open asks at most %d paths", ErrInvalid, MaxOpenPaths)
+	if len(in.Paths) > MaxSessionPaths {
+		return nil, fmt.Errorf("%w: an open asks at most %d paths", ErrInvalid, MaxSessionPaths)
 	}
 
 	asked, err := parseAskedPaths(in.Paths)
@@ -91,8 +91,8 @@ func (s *Service) newOpenResolver(a *Actor, in OpenInput) (*openResolver, error)
 		return nil, err
 	}
 
-	if !slices.Contains(openConsumers(), in.Consumer) {
-		return nil, fmt.Errorf("%w: consumer %q is not api, console or pulumi", ErrInvalid, in.Consumer)
+	if _, err = ParseOpenConsumer(string(in.Consumer)); err != nil {
+		return nil, err
 	}
 
 	duration := in.Duration
@@ -185,7 +185,7 @@ func (s *Service) accessEntry(a *Actor, in OpenInput, root Profile, reads []prof
 	})
 
 	changes := make([]audit.Change, 0, len(reads)+openAccessFixedChanges)
-	changes = append(changes, audit.Change{Key: "consumer", Old: nil, New: in.Consumer, Layer: "", TakesEffect: ""})
+	changes = append(changes, audit.Change{Key: "consumer", Old: nil, New: string(in.Consumer), Layer: "", TakesEffect: ""})
 
 	paths := "all"
 	if len(in.Paths) > 0 {
@@ -212,6 +212,18 @@ func (s *Service) accessEntry(a *Actor, in OpenInput, root Profile, reads []prof
 	return e
 }
 
+// accessRefusedEntry makes the audit entry of a denied or refused open: the
+// kind access with the outcome and no value.
+func (s *Service) accessRefusedEntry(a *Actor, ns namespace.Name, root Profile, outcome audit.Outcome) audit.Entry {
+	e := s.entry(a, record{
+		ns: ns, action: identity.ActionProfileOpen, id: root.ID, name: root.Name, rev: 0,
+		kind: audit.KindAccess, reason: "",
+	})
+	e.Outcome = outcome
+
+	return e
+}
+
 // recordAccessRefused writes the audit entry of a denied or refused open:
 // the kind access with the outcome and no value.
 func (s *Service) recordAccessRefused(
@@ -222,11 +234,7 @@ func (s *Service) recordAccessRefused(
 		return
 	}
 
-	e := s.entry(a, record{
-		ns: ns, action: identity.ActionProfileOpen, id: root.ID, name: root.Name, rev: 0,
-		kind: audit.KindAccess, reason: "",
-	})
-	e.Outcome = outcome
+	e := s.accessRefusedEntry(a, ns, root, outcome)
 
 	// A failed entry write is not the answer: the denial or the refusal is.
 	_, _ = s.audit.Append(ctx, fence, e) //nolint:errcheck // A failed entry write is not the answer.

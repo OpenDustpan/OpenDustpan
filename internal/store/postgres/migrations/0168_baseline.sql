@@ -1092,10 +1092,11 @@ CREATE TABLE profile_open_sessions (
     created_at_ms bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
     CONSTRAINT profile_open_sessions_check CHECK ((expires_at_ms > created_at_ms)),
+    CONSTRAINT profile_open_sessions_consumer_check CHECK ((consumer = ANY (ARRAY['api'::text, 'console'::text, 'pulumi'::text]))),
     CONSTRAINT profile_open_sessions_id_check CHECK (((id ~~ 'pos-%'::text) AND (length(id) > 4))),
     CONSTRAINT profile_open_sessions_owner_id_check CHECK ((owner_id <> ''::text)),
     CONSTRAINT profile_open_sessions_owner_kind_check CHECK ((owner_kind = 'principal'::text)),
-    CONSTRAINT profile_open_sessions_consumer_check CHECK ((consumer = ANY (ARRAY['api'::text, 'console'::text, 'pulumi'::text]))),
+    CONSTRAINT profile_open_sessions_paths_check CHECK ((jsonb_typeof((paths)::jsonb) = 'array'::text)),
     CONSTRAINT profile_open_sessions_sealed_check CHECK ((length(sealed) > 0))
 );
 
@@ -2382,8 +2383,6 @@ CREATE INDEX principals_namespace ON principals USING btree (namespace, subject 
 CREATE UNIQUE INDEX principals_subject ON principals USING btree (subject COLLATE "C") WHERE (deleted_at_ms IS NULL);
 
 CREATE INDEX profile_open_sessions_expiry ON profile_open_sessions USING btree (expires_at_ms);
-
-CREATE INDEX profile_open_sessions_owner ON profile_open_sessions USING btree (namespace_id, owner_kind, owner_id, expires_at_ms);
 
 CREATE UNIQUE INDEX profiles_live_name ON profiles USING btree (namespace_id, name) WHERE (deleted_at_ms = 0);
 

@@ -205,7 +205,8 @@ profiles that it read, and never a value. A denial writes one entry with the
 outcome `denied`.
 
 An open reads at most 64 revisions, follows imports at most 16 levels deep,
-and answers at most 4 MiB. An owner holds at most 100 live sessions.
+and answers at most 4 MiB. The server sets no limit on the number of live
+sessions of an owner.
 
 ## Read an open session
 

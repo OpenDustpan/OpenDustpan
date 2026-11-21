@@ -9,26 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
-
-// Consumers of an open session: the only callers that may open a profile.
-const (
-	// OpenConsumerAPI is a script or a tool that calls the API.
-	OpenConsumerAPI = "api"
-	// OpenConsumerConsole is the console.
-	OpenConsumerConsole = "console"
-	// OpenConsumerPulumi is the Pulumi CLI through the tool-neutral API.
-	OpenConsumerPulumi = "pulumi"
-)
-
-// openConsumers is the allowlist of the consumer of an open.
-func openConsumers() []string {
-	return []string{OpenConsumerAPI, OpenConsumerConsole, OpenConsumerPulumi}
-}
 
 // OpenInput is one open of a profile.
 type OpenInput struct {
@@ -37,7 +21,7 @@ type OpenInput struct {
 	// Paths are the joined paths that the open answers. Empty means all.
 	Paths []string
 	// Consumer is api, console or pulumi.
-	Consumer string
+	Consumer OpenConsumer
 	// Duration is the life of the session. Zero means DefaultSessionDuration.
 	Duration time.Duration
 }
@@ -115,11 +99,11 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 		return Opened{}, fmt.Errorf("encode open of %s: %w", root.Name, err)
 	}
 
-	if len(text) > MaxOpenBytes {
+	if len(text) > MaxResultBytes {
 		s.recordAccessRefused(ctx, a, in.Namespace, root, audit.OutcomeFailure)
 
 		return Opened{}, fmt.Errorf("%w: open of %s has %d bytes, the limit is %d",
-			ErrLimit, root.Name, len(text), MaxOpenBytes)
+			ErrLimit, root.Name, len(text), MaxResultBytes)
 	}
 
 	now := s.now().UTC()
@@ -132,10 +116,15 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 		return Opened{}, err
 	}
 
-	sess := Session{
-		ID: ident.NewID(SessionIDPrefix), Namespace: in.Namespace, Root: root.ID,
-		Owner: SessionOwner{Kind: OwnerPrincipal, ID: a.Principal.Subject}, Consumer: in.Consumer, Paths: in.Paths,
+	sess, err := NewSession(SessionParams{
+		ID: NewSessionID(), Namespace: in.Namespace, Root: root.ID,
+		Owner: PrincipalOwner(a.Principal.Subject), Consumer: in.Consumer, Paths: in.Paths,
 		Sealed: sealed, CreatedAt: now, ExpiresAt: expiry,
+	})
+	if err != nil {
+		s.recordAccessRefused(ctx, a, in.Namespace, root, audit.OutcomeFailure)
+
+		return Opened{}, fmt.Errorf("make session of %s: %w", root.Name, err)
 	}
 
 	entry := s.accessEntry(a, in, root, resolver.reads)
@@ -144,7 +133,7 @@ func (s *Service) Open(ctx context.Context, a *Actor, in OpenInput) (Opened, err
 		return Opened{}, fmt.Errorf("store open of %s: %w", root.Name, err)
 	}
 
-	return Opened{SessionID: sess.ID, ExpiresAt: expiry}, nil
+	return Opened{SessionID: sess.ID(), ExpiresAt: expiry}, nil
 }
 
 // sealOpen seals the answer of an open under the data key of the root
@@ -184,7 +173,9 @@ func (s *Service) ReadSession(
 		return SessionData{}, s.denySessionRead(ctx, a, ns, id)
 	}
 
-	if !validSessionID(id) {
+	// Defense in depth: the store reads an ID that is not a session ID as
+	// not found too; this check stays so that a hostile ID never reaches it.
+	if _, err := ParseSessionID(id); err != nil {
 		return SessionData{}, fmt.Errorf("open session %s: %w", id, ErrNotFound)
 	}
 
@@ -194,7 +185,7 @@ func (s *Service) ReadSession(
 		}
 	}
 
-	owner := SessionOwner{Kind: OwnerPrincipal, ID: a.Principal.Subject}
+	owner := PrincipalOwner(a.Principal.Subject)
 
 	if err := s.require(ctx, a, ns, identity.ActionProfileOpen); err != nil {
 		if errors.Is(err, identity.ErrDenied) {
@@ -213,37 +204,36 @@ func (s *Service) ReadSession(
 }
 
 // denySessionRead deletes the session after a refused read and answers the
-// denial. A delete that fails leaves the denial as the answer, and no value
-// leaves. A denied entry names the root profile when the session still reads.
+// denial. The delete and the denied entry share one transaction. A session
+// that does not read writes no entry and deletes nothing. A delete that fails
+// leaves the denial as the answer, and no value leaves.
 func (s *Service) denySessionRead(ctx context.Context, a *Actor, ns namespace.Name, id string) error {
 	denied := fmt.Errorf("authorize %s: %w", identity.ActionProfileOpen, identity.ErrDenied)
 
-	owner := SessionOwner{Kind: OwnerPrincipal, ID: a.Principal.Subject}
+	owner := PrincipalOwner(a.Principal.Subject)
 
 	// The read names the root profile of the entry before the delete: after
 	// the delete the session reads as not found.
-	sess, getErr := s.sessions.Get(ctx, ns, id, owner, s.now().UTC())
+	sess, err := s.sessions.Get(ctx, ns, id, owner, s.now().UTC())
+	if err != nil {
+		return denied
+	}
+
+	p, err := s.store.Get(ctx, ns, RefByID(sess.Root()))
+	if err != nil {
+		return denied
+	}
+
+	fence, err := s.fence(ctx, ns)
+	if err != nil {
+		return denied
+	}
 
 	// Defense in depth: the store deletes only the session of the owner in
 	// the namespace, so a refused read cannot remove a session of another
 	// owner or namespace.
 	// The delete is best effort: the denial is the answer either way.
-	if err := s.sessions.Delete(ctx, ns, id, owner); err != nil {
-		return denied
-	}
-
-	// The entry is best effort: the denial names the root profile only when
-	// the session still reads.
-	if getErr != nil {
-		return denied
-	}
-
-	p, err := s.store.Get(ctx, ns, RefByID(sess.Root))
-	if err != nil {
-		return denied
-	}
-
-	s.recordAccessRefused(ctx, a, ns, p, audit.OutcomeDenied)
+	_ = s.sessions.Delete(ctx, id, owner, fence, []audit.Entry{s.accessRefusedEntry(a, ns, p, audit.OutcomeDenied)}) //nolint:errcheck // The denial is the answer.
 
 	return denied
 }
@@ -252,12 +242,12 @@ func (s *Service) denySessionRead(ctx context.Context, a *Actor, ns namespace.Na
 func (s *Service) openSessionValues(
 	ctx context.Context, ns namespace.Name, sess Session, paths []string,
 ) (SessionData, error) {
-	sc, err := scopeOf(ns, sess.Root)
+	sc, err := scopeOf(ns, sess.Root())
 	if err != nil {
 		return SessionData{}, err
 	}
 
-	plain, err := s.sealer.Decrypt(ctx, sc, [][]byte{sess.Sealed})
+	plain, err := s.sealer.Decrypt(ctx, sc, [][]byte{sess.Sealed()})
 	if err != nil || len(plain) != 1 {
 		return SessionData{}, fmt.Errorf("open session: %w", errOrInvalid(err))
 	}
@@ -298,18 +288,13 @@ func errOrInvalid(err error) error {
 	return ErrInvalid
 }
 
-// validSessionID reports whether id can name an open session.
-func validSessionID(id string) bool {
-	return len(id) > len(SessionIDPrefix) && strings.HasPrefix(id, SessionIDPrefix)
-}
-
 // checkOpenPath checks one joined path of an open or a session read.
 func checkOpenPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: a path is not empty", ErrInvalid)
 	}
 
-	if strings.ContainsFunc(path, isOpenControl) {
+	if hasControl(path) {
 		return fmt.Errorf("%w: path %q holds a control character", ErrInvalid, path)
 	}
 
@@ -319,9 +304,6 @@ func checkOpenPath(path string) error {
 
 	return nil
 }
-
-// isOpenControl reports whether r is a control character.
-func isOpenControl(r rune) bool { return r < 0x20 || r == 0x7f }
 
 // splitOpenPath splits a joined path into segments. A "." or a "\" in a key
 // is written with a leading "\".

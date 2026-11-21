@@ -101,10 +101,6 @@ const (
 	MaxOpenRevisions = 64
 	// MaxOpenDepth is the deepest import chain that one open follows.
 	MaxOpenDepth = 16
-	// MaxOpenBytes is the largest result of one open, in bytes.
-	MaxOpenBytes = 4 << 20
-	// MaxOpenPaths is the largest paths list of one open.
-	MaxOpenPaths = 1024
 )
 
 // Profile is the metadata of one profile. The newest revision is Latest.

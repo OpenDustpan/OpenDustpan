@@ -102,15 +102,15 @@ When a caller repeats an open with the same Idempotency-Key and the same body wi
 
 ### Requirement: Store a session
 
-When an open succeeds, the server SHALL store one session that is sealed with the data key of the root profile, and SHALL keep at most 100 live sessions for each principal.
+When an open succeeds, the server SHALL store one session that is sealed with the data key of the root profile. The server SHALL NOT cap the number of live sessions (ADR 392). The rate limit on opens is out of scope, because RFC 135 is open.
 
 #### Scenario: Put one session
 - **WHEN** a principal opens with the consumer api
 - **THEN** the server stores one session with an ID that starts with pos- and the store holds only the ciphertext
 
-#### Scenario: Limit
+#### Scenario: No cap on the count
 - **WHEN** a principal has 100 live sessions and opens again
-- **THEN** the open fails with profile.ErrLimit and stores nothing
+- **THEN** the server stores the new session
 
 #### Scenario: Atomic
 - **WHEN** the audit write of an open fails

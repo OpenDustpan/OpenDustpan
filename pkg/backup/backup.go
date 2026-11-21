@@ -87,9 +87,9 @@ const (
 	TableJobTokens            = "job_tokens"
 	TableLocalUserResets      = "local_user_resets"
 	TablePasskeyChallenges    = "passkey_challenges"
-	// TableProfileOpenSessions holds the live open sessions: sealed answers
-	// that end within hours. A backup leaves them out and a restore leaves
-	// the table empty.
+	// TableProfileOpenSessions holds the open sessions of profiles: each row
+	// holds a result that is sealed with the data key of a profile and that
+	// ends within hours. A backup leaves it out and a restore empties it.
 	TableProfileOpenSessions = "profile_open_sessions"
 	// TableBlobDeleteLeases holds the lease of a blob deleter that runs now.
 	// The swap keeps the live rows, so the restore waits for the deleters.

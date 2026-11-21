@@ -1674,33 +1674,6 @@ func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, err
 	return count, err
 }
 
-const countLiveProfileOpenSessions = `-- name: CountLiveProfileOpenSessions :one
-SELECT COUNT(*)
-FROM profile_open_sessions
-WHERE namespace_id = $1 AND owner_kind = $2
-  AND owner_id = $3 AND expires_at_ms > $4
-`
-
-type CountLiveProfileOpenSessionsParams struct {
-	NamespaceID string
-	OwnerKind   string
-	OwnerID     string
-	NowMs       int64
-}
-
-// The sessions of one owner in a namespace that have not ended at now_ms.
-func (q *Queries) CountLiveProfileOpenSessions(ctx context.Context, arg CountLiveProfileOpenSessionsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countLiveProfileOpenSessions,
-		arg.NamespaceID,
-		arg.OwnerKind,
-		arg.OwnerID,
-		arg.NowMs,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countLiveProfiles = `-- name: CountLiveProfiles :one
 SELECT COUNT(*)
 FROM profiles
@@ -3747,17 +3720,17 @@ WHERE (namespace_id, id) IN (
     FROM profile_open_sessions AS s
     WHERE s.expires_at_ms <= $1
     ORDER BY s.expires_at_ms, s.namespace_id, s.id
-    LIMIT $2
+    LIMIT $2::BIGINT
 )
 `
 
 type DeleteEndedProfileOpenSessionsParams struct {
 	NowMs     int64
-	PageLimit int32
+	PageLimit int64
 }
 
 // Removes at most page_limit sessions that ended at or before now_ms, in any
-// namespace.
+// namespace, the oldest end first.
 func (q *Queries) DeleteEndedProfileOpenSessions(ctx context.Context, arg DeleteEndedProfileOpenSessionsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteEndedProfileOpenSessions, arg.NowMs, arg.PageLimit)
 	if err != nil {
@@ -4593,11 +4566,10 @@ func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams
 	return result.RowsAffected(), nil
 }
 
-const deleteProfileOpenSession = `-- name: DeleteProfileOpenSession :one
+const deleteProfileOpenSession = `-- name: DeleteProfileOpenSession :execrows
 DELETE FROM profile_open_sessions
 WHERE namespace_id = $1 AND id = $2
   AND owner_kind = $3 AND owner_id = $4
-RETURNING expires_at_ms
 `
 
 type DeleteProfileOpenSessionParams struct {
@@ -4607,18 +4579,19 @@ type DeleteProfileOpenSessionParams struct {
 	OwnerID     string
 }
 
-// Removes the session of the owner and answers its end. No row means that
+// Removes the session of the owner, ended or not. No row removed means that
 // the session does not exist or belongs to another owner.
 func (q *Queries) DeleteProfileOpenSession(ctx context.Context, arg DeleteProfileOpenSessionParams) (int64, error) {
-	row := q.db.QueryRow(ctx, deleteProfileOpenSession,
+	result, err := q.db.Exec(ctx, deleteProfileOpenSession,
 		arg.NamespaceID,
 		arg.ID,
 		arg.OwnerKind,
 		arg.OwnerID,
 	)
-	var expires_at_ms int64
-	err := row.Scan(&expires_at_ms)
-	return expires_at_ms, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteProxyRuleSet = `-- name: DeleteProxyRuleSet :execrows
@@ -13415,8 +13388,7 @@ INSERT INTO profile_open_sessions (
     created_at_ms, expires_at_ms
 ) VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8,
-    $9, $10
+    $6, $7, $8, $9, $10
 )
 `
 

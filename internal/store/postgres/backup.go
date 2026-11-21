@@ -52,15 +52,12 @@ const (
 	pgColIssuer      = "issuer"
 	pgColNamespace   = "namespace"
 	pgColNamespaceID = "namespace_id"
-	pgColOwnerKind   = "owner_kind"
-	pgColOwnerID     = "owner_id"
 	pgColReason      = "reason"
 	pgColSeq         = "seq"
 	pgColBlobKey     = "blob_key"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
-	pgColSealed      = "sealed"
 	pgColWrapperID   = "wrapper_id"
 	pgColScopeID     = "scope_id"
 	pgColStartedAtMs = "started_at_ms"
@@ -91,6 +88,9 @@ const (
 	pgColProviderID  = "provider_id"
 	pgColSink        = "sink"
 	pgColExpiresAtMs = "expires_at_ms"
+	pgColOwnerID     = "owner_id"
+	pgColOwnerKind   = "owner_kind"
+	pgColSealed      = "sealed"
 	pgColPoolID      = "pool_id"
 	pgColEnabled     = "enabled"
 )
@@ -542,6 +542,15 @@ func pgBlobDeleteLeaseControlTables() []pgCopyTable {
 	}
 }
 
+// pgProfileOpenSessionColumns lists the columns of the table of open
+// sessions.
+func pgProfileOpenSessionColumns() []string {
+	return []string{
+		pgColNamespaceID, "id", "root_profile_id", pgColOwnerKind, pgColOwnerID, "consumer", "paths", pgColSealed,
+		pgColCreatedAtMs, pgColExpiresAtMs,
+	}
+}
+
 // pgEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live
 // columns.
@@ -604,7 +613,7 @@ func pgEmptiedTables() []pgCopyTable {
 		{
 			table:   backup.TableProfileOpenSessions,
 			columns: pgProfileOpenSessionColumns(),
-			orderBy: []string{"namespace_id", "id"},
+			orderBy: []string{pgColNamespaceID, "id"},
 		},
 		{
 			table: backup.TableUnitState,
@@ -614,15 +623,6 @@ func pgEmptiedTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColUnitID},
 		},
-	}
-}
-
-// pgProfileOpenSessionColumns lists the COPY columns of the table of open
-// profile sessions.
-func pgProfileOpenSessionColumns() []string {
-	return []string{
-		pgColNamespaceID, "id", "root_profile_id", pgColOwnerKind, pgColOwnerID, "consumer", "paths",
-		pgColSealed, pgColCreatedAtMs, pgColExpiresAtMs,
 	}
 }
 

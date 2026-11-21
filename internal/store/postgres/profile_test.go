@@ -25,28 +25,7 @@ func TestProfileConformance(t *testing.T) {
 
 		return profiletest.Store{
 			Profiles: s.Profiles(), Namespaces: s, Audit: s, Records: s.Idempotency(wrapper),
-		}
-	})
-}
-
-func TestProfileSessionsConformance(t *testing.T) {
-	t.Parallel()
-
-	base := os.Getenv(envURL)
-	if base == "" {
-		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
-	}
-
-	profiletest.RunSessions(t, func(t *testing.T) profiletest.SessionStore {
-		t.Helper()
-
-		s := open(t, base)
-
-		wrapper := idempotencytest.TestWrapper(t, 1)
-
-		return profiletest.SessionStore{
-			Profiles: s.Profiles(), Sessions: s.Sessions(), Namespaces: s, Audit: s,
-			Records: s.Idempotency(wrapper),
+			Sessions: s.ProfileSessions(),
 		}
 	})
 }

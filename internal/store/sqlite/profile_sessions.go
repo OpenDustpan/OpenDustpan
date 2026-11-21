@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -15,259 +14,223 @@ import (
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
-var _ profile.Sessions = (*Sessions)(nil)
+var _ profile.Sessions = (*ProfileSessions)(nil)
 
-// Sessions is the store of open sessions on the database of a Store. It
-// implements profile.Sessions. A separate type keeps its methods apart from
-// the methods of the other ports of the Store.
-type Sessions struct {
+// ProfileSessions is the store of open sessions on the database of a Store.
+// It implements profile.Sessions. The table holds only the sealed result.
+type ProfileSessions struct {
 	store *Store
 }
 
-// Sessions returns the store of open sessions on s.
-func (s *Store) Sessions() *Sessions {
-	return &Sessions{store: s}
+// ProfileSessions returns the store of open sessions on s.
+func (s *Store) ProfileSessions() *ProfileSessions {
+	return &ProfileSessions{store: s}
 }
 
-// Put implements profile.Sessions.
-func (p *Sessions) Put(
+// Put implements profile.Sessions. The transaction holds the fence of the
+// namespace, so the insert and its audit entries are one step.
+func (p *ProfileSessions) Put(
 	ctx context.Context, sess profile.Session, fence namespace.Fence, e []audit.Entry,
 ) error {
-	if err := checkSessionPut(sess, fence, e); err != nil {
+	// Defense in depth: profile.NewSession checks a session, and only the zero
+	// value skips it. This check stays so that a store never writes a row of
+	// the zero value.
+	if sess.ID() == "" || sess.Namespace() != fence.Namespace {
+		return fmt.Errorf("%w: the session is not valid for the namespace of the fence",
+			profile.ErrInvalid)
+	}
+
+	paths, err := codec.EncodeSessionPaths(sess.Paths())
+	if err != nil {
 		return err
 	}
 
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
-	written := profile.SessionWritten{Session: sess}
+	return p.store.inAuditedWrite(ctx, fence, e, func() any { return profile.SessionWritten{Session: sess} },
+		func(q *db.Queries) error {
+			nsID, nsErr := profileNamespaceID(ctx, q, sess.Namespace())
+			if nsErr != nil {
+				return nsErr
+			}
 
-	return p.inAuditedTx(ctx, fence, e, &written, func(q *db.Queries) error {
-		return insertOpenSession(ctx, q, sess)
-	})
-}
+			if _, rootErr := liveProfile(ctx, q, nsID, sess.Root()); rootErr != nil {
+				return rootErr
+			}
 
-// checkSessionPut checks the entries, the session and the fence of a Put
-// before it writes.
-func checkSessionPut(sess profile.Session, fence namespace.Fence, e []audit.Entry) error {
-	if len(e) == 0 {
-		return fmt.Errorf("%w: a write needs at least one audit entry", profile.ErrInvalid)
-	}
+			owner := sess.Owner()
 
-	for n := range e {
-		if err := e[n].Validate(); err != nil {
-			return fmt.Errorf("audit entry: %w", err)
-		}
+			insertErr := q.InsertProfileOpenSession(ctx, db.InsertProfileOpenSessionParams{
+				NamespaceID: nsID, ID: sess.ID(), RootProfileID: string(sess.Root()), OwnerKind: string(owner.Kind),
+				OwnerID: owner.ID, Consumer: string(sess.Consumer()), Paths: paths, Sealed: sess.Sealed(),
+				CreatedAtMs: codec.Millis(sess.CreatedAt()), ExpiresAtMs: codec.Millis(sess.ExpiresAt()),
+			})
+			if isUniqueViolation(insertErr) {
+				return fmt.Errorf("%w: the session ID %q is in use", profile.ErrConflict, sess.ID())
+			}
 
-		if e[n].Namespace != fence.Namespace {
-			return fmt.Errorf("%w: entry names %q, fence names %q",
-				audit.ErrInvalidEntry, e[n].Namespace, fence.Namespace)
-		}
-	}
+			if insertErr != nil {
+				return fmt.Errorf("insert open session: %w", insertErr)
+			}
 
-	if err := sess.Valid(); err != nil {
-		return err
-	}
-
-	if sess.Namespace != fence.Namespace {
-		return fmt.Errorf("%w: session names %q, fence names %q", profile.ErrInvalid, sess.Namespace, fence.Namespace)
-	}
-
-	return nil
-}
-
-// insertOpenSession stores sess in the transaction of q: it reads the live root
-// and counts the live sessions of the owner before the insert.
-func insertOpenSession(ctx context.Context, q *db.Queries, sess profile.Session) error {
-	nsID, err := profileNamespaceID(ctx, q, sess.Namespace)
-	if err != nil {
-		return err
-	}
-
-	if _, err = liveProfile(ctx, q, nsID, sess.Root); err != nil {
-		return fmt.Errorf("root profile %s: %w", sess.Root, err)
-	}
-
-	live, err := q.CountLiveProfileOpenSessions(ctx, db.CountLiveProfileOpenSessionsParams{
-		NamespaceID: nsID, OwnerKind: string(sess.Owner.Kind), OwnerID: sess.Owner.ID,
-		NowMs: codec.Millis(sess.CreatedAt),
-	})
-	if err != nil {
-		return fmt.Errorf("count open sessions: %w", err)
-	}
-
-	if live >= profile.MaxLiveSessions {
-		return fmt.Errorf("%w: owner %s holds %d live sessions",
-			profile.ErrSessionLimit, sess.Owner.ID, profile.MaxLiveSessions)
-	}
-
-	paths, err := encodeSessionPaths(sess.Paths)
-	if err != nil {
-		return err
-	}
-
-	err = q.InsertProfileOpenSession(ctx, db.InsertProfileOpenSessionParams{
-		NamespaceID: nsID, ID: sess.ID, RootProfileID: string(sess.Root),
-		OwnerKind: string(sess.Owner.Kind), OwnerID: sess.Owner.ID, Consumer: sess.Consumer, Paths: paths,
-		Sealed: sess.Sealed, CreatedAtMs: codec.Millis(sess.CreatedAt), ExpiresAtMs: codec.Millis(sess.ExpiresAt),
-	})
-	if isUniqueViolation(err) {
-		return fmt.Errorf("%w: session %s is in use", profile.ErrConflict, sess.ID)
-	}
-
-	if err != nil {
-		return fmt.Errorf("insert open session: %w", err)
-	}
-
-	return nil
-}
-
-// Get implements profile.Sessions.
-func (p *Sessions) Get(
-	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner, now time.Time,
-) (profile.Session, error) {
-	p.store.mu.RLock()
-	defer p.store.mu.RUnlock()
-
-	nsID, err := profileNamespaceID(ctx, p.store.queries, ns)
-	if err != nil {
-		return profile.Session{}, err
-	}
-
-	row, err := p.store.queries.GetProfileOpenSession(ctx, db.GetProfileOpenSessionParams{
-		NamespaceID: nsID, ID: id, OwnerKind: string(owner.Kind), OwnerID: owner.ID, NowMs: codec.Millis(now),
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return profile.Session{}, profile.ErrNotFound
-	}
-
-	if err != nil {
-		return profile.Session{}, fmt.Errorf("select open session: %w", err)
-	}
-
-	return decodeSessionRow(ns, row)
-}
-
-// Delete implements profile.Sessions. It removes the session of the owner,
-// and answers ErrNotFound for a session that does not exist, also for an
-// ended session that a sweep has not removed yet, which it removes.
-func (p *Sessions) Delete(
-	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner,
-) error {
-	p.store.mu.RLock()
-	defer p.store.mu.RUnlock()
-
-	var ends int64
-
-	err := p.store.inTx(ctx, func(q *db.Queries) error {
-		nsID, err := profileNamespaceID(ctx, q, ns)
-		if err != nil {
-			return err
-		}
-
-		ends, err = q.DeleteProfileOpenSession(ctx, db.DeleteProfileOpenSessionParams{
-			NamespaceID: nsID, ID: id, OwnerKind: string(owner.Kind), OwnerID: owner.ID,
+			return nil
 		})
-		if errors.Is(err, sql.ErrNoRows) {
-			return profile.ErrNotFound
-		}
+}
 
-		return err
-	})
-	if err != nil {
-		return err
+// checkSessionKey returns profile.ErrNotFound for an ID that is not a session
+// ID and for an owner that cannot own a session. A caller learns nothing from
+// the text of the error.
+func checkSessionKey(id string, owner profile.SessionOwner) error {
+	// Defense in depth: the query binds each value as a parameter, and the
+	// service checks the ID too. This check stays so that a hostile ID never
+	// reaches the database.
+	if _, err := profile.ParseSessionID(id); err != nil {
+		return profile.ErrNotFound
 	}
 
-	if ends <= time.Now().UTC().UnixMilli() {
+	if err := owner.Valid(); err != nil {
 		return profile.ErrNotFound
 	}
 
 	return nil
 }
 
-// Sweep implements profile.Sessions.
-func (p *Sessions) Sweep(ctx context.Context, now time.Time, limit int) (int, error) {
-	if limit < 1 {
-		return 0, fmt.Errorf("%w: sweep limit must be 1 or more", profile.ErrInvalid)
+// Get implements profile.Sessions.
+func (p *ProfileSessions) Get(
+	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner, now time.Time,
+) (profile.Session, error) {
+	if err := checkSessionKey(id, owner); err != nil {
+		return profile.Session{}, err
 	}
 
 	p.store.mu.RLock()
 	defer p.store.mu.RUnlock()
 
-	var deleted int64
+	var (
+		nsID string
+		row  db.ProfileOpenSession
+	)
 
-	err := p.store.inTx(ctx, func(q *db.Queries) error {
-		n, err := q.DeleteEndedProfileOpenSessions(ctx, db.DeleteEndedProfileOpenSessionsParams{
-			NowMs: codec.Millis(now), PageLimit: int64(limit),
-		})
+	err := p.store.inReadTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		nsID, err = profileNamespaceID(ctx, q, ns)
 		if err != nil {
-			return fmt.Errorf("delete ended open sessions: %w", err)
+			return err
 		}
 
-		deleted = n
+		row, err = q.GetProfileOpenSession(ctx, db.GetProfileOpenSessionParams{
+			NamespaceID: nsID, ID: id, OwnerKind: string(owner.Kind), OwnerID: owner.ID, NowMs: codec.Millis(now),
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return profile.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select open session: %w", err)
+		}
 
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return profile.Session{}, err
 	}
 
-	return int(deleted), nil
+	return sessionFromRow(sessionReadKey{ns: ns, nsID: nsID, id: id, owner: owner, now: now}, row)
 }
 
-// encodeSessionPaths encodes paths as the JSON array of the paths column.
-// Empty means all paths.
-func encodeSessionPaths(paths []string) (string, error) {
-	if paths == nil {
-		paths = []string{}
+// sessionReadKey is the key of one read of Get: the namespace by name and by
+// stable ID, the ID of the session, the owner and the time of the read.
+type sessionReadKey struct {
+	ns    namespace.Name
+	nsID  string
+	id    string
+	owner profile.SessionOwner
+	now   time.Time
+}
+
+// sessionFromRow decodes the row that the query of Get found, and checks it
+// against the key of the read. A row of another namespace, of another owner or
+// of an ended session is profile.ErrNotFound. A row that fails the rules of
+// profile.NewSession is an error that wraps profile.ErrInvalid.
+func sessionFromRow(k sessionReadKey, row db.ProfileOpenSession) (profile.Session, error) {
+	// Defense in depth: the query holds the namespace, the ID, the owner and
+	// the clock. These checks stay so that a row of another namespace, of
+	// another owner or of an ended session never reaches a caller if the
+	// query changes.
+	if row.NamespaceID != k.nsID {
+		return profile.Session{}, profile.ErrNotFound
 	}
 
-	text, err := json.Marshal(paths)
+	sess, err := codec.ProfileSessionFromRow(k.ns, codec.ProfileOpenSessionRow(row))
 	if err != nil {
-		return "", fmt.Errorf("%w: encode session paths: %w", profile.ErrInvalid, err)
+		return profile.Session{}, err
 	}
 
-	return string(text), nil
-}
-
-// decodeSessionRow answers the session of row.
-func decodeSessionRow(ns namespace.Name, row db.ProfileOpenSession) (profile.Session, error) {
-	var paths []string
-
-	if err := json.Unmarshal([]byte(row.Paths), &paths); err != nil {
-		return profile.Session{}, fmt.Errorf("%w: stored session holds no paths: %w", profile.ErrInvalid, err)
+	if sess.ID() != k.id || sess.Owner() != k.owner || !sess.Live(k.now) {
+		return profile.Session{}, profile.ErrNotFound
 	}
 
-	return profile.Session{
-		ID: row.ID, Namespace: ns, Root: profile.ID(row.RootProfileID),
-		Owner: profile.SessionOwner{Kind: profile.OwnerKind(row.OwnerKind), ID: row.OwnerID}, Consumer: row.Consumer,
-		Paths: paths, Sealed: row.Sealed, CreatedAt: codec.FromMillis(row.CreatedAtMs),
-		ExpiresAt: codec.FromMillis(row.ExpiresAtMs),
-	}, nil
+	return sess, nil
 }
 
-// inAuditedTx runs fn and appends each entry of es in the same fenced
-// transaction. It checks every entry before the transaction starts. When ctx
-// carries an idempotency.Completion, the transaction also stores its answer
-// for written, which fn fills before it returns.
-func (p *Sessions) inAuditedTx(
-	ctx context.Context, fence namespace.Fence, es []audit.Entry, written *profile.SessionWritten,
-	fn func(q *db.Queries) error,
+// Delete implements profile.Sessions. The namespace is the namespace of the
+// fence.
+func (p *ProfileSessions) Delete(
+	ctx context.Context, id string, owner profile.SessionOwner, fence namespace.Fence, e []audit.Entry,
 ) error {
-	// The store appends the last entry after fn, so fn appends the others.
-	last := es[len(es)-1]
+	if err := checkSessionKey(id, owner); err != nil {
+		return err
+	}
 
-	return p.store.inFencedAuditedTx(ctx, fence, &last, func(q *db.Queries) error {
-		if err := fn(q); err != nil {
+	p.store.mu.RLock()
+	defer p.store.mu.RUnlock()
+
+	return p.store.inAuditedWrite(ctx, fence, e, func() any { return nil }, func(q *db.Queries) error {
+		nsID, err := profileNamespaceID(ctx, q, fence.Namespace)
+		if err != nil {
 			return err
 		}
 
-		for n := range len(es) - 1 {
-			if _, err := appendAuditEntry(ctx, q, es[n]); err != nil {
-				return fmt.Errorf("append audit entry: %w", err)
-			}
+		n, err := q.DeleteProfileOpenSession(ctx, db.DeleteProfileOpenSessionParams{
+			NamespaceID: nsID, ID: id, OwnerKind: string(owner.Kind), OwnerID: owner.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("delete open session: %w", err)
 		}
 
-		return finishCompletion(ctx, q, *written)
+		if n == 0 {
+			return profile.ErrNotFound
+		}
+
+		return nil
 	})
+}
+
+// Sweep implements profile.Sessions.
+func (p *ProfileSessions) Sweep(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit < 1 {
+		return 0, fmt.Errorf("%w: a sweep deletes 1 or more sessions", profile.ErrInvalid)
+	}
+
+	p.store.mu.RLock()
+	defer p.store.mu.RUnlock()
+
+	var n int64
+
+	err := p.store.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		n, err = q.DeleteEndedProfileOpenSessions(ctx, db.DeleteEndedProfileOpenSessionsParams{
+			NowMs: codec.Millis(now), PageLimit: int64(limit),
+		})
+
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("sweep open sessions: %w", err)
+	}
+
+	return int(n), nil
 }

@@ -23,9 +23,6 @@ const (
 	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColNamespaceID = "namespace_id"
-	backupColOwnerKind   = "owner_kind"
-	backupColOwnerID     = "owner_id"
-	backupColSealed      = "sealed"
 	backupColBlobKey     = "blob_key"
 	backupColReason      = "reason"
 	backupColWrapperID   = "wrapper_id"
@@ -60,6 +57,9 @@ const (
 	backupColScopeKey    = "scope_key"
 	backupColUnitID      = "unit_id"
 	backupColExpiresAtMs = "expires_at_ms"
+	backupColOwnerID     = "owner_id"
+	backupColOwnerKind   = "owner_kind"
+	backupColSealed      = "sealed"
 	backupColSeq         = "seq"
 	backupColJobID       = "job_id"
 	backupColPoolID      = "pool_id"
@@ -691,8 +691,16 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table: backup.TableProfileOpenSessions,
 			columns: []string{
-				backupColNamespaceID, "id", "root_profile_id", backupColOwnerKind, backupColOwnerID, "consumer",
-				"paths", backupColSealed, backupColCreatedAtMs, backupColExpiresAtMs,
+				backupColNamespaceID,
+				"id",
+				"root_profile_id",
+				backupColOwnerKind,
+				backupColOwnerID,
+				"consumer",
+				"paths",
+				backupColSealed,
+				backupColCreatedAtMs,
+				backupColExpiresAtMs,
 			},
 		},
 		{

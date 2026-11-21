@@ -22,7 +22,6 @@ Errors the person may hit, and the one command that helps:
 | The caller lacks profile:open on the namespace, on the open or on a later read of the session | 403. A read after the grant ended also deletes the session. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` |
 | The open reaches a provider block | 422 with the NEW code profile.provider and the name of the block. An open of a static profile with no blocks succeeds. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` |
 | The open asks a value that is marked never store | 422 with the NEW code profile.never-store and the path. | `POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open` (NEW route) with a `paths` list that leaves the path out |
-| The principal has 100 live sessions | 422 with the code profile.limit. | `GET /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}` (the person reads the revision, and waits for a session to end) |
 
 Evidence for the claims above (each one checked on main at the line):
 
@@ -120,7 +119,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "- Sessions are not in a backup, because they hold credentials that end"
 - Quote: "A refused open writes an entry too. A read of a session writes no entry,"
 - Quote (decision 11, actions table): "`profile:open` | the profile | Open, read the static secrets of a document, a diff with secrets." The row names no fresh sign-in. So an open and a session read with a personal token need `profile:open` only (owner, 2026-11-20). The reveal differs: it needs a console session with a recent sign-in (`docs/reference/profiles-api.md:155-158`, `pkg/profile/service.go:479-499`). This change keeps the reveal as it is.
-- Effect: The change implements the open for the three session consumers, the seal with the key of the root profile, the owner rule (the same principal), the recheck at each read, the exclusion from backups, and one audit entry of kind access for each open and each refused open. Sessions are for a principal. The rule for a job (at most 100 for each job) belongs to the job open, which is out of scope.
+- Effect: The change implements the open for the three session consumers, the seal with the key of the root profile, the owner rule (the same principal), the recheck at each read, the exclusion from backups, and one audit entry of kind access for each open and each refused open. Sessions are for a principal. Sessions have no cap on their count (ADR 392). The rate limit on opens that replaces the cap is not in this change, because RFC 135 is open.
 - Conflict: none. The old draft added a request field `mode`. Decision 1 has no such field, so this version drops it.
 
 **ADR 209: How each tool reads a profile** (owner-tagged: decision 3).
@@ -178,6 +177,6 @@ Questions considered and answered:
 - Does an open bind a session to a token or to a principal? To the principal. ADR 203 decision 3: "- Only the credential that opened a session reads it: the same" principal. A second token of the same principal reads the session. Reveal binds nothing, so this is the narrowest rule that the ADR gives for a person.
 - Does a key of the root profile exist? Yes: `Sealer` seals under the data key of a scope, and `scopeOf(namespace, profile ID)` makes the scope (`pkg/profile/service.go:22-25`, `pkg/profile/service.go:679`).
 - Does `$neverStore` on a plain value save? No. Main refuses it on purpose, a test pins it, and the docs say so. The old task that changed the rule is removed.
-- Does the 101st open of a job count? Jobs are out of scope. The limit of 100 live sessions is for each principal.
+- Is there a cap on live sessions? No. ADR 392 removes the cap of ADR 203 decision 3 for a principal and for a job. The rate limit on opens is in RFC 135 and not in this change.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs, and rewritten against main by the PM. Every quote, path and ADR citation was checked by code.

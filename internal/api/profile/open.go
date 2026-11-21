@@ -70,7 +70,7 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request, p identity.Princi
 	}
 
 	opened, err := h.profiles.Open(ctx, actorOf(r, p), profile.OpenInput{
-		Namespace: obj.Namespace(), Ref: target.Ref, Paths: body.Paths, Consumer: body.Consumer,
+		Namespace: obj.Namespace(), Ref: target.Ref, Paths: body.Paths, Consumer: profile.OpenConsumer(body.Consumer),
 		Duration: duration,
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func openAnswer(obj identity.Object) answerFunc {
 			return idempotency.Answer{}, errWrittenResult
 		}
 
-		return encodeOpenAnswer(w.Session.ID, w.Session.ExpiresAt)
+		return encodeOpenAnswer(w.Session.ID(), w.Session.ExpiresAt())
 	}
 }
 
@@ -147,7 +147,7 @@ func openSecretID(result any) string {
 		return ""
 	}
 
-	return w.Session.ID
+	return w.Session.ID()
 }
 
 // readSession serves GET /profile-sessions/{session}. It checks profile:open
