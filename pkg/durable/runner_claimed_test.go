@@ -304,16 +304,16 @@ func claimEndDigest() token.Digest {
 	return token.Digest{}
 }
 
-// TestClaimReleaseAtJobEnd proves that when the job of an accepted claim
-// ends, the server marks the claim ended with an end time, while the claim
-// of a job that still runs stays accepted.
+// TestClaimReleaseAtJobEnd proves that ReleaseByJob marks each accepted
+// claim of the ended job ended with an end time, while the claim of a job
+// that still runs stays accepted.
 func TestClaimReleaseAtJobEnd(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimEndFixture(t)
 	endJobOne(t, f.now)
 
-	// The end of the job releases its claim with an end time.
+	// ReleaseByJob ends the accepted claims of job-1 with an end time.
 	if n := f.registry.ReleaseByJob(t.Context(), "job-1", f.now.Add(time.Minute)); n != 1 {
 		t.Fatalf("released claims of job-1 = %d, want 1", n)
 	}
