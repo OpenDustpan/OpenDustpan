@@ -80,6 +80,18 @@ _Avoid_: Source unit (in new text about output sharing), upstream
 The unit that reads the outputs of a producer, in the language of output sharing (ADR 273). A sharing rule names it as a unit, as its collection or as its namespace.
 _Avoid_: Dependent (that is the side of a dependency edge), downstream, reader
 
+**Reader (of a sharing rule)**:
+The identity that a sharing rule lets read the outputs of a producer (ADR 393). The rule stores it as the issuer of an OpenDustpan namespace and stable-ID claims: the namespace ID, and the unit ID or the collection ID. A reader in the namespace of the producer has the local issuer. A job proves it with a short-lived token of its namespace issuer. The rule of the producer decides.
+_Avoid_: Consumer (the consumer is the unit that reads, not the identity in a rule), subscriber, grantee
+
+**Linked unit**:
+A read-only stack or workspace in the namespace of a consumer. It points at the URL of a producer unit in another namespace. The producer can be on the same installation or on another one. The producer approves its request, and the approval makes the sharing rule. The real CLIs read it through their own backend. It serves a state that holds only the shared outputs. The state is the latest version of the producer, or a version that the consumer pins (ADR 393).
+_Avoid_: Remote stack, proxy unit, mirror, imported unit
+
+**Delegated access**:
+Access to the outputs of a producer through a sharing rule whose reader is in another namespace. It depends on an access system that can be outside the control of the producer. The console and the docs say so at the rule, and the access review lists and flags the rule (ADR 393).
+_Avoid_: Cross-tenant grant, external grant
+
 **Output sharing default**:
 The namespace setting `outputSharing.newUnitDefault` that decides the sharing rule of a new unit (ADR 273). The value `nobody` is the default and gives a new unit no rule. The value `namespace` gives it one rule that names its namespace. A change of the setting changes no rule of a unit that exists.
 _Avoid_: Sharing policy, default visibility
