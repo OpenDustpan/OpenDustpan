@@ -46,7 +46,11 @@ func TestClaimRegistryGuardsRefuseBeforeTheStore(t *testing.T) {
 		mutate func(f *claimFixture, req *workspace.RegisterClaimRequest)
 		want   error
 	}{
-		{"empty set", func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Addresses = nil }, workspace.ErrClaimEmptySet},
+		{
+			"empty set",
+			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Addresses = nil },
+			workspace.ErrClaimEmptySet,
+		},
 		{
 			"blank addresses",
 			func(_ *claimFixture, r *workspace.RegisterClaimRequest) { r.Addresses = []string{" ", ""} },
