@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
@@ -37,7 +38,10 @@ const (
 // Config holds the dependencies of a Handler. Every field except Now and
 // Sessions is required.
 type Config struct {
-	Profiles      *profile.Service
+	Profiles *profile.Service
+	// Opens serves the open and the session read. Nil means Profiles. A test
+	// sets it to count the calls that reach the service.
+	Opens         OpenService
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
@@ -67,9 +71,18 @@ type Config struct {
 	Now         func() time.Time
 }
 
+// OpenService is the part of the profile service that the open routes call.
+type OpenService interface {
+	Open(ctx context.Context, a *profile.Actor, in profile.OpenInput) (profile.Opened, error)
+	ReadSession(
+		ctx context.Context, a *profile.Actor, ns namespace.Name, id string, paths []string,
+	) (profile.SessionData, error)
+}
+
 // Handler serves the profile API.
 type Handler struct {
 	profiles *profile.Service
+	opens    OpenService
 	authn    identity.Authenticator
 	authz    identity.Authorizer
 	guard    *refusal.Recorder
@@ -101,8 +114,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
+	var opens OpenService = cfg.Profiles
+	if cfg.Opens != nil {
+		opens = cfg.Opens
+	}
+
 	h := &Handler{
 		profiles: cfg.Profiles,
+		opens:    opens,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
 		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("profile"),

@@ -33,6 +33,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 
 	handler, err := profileapi.NewHandler(profileapi.Config{
 		Profiles:      svc,
+		Opens:         nil,
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,

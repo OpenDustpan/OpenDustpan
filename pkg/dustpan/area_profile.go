@@ -123,6 +123,7 @@ func newProfileHandler(in profileInputs) (http.Handler, error) {
 		Idempotency:   in.idempotency,
 		SessionPolicy: sessionPolicy,
 		Profiles:      profiles,
+		Opens:         nil,
 		Authenticator: in.authenticator,
 		Authorizer:    in.authorizer,
 		Sessions:      in.sessions,

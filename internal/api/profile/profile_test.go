@@ -65,6 +65,8 @@ func grantsOf(subject string) []identity.Action {
 		return []identity.Action{write}
 	case "manageonly":
 		return []identity.Action{manage}
+	case "opener":
+		return []identity.Action{open}
 	default:
 		return nil
 	}
@@ -275,6 +277,7 @@ func buildFixtureWith(
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       svc,
+		Opens:          nil,
 		Authenticator:  testAuthn{},
 		Authorizer:     authz,
 		Sessions:       nil,
@@ -1025,6 +1028,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       nil,
+		Opens:          nil,
 		Authenticator:  nil,
 		Authorizer:     nil,
 		Sessions:       nil,

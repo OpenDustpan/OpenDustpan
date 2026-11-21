@@ -62,6 +62,15 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request, p identity.Princi
 		return
 	}
 
+	// Defense in depth: the service checks the paths, the consumer and the
+	// duration too; these checks stay so that a hostile body never reaches
+	// the service, and so that a new caller of the service cannot skip them.
+	if checkErr := checkOpenBody(body); checkErr != nil {
+		h.writeError(ctx, w, checkErr)
+
+		return
+	}
+
 	duration, err := parseOpenDuration(body.Duration)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -69,7 +78,7 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request, p identity.Princi
 		return
 	}
 
-	opened, err := h.profiles.Open(ctx, actorOf(r, p), profile.OpenInput{
+	opened, err := h.opens.Open(ctx, actorOf(r, p), profile.OpenInput{
 		Namespace: obj.Namespace(), Ref: target.Ref, Paths: body.Paths, Consumer: profile.OpenConsumer(body.Consumer),
 		Duration: duration,
 	})
@@ -89,7 +98,29 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request, p identity.Princi
 	idempotent.Write(w, answer)
 }
 
+// checkOpenBody checks the paths and the consumer of an open body with the
+// rules of the service: at most MaxSessionPaths paths, each with the check of
+// profile.CheckOpenPath, and a consumer from the allowlist.
+func checkOpenBody(body openBody) error {
+	if len(body.Paths) > profile.MaxSessionPaths {
+		return fmt.Errorf("%w: an open asks at most %d paths", profile.ErrInvalid, profile.MaxSessionPaths)
+	}
+
+	for _, p := range body.Paths {
+		if err := profile.CheckOpenPath(p); err != nil {
+			return fmt.Errorf("open path: %w", err)
+		}
+	}
+
+	if _, err := profile.ParseOpenConsumer(body.Consumer); err != nil {
+		return fmt.Errorf("open consumer: %w", err)
+	}
+
+	return nil
+}
+
 // parseOpenDuration parses the duration of an open. Empty means the default.
+// A duration outside the window of a session is refused.
 func parseOpenDuration(raw string) (time.Duration, error) {
 	if raw == "" {
 		return 0, nil
@@ -98,6 +129,11 @@ func parseOpenDuration(raw string) (time.Duration, error) {
 	d, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%w: duration %q is not a duration: %w", profile.ErrInvalid, raw, err)
+	}
+
+	if d < profile.MinSessionDuration || d > profile.MaxSessionDuration {
+		return 0, fmt.Errorf("%w: duration %s is outside %s to %s",
+			profile.ErrInvalid, d, profile.MinSessionDuration, profile.MaxSessionDuration)
 	}
 
 	return d, nil
@@ -176,10 +212,18 @@ func (h *Handler) readSession(
 	var paths []string
 
 	if raw := queryOf(r).Get("path"); raw != "" {
+		// Defense in depth: the service checks the path too; this check stays
+		// so that a hostile path never reaches it.
+		if pathErr := profile.CheckOpenPath(raw); pathErr != nil {
+			h.writeError(ctx, w, fmt.Errorf("session path: %w", pathErr))
+
+			return
+		}
+
 		paths = []string{raw}
 	}
 
-	data, err := h.profiles.ReadSession(ctx, actorOf(r, p), obj.Namespace(), id, paths)
+	data, err := h.opens.ReadSession(ctx, actorOf(r, p), obj.Namespace(), id, paths)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

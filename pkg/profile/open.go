@@ -217,7 +217,7 @@ func (s *Service) ReadSession(
 	}
 
 	for _, p := range paths {
-		if err := checkOpenPath(p); err != nil {
+		if err := CheckOpenPath(p); err != nil {
 			return SessionData{}, err
 		}
 	}
@@ -331,8 +331,11 @@ func errOrInvalid(err error) error {
 	return ErrInvalid
 }
 
-// checkOpenPath checks one joined path of an open or a session read.
-func checkOpenPath(path string) error {
+// CheckOpenPath checks one joined path of an open or a session read: 1 to
+// MaxSessionPathBytes bytes, no control character (C0, DEL or C1) and no
+// invalid byte, and valid segments. It returns ErrInvalid otherwise. The
+// handler calls it too, so that both layers share one rule.
+func CheckOpenPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: a path is not empty", ErrInvalid)
 	}

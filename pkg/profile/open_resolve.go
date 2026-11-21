@@ -131,7 +131,7 @@ func parseAskedPaths(paths []string) (map[string][]string, error) {
 	for _, p := range paths {
 		// The same check as the session read: length, control characters and
 		// segments, before any read or decrypt.
-		if err := checkOpenPath(p); err != nil {
+		if err := CheckOpenPath(p); err != nil {
 			return nil, err
 		}
 
