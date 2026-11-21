@@ -8,6 +8,8 @@ Changed by:
   failover.
 - ADR 391 changes decision 3: a stored reference to a consumer unit or
   consumer collection of another namespace is its stable ID, never its name.
+- ADR 393 supersedes decision 3: a sharing rule names a reader by issuer and stable IDs. A linked unit carries a read across a boundary.
+- ADR 393 changes decision 5: check 2 applies to reads inside one namespace only.
 
 ## Context
 

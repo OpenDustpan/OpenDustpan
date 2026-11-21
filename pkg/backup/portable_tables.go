@@ -340,6 +340,21 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   TableOutputSharingRules,
+			OrderBy: []string{portColNamespace, "id"},
+			Columns: []Column{
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "id", Kind: KindText},
+				{Name: "producer_kind", Kind: KindText},
+				{Name: "producer_id", Kind: KindText},
+				{Name: "consumer_kind", Kind: KindText},
+				{Name: portColConsumerNamespace, Kind: KindText},
+				{Name: portColConsumerID, Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
 			Table: "object_context",
 			OrderBy: []string{
 				portColNamespaceID,
@@ -853,3 +868,11 @@ func portableProxyRuleTables() []PortableTable {
 		},
 	}
 }
+
+// portColConsumerNamespace is the column of the namespace of the consumer of a
+// sharing rule.
+const portColConsumerNamespace = "consumer_namespace"
+
+// portColConsumerID is the column of the stable ID of the consumer of a sharing
+// rule.
+const portColConsumerID = "consumer_id"

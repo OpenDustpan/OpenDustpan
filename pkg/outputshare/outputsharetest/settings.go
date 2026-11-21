@@ -18,6 +18,8 @@ const (
 	settingAction = "unit:manage-sharing"
 	// settingAtMs is the time of the audit entry, in Unix milliseconds.
 	settingAtMs = 1_790_000_000_000
+	// tester is the principal that the cases name as the actor.
+	tester = "tester"
 	// acme is the namespace of most cases.
 	acme namespace.Name = "acme"
 	// globex is the second namespace of the cases.
@@ -30,7 +32,7 @@ func settingEntry(fence namespace.Fence) audit.Entry {
 	return audit.Entry{
 		At:            time.UnixMilli(settingAtMs).UTC(),
 		Namespace:     fence.Namespace,
-		Subject:       "tester",
+		Subject:       tester,
 		IDPSubject:    "",
 		TokenID:       "",
 		Action:        settingAction,

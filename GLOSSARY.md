@@ -68,7 +68,7 @@ A rule of a namespace that matches a Pulumi project pattern and a stack-name pat
 _Avoid_: Routing rule, assignment rule
 
 **Sharing rule**:
-A rule of the producer namespace that lets the jobs of named units read the root outputs of a producer (ADR 273). Its producer is a unit, a collection or a namespace. Its consumer is a unit, a collection, or the namespace of the producer. It can name a unit or a collection of another namespace, never a whole other namespace, and never a principal. A job token reads the outputs of another unit only when two checks pass. A sharing rule names the unit of the job, and the principal whose grants decide holds `unit:read-outputs` on the producer. That principal is one of three (ADR 273 decision 5). It is the principal that started the job, or the last saver of the trigger that started the job. For an open of the profile block `outputs/opendustpan`, it is the attachment authority. A sharing rule gives a person nothing: a person reads outputs with a grant of `unit:read-outputs`.
+A rule of the producer namespace that lets the jobs of named units read the root outputs of a producer (ADR 273). Its producer is a unit, a collection or a namespace. Its consumer is a unit, a collection, or the namespace of the producer. It can name a unit or a collection of another namespace, never a whole other namespace, and never a principal. The rule keeps each unit and each collection by its stable ID, never by its name. A rename keeps the rule. A unit or collection that someone deletes and makes again does not match. A job token reads the outputs of another unit only when two checks pass. A sharing rule names the unit of the job, and the principal whose grants decide holds `unit:read-outputs` on the producer. That principal is one of three (ADR 273 decision 5). It is the principal that started the job, or the last saver of the trigger that started the job. For an open of the profile block `outputs/opendustpan`, it is the attachment authority. A sharing rule gives a person nothing: a person reads outputs with a grant of `unit:read-outputs`.
 _Avoid_: Remote state sharing (except when naming the HCP Terraform feature), output grant, share, output-sharing rule (in new text)
 _Copy says_: "sharing rule", with "who can read the outputs" where it helps. The `unit:read-outputs` and `unit:manage-sharing` action names stay in the API.
 
@@ -79,6 +79,18 @@ _Avoid_: Source unit (in new text about output sharing), upstream
 **Consumer**:
 The unit that reads the outputs of a producer, in the language of output sharing (ADR 273). A sharing rule names it as a unit, as its collection or as its namespace.
 _Avoid_: Dependent (that is the side of a dependency edge), downstream, reader
+
+**Reader (of a sharing rule)**:
+The identity that a sharing rule lets read the outputs of a producer (ADR 393). The rule stores it as the issuer of an OpenDustpan namespace and stable-ID claims: the namespace ID, and the unit ID or the collection ID. A reader in the namespace of the producer has the local issuer. A job proves it with a short-lived token of its namespace issuer. The rule of the producer decides.
+_Avoid_: Consumer (the consumer is the unit that reads, not the identity in a rule), subscriber, grantee
+
+**Linked unit**:
+A read-only stack or workspace in the namespace of a consumer. It points at the URL of a producer unit in another namespace. The producer can be on the same installation or on another one. The producer approves its request, and the approval makes the sharing rule. The real CLIs read it through their own backend. It serves a state that holds only the shared outputs. The state is the latest version of the producer, or a version that the consumer pins (ADR 393).
+_Avoid_: Remote stack, proxy unit, mirror, imported unit
+
+**Delegated access**:
+Access to the outputs of a producer through a sharing rule whose reader is in another namespace. It depends on an access system that can be outside the control of the producer. The console and the docs say so at the rule, and the access review lists and flags the rule (ADR 393).
+_Avoid_: Cross-tenant grant, external grant
 
 **Output sharing default**:
 The namespace setting `outputSharing.newUnitDefault` that decides the sharing rule of a new unit (ADR 273). The value `nobody` is the default and gives a new unit no rule. The value `namespace` gives it one rule that names its namespace. A change of the setting changes no rule of a unit that exists.

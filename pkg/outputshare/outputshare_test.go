@@ -28,7 +28,7 @@ func unitObject(t *testing.T, tool string, ns namespace.Name, name string) ident
 	return o
 }
 
-func rule(producer, consumer identity.Object) outputshare.Rule {
+func rule(producer identity.Object, consumer outputshare.Consumer) outputshare.Rule {
 	return outputshare.Rule{
 		CreatedAt: time.Time{},
 		ID:        "r-1",
@@ -38,15 +38,26 @@ func rule(producer, consumer identity.Object) outputshare.Rule {
 	}
 }
 
+func unitConsumer(ns namespace.Name, id string) outputshare.Consumer {
+	return outputshare.Consumer{Kind: outputshare.ConsumerUnit, Namespace: ns, ID: id}
+}
+
+func collectionConsumer(ns namespace.Name, id string) outputshare.Consumer {
+	return outputshare.Consumer{Kind: outputshare.ConsumerCollection, Namespace: ns, ID: id}
+}
+
+func namespaceConsumer(ns namespace.Name) outputshare.Consumer {
+	return outputshare.Consumer{Kind: outputshare.ConsumerNamespace, Namespace: ns, ID: ""}
+}
+
 func TestRuleValidate(t *testing.T) {
 	t.Parallel()
 
 	network := unitObject(t, "pulumi", acme, "net/prod").WithUnitID("stk-1")
-	web := unitObject(t, "opentofu", acme, "web").WithUnitID("ws-1")
-	otherWeb := unitObject(t, "opentofu", beta, "web")
+	web := unitConsumer(acme, "ws-1")
 	platform := identity.CollectionObject(acme, "platform").WithCollectionID("col-1")
-	otherPlatform := identity.CollectionObject(beta, "platform")
 	principal := identity.PrincipalObject("p-2")
+	tooLong := strings.Repeat("a", outputshare.MaxIDBytes+1)
 
 	for _, tc := range []struct {
 		name string
@@ -54,18 +65,16 @@ func TestRuleValidate(t *testing.T) {
 		ok   bool
 	}{
 		{"unit to unit", rule(network, web), true},
-		{"unit to a unit of another tool", rule(web, network), true},
-		{"unit to collection", rule(network, platform), true},
-		{"collection to namespace", rule(platform, identity.NamespaceObject(acme)), true},
-		{"namespace to namespace", rule(identity.NamespaceObject(acme), identity.NamespaceObject(acme)), true},
-		{"unit to a unit of another namespace", rule(network, otherWeb), true},
-		{"unit to a collection of another namespace", rule(network, otherPlatform), true},
-		{"unit to a whole other namespace", rule(network, identity.NamespaceObject(beta)), false},
-		{"unit to a principal", rule(network, principal), false},
+		{"unit to collection", rule(network, collectionConsumer(acme, "col-2")), true},
+		{"collection to namespace", rule(platform, namespaceConsumer(acme)), true},
+		{"namespace to namespace", rule(identity.NamespaceObject(acme), namespaceConsumer(acme)), true},
+		{"unit to a unit of another namespace", rule(network, unitConsumer(beta, "ws-9")), true},
+		{"unit to a collection of another namespace", rule(network, collectionConsumer(beta, "col-9")), true},
+		{"unit to a whole other namespace", rule(network, namespaceConsumer(beta)), false},
+		{"unit to a principal", rule(network, outputshare.Consumer{Kind: "principal", Namespace: acme, ID: "p-2"}), false},
 		{"principal as producer", rule(principal, web), false},
-		{"unit to the installation", rule(network, identity.ServerObject()), false},
-		{"unit to the caller", rule(network, identity.CallerObject()), false},
-		{"unit to the zero object", rule(network, identity.Object{}), false},
+		{"unit to the installation", rule(network, outputshare.Consumer{Kind: "server", Namespace: acme, ID: ""}), false},
+		{"unit to the zero consumer", rule(network, outputshare.Consumer{Kind: "", Namespace: "", ID: ""}), false},
 		{"zero producer", rule(identity.Object{}, web), false},
 		{"empty ID", withID(rule(network, web), ""), false},
 		{"ID with an upper case byte", withID(rule(network, web), "R-1"), false},
@@ -74,13 +83,26 @@ func TestRuleValidate(t *testing.T) {
 		{"no saver", withSaver(rule(network, web), ""), false},
 		{"producer unit with no stable ID", rule(unitObject(t, "pulumi", acme, "net/prod"), web), false},
 		{"producer collection with no stable ID", rule(identity.CollectionObject(acme, "platform"), web), false},
-		{"consumer unit of the namespace with no stable ID", rule(network, unitObject(t, "opentofu", acme, "web")), false},
-		{"consumer collection of the namespace with no stable ID", rule(network, identity.CollectionObject(acme, "platform")), false},
-		{"consumer unit of another namespace with a stable ID", rule(network, otherWeb.WithUnitID("ws-9")), false},
-		{
-			"consumer collection of another namespace with a stable ID",
-			rule(network, otherPlatform.WithCollectionID("col-9")), false,
-		},
+		{"consumer unit with no stable ID", rule(network, unitConsumer(acme, "")), false},
+		{"consumer collection with no stable ID", rule(network, collectionConsumer(acme, "")), false},
+		{"consumer unit of another namespace with no stable ID", rule(network, unitConsumer(beta, "")), false},
+		{"consumer ID with an upper case byte", rule(network, unitConsumer(beta, "WS-9")), false},
+		{"consumer ID with a slash", rule(network, unitConsumer(beta, "a/b")), false},
+		{"consumer ID with a line feed", rule(network, unitConsumer(beta, "a\nb")), false},
+		{"consumer ID with a dot", rule(network, collectionConsumer(beta, "a.b")), false},
+		{"consumer ID with a NUL", rule(network, unitConsumer(beta, "a\x00b")), false},
+		{"consumer ID with a multi-byte letter", rule(network, unitConsumer(beta, "caf\u00e9")), false},
+		{"consumer ID too long", rule(network, unitConsumer(beta, tooLong)), false},
+		{"consumer ID of the longest length", rule(network, unitConsumer(beta, tooLong[1:])), true},
+		{"consumer namespace that is empty", rule(network, unitConsumer("", "ws-9")), false},
+		{"consumer namespace with a slash", rule(network, unitConsumer("a/b", "ws-9")), false},
+		{"consumer namespace with a space", rule(network, unitConsumer("be ta", "ws-9")), false},
+		{"namespace consumer with an ID", rule(network, outputshare.Consumer{
+			Kind: outputshare.ConsumerNamespace, Namespace: acme, ID: "ws-1",
+		}), false},
+		{"consumer kind that is not in the allowlist", rule(network, outputshare.Consumer{
+			Kind: "Unit", Namespace: acme, ID: "ws-1",
+		}), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -114,11 +136,11 @@ func TestRuleCrossNamespace(t *testing.T) {
 
 	network := unitObject(t, "pulumi", acme, "net/prod")
 
-	if rule(network, unitObject(t, "opentofu", acme, "web")).CrossNamespace() {
+	if rule(network, unitConsumer(acme, "ws-1")).CrossNamespace() {
 		t.Fatal("a consumer of the same namespace is not across namespaces")
 	}
 
-	if !rule(network, identity.CollectionObject(beta, "platform")).CrossNamespace() {
+	if !rule(network, collectionConsumer(beta, "col-9")).CrossNamespace() {
 		t.Fatal("a collection of another namespace is across namespaces")
 	}
 }

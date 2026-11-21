@@ -979,6 +979,24 @@ CREATE TABLE oidc_providers (
     created_at_ms bigint NOT NULL
 );
 
+CREATE TABLE output_sharing_rules (
+    namespace text NOT NULL,
+    id text NOT NULL,
+    producer_kind text NOT NULL,
+    producer_id text DEFAULT ''::text NOT NULL,
+    consumer_kind text NOT NULL,
+    consumer_namespace text NOT NULL,
+    consumer_id text DEFAULT ''::text NOT NULL,
+    created_by text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    CONSTRAINT output_sharing_rules_consumer_check CHECK ((((consumer_kind = 'namespace'::text) AND (consumer_namespace = namespace) AND (consumer_id = ''::text)) OR ((consumer_kind = ANY (ARRAY['unit'::text, 'collection'::text])) AND (consumer_id <> ''::text)))),
+    CONSTRAINT output_sharing_rules_created_at_ms_check CHECK ((created_at_ms >= 0)),
+    CONSTRAINT output_sharing_rules_created_by_check CHECK ((created_by <> ''::text)),
+    CONSTRAINT output_sharing_rules_id_check CHECK (((length(id) >= 1) AND (length(id) <= 64) AND (id ~ '^[a-z0-9_-]+$'::text))),
+    CONSTRAINT output_sharing_rules_producer_check CHECK (((producer_kind = 'namespace'::text) = (producer_id = ''::text))),
+    CONSTRAINT output_sharing_rules_producer_kind_check CHECK ((producer_kind = ANY (ARRAY['unit'::text, 'collection'::text, 'namespace'::text])))
+);
+
 CREATE TABLE passkey_challenges (
     digest text NOT NULL,
     kind text NOT NULL,
@@ -2022,6 +2040,9 @@ ALTER TABLE ONLY object_context
 ALTER TABLE ONLY oidc_providers
     ADD CONSTRAINT oidc_providers_pkey PRIMARY KEY (provider_id);
 
+ALTER TABLE ONLY output_sharing_rules
+    ADD CONSTRAINT output_sharing_rules_pkey PRIMARY KEY (namespace, id);
+
 ALTER TABLE ONLY passkey_challenges
     ADD CONSTRAINT passkey_challenges_pkey PRIMARY KEY (digest);
 
@@ -2378,6 +2399,10 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions USING
 
 CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (namespace_id, object_kind, object_id, resource_key, source);
 
+CREATE INDEX output_sharing_rules_consumer ON output_sharing_rules USING btree (consumer_namespace, consumer_id) WHERE (consumer_id <> ''::text);
+
+CREATE UNIQUE INDEX output_sharing_rules_pair ON output_sharing_rules USING btree (namespace, producer_kind, producer_id, consumer_kind, consumer_namespace, consumer_id);
+
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
 
 CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges USING btree (kind, expires_at_ms);
@@ -2569,6 +2594,9 @@ ALTER TABLE ONLY object_context_owners
 
 ALTER TABLE ONLY passkeys
     ADD CONSTRAINT passkeys_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
+
+ALTER TABLE ONLY output_sharing_rules
+    ADD CONSTRAINT output_sharing_rules_namespace_fkey FOREIGN KEY (namespace) REFERENCES namespaces(name);
 
 ALTER TABLE ONLY person_preferences
     ADD CONSTRAINT person_preferences_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);

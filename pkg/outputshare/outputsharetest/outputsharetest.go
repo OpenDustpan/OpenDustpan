@@ -47,6 +47,26 @@ type Harness struct {
 	// tool store writes the rule of the setting of the namespace in the
 	// transaction that makes the unit.
 	Unit func(t *testing.T, tool string, ns namespace.Name, name, collection string) outputshare.Placement
+	// RemoveUnit is an optional hook: it deletes the unit as a person does,
+	// and the unit keeps its stable ID until a purge. A case that needs it
+	// skips when it is nil.
+	RemoveUnit func(t *testing.T, unit outputshare.Placement)
+	// PurgeUnit is an optional hook: it deletes the unit and purges it, so
+	// that the store removes the rules that name it. A case that needs it
+	// skips when it is nil.
+	PurgeUnit func(t *testing.T, unit outputshare.Placement)
+	// RenameUnit is an optional hook: it renames the unit and returns its
+	// placement with the new name and the same stable ID. A case that needs
+	// it skips when it is nil.
+	RenameUnit func(t *testing.T, unit outputshare.Placement, newName string) outputshare.Placement
+	// MoveUnit is an optional hook: it moves the unit into the collection
+	// and returns its placement. A case that needs it skips when it is nil.
+	MoveUnit func(t *testing.T, unit outputshare.Placement, collection string) outputshare.Placement
+	// RemakeCollection is an optional hook: it deletes the collection, which
+	// must hold no unit, makes it again with the same name and returns the
+	// new collection with its new stable ID. A case that needs it skips when
+	// it is nil.
+	RemakeCollection func(t *testing.T, ns namespace.Name, name string) identity.Object
 	// UnitFault is an optional hook: it makes a unit as Unit does, with a
 	// fault that the adapter injects after the write of the first rule and
 	// before the commit, and returns the error of the create. A case that
@@ -199,45 +219,7 @@ func withToolStores(cases []suiteCase) []suiteCase {
 
 // storeCases are the behaviors of Store.
 func storeCases() []suiteCase {
-	rules := []suiteCase{
-		{nil, "store: put and get round trip a rule on a unit, a collection and a namespace"},
-		{nil, "store: put refuses a rule that fails Validate and changes nothing"},
-		{nil, "store: put refuses a rule that names a principal"},
-		{nil, "store: put refuses a rule that names a whole other namespace"},
-		{nil, "store: put keeps a rule that names a unit or a collection of another namespace"},
-		{nil, "store: put refuses a producer or a consumer of the namespace with no stable ID"},
-		{nil, "store: put refuses a producer unit that does not exist with ErrUnknownObject"},
-		{nil, "store: put refuses a consumer unit or collection of the namespace that does not exist"},
-		{nil, "store: put refuses a stable ID that names another object than the name"},
-		{nil, "store: put refuses a consumer of another namespace with a stable ID"},
-		{nil, "store: put of a consumer of another namespace answers the same whether it exists or not"},
-		{nil, "store: put refuses a second rule with the same producer and consumer"},
-		{nil, "store: put refuses the rule past the limit of the producer"},
-		{nil, "store: put refuses a stale fence and a fence of another namespace"},
-		{nil, "store: a rule across namespaces carries the fence of the producer only"},
-		{nil, "store: get and delete of an unknown rule"},
-		{nil, "store: get and delete of a rule of another unit answer ErrNotFound and change nothing"},
-		{nil, "store: get and delete on a unit never reach the rule of its collection or its namespace"},
-		{nil, "store: get and delete on the namespace never reach the rule of a unit"},
-		{nil, "store: get and delete on a unit made again with the old name never reach the rule of the old unit"},
-		{nil, "store: get and delete refuse an invalid ID and an invalid namespace"},
-		{nil, "store: delete refuses a stale fence"},
-		{nil, "store: list returns the rules of one producer ordered by ID"},
-		{nil, "store: a rule is invisible to another namespace"},
-		{nil, "store: a rename of the producer or of a consumer in the namespace keeps the rule"},
-		{nil, "store: a collection of the namespace made again with the old name does not get the rules"},
-		{nil, "store: a collection of another namespace made again with the old name matches the rule"},
-		{nil, "store: the purge of a unit removes the rules that name it in its namespace"},
-		{nil, "store: find matches a rule on the unit, its collection and its namespace"},
-		{nil, "store: find matches a consumer unit, its collection and the namespace of the producer"},
-		{nil, "store: find never matches a namespace rule for a consumer of another namespace"},
-		{nil, "store: find matches a consumer of another namespace by its reference"},
-		{nil, "store: find after a move of the consumer to another collection"},
-		{nil, "store: find returns ErrNoRule when no rule matches"},
-		{nil, "store: find of a producer with no stable ID runs the same query and returns ErrNoRule"},
-		{nil, "store: find never matches a stored row that fails Validate"},
-		{nil, "store: find refuses an invalid placement"},
-	}
+	rules := withRuleStore(ruleCases())
 
 	return slices.Concat(rules, settingCases(), []suiteCase{
 		{nil, "store: set setting changes no rule of a unit that exists"},

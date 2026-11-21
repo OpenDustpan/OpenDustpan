@@ -47,8 +47,8 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 
 	s, path := openOutputShare(t)
 
-	return outputsharetest.Harness{
-		Store:        nil,
+	h := outputsharetest.Harness{
+		Store:        s.OutputSharingStore(),
 		Checker:      nil,
 		Attachments:  nil,
 		States:       nil,
@@ -56,7 +56,8 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 		SaveOutputs:  nil,
 		DeleteUnit:   nil,
 		DeleteOnRead: nil,
-		Settings:     s.OutputSharingSettings(),
+		RemoveUnit:   nil, PurgeUnit: nil, RenameUnit: nil, MoveUnit: nil, RemakeCollection: nil,
+		Settings: s.OutputSharingSettings(),
 		Namespace: func(t *testing.T, name string) namespace.Fence {
 			t.Helper()
 
@@ -83,13 +84,37 @@ func outputShareHarness(t *testing.T) outputsharetest.Harness {
 
 			return actions
 		},
-		Calls:    nil,
-		StoreRaw: nil,
+		Calls: nil,
+		StoreRaw: func(t *testing.T, r outputshare.Rule) {
+			t.Helper()
+
+			plantRuleRow(t, path, r)
+		},
 		SettingRaw: func(t *testing.T, ns namespace.Name, value string) {
 			t.Helper()
 
 			plantSettingRow(t, path, ns, value)
 		},
+	}
+
+	return outputsharetest.WithUnits(h, s)
+}
+
+// plantRuleRow writes the rule r as a row with direct SQL and the CHECK
+// constraints off, as a row of another version could hold it.
+func plantRuleRow(t *testing.T, path string, r outputshare.Rule) {
+	t.Helper()
+
+	conn := rawSettingDB(t, path)
+
+	if _, err := conn.ExecContext(t.Context(), `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("ignore check constraints: %v", err)
+	}
+
+	insert := outputsharetest.RawRuleInsertSQLite()
+
+	if _, err := conn.ExecContext(t.Context(), insert, outputsharetest.RawRuleRow(r)...); err != nil {
+		t.Fatalf("plant the sharing rule %q: %v", r.ID, err)
 	}
 }
 
@@ -422,5 +447,35 @@ func TestOutputSharingSettingSurvivesABackupRestore(t *testing.T) {
 	got, err := settings.Setting(ctx, "acme")
 	if err != nil || got != outputshare.DefaultNamespace {
 		t.Fatalf("Setting after the restore = %q, %v, want namespace", got, err)
+	}
+}
+
+// TestSharingRuleTableRefusesAnotherKind proves the layer of the table alone:
+// the CHECK constraints refuse a rule that names a principal, a whole other
+// namespace, an object with no stable ID or a namespace consumer with an ID,
+// also when the store code is skipped.
+func TestSharingRuleTableRefusesAnotherKind(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range outputsharetest.HostileRuleRows() {
+		t.Run(tc.Name, func(t *testing.T) {
+			t.Parallel()
+
+			s, path := openOutputShare(t)
+			ensureNamespace(t, s, "acme")
+
+			_, err := rawSettingDB(t, path).ExecContext(t.Context(), outputsharetest.RawRuleInsertSQLite(),
+				tc.Row[0], tc.Row[1], tc.Row[2], tc.Row[3], tc.Row[4], tc.Row[5], tc.Row[6], tc.Row[7],
+				int64(1))
+
+			switch {
+			case tc.OK && err != nil:
+				t.Fatalf("insert %s: %v", tc.Name, err)
+			case !tc.OK && (err == nil || !strings.Contains(err.Error(), "CHECK")):
+				t.Fatalf("insert %s = %v, want the refusal of a CHECK", tc.Name, err)
+			default:
+				// The row is accepted or refused as the case says.
+			}
+		})
 	}
 }

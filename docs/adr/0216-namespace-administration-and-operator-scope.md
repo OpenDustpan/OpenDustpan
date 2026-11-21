@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 273 changes decision 8: a sharing rule needs no acceptance of both
   namespaces.
+- ADR 393 changes decision 8: for output sharing, the producer rule and the reader linked unit are the acceptance of both sides.
 
 ## Context
 
