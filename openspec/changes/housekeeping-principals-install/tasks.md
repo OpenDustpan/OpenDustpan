@@ -24,6 +24,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 E2e: use an administrator access token. List the principals with the existing `GET /api/server/principals?kind=service&source=builtin`, and read the grants with the existing `GET /api/server/principals/{principal}/grants`, in `e2e/principals_test.go`. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Usability check: an operator finds the built-in principals and their grants from the page `docs/guides/principals-and-groups.md` alone. Check: the check is recorded in the pull request. A person's step.
-- [ ] 4.3 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 E2e: use an administrator access token. List the principals with the existing `GET /api/server/principals?kind=service&source=builtin`, and read the grants with the existing `GET /api/server/principals/{principal}/grants`, in `e2e/principals_test.go`. Check: `make e2e` passes.
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (housekeeping-principals-install 4.2)): Usability check: an operator finds the built-in principals and their grants from the page `docs/guides/principals-and-groups.md` alone. Check: the check is recorded in the pull request. Record the transcript in the pull request body.
+- [ ] 4.3 Full check. Check: `make check` reports zero findings.

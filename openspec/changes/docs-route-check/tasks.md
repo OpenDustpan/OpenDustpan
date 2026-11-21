@@ -22,7 +22,7 @@
   each marked route, or no route.
 - [ ] 2.2b In `docs/reference/settings-api.md:218`, write the route `/health/ready` with no method (``the route `/health/ready` answers 503 to a GET request``). Add no marker. Change no other line. Check: `TestDocsRoutesAreServed` reports no `server.route-not-found` for `docs/reference/settings-api.md`.
 - [ ] 2.2a In `docs/guides/backup-restore-upgrade.md:74`, change `GET /api/server/backups/{id}` to `GET /api/dustpan/v1/backups/{id}`, the route that `internal/api/server/backups.go:31-33` serves. Add no marker. Change no other line. Check: `TestDocsRoutesAreServed` reports no `server.route-not-found` for `docs/guides/backup-restore-upgrade.md`.
-- [x] 2.3 `make docs-lint` reports zero findings on `docs/reference/self-service-api.md`, `docs/guides/publish-a-blueprint.md`, `docs/guides/backup-restore-upgrade.md` and `docs/reference/settings-api.md`. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only). Credential: none. BLOCKED by: none.
+- [x] 2.3 `make docs-lint` reports zero findings on `docs/reference/self-service-api.md`, `docs/guides/publish-a-blueprint.md`, `docs/guides/backup-restore-upgrade.md` and `docs/reference/settings-api.md`. Check: the command exits 0. Credential: none. BLOCKED by: none.
 
 ## 3. Verification
 
@@ -36,4 +36,4 @@
 - [ ] 3.2 Prove guard 2 in `cmd/opendustpan/docs_routes_test.go` (NEW): ignore the marker in `routeIsMarked` (NEW);
   `TestDocsRouteCheckFailsOnAnUnservedRoute` fails. Check: the test names the
   marker.
-- [x] 3.3 `make check` reports zero findings on `cmd/opendustpan/docs_routes_test.go` (NEW). Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only). Credential: none. BLOCKED by: none.
+- [x] 3.3 `make check` reports zero findings on `cmd/opendustpan/docs_routes_test.go` (NEW). Check: the command exits 0. Credential: none. BLOCKED by: none.

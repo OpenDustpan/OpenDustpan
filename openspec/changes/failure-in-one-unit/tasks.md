@@ -19,7 +19,7 @@
 
 ## 4. definition of done
 
-- [ ] 4.1 Write the Terragrunt failure page. Check: Each command on the page runs as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/failure_in_one_unit_docs_test.go runs each command of the docs page against the e2e test server).
-- [ ] 4.2 Run the usability check of the failure path. Check: A Developer finds the failed unit from the docs page alone and each error names one command. A person's step.
+- [ ] 4.1 Write the Terragrunt failure page. Check: Each command on the page runs as written in a test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (failure-in-one-unit 4.2)): Run the usability check of the failure path. Check: A Developer finds the failed unit from the docs page alone and each error names one command. Record the transcript in the pull request body.
 - [ ] 4.3 Run the e2e fan-out apply over three units with one failing unit. Check: BLOCKED by the NEW fan-out change order apply path; runs on PostgreSQL over TLS with the real binary.
-- [ ] 4.4 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.4 Run the full check suite. Check: `make check` with zero findings.

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the design document of the change before the first test. Check: the design document of the change lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the design document of the change before the first test. Check: the design document of the change lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -20,13 +20,13 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wiring and routes keep their authorization actions Check: route test passes
+- [x] 4.1 Wiring and routes keep their authorization actions Check: route test passes
 - [x] 4.2 Update docs/guides/roles-and-grants.md and docs/guides/access-review.md; each command on the pages uses the route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review or DELETE /api/server/grants/{id} with a personal access token Check: the commands on the pages run in e2e
-- [ ] 4.3 Usability check: the persona completes the path from the docs page alone Check: each error names one helping command
-- [x] 4.5 Run TestCollectionGrantScope in the file e2e/collection_grants_test.go (e2e/collection_grants_test.go:46, TestCollectionGrantScope): the steps of tasks 1.1 to 1.4, with the real Pulumi CLI and OpenTofu, the route DELETE /api/server/grants/{id} and a personal access token of a non-admin person. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes. Confirmed by: CI (the agent writes the e2e test).
-- [x] 4.6 Run the discovery step of TestCollectionGrantScope in the file e2e/collection_grants_test.go (e2e/collection_grants_test.go:46, TestCollectionGrantScope) (ADR 374 decision 1) with the real OpenTofu CLI, the route GET /api/v2/organizations/{organization}/entitlement-set and a personal access token of a person who holds a grant on one collection only. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes, including the entitlement-set read before and after the revoke. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.4 Run the full check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only)
+- [x] 4.3 Usability check: the persona completes the path from the docs page alone Check: each error names one helping command
+- [x] 4.5 Run TestCollectionGrantScope in the file e2e/collection_grants_test.go (e2e/collection_grants_test.go:46, TestCollectionGrantScope): the steps of tasks 1.1 to 1.4, with the real Pulumi CLI and OpenTofu, the route DELETE /api/server/grants/{id} and a personal access token of a non-admin person. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes.
+- [x] 4.6 Run the discovery step of TestCollectionGrantScope in the file e2e/collection_grants_test.go (e2e/collection_grants_test.go:46, TestCollectionGrantScope) (ADR 374 decision 1) with the real OpenTofu CLI, the route GET /api/v2/organizations/{organization}/entitlement-set and a personal access token of a person who holds a grant on one collection only. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes, including the entitlement-set read before and after the revoke.
+- [ ] 4.4 Run the full check Check: `make check` with zero findings.

@@ -23,4 +23,4 @@
 ## 4. definition of done
 
 - [x] 4.1 Confirm the existing outputs routes use the Latest port with no new route Check: `TestLatestAnswersTheBitWithoutABlobRead` and `TestLatestStreamsTheBlobWhenTheBitIsNull` pass in pkg/workspace; the first counts no blob read with a present bit
-- [x] 4.2 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.2 Pass the full check Check: `make check` reports zero findings.

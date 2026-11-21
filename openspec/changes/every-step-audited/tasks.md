@@ -25,5 +25,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Extend `e2e/audit_export_test.go` on PostgreSQL through the real binary over TLS: delegate, run one agent step, list `GET /api/audit/entries` and call `GET /api/audit/check`. Check: the step passes in CI. BLOCKED by the Dusty run job.
-- [ ] 4.2 Run a usability check of the audit read path. Check: the persona completes the path from the docs page alone and each error names the one command that helps. A person's step.
-- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (every-step-audited 4.2)): Run a usability check of the audit read path. Check: the persona completes the path from the docs page alone and each error names the one command that helps. Record the transcript in the pull request body.
+- [ ] 4.3 Run the full check suite. Check: `make check` with zero findings.

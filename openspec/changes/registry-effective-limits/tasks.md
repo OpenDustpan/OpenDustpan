@@ -19,7 +19,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add a section with the six limits and the command that shows them to the registry publish page, docs/guides/registry-publish.md (the page that the parent change adds). Check: Docs page commands run as written for the read of the limits. Confirmed by: CI (an e2e step in the NEW file e2e/registry_effective_limits_test.go runs the command).
-- [ ] 4.2 Add an e2e step in NEW file e2e/registry_effective_limits_test.go that reads the limits with an access token and checks each value against the value in the error of a refused publish. Check: `make e2e` runs the step. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run the usability check of the read of the limits from the docs page alone. Check: A namespace administrator reads the limits from the docs page alone; the error of a missing grant names its one command. A person's step.
-- [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add a section with the six limits and the command that shows them to the registry publish page, docs/guides/registry-publish.md (the page that the parent change adds). Check: Docs page commands run as written for the read of the limits.go runs the command).
+- [ ] 4.2 Add an e2e step in NEW file e2e/registry_effective_limits_test.go that reads the limits with an access token and checks each value against the value in the error of a refused publish. Check: `make e2e` runs the step.
+- [ ] 4.3 Agent pre-run (human run-through in person-steps (registry-effective-limits 4.3)): Run the usability check of the read of the limits from the docs page alone. Check: A namespace administrator reads the limits from the docs page alone; the error of a missing grant names its one command. Record the transcript in the pull request body.
+- [ ] 4.4 Pass the full check. Check: `make check` reports zero findings.

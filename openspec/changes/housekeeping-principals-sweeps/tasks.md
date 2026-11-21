@@ -18,5 +18,5 @@ Order: part 1 (`housekeeping-principals-install`) is on main first.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Usability check: an operator finds who ran each of these sweeps in the audit log from the entry alone. Check: the check is recorded in the pull request. A person's step.
-- [ ] 3.2 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Agent pre-run (human run-through in person-steps (housekeeping-principals-sweeps 3.1)): Usability check: an operator finds who ran each of these sweeps in the audit log from the entry alone. Check: the check is recorded in the pull request. Record the transcript in the pull request body.
+- [ ] 3.2 Full check. Check: `make check` reports zero findings.

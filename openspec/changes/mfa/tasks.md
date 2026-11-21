@@ -19,6 +19,6 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Add e2e step with the real Pulumi CLI and OpenTofu in NEW file e2e/mfa_test.go. Route: POST /api/dustpan/v1/me/tokens, credential kind: session cookie with a fresh MFA step. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.2 Add docs page in NEW file docs/guides/mfa.md and run usability check. Check: Docs commands run as written. A person's step. `make docs-lint` passes on each edited guide.
-- [ ] 3.3 Pass the full check. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Add e2e step with the real Pulumi CLI and OpenTofu in NEW file e2e/mfa_test.go. Route: POST /api/dustpan/v1/me/tokens, credential kind: session cookie with a fresh MFA step. Check: `make e2e` passes.
+- [ ] 3.2 Add docs page in NEW file docs/guides/mfa.md and run usability check. Check: Docs commands run as written. `make docs-lint` passes on each edited guide.
+- [ ] 3.3 Pass the full check. Check: `make check` passes with zero findings.

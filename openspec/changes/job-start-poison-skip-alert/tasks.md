@@ -8,6 +8,6 @@
 
 ## 2. Definition of done
 
-- [ ] 2.1 Wire the counter and the alert into the server and add the docs page. Check: e2e step reads ANY /api/server/metrics with an installation administrator access token after 10 skips. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 2.2 Check that each error names one command. Check: usability check from the docs page alone. A person's step.
-- [ ] 2.3 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 2.1 Wire the counter and the alert into the server and add the docs page. Check: e2e step reads ANY /api/server/metrics with an installation administrator access token after 10 skips.
+- [ ] 2.2 Check that each error names one command. Check: usability check from the docs page alone.
+- [ ] 2.3 Run the full check. Check: `make check` with zero findings.

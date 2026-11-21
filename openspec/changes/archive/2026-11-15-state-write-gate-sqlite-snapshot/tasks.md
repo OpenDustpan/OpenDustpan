@@ -18,4 +18,4 @@ A test that passes on main from the start counts as done: main already has the b
 ## 3. Definition of done
 
 - [x] 3.1 No route, authorization or docs change. The production change is limited to `pkg/store/sqlite/sqlite.go` and `pkg/store/sqlite/inventory.go`, as the design describes. Check: the route test passes and no file under docs/ changes.
-- [x] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Evidence: CI of #3128 was green on its merge.
+- [x] 3.2 Run the local checks (`Makefile`). Check: `make check` reports zero findings. Evidence: CI of #3128 was green on its merge.

@@ -20,4 +20,4 @@
 ## 3. Definition of done
 
 - [x] 3.1 Add one line to docs/guides/principals-and-groups.md: the kind `agent` exists, a person cannot create it through the API, and the list filters by it. Check: `make docs-lint` passes on each edited guide.
-- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.2 Run the checks. Check: `make check` reports zero findings.

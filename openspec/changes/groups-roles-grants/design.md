@@ -73,3 +73,12 @@ flowchart LR
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Unit write | The grant ends between the grant read and the commit | Retry after a new grant | No write committed and the answer is 403 |
+
+## Main check (task 0.1)
+
+Each fact of "What main already does" was read at its file and function on the current main (`origin/main` at `96d0de656`). The function names match. The line numbers moved since the proposal was written:
+
+- Group grants: proposal says `pkg/access/access_test.go:394 (TestGroupGrants)`. On current main the function `TestGroupGrants` starts at `pkg/access/access_test.go:415`. Difference: +21 lines. Behavior is unchanged.
+- Built-in role families: proposal says `pkg/access/access_test.go:638 (TestBuiltInRoleFamilies)`. On current main the function `TestBuiltInRoleFamilies` starts at `pkg/access/access_test.go:661`. Difference: +23 lines. Behavior is unchanged.
+- Collection access review: proposal says `pkg/access/review_collection_test.go:65 (TestReviewOfACollection)`. On current main the function `TestReviewOfACollection` starts at `pkg/access/review_collection_test.go:65`. Difference: none.
+- File names of task 2.1: `pkg/access/authorizer.go` holds the grant check and `pkg/access/discovery.go` holds the discovery check. Both files exist on current main. No new file is needed.

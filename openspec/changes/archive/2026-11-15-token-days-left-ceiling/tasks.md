@@ -13,4 +13,4 @@
 ## 3. Proof
 
 - [x] 3.1 Run `go test -tags e2e ./e2e/ -run 'TestAccessTokens/sqlite' -count=12` (`e2e/tokens_test.go`). No route: the test runs the existing e2e test only. Check: 12 of 12 pass. Paste the output into the pull request.
-- [x] 3.2 Run the fast checks (build, vet, lint of `pkg/accesstoken` and `internal/cli/client`, the unit tests). Check: they pass. Confirmed by: CI (the agent runs the fast checks only). Paste the output into the pull request.
+- [x] 3.2 Run the fast checks (build, vet, lint of `pkg/accesstoken` and `internal/cli/client`, the unit tests). Check: they pass. Paste the output into the pull request.

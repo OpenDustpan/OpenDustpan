@@ -9,13 +9,13 @@
 - [x] 1.3 Find every other section that mentions group sync or identity provider membership. Edit each one that implies a refusal. List each edit in the pull request description. Check: rg -n -i 'identity provider|group claim|scim|sync' docs/guides/principals-and-groups.md lists each hit, and the description lists the edits. `make docs-lint` passes on each edited guide.
 - [x] 1.4 Compare the new wording with the sync code and the SQLite and PostgreSQL group_claims adapters. Confirm that the sync applies no protected-group rule. Check: rg -n -i 'protected' pkg/store/internal/groupclaims pkg/store/sqlite pkg/store/postgres shows no check of the flag in the sync, and the description records the result.
 - [x] 1.5 Comment on issue #2688 (a GitHub issue comment, no file edit; record the link in the pull request description for docs/guides/principals-and-groups.md): this change lands first, and each pull request that enforces the rule, in part or in full, must rewrite the guide sentence and update the catalog of code rules. Check: The comment on issue #2688 exists and the description links it.
-- [x] 1.6 Run docs lint on the edited guide docs/guides/principals-and-groups.md. Check: make docs-lint passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 1.6 Run docs lint on the edited guide docs/guides/principals-and-groups.md. Check: make docs-lint passes with zero findings.
 
 ## 2. Side effects (computed from main)
 
-- [x] 2.1 Confirm that no request flow changed, so the round-trip budgets stand. Confirmed by: CI (the round-trip tests pass unchanged).
+- [x] 2.1 Confirm that no request flow changed, so the round-trip budgets stand.
 - [x] 2.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Run the full check. Check: make check passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Run the full check. Check: make check passes with zero findings.

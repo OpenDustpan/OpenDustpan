@@ -13,8 +13,8 @@
 ## 2. Build and docs
 
 - [ ] 2.1 Wire run page to job, log, plan and approval routes from dependencies in the NEW file src/pages/run-page.ts of the console repository (OpenDustpan/console). Check: `GET /api/dustpan/v1/namespaces/{}/jobs/{}` returns phases, gates and approvals for the page.
-- [ ] 2.2 Write docs page for the run page path in NEW file docs/console/run-page.md. Check: Docs page runbook commands run as written against suite server. Confirmed by: CI (an e2e step in the NEW file e2e/console_2_docs_test.go runs each command of the docs page against the e2e test server).
-- [ ] 2.3 Run usability check of full run page path and record the result in NEW file docs/console/run-page-usability.md. Check: Developer completes timeline, log, diff and approval from docs page alone. A person's step.
+- [ ] 2.2 Write docs page for the run page path in NEW file docs/console/run-page.md. Check: Docs page runbook commands run as written against suite server.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Agent pre-run (human run-through in person-steps (console-2 2.3)): Run usability check of full run page path and record the result in NEW file docs/console/run-page-usability.md. Check: Developer completes timeline, log, diff and approval from docs page alone. Record the transcript in the pull request body.
 
 ## 3. Side effects (computed from main)
 
@@ -23,5 +23,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Verify wiring, route actions and public API use. Check: Route declares authorization actions for job read, log read, plan read and approval write.
-- [ ] 4.2 Run e2e step with the real server and a real runner job. Check: BLOCKED by the job routes of add-job-service-routes-start-1 and the approval route of policy-approvals; once they land, browser tests call `GET /api/dustpan/v1/namespaces/{}/jobs/{}` with a personal token of a principal that holds the read action. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Run e2e step with the real server and a real runner job. Check: BLOCKED by the job routes of add-job-service-routes-start-1 and the approval route of policy-approvals; once they land, browser tests call `GET /api/dustpan/v1/namespaces/{}/jobs/{}` with a personal token of a principal that holds the read action.
+- [ ] 4.3 Run make check with zero findings. Check: `make check` reports zero findings.

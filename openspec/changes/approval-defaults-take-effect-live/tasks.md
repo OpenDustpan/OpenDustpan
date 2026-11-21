@@ -23,6 +23,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step in the NEW file `e2e/jobs_apply_approval_test.go` that starts an apply of an OpenTofu workspace on a runner with the real OpenTofu CLI, sets the default with `PUT /api/dustpan/v1/namespaces/{namespace}/approval-default`, shows `awaiting-approval`, approves with two principals and shows the apply. Check: the step passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add an e2e step in the NEW file `e2e/jobs_apply_approval_test.go` that starts an apply of an OpenTofu workspace on a runner with the real OpenTofu CLI, sets the default with `PUT /api/dustpan/v1/namespaces/{namespace}/approval-default`, shows `awaiting-approval`, approves with two principals and shows the apply. Check: the step passes.
 - [ ] 4.2 Update `docs/guides/approval-rules.md` and `docs/reference/jobs-api.md` for the apply start, the wait and the recheck, and remove the lines that say that an apply is not accepted. Check: the docs commands run in an e2e step in the NEW file `e2e/jobs_apply_approval_docs_test.go`, and `make docs-lint` passes. Confirmed by: CI.
-- [ ] 4.3 Run the usability check from the docs page alone and `make check` with zero findings. Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Run the usability check from the docs page alone and `make check` with zero findings. Check: `make check` reports zero findings.

@@ -21,6 +21,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run the e2e step against the Dusty loop and the MCP tools/list route with an access token. Check: Toolset call through the Dusty loop with an access token passes the agent:use gate; BLOCKED by dusty-proposes-change-order for the draft route. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Usability check from the docs page alone. Check: Each error names its one command. A person's step.
-- [ ] 4.3 Run make check. Check: make check reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Run the e2e step against the Dusty loop and the MCP tools/list route with an access token. Check: Toolset call through the Dusty loop with an access token passes the agent:use gate; BLOCKED by dusty-proposes-change-order for the draft route.
+- [ ] 4.2 Usability check from the docs page alone. Check: Each error names its one command.
+- [ ] 4.3 Run make check. Check: make check reports zero findings.

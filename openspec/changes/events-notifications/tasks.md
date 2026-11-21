@@ -13,7 +13,7 @@
 
 - [ ] 2.1 Append notices in the job transaction and in the token expiry schedule with fence and audit entry, in pkg/notify (notice builders) and pkg/accesstoken/accesstoken.go (expiry schedule). Check: `go test ./pkg/notify/... ./pkg/job/...` passes.
 - [ ] 2.2 Wire dispatcher checks, enqueue idempotence, retry backoff, suspend and redeliver in pkg/notify through the existing subscription deliveries route. Declaration file: the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand). Adapter file: internal/api/notifications. Check: `GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries` with a personal access token of a principal that holds namespace:manage-notifications lists pending rows with reason.
-- [ ] 2.3 Run e2e in NEW file e2e/notifications_test.go with a webhook sink and a matching subscription against the real binary over TLS. Check: `POST /api/dustpan/v1/namespaces/{namespace}/subscriptions` and `GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries` with a personal access token; the real receiver logs signed POSTs for one Pulumi and one OpenTofu job. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 2.3 Run e2e in NEW file e2e/notifications_test.go with a webhook sink and a matching subscription against the real binary over TLS. Check: `POST /api/dustpan/v1/namespaces/{namespace}/subscriptions` and `GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries` with a personal access token; the real receiver logs signed POSTs for one Pulumi and one OpenTofu job.
 
 ## 3. Side effects (computed from main)
 
@@ -21,6 +21,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write docs page in the existing file docs/guides/notification-destinations.md: extend it with create sink, subscribe with type filter, rotate signing secret, redeliver, read deliveries, order by sequence. Check: Docs page commands run as written in a fresh install. Confirmed by: CI (an e2e step in the NEW file e2e/events_notifications_docs_test.go runs each command of the docs page against the e2e test server). A person's step. `make docs-lint` passes on each edited guide.
-- [ ] 4.2 Usability check with namespace administrator and recorded errors. Check: Persona completes sink to signed delivery from the docs page alone. A person's step.
-- [ ] 4.3 Route actions, route test, audit entries, and conformance suites pass. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Write docs page in the existing file docs/guides/notification-destinations.md: extend it with create sink, subscribe with type filter, rotate signing secret, redeliver, read deliveries, order by sequence. Check: Docs page commands run as written in a fresh install.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
+- [ ] 4.2 Agent pre-run (human run-through in person-steps (events-notifications 4.2)): Usability check with namespace administrator and recorded errors. Check: Persona completes sink to signed delivery from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.3 Route actions, route test, audit entries, and conformance suites pass. Check: `make check` with zero findings.
