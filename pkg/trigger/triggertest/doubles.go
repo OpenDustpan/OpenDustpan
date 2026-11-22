@@ -19,9 +19,9 @@ import (
 // builds its Dispatcher with Doubles.Dispatcher over its own Store, and the
 // suite drives the doubles through the methods below.
 type Doubles struct {
-	revoked map[string]bool
-	reused  map[string]string
-	audited map[namespace.Name][]audit.Entry
+	revoked   map[string]bool
+	reused    map[string]string
+	audited   map[namespace.Name][]audit.Entry
 	last      map[graph.Unit]string
 	afterLast func()
 	next      int
