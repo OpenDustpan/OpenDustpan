@@ -23,7 +23,7 @@ func sweepChainServer(
 	t.Helper()
 
 	return &Server{
-		claimSweeper:      nil,
+		claimSweeper:         nil,
 		kind:                 kindState{store: nil, principals: nil, kind: ""},
 		instances:            instanceState{store: nil, id: "", version: "", registered: nil},
 		ready:                nil,
