@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #1254.
@@ -18,8 +18,8 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A job token writes state outside its phase | 403 denied: the phase of the job did not pass change.apply and the write is not the lock or lease of its plan. | `kubectl logs -l app=opendustpan --tail=100` |
-| A job token writes the state of a unit outside its job | 403 denied: the job token names a unit outside its job. | `kubectl logs -l app=opendustpan --tail=100` |
+| A job token writes state outside its phase | 403: The credential of the caller may not make this write. The server log names the job, the phase and the gate message. | `kubectl logs -l app=opendustpan --tail=100` |
+| A job token writes the state of a unit outside its job | 403: The credential of the caller may not make this write. The server log names the job and the unit. | `kubectl logs -l app=opendustpan --tail=100` |
 
 Evidence for the claims above:
 
@@ -32,7 +32,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Add a gate subject source in `pkg/dustpan` (NEW `jobClaimSubjects`) that wraps `principalSubjects`. For a job-token principal it reads the job by `Principal.JobID` from the job store on each call and sets `Subject.Job` (job, phase, PassedApply, units). `GuardStateWrite` already asks the subject source on each write, so the claim is fresh and no adapter can skip it.
+- Add a gate subject source in `pkg/dustpan` (NEW `jobClaimSubjects`) that wraps `principalSubjects`. For a job-token principal it reads the job by `Principal.JobID` from the job store on each call and sets `Subject.Job` (job, phase, PassedApply, units). `GuardStateWrite` already asks the subject source on each write, so the claim is fresh on each route that calls the guard on main.
 - Refuse with identity.ErrDenied any other write of a phase that did not pass change.apply, any write for a unit outside its job, and any write whose claim does not resolve.
 
 Out of scope:
@@ -42,6 +42,7 @@ Out of scope:
 - Console display of decision records
 - A new read route for decision records
 - Unit-import operation kind and the HTTP backend path
+- A guard call on the write paths that `stategate.UncheckedPaths` lists on main (Pulumi update create and start, TFE state-version create without a lock, the HTTP backend write of a job that holds its plan lock). A later change adds each check and moves the path to `CheckedPaths`. Until then a job token on those paths meets no state.write gate.
 
 Depends on:
 
