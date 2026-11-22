@@ -1,18 +1,18 @@
 ---
-version: 8
+version: 9
 ---
 
 Issue: #982, #1026.
 
 ## Why
 
-**Persona: runner operator.** A runner operator runs a pool whose runners claim jobs. The launcher of each claim needs the session paths that move one job phase forward: open the session, renew the claim, read source, get the job token, report steps and logs, and upload and commit the plan. Each path needs a clear cap and a clear error.
+**Persona: runner operator.** A runner operator runs a pool whose runners claim jobs. The launcher of each claim needs the session paths that move one job phase forward: open the session, renew the claim, get the job token, report steps and logs, and upload and commit the plan. Each path needs a clear cap and a clear error.
 
 The user path this change must make work:
 
 1. **API.** The runner polls and claims a job phase with its runner key. The server takes the claim kinds from the pool.
 2. **API.** The launcher opens a job session with the handoff token, then renews the claim through the session renew path.
-3. **API.** The launcher reads source, begins and ends steps, streams log chunks, uploads plan parts and commits the plan once.
+3. **API.** The launcher begins and ends steps, streams log chunks, uploads plan parts and commits the plan. A repeat of the same commit answers 204.
 4. **Docs page.** The runner operator reads docs/reference/runner-api.md for each session path, cap and error code.
 5. **E2e.** The step drives the real launcher against POST /runner/v1/session with a handoff token, then the session paths with the session key proof (action runner:claim).
 
@@ -22,8 +22,8 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | The launcher calls a session path with a bad, expired or replayed session proof, or with a runner key. | 401 {"code": "bad-proof", "message": "session proof failed"} | `POST /runner/v1/session/renew` (new in this change) with a fresh proof of the session key |
 | The launcher writes after a takeover, cancel or expiry ended the claim. | 409 {"code": "claim-lost", "message": "claim no longer live"} | `POST /runner/v1` poll path of the runner (route of main under /runner/v1) with the runner key to take the next claim |
-| The launcher sends a log chunk above 1 MiB, above a session cap, out of order or with a wrong hash. | 400 {"code": "invalid", "message": "log chunk refused"} | `POST /runner/v1/session/logs` (new in this change) with the same sequence number and the correct Dustpan-Content-SHA256 |
-| The launcher commits the plan a second time for one phase. | 409 {"code": "plan-committed", "message": "plan already committed"} | `POST /runner/v1/session/renew` (new in this change) to keep the claim, then stop: the first commit stands |
+| The launcher sends a log chunk above 1 MiB, above a step or phase cap, out of order or with a wrong hash. | 400 {"code": "invalid", "message": "log chunk refused"} | `POST /runner/v1/session/logs` (new in this change) with the same sequence number and the correct Dustpan-Content-SHA256 |
+| The launcher commits other plan parts after a commit stored the plan. | 409 {"code": "conflict", "message": "..."} (ADR 131 decision 13; a repeat with the same parts and hashes answers 204) | `POST /runner/v1/session/renew` to keep the claim, then stop: the first commit stands |
 
 Evidence for the claims above:
 
@@ -33,15 +33,19 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Main already has these routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go:164-199, PathSession* in pkg/runner/protocol/protocol.go:75-117). Main also has their tests in internal/api/runnerapi/session_test.go and internal/api/runnerapi/session_guard_test.go, and the docs rows at docs/reference/runner-api.md:160-163.
-- This change adds the routes that main declares but does not route: PathSessionSource (pkg/runner/protocol/protocol.go:83), PathSessionSourceObject (:86), PathSessionPlanPart (:89), PathSessionPlanUpload (:107) and PathSessionPlanCommit (:110). The credentials path (PathSessionCredentials) belongs to `add-job-session-paths-runner-token-issuer`. This change adds their caps, their tests and their docs rows.
-- A runner key on a session path and a session key on a runner path both answer 401 bad-proof.
-- The session paths serve job claims only. A namespace pool with the sweep purpose is refused.
-- Upload caps, a log sequence rule, the Dustpan-Content-SHA256 check, and one plan commit with a stored result.
-- Entries in docs/reference/runner-api.md for each session path, cap and error code.
+Most of the plan paths and session routes are already on main. This change adds only what main lacks. After the re-check against main 18f6d4d3d, the gaps are the phase caps of the log, the hostile tests of the plan caps and the sweep pool, and the docs rows for the caps.
+
+- Main already has the session routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go, PathSession* in pkg/runner/protocol/protocol.go:75-117), with tests in internal/api/runnerapi/session_test.go and internal/api/runnerapi/session_guard_test.go.
+- Main already routes and tests the three plan paths: PathSessionPlanUpload, PathSessionPlanCommit and PathSessionPlanPart, through `planRoutes` (internal/api/runnerapi/plan.go:22-47, called from `buildRoutes` in internal/api/runnerapi/routes.go:63). Their tests are in internal/api/runnerapi/plan_test.go (TestPlanUploadAndCommit, TestPlanCommitIsChecked, TestPlanRoutesWithALostClaim, TestPlanRoutesNeedTheKeyOfTheSession). The docs rows are at docs/reference/runner-api.md:170-172 and the e2e step is e2e/path_runner_apply_test.go. This change does not route them again.
+- The server refuses a log step with more than `protocol.MaxLogChunksPerStep` chunks (internal/api/runnerapi/session.go:557-575). `protocol.MaxLogBytesPerStep`, `protocol.MaxLogChunksPerPhase` and `protocol.MaxLogBytesPerPhase` (pkg/runner/protocol/protocol.go:156-162) are declared and the server does not enforce them: only the launcher checks the step cap (the log writer of the launcher run package). This change adds the server check of the three limits, in the transaction of the chunk write, with hostile tests.
+- A runner key on a session path and a session key on a runner path both answer 401 bad-proof. Main has tests for the plan paths (TestPlanRoutesNeedTheKeyOfTheSession); this change adds the same hostile test for the log and step paths.
+- The session paths serve job claims only. Main refuses a sweep claim at the exchange (TestSweepExchangeIsRefused, internal/api/runnerapi/session_guard_test.go:337). This change adds the hostile test for a namespace pool with the sweep purpose.
+- A plan commit follows ADR 131 decision 13. A repeat with the same parts and hashes under the same claim answers 204. Other parts after a commit answer `conflict`. Main already does this (the CommitPlan method of the job plan recorder port; TestPlanUploadAndCommit expects 204 for the second commit). This change adds no new error code.
+- Entries in docs/reference/runner-api.md for the log and plan caps (per phase and per step).
 
 Out of scope:
 
+- The source paths PathSessionSource and PathSessionSourceObject (pkg/runner/protocol/protocol.go:83-86). The server has no source pipeline to serve them: runnerapi.Config holds no source dependency, the assignment has `Source: nil` (internal/api/runnerapi/session.go:362), and the snapshot store port of the source package has no adapter. Follow-up: the source paths come in a later change, after the source pipeline of ADR 135 lands.
 - The sweep report, finish routes and all sweep code.
 - The credentials path and the job token issuer (`add-job-session-paths-runner-token-issuer`).
 - The launcher binary modes, runner pool routes and the runner pool e2e, in other changes.
@@ -67,6 +71,11 @@ Each fact names its file, line and function on main. The change specifies only t
 - ErrSessionWaitPassed exists in the runner package. (`pkg/runner/runner.go:100`)
 - RecordClaim is a store port method. (`pkg/runner/store.go:153`)
 - The job token credential kind exists. ((read only) `pkg/identity/identity.go` line 113)
+- The three plan paths are routed by `planRoutes` and tested. (`internal/api/runnerapi/plan.go:22`, `internal/api/runnerapi/routes.go:63`, `internal/api/runnerapi/plan_test.go:301`)
+- A second plan commit with the same parts answers 204. (the CommitPlan method of the job plan recorder port, `internal/api/runnerapi/plan_test.go:314`)
+- The step log cap is checked in the handler. (`internal/api/runnerapi/session.go:557`)
+- The per-phase and per-step byte limits are constants with no server check. (`pkg/runner/protocol/protocol.go:156-162`)
+- The assignment carries no source. (`internal/api/runnerapi/session.go:362`)
 
 ## Owner decisions that apply
 
@@ -80,12 +89,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 131: The runner protocol** (not owner-tagged).
 
-- Decisions that apply: 1 (current), 3 (current), 10 (current), 11 (current), 14 (current).
+- Decisions that apply: 1 (current), 3 (current), 10 (current), 11 (current), 13 (current), 14 (current).
 - Changed by: ADR 139 extends decision 6. Chain to the end: ADR 139, ADR 282, ADR 304, ADR 343, ADR 310.
 - Current rule: this ADR, with ADR 139.
 - Quote: "Logs. The launcher sends the output of each step in chunks of at most 1 MiB, with numbers from 0 and the header `Dustpan-Content-SHA256`."
 - Quote: "Plans and outputs. After the last step that names an output, the launcher uploads each part of the plan, then commits the plan in one call."
-- Effect: The change serves the session paths, caps and errors as decided.
+- Quote: "A plan commit with the same parts and hashes under the same claim changes nothing and answers 204. A plan commit with other parts after a commit fails with `conflict`." (docs/adr/0131-the-runner-protocol.md:214-216, decision 13). Changed-by check: ADR 139 extends decision 6; no later ADR in the chain changes decision 13. The change keeps this rule and adds no new error code for a repeat commit.
+- Effect: The change adds the phase caps and tests for the session paths as decided.
 - Conflict: none.
 
 **ADR 130: Runner pools, runners and coordinators** (owner-tagged: decision 3).
@@ -95,15 +105,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 164, 300, 343.
 - Quote: "A pool has a purpose that never changes (owner)."
 - Effect: The session paths take the claim kind from the pool and serve job claims only.
-- Conflict: none.
-
-**ADR 135: The source pipeline: snapshots of git packs** (not owner-tagged).
-
-- Decisions that apply: 3 (current).
-- Changed by: ADR 199 extends decision 1; ADR 213 extends decision 6; ADR 220 changes decision 9; ADR 222 changes decision 6; ADR 226 changes decision 6. Chain to the end: ADR 199, ADR 213, ADR 220, ADR 222, ADR 226, ADR 286, ADR 310, ADR 241, ADR 244, ADR 265, ADR 267, ADR 271, ADR 273, ADR 300, ADR 309, ADR 353, ADR 363, ADR 335, ADR 351, ADR 354, ADR 240, ADR 258, ADR 263, ADR 342, ADR 248, ADR 313, ADR 343, ADR 299, ADR 307, ADR 338, ADR 369, ADR 370, ADR 303, ADR 336, ADR 297, ADR 358, ADR 366, ADR 365, ADR 328, ADR 359, ADR 368.
-- Current rule: this ADR, with ADR 199, 213, 220, 222, 226.
-- Quote: "The runner never connects to the forge for the code."
-- Effect: The source path reads the snapshot through the session.
 - Conflict: none.
 
 **ADR 100: A shared job model on durable operations** (not owner-tagged).
@@ -131,6 +132,7 @@ none
 Questions considered and answered:
 
 - Can a sweep-purpose pool reach the job session paths? No. Owner decision, 13 Nov 2026 (queue P14), with ADR 130 decision 3: claim kinds come from the pool, and a namespace pool with the sweep purpose is refused.
+- Where do the source paths go? Out of this change: the source pipeline of ADR 135 has no adapter on main. A later change adds them after the pipeline lands.
 - Does the Idempotency-Key rule apply? No. ADR 210 decision 2 keeps runner paths outside the tool-neutral API; the replay rule of ADR 131 decision 13 applies.
 - Who routes the credentials path? `add-job-session-paths-runner-token-issuer`. This change adds no credentials route and no issue logic.
 
