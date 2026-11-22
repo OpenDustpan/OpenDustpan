@@ -4,7 +4,7 @@ ADR 370 gives each housekeeping purpose its own built-in service principal with 
 
 ## Decisions
 
-1. **One closed list of purposes.** NEW `principal.HousekeepingPurpose` is a type with unexported fields. Its values come only from NEW `principal.HousekeepingPurposes()`. Each value has a stable subject (`housekeeping:<purpose>`), a role name and the actions of that role. A purpose that is not in the list cannot exist, so no code can act as a housekeeping principal of a made-up purpose.
+1. **One closed list of purposes.** NEW `principal.HousekeepingPurpose` is a type with unexported fields. Its values come only from NEW `principal.HousekeepingPurposes()`. Each value has a stable subject (`housekeeping:<purpose>`) and a role name. The actions of each role live in `pkg/access/roles.go` and nowhere else, because `pkg/access` imports `pkg/principal`, so the `principal` package cannot hold them. The table "Roles of the housekeeping principals" gives the role name and the exact actions of each purpose. A purpose that is not in the list cannot exist, so no code can act as a housekeeping principal of a made-up purpose.
 2. **The install writes principals and grants.** In the transaction that makes the installation, the store writes one principal of kind `service` and source `builtin` for each purpose, and one stored grant of its role on its object, with the install as the creator and the install time. Code defines the role. The grant row decides who holds it.
 3. **The store filters by source.** The store applies the `source` filter in the list query and in the count query. The service does not filter after the read, because that breaks the page totals and the cursors.
 4. **The seed is part of the empty installation.** The principals and grants of the baseline exist in every new installation, so the shared suites expect them: each total is the seeded count plus the rows of the test, and the count comes from `principal.HousekeepingPurposes()`. The suites do not filter the seeded rows out and the store does not hide them, because a hidden principal is a rule that a user cannot see (No magic).
@@ -24,7 +24,7 @@ This part adds no guard. The table of hostile cases for each guard is in part 3.
 
 Types and functions (`pkg/principal`):
 
-- NEW type `principal.HousekeepingPurpose`, with unexported fields. A value comes only from the closed list of NEW `principal.HousekeepingPurposes()`. Each value has the subject `housekeeping:<purpose>`, a role name and the actions of that role.
+- NEW type `principal.HousekeepingPurpose`, with unexported fields. A value comes only from the closed list of NEW `principal.HousekeepingPurposes()`. Each value has the subject `housekeeping:<purpose>` and a role name. The actions of the role are in `pkg/access/roles.go` (see "Roles of the housekeeping principals").
 - NEW `principal.Housekeeping(purpose)` returns the `identity.Principal` of one purpose.
 - NEW source `builtin`, a constant next to `SourceLocal` (`pkg/principal/principal.go:132`). `validateSource` (`pkg/principal/principal.go:649`) accepts it. An unknown source returns `principal.ErrInvalid`.
 
@@ -59,6 +59,34 @@ The caller of each purpose on main is in the design document of its part. The ru
 | `issuer-rotation` | part 3 |
 
 This part writes the principal and the grants of all eleven purposes, so the sweeps of part 2 and part 3 find them.
+
+## Roles of the housekeeping principals
+
+This table is the contract of the roles. Part 2 and part 3 use it as it is. The NEW constants, descriptions and action lists go in `pkg/access/roles.go` (the constant block, `builtInDescriptions` and `builtInActions`), in the style of `RoleTokenManager`: a lower-case name with hyphens, and a comment that says what the role may do. Each role name is `housekeeping-<purpose>`, and the NEW constant is `RoleHousekeeping<Purpose>` (for example `RoleHousekeepingArtifactSweep = "housekeeping-artifact-sweep"`). A role holds only the actions in its row, and no built-in role gets any of them (the family lists stay as on main). No family list changes, except the two classifications in note 3.
+
+The "Action values" column names the actions as `identity.Action` values on main ((read only) `pkg/identity/identity.go`). The caller of each purpose has no authorizer call on main, so the action of a row comes from the audit entry that the purpose writes now, or, when that name is not an `identity.Action`, from the action that a person needs for the same effect. A row that says "OPEN" has no action on main or needs an owner choice. Such a row is not final, and its role is not written until the question is answered (proposal, "Open questions").
+
+| Purpose | Subject | Role name | Action values | Object scope | Evidence on main |
+| --- | --- | --- | --- | --- | --- |
+| `agent-reaper` | `housekeeping:agent-reaper` | `housekeeping-agent-reaper` | `namespace:manage-agent-runs` (ends the orphan runs). The sweep of expired reveals: OPEN Q2. | Each namespace (OPEN Q1) | (read only) `internal/agent/reaper.go` (line 53) (`Reap`); (read only) `pkg/identity/identity.go` (line 529) |
+| `artifact-sweep` | `housekeeping:artifact-sweep` | `housekeeping-artifact-sweep` | OPEN Q2: none on main. The audit action `job:artifact-sweep` is not an `identity.Action`. Proposal: NEW `server:sweep-artifacts`. | `@server` | (read only) `pkg/job/artifactsweep.go` (line 33) and `:654` |
+| `blob-sweep` | `housekeeping:blob-sweep` | `housekeeping-blob-sweep` | OPEN Q2: none on main. Proposal: NEW `server:sweep-blobs`. | `@server` | (read only) `pkg/workspace/service.go` (line 2527) (`deleteExpiredBlobs`) |
+| `checkpoint-sweep` | `housekeeping:checkpoint-sweep` | `housekeeping-checkpoint-sweep` | OPEN Q2: none on main. Proposal: NEW `server:sweep-checkpoints`. | `@server` | (read only) `pkg/stack/superseded_sweep.go` (line 72) (`SweepSuperseded`) |
+| `history-retention` | `housekeeping:history-retention` | `housekeeping-history-retention` | `unit:redact` (a redaction of the cause `retention`). | Each namespace (OPEN Q1) | (read only) `pkg/history/redaction.go` (line 22) (`RetentionReason`) and `:45` (`CauseRetention`); (read only) `pkg/identity/identity.go` (line 598); (read only) `internal/api/jobs/routes.go` (line 193) |
+| `issuer-rotation` | `housekeeping:issuer-rotation` | `housekeeping-issuer-rotation` | `namespace:manage-issuer` | Each namespace (OPEN Q1) | (read only) `internal/issuersvc/settings.go` (line 197) (`serverEntry`) and `:98` (the check of a person) |
+| `job-reconcile` | `housekeeping:job-reconcile` | `housekeeping-job-reconcile` | OPEN Q3. Derived from code: `job:cancel` and the start action of the job (`unit:run-plan`, `unit:run-apply`, `unit:run-destroy`, `unit:write-back`). | Each namespace (OPEN Q1) | (read only) `pkg/job/reconcile.go` (line 279), `:340` (`ActionJobCancel`) and `:451` (`reconcileAction`, which returns the first start requirement) |
+| `name-lock-prune` | `housekeeping:name-lock-prune` | `housekeeping-name-lock-prune` | OPEN Q2: none on main. The audit action `sign-in.name-locks-pruned` is not an `identity.Action`. Proposal: NEW `server:prune-name-locks`. | `@server` | (read only) `internal/localusersvc/locks.go` (line 359) and `:510` |
+| `saved-view-cleanup` | `housekeeping:saved-view-cleanup` | `housekeeping-saved-view-cleanup` | `view:delete` | Each namespace (OPEN Q1) | (read only) `pkg/savedview/service.go` (line 266) (`systemEntry`) |
+| `temp-admin-expiry` | `housekeeping:temp-admin-expiry` | `housekeeping-temp-admin-expiry` | OPEN Q2: none on main. The audit action `server:manage-temporary-administrators` is not an `identity.Action`. Proposal: NEW `server:expire-temporary-administrators`. | `@server` | (read only) `pkg/tempadmin/tempadmin.go` (line 189); (read only) `pkg/tempadmin/service.go` (line 365) |
+| `token-sweep` | `housekeeping:token-sweep` | `housekeeping-token-sweep` | `server:manage-token-policy` | `@server` | (read only) `pkg/accesstoken/policy.go` (line 204) (`SweepEntry`); (read only) `pkg/access/access.go` (line 167) |
+
+Notes:
+
+1. **Object.** A row that says `@server` is a grant on the installation object (`identity.ServerObject`). A row that says "Each namespace" names actions of the data family: a grant on `@server` reaches them only when the setting `access.installationGrantsReachNamespaces` is `true`. Q1 asks how the grant is made.
+2. **Least privilege.** No role holds a read action that its purpose does not use, and no role holds a delegation action, a token action or `server:manage-principals`. The test of task 1.4 checks this for each role.
+3. **Classification.** `unit:redact` and `namespace:manage-agent-runs` are in the action list of (read only) `pkg/identity/identity.go` (lines 601 and 532) and not in the `families` map of `pkg/access/access.go` (checked by `rg` on main). A role can hold them only after the build classifies them, as `FamilyData`, like the other actions on a namespace, a collection or a unit. This is a NEW line in `pkg/access/access.go` for each action. It changes no built-in role on its own. The classification is not final until Q1 is answered, because Q1 may move them out of the data family.
+4. **The `agent-reaper` row** names the end of an orphan run. The sweep of expired sealed reveals in the same `Reap` call has no action on main (Q2).
+5. **Proposed names** in Q2 follow the `server:` prefix of the operator and administration actions on main (ADR 210 decision 7 renames the area to `installation:`; the rename lands in its own change, and the new names follow it then).
 
 ## Risks
 

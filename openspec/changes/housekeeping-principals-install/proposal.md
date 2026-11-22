@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #3289.
 
 Decision: ADR 370. Part 1 of 3 of the housekeeping principals. Part 2 is `housekeeping-principals-sweeps`. Part 3 is `housekeeping-principals`, which keeps the name of the whole work, so each change that waits for "housekeeping-principals" waits for all three parts. This part touches no file of the access token, identity and sign-in packages.
@@ -25,7 +29,7 @@ Evidence for the claims above:
 ## What Changes
 
 - NEW: one built-in service principal for each housekeeping purpose, made at the install, with the source `builtin`.
-- NEW: the install step writes the grants of each housekeeping principal as stored grants, with the install as the creator and the install time. A role for each purpose holds only the actions that the purpose needs.
+- NEW: the install step writes the grants of each housekeeping principal as stored grants, with the install as the creator and the install time. A role for each purpose holds only the actions that the purpose needs. The role name and the exact actions of each purpose are in the table "Roles of the housekeeping principals" of the design document, and the constants, descriptions and action lists are NEW in `pkg/access/roles.go`.
 - NEW: the `source` filter of `GET /api/server/principals` and the `builtin` source. The other routes exist on main.
 - NEW: a portable restore clears the seeded principals and grants of the new baseline before it loads the backup, so the restored installation has the rows of the backup.
 - Test side only: the shared suites of principals, namespace principals and access expect the seeded rows in their totals, page orders and review counts.
@@ -78,6 +82,21 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 - Effect: This part builds the principals of decision 2 and the stored grants of decision 3 at the install, in the baseline (decision 4). Decision 3 revoke and denial are built by part 2 and part 3. Decision 1 is built by the first trigger change.
 - Conflict: none.
 
+**ADR 216: Access scopes and the reach of the installation grant** (owner-tagged: decision 7).
+
+- Decisions that apply: 7 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "With `true`, a grant on `@server` reaches each namespace, as ADR 52 decision 5 says. With `false`, a grant on `@server` gives only the actions of the operator scope. It never gives an action inside a namespace."
+- Effect: A role of a housekeeping principal that holds data actions (for example `unit:redact`) works through a grant on `@server` only when the setting is `true`. This change does not decide how the grant is made when the setting is `false`. See Q1.
+- Conflict: possible, depending on the answer to Q1. Not decided here.
+
+**ADR 52: Namespaces, collections and units** (decision 5, the grant chain unit, collection, namespace, `@server`).
+
+- Quote: "a grant on `@server` reaches each namespace" (as ADR 216 decision 7 cites it).
+- Effect: The rows of the role table that say "Each namespace" depend on this chain and on ADR 216 decision 7.
+- Conflict: none.
+
 **ADR 322: No migrations or compatibility code before the first tag** (owner-tagged: decisions 1, 2, 4 and 5).
 
 - Decisions that apply: 1 (changed).
@@ -89,7 +108,33 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 
 ## Open questions
 
-none
+The action of four purposes comes from code: `token-sweep` (final), and `history-retention`, `issuer-rotation` and `saved-view-cleanup` (final except for Q1). The other seven rows of the role table in the design document are marked "OPEN". Nothing in them is decided, and an implementing agent must not guess them. This change is not ready for an agent until the owner answers Q1 to Q3.
+
+**Q1. How does a housekeeping principal reach the namespaces?** (touches the owner-tagged ADR 216 decision 7 and ADR 370 decision 3)
+
+Five roles hold actions of the data family on namespaces: `agent-reaper`, `history-retention`, `issuer-rotation`, `job-reconcile` and `saved-view-cleanup`. A grant on `@server` gives these actions only when `access.installationGrantsReachNamespaces` is `true`. OpenDustpan Cloud locks the value `false`, so a grant on `@server` would stop these purposes there.
+
+- Option A: write the grants on `@server` only, as the table says. Cost: the five per-namespace purposes stop when the setting is `false`. No ADR change.
+- Option B: NEW actions of the operator family for these purposes, which act inside namespaces for the housekeeping principals only. Cost: ADR 216 decision 7 says that a grant on `@server` "never gives an action inside a namespace", so this needs an amendment by the owner.
+- Option C: the install writes the grants on `@server` for the installation-wide purposes, and the creation of each namespace writes one stored grant of each per-namespace role on that namespace (creator: the server, with the time). Cost: five grants for each namespace, visible in the access review. ADR 370 decision 3 says "The install step writes the grants of each housekeeping principal"; the namespace step needs an amendment by the owner.
+- Recommendation: C. Every grant stays a visible stored row, and the sweeps work with the setting `false` (No magic). The cost is a larger access review and an ADR 370 amendment.
+- 3 a.m. summary: without an answer, the purposes that clean up inside namespaces either stop in Cloud (A) or need a rule that ADR 216 forbids today (B).
+
+**Q2. Which actions do the purposes with no action on main hold?** (security semantics; no owner ADR conflict)
+
+`artifact-sweep`, `blob-sweep`, `checkpoint-sweep`, `name-lock-prune`, `temp-admin-expiry` and the reveal sweep of `agent-reaper` write audit actions that are not `identity.Action` values on main, so no existing action describes them.
+
+- Option A: NEW narrow actions in the operator family: `server:sweep-artifacts`, `server:sweep-blobs`, `server:sweep-checkpoints`, `server:prune-name-locks`, `server:expire-temporary-administrators` and `server:sweep-agent-reveals`. Each role holds one. Cost: six new actions in `pkg/identity/identity.go` and `pkg/access/access.go`, and a change of the `server:` prefix with the rename of ADR 210 decision 7.
+- Option B: reuse a wide action (for example `server:maintenance`, `server:manage-sign-in`, `server:manage-principals`). Cost: each role then holds more than its purpose needs.
+- Recommendation: A, because least privilege is the point of ADR 370 decision 2.
+
+**Q3. Does `job-reconcile` hold the start actions of the jobs it continues?** (security semantics)
+
+`reconcileAction` returns the start action of the job ((read only) `pkg/job/reconcile.go` (line 451)). To authorize with it, the role holds `unit:run-plan`, `unit:run-apply`, `unit:run-destroy` and `unit:write-back`, with `job:cancel`.
+
+- Option A: hold these five actions. Cost: the principal could start a destroy if someone holds its credential. Part 3 refuses a credential for it, and it is a stored grant that can be revoked.
+- Option B: NEW action `job:reconcile`, which the authorizer accepts for the continuation of a job that a person started. Cost: one new action and a rule in the job service.
+- Recommendation: B.
 
 Questions considered and answered:
 
