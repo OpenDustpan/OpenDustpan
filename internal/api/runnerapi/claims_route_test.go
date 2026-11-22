@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -155,8 +156,13 @@ type testClaimDeleted struct {
 	deleted map[workspace.ID]bool
 }
 
-func (f *testClaimDeleted) IsDeleted(_ context.Context, id workspace.ID) (bool, error) {
-	return f.deleted[id], nil
+func (f *testClaimDeleted) DeletedWorkspace(_ context.Context, id workspace.ID) (workspace.Workspace, bool, error) {
+	var gone workspace.Workspace
+
+	gone.ID = id
+	gone.Ref = workspace.Ref{Namespace: "acme", Name: "network"}
+
+	return gone, f.deleted[id], nil
 }
 
 // claimDoc is one claim of a register or list answer.
@@ -171,6 +177,8 @@ type claimDoc struct {
 	State       string   `json:"state"`
 	StartedAt   string   `json:"startedAt"`
 	EndedAt     string   `json:"endedAt"`
+	LeaseEndsAt string   `json:"leaseEndsAt"`
+	RenewedAt   string   `json:"renewedAt"`
 }
 
 // claimListDoc is a list answer.
@@ -195,6 +203,8 @@ type claimWorld struct {
 	tokens  *fakeJobTokenStore
 	deleted *testClaimDeleted
 	spaces  *testClaimWorkspaces
+	// clock is the clock of the claim registry, in Unix milliseconds.
+	clock *atomic.Int64
 }
 
 // liveTokenMatch returns a live job token match for job jobID on unit.
@@ -277,7 +287,7 @@ func newClaimWorld(t *testing.T, authz identity.Authorizer) *claimWorld {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	unit = unit.WithUnitID("unit-claims-1")
+	unit = unit.WithUnitID(string(wsID))
 
 	tokens := &fakeJobTokenStore{matches: make(map[jobtoken.Digest]jobtoken.Match)}
 	secrets := make(map[string]string)
@@ -292,13 +302,17 @@ func newClaimWorld(t *testing.T, authz identity.Authorizer) *claimWorld {
 		tokens.matches[jobtoken.DigestOf(secret)] = liveTokenMatch(now, secret, jobID, unit)
 	}
 
+	clock := new(atomic.Int64)
+	clock.Store(now.UnixMilli())
+
 	registry, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
 		Workspaces: spaces,
 		Versions:   versions,
 		Deleted:    deleted,
 		Manual:     nil,
-		OnAccept:   nil,
-		Now:        func() time.Time { return now },
+		Store:      workspace.NewMemoryClaimStore(spaces),
+		Now:        func() time.Time { return time.UnixMilli(clock.Load()).UTC() },
+		Lease:      0,
 	})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -324,7 +338,7 @@ func newClaimWorld(t *testing.T, authz identity.Authorizer) *claimWorld {
 
 	return &claimWorld{
 		env: e, wsID: string(wsID), base: string(base), unit: unit, secret: secrets, tokens: tokens,
-		deleted: deleted, spaces: spaces,
+		deleted: deleted, spaces: spaces, clock: clock,
 	}
 }
 
@@ -462,6 +476,14 @@ func TestClaimRoutesDeclareActions(t *testing.T) {
 	for i := range w.env.handler.Routes() {
 		route := &w.env.handler.Routes()[i]
 
+		if route.Path == runnerapi.PathWorkspaceClaimRenew {
+			if len(route.Actions) != 1 || route.Actions[0] != identity.ActionUnitClaimRegister {
+				t.Errorf("POST renew declares %v, want unit:claim-register", route.Actions)
+			}
+
+			continue
+		}
+
 		if route.Path != runnerapi.PathWorkspaceClaims {
 			continue
 		}
@@ -483,8 +505,9 @@ func TestClaimRoutesDeclareActions(t *testing.T) {
 }
 
 // TestClaimMissingActionDenied proves that a caller without
-// unit:claim-register gets 403, the answer names the missing action on
-// the workspace, and the server stores no claim.
+// unit:claim-register gets 404, the answer of a workspace that does not exist
+// and not a 403 that says the workspace exists, and the server stores no
+// claim.
 func TestClaimMissingActionDenied(t *testing.T) {
 	t.Parallel()
 
@@ -493,23 +516,27 @@ func TestClaimMissingActionDenied(t *testing.T) {
 	status, raw := w.call(t, http.MethodPost, claimPath(w.wsID), w.bearer("job-1"),
 		registerBody(w, "job-1", "aws_instance.a"))
 
-	if status != http.StatusForbidden {
-		t.Fatalf("register without the action = %d %s, want 403", status, raw)
+	if status != http.StatusNotFound {
+		t.Fatalf("register without the action = %d %s, want 404", status, raw)
 	}
 
 	refused := decodeClaimError(t, raw)
 
-	if refused.Code != "forbidden" {
-		t.Errorf("code = %q, want forbidden", refused.Code)
+	if refused.Code != "not-found" {
+		t.Errorf("code = %q, want not-found", refused.Code)
 	}
 
-	if refused.Message == "" {
-		t.Fatal("answer has no message")
+	// The answer of a missing workspace and the answer of a caller without the
+	// action are the same: it names no action and no object.
+	missing, missingRaw := w.call(t, http.MethodPost, claimPath("ws-missing"), w.bearer("job-1"),
+		registerBody(w, "job-1", "aws_instance.a"))
+	if missing != http.StatusNotFound || decodeClaimError(t, missingRaw) != refused {
+		t.Errorf("missing workspace = %d %s, want the answer %+v", missing, missingRaw, refused)
 	}
 
-	for _, want := range []string{"unit:claim-register", "opentofu:acme/network"} {
-		if !strings.Contains(refused.Message, want) {
-			t.Errorf("message %q names no %q", refused.Message, want)
+	for _, leak := range []string{"unit:claim-register", "opentofu:acme/network", "network"} {
+		if strings.Contains(refused.Message, leak) {
+			t.Errorf("message %q names %q", refused.Message, leak)
 		}
 	}
 }
@@ -748,8 +775,15 @@ func TestClaimRegisterOversizeRefused(t *testing.T) {
 			t.Fatalf("register too many addresses = %d %s, want 422", status, raw)
 		}
 
-		if refused := decodeClaimError(t, raw); refused.Code != "unprocessable" {
+		refused := decodeClaimError(t, raw)
+		if refused.Code != "unprocessable" {
 			t.Errorf("code = %q, want unprocessable", refused.Code)
+		}
+
+		// The handler guard words the refusal, so the registry guard alone
+		// would give another message.
+		if !strings.Contains(refused.Message, "the claim holds 10001 addresses, at most 10000") {
+			t.Errorf("message = %q, want the handler refusal that names the bound", refused.Message)
 		}
 	})
 
@@ -769,8 +803,13 @@ func TestClaimRegisterOversizeRefused(t *testing.T) {
 			t.Fatalf("register address too long = %d %s, want 422", status, raw)
 		}
 
-		if refused := decodeClaimError(t, raw); refused.Code != "unprocessable" {
+		refused := decodeClaimError(t, raw)
+		if refused.Code != "unprocessable" {
 			t.Errorf("code = %q, want unprocessable", refused.Code)
+		}
+
+		if !strings.Contains(refused.Message, "an address holds more than 1024 bytes") {
+			t.Errorf("message = %q, want the handler refusal that names the bound", refused.Message)
 		}
 	})
 }

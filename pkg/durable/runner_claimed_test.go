@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -193,25 +194,28 @@ func newClaimEndFixture(t *testing.T) *claimEndFixture {
 	base := workspace.StateVersionID("sv-1")
 	fence := namespace.Fence{Namespace: ns, FailoverVersion: 1}
 
+	spaces := claimEndWorkspaces{ws: workspace.Workspace{
+		ID:           wsID,
+		NamespaceID:  namespace.ID("ns-acme"),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		InCollection: false,
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		Ref:          workspace.Ref{Namespace: ns, Name: "network"},
+		Revision:     1,
+	}}
+
 	registry, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
-		Workspaces: claimEndWorkspaces{ws: workspace.Workspace{
-			ID:           wsID,
-			NamespaceID:  namespace.ID("ns-acme"),
-			CreatedAt:    now,
-			UpdatedAt:    now,
-			Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			LastRelease:  workspace.NoRelease(),
-			InCollection: false,
-			Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
-			Origin:       identity.StateOrigin{Job: "", Commit: ""},
-			Ref:          workspace.Ref{Namespace: ns, Name: "network"},
-			Revision:     1,
-		}},
-		Versions: claimEndVersions{ws: wsID, base: base},
-		Deleted:  nil,
-		Manual:   nil,
-		OnAccept: nil,
-		Now:      func() time.Time { return now },
+		Workspaces: spaces,
+		Versions:   claimEndVersions{ws: wsID, base: base},
+		Deleted:    nil,
+		Manual:     nil,
+		Store:      workspace.NewMemoryClaimStore(spaces),
+		Now:        func() time.Time { return now },
+		Lease:      0,
 	})
 	if err != nil {
 		t.Fatalf("registry: %v", err)
@@ -231,7 +235,9 @@ func newClaimEndFixture(t *testing.T) *claimEndFixture {
 func (f *claimEndFixture) register(t *testing.T, jobID string) {
 	t.Helper()
 
-	_, err := f.registry.Register(t.Context(), workspace.RegisterClaimRequest{
+	_, err := f.registry.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       claimEndAudit(f.fence.Namespace),
 		WorkspaceID: f.wsID,
 		Base:        f.base,
 		Addresses:   []string{"aws_instance." + jobID},
@@ -276,7 +282,11 @@ func endJobOne(t *testing.T, now time.Time) {
 func checkClaimsEnded(t *testing.T, f *claimEndFixture) {
 	t.Helper()
 
-	got := f.registry.List(t.Context(), f.wsID)
+	got, listErr := f.registry.List(t.Context(), f.wsID)
+	if listErr != nil {
+		t.Fatalf("list: %v", listErr)
+	}
+
 	if len(got) != 2 {
 		t.Fatalf("list holds %d claims, want 2", len(got))
 	}
@@ -314,13 +324,29 @@ func TestClaimReleaseAtJobEnd(t *testing.T) {
 	endJobOne(t, f.now)
 
 	// ReleaseByJob ends the accepted claims of job-1 with an end time.
-	if n := f.registry.ReleaseByJob(t.Context(), "job-1", f.now.Add(time.Minute)); n != 1 {
-		t.Fatalf("released claims of job-1 = %d, want 1", n)
-	}
-
-	if n := f.registry.ReleaseByJob(t.Context(), "job-unknown", f.now.Add(time.Minute)); n != 0 {
-		t.Fatalf("released claims of an unknown job = %d, want 0", n)
+	for _, c := range []struct {
+		job  string
+		want int
+	}{
+		{"job-1", 1},
+		{"job-unknown", 0},
+	} {
+		n, err := f.registry.ReleaseByJob(t.Context(), f.fence, c.job, f.now.Add(time.Minute))
+		if err != nil || n != c.want {
+			t.Fatalf("released claims of %s = %d, %v, want %d", c.job, n, err, c.want)
+		}
 	}
 
 	checkClaimsEnded(t, f)
+}
+
+// claimEndAudit returns a valid audit entry of a claim accept in ns.
+func claimEndAudit(ns namespace.Name) audit.Entry {
+	return audit.Entry{
+		At: time.UnixMilli(1_700_000_000_000).UTC(), Namespace: ns, Subject: "ada", IDPSubject: "", TokenID: "",
+		Action: "unit:claim-register", Object: "unit:network", Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "", Origin: nil,
+	}
 }

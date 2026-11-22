@@ -5,6 +5,7 @@ docs/guides/approval-rules.md
 docs/guides/architecture-and-sizing.md
 docs/guides/audit-log.md
 docs/guides/backup-restore-upgrade.md
+docs/guides/claims.md
 docs/guides/collections-and-placement.md
 docs/guides/connect-github.md
 docs/guides/console-sign-in.md

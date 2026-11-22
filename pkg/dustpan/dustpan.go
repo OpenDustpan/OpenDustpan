@@ -263,6 +263,9 @@ type settings struct {
 	// ldapLoopback lets the LDAP sign-in reach a loopback address. See
 	// WithLDAPLoopbackForTests.
 	ldapLoopback bool
+	// claimTiming is the lease and the sweep period of the apply claims. See
+	// WithClaimTimingForTests.
+	claimTiming claimTiming
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
@@ -605,6 +608,9 @@ type Server struct {
 	flushDenials func(ctx context.Context)
 	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
+	// claimSweeper ends the apply claims whose lease ended on a schedule, or is
+	// nil when the server keeps no claims.
+	claimSweeper *claimSweeper
 	// signInRequests deletes the expired sign-in requests on a schedule, or
 	// is nil with no console sign-in. signInPruneEvery is the period of
 	// that schedule.
@@ -701,6 +707,9 @@ type services struct {
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
+	// claimSweeper ends the apply claims whose lease ended, or is nil when the
+	// server keeps no claims. assemble sets it.
+	claimSweeper *claimSweeper
 	// access keeps the roles and grants, or is nil when the store keeps
 	// none. NewServer sets it after newServices. The installation API and
 	// the token service share it.
@@ -768,6 +777,7 @@ func defaultSettings() *settings {
 		oidcProviders:           nil,
 		ldapProviders:           nil,
 		ldapLoopback:            false,
+		claimTiming:             claimTiming{lease: 0, every: 0},
 		signInHTTPClient:        nil,
 		sessionCookies:          nil,
 		version:                 "",
@@ -1155,11 +1165,11 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		observed:      observed,
 		chain:         mount.chain,
 		ready:         mount.ready, drainPeriod: cfg.drainPeriod,
-		tokens:           svc.tokens,
-		tempAdmins:       svc.tempAdmins,
-		shipper:          shipper,
-		beforeServe:      cfg.beforeServe,
-		deleted:          svc.deleted,
+		tokens:      svc.tokens,
+		tempAdmins:  svc.tempAdmins,
+		shipper:     shipper,
+		beforeServe: cfg.beforeServe,
+		deleted:     svc.deleted, claimSweeper: svc.claimSweeper,
 		signInRequests:   mount.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, mount.signIn),
@@ -1227,6 +1237,11 @@ func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *a
 	}
 
 	svc.deleted = deleted
+
+	svc.claimSweeper, err = newClaimSweeper(cfg, *svc)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	shipper, err := newAuditShipper(cfg, observed)
 	if err != nil {
@@ -2162,8 +2177,8 @@ func newServices(cfg *settings, tokens *accesstoken.Service, authz identity.Auth
 		updates:     updates,
 		secrets:     secrets,
 		workspaces:  workspaces,
-		tokens:      nil, tempAdmins: nil, deleted: nil, access: nil, collections: nil, placements: nil, gates: nil,
-		stateWrite: stateWriteGates{svc: nil, guard: nil}, issuer: nil,
+		tokens:      nil, tempAdmins: nil, deleted: nil, claimSweeper: nil, access: nil, collections: nil,
+		placements: nil, gates: nil, stateWrite: stateWriteGates{svc: nil, guard: nil}, issuer: nil,
 	}, nil
 }
 

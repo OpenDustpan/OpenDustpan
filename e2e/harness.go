@@ -279,6 +279,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		deltaCutoff:            0,
 		sinkSenders:            nil,
 		auditSinks:             nil,
+		claimTiming:            false,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -367,6 +368,41 @@ func NewEnvWithAuditSinks(
 	return startEnv(ctx, in)
 }
 
+// ClaimLeaseForTests and ClaimSweepForTests are the lease of a wrapper claim
+// and the period of the expiry sweep of NewEnvWithClaimTiming.
+const (
+	ClaimLeaseForTests = 5 * time.Second
+	ClaimSweepForTests = 500 * time.Millisecond
+)
+
+// claimTimingOptions returns the option that shortens the lease and the sweep
+// period, or none.
+func claimTimingOptions(args serverArgs) []dustpan.Option {
+	if !args.claimTiming {
+		return nil
+	}
+
+	return []dustpan.Option{dustpan.WithClaimTimingForTests(ClaimLeaseForTests, ClaimSweepForTests)}
+}
+
+// NewEnvWithClaimTiming starts an in-process server as NewEnv does, with a
+// short lease for the claims of the local wrapper and a short sweep period.
+// The server runs its own listener, because the sweep runs only in
+// Server.Run. The server binary has no setting for this, so this constructor
+// refuses it.
+func NewEnvWithClaimTiming(ctx context.Context, tb testing.TB, store Store) *Env {
+	tb.Helper()
+
+	if UseBinaryServer() {
+		tb.Fatalf("NewEnvWithClaimTiming needs the in-process server")
+	}
+
+	in := defaultEnvInput(tb, NoCLI(), store)
+	in.claimTiming = true
+
+	return startEnv(ctx, in)
+}
+
 // NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
 // turned on and applied to the bootstrap admin token too, so a step can lock
 // one namespace to one source address and prove the 403 answers.
@@ -402,6 +438,7 @@ func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
 		deltaCutoff:            0,
 		sinkSenders:            nil,
 		auditSinks:             nil,
+		claimTiming:            false,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -466,6 +503,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		deltaCutoff:            cutoff,
 		sinkSenders:            nil,
 		auditSinks:             nil,
+		claimTiming:            false,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -516,7 +554,7 @@ func startInprocessServer(
 	tb := in.tb
 	tb.Helper()
 
-	if len(in.auditSinks) > 0 {
+	if len(in.auditSinks) > 0 || in.claimTiming {
 		return startRunInprocessServer(ctx, in, member)
 	}
 
@@ -551,6 +589,7 @@ func startInprocessServer(
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
 		auditSinks:        in.auditSinks,
+		claimTiming:       in.claimTiming,
 		listener:          nil,
 	})
 
@@ -563,6 +602,18 @@ func startInprocessServer(
 	}
 
 	return &inprocessServer{URL: ts.URL, Client: ts.Client(), ts: ts, close: ts.Close}, build, signIn
+}
+
+// runPublicURL returns the public URL of the server that runs its own
+// listener ln. The claim routes belong to the runner API, which the server
+// mounts only with a public URL, so an env with claim timing gets the address
+// of its listener. Another env has none.
+func runPublicURL(in envInput, ln net.Listener) string {
+	if !in.claimTiming {
+		return ""
+	}
+
+	return "http://" + ln.Addr().String()
 }
 
 // startRunInprocessServer starts an in-process server that runs its own
@@ -591,10 +642,11 @@ func startRunInprocessServer(
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
 		signIn:            nil,
-		publicURL:         "",
+		publicURL:         runPublicURL(in, ln),
 		sinkSenders:       in.sinkSenders,
 		issuer:            in.issuer,
 		auditSinks:        in.auditSinks,
+		claimTiming:       in.claimTiming,
 		listener:          ln,
 	})
 
@@ -790,6 +842,9 @@ type serverArgs struct {
 	issuer *OIDCIssuerFake
 	// auditSinks receive a copy of each audit entry of the in-process server.
 	auditSinks []audit.ShipSink
+	// claimTiming gives the in-process server a short lease for the claims of
+	// the local wrapper and a short period for the expiry sweep.
+	claimTiming bool
 	// listener makes the in-process server run its own listener for the
 	// audit shipper, instead of serving its handler directly. It is nil for
 	// the handler mode.
@@ -921,6 +976,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	), args.signIn.options()...)
 
 	opts = append(opts, inprocessRunOptions(args)...)
+	opts = append(opts, claimTimingOptions(args)...)
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -1845,6 +1901,81 @@ func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIS
 func (e *Env) APIStepWithHeaders(ctx context.Context, t *testing.T, spec APIStepSpec, headers map[string]string) {
 	t.Helper()
 	e.apiStepWith(ctx, t, e.token, spec, headers)
+}
+
+// apiStepPause is the pause between two calls of APIStepUntil.
+const apiStepPause = 250 * time.Millisecond
+
+// APIStepUntil is APIStepWithHeaders for a call whose answer changes when the
+// server does background work: it repeats the call, with a pause between two
+// calls, until the status is spec.Want and spec.Check passes. It stops after
+// tries calls and fails the step with the last answer.
+func (e *Env) APIStepUntil(
+	ctx context.Context, t *testing.T, spec APIStepSpec, headers map[string]string, tries int,
+) {
+	t.Helper()
+
+	t.Run(spec.Name, func(t *testing.T) {
+		e.Recorder.SetStep(spec.Name)
+
+		failure := "no call was made"
+
+		for range tries {
+			if failure = apiAttempt(ctx, e, spec, headers); failure == "" {
+				break
+			}
+
+			pause(ctx, apiStepPause)
+		}
+
+		exitCode := 0
+		if failure != "" {
+			exitCode = 1
+		}
+
+		e.steps = append(e.steps, StepResult{
+			Name: spec.Name, Command: spec.Method + " " + spec.Path, Failure: failure, Stderr: "",
+			ExitCode: exitCode, Passed: failure == "", Skipped: false,
+		})
+
+		if failure != "" {
+			t.Errorf("%s %s: %s", spec.Method, spec.Path, failure)
+		}
+	})
+}
+
+// apiAttempt makes the call of spec once and returns the failure, or an empty
+// string when the status is spec.Want and spec.Check passes.
+func apiAttempt(ctx context.Context, e *Env, spec APIStepSpec, headers map[string]string) string {
+	status, respBody, err := e.tfeStatusAs(ctx, e.token, tfeCall{
+		method: spec.Method, path: spec.Path, body: spec.Body, userAgent: spec.UserAgent,
+		scheme: spec.Scheme, headers: headers,
+	})
+
+	switch {
+	case err != nil:
+		return err.Error()
+	case status != spec.Want:
+		return fmt.Sprintf("answers %d, want %d: %s", status, spec.Want, clip(respBody))
+	case spec.Check != nil:
+		if checkErr := spec.Check(respBody); checkErr != nil {
+			return checkErr.Error()
+		}
+	default:
+	}
+
+	return ""
+}
+
+// pause waits for d or until ctx is done.
+func pause(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 // APIStepWithHeadersAs is APIStepWithHeaders for the person who owns token,

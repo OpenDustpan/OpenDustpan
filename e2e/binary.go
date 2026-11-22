@@ -129,6 +129,9 @@ type envInput struct {
 	// auditSinks receive a copy of each audit entry of the in-process
 	// server. The server binary takes its sinks through --audit-sink.
 	auditSinks []audit.ShipSink
+	// claimTiming gives the in-process server a short lease for the claims of
+	// the local wrapper and a short period for the expiry sweep.
+	claimTiming bool
 	// issuer is a fake OpenID provider of a CI platform whose keys the
 	// in-process server may read, on the loopback, or nil.
 	issuer *OIDCIssuerFake

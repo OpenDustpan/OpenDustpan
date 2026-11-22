@@ -206,21 +206,10 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 		}, true
 	}
 
-	if errors.Is(err, errClaimTooLarge) {
+	if errors.Is(err, errClaimTooLarge) || errors.Is(err, workspace.ErrClaimTooLarge) ||
+		errors.Is(err, workspace.ErrClaimInvalid) {
 		return http.StatusUnprocessableEntity, protocol.Error{
 			Code: protocol.ErrorUnprocessable, Message: err.Error(), Supported: "",
-		}, true
-	}
-
-	if errors.Is(err, errClaimForbidden) {
-		msg := errClaimForbidden.Error()
-
-		if denied, _ := errors.AsType[*identity.DeniedError](err); denied != nil {
-			msg = fmt.Sprintf("%s: %s on %s", errClaimForbidden, denied.Action, denied.Object)
-		}
-
-		return http.StatusForbidden, protocol.Error{
-			Code: protocol.ErrorForbidden, Message: msg, Supported: "",
 		}, true
 	}
 
@@ -231,9 +220,10 @@ func claimRefused(err error) (int, protocol.Error, bool) {
 	}{
 		{
 			http.StatusForbidden, protocol.ErrorForbidden,
-			[]error{errClaimJobMismatch, errClaimUnitMismatch, identity.ErrDenied},
+			[]error{errClaimJobMismatch, identity.ErrDenied},
 		},
 		{http.StatusConflict, protocol.ErrorClaimClosureUnproven, []error{workspace.ErrClaimReplace}},
+		{http.StatusConflict, protocol.ErrorClaimEnded, []error{workspace.ErrClaimEnded}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimEmptySet, []error{workspace.ErrClaimEmptySet}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimBadBase, []error{workspace.ErrClaimBadBase}},
 		{http.StatusUnprocessableEntity, protocol.ErrorClaimLocked, []error{workspace.ErrClaimLocked}},

@@ -2,22 +2,13 @@ package workspace_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
-	"opendustpan.org/opendustpan/internal/store/postgres"
-	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -81,8 +72,12 @@ type claimDeleted struct {
 	deleted map[workspace.ID]bool
 }
 
-func (f *claimDeleted) IsDeleted(_ context.Context, id workspace.ID) (bool, error) {
-	return f.deleted[id], nil
+func (f *claimDeleted) DeletedWorkspace(_ context.Context, id workspace.ID) (workspace.Workspace, bool, error) {
+	var gone workspace.Workspace
+
+	gone.ID = id
+
+	return gone, f.deleted[id], nil
 }
 
 // claimFixture holds one live workspace and one base version.
@@ -94,6 +89,7 @@ type claimFixture struct {
 	base       workspace.StateVersionID
 	fence      namespace.Fence
 	ns         namespace.Name
+	store      *workspace.MemoryClaimStore
 }
 
 // newClaimFixture returns a fixture with workspace ws-1 in namespace acme
@@ -141,6 +137,7 @@ func newClaimFixture() *claimFixture {
 		base:    base,
 		fence:   namespace.Fence{Namespace: ns, FailoverVersion: 1},
 		ns:      ns,
+		store:   nil,
 	}
 }
 
@@ -174,34 +171,68 @@ func fixtureBaseVersion(base workspace.StateVersionID, wsID workspace.ID) worksp
 	}
 }
 
-// registry returns a ClaimRegistry over the fixture with a fixed clock.
-// OnAccept records each accepted claim when record is not nil.
-func (f *claimFixture) registry(record *[]workspace.Claim) *workspace.ClaimRegistry {
+// registry returns a ClaimRegistry over the fixture with a fixed clock. The
+// registry keeps its claims in the fixture store.
+func (f *claimFixture) registry() *workspace.ClaimRegistry {
 	now := time.UnixMilli(1_700_000_000_000).UTC()
 
-	cfg := workspace.ClaimRegistryConfig{
+	f.store = workspace.NewMemoryClaimStore(f.workspaces)
+
+	r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
 		Workspaces: f.workspaces,
 		Versions:   f.versions,
 		Deleted:    f.deleted,
 		Manual:     nil,
-		OnAccept:   nil,
+		Store:      f.store,
 		Now:        func() time.Time { return now },
-	}
-
-	if record != nil {
-		cfg.OnAccept = func(_ context.Context, c workspace.Claim) error {
-			*record = append(*record, c)
-
-			return nil
-		}
-	}
-
-	r, err := workspace.NewClaimRegistry(cfg)
+		Lease:      0,
+	})
 	if err != nil {
 		panic(err)
 	}
 
 	return r
+}
+
+// claimAudit returns a valid audit entry of a claim accept in namespace
+// acme. The registry sets its time, object ID and job ID.
+func claimAudit() audit.Entry {
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		panic(err)
+	}
+
+	return audit.Entry{
+		At: time.UnixMilli(1_700_000_000_000).UTC(), Namespace: ns, Subject: "ada", IDPSubject: "", TokenID: "",
+		Action: "unit:claim-register", Object: "unit:network", Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "", Origin: nil,
+	}
+}
+
+// list returns the claims of the fixture workspace and fails the test on a
+// store error.
+func (f *claimFixture) list(t *testing.T, r *workspace.ClaimRegistry) []workspace.Claim {
+	t.Helper()
+
+	got, err := r.List(t.Context(), f.ws)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	return got
+}
+
+// noteCommitted records a later version on the fixture workspace.
+func (f *claimFixture) noteCommitted(
+	t *testing.T, r *workspace.ClaimRegistry, id workspace.StateVersionID, addresses ...string,
+) {
+	t.Helper()
+
+	if err := r.NoteCommitted(t.Context(), f.fence, f.ws, id, addresses); err != nil {
+		t.Fatalf("note committed: %v", err)
+	}
 }
 
 // register registers one claim of the fixture workspace and fails the test
@@ -211,7 +242,9 @@ func (f *claimFixture) register(
 ) workspace.Claim {
 	t.Helper()
 
-	claim, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+	claim, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
 		Addresses:   addresses,
@@ -234,7 +267,7 @@ func TestClaimSecondDisjointAccepted(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
+	r := f.registry()
 
 	first := f.register(t, r, "job-1", "aws_instance.a")
 	second := f.register(t, r, "job-2", "aws_instance.b")
@@ -251,7 +284,7 @@ func TestClaimSecondDisjointAccepted(t *testing.T) {
 		t.Fatalf("second claim = %+v, want start time and principal", second)
 	}
 
-	got := r.List(t.Context(), f.ws)
+	got := f.list(t, r)
 	if len(got) != 2 || got[0].ID != first.ID || got[1].ID != second.ID {
 		t.Fatalf("list = %v, want both claims in accept order", got)
 	}
@@ -264,11 +297,13 @@ func TestClaimOverlapRefused(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
+	r := f.registry()
 
 	first := f.register(t, r, "job-1", "aws_instance.a", "aws_instance.b")
 
-	_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
 		Addresses:   []string{"aws_instance.b", "aws_instance.c"},
@@ -291,7 +326,7 @@ func TestClaimOverlapRefused(t *testing.T) {
 		t.Fatalf("blocker = %q, want %q", overlap.Blocker, first.ID)
 	}
 
-	if got := r.List(t.Context(), f.ws); len(got) != 1 {
+	if got := f.list(t, r); len(got) != 1 {
 		t.Fatalf("list holds %d claims, want 1", len(got))
 	}
 }
@@ -303,9 +338,11 @@ func TestClaimEmptySetRejected(t *testing.T) {
 
 	for _, addresses := range [][]string{nil, {}, {"  "}, {"", "  "}} {
 		f := newClaimFixture()
-		r := f.registry(nil)
+		r := f.registry()
 
-		_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
+			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
 			Addresses:   addresses,
@@ -319,7 +356,7 @@ func TestClaimEmptySetRejected(t *testing.T) {
 			t.Fatalf("register %q = %v, want ErrClaimEmptySet", addresses, err)
 		}
 
-		if got := r.List(t.Context(), f.ws); len(got) != 0 {
+		if got := f.list(t, r); len(got) != 0 {
 			t.Fatalf("list holds %d claims, want none", len(got))
 		}
 	}
@@ -332,10 +369,12 @@ func TestClaimTouchedBaseRejected(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
-	r.NoteCommitted(t.Context(), f.ws, "sv-2", []string{"aws_instance.a"})
+	r := f.registry()
+	f.noteCommitted(t, r, "sv-2", "aws_instance.a")
 
-	_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
 		Addresses:   []string{"aws_instance.a"},
@@ -358,7 +397,7 @@ func TestClaimTouchedBaseRejected(t *testing.T) {
 		t.Fatalf("touching version = %q, want sv-2", touched.Version)
 	}
 
-	if got := r.List(t.Context(), f.ws); len(got) != 0 {
+	if got := f.list(t, r); len(got) != 0 {
 		t.Fatalf("list holds %d claims, want none", len(got))
 	}
 }
@@ -370,8 +409,8 @@ func TestClaimUntouchedOlderBaseAccepted(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
-	r.NoteCommitted(t.Context(), f.ws, "sv-2", []string{"aws_instance.other"})
+	r := f.registry()
+	f.noteCommitted(t, r, "sv-2", "aws_instance.other")
 
 	claim := f.register(t, r, "job-1", "aws_instance.a")
 
@@ -387,9 +426,11 @@ func TestClaimReplaceRefused(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
+	r := f.registry()
 
-	_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
 		Addresses:   []string{"aws_instance.a"},
@@ -403,7 +444,7 @@ func TestClaimReplaceRefused(t *testing.T) {
 		t.Fatalf("register replace = %v, want ErrClaimReplace", err)
 	}
 
-	if got := r.List(t.Context(), f.ws); len(got) != 0 {
+	if got := f.list(t, r); len(got) != 0 {
 		t.Fatalf("list holds %d claims, want none", len(got))
 	}
 }
@@ -415,7 +456,7 @@ func TestClaimSameJobRetryIdempotent(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
+	r := f.registry()
 
 	first := f.register(t, r, "job-1", "aws_instance.b", "aws_instance.a")
 	retry := f.register(t, r, "job-1", "aws_instance.a", "aws_instance.b")
@@ -424,7 +465,7 @@ func TestClaimSameJobRetryIdempotent(t *testing.T) {
 		t.Fatalf("retry ID = %q, want %q", retry.ID, first.ID)
 	}
 
-	if got := r.List(t.Context(), f.ws); len(got) != 1 {
+	if got := f.list(t, r); len(got) != 1 {
 		t.Fatalf("list holds %d claims, want 1", len(got))
 	}
 
@@ -434,7 +475,7 @@ func TestClaimSameJobRetryIdempotent(t *testing.T) {
 		t.Fatalf("different set ID = %q, want a new claim ID", other.ID)
 	}
 
-	if got := r.List(t.Context(), f.ws); len(got) != 2 {
+	if got := f.list(t, r); len(got) != 2 {
 		t.Fatalf("list holds %d claims, want 2", len(got))
 	}
 }
@@ -448,12 +489,14 @@ func TestClaimWrapperRetryIsPerPrincipal(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
+	r := f.registry()
 
 	registerAs := func(principal string) workspace.Claim {
 		t.Helper()
 
-		claim, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+		claim, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
+			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
 			Addresses:   []string{"aws_instance.a"},
@@ -476,8 +519,11 @@ func TestClaimWrapperRetryIsPerPrincipal(t *testing.T) {
 		t.Fatalf("retry ID = %q, want %q", retry.ID, first.ID)
 	}
 
-	if n := r.ExpireStale(t.Context(), first.StartedAt.Add(time.Minute)); n != 1 {
-		t.Fatalf("expired claims = %d, want 1", n)
+	expireAt := first.LeaseEndsAt.Add(time.Second)
+
+	n, err := f.store.ExpireClaims(t.Context(), f.fence, expireAt, 10)
+	if err != nil || n != 1 {
+		t.Fatalf("expired claims = %d, %v, want 1", n, err)
 	}
 
 	other := registerAs("bob")
@@ -490,65 +536,54 @@ func TestClaimWrapperRetryIsPerPrincipal(t *testing.T) {
 		t.Fatalf("other claim = %+v, want accepted with principal bob", other)
 	}
 
-	if got := r.List(t.Context(), f.ws); len(got) != 2 {
+	if got := f.list(t, r); len(got) != 2 {
 		t.Fatalf("list holds %d claims, want 2", len(got))
 	}
 }
 
 // TestClaimAcceptAuditEntry proves that the server writes one audit entry
-// with the claim ID and the job ID when it accepts a claim, and that a
-// failing audit entry rolls the accept back.
+// with the claim ID and the job ID when it accepts a claim, and that an
+// invalid audit entry rolls the accept back.
 func TestClaimAcceptAuditEntry(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-
-	var accepted []workspace.Claim
-
-	r := f.registry(&accepted)
+	r := f.registry()
 	claim := f.register(t, r, "job-1", "aws_instance.a")
 
-	if len(accepted) != 1 || accepted[0].ID != claim.ID || accepted[0].JobID != "job-1" {
-		t.Fatalf("audit entries = %+v, want one entry with the claim and job IDs", accepted)
+	entries := f.store.Entries()
+	if len(entries) != 1 || entries[0].ObjectID != claim.ID || entries[0].JobID != "job-1" {
+		t.Fatalf("audit entries = %+v, want one entry with the claim and job IDs", entries)
 	}
 
-	if accepted[0].Base != f.base {
-		t.Fatalf("audit entry base = %q, want %q", accepted[0].Base, f.base)
+	if !entries[0].At.Equal(claim.StartedAt) {
+		t.Fatalf("audit entry time = %v, want %v", entries[0].At, claim.StartedAt)
 	}
 
-	failing, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
-		Workspaces: f.workspaces,
-		Versions:   f.versions,
-		Deleted:    f.deleted,
-		Manual:     nil,
-		OnAccept: func(context.Context, workspace.Claim) error {
-			return errAcceptUnavailable
-		},
-		Now: func() time.Time { return time.UnixMilli(1_700_000_000_000).UTC() },
-	})
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
+	failing := newClaimFixture()
+	fr := failing.registry()
 
-	_, err = failing.Register(t.Context(), workspace.RegisterClaimRequest{
-		WorkspaceID: f.ws,
-		Base:        f.base,
+	var invalid audit.Entry
+
+	_, err := fr.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       invalid,
+		WorkspaceID: failing.ws,
+		Base:        failing.base,
 		Addresses:   []string{"aws_instance.a"},
 		Principal:   "ada",
 		JobID:       "job-1",
 		Replace:     false,
 		Trigger:     "",
-	}, f.fence)
-	if err == nil {
-		t.Fatal("register with failing audit = nil, want an error")
+	}, failing.fence)
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("register with invalid audit entry = %v, want audit.ErrInvalidEntry", err)
 	}
 
-	if got := failing.List(t.Context(), f.ws); len(got) != 0 {
+	if got := failing.list(t, fr); len(got) != 0 {
 		t.Fatalf("list holds %d claims, want none after the audit failure", len(got))
 	}
 }
-
-var errAcceptUnavailable = errors.New("audit store does not answer")
 
 // TestClaimBadWorkspaceOrBase proves that a claim on a missing workspace
 // fails with 404, on a deleted workspace with 410, on a locked workspace
@@ -561,9 +596,11 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		t.Parallel()
 
 		f := newClaimFixture()
-		r := f.registry(nil)
+		r := f.registry()
 
-		_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
+			Audit:       claimAudit(),
 			WorkspaceID: "ws-missing",
 			Base:        f.base,
 			Addresses:   []string{"aws_instance.a"},
@@ -584,9 +621,11 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		f := newClaimFixture()
 		f.deleted.deleted[f.ws] = true
 		delete(f.workspaces.spaces, f.ws)
-		r := f.registry(nil)
+		r := f.registry()
 
-		_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
+			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
 			Addresses:   []string{"aws_instance.a"},
@@ -608,9 +647,11 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		w := f.workspaces.spaces[f.ws]
 		w.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "lock-1", Holder: "bob", Reason: ""}
 		f.workspaces.spaces[f.ws] = w
-		r := f.registry(nil)
+		r := f.registry()
 
-		_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
+			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        f.base,
 			Addresses:   []string{"aws_instance.a"},
@@ -629,9 +670,11 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 		t.Parallel()
 
 		f := newClaimFixture()
-		r := f.registry(nil)
+		r := f.registry()
 
-		_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+		_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+			ViaJobToken: false,
+			Audit:       claimAudit(),
 			WorkspaceID: f.ws,
 			Base:        "sv-unknown",
 			Addresses:   []string{"aws_instance.a"},
@@ -645,7 +688,7 @@ func TestClaimBadWorkspaceOrBase(t *testing.T) {
 			t.Fatalf("register unknown base = %v, want ErrClaimBadBase", err)
 		}
 
-		if got := r.List(t.Context(), f.ws); len(got) != 0 {
+		if got := f.list(t, r); len(got) != 0 {
 			t.Fatalf("list holds %d claims, want none", len(got))
 		}
 	})
@@ -657,14 +700,16 @@ func TestClaimStaleFenceRefused(t *testing.T) {
 	t.Parallel()
 
 	f := newClaimFixture()
-	r := f.registry(nil)
+	r := f.registry()
 
 	f.register(t, r, "job-1", "aws_instance.a")
 
 	stale := f.fence
 	stale.FailoverVersion++
 
-	_, err := r.Register(t.Context(), workspace.RegisterClaimRequest{
+	_, err := r.Register(t.Context(), &workspace.RegisterClaimRequest{
+		ViaJobToken: false,
+		Audit:       claimAudit(),
 		WorkspaceID: f.ws,
 		Base:        f.base,
 		Addresses:   []string{"aws_instance.b"},
@@ -676,360 +721,5 @@ func TestClaimStaleFenceRefused(t *testing.T) {
 
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("register stale fence = %v, want ErrFenced", err)
-	}
-}
-
-// claimDialectStore is the store surface that the parallel registration
-// test needs: the workspace and version writes of the fixture plus the
-// read sides of the registry.
-type claimDialectStore interface {
-	workspace.ClaimWorkspaces
-	workspace.ClaimVersions
-	CreateNamespace(ctx context.Context, ns namespace.Namespace) error
-	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
-	CreateStateVersion(ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int) error
-}
-
-// claimDialect is one SQL dialect of the parallel registration test.
-type claimDialect struct {
-	name string
-	open func(t *testing.T) claimDialectStore
-}
-
-// claimDialects returns SQLite, and PostgreSQL when
-// DUSTPAN_TEST_POSTGRES_URL names a server.
-func claimDialects() []claimDialect {
-	list := []claimDialect{{name: "sqlite", open: openClaimSQLite}}
-
-	if os.Getenv(claimPostgresEnv) != "" {
-		list = append(list, claimDialect{name: "postgres", open: openClaimPostgres})
-	}
-
-	return list
-}
-
-// claimPostgresEnv names the variable with the URL of a PostgreSQL server
-// for the tests. Each test uses a schema of its own.
-const claimPostgresEnv = "DUSTPAN_TEST_POSTGRES_URL"
-
-// openClaimSQLite opens an empty SQLite store.
-//
-//nolint:ireturn // The dialect is chosen at runtime: SQLite here, PostgreSQL below.
-func openClaimSQLite(t *testing.T) claimDialectStore {
-	t.Helper()
-
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	return s
-}
-
-// openClaimPostgres opens a PostgreSQL store on a schema of its own.
-//
-//nolint:ireturn // The dialect is chosen at runtime: PostgreSQL here, SQLite above.
-func openClaimPostgres(t *testing.T) claimDialectStore {
-	t.Helper()
-
-	base := os.Getenv(claimPostgresEnv)
-
-	suffix := make([]byte, 6)
-	if _, err := rand.Read(suffix); err != nil {
-		t.Fatalf("random schema name: %v", err)
-	}
-
-	name := "claim_" + hex.EncodeToString(suffix)
-
-	if err := claimExecSQL(t.Context(), base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-
-	t.Cleanup(func() {
-		for _, schema := range []string{name, name + "_control"} {
-			drop := "DROP SCHEMA IF EXISTS " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
-			if dropErr := claimExecSQL(context.Background(), base, drop); dropErr != nil {
-				t.Errorf("drop schema %s: %v", schema, dropErr)
-			}
-		}
-	})
-
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatalf("parse %s: %v", claimPostgresEnv, err)
-	}
-
-	q := u.Query()
-	q.Set("search_path", name)
-	u.RawQuery = q.Encode()
-
-	s, err := postgres.Open(t.Context(), u.String())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(s.Close)
-
-	return s
-}
-
-// claimExecSQL runs one statement on the database at dbURL.
-func claimExecSQL(ctx context.Context, dbURL, stmt string) error {
-	conn, err := pgx.Connect(ctx, dbURL)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-
-	_, execErr := conn.Exec(ctx, stmt)
-
-	if closeErr := conn.Close(ctx); closeErr != nil {
-		return errors.Join(execErr, fmt.Errorf("close: %w", closeErr))
-	}
-
-	if execErr != nil {
-		return fmt.Errorf("exec: %w", execErr)
-	}
-
-	return nil
-}
-
-// seedClaimWorkspace creates namespace acme, workspace ws-9 and base
-// version sv-9 in the store, and returns the fence, the workspace ID and
-// the base version ID.
-func seedClaimWorkspace(
-	t *testing.T, s claimDialectStore,
-) (namespace.Fence, workspace.ID, workspace.StateVersionID) {
-	t.Helper()
-
-	now := time.UnixMilli(1_700_000_000_000).UTC()
-	ns := namespace.Namespace{
-		CreatedAt:           now,
-		ID:                  namespace.NewID(),
-		Name:                "acme",
-		PrimaryInstallation: "local",
-		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
-		FailoverVersion:     1,
-	}
-
-	if err := s.CreateNamespace(t.Context(), ns); err != nil {
-		t.Fatalf("create namespace: %v", err)
-	}
-
-	fence := ns.Fence()
-	wsID := workspace.ID("ws-9")
-	w := workspace.Workspace{
-		NamespaceID:  ns.ID,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease:  workspace.NoRelease(),
-		InCollection: false,
-		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
-		Origin:       identity.StateOrigin{Job: "", Commit: ""},
-		ID:           wsID,
-		Ref:          workspace.Ref{Namespace: ns.Name, Name: workspace.Name("network")},
-		Revision:     1,
-	}
-
-	if err := s.CreateWorkspace(t.Context(), w, fence); err != nil {
-		t.Fatalf("create workspace: %v", err)
-	}
-
-	base := workspace.StateVersionID("sv-9")
-
-	versionErr := s.CreateStateVersion(t.Context(), fixturePendingVersion(base, wsID), fence,
-		workspace.DefaultMaxPendingVersions)
-	if versionErr != nil {
-		t.Fatalf("create base version: %v", versionErr)
-	}
-
-	return fence, wsID, base
-}
-
-// fixturePendingVersion returns a pending base state version with every
-// field set explicitly.
-func fixturePendingVersion(base workspace.StateVersionID, wsID workspace.ID) workspace.StateVersion {
-	return workspace.StateVersion{
-		CreatedAt:       time.Time{},
-		FinalizedAt:     time.Time{},
-		UploadExpiresAt: time.Time{},
-		Upload:          token.Digest{},
-		Holder:          "",
-		LockID:          "",
-		ID:              base,
-		Workspace:       wsID,
-		Lineage:         "lin-9",
-		Status:          workspace.StatusPending,
-		Content:         "",
-		Outputs:         nil,
-		MD5:             [16]byte{},
-		Serial:          1,
-		Size:            0,
-		Force:           false,
-		UnlockedWrite:   false,
-		Sealed:          false,
-		ClientEncrypted: workspace.ClientEncryptedUnknown,
-		SensitiveMarks:  nil,
-		RestoredFrom:    "",
-		FenceBy:         "",
-		Origin:          identity.StateOrigin{Job: "", Commit: ""},
-	}
-}
-
-// claimParallelSetup holds the registry and the IDs of one dialect run
-// of the parallel registration test.
-type claimParallelSetup struct {
-	registry *workspace.ClaimRegistry
-	fence    namespace.Fence
-	wsID     workspace.ID
-	base     workspace.StateVersionID
-}
-
-// newClaimParallelSetup opens the dialect store, seeds one workspace with
-// one base version, and returns the registry over it.
-func newClaimParallelSetup(t *testing.T, dialect claimDialect) *claimParallelSetup {
-	t.Helper()
-
-	s := dialect.open(t)
-	fence, wsID, base := seedClaimWorkspace(t, s)
-
-	r, err := workspace.NewClaimRegistry(workspace.ClaimRegistryConfig{
-		Workspaces: s,
-		Versions:   s,
-		Deleted:    nil,
-		Manual:     nil,
-		OnAccept:   nil,
-		Now:        time.Now,
-	})
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
-
-	return &claimParallelSetup{registry: r, fence: fence, wsID: wsID, base: base}
-}
-
-// registerDisjointFanout registers one disjoint claim per caller in
-// parallel and returns the claim IDs in caller order.
-func registerDisjointFanout(
-	t *testing.T, setup *claimParallelSetup, callers int,
-) []string {
-	t.Helper()
-
-	var wg sync.WaitGroup
-
-	accepted := make([]string, callers)
-	errs := make([]error, callers)
-
-	for i := range callers {
-		wg.Go(func() {
-			claim, err := setup.registry.Register(context.Background(), workspace.RegisterClaimRequest{
-				WorkspaceID: setup.wsID,
-				Base:        setup.base,
-				Addresses:   []string{fmt.Sprintf("aws_instance.node_%d", i)},
-				Principal:   "ada",
-				JobID:       fmt.Sprintf("job-%d", i),
-				Replace:     false,
-				Trigger:     "",
-			}, setup.fence)
-			if err == nil {
-				accepted[i] = claim.ID
-			} else {
-				errs[i] = err
-			}
-		})
-	}
-
-	wg.Wait()
-
-	for i := range callers {
-		if errs[i] != nil {
-			t.Fatalf("register %d = %v, want accepted", i, errs[i])
-		}
-
-		if accepted[i] == "" {
-			t.Fatalf("register %d stored no claim ID", i)
-		}
-	}
-
-	return accepted
-}
-
-// raceSharedAddress races two registrations over one address and proves
-// that exactly one wins, and that the loser names the winner as the
-// blocker.
-func raceSharedAddress(t *testing.T, setup *claimParallelSetup) {
-	t.Helper()
-
-	var race sync.WaitGroup
-
-	raceErrs := make([]error, 2)
-	raceIDs := make([]string, 2)
-
-	for i := range 2 {
-		race.Go(func() {
-			claim, err := setup.registry.Register(context.Background(), workspace.RegisterClaimRequest{
-				WorkspaceID: setup.wsID,
-				Base:        setup.base,
-				Addresses:   []string{"aws_instance.shared"},
-				Principal:   "ada",
-				JobID:       fmt.Sprintf("race-%d", i),
-				Replace:     false,
-				Trigger:     "",
-			}, setup.fence)
-			if err == nil {
-				raceIDs[i] = claim.ID
-			} else {
-				raceErrs[i] = err
-			}
-		})
-	}
-
-	race.Wait()
-
-	wins := 0
-
-	for i := range 2 {
-		if raceIDs[i] != "" {
-			wins++
-		}
-
-		if raceErrs[i] != nil && !errors.Is(raceErrs[i], workspace.ErrClaimOverlap) {
-			t.Fatalf("race register %d = %v, want accepted or overlap", i, raceErrs[i])
-		}
-	}
-
-	if wins != 1 {
-		t.Fatalf("race winners = %d, want exactly 1", wins)
-	}
-}
-
-// TestClaimParallelDisjoint proves that parallel registrations of disjoint
-// claims serialize on the workspace row lock and all land, on each SQL
-// dialect: two registrations that race over the same accepted set cannot
-// both pass.
-func TestClaimParallelDisjoint(t *testing.T) {
-	t.Parallel()
-
-	const callers = 24
-
-	for _, dialect := range claimDialects() {
-		t.Run(dialect.name, func(t *testing.T) {
-			t.Parallel()
-
-			setup := newClaimParallelSetup(t, dialect)
-			registerDisjointFanout(t, setup, callers)
-
-			if got := setup.registry.List(context.Background(), setup.wsID); len(got) != callers {
-				t.Fatalf("list holds %d claims, want %d", len(got), callers)
-			}
-
-			raceSharedAddress(t, setup)
-		})
 	}
 }

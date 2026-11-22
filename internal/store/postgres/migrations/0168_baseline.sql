@@ -1714,6 +1714,39 @@ CREATE TABLE workspace_blame_items (
     CONSTRAINT workspace_blame_items_resource_count_check CHECK ((resource_count >= 0))
 );
 
+CREATE TABLE workspace_claim_touches (
+    workspace_id text NOT NULL,
+    seq bigint NOT NULL,
+    version_id text NOT NULL,
+    addresses text NOT NULL,
+    CONSTRAINT workspace_claim_touches_seq_check CHECK ((seq >= 1)),
+    CONSTRAINT workspace_claim_touches_version_id_check CHECK ((version_id <> ''::text))
+);
+
+CREATE TABLE workspace_claims (
+    id text NOT NULL,
+    workspace_id text NOT NULL,
+    seq bigint NOT NULL,
+    base text NOT NULL,
+    addresses text NOT NULL,
+    principal text NOT NULL,
+    job_id text DEFAULT ''::text NOT NULL,
+    trigger_name text DEFAULT ''::text NOT NULL,
+    state text NOT NULL,
+    started_at_ms bigint NOT NULL,
+    ended_at_ms bigint DEFAULT 0 NOT NULL,
+    lease_ends_at_ms bigint DEFAULT 0 NOT NULL,
+    renewed_at_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT workspace_claims_base_check CHECK ((base <> ''::text)),
+    CONSTRAINT workspace_claims_id_check CHECK ((id <> ''::text)),
+    CONSTRAINT workspace_claims_lease_ends_at_ms_check CHECK ((lease_ends_at_ms >= 0)),
+    CONSTRAINT workspace_claims_lease_job_check CHECK (((job_id = ''::text) = (lease_ends_at_ms > 0))),
+    CONSTRAINT workspace_claims_principal_check CHECK ((principal <> ''::text)),
+    CONSTRAINT workspace_claims_renewed_at_ms_check CHECK ((renewed_at_ms >= 0)),
+    CONSTRAINT workspace_claims_seq_check CHECK ((seq >= 1)),
+    CONSTRAINT workspace_claims_state_check CHECK ((state = ANY (ARRAY['accepted'::text, 'ended'::text])))
+);
+
 CREATE TABLE workspace_resource_changes (
     workspace_id text NOT NULL,
     state_version_id text NOT NULL,
@@ -2236,6 +2269,15 @@ ALTER TABLE ONLY workspace_blame_items
 ALTER TABLE ONLY workspace_blame_items
     ADD CONSTRAINT workspace_blame_items_workspace_id_ordinal_key UNIQUE (workspace_id, ordinal);
 
+ALTER TABLE ONLY workspace_claim_touches
+    ADD CONSTRAINT workspace_claim_touches_pkey PRIMARY KEY (workspace_id, seq);
+
+ALTER TABLE ONLY workspace_claims
+    ADD CONSTRAINT workspace_claims_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY workspace_claims
+    ADD CONSTRAINT workspace_claims_workspace_id_seq_key UNIQUE (workspace_id, seq);
+
 ALTER TABLE ONLY workspace_resource_changes
     ADD CONSTRAINT workspace_resource_changes_pkey PRIMARY KEY (workspace_id, state_version_id, address);
 
@@ -2462,6 +2504,10 @@ CREATE INDEX updates_history ON updates USING btree (stack_id, version) WHERE ((
 CREATE UNIQUE INDEX updates_one_running ON updates USING btree (stack_id) WHERE ((status = 'running'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
 
 CREATE INDEX used_tickets_until ON used_tickets USING btree (until_ms);
+
+CREATE INDEX workspace_claims_job ON workspace_claims USING btree (job_id) WHERE (state = 'accepted'::text);
+
+CREATE INDEX workspace_claims_lease ON workspace_claims USING btree (lease_ends_at_ms) WHERE ((state = 'accepted'::text) AND (lease_ends_at_ms > 0));
 
 CREATE INDEX workspace_resource_changes_address ON workspace_resource_changes USING btree (workspace_id, address, ordinal DESC);
 
@@ -2722,6 +2768,12 @@ ALTER TABLE ONLY workspace_blame_cursors
 
 ALTER TABLE ONLY workspace_blame_items
     ADD CONSTRAINT workspace_blame_items_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspaces(id);
+
+ALTER TABLE ONLY workspace_claim_touches
+    ADD CONSTRAINT workspace_claim_touches_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspaces(id);
+
+ALTER TABLE ONLY workspace_claims
+    ADD CONSTRAINT workspace_claims_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspaces(id);
 
 ALTER TABLE ONLY workspace_resource_changes
     ADD CONSTRAINT workspace_resource_changes_workspace_id_state_version_id_fkey FOREIGN KEY (workspace_id, state_version_id) REFERENCES workspace_blame_items(workspace_id, state_version_id);

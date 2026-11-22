@@ -450,7 +450,7 @@ func TestJobConformance(t *testing.T) {
 
 		return jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
-			Domain: d, WriteState: d.WriteState(),
+			Domain: d, WriteState: d.WriteState(), Claims: s,
 			FailAudit: func(t *testing.T) {
 				t.Helper()
 
@@ -546,7 +546,7 @@ func newRecorderHarnessOf(
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
-			FailAudit: nil,
+			FailAudit: nil, Claims: nil,
 		},
 		Records:  j,
 		ItemKeys: s,

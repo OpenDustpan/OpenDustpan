@@ -144,6 +144,7 @@ func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
 // testServer returns a Server with only the fields that the job tests use.
 func testServer(durableStore DurableStore, owner string) *Server {
 	return &Server{
+		claimSweeper:      nil,
 		kind:                 kindState{store: nil, principals: nil, kind: ""},
 		instances:            instanceState{store: nil, id: "", version: "", registered: nil},
 		ready:                nil,

@@ -61,6 +61,7 @@ type stackStorePorts interface {
 type workspaceStorePorts interface {
 	workspace.Store
 	workspace.StateStore
+	workspace.ClaimStore
 }
 
 // AccessStorePorts holds the ports of the inventory and of the principals.

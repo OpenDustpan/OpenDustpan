@@ -141,6 +141,8 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	specs = append(specs, s.claimSweepSchedule()...)
+
 	return append(specs, s.issuerRotateSchedule()...)
 }
 
@@ -155,6 +157,10 @@ func (s *Server) jobKinds() []durable.KindSpec {
 
 	if s.deleted != nil {
 		kinds = append(kinds, jobKind(kindDeleted, s.sweepDeletedOnce))
+	}
+
+	if s.claimSweeper != nil {
+		kinds = append(kinds, jobKind(kindClaimSweep, s.claimSweeper.sweepOnce))
 	}
 
 	if s.signInRequests != nil {
@@ -469,6 +475,7 @@ func (s *Server) startSweeps(ctx context.Context, sweeps *sync.WaitGroup) error 
 	if s.durable == nil {
 		sweeps.Go(func() { s.sweepInactive(ctx) })
 		sweeps.Go(func() { s.sweepDeleted(ctx) })
+		sweeps.Go(func() { s.sweepClaims(ctx) })
 		sweeps.Go(func() { s.pruneSignInRequests(ctx) })
 		sweeps.Go(func() { s.sweepIdempotency(ctx) })
 		sweeps.Go(func() { s.sweepProfileSessions(ctx) })

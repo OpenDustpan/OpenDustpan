@@ -570,6 +570,11 @@ func pgProfileOpenSessionColumns() []string {
 // backup.EmptiedTables. CheckCoverage compares each list with the live
 // columns.
 func pgEmptiedTables() []pgCopyTable {
+	return append(pgEmptiedBaseTables(), pgCopyClaimTables()...)
+}
+
+// pgEmptiedBaseTables lists the emptied tables that are not claim tables.
+func pgEmptiedBaseTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table: backup.TableIdempotencyRecords,
@@ -637,6 +642,26 @@ func pgEmptiedTables() []pgCopyTable {
 				"final_at_ms",
 			},
 			orderBy: []string{pgColUnitID},
+		},
+	}
+}
+
+// pgCopyClaimTables holds the COPY columns of the tables of the apply claims.
+// A backup leaves them out.
+func pgCopyClaimTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   backup.TableWorkspaceClaimTouches,
+			columns: []string{pgColWorkspaceID, pgColSeq, "version_id", "addresses"},
+			orderBy: []string{pgColWorkspaceID, pgColSeq},
+		},
+		{
+			table: backup.TableWorkspaceClaims,
+			columns: []string{
+				"id", pgColWorkspaceID, pgColSeq, "base", "addresses", sinkColPrincipal, "job_id", "trigger_name",
+				pgColState, "started_at_ms", pgColEndedAtMs, "lease_ends_at_ms", "renewed_at_ms",
+			},
+			orderBy: []string{"id"},
 		},
 	}
 }

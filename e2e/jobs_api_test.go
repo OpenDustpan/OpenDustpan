@@ -178,6 +178,7 @@ func jobsScenario(t *testing.T, env *e2e.Env) {
 	approvalsRefuseWhatDoesNotWait(ctx, t, env, started)
 	memberStartsNothing(ctx, t, env, started)
 	aGateStopsAClaim(ctx, t, env)
+	aDisjointClaimsAccepted(ctx, t, env)
 	aDamagedJobIsRefusedAndCanceled(ctx, t, env, started)
 }
 
