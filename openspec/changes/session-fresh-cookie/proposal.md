@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #3257.
@@ -20,7 +20,7 @@ The path after this change:
 ## Evidence
 
 - `Checker.Authenticate` reads the stored session only (internal/sessionauth/sessionauth.go:109). The stored `session.Session` has `AuthTime` and `Provider` and no factor kind (pkg/session/session.go:124).
-- The six places that set a session cookie (five sign-ins and the renewal at `localusers.go:807`): `signin.go:450`, `passwordsignin.go:294`, `passkeysignin.go:303`, `localusers.go:467` and `:807`, `devsignin.go:146` (internal/api/server, `sessionCookie(...)`).
+- The six places that set a session cookie (five sign-ins and the renewal): `internal/api/server/signin.go:450`, `internal/api/server/passwordsignin.go:294`, `internal/api/server/passkeysignin.go:303`, `internal/api/server/localusers.go:467` and `:807` (the renewal), `internal/api/server/devsignin.go:146` (each calls `sessionCookie(...)`).
 - The claim types exist (`Claims`, `AccessClaims`, `FreshKind`, pkg/session/cookie.go:194-273). The sealer is the change `session-key-ring`.
 
 ## Fix boundary
@@ -39,7 +39,7 @@ Out of scope:
 
 - `pkg/session/fresh.go` (NEW), `pkg/session/fresh_test.go` (NEW)
 - `internal/sessionauth/sessionauth.go`, `internal/sessionauth/fresh_test.go` (NEW)
-- `internal/api/server/signin.go`, `passwordsignin.go`, `passkeysignin.go`, `localusers.go`, `devsignin.go`, `internal/api/server/accesscookie.go` (NEW)
+- `internal/api/server/signin.go`, `internal/api/server/passwordsignin.go`, `internal/api/server/passkeysignin.go`, `internal/api/server/localusers.go`, `internal/api/server/devsignin.go`, `internal/api/server/accesscookie.go` (NEW), `internal/api/server/accesscookie_test.go` (NEW)
 - `e2e/e2e_test.go`, `docs/guides/`
 
 ## Check
