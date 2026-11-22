@@ -27,8 +27,8 @@ Evidence for the claims above:
 - The gate service refuses a write of a phase that did not pass change.apply, except the lock of its plan. Proof: pkg/gate/service.go:323 holds the message: phase did not pass change.apply, and writes only the lock of its plan.
 - The server wires a job claimer for runner polls. Proof: pkg/dustpan/runners.go:51 holds type JobClaimerFunc and pkg/dustpan/runners.go:56 holds WithJobClaimer; pkg/dustpan/builtin_stores.go:396 calls it.
 - The gate subject of a job token has no job today. Proof: `pkg/dustpan/stateguard.go:402` (`principalSubjects.Subject`) sets `Job: nil` for each credential, and `pkg/gate/service.go:308` (`jobTokenWrite`) refuses a nil `Job`, so each job-token state write is refused on main.
-- The job token principal carries the job ID. Proof: `pkg/jobtoken/service.go:206` sets `JobID` on the principal, and `pkg/identity/identity.go:76` holds `Principal.JobID`.
-- The job store reads a job by ID. Proof: `pkg/job/store.go:236` holds `Store.Get`.
+- The job token principal carries the job ID. Proof: `pkg/jobtoken/service.go`, line 206 sets `JobID` on the principal, and `pkg/identity/identity.go`, line 76 holds `Principal.JobID`.
+- The job store reads a job by ID. Proof: `pkg/job/store.go`, line 236 holds `Store.Get`.
 
 ## What Changes
 
