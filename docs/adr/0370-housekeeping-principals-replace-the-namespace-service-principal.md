@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-14. Decided by the project owner. The product manager chose the stricter shape that the owner allowed
 
+Changed by:
+
+- ADR 394 changes decision 3: a wording refinement with the owner's word, the install step and each namespace creation write the grants.
+
 Changes:
 
 - Supersedes ADR 338: the namespace service principal is removed.
@@ -59,9 +63,10 @@ A check of main on 14 November 2026 found:
    the sweep of access tokens, the expiry of temporary administrators, the
    cleanup of saved views and the reconcile of jobs. Each one is made at the
    install. The record of each run names it.
-3. **Their permissions are stored grants (owner, 2026-11-14).** The install
-   step writes the grants of each housekeeping principal as stored grants,
-   with a creator and a time. A person can list, audit and revoke them. Code
+3. **Their permissions are stored grants (owner, 2026-11-14; owner,
+   2026-11-22).** The install step and each namespace creation write the
+   grants of each housekeeping principal as stored grants, with a creator and
+   a time. A person can list, audit and revoke them. Code
    defines the roles, never who holds them. A revoke of the grant of one
    housekeeping principal stops only its own work, and the server writes the
    denial to the audit log.
@@ -79,3 +84,11 @@ A check of main on 14 November 2026 found:
   and 6, or with them.
 - The glossary term "Namespace service principal" is removed, and a term
   "Housekeeping principal" is added, in the change.
+
+## Changelog
+
+- 2026-11-22, wording refinement with the owner's word (ADR 394, Q1 option C):
+  decision 3 now says that the install step and each namespace creation write
+  the grants. Before: "The install step writes the grants of each housekeeping
+  principal as stored grants, with a creator and a time." The other words of
+  decision 3 stay.
