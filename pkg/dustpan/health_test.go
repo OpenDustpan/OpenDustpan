@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -353,6 +354,27 @@ func TestHealthReadySlowCheck(t *testing.T) {
 				t.Fatalf("GET /health/ready took %s, want the 2-second limit to end it", elapsed)
 			}
 		})
+	}
+}
+
+// TestReady503WithRetryAfterWhenStoreDown proves GET /health/ready answers 503
+// with Retry-After 30 when the store ping reports a database outage.
+func TestReady503WithRetryAfterWhenStoreDown(t *testing.T) {
+	t.Parallel()
+
+	ts := newReadinessServer(t, failPing(syscall.ECONNREFUSED), nil)
+
+	status, header, body := getProbe(t, ts, "/health/ready")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health/ready status %d, want %d (body %q)", status, http.StatusServiceUnavailable, body)
+	}
+
+	if got := header.Get("Retry-After"); got != "30" {
+		t.Fatalf("Retry-After = %q, want 30 (body %q)", got, body)
+	}
+
+	if !strings.Contains(body, `"status":"unavailable"`) {
+		t.Fatalf("body %q missing unavailable status", body)
 	}
 }
 

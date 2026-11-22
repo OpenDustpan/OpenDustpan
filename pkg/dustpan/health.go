@@ -298,15 +298,22 @@ func (rd *readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	failed := pingAll(r.Context(), rd.checks, rd.timeout)
-	if len(failed) == 0 {
+	result := pingAll(r.Context(), rd.checks, rd.timeout)
+	if len(result.failed) == 0 {
 		rd.writeJSON(r.Context(), w, http.StatusOK, readinessDoc{Status: statusOK, Failed: nil})
 
 		return
 	}
 
+	if result.outage {
+		w.Header().Set("Retry-After", strconv.Itoa(RetryAfterSeconds))
+	}
+
 	rd.failures.Inc()
-	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable, readinessDoc{Status: statusUnavailable, Failed: failed})
+	rd.writeJSON(
+		r.Context(), w, http.StatusServiceUnavailable,
+		readinessDoc{Status: statusUnavailable, Failed: result.failed},
+	)
 }
 
 // ServeOne serves GET /health/ready/{component}. A component that the
@@ -384,6 +391,11 @@ type componentsDoc struct {
 	Components []componentDoc `json:"components"`
 }
 
+type pingResult struct {
+	failed []string
+	outage bool
+}
+
 func (rd *readiness) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -402,9 +414,11 @@ func (rd *readiness) writeJSON(ctx context.Context, w http.ResponseWriter, statu
 // serveComponents answers for the components in parts.
 func (rd *readiness) serveComponents(w http.ResponseWriter, r *http.Request, parts []componentChecks) {
 	doc := componentsDoc{Status: statusOK, Failed: nil, Components: make([]componentDoc, 0, len(parts))}
+	outage := false
 
 	for _, part := range parts {
-		state := rd.run(r.Context(), part)
+		state, partOutage := rd.run(r.Context(), part)
+		outage = outage || partOutage
 		if state.Status != statusOK {
 			doc.Status = statusUnavailable
 		}
@@ -424,17 +438,21 @@ func (rd *readiness) serveComponents(w http.ResponseWriter, r *http.Request, par
 		return
 	}
 
+	if outage {
+		w.Header().Set("Retry-After", strconv.Itoa(RetryAfterSeconds))
+	}
+
 	rd.failures.Inc()
 	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable, doc)
 }
 
 // run runs the checks of one component and answers its state.
-func (rd *readiness) run(ctx context.Context, part componentChecks) componentDoc {
-	failed := pingAll(ctx, part.pings, rd.timeout)
+func (rd *readiness) run(ctx context.Context, part componentChecks) (componentDoc, bool) {
+	result := pingAll(ctx, part.pings, rd.timeout)
 
 	for _, test := range part.tests {
 		if !test.ok(ctx) {
-			failed = append(failed, test.name)
+			result.failed = append(result.failed, test.name)
 		}
 	}
 
@@ -447,17 +465,17 @@ func (rd *readiness) run(ctx context.Context, part componentChecks) componentDoc
 		}
 	}
 
-	if len(failed) == 0 {
-		return componentDoc{Name: part.name, Status: statusOK, Failed: nil, Info: info}
+	if len(result.failed) == 0 {
+		return componentDoc{Name: part.name, Status: statusOK, Failed: nil, Info: info}, result.outage
 	}
 
-	return componentDoc{Name: part.name, Status: statusUnavailable, Failed: failed, Info: info}
+	return componentDoc{Name: part.name, Status: statusUnavailable, Failed: result.failed, Info: info}, result.outage
 }
 
 // pingAll pings every check with its own timeout and returns the names of the
 // checks that failed, in check order. It returns only names, never errors, so
 // no driver text reaches the caller.
-func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration) []string {
+func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration) pingResult {
 	errs := make([]error, len(checks))
 
 	var wg sync.WaitGroup
@@ -473,11 +491,15 @@ func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration
 
 	wg.Wait()
 
-	var failed []string
+	var result pingResult
 
 	for i := range checks {
 		if errs[i] == nil {
 			continue
+		}
+
+		if pingOutage(errs[i]) {
+			result.outage = true
 		}
 
 		name := checks[i].name
@@ -486,10 +508,10 @@ func pingAll(ctx context.Context, checks []readinessCheck, timeout time.Duration
 			name = renamed.name
 		}
 
-		failed = append(failed, name)
+		result.failed = append(result.failed, name)
 	}
 
-	return failed
+	return result
 }
 
 // WithDrainPeriod sets the drain: the time between the stop signal and the
