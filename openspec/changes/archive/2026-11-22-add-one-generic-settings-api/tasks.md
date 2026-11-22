@@ -29,4 +29,4 @@
 - [x] 3.3 Add an e2e step in the existing file e2e/settings_test.go (extend it in place) on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes.
 - [x] 3.4 Write the docs page in the NEW file docs/guides/settings.md. Check: make docs-lint passes
 - [x] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps.
-- [ ] 3.6 Run the full gate. Check: make check with zero findings.
+- [x] 3.6 Run the full gate. Check: make check with zero findings.
