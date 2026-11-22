@@ -62,7 +62,7 @@ var operationLabels = map[string]apidesc.Label{
 		WithQuery(
 			apidesc.StringParam("path", "Reads only this path of the open session."),
 		).
-		WithBodies(apidesc.NoBody, apidesc.Typed[sessionResponse]("ReadProfileSessionResponse", openProfileNames...)),
+		WithBodies(apidesc.NoBody, apidesc.Typed[sessionResponse]("ReadProfileSessionResponse", openProfileNames()...)),
 }
 
 // showSecretsQuery is the query parameter of a read of a profile that shows
@@ -73,13 +73,14 @@ var showSecretsQuery = apidesc.BooleanParam(
 	"showSecrets", "Shows the values of the secrets. The caller needs the permission to reveal them.",
 )
 
-// openProfileNames declares the JSON forms inside the open bodies: a session
-// value holds any JSON value.
-//
-//nolint:gochecknoglobals // Fixed values; Go has no constant slices.
-var openProfileNames = []apidesc.Declaration{
-	apidesc.Named[sessionValue]("ProfileSessionValue"),
-	apidesc.Declare[jsonValue](map[string]any{"description": "Any JSON value."}),
+// openProfileNames returns the declarations of the JSON forms inside the open
+// bodies: a session value holds any JSON value. A function keeps the fixed
+// values out of package state.
+func openProfileNames() []apidesc.Declaration {
+	return []apidesc.Declaration{
+		apidesc.Named[sessionValue]("ProfileSessionValue"),
+		apidesc.Declare[jsonValue](map[string]any{"description": "Any JSON value."}),
+	}
 }
 
 // queryOf returns the query of a request, as the label of its route allows

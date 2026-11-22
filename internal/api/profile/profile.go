@@ -159,21 +159,26 @@ type profileErrorRow struct {
 	code     string
 }
 
-// profileErrorTable lists the answers of the profile service, with the open
-// rows first. A table keeps the mapping free of one branch per sentinel.
-//
-//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
-var profileErrorTable = []profileErrorRow{
-	{sentinel: profile.ErrProvider, status: http.StatusUnprocessableEntity, code: errcode.ProfileProvider},
-	{sentinel: profile.ErrNeverStore, status: http.StatusUnprocessableEntity, code: errcode.ProfileNeverStore},
-	{sentinel: profile.ErrFinal, status: http.StatusUnprocessableEntity, code: errcode.ProfileFinal},
-	{sentinel: profile.ErrReference, status: http.StatusUnprocessableEntity, code: errcode.ProfileReference},
-	{sentinel: profile.ErrImportCycle, status: http.StatusUnprocessableEntity, code: errcode.ProfileImportCycle},
-	{sentinel: profile.ErrNotFound, status: http.StatusNotFound, code: errcode.ProfileNotFound},
-	{sentinel: profile.ErrSchemaVersion, status: http.StatusUnprocessableEntity, code: errcode.ProfileSchemaVersion},
-	{sentinel: profile.ErrLimit, status: http.StatusUnprocessableEntity, code: errcode.ProfileLimit},
-	{sentinel: profile.ErrInvalid, status: http.StatusBadRequest, code: errcode.ProfileInvalid},
-	{sentinel: profile.ErrConflict, status: http.StatusConflict, code: errcode.ProfileConflict},
+// profileErrorTable returns the answers of the profile service, with the open
+// rows first. A table keeps the mapping free of one branch per sentinel, and a
+// function keeps the fixed table out of package state.
+func profileErrorTable() []profileErrorRow {
+	return []profileErrorRow{
+		{sentinel: profile.ErrProvider, status: http.StatusUnprocessableEntity, code: errcode.ProfileProvider},
+		{sentinel: profile.ErrNeverStore, status: http.StatusUnprocessableEntity, code: errcode.ProfileNeverStore},
+		{sentinel: profile.ErrFinal, status: http.StatusUnprocessableEntity, code: errcode.ProfileFinal},
+		{sentinel: profile.ErrReference, status: http.StatusUnprocessableEntity, code: errcode.ProfileReference},
+		{sentinel: profile.ErrImportCycle, status: http.StatusUnprocessableEntity, code: errcode.ProfileImportCycle},
+		{sentinel: profile.ErrNotFound, status: http.StatusNotFound, code: errcode.ProfileNotFound},
+		{
+			sentinel: profile.ErrSchemaVersion,
+			status:   http.StatusUnprocessableEntity,
+			code:     errcode.ProfileSchemaVersion,
+		},
+		{sentinel: profile.ErrLimit, status: http.StatusUnprocessableEntity, code: errcode.ProfileLimit},
+		{sentinel: profile.ErrInvalid, status: http.StatusBadRequest, code: errcode.ProfileInvalid},
+		{sentinel: profile.ErrConflict, status: http.StatusConflict, code: errcode.ProfileConflict},
+	}
 }
 
 // profileErrors maps the errors of the profile service and of the fresh
@@ -183,7 +188,7 @@ func profileErrors(err error) (problem.Problem, bool) {
 		return p, true
 	}
 
-	for _, row := range profileErrorTable {
+	for _, row := range profileErrorTable() {
 		if errors.Is(err, row.sentinel) {
 			return problem.New(row.status, row.code, err.Error()), true
 		}
