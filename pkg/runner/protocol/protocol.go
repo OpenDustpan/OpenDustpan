@@ -222,6 +222,21 @@ const (
 	ErrorNoUpstream         = "no-upstream"          // 404: the pool has no upstream credential
 )
 
+// The codes of Error of the apply claim routes, and the HTTP status of
+// each.
+const (
+	ErrorClaimOverlap         = "claim-overlap"          // 409: the claim shares an address with an accepted claim
+	ErrorClaimClosureUnproven = "claim.closure-unproven" // 409: the claim holds a replace action
+	ErrorClaimStaleBase       = "claim-stale-base"       // 422: a later version touched the claim after its base
+	ErrorClaimEmptySet        = "claim-empty-set"        // 422: the claim holds no resource address
+	ErrorClaimBadBase         = "claim-bad-base"         // 422: the claim names an unknown base version
+	ErrorClaimLocked          = "claim-locked"           // 422: the workspace of the claim is locked
+	ErrorClaimEnded           = "claim-ended"            // 409: the claim ended; register a new claim
+	ErrorUnprocessable        = "unprocessable"          // 422: the request is well formed but cannot run
+	ErrorForbidden            = "forbidden"              // 403: the caller lacks the action on the object
+	ErrorGone                 = "gone"                   // 410: the object is deleted
+)
+
 // JoinRequest registers a runner. The token is the secret of the join
 // token. Proof is the signature of runner.JoinChallenge by the new key.
 type JoinRequest struct {

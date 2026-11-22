@@ -916,10 +916,13 @@ func requestFlows() []requestFlow {
 			h.measure(h.lock)
 			h.unlock()
 		}},
-		// The budget is 48. The cancel reads the job and its pool, ends the
+		// The budget is 49. The cancel reads the job and its pool, ends the
 		// durable operation of the job, writes the job row and its audit entry
-		// in one transaction, and reads the pool again for the answer.
-		{"job cancel", 48, func(h *rtHarness) {
+		// in one transaction, and reads the pool again for the answer. The write
+		// of a job row that moves the job to a terminal state also reads the
+		// accepted claims of the job, 1 round trip, to end them in the same
+		// transaction.
+		{"job cancel", 49, func(h *rtHarness) {
 			jobID := h.startPlanJob()
 			h.measure(func() {
 				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
@@ -1555,7 +1558,7 @@ func restoreModel() costModel {
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips - profileOpenSessionTrips +
-			firstAdministratorTrips,
+			firstAdministratorTrips + claimTableTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1583,6 +1586,13 @@ const settingChangeEntryTrips = 2
 // A restore leaves each table empty and reads it only for its column check, 1
 // round trip, so each costs 1 less than the 2 that perOther gives.
 const eventReceiptTrips = 2
+
+// claimTableTrips is the change in the fixed part for the two tables of the
+// apply claims (workspace_claims and workspace_claim_touches). A backup
+// leaves them out and a restore leaves them empty, and reads each only for its
+// column check, 1 round trip, so each costs 1 less than the 2 that perOther
+// gives.
+const claimTableTrips = -2
 
 // profileOpenSessionTrips is the number of round trips that the table of the
 // open sessions of profiles takes off the fixed part. A restore leaves the

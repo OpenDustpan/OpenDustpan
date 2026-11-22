@@ -197,21 +197,22 @@ func newCheckerStarter(t *testing.T, b checkerBackend, now func() time.Time) che
 
 	// The job service reads the namespace service and the gate service only.
 	svc := services{
-		namespaces:  namespaces,
-		stacks:      nil,
-		updates:     nil,
-		secrets:     nil,
-		workspaces:  nil,
-		manualLocks: nil,
-		tokens:      nil,
-		collections: nil,
-		placements:  nil,
-		gates:       gates.svc,
-		stateWrite:  gates,
-		deleted:     nil,
-		access:      nil,
-		tempAdmins:  nil,
-		issuer:      nil,
+		namespaces:   namespaces,
+		stacks:       nil,
+		updates:      nil,
+		secrets:      nil,
+		workspaces:   nil,
+		manualLocks:  nil,
+		tokens:       nil,
+		collections:  nil,
+		placements:   nil,
+		gates:        gates.svc,
+		stateWrite:   gates,
+		deleted:      nil,
+		claimSweeper: nil,
+		access:       nil,
+		tempAdmins:   nil,
+		issuer:       nil,
 	}
 
 	starter, err := newJobService(svc, cfg)

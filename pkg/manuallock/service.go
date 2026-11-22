@@ -325,7 +325,22 @@ func (s *Service) PhaseStart(ctx context.Context, unit Unit, jobID string) time.
 // covers the unit, so a new lock on a wider object never lifts a refusal that an
 // older lock gives.
 func (s *Service) afterPhase(ctx context.Context, locks []Lock, unit Unit, jobID string) (Lock, error) {
-	started := s.PhaseStart(ctx, unit, jobID)
+	return LockForPhase(locks, s.PhaseStart(ctx, unit, jobID))
+}
+
+// LockForPhase applies the rule of a job phase to locks, which cover one unit
+// and are not empty: the phase passes only when it started before every lock.
+// It reads no store and no clock, so a caller that holds a transaction applies
+// the rule inside it with the start time that it read before. A start time of
+// zero, which PhaseStart answers for a job that is unknown, passes no lock and
+// returns the first lock. When the phase did not start before a lock, it
+// returns the first such lock. It returns ErrNotLocked when the phase passes
+// all locks, and also for an empty list: an empty list covers nothing.
+func LockForPhase(locks []Lock, started time.Time) (Lock, error) {
+	if len(locks) == 0 {
+		return Lock{}, ErrNotLocked
+	}
+
 	if started.IsZero() {
 		return locks[0], nil
 	}

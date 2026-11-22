@@ -331,6 +331,7 @@ func startSignInEnvWith(ctx context.Context, tb testing.TB, cli Install, store S
 		deltaCutoff:            0,
 		sinkSenders:            nil,
 		auditSinks:             nil,
+		claimTiming:            false,
 		disableJournaling:      false,
 		ipAllowlists:           opts.ipAllowlists,
 		issuer:                 opts.issuer,

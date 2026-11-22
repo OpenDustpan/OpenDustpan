@@ -83,7 +83,20 @@ func updateJobRow(ctx context.Context, q *db.Queries, r jobstore.Row, prev int64
 		return false, jobIndexError("update job", err)
 	}
 
-	return n == 1, nil
+	if n != 1 {
+		return false, nil
+	}
+
+	// Every write of a job row passes here. A job that moves to a terminal
+	// state ends its claims in the same transaction, so no claim outlives its
+	// job, whichever path ended the job.
+	if r.State.Terminal() {
+		if _, err = endJobClaims(ctx, q, r.Namespace, string(r.ID), time.UnixMilli(r.UpdatedMs)); err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
 }
 
 // startDurableOperation starts the durable operation of req, in the

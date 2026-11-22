@@ -102,6 +102,7 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 	return &storetest.StoredBlobBackupRig{
 		Recorder: jobtest.NewRecorderHarness(t, jobtest.RecorderParts{
 			Harness: jobtest.Harness{
+				Claims:     nil,
 				Jobs:       jobs,
 				Durable:    ops,
 				Freezes:    jobs,

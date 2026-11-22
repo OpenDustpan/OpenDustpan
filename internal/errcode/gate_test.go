@@ -53,8 +53,20 @@ func gated() []errcodetest.Adapter {
 		api("pulumi", []string{"errorResponse", "codedErrorResponse", "freshRefusalResponse"}, nil),
 		api("registry", nil, nil),
 		// The runner protocol has its own codes and its own versions.
-		api("runnerapi", nil,
-			[]string{"classifyProtocol", "classifyProtocolOther", "classifyProxy"}),
+		// claimRefused and classifyProtocolRest answer that protocol too:
+		// the apply claim routes report overlap, stale base and closure
+		// with runner codes, not catalog codes.
+		api(
+			"runnerapi",
+			nil,
+			[]string{
+				"classifyProtocol",
+				"classifyProtocolOther",
+				"classifyProxy",
+				"claimRefused",
+				"classifyProtocolRest",
+			},
+		),
 		api("runnerpools", nil, nil),
 		api("selfservice", nil, nil),
 		api("settings", []string{"bulkError"}, nil),

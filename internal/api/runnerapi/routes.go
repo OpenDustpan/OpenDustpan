@@ -30,6 +30,11 @@ const (
 	// identity.ActionRunnerClaim on the pool of its runner. A runner key
 	// never passes this scope, and a session key never passes ScopeRunnerKey.
 	ScopeSessionKey
+	// ScopeJobToken is a request with a bearer job token or an access
+	// token: the handler authenticates the credential itself, because the
+	// token, not a runner or session key, carries the call. The wrapper
+	// checks the release and reads the body only.
+	ScopeJobToken
 )
 
 // Route declares one endpoint: its ServeMux pattern, how it is protected,
@@ -55,7 +60,9 @@ type Route struct {
 func (h *Handler) buildRoutes() []Route {
 	routes := append(append([]Route(nil), h.runnerRoutes()...), h.launcherRoutes()...)
 
-	return append(append(routes, h.planRoutes()...), h.proxyRoutes()...)
+	routes = append(append(routes, h.planRoutes()...), h.proxyRoutes()...)
+
+	return append(routes, h.claimRoutes()...)
 }
 
 // runnerRoutes returns the routes of the runner side of the protocol.

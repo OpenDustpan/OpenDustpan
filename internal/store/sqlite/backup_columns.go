@@ -655,6 +655,11 @@ func sqliteBlobDeleteLeaseControlTables() []sqliteBackupTable {
 // sqliteEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live schema.
 func sqliteEmptiedTables() []sqliteBackupTable {
+	return append(sqliteEmptiedBaseTables(), sqliteClaimBackupTables()...)
+}
+
+// sqliteEmptiedBaseTables lists the emptied tables that are not claim tables.
+func sqliteEmptiedBaseTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
 			table: backup.TableIdempotencyRecords,
@@ -722,6 +727,24 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			columns: []string{
 				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",
 				"final_job", "final_at_ms",
+			},
+		},
+	}
+}
+
+// sqliteClaimBackupTables lists the column lists of the tables of the apply
+// claims. A backup leaves them out.
+func sqliteClaimBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table:   backup.TableWorkspaceClaimTouches,
+			columns: []string{backupColWorkspaceID, backupColSeq, "version_id", "addresses"},
+		},
+		{
+			table: backup.TableWorkspaceClaims,
+			columns: []string{
+				"id", backupColWorkspaceID, backupColSeq, "base", "addresses", "principal", "job_id", "trigger_name",
+				backupColState, "started_at_ms", backupColEndedAtMs, "lease_ends_at_ms", "renewed_at_ms",
 			},
 		},
 	}

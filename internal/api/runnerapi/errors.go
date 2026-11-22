@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // errNotFound is the one answer for an unknown namespace, an unknown pool, an
@@ -187,8 +188,79 @@ func sentenceOf(err error, sentinels []error) string {
 	return internalMessage
 }
 
+// claimRefused maps the errors of the apply claim routes: each answer
+// names the missing action, the blocker or the touching version, so the
+// caller knows the one command that helps. A denial names the action and
+// the unit, never the subject. It reports false when err is no claim
+// error.
+func claimRefused(err error) (int, protocol.Error, bool) {
+	if overlap, _ := errors.AsType[*workspace.OverlapError](err); overlap != nil {
+		return http.StatusConflict, protocol.Error{
+			Code: protocol.ErrorClaimOverlap, Message: overlap.Error(), Supported: "",
+		}, true
+	}
+
+	if touched, _ := errors.AsType[*workspace.TouchedBaseError](err); touched != nil {
+		return http.StatusUnprocessableEntity, protocol.Error{
+			Code: protocol.ErrorClaimStaleBase, Message: touched.Error(), Supported: "",
+		}, true
+	}
+
+	if errors.Is(err, errClaimTooLarge) || errors.Is(err, workspace.ErrClaimTooLarge) ||
+		errors.Is(err, workspace.ErrClaimInvalid) {
+		return http.StatusUnprocessableEntity, protocol.Error{
+			Code: protocol.ErrorUnprocessable, Message: err.Error(), Supported: "",
+		}, true
+	}
+
+	for _, row := range []struct {
+		status    int
+		code      string
+		sentinels []error
+	}{
+		{
+			http.StatusForbidden, protocol.ErrorForbidden,
+			[]error{errClaimJobMismatch, identity.ErrDenied},
+		},
+		{http.StatusConflict, protocol.ErrorClaimClosureUnproven, []error{workspace.ErrClaimReplace}},
+		{http.StatusConflict, protocol.ErrorClaimEnded, []error{workspace.ErrClaimEnded}},
+		{http.StatusUnprocessableEntity, protocol.ErrorClaimEmptySet, []error{workspace.ErrClaimEmptySet}},
+		{http.StatusUnprocessableEntity, protocol.ErrorClaimBadBase, []error{workspace.ErrClaimBadBase}},
+		{http.StatusUnprocessableEntity, protocol.ErrorClaimLocked, []error{workspace.ErrClaimLocked}},
+		{http.StatusGone, protocol.ErrorGone, []error{workspace.ErrClaimDeleted}},
+		{
+			http.StatusNotFound, protocol.ErrorNotFound,
+			[]error{workspace.ErrClaimNotFound, workspace.ErrNotFound},
+		},
+		{http.StatusUnauthorized, protocol.ErrorTokenExpired, []error{identity.ErrJobTokenEnded}},
+		{http.StatusUnauthorized, protocol.ErrorBadProof, []error{identity.ErrUnauthenticated}},
+	} {
+		for _, sentinel := range row.sentinels {
+			if errors.Is(err, sentinel) {
+				return row.status, protocol.Error{
+					Code: row.code, Message: sentinel.Error(), Supported: "",
+				}, true
+			}
+		}
+	}
+
+	return 0, protocol.Error{Code: "", Message: "", Supported: ""}, false
+}
+
 // classifyProtocolOther maps the errors of claims and requests.
 func classifyProtocolOther(
+	err error, mk func(status int, code string, sentinels ...error) (int, protocol.Error),
+) (int, protocol.Error) {
+	if status, body, ok := claimRefused(err); ok {
+		return status, body
+	}
+
+	return classifyProtocolRest(err, mk)
+}
+
+// classifyProtocolRest maps the errors of claims and requests that are no
+// apply claim refusal.
+func classifyProtocolRest(
 	err error, mk func(status int, code string, sentinels ...error) (int, protocol.Error),
 ) (int, protocol.Error) {
 	switch {

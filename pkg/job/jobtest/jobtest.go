@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // Harness is one fresh, empty database for one case. The stores share the
@@ -55,6 +56,10 @@ type Harness struct {
 	// until the test ends. A harness that cannot make the append fail leaves
 	// it nil, and the suite skips the case that needs it.
 	FailAudit func(t *testing.T)
+	// Claims is the claim store of the same database. A harness whose
+	// database keeps no claims leaves it nil, and the cases of the claims of a
+	// job do not run.
+	Claims workspace.ClaimStore
 }
 
 // StateWriter writes the state of a unit through the store of its tool. The
@@ -190,7 +195,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
 	}, createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
-		endClaimCases(), claimBoundCases(), claimGateCases())
+		endClaimCases(), claimBoundCases(), claimGateCases(), claimCases())
 
 	runCases(t, newHarness, cases)
 

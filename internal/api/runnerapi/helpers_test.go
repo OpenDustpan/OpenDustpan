@@ -475,6 +475,7 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 		Artifacts:                  nil,
 		OnHandoffRefusalSuppressed: nil,
 		Proxies:                    nil,
+		Claims:                     nil,
 	}
 
 	if opts.mutate != nil {
