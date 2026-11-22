@@ -24,8 +24,8 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The gate package defines JobClaim with PassedApply. Proof: pkg/gate/service.go:23 holds the type JobClaim; pkg/gate/service.go:27 holds PassedApply.
-- The gate service refuses a write of a phase that did not pass change.apply, except the lock of its plan. Proof: pkg/gate/service.go:276 holds the message: phase did not pass change.apply, and writes only the lock of its plan.
-- The server wires a job claimer for runner polls. Proof: pkg/dustpan/runners.go:45 holds type JobClaimerFunc and pkg/dustpan/runners.go:47 holds WithJobClaimer; cmd/opendustpan/main.go:1295 calls it.
+- The gate service refuses a write of a phase that did not pass change.apply, except the lock of its plan. Proof: pkg/gate/service.go:323 holds the message: phase did not pass change.apply, and writes only the lock of its plan.
+- The server wires a job claimer for runner polls. Proof: pkg/dustpan/runners.go:51 holds type JobClaimerFunc and pkg/dustpan/runners.go:56 holds WithJobClaimer; pkg/dustpan/builtin_stores.go:396 calls it.
 - The state-write adapters cannot build a JobClaim today. Proof: Issue #1254 body: Service.GuardStateWrite lets a job token pass the gates, with no check of the job, because the adapters cannot build a JobClaim.
 
 ## What Changes
@@ -55,7 +55,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- GuardStateWrite is the gate entry for state.write. (`pkg/gate/statewrite.go:65`)
+- GuardStateWrite is the gate entry for state.write. (`pkg/gate/statewrite.go:66`)
 - JobClaim carries PassedApply. (`pkg/gate/service.go:23`)
 - JobClaimerFunc builds the claimer of a runner poll. (`pkg/dustpan/runners.go:45`)
 
