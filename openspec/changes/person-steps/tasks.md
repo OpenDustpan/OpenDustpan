@@ -92,6 +92,7 @@ only if the transcript leaves doubt; most need no second pass. Tick each task wh
 - [ ] 4.1 Run definition of done for this part: wiring of both NEW Make targets and usability check from test output; route, e2e install step, and docs page are BLOCKED by part 2 container image and install docs work Check: BLOCKED by part 2 container image, install test route and docs page; `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 4.2 Run wiring, route with authorization actions, docs page and usability check. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 4.3 Run usability check from the docs page alone Check: an Operator completes the matrix from docs/guides/backup-restore-upgrade.md alone and each error names the one helping command. A person's step.
+- [ ] 3.5 Usability check from the docs draft. Check: The persona completes the path and each error names one command. A person's step.
 
 ## Move staged workflows into place
 
