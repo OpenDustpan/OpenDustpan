@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #3257.
@@ -19,16 +19,16 @@ The path after this change:
 
 ## Evidence
 
-- `Checker.Authenticate` reads the stored session only (internal/sessionauth/sessionauth.go:132). The stored `session.Session` has `AuthTime` and `Provider` and no factor kind (pkg/session/session.go:123).
-- The six places that set a session cookie (five sign-ins and the renewal at `localusers.go:741`): `signin.go:440`, `passwordsignin.go:259`, `passkeysignin.go:303`, `localusers.go:402` and `:741`, `devsignin.go:146` (internal/api/server, `sessionCookie(...)`).
-- The claim types exist (`Claims`, `AccessClaims`, `FreshKind`, pkg/session/cookie.go:193-273). The sealer is the change `session-key-ring`.
+- `Checker.Authenticate` reads the stored session only (internal/sessionauth/sessionauth.go:109). The stored `session.Session` has `AuthTime` and `Provider` and no factor kind (pkg/session/session.go:124).
+- The six places that set a session cookie (five sign-ins and the renewal at `localusers.go:807`): `signin.go:450`, `passwordsignin.go:294`, `passkeysignin.go:303`, `localusers.go:467` and `:807`, `devsignin.go:146` (internal/api/server, `sessionCookie(...)`).
+- The claim types exist (`Claims`, `AccessClaims`, `FreshKind`, pkg/session/cookie.go:194-273). The sealer is the change `session-key-ring`.
 
 ## Fix boundary
 
 - At each session start, the handler seals an access cookie with the claims below and sets `__Host-dustpan_access` (`session.AccessCookie`) with the attributes of ADR 297 decision 1.
-- `sessionauth.Checker.Authenticate` opens the cookie and binds it to the stored session. It returns the fact in `Caller.Fresh`. The binding fails closed.
+- `sessionauth.Checker.Authenticate` opens the cookie and binds it to the stored session. It returns the fact in the field `Caller.Fresh` (NEW). The binding fails closed.
 - The fresh fact is written only at a sign-in. A request never advances it.
-- The access cookie lives at most `AccessLifetime` (5 minutes). A request that the stored session authenticates re-issues it near its expiry, with the same claims and a new expiry. It never changes `FreshAt`, `MFAAt` or `FreshKind`.
+- The access cookie lives at most `AccessLifetime` (5 minutes). A request that the stored session authenticates re-issues it near its expiry, with the same claims and a new expiry. It never changes the fields FreshAt, MFAAt or FreshKind of the claims.
 
 Out of scope:
 
@@ -49,9 +49,13 @@ Out of scope:
 
 ## What main already does
 
-- The sealer, the ring and the cookie claims types: ports and types only on main; the change `session-key-ring` implements them.
-- `sessionCookie` sets the stored session cookie at each of the six sites.
-- A step is a new sign-in with `fresh=1` that makes a new stored session (`freshSignIn`, internal/api/server/signin_test.go:1355).
+- `Checker.Authenticate` reads the session cookie, resolves the stored session and returns a `Caller` with the match and the secret only. (`internal/sessionauth/sessionauth.go:109 (func Checker.Authenticate)`)
+- `Caller` holds `Match` and `Secret` and no fresh fact. (`internal/sessionauth/sessionauth.go:98 (type Caller)`)
+- The stored session has the fields AuthTime and Provider and no factor kind. (`pkg/session/session.go:124 (type Session)`)
+- The claims types of the access cookie, with the fields FreshKind, FreshAt and MFAAt, are ports and types only: the change `session-key-ring` implements the sealer and the ring. (`pkg/session/cookie.go:226 (type Claims)`)
+- The name of the access cookie is a constant. (`pkg/session/cookie.go:29 (const AccessCookie)`)
+- `sessionCookie` builds the stored session cookie, and each of the six sites calls it. (`internal/api/server/signin.go:721 (func sessionCookie)`)
+- The renewal after a password change is a new stored session with no sign-in. (`internal/api/server/localusers.go:786 (func renewSession)`)
 
 ## ADR check
 
@@ -68,6 +72,6 @@ Open questions: none.
 Considered and answered:
 
 - Does a request refresh the fact? No. Only a sign-in writes `freshAt`. A re-issue copies the claims.
-- What binds the cookie to the stored session? The principal ID, the session generation and the sign-in time (`SignInAt` equals the creation time of the stored session in milliseconds). Any difference gives no fact.
+- What binds the cookie to the stored session? The principal ID, the session generation and the sign-in time (the field SignInAt of the claims equals the creation time of the stored session in milliseconds). Any difference gives no fact.
 - Does a renewal after a password change carry a fact? No. It is not a sign-in. It sets empty claims.
 - Which kind for which sign-in? Passkey gives `passkey`. A password with a second factor gives `mfa`. An SSO provider gives `sso` with the authentication time that the provider gives. A password alone gives `password`. A dev sign-in gives no kind.
