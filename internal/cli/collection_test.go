@@ -44,6 +44,7 @@ func commandRuns() map[string]cli.RunFunc {
 		"placement add":     cli.PlacementAdd,
 		"placement list":    cli.PlacementList,
 		"placement delete":  cli.PlacementDelete,
+		"runner pools list": cli.RunnerPoolsList,
 	}
 }
 
