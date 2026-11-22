@@ -46,6 +46,7 @@ Out of scope: any new route, field, error code, store change or API change; crea
 ## ADR check
 
 - ADR 130 (runner pools, owner-tagged): this change adds no behavior of a pool. Quote: "A pool has a purpose that never changes (owner)." The command only reads.
+- ADR 250 (defense in depth): step 5 writes a denial to the audit log. The server makes each denial of an action and writes that record. A client-side usage error in the CLI denies no action, so design.md states that these refusals are unaudited by design.
 - ADR 17: "Give every feature a REST API" is met; the command is a client of the existing API.
 
 ## Open questions
