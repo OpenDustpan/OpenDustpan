@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #3257.
@@ -12,9 +12,9 @@ Today a fresh step is on for everyone. An installation with an SSO provider cann
 
 The path after this change:
 
-1. The administrator reads the effective value of `freshAuthEnabled` with `GET /api/server/settings`. It is `false`, with its source.
+1. The administrator reads the effective value of `freshAuthEnabled` with `GET /api/dustpan/v1/settings`. It is `false`, with its source.
 2. A developer approves a `destroy` with an access token that holds the grant. The server accepts it and writes the audit entry.
-3. The administrator turns the setting on with `PATCH /api/server/settings` (no step needed from off to on). From then on, each step of ADR 227 decision 2 asks for a fresh authentication.
+3. The administrator turns the setting on with `PATCH /api/dustpan/v1/settings` (no step needed from off to on). From then on, each step of ADR 227 decision 2 asks for a fresh authentication.
 4. Errors: with the setting on, a request with no fresh step gets 403 `mfa.fresh-step-required` and the path of a new sign-in. The turn from on to off needs a fresh step itself.
 
 ## Evidence
@@ -34,7 +34,7 @@ The path after this change:
 ## Fix boundary
 
 - Declare the installation setting `freshAuthEnabled`: boolean, effective default `false`, reduces security when it goes from on to off. Its settings API shows the effective value and its source. A flag, an environment variable or the configuration file may set it.
-- One decision point, `freshstep.Policy`, that every fresh-step call site asks. With the setting off it answers "no step". The handler, the service and the store each read the same effective value. None keeps its own rule.
+- One decision point, the NEW `freshstep.Policy` (in the NEW package `pkg/freshstep`), that every fresh-step call site asks. With the setting off it answers "no step". The handler, the service and the store each read the same effective value. None keeps its own rule.
 - Gate each call site that the `rg` of task 1.1 finds, except the sites that ADR 385 decision 5 keeps.
 - The refusal of the approval route (`internal/api/jobs/approve.go`, "no session MFA proof yet") is not the answer with the setting off. With the setting on, the fresh fact of #3257 is a separate change that depends on this one.
 - A stored `freshAuthSeconds` of an approval rule and `freshAuthForApprovals` of a namespace keep their values with the setting off. The settings API and the rule API show `"enforced": false` for them.
