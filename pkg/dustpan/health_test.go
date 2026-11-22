@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -357,24 +356,48 @@ func TestHealthReadySlowCheck(t *testing.T) {
 	}
 }
 
-// TestReady503WithRetryAfterWhenStoreDown proves GET /health/ready answers 503
-// with Retry-After 30 when the store ping reports a database outage.
-func TestReady503WithRetryAfterWhenStoreDown(t *testing.T) {
+// TestHealthReadyRetryAfterOnStoreFailure proves GET /health/ready answers 503
+// with Retry-After 5 when the store ping fails.
+func TestHealthReadyRetryAfterOnStoreFailure(t *testing.T) {
 	t.Parallel()
 
-	ts := newReadinessServer(t, failPing(syscall.ECONNREFUSED), nil)
+	ts := newReadinessServer(t, failPing(errStoreCanary), nil)
 
 	status, header, body := getProbe(t, ts, "/health/ready")
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("GET /health/ready status %d, want %d (body %q)", status, http.StatusServiceUnavailable, body)
 	}
 
-	if got := header.Get("Retry-After"); got != "30" {
-		t.Fatalf("Retry-After = %q, want 30 (body %q)", got, body)
+	if got := header.Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5 (body %q)", got, body)
 	}
 
 	if !strings.Contains(body, `"status":"unavailable"`) {
 		t.Fatalf("body %q missing unavailable status", body)
+	}
+}
+
+// TestHealthReadyRetryAfterOnStoreStall proves GET /health/ready answers 503
+// with Retry-After 5 within 5 seconds when the store ping never answers.
+func TestHealthReadyRetryAfterOnStoreStall(t *testing.T) {
+	t.Parallel()
+
+	ts := newReadinessServer(t, blockPing, nil)
+
+	start := time.Now()
+	status, header, body := getProbe(t, ts, "/health/ready")
+	elapsed := time.Since(start)
+
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health/ready status %d, want %d (body %q)", status, http.StatusServiceUnavailable, body)
+	}
+
+	if got := header.Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5 (body %q)", got, body)
+	}
+
+	if elapsed > 5*time.Second {
+		t.Fatalf("GET /health/ready took %s, want 503 within 5 seconds", elapsed)
 	}
 }
 
