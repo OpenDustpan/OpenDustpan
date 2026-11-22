@@ -8,7 +8,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Add the command in the NEW file internal/cli/runner_pools.go and one row in each of cmd/opendustpan/commands.go and internal/cli/reference.go. Check: `go test ./internal/cli/... ./cmd/opendustpan/...` passes TestRunnerPoolsList.
+- [ ] 2.1 Add the command in the NEW file internal/cli/runner_pools.go and one row in each of cmd/opendustpan/commands.go (the row `cli.RunnerPoolsListCommand(cli.RunnerPoolsList)` is NEW) and internal/cli/reference.go. Add one usage line `opendustpan runner pools list --namespace <namespace>` in the Operate group of the usage text in internal/cli/client/client.go, because TestUsageNamesEveryCommand and TestUsageGroupsByIntent in cmd/opendustpan/help_test.go require every command row in the usage. The new command also needs edits in internal/cli/settings.go, internal/cli/cli.go, internal/cli/collection_test.go and cmd/opendustpan/help_test.go (the settings and collection lists and the help test name each command). Regenerate docs/reference/configuration.md with `go test ./internal/cli/ -run TestConfigurationReference -update`, because the new reference row changes it. Check: `go test ./internal/cli/... ./cmd/opendustpan/...` passes TestRunnerPoolsList.
 
 ## 3. Definition of done
 

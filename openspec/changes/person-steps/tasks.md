@@ -93,6 +93,7 @@ only if the transcript leaves doubt; most need no second pass. Tick each task wh
 - [ ] 4.2 Run wiring, route with authorization actions, docs page and usability check. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 4.3 Run usability check from the docs page alone Check: an Operator completes the matrix from docs/guides/backup-restore-upgrade.md alone and each error names the one helping command. A person's step.
 - [ ] 3.5 Usability check from the docs draft. Check: The persona completes the path and each error names one command. A person's step.
+- [ ] 4.3 Usability check from the docs page of backup-fence-target-writes-attempt. Check: an Operator completes the path from docs/guides/several-instances.md alone (start a backup, check it, read the target layout and the cleanup step) and each error names the one command that helps. A person's step.
 
 ## Move staged workflows into place
 

@@ -1,22 +1,40 @@
 ## Context
 
-The session surface for job phases. Sweep report and finish stay in other parts.
+The session surface for job phases. Sweep report and finish stay in other parts. The source paths wait for the source pipeline and are not part of this change.
 
 ## Decisions
 
 1. **One checked session claim.** An unexported sessionClaim is made only by newSessionClaim, which checks the proof, the live claim and the job purpose of the pool.
 2. **Fence on each write.** Each write checks the claim again in its own transaction.
 3. **Chunk bytes keyed by claim and sequence.** The blob key holds the claim and the sequence, so a lost-claim launcher cannot overwrite a counted chunk of a new claim. The counter moves after the bytes.
-4. **One plan commit.** The commit stores the plan hash. A second commit answers 409 plan-committed.
+4. **Plan commit as ADR 131 decides.** Main keeps this rule and the change does not alter it: a commit with the same parts and hashes under the same claim answers 204 and changes nothing. A commit with other parts after a commit answers `conflict`.
+5. **Phase caps in the chunk transaction.** The reserve step of a log chunk checks the chunk count and the byte count of the step and of the phase, with the limits of pkg/runner/protocol/protocol.go:156-162. A breach answers invalid and keeps no bytes.
 
 ## Structure
 
 Unexported type sessionClaim, made only by newSessionClaim.
 
+## Contract
+
+No new route and no new error code. The routes of the plan paths are on main (`planRoutes`, internal/api/runnerapi/plan.go:22-47). The source paths are not part of this change.
+
+| Limit | Constant | Answer on a breach |
+| --- | --- | --- |
+| Chunks of one step | protocol.MaxLogChunksPerStep (20,000) | 400 invalid. Main checks it already. |
+| Bytes of one step | protocol.MaxLogBytesPerStep (256 MiB) | 400 invalid. NEW server check. |
+| Chunks of one phase | protocol.MaxLogChunksPerPhase (100,000) | 400 invalid. NEW server check. |
+| Bytes of one phase | protocol.MaxLogBytesPerPhase (1 GiB) | 400 invalid. NEW server check. |
+| One plan part | job.MaxPlanPart (256 MiB) | 400 invalid. Main checks it already. |
+| Parts of one commit | protocol.MaxPlanParts (8) | 400 invalid. Main checks it already. |
+
+Error codes: the codes of pkg/runner/protocol/protocol.go (invalid 400, bad-proof 401, claim-lost 409, conflict 409). The caps answer 400 invalid.
+
+Stored data: the count of chunks and bytes of each phase, kept with the log counters that the recorder already stores. The schema work, if any, stays in the store of the job recorder (job.DurableRecorder.AppendLog).
+
 ## Risks
 
 - A refused chunk must keep no bytes in the count.
-- A second plan commit must not replace the first.
+- A commit with other parts must not replace the stored plan (main answers conflict).
 - A re-upload of a part number replaces the part and does not count against the 8 parts.
 
 ## Layers (defense in depth)
@@ -25,7 +43,7 @@ Unexported type sessionClaim, made only by newSessionClaim.
 | --- | --- | --- |
 | HTTP handler | The proof check accepts only the session key on session paths. | TestSessionRejectsRunnerKey |
 | Service | newSessionClaim checks the live claim and job purpose on each write. | TestSessionWriteAfterTakeover |
-| Store adapter | The transaction checks the fence, the sequence and the caps. | TestPlanCommitTwice |
+| Store adapter | The transaction checks the fence, the sequence and the caps. | TestLogPhaseCapStoresNothing |
 
 ## Diagrams
 
@@ -37,23 +55,23 @@ sequenceDiagram
  participant S as Server
  L->>S: POST /runner/v1/session
  S-->>L: session
- L->>S: renew, source, steps, logs
+ L->>S: renew, steps, logs
  L->>S: plan parts, plan-commit
- S-->>L: 200 or 409 plan-committed
+ S-->>L: 204, also for the same commit again
 ```
 
 Modules that the change touches, and their imports on main:
 
 ```mermaid
 flowchart LR
-P1[internal/unmanaged]
+P1[unmanaged]
 ```
 
 New imports of this change (each one allowed by the module rules):
 
 - `internal/api/runnerapi` imports `pkg/runner`
-- `internal/api/runnerapi` imports `pkg/job`
-- `internal/api/runnerapi` imports `pkg/identity`
+- `internal/api/runnerapi` imports (read only) `pkg/job`
+- `internal/api/runnerapi` imports (read only) `pkg/identity`
 
 States on main in the touched packages:
 
@@ -79,7 +97,7 @@ States and transitions after this change:
 stateDiagram-v2
  [*] --> NEW_ClaimLive
  NEW_ClaimLive --> NEW_SessionOpen: exchange
- NEW_SessionOpen --> NEW_PlanCommitted: plan-commit
+ NEW_SessionOpen --> NEW_PlanCommitted: plan-commit (a repeat stays here)
  NEW_SessionOpen --> NEW_ClaimLost: takeover or cancel
  NEW_PlanCommitted --> [*]
  NEW_ClaimLost --> [*]
@@ -133,14 +151,14 @@ flowchart LR
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | limit | The session holds a bounded lease. | TestSessionLeaseBound |
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | authorize at point of use | newSessionClaim checks the live claim and purpose. | TestSessionWriteAfterTakeover |
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | fail closed | A lost claim answers claim-lost and stores nothing. | TestClaimLostStoresNothing |
-| Team host to server | R | A launcher denies a second plan commit. | boundary check | The commit names the plan hash. | TestPlanCommitHashChecked |
-| Team host to server | R | A launcher denies a second plan commit. | encode or contain | The audit entry holds IDs, never the token. | TestCredentialsAuditNoToken |
-| Team host to server | R | A launcher denies a second plan commit. | limit | One commit for each phase. | TestPlanCommitTwice |
-| Team host to server | R | A launcher denies a second plan commit. | authorize at point of use | The commit checks the live claim. | TestPlanCommitAfterTakeover |
-| Team host to server | R | A launcher denies a second plan commit. | fail closed | The second commit answers 409 and changes nothing. | TestPlanCommitTwice |
+| Team host to server | R | A launcher denies a plan commit or sends another one. | boundary check | The commit names the plan hash. | TestPlanCommitHashChecked |
+| Team host to server | R | A launcher denies a plan commit or sends another one. | encode or contain | The audit entry holds IDs, never the token. | TestCredentialsAuditNoToken |
+| Team host to server | R | A launcher denies a plan commit or sends another one. | limit | One plan for each phase: other parts answer conflict. | TestPlanCommitOtherParts |
+| Team host to server | R | A launcher denies a plan commit or sends another one. | authorize at point of use | The commit checks the live claim. | TestPlanCommitAfterTakeover |
+| Team host to server | R | A launcher denies a plan commit or sends another one. | fail closed | A commit with other parts answers conflict and changes nothing. | TestPlanCommitOtherParts |
 | Team host to server | D | A launcher floods chunks or parts to fill storage. | boundary check | Size is checked while the body streams. | TestLogChunkStreamCap |
 | Team host to server | D | A launcher floods chunks or parts to fill storage. | encode or contain | A refused upload removes its blob. | TestRefusedUploadRemovesBlob |
-| Team host to server | D | A launcher floods chunks or parts to fill storage. | limit | Per-step and per-phase caps in the transaction. | TestLogCapsPerStepAndPhase |
+| Team host to server | D | A launcher floods chunks or parts to fill storage. | limit | Per-step and per-phase chunk and byte caps in the transaction. | TestLogCapsPerStepAndPhase |
 | Team host to server | D | A launcher floods chunks or parts to fill storage. | authorize at point of use | Each write checks the live claim. | TestFloodAfterTakeover |
 | Team host to server | D | A launcher floods chunks or parts to fill storage. | fail closed | A cap breach answers invalid and stores nothing. | TestCapBreachStoresNothing |
 
@@ -151,4 +169,4 @@ flowchart LR
 | Session exchange | The handoff token is used twice or the claim is gone. | The launcher stops; the runner takes a new claim. | One session at most. |
 | Log chunk write | The server stops after the bytes and before the counter. | The launcher sends the same chunk; the bytes are overwritten. | The chunk is counted once. |
 | Plan part upload | The claim is lost after a part is stored and before the commit. | The new claim plans again. | The uncommitted part is not referenced; orphan cleanup removes it. |
-| Plan commit | A second commit arrives, or the first answer is lost. | The launcher repeats once and gets 409 plan-committed. | The first commit stands. |
+| Plan commit | The first answer is lost. | The launcher repeats the same commit and gets 204. | The first commit stands. |

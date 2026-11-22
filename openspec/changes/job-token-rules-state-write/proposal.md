@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 7
 ---
 
 Issue: #1254.
@@ -18,19 +18,21 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A job token writes state outside its phase | 403 denied: the phase of the job did not pass change.apply and the write is not the lock or lease of its plan. | `kubectl logs -l app=opendustpan --tail=100` |
-| A job token writes the state of a unit outside its job | 403 denied: the job token names a unit outside its job. | `kubectl logs -l app=opendustpan --tail=100` |
+| A job token writes state outside its phase | 403: The credential of the caller may not make this write. The server log names the job, the phase and the gate message. | `kubectl logs -l app=opendustpan --tail=100` |
+| A job token writes the state of a unit outside its job | 403: The credential of the caller may not make this write. The server log names the job and the unit. | `kubectl logs -l app=opendustpan --tail=100` |
 
 Evidence for the claims above:
 
 - The gate package defines JobClaim with PassedApply. Proof: pkg/gate/service.go:23 holds the type JobClaim; pkg/gate/service.go:27 holds PassedApply.
-- The gate service refuses a write of a phase that did not pass change.apply, except the lock of its plan. Proof: pkg/gate/service.go:276 holds the message: phase did not pass change.apply, and writes only the lock of its plan.
-- The server wires a job claimer for runner polls. Proof: pkg/dustpan/runners.go:45 holds type JobClaimerFunc and pkg/dustpan/runners.go:47 holds WithJobClaimer; cmd/opendustpan/main.go:1295 calls it.
-- The state-write adapters cannot build a JobClaim today. Proof: Issue #1254 body: Service.GuardStateWrite lets a job token pass the gates, with no check of the job, because the adapters cannot build a JobClaim.
+- The gate service refuses a write of a phase that did not pass change.apply, except the lock of its plan. Proof: pkg/gate/service.go:323 holds the message: phase did not pass change.apply, and writes only the lock of its plan.
+- The server wires a job claimer for runner polls. Proof: pkg/dustpan/runners.go:51 holds type JobClaimerFunc and pkg/dustpan/runners.go:56 holds WithJobClaimer; pkg/dustpan/builtin_stores.go:396 calls it.
+- The gate subject of a job token has no job today. Proof: `pkg/dustpan/stateguard.go:402` (`principalSubjects.Subject`) sets `Job: nil` for each credential, and `pkg/gate/service.go:308` (`jobTokenWrite`) refuses a nil `Job`, so each job-token state write is refused on main.
+- The job token principal carries the job ID. Proof: the job token service sets `JobID` on the principal of a verified token, and `identity.Principal` holds the field `JobID`.
+- The job store reads a job by ID. Proof: the interface `job.Store` has the method `Get`, which returns the job by ID or `job.ErrNotFound`.
 
 ## What Changes
 
-- Add a source of JobClaim (job, phase, PassedApply, units) for a verified job token, resolved fresh for each call, and pass it to Evaluate at state.write on the Pulumi and TFE-compatible paths.
+- Add a gate subject source in `pkg/dustpan` (NEW `jobClaimSubjects`) that wraps `principalSubjects`. For a job-token principal it reads the job by `Principal.JobID` from the job store on each call and sets `Subject.Job` (job, phase, PassedApply, units). `GuardStateWrite` already asks the subject source on each write, so the claim is fresh on each route that calls the guard on main.
 - Refuse with identity.ErrDenied any other write of a phase that did not pass change.apply, any write for a unit outside its job, and any write whose claim does not resolve.
 
 Out of scope:
@@ -40,6 +42,7 @@ Out of scope:
 - Console display of decision records
 - A new read route for decision records
 - Unit-import operation kind and the HTTP backend path
+- A guard call on the write paths that `stategate.UncheckedPaths` lists on main (Pulumi update create and start, TFE state-version create without a lock, the HTTP backend write of a job that holds its plan lock). A later change adds each check and moves the path to `CheckedPaths`. Until then a job token on those paths meets no state.write gate.
 
 Depends on:
 
@@ -55,7 +58,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- GuardStateWrite is the gate entry for state.write. (`pkg/gate/statewrite.go:65`)
+- GuardStateWrite is the gate entry for state.write. (`pkg/gate/statewrite.go:66`)
 - JobClaim carries PassedApply. (`pkg/gate/service.go:23`)
 - JobClaimerFunc builds the claimer of a runner poll. (`pkg/dustpan/runners.go:45`)
 
@@ -92,6 +95,6 @@ Questions considered and answered:
 - Do access limits change for job tokens? No. Issue #1254 says they already hold for job tokens.
 - Does a deny gate still refuse a plan-lock write? Yes. ADR 335 decision 1: a deny gate keeps its effect.
 - How does a job-token unlocked-write meet state.write? ADR 335 decision 3: with operation kind unlocked-write; a refusal refuses the write.
-- Where does the claim come from on main? No gate.JobClaim source exists in the adapters. pkg/dustpan/runners.go:45 builds a job.Claimer for runner polls. The change adds a new source file and reuses job data; it adds no second port.
+- Where does the claim come from on main? No source sets gate.Subject.Job: principalSubjects at pkg/dustpan/stateguard.go:402 sets nil. pkg/dustpan/runners.go:45 builds a job.Claimer for runner polls, which is not a state-write seam. The change adds a subject source that reads the job store; it adds no second port and no field on gate.StateWrite.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
