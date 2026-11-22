@@ -63,7 +63,7 @@ A check of main on 14 November 2026 found:
    the sweep of access tokens, the expiry of temporary administrators, the
    cleanup of saved views and the reconcile of jobs. Each one is made at the
    install. The record of each run names it.
-3. **Their permissions are stored grants (owner, 2026-11-14; owner,
+3. **Their permissions are stored grants (owner, 2026-11-14 and
    2026-11-22).** The install step and each namespace creation write the
    grants of each housekeeping principal as stored grants, with a creator and
    a time. A person can list, audit and revoke them. Code

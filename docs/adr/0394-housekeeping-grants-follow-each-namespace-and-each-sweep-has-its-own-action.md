@@ -4,7 +4,7 @@ Status: accepted · 2026-11-22. Records decisions of the project owner of 22 Nov
 
 Changes:
 
-- Changes ADR 370 decision 3: a wording refinement with the owner's word, the install step and each namespace creation write the grants of the housekeeping principals.
+- Changes ADR 370 decision 3: a wording refinement with the owner's word. The install step and each namespace creation write the grants of the housekeeping principals.
 
 ## Context
 
