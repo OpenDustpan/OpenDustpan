@@ -1,5 +1,5 @@
 ---
-version: 9
+version: 10
 ---
 
 Issue: #1158.
@@ -8,7 +8,7 @@ The question of which kinds of principal may approve a job (owner decision 7, 20
 
 ## Why
 
-**Persona: developer.** A developer starts a job on a unit that two approval defaults guard. The namespace default needs 2 approvers of group `platform`. The collection default needs 1 approver of any kind. Today the start of the job fails, so the team must move both defaults into one scope. The developer wants the job to wait for 3 distinct people and then run.
+**Persona: developer.** A developer starts a job on a unit that two approval defaults guard. The namespace default needs 2 approvers of group `platform`. The collection default names one named person (a user) or the owners of the unit. Part A of this change is on main: a job with two defaults that name groups waits for distinct people and then runs. The start of a job still fails when a default names users or unit owners, or sets `freshAuthSeconds`, because a job gate holds groups only. The developer wants the job to wait for 3 distinct people and then run, whichever of these shapes the defaults use.
 
 The user path this change must make work:
 
@@ -20,44 +20,32 @@ Errors the person may hit, and the one command that helps. Each row exists on ma
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The start of a job fails because two defaults apply (exists on main: (read only) `pkg/gate/jobgate/jobgate.go:168`) | After this change, the start succeeds for requirements that name groups, users or unit owners. A default with an `unless` body still fails the start with the same error, because a job has no `unless` for now (owner, 2026-11-20). A default with `freshAuthSeconds` fails the start until task 5.4 lands. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-default` |
-| 403 on an approval: the subject is not a member of a group of any requirement of the phase (exists on main in `checkGroups`, (read only) `pkg/job/service_approve.go:253`) | After this change, the answer names the requirements of the phase that the subject cannot fill. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
-| 409 `job.already-approved` (exists: (read only) `internal/errcode/catalog_job.go:9`) | The caller approved this phase already. One subject fills one slot. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
+| The start of a job fails because a default names users or unit owners, or sets a fresh window (exists on main in `gatesOf`, (read only) `pkg/gate/jobgate/jobgate.go`, line 171) | After this change, the start succeeds for requirements that name groups, users or unit owners. A default with an `unless` body still fails the start with the same error, because a job has no `unless` for now (owner, 2026-11-20). A default with `freshAuthSeconds` fails the start until task 5.4 lands. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-default` |
+| 403 on an approval: the subject fills no requirement of the phase (exists on main in `checkGroups`, (read only) `pkg/job/service_approve.go`, line 277) | On main the answer names the requirements of the phase that the subject cannot fill. After this change the same answer holds for users and unit owners. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
+| 409 `job.already-approved` (exists: (read only) `internal/errcode/catalog_job.go`, line 9) | The caller approved this phase already. One subject fills one slot. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
 
 Evidence for the claims above:
 
-- A job holds one gate per phase kind, with one count. Proof: `Decision.Gates` is `map[PhaseKind]Gate` ((read only) `pkg/job/gate.go:431`) and `PolicyGates` copies one gate for each kind ((read only) `pkg/job/gate.go:129`).
-- The decider refuses more than one requirement. Proof: `gateOf` returns an error that wraps `gate.ErrUnavailable` when `len(reqs) > 1` ((read only) `pkg/gate/jobgate/jobgate.go:168`). The test `TestDecideFailsClosed` fixes this refusal ((read only) `pkg/gate/jobgate/jobgate_test.go:426`).
-- `Gate.Status` and `GatesStatus` count each gate alone, with no rule that a person fills one slot across gates ((read only) `pkg/job/gate.go:236`, (read only) `pkg/job/gate.go:295`). So a phase with two gates would count one person twice.
-- `checkGroups` demands that the approver is in the groups of every gate that names groups ((read only) `pkg/job/service_approve.go:253`). With several gates, one approver could never be a member of two disjoint groups, so a phase with two group gates would never open.
-- The approval state is in the JSON body of the job row, so the SQL baselines do not change. Proof: `gateBody` and `approvalBody` in (read only) `pkg/store/internal/jobstore/body.go:127` and `:144` are the one codec of both dialects.
-- The jobs API already returns the gates and the approvals of each phase ((read only) `internal/api/jobs/serve.go:92`, `:412`, `:419`).
-- The approval defaults give at most 3 requirements for one unit. Proof: `UnitChain` returns the namespace, the collection and the unit scopes ((read only) `pkg/gate/scope.go:459`), and each scope holds one default ((read only) `pkg/gate/rules.go:298`). `DefaultRequirements` turns each default into one requirement or merges it into `default` ((read only) `pkg/gate/requirements.go:30`).
-
+- Part A is on main: a phase holds up to 3 named gates and the approvals fill them by a maximum matching. Proof: `Decision.Gates` is `map[PhaseKind][]Gate` ((read only) `pkg/job/gate.go`, line 431), `MaxApprovalGates` is 3 (line 133), and `GatesStatus` calls `GatesProgress` ((read only) `pkg/job/gate.go`, line 309; (read only) `pkg/job/match.go`, line 18).
+- The decider still refuses the shapes of Part B. Proof: `gatesOf` returns an error that wraps `gate.ErrUnavailable` for a requirement with users, unit owners or a fresh window ((read only) `pkg/gate/jobgate/jobgate.go`, line 171). The test `TestDecideFailsClosed` fixes these refusals ((read only) `pkg/gate/jobgate/jobgate_test.go`, line 428).
+- The approval state is in the JSON body of the job row, so the SQL baselines do not change. Proof: `gateBody` and `approvalBody` in (read only) `internal/store/jobstore/body.go`, lines 127 and 145, are the one codec of both dialects.
+- The jobs API already returns the gates and the approvals of each phase. Proof: `gateResponse` and `approvalResponse` in (read only) `internal/api/jobs/serve.go`, lines 131 and 145.
+- The approval defaults give at most 3 requirements for one unit. Proof: `UnitChain` returns the namespace, the collection and the unit scopes ((read only) `pkg/gate/scope.go`, line 459), and each scope holds one default ((read only) `pkg/gate/rules.go`, line 298). `DefaultRequirements` turns each default into one requirement or merges it into `default` ((read only) `pkg/gate/requirements.go`, line 30).
 
 ## What Changes
 
-The change has two parts. Part A is buildable now, because ADR 225 decision 6 and ADR 192 decision 6 decide it. Part B is decided by the owner (2026-11-20, see "Owner decisions folded in").
+Part A (several group requirements on one job, with distinct people) is on main and is not part of this change. Part B is decided by the owner (2026-11-20, see "Owner decisions folded in"). The tasks are in `tasks.md`, sections 1 to 5.
 
-**Part A: several group requirements on one job, with distinct people.**
+**Part B: users, unit owners, fresh windows and the refusal of `unless` (decided).** Each item follows an owner decision.
 
-- `pkg/job/gate.go`: `Gate` gets a NEW field `Name`, the name of its requirement (`default`, `default/<scope key>`). `Decision.Gates` (exists, `map[PhaseKind]Gate`, `:431`) becomes `map[PhaseKind][]Gate` (NEW type), and `PolicyGates` (`:129`) copies each gate of a kind. `Approval` gets a NEW field `For`: the names of the gates whose approvers held the approver when the approver signed. `GatesStatus` (`:295`) becomes a maximum matching: each gate has `Approvals` slots, and one subject fills one slot of one gate. A new file `pkg/job/match.go` holds the matching, with augmenting paths over at most 3 gates.
-- `pkg/job/service_approve.go`: `checkApprover` (`:208`) and `checkGroups` (`:253`) check each gate alone and set the NEW field `For` of the approval to the gates that hold the approver. An approval whose `For` is empty is refused with `identity.ErrDenied`. `record` (`:347`) and `approvalEntry` (`:391`) write the names of `For` to the audit entry. `waitingGates` (`:174`) stays.
-- `pkg/job/reconcile.go:372` and `pkg/job/service_start.go:735`: both call `GatesStatus` and need no code change. The tests prove that they use the matching.
-- `pkg/job/service_start.go:439`: the start refuses a decision with more than 3 gates for a phase, with `ErrInvalid` (defense in depth, see the design).
-- `pkg/gate/jobgate/jobgate.go`: `gateOf` (`:167`) becomes `gatesOf`. It returns one `job.Gate` for each requirement, with the name set. In Part A it keeps the refusal, with the same text, for a requirement that names users or unit owners, sets `freshAuthSeconds`, or has groups saved with no group IDs; Part B removes the first two refusals one at a time. `Decide` (`:73`) sets the `BindPlan` field on every gate of a changing phase.
-- `pkg/store/internal/jobstore/body.go`: `gateBody` gets `name`, `approvalBody` gets `for`. The stores of both dialects share this codec, and the JSON column `body` of the jobs table holds this state, so the baselines `pkg/store/sqlite/migrations/` and `pkg/store/postgres/migrations/` do not change and no migration is added.
-- `internal/api/jobs/serve.go:130-145`: `gateResponse` gets `name` and `filled`, `approvalResponse` gets `for`. The API description and the clients are generated again with `make generate` and `make clients-generate`.
-- `docs/guides/approval-rules.md`: the section "One requirement only" (`:31-37`) is replaced. `docs/guides/jobs.md` (approve section, `:77`) shows the new response fields.
-
-**Part B: users, unit owners, fresh windows and the refusal of `unless` (decided).** Each item follows an owner decision. The tasks are in `tasks.md`, section 5.
-
-- Users by stable ID. An approver entry in `users` is the stable principal ID, with the name kept for display only, as `groups` and `groupIds` are. A gate holds `UserIDs`. A user entry with no ID counts no one (fail closed).
-- Unit owners resolve at each approval. `Approve` reads the owners of the unit from the context at the scope of the rule or wider, and only `group:` and `principal:` entries count. A read error refuses the approval.
-- An approval counts as of the approval time. `For` is the only record of eligibility. Nothing checks the approver again at dispatch.
-- Each requirement keeps its own fresh window. A requirement with `freshAuthSeconds` becomes a gate with its own window, and an approval fills only the gates whose window its fresh step meets. This task waits for three other changes (see "Depends on").
-- No `unless` on a job for now. `DefaultRequirements` keeps its refusal ((read only) `pkg/gate/requirements.go:44`), and a test and the guide fix it.
+- Users by stable ID. In `pkg/gate/rules.go`, `Approvers` (line 147) gets the NEW field `UserIDs`, parallel to `Users`. An approver entry in `users` is the stable principal ID, with the name kept for display only, as the groups and their IDs are. A job gate gets the NEW fields `UserIDs` and `Users`. A user entry with no ID counts no one (fail closed).
+- Unit owners resolve at each approval. `Approve` in `pkg/job/service_approve.go` reads the owners of the unit from the context at the scope of the rule or wider, through the NEW port `UnitOwnerReader`, and only `group:` and `principal:` entries count. A read error refuses the approval.
+- An approval counts as of the approval time. The field `For` of the approval is the only record of eligibility. Nothing checks the approver again at dispatch.
+- Each requirement keeps its own fresh window. A requirement with `freshAuthSeconds` becomes a gate with its own window, and an approval fills only the gates whose window its fresh step meets. This task waits for other changes (see "Depends on").
+- No `unless` on a job for now. `DefaultRequirements` keeps its refusal ((read only) `pkg/gate/requirements.go`, line 44), and a test and the guide fix it.
 - Rejection stays open to every holder of `job:approve`, as on main.
+- `pkg/gate/jobgate/jobgate.go`: `gatesOf` stops refusing users, unit owners and `freshAuthSeconds`, one task at a time.
+- `docs/guides/approval-rules.md` and `docs/guides/jobs.md`: show the users, the unit owners and the fresh window on a job.
 
 Out of scope:
 
@@ -70,14 +58,13 @@ Out of scope:
 - Change orders. They have their own matcher (the matcher of change orders, ADR 192 decision 6).
 - Gate configuration routes, the simulate route and the console run page.
 
-Depends on: none for Part A and for Part B except the fresh window.
+Depends on: none for the tasks 5.1 to 5.3 and 5.5. Task 5.4 (the fresh window) waits for the changes session-fresh-cookie, fresh-auth-enabled-setting and fix-destroy-approval-fresh-auth. They give the fresh-authentication fact.
 
 Follow-up: the change `machine-approvals` depends on this change. It adds the machine approvers (a service principal, or the access token of a person, named by stable ID in the rule) and needs RFC 134 and a new ADR first.
 
-The fresh window (task 5.4) starts after the changes session-fresh-cookie, fresh-auth-enabled-setting and fix-destroy-approval-fresh-auth are on main: they give the fresh-authentication fact.
+Not a dependency: the change approval-defaults-take-effect-live. Its premise (the decider is wired nowhere) is false on main: (read only) `pkg/dustpan/jobservice.go`, line 45, builds `jobgate.New`. Mark that change stale in its own pull request.
 
-Not a dependency: the change approval-defaults-take-effect-live. Its premise (the decider is wired nowhere) is false on main: (read only) `pkg/dustpan/jobservice.go:45` builds `jobgate.New`. Mark that change stale in its own pull request.
-- The changes fresh-authentication-window-0-turns and gate-evaluation-must-apply-dev are not dependencies of Part A.
+The change gate-evaluation-must-apply-dev is a layer below this one in the plan. The plan also puts fresh-authentication-window-0-turns below this change. It stays a dependency of the plan, and it is not a dependency of tasks 5.1 to 5.3 and 5.5.
 
 ## Owner decisions folded in
 
@@ -85,7 +72,7 @@ The owner answered four of the five first questions and decided that the fifth s
 
 | First question | Owner decision (2026-11-20) | Effect in this change |
 | --- | --- | --- |
-| 1. Who may approve and reject, and how a user is named | Name approvers by stable ID. Any `job:approve` holder may reject. | Option C of the first draft. `UserIDs` on the gate. Rejection stays as on main. |
+| 1. Who may approve and reject, and how a user is named | Name approvers by stable ID. Any `job:approve` holder may reject. | Option C of the first draft. A NEW field `UserIDs` on the gate. Rejection stays as on main. |
 | 2. When unit owners resolve | Resolve unit owners at each approval, and fail closed. Only `group:` and `principal:` entries count. | Option B. `Approve` reads the context. A text owner counts no one. |
 | 3. A recheck before dispatch | An approval counts as of the approval time. A recheck at dispatch is a separate, later change. | Option A. `For` is written once, at the approval. |
 | 4. A fresh window with several requirements | Each requirement keeps its own fresh window. | Option B. Task 5.4. |
@@ -102,17 +89,21 @@ The owner answered four of the five first questions and decided that the fifth s
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- `Gate` is one requirement: one count, one list of groups ((read only) `pkg/job/gate.go:89`).
-- A phase holds `[]Gate` (`phase.Gates`, (read only) `pkg/store/internal/jobstore/body.go:164`), but the policy fills one gate for each kind (`PolicyGates`, (read only) `pkg/job/gate.go:129`).
-- `Approve` reads the waiting gates, checks the approver and records the verdict ((read only) `pkg/job/service_approve.go:38`, `:174`, `:208`, `:347`).
-- `record` picks `EventApproved`, `EventApprovalRecorded` or `EventRejected` from `GatesStatus` ((read only) `pkg/job/service_approve.go:357`).
-- The reconciler dispatches a queued job when `GatesStatus` is open ((read only) `pkg/job/reconcile.go:372`). The store checks the plan binding, the lock, the busy unit and the destroy proof in `Store.Apply` for `EventDispatch` ((read only) `pkg/job/store.go:247`, `checkDestroyProof` in (read only) `pkg/store/internal/jobstore/events.go`).
-- A rejection by any holder of `job:approve` rejects the job. It needs no group check ((read only) `pkg/job/service_approve.go:251`).
-- `checkApprover` refuses an agent (`a.Agent != ""`) and a subject that the policy does not count ((read only) `pkg/job/service_approve.go:208`). It does not read the kind or the credential of the principal. `ActsAsPerson` exists ((read only) `pkg/identity/identity.go:136`), and the job code does not call it.
-- The route `POST .../jobs/{job_id}/approvals` declares `job:read` and `job:approve` on the unit of the job ((read only) `internal/api/jobs/routes.go:157`).
-- `DefaultRequirements` refuses a default with an `unless` body ((read only) `pkg/gate/requirements.go:44`). `Unless` is a field of `ApprovalDefault` ((read only) `pkg/gate/rules.go:310`), not of `ApprovalRule` (`:212`).
-- `Approvers` holds `Groups` and `GroupIDs` (name for display, ID for identity), `Users` as strings and `UnitOwners` as a flag ((read only) `pkg/gate/rules.go:147`). `Requirement.FreshAuth` holds `Set` and `Seconds` ((read only) `pkg/gate/record.go:109`, `pkg/gate/rules.go:83`).
-- `gate.ErrUnavailable` is the fail-closed error of the policy engine ((read only) `pkg/gate/gate.go:76`).
+- `Gate` is one requirement: a name, a count, a list of groups and their IDs (`pkg/job/gate.go:89 (type Gate)`)
+- A phase holds up to `MaxApprovalGates` gates, and `PolicyGates` copies each gate of a kind (`pkg/job/gate.go:138 (func PolicyGates)`)
+- `GatesStatus` returns the result of the approvals for the gates of one phase from a maximum matching, where one subject fills one slot (`pkg/job/gate.go:309 (func GatesStatus)`)
+- `Approve` reads the waiting gates, checks the approver and records the verdict (`pkg/job/service_approve.go:38 (func Approve)`)
+- A rejection by any holder of `job:approve` rejects the job, and it needs no group check (`pkg/job/service_approve.go:67 (func Approve)`)
+- `checkApprover` refuses an agent and a subject that the policy does not count, and it sets the field `For` of the approval. It does not read the kind or the credential of the principal (`pkg/job/service_approve.go:209 (func checkApprover)`)
+- `checkGroups` returns the names of the gates that hold the subject, and refuses with `identity.ErrDenied` when there is none (`pkg/job/service_approve.go:277 (func checkGroups)`)
+- `record` picks `EventApproved`, `EventApprovalRecorded` or `EventRejected` from the gates after the verdict (`pkg/job/service_approve.go:401 (func record)`)
+- The reconciler dispatches a queued job when `GatesStatus` is open (`pkg/job/reconcile.go:363 (func dispatchJob)`)
+- `gatesOf` returns one gate for each requirement and refuses users, unit owners and `freshAuthSeconds` with `gate.ErrUnavailable` (`pkg/gate/jobgate/jobgate.go:171 (func gatesOf)`)
+- `gateBody` and `approvalBody` are the one codec of the job state for both dialects (`internal/store/jobstore/body.go:127 (type gateBody)`)
+- `ActsAsPerson` exists, and the job code does not call it (`pkg/identity/identity.go:136 (func ActsAsPerson)`)
+- `DefaultRequirements` refuses a default with an `unless` body (`pkg/gate/requirements.go:30 (func DefaultRequirements)`)
+- `Approvers` holds groups and their IDs (name for display, ID for identity), `Users` as strings and a unit-owners flag (`pkg/gate/rules.go:147 (type Approvers)`)
+- `gate.ErrUnavailable` is the fail-closed error of the policy engine (`pkg/gate/gate.go:76 (var ErrUnavailable)`)
 
 ## ADR check
 
@@ -128,7 +119,7 @@ Each quote is copied from the file in (read only) `docs/adr/` on main at `65b843
 - Quote (decision 7): "An eligible approver of a requirement holds the approve action of the object (`changeorder:approve`, `job:approve` or `profile:approve`) and is in the `approvers` of its rule. An author is eligible only when `authorMayApprove` is `true`. An approver is a person in a session. A service principal, a job token and an access token never approve, also when they hold the approve action. An agent never approves (ADR 128 decision 10 stays)."
 - Quote (decision 8): "A rejection by an eligible approver of any requirement rejects the change."
 - Effect: Part A applies decision 6 to jobs. Decision 6 already names jobs, so no new decision is needed for the matching. This change does not touch the sentences of decision 7 on the kind of the approver. Owner decision 7 of 2026-11-20 changes them for a job approval, and the change `machine-approvals` holds it (RFC 134, then a new ADR).
-- Conflict, answered: decision 8 says "eligible approver", and main lets any holder of `job:approve` reject ((read only) `pkg/job/service_approve.go:251`). The owner decided that any `job:approve` holder may reject (2026-11-20). Task 5.7 records an amendment of the words of decision 8 for jobs.
+- Conflict, answered: decision 8 says "eligible approver", and main lets any holder of `job:approve` reject ((read only) `pkg/job/service_approve.go`, line 67). The owner decided that any `job:approve` holder may reject (2026-11-20). Task 5.7 records an amendment of the words of decision 8 for jobs.
 - Conflict: none for this change. Decision 7 says an access token never approves, and ADR 385 decision 2 says the opposite for a `destroy` with the setting off. The owner decided it on 2026-11-20, and the change `machine-approvals` records it. This change adds no code for it.
 
 **ADR 192: Reviews: approve, request changes, and reject and close** (decision 6 is cited by ADR 225 decision 6).
@@ -179,7 +170,7 @@ Each quote is copied from the file in (read only) `docs/adr/` on main at `65b843
 **ADR 362: Owner decisions of 8 November 2026** (owner-tagged: decision 1, "Stable IDs").
 
 - Changed by: ADR 363 extends decision 2. Current rule: this ADR, with ADR 363.
-- Effect: a gate names groups by `GroupIDs` and users by `UserIDs`, and the matching keys its slots by the gate name, not by a display string. The owner applied the same rule to users (2026-11-20).
+- Effect: a gate names groups by their IDs and users by the NEW field `UserIDs`, and the matching keys its slots by the gate name, not by a display string. The owner applied the same rule to users (2026-11-20).
 
 Security change: each pull request of this change needs the Opus security review (rev2) on its exact head before it is queued.
 
