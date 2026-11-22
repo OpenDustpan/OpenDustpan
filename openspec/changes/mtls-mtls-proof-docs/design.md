@@ -2,6 +2,10 @@
 
 Bundle, rule, exchange matching, and the stored trust token ship in the first two parts. This part proves that path with the real binary over TLS and the real CLIs, and writes the docs page.
 
+## Contract
+
+None. This change adds no port, type, endpoint, stored schema or CLI output. It proves the exchange route and the trust token of the first two parts with e2e steps and a docs page.
+
 ## Decisions
 
 1. **CLIs use the exchanged token.** The workload presents the client certificate only at the exchange call, gets a stored trust token, and runs the Pulumi CLI and OpenTofu with that token as a bearer token.

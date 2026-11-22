@@ -1,6 +1,8 @@
 ---
-version: 5
+version: 6
 ---
+
+Issue: #3566 (the same path: the exchange part of this proof).
 
 Roadmap: `docs/roadmap.md:188` (E2E step and docs prove mTLS with real CLIs.).
 
