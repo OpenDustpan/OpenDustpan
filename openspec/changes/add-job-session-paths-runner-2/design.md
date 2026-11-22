@@ -13,6 +13,22 @@ The session surface for job phases. Sweep report and finish stay in other parts.
 
 Unexported type sessionClaim, made only by newSessionClaim.
 
+## Contract
+
+Routes that main declares in pkg/runner/protocol/protocol.go and does not route yet. Each one needs the proof of the session key (action runner:claim) and a live claim:
+
+| Route | Constant | Answer |
+| --- | --- | --- |
+| `GET /runner/v1/session/source` | PathSessionSource (pkg/runner/protocol/protocol.go:83) | The git pack of the commit of the job. 409 source-not-ready with Retry-After while the snapshot is in build. |
+| `GET /runner/v1/session/source/objects/{oid}` | PathSessionSourceObject (pkg/runner/protocol/protocol.go:86) | One LFS object. 404 not-found when it is absent. |
+| `GET /runner/v1/session/plan/parts/{part}` | PathSessionPlanPart (pkg/runner/protocol/protocol.go:89) | One part of the plan of an apply phase. |
+| `PUT /runner/v1/session/plan/uploads/{part}` | PathSessionPlanUpload (pkg/runner/protocol/protocol.go:107) | Stages one part. At most 8 parts, at most 256 MiB each. A new upload of a part number replaces the part. |
+| `POST /runner/v1/session/plan/commit` | PathSessionPlanCommit (pkg/runner/protocol/protocol.go:110) | Stores the staged parts as the plan, once. |
+
+Error codes: the codes of pkg/runner/protocol/protocol.go:198-214 (invalid 400, bad-proof 401, claim-lost 409, source-not-ready 409). One code is NEW: `ErrorPlanCommitted = "plan-committed"`, HTTP 409, for a second commit of the plan of one phase. The caps answer 400 invalid.
+
+Stored data: the plan hash of the first commit, kept with the plan. No new table or column beyond it.
+
 ## Risks
 
 - A refused chunk must keep no bytes in the count.
@@ -46,14 +62,14 @@ Modules that the change touches, and their imports on main:
 
 ```mermaid
 flowchart LR
-P1[internal/unmanaged]
+P1[unmanaged]
 ```
 
 New imports of this change (each one allowed by the module rules):
 
 - `internal/api/runnerapi` imports `pkg/runner`
-- `internal/api/runnerapi` imports `pkg/job`
-- `internal/api/runnerapi` imports `pkg/identity`
+- `internal/api/runnerapi` imports (read only) `pkg/job`
+- `internal/api/runnerapi` imports (read only) `pkg/identity`
 
 States on main in the touched packages:
 
