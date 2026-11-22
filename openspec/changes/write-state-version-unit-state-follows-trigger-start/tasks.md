@@ -1,10 +1,10 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add Upstream conformance cases for applied, duplicate, older and concurrent older version Check: pkg/trigger/triggertest Upstream cases fail on main
+- [x] 1.1 Add Upstream conformance cases for applied, duplicate, older and concurrent older version Check: pkg/trigger/triggertest Upstream cases fail on main
 - [ ] 1.2 Add saver read-check cases for missing, deleted, disabled and grant-lost saver Check: pkg/outputshare/outputsharetest cases fail on main
 
 ## 2. Implementation
