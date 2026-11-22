@@ -1,15 +1,17 @@
 ## Context
 
-Two or more instances share one PostgreSQL database. A database stop must surface as 503 with Retry-After 30 seconds on ready and on writes, while live stays green. Recovery needs no restart. Half-write atomicity belongs to the atomic part.
+Two or more instances share one PostgreSQL database. A database stop must surface as 503 with Retry-After on ready and on writes, while live stays green. Recovery needs no restart. Half-write atomicity belongs to the atomic part.
 
 ## Decisions
 
-1. **One outage error mapped at the edge.** Map only a store outage to one NEW sentinel error and translate it at the HTTP adapters into 503 with Retry-After 30 seconds in each wire shape: tool-neutral JSON, Pulumi camelCase error, TFE JSON:API error. Connection refused, connection timeout and ping timeout map to the outage error; constraint errors, client context cancel and query logic errors never map. Keep GET /health/live free of store checks.
-2. **Bounded probe with no cache.** Ready ping timeout is 2 seconds and write store wait timeout is 2 seconds, so GET /health/ready answers within 5 seconds even when packets drop. No cached ready result; each probe pings once.
+1. **Reuse the outage error that main has.** No new sentinel. A store outage is `namespace.ErrUnavailable` (defined in package namespace; the store adapters wrap it, and a connection failure also wraps `namespace.ErrUnreachable`). A new sentinel in `pkg/dustpan` would make an import cycle, because `pkg/dustpan` imports the adapters. The adapters already switch on `namespace.ErrUnavailable` before other mapping: Handler.writeError of the TFE adapter, Handler.writeError of the Pulumi adapter and the status writer of the HTTP backend adapter. Constraint errors and client context cancel never wrap it, so they never map. The store `Ping` keeps its cause out of each SQL store adapter and maps any failed ping to `namespace.ErrUnavailable`; this change leaves both adapters as they are, so any failed ping counts as an outage.
+2. **One Retry-After value.** All shapes read `problem.StoreRetryAfter` (5 seconds on main) and need no edit. `GET /health/ready` sets the same header through `problem.SetStoreRetryAfter` when a check fails, in the single-check and the component answers (`pkg/dustpan/health.go:308` and `:427`).
+3. **Bounded probe with no cache.** Ready ping timeout stays 2 seconds (`readinessTimeout`, `pkg/dustpan/health.go:23`), so GET /health/ready answers within 5 seconds even when packets drop. No cached ready result; each probe pings once. The statement timeout of writes is not changed here (ADR 298 sets it).
+4. **Live stays 204.** `GET /health/live` answers 204 with no store check on main (`pkg/dustpan/dustpan.go:4130`) and keeps it.
 
 ## Structure
 
-Unexported outageError type built only by constructor newOutageError(retryAfterSecs int); HTTP adapters switch on it before other error mapping.
+No new type and no new package. The edge mapping is the code that main has in the three adapters; the change edits the readiness handler.
 
 ## Risks
 
@@ -28,10 +30,10 @@ participant I as Instance
 participant DB as DB
 CLI->>LB: PUT state version
 LB->>I: PUT state version
-I->>DB: write with 2 second timeout
+I->>DB: write
 DB-->>I: timeout or refused
-I-->>LB: 503 Retry-After 30
-LB-->>CLI: 503 Retry-After 30
+I-->>LB: 503 Retry-After 5
+LB-->>CLI: 503 Retry-After 5
 ```
 
 ## Quality attributes
@@ -39,6 +41,6 @@ LB-->>CLI: 503 Retry-After 30
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
 | availability | 503 within 5 | seconds | GET /health/ready per instance during PostgreSQL stop |
-| availability | 200 within 1 | seconds | GET /health/live per instance during PostgreSQL stop |
+| availability | 204 within 1 | seconds | GET /health/live per instance during PostgreSQL stop |
 | latency | 2 | seconds | store probe per ready check during outage |
-| latency | 30 | seconds | Retry-After header on ready and on writes during outage |
+| latency | 5 | seconds | Retry-After header on ready and on writes during outage |
