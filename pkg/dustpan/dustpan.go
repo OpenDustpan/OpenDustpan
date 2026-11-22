@@ -621,6 +621,11 @@ type Server struct {
 	// schedule.
 	idempotency      idempotency.Store
 	idempotencyEvery time.Duration
+	// profileSessions deletes the ended open sessions on a schedule, or is
+	// nil without a store of them. profileSessionsEvery is the period of
+	// that schedule.
+	profileSessions      profile.Sessions
+	profileSessionsEvery time.Duration
 	// ready is the readiness probe. Run makes it answer 503 when the drain
 	// starts. drainPeriod is the length of the drain.
 	ready       *readiness
@@ -1127,15 +1132,14 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		return nil, err
 	}
 
-	flushDenials, err := denialFlusher(cfg, svc, observed)
+	workers, err := assembleWorkers(cfg, svc, observed)
 	if err != nil {
 		return nil, err
 	}
 
-	reconciler, artifactSweeper, err := newJobWorkers(svc, cfg)
-	if err != nil {
-		return nil, err
-	}
+	flushDenials := workers.flush
+	reconciler := workers.reconciler
+	artifactSweeper := workers.sweeper
 
 	started := newStartState()
 
@@ -1175,6 +1179,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, supersededSweeper: svc.updates, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
+		profileSessions: cfg.profiles.sessions, profileSessionsEvery: profileSessionSweepEvery,
 		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
@@ -1182,6 +1187,32 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 	cfg.watch.attach(srv, observed.Registry())
 
 	return srv, nil
+}
+
+// assembleWorkersOut holds the background workers of assemble: the denial
+// flusher and the job reconciler with its artifact sweeper.
+type assembleWorkersOut struct {
+	flush      func(context.Context)
+	reconciler *job.Reconciler
+	sweeper    *job.ArtifactSweeper
+}
+
+// assembleWorkers starts the background flushers and sweepers of assemble:
+// the denial flusher and the job reconciler with its artifact sweeper.
+func assembleWorkers(
+	cfg *settings, svc services, observed *metrics.ServerMetrics,
+) (assembleWorkersOut, error) {
+	flushDenials, err := denialFlusher(cfg, svc, observed)
+	if err != nil {
+		return assembleWorkersOut{}, err
+	}
+
+	reconciler, artifactSweeper, err := newJobWorkers(svc, cfg)
+	if err != nil {
+		return assembleWorkersOut{}, err
+	}
+
+	return assembleWorkersOut{flush: flushDenials, reconciler: reconciler, sweeper: artifactSweeper}, nil
 }
 
 // prepareBackground binds the recorder of the refused dev sign-ins and builds
@@ -1529,7 +1560,8 @@ func newProfileAPIs(
 	}
 
 	profiles, err := newProfileHandler(profileInputs{
-		store: cfg.profiles.store, entries: cfg.namespaceStore, namespaces: svc.namespaces, sealer: svc.secrets,
+		store: cfg.profiles.store, openSessions: cfg.profiles.sessions, entries: cfg.namespaceStore,
+		namespaces: svc.namespaces, sealer: svc.secrets,
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		sessions: cfg.sessionCookies, policies: policies, idempotency: idem,
 		denialLimiter: cfg.denialLimiter, onFailure: onFailure, logger: cfg.logger, now: cfg.now,

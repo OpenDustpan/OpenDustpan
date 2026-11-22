@@ -496,6 +496,9 @@ type rtHarness struct {
 	jobID     string
 	stack     string
 	nextStack int
+	// profileSeq numbers the profiles of the profile flows: each run of a
+	// flow opens a new profile, so warm-up never conflicts.
+	profileSeq int
 	// jobPool is true after the runner pool of the job flows exists.
 	jobPool bool
 	// runnerKey and runnerID are the key and the ID of the runner of the job
@@ -516,21 +519,22 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	t.Cleanup(transport.CloseIdleConnections)
 
 	h := &rtHarness{
-		t:         t,
-		cluster:   cluster,
-		client:    &http.Client{Transport: transport, Timeout: requestLimit},
-		tracer:    tracer,
-		warm:      false,
-		mode:      mode,
-		trips:     nil,
-		serial:    0,
-		workspace: "",
-		jobID:     "",
-		stack:     "",
-		nextStack: 0,
-		jobPool:   false,
-		runnerKey: nil,
-		runnerID:  "",
+		t:          t,
+		cluster:    cluster,
+		client:     &http.Client{Transport: transport, Timeout: requestLimit},
+		tracer:     tracer,
+		warm:       false,
+		mode:       mode,
+		trips:      nil,
+		serial:     0,
+		workspace:  "",
+		profileSeq: 0,
+		jobID:      "",
+		stack:      "",
+		nextStack:  0,
+		jobPool:    false,
+		runnerKey:  nil,
+		runnerID:   "",
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
@@ -647,6 +651,50 @@ func (h *rtHarness) createStack(name string) {
 	h.t.Helper()
 
 	h.call(http.MethodPost, "/api/stacks/acme/web", `{"stackName":"`+name+`"}`, http.StatusOK)
+}
+
+// nextProfileName returns the name of the next profile of the profile flows.
+func (h *rtHarness) nextProfile() string {
+	h.t.Helper()
+
+	name := "prof-" + strconv.Itoa(h.profileSeq)
+	h.profileSeq++
+
+	return name
+}
+
+// createProfile creates the profile name with a small document.
+func (h *rtHarness) createProfile(name string) {
+	h.t.Helper()
+
+	h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/profiles",
+		`{"name":"`+name+`","document":"schemaVersion: 1\nvalues:\n  region: eu-west-1\n"}`, http.StatusCreated)
+}
+
+// openProfile opens the profile name with the API consumer and returns the
+// session ID of the open.
+func (h *rtHarness) openProfile(name string) string {
+	h.t.Helper()
+
+	var opened struct {
+		SessionID string `json:"sessionId"` //nolint:tagliatelle // The apidesc camelCase rule spells an ID as Id; sessionId is the wire name.
+	}
+
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/profiles/"+name+"/open",
+		`{"consumer":"api"}`, http.StatusCreated), &opened)
+
+	if opened.SessionID == "" {
+		h.t.Fatalf("the open of %s gave no session", name)
+	}
+
+	return opened.SessionID
+}
+
+// readSession reads the open session id.
+func (h *rtHarness) readSession(id string) {
+	h.t.Helper()
+
+	h.call(http.MethodGet, "/api/dustpan/v1/namespaces/acme/profile-sessions/"+id, "", http.StatusOK)
 }
 
 // startPlanJob starts a plan job on the workspace and returns its ID. The first
@@ -1025,6 +1073,26 @@ func requestFlows() []requestFlow {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
+		}},
+		// The budget is 28. The wrapper reads the namespace for the grant
+		// (1). The resolve reads the root in a fenced transaction (4) and
+		// its revision in another (5). The seal reads the data key of the
+		// root and makes it on the first open of the profile (7). The write
+		// stores the session and its audit entry in the fenced transaction
+		// of the namespace (11), which rereads the root and counts the live
+		// sessions of the owner.
+		{"profile open", 28, func(h *rtHarness) {
+			name := h.nextProfile()
+			h.createProfile(name)
+			h.measure(func() { h.openProfile(name) })
+		}},
+		// The budget is 5. The read runs in a fenced transaction (4) and
+		// reads the data key of the root to unseal the session (1).
+		{"profile session read", 5, func(h *rtHarness) {
+			name := h.nextProfile()
+			h.createProfile(name)
+			id := h.openProfile(name)
+			h.measure(func() { h.readSession(id) })
 		}},
 	}
 }

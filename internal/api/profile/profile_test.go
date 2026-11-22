@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/expr"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -63,6 +65,8 @@ func grantsOf(subject string) []identity.Action {
 		return []identity.Action{write}
 	case "manageonly":
 		return []identity.Action{manage}
+	case "opener":
+		return []identity.Action{open}
 	default:
 		return nil
 	}
@@ -113,6 +117,23 @@ type fixture struct {
 	// while no request runs.
 	denied map[identity.Action]bool
 	clock  *testClock
+	// sessionReads counts the reads of the open session store.
+	sessionReads *atomic.Int64
+}
+
+// countingSessions counts the reads of an open session store.
+type countingSessions struct {
+	profile.Sessions
+
+	reads *atomic.Int64
+}
+
+func (c countingSessions) Get(
+	ctx context.Context, ns namespace.Name, id string, owner profile.SessionOwner, now time.Time,
+) (profile.Session, error) {
+	c.reads.Add(1)
+
+	return c.Sessions.Get(ctx, ns, id, owner, now)
 }
 
 // testClock is the clock of the Idempotency-Key middleware.
@@ -133,6 +154,18 @@ func (c *testClock) Advance(d time.Duration) {
 	defer c.mu.Unlock()
 
 	c.now = c.now.Add(d)
+}
+
+// testEvaluator returns the real expression engine of the profile service.
+func testEvaluator(t *testing.T) *expr.Evaluator {
+	t.Helper()
+
+	eval, err := expr.NewWithTimeout(expr.NewLimiter(), time.Minute)
+	if err != nil {
+		t.Fatalf("expr evaluator: %v", err)
+	}
+
+	return eval
 }
 
 // newFixture returns a handler that takes the Idempotency-Key header.
@@ -224,8 +257,12 @@ func buildFixtureWith(
 
 	authz := testAuthz{deny: denied}
 
+	reads := &atomic.Int64{}
+
 	svc, err := profile.NewService(profile.Config{
-		Store: store.Profiles(), Namespaces: store, Sealer: secrets, Audit: store, Authorizer: authz, Now: nil,
+		Store: store.Profiles(), Namespaces: store, Sealer: secrets, Audit: store, Authorizer: authz,
+		Sessions:  countingSessions{Sessions: store.ProfileSessions(), reads: reads},
+		Evaluator: testEvaluator(t), Now: nil, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("profile service: %v", err)
@@ -240,6 +277,7 @@ func buildFixtureWith(
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       svc,
+		Opens:          nil,
 		Authenticator:  testAuthn{},
 		Authorizer:     authz,
 		Sessions:       nil,
@@ -264,6 +302,8 @@ func buildFixtureWith(
 		store:   store,
 		denied:  denied,
 		clock:   clock,
+
+		sessionReads: reads,
 	}
 }
 
@@ -686,6 +726,7 @@ func TestEscapedSlashNames(t *testing.T) {
 		{"list revisions", http.MethodGet, "/revisions", "reader", "", false, http.StatusOK},
 		{"get revision 1", http.MethodGet, "/revisions/1", "reader", "", false, http.StatusOK},
 		{"save revision", http.MethodPost, "/revisions", "writer", body, true, http.StatusCreated},
+		{"open", http.MethodPost, "/open", "admin", `{"consumer":"api"}`, false, http.StatusCreated},
 		{"delete", http.MethodDelete, "", "admin", "", false, http.StatusNoContent},
 	}
 
@@ -987,6 +1028,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		Profiles:       nil,
+		Opens:          nil,
 		Authenticator:  nil,
 		Authorizer:     nil,
 		Sessions:       nil,

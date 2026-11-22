@@ -22,7 +22,10 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 		Sealer:     struct{ profile.Sealer }{nil},
 		Audit:      struct{ audit.Store }{nil},
 		Authorizer: coverageAuthorizer{},
+		Sessions:   struct{ profile.Sessions }{nil},
+		Evaluator:  struct{ profile.Evaluator }{nil},
 		Now:        nil,
+		Logger:     nil,
 	})
 	if err != nil {
 		tb.Fatalf("profile service: %v", err)
@@ -30,6 +33,7 @@ func coverageProfileRoutes(tb testing.TB) []RouteRef {
 
 	handler, err := profileapi.NewHandler(profileapi.Config{
 		Profiles:      svc,
+		Opens:         nil,
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,

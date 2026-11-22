@@ -101,6 +101,16 @@ func (memNamespaces) Ping(context.Context) error { return nil }
 // errAppend is what the audit port answers when failAppend is set.
 var errAppend = errors.New("audit store is down")
 
+// stubEvaluator refuses every expression. Tests of Open use the real
+// Evaluator of internal/expr instead.
+type stubEvaluator struct{}
+
+func (stubEvaluator) Eval(
+	_ context.Context, _ string, _ map[string]any,
+) (profile.Evaluation, error) {
+	return profile.Evaluation{}, profile.ErrReference
+}
+
 type memAudit struct{ m *mem }
 
 func (a memAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {

@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
 )
 
@@ -37,7 +38,10 @@ const (
 // Config holds the dependencies of a Handler. Every field except Now and
 // Sessions is required.
 type Config struct {
-	Profiles      *profile.Service
+	Profiles *profile.Service
+	// Opens serves the open and the session read. Nil means Profiles. A test
+	// sets it to count the calls that reach the service.
+	Opens         OpenService
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Audit keeps the entries of the requests that the Authorizer refuses. Nil
@@ -67,9 +71,18 @@ type Config struct {
 	Now         func() time.Time
 }
 
+// OpenService is the part of the profile service that the open routes call.
+type OpenService interface {
+	Open(ctx context.Context, a *profile.Actor, in profile.OpenInput) (profile.Opened, error)
+	ReadSession(
+		ctx context.Context, a *profile.Actor, ns namespace.Name, id string, paths []string,
+	) (profile.SessionData, error)
+}
+
 // Handler serves the profile API.
 type Handler struct {
 	profiles *profile.Service
+	opens    OpenService
 	authn    identity.Authenticator
 	authz    identity.Authorizer
 	guard    *refusal.Recorder
@@ -101,8 +114,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("denial recorder: %w", err)
 	}
 
+	var opens OpenService = cfg.Profiles
+	if cfg.Opens != nil {
+		opens = cfg.Opens
+	}
+
 	h := &Handler{
 		profiles: cfg.Profiles,
+		opens:    opens,
 		authn:    cfg.Authenticator,
 		authz:    cfg.Authorizer,
 		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("profile"),
@@ -133,6 +152,35 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	problem.Writer{Logger: h.logger, KeepDenied: keepDenied, Classify: profileErrors}.Write(ctx, w, err)
 }
 
+// profileErrorRow maps one sentinel of the profile service to its answer.
+type profileErrorRow struct {
+	sentinel error
+	status   int
+	code     string
+}
+
+// profileErrorTable returns the answers of the profile service, with the open
+// rows first. A table keeps the mapping free of one branch per sentinel, and a
+// function keeps the fixed table out of package state.
+func profileErrorTable() []profileErrorRow {
+	return []profileErrorRow{
+		{sentinel: profile.ErrProvider, status: http.StatusUnprocessableEntity, code: errcode.ProfileProvider},
+		{sentinel: profile.ErrNeverStore, status: http.StatusUnprocessableEntity, code: errcode.ProfileNeverStore},
+		{sentinel: profile.ErrFinal, status: http.StatusUnprocessableEntity, code: errcode.ProfileFinal},
+		{sentinel: profile.ErrReference, status: http.StatusUnprocessableEntity, code: errcode.ProfileReference},
+		{sentinel: profile.ErrImportCycle, status: http.StatusUnprocessableEntity, code: errcode.ProfileImportCycle},
+		{sentinel: profile.ErrNotFound, status: http.StatusNotFound, code: errcode.ProfileNotFound},
+		{
+			sentinel: profile.ErrSchemaVersion,
+			status:   http.StatusUnprocessableEntity,
+			code:     errcode.ProfileSchemaVersion,
+		},
+		{sentinel: profile.ErrLimit, status: http.StatusUnprocessableEntity, code: errcode.ProfileLimit},
+		{sentinel: profile.ErrInvalid, status: http.StatusBadRequest, code: errcode.ProfileInvalid},
+		{sentinel: profile.ErrConflict, status: http.StatusConflict, code: errcode.ProfileConflict},
+	}
+}
+
 // profileErrors maps the errors of the profile service and of the fresh
 // sign-in that a profile change needs.
 func profileErrors(err error) (problem.Problem, bool) {
@@ -140,20 +188,13 @@ func profileErrors(err error) (problem.Problem, bool) {
 		return p, true
 	}
 
-	switch {
-	case errors.Is(err, profile.ErrNotFound):
-		return problem.New(http.StatusNotFound, errcode.ProfileNotFound, err.Error()), true
-	case errors.Is(err, profile.ErrSchemaVersion):
-		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileSchemaVersion, err.Error()), true
-	case errors.Is(err, profile.ErrLimit):
-		return problem.New(http.StatusUnprocessableEntity, errcode.ProfileLimit, err.Error()), true
-	case errors.Is(err, profile.ErrInvalid):
-		return problem.New(http.StatusBadRequest, errcode.ProfileInvalid, err.Error()), true
-	case errors.Is(err, profile.ErrConflict):
-		return problem.New(http.StatusConflict, errcode.ProfileConflict, err.Error()), true
-	default:
-		return problem.Pass()
+	for _, row := range profileErrorTable() {
+		if errors.Is(err, row.sentinel) {
+			return problem.New(row.status, row.code, err.Error()), true
+		}
 	}
+
+	return problem.Pass()
 }
 
 // keepDenied answers the one class of the profile API that wraps a denial and

@@ -234,3 +234,29 @@ func TestEvaluatorsShareTheLimiter(t *testing.T) {
 		t.Fatalf("second: Bool() with a free slot = %v, %v, want true", got, err)
 	}
 }
+
+// TestNewWithTimeoutSetsTheLimitAndNewKeepsTheProductionLimit fails when
+// NewWithTimeout ignores its limit, accepts a limit that is not above zero, or
+// when New stops using the production limit.
+func TestNewWithTimeoutSetsTheLimitAndNewKeepsTheProductionLimit(t *testing.T) {
+	t.Parallel()
+
+	e, err := NewWithTimeout(NewLimiter(), time.Minute)
+	if err != nil || e.timeout != time.Minute {
+		t.Fatalf("NewWithTimeout = %v, %v, want the limit of one minute", e, err)
+	}
+
+	for _, d := range []time.Duration{0, -time.Second} {
+		if _, err = NewWithTimeout(NewLimiter(), d); !errors.Is(err, ErrTimeout) {
+			t.Errorf("limit %v: error = %v, want ErrTimeout", d, err)
+		}
+	}
+
+	if _, err = NewWithTimeout(nil, time.Minute); !errors.Is(err, ErrNoLimiter) {
+		t.Errorf("nil limiter: error = %v, want ErrNoLimiter", err)
+	}
+
+	if got, want := mustNew(t, NewLimiter()).timeout, selfservice.ExprTimeoutMillis*time.Millisecond; got != want {
+		t.Errorf("New limit = %v, want the production limit %v", got, want)
+	}
+}

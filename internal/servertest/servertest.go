@@ -828,6 +828,9 @@ func explicitStoreOptions(store *postgres.Store, logger *slog.Logger) []dustpan.
 		dustpan.WithTriggerStore(store.Triggers()),
 		dustpan.WithUnitSettingsStore(store.UnitSettings()),
 		dustpan.WithDriftStore(store.DriftResults()),
+		dustpan.WithProfileStore(store.Profiles()),
+		dustpan.WithProfileSessions(store.ProfileSessions()),
+		dustpan.WithIssuerStore(store.Issuer()),
 		dustpan.WithInstallationKindStore(store),
 		dustpan.WithInstanceStore(store),
 	}
