@@ -208,6 +208,7 @@ func (s storeSessions) signIn() *apiserver.SignIn {
 		PasskeySignIn:       nil,
 		PasskeyBeginLimiter: nil,
 		PasskeyLimiter:      nil,
+		Sealer:              nil,
 	}
 }
 

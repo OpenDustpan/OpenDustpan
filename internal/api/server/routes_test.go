@@ -415,6 +415,7 @@ func newServiceBackedHandlerAt(
 			},
 			DevCode:  devCode,
 			DevAdmin: bootstrapAdmin,
+			Sealer:   nil,
 		},
 		CheckpointEpochs:   fakeEpochs{},
 		DenialLimiter:      nil,

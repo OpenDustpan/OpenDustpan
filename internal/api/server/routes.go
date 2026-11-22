@@ -358,6 +358,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		ctx = withPrincipal(ctx, p)
 		if caller != nil {
 			ctx = context.WithValue(ctx, sessionKey{}, *caller)
+			h.maybeReissueAccessCookie(w, r, caller)
 		}
 
 		r = r.WithContext(ctx)

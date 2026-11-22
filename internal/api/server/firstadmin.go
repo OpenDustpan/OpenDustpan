@@ -423,7 +423,7 @@ func (h *Handler) redeemFirstAdministrator(
 
 	// The fresh check of this route is its own: it reads the window of the
 	// session policy and asks no setting that turns the check off.
-	if err := h.checkRedeemFreshness(r, caller); err != nil {
+	if err := h.checkRedeemFreshness(r, &caller); err != nil {
 		h.refuseFirstAdmin(w, r, p, firstAdminRefusal{action: action, rule: faRuleStaleSignIn}, err)
 
 		return
@@ -473,7 +473,7 @@ func (h *Handler) redeemFirstAdministrator(
 // asks at each step, so no sign-in passes, and a sign-in after now is too old.
 // It never asks a setting: the redeem needs a fresh sign-in whatever the
 // installation settings say.
-func (h *Handler) checkRedeemFreshness(r *http.Request, caller sessionCaller) error {
+func (h *Handler) checkRedeemFreshness(r *http.Request, caller *sessionCaller) error {
 	window := h.freshnessWindow(r.Context())
 	refusal := reauthenticateError{
 		url:    reauthenticateURL(caller.Match.Session.Provider),

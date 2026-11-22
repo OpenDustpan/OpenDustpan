@@ -144,6 +144,7 @@ func (h *Handler) devCodeSignIn(w http.ResponseWriter, r *http.Request, _ identi
 	}
 
 	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
+	h.setAccessCookie(w, r, sess, emptySignInMethod())
 	w.WriteHeader(http.StatusNoContent)
 }
 

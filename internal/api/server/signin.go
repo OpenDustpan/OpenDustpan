@@ -155,6 +155,9 @@ type SignIn struct {
 	// OnDevRefused is called with the subject of each dev person whose session
 	// a server of another kind refuses. Nil means no call.
 	OnDevRefused func(ctx context.Context, subject string)
+	// Sealer seals the access cookie of a sign-in. Nil sets no access
+	// cookie: the stored session still authenticates.
+	Sealer session.Sealer
 }
 
 // StoredProviders finds the sign-in providers that the API keeps.
@@ -186,6 +189,7 @@ type signInState struct {
 	checker           *sessionauth.Checker
 	devCode           *devcode.Code
 	devAdmin          identity.Principal
+	sealer            session.Sealer
 }
 
 // provider returns the sign-in provider id: a provider of the
@@ -250,6 +254,10 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		opts = append(opts, sessionauth.RefuseDevSubjects(), sessionauth.OnDevRefused(cfg.OnDevRefused))
 	}
 
+	if cfg.Sealer != nil {
+		opts = append(opts, sessionauth.WithSealer(cfg.Sealer))
+	}
+
 	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("session cookie check: %w", err)
@@ -270,6 +278,7 @@ func newSignInState(cfg *SignIn, kind installation.Kind) (*signInState, error) {
 		checker:           checker,
 		devCode:           cfg.DevCode,
 		devAdmin:          cfg.DevAdmin,
+		sealer:            cfg.Sealer,
 	}, nil
 }
 
@@ -448,6 +457,7 @@ func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, _ identit
 	}
 
 	http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
+	h.setAccessCookie(w, r, res.Session, ssoSignInMethod(assertion))
 	// The return path passed session.ValidReturnPath when the request was
 	// stored: it is a path of this server.
 	http.Redirect(w, r, cb.returnPath, http.StatusSeeOther)
@@ -658,6 +668,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request, p identity.Pri
 	}
 
 	http.SetCookie(w, sessionCookie("", -1))
+	h.clearAccessCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

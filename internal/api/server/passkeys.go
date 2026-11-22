@@ -255,7 +255,7 @@ func (h *Handler) passkeyCaller(
 
 // passkeyActor returns the actor of a step of the caller: the audit entry of
 // the request, and the principal and the session of the console session.
-func passkeyActor(r *http.Request, p identity.Principal, caller sessionCaller, action identity.Action) mfasvc.Actor {
+func passkeyActor(r *http.Request, p identity.Principal, caller *sessionCaller, action identity.Action) mfasvc.Actor {
 	return mfasvc.Actor{
 		Entry: callerEntry(r, p, action), PrincipalID: caller.Match.Owner.ID, SessionID: caller.Match.Session.ID,
 	}
@@ -300,7 +300,7 @@ func (h *Handler) beginPasskey(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	actor := passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
+	actor := passkeyActor(r, p, &caller, identity.ActionCallerManageSignIn)
 
 	options, err := h.passkeys.BeginRegistration(ctx, actor, person)
 	if err != nil {
@@ -341,7 +341,7 @@ func (h *Handler) finishPasskey(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	actor := passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
+	actor := passkeyActor(r, p, &caller, identity.ActionCallerManageSignIn)
 
 	key, err := h.passkeys.FinishRegistration(ctx, actor, person, req.Name, req.Response)
 	if err != nil {
@@ -364,7 +364,7 @@ func (h *Handler) listPasskeys(w http.ResponseWriter, r *http.Request, p identit
 		return
 	}
 
-	keys, err := h.passkeys.Passkeys(ctx, passkeyActor(r, p, caller, identity.ActionCallerRead))
+	keys, err := h.passkeys.Passkeys(ctx, passkeyActor(r, p, &caller, identity.ActionCallerRead))
 	if err != nil {
 		h.writeError(ctx, w, passkeyError(err))
 
@@ -404,7 +404,7 @@ func (h *Handler) removePasskey(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	actor := passkeyActor(r, p, caller, identity.ActionCallerManageSignIn)
+	actor := passkeyActor(r, p, &caller, identity.ActionCallerManageSignIn)
 
 	if err := h.passkeys.RemovePasskey(ctx, actor, id); err != nil {
 		h.writeError(ctx, w, passkeyError(err))

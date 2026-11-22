@@ -343,6 +343,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		PasskeySignIn:       nil,
 		PasskeyBeginLimiter: nil,
 		PasskeyLimiter:      nil,
+		Sealer:              nil,
 	}
 	if parts.tweak != nil {
 		parts.tweak(signIn, st)

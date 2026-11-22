@@ -293,7 +293,7 @@ func newFAFixture(t *testing.T) faFixture {
 			Service: newTestSignInService(t, st, sessions, principals), OnDevRefused: nil, DevCode: nil,
 			DevAdmin: noBootstrapAdmin, Sessions: sessions, Limiter: limiter, Stored: nil, Admin: nil,
 			PasswordProviders: nil, Origins: []string{signInBase}, Providers: nil, PasswordLimiter: nil, Passkeys: nil,
-			PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+			PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil, Sealer: nil,
 		},
 		CheckpointEpochs:   nil,
 		DenialLimiter:      nil,

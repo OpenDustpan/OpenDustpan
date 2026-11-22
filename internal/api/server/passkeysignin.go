@@ -301,6 +301,7 @@ func (h *Handler) completePasskey(
 		}
 
 		http.SetCookie(w, sessionCookie(res.Secret.Reveal(), length))
+		h.setAccessCookie(w, r, res.Session, passkeySignInMethod())
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, signinsvc.ErrReasonRequired):
 		// The sign-in service refused the sign-in of the break-glass account

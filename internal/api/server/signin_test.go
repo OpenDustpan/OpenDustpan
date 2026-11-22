@@ -302,6 +302,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 				AutoCreate: opts.autoCreate, Stored: false,
 			},
 		},
+		Sealer: nil,
 	}
 	addPasswordProviders(signIn, opts.passwords, limiter)
 
@@ -1304,6 +1305,7 @@ func TestSignInProviderDown(t *testing.T) {
 					Issuer: "", ClientID: "", Scopes: nil, AutoCreate: true, Stored: false,
 				},
 			},
+			Sealer: nil,
 		},
 		CheckpointEpochs: nil,
 		DenialLimiter:    nil,

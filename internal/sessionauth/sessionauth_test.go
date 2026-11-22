@@ -238,14 +238,14 @@ func TestAuthenticate(t *testing.T) {
 				return
 			}
 
-			checkAlice(t, err, p, caller, secret)
+			checkAlice(t, err, p, &caller, secret)
 		})
 	}
 }
 
 // checkAlice checks that a request authenticated as the session of
 // aliceMatch with secret.
-func checkAlice(t *testing.T, err error, p identity.Principal, caller sessionauth.Caller, secret session.Secret) {
+func checkAlice(t *testing.T, err error, p identity.Principal, caller *sessionauth.Caller, secret session.Secret) {
 	t.Helper()
 
 	if err != nil {

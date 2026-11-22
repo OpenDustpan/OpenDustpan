@@ -58,6 +58,7 @@ type Checker struct {
 	// onRefused is called with the subject of each dev person that refuse
 	// turns away. Nil means no call.
 	onRefused func(ctx context.Context, subject string)
+	sealer    session.Sealer
 }
 
 // Option changes a Checker.
@@ -78,6 +79,12 @@ func OnDevRefused(f func(ctx context.Context, subject string)) Option {
 	return func(c *Checker) { c.onRefused = f }
 }
 
+// WithSealer makes the Checker read the access cookie with s and set the
+// fresh fact of the caller. Nil keeps no fact.
+func WithSealer(s session.Sealer) Option {
+	return func(c *Checker) { c.sealer = s }
+}
+
 // New returns a Checker that checks sessions with sessions and lets a
 // request with the cookie come from origins.
 func New(sessions Sessions, origins []string, opts ...Option) (*Checker, error) {
@@ -85,7 +92,9 @@ func New(sessions Sessions, origins []string, opts ...Option) (*Checker, error) 
 		return nil, errNoSessions
 	}
 
-	c := &Checker{sessions: sessions, origins: slices.Clone(origins), refuse: false, onRefused: nil}
+	c := &Checker{
+		sessions: sessions, origins: slices.Clone(origins), refuse: false, onRefused: nil, sealer: nil,
+	}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -98,6 +107,7 @@ func New(sessions Sessions, origins []string, opts ...Option) (*Checker, error) 
 type Caller struct {
 	Match  session.Match
 	Secret session.Secret
+	Fresh  session.FreshFact
 }
 
 // Authenticate resolves the session cookie of r to its owner. A nil Checker,
@@ -154,7 +164,9 @@ func (c *Checker) Authenticate(r *http.Request) (identity.Principal, Caller, err
 		JobID:          "",
 	}
 
-	return p, Caller{Match: m, Secret: secret}, nil
+	fresh := c.freshFact(r, m)
+
+	return p, Caller{Match: m, Secret: secret, Fresh: fresh}, nil
 }
 
 // Now returns the time of the clock of the session service, or the system
@@ -318,4 +330,30 @@ func Fresh(now, authTime time.Time, window time.Duration) bool {
 	age := now.Sub(authTime)
 
 	return age >= 0 && age <= window
+}
+
+// freshFact returns the fresh fact of the access cookie of r bound to m. A
+// missing, expired, forged or unbound cookie gives the zero fact and no error.
+func (c *Checker) freshFact(r *http.Request, m session.Match) session.FreshFact {
+	var none session.FreshFact
+
+	if c == nil || c.sealer == nil {
+		return none
+	}
+
+	raw, found := apidesc.Cookie(r, session.AccessCookie)
+	if !found || raw == "" {
+		return none
+	}
+
+	now := c.Now()
+	claims, err := c.sealer.OpenAccess(r.Context(), raw, now)
+	if err != nil {
+		return none
+	}
+
+	// Defense in depth: the open checks the seal and the expiry; the bind
+	// checks the person, the generation and the sign-in time. This bind stays
+	// so that a cookie that opens still needs its session.
+	return session.BindFact(claims, m, now)
 }

@@ -292,6 +292,7 @@ func (h *Handler) providerPasswordSignIn(
 	}
 
 	http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
+	h.setAccessCookie(w, r, res.Session, ldapSignInMethod())
 	w.WriteHeader(http.StatusNoContent)
 }
 

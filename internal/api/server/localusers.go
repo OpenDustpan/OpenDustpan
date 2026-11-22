@@ -465,6 +465,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 	h.clearNameCounts(ctx, in)
 
 	http.SetCookie(w, sessionCookie(res.Secret.Reveal(), h.sessionLength(ctx, res.Session)))
+	h.setAccessCookie(w, r, res.Session, localSignInMethod(in.Assertion))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -774,7 +775,7 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 		return
 	}
 
-	h.renewSession(ctx, w, r, caller, g)
+	h.renewSession(ctx, w, r, &caller, g)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -784,7 +785,7 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 // when another change bumped the generation after g. A failure leaves the
 // browser signed out, which is the safe direction: the password changed.
 func (h *Handler) renewSession(
-	ctx context.Context, w http.ResponseWriter, r *http.Request, caller sessionCaller, g uint64,
+	ctx context.Context, w http.ResponseWriter, r *http.Request, caller *sessionCaller, g uint64,
 ) {
 	// Defense in depth: the service returns the generation of its write and
 	// never 0. This check stays so that a renewal never starts a session that
@@ -805,6 +806,7 @@ func (h *Handler) renewSession(
 	}
 
 	http.SetCookie(w, sessionCookie(secret.Reveal(), h.sessionLength(ctx, sess)))
+	h.setAccessCookie(w, r, sess, emptySignInMethod())
 }
 
 // localUserError returns the coded answer of an error of the local user

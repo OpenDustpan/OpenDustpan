@@ -213,6 +213,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 			PasskeySignIn:       nil,
 			PasskeyBeginLimiter: nil,
 			PasskeyLimiter:      nil,
+			Sealer:              nil,
 		},
 		InstallationKind: parts.kind,
 		StateWriteGates:  parts.stateWrite,
