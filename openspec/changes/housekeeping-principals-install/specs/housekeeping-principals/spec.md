@@ -8,6 +8,34 @@ The server SHALL make one built-in service principal for each housekeeping purpo
 - **WHEN** an operator lists the principals of a new installation
 - **THEN** each housekeeping purpose has one principal of kind `service` and source `builtin`, and each has stored grants with a creator and a time
 
+### Requirement: Each namespace gets the grants of the housekeeping principals that act inside it
+
+The server SHALL write, in the transaction of each namespace creation, one stored grant on the new namespace for each housekeeping role that acts inside a namespace, with the server as the creator and the creation time, and SHALL write an audit entry for each grant in the chain of the namespace.
+
+#### Scenario: New namespace
+- **WHEN** an operator creates a namespace
+- **THEN** the namespace has one stored grant of each of the roles `housekeeping-agent-reaper`, `housekeeping-history-retention`, `housekeeping-issuer-rotation`, `housekeeping-job-reconcile` and `housekeeping-saved-view-cleanup`, each with a creator and a time
+
+#### Scenario: Revoked grant stays revoked
+- **WHEN** an operator revokes one of these grants and then creates another namespace
+- **THEN** the revoked grant stays revoked and the new namespace has its own five grants
+
+### Requirement: Each sweep has its own narrow action
+
+The server SHALL define one action for each of the sweeps of artifacts, blobs, checkpoints, name locks, temporary administrators and agent reveals, and the role of each purpose SHALL hold only the action of its sweep.
+
+#### Scenario: Role of the artifact sweep
+- **WHEN** an operator reads the role `housekeeping-artifact-sweep`
+- **THEN** the role holds `server:sweep-artifacts` and no other action
+
+### Requirement: The reconcile of jobs has its own action
+
+The server SHALL define the action `job:reconcile`, and the role of the reconcile of jobs SHALL hold that action and no start action.
+
+#### Scenario: Role of the reconcile
+- **WHEN** an operator reads the role `housekeeping-job-reconcile`
+- **THEN** the role holds `job:reconcile` and none of `unit:run-plan`, `unit:run-apply`, `unit:run-destroy`, `unit:write-back` and `job:cancel`
+
 ### Requirement: The principal list filters by source
 
 The principal list SHALL keep only the principals of the source in the `source` query parameter, and SHALL count only those rows in its total and its cursor.
