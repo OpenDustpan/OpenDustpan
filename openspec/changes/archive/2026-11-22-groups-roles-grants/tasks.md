@@ -29,4 +29,4 @@
 - [x] 4.3 Usability check: the persona completes the path from the docs page alone Check: each error names one helping command
 - [x] 4.5 Run TestCollectionGrantScope in the file e2e/collection_grants_test.go (e2e/collection_grants_test.go:46, TestCollectionGrantScope): the steps of tasks 1.1 to 1.4, with the real Pulumi CLI and OpenTofu, the route DELETE /api/server/grants/{id} and a personal access token of a non-admin person. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes.
 - [x] 4.6 Run the discovery step of TestCollectionGrantScope in the file e2e/collection_grants_test.go (e2e/collection_grants_test.go:46, TestCollectionGrantScope) (ADR 374 decision 1) with the real OpenTofu CLI, the route GET /api/v2/organizations/{organization}/entitlement-set and a personal access token of a person who holds a grant on one collection only. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes, including the entitlement-set read before and after the revoke.
-- [ ] 4.4 Run the full check Check: `make check` with zero findings.
+- [x] 4.4 Run the full check Check: `make check` with zero findings.
