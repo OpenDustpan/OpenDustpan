@@ -2,6 +2,8 @@
 version: 4
 ---
 
+Issue: #3931.
+
 Roadmap: `docs/roadmap.md:475` (Return 503 with Retry-After and keep live check green.).
 
 ## Why
@@ -25,7 +27,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Main has health tests for live checks nothing and ready OK. Proof: TestHealthLiveStillChecksNothing at pkg/dustpan/health_test.go:176 and TestHealthReadyOK at pkg/dustpan/health_test.go:193
-- Main has TFE state version and lock handlers that this part maps to 503. Proof: Handler.writeStateVersion at internal/api/tfe/states.go:602, Handler.lockWorkspace at internal/api/tfe/locks.go:103, Handler.unlockWorkspace at internal/api/tfe/locks.go:216
+- Main has TFE state version and lock handlers that this part maps to 503. Proof: Handler.writeStateVersion at internal/api/tfe/states.go:602, Handler.lockWorkspace at internal/api/tfe/locks.go:134, Handler.unlockWorkspace at internal/api/tfe/locks.go:266
 - Main has a Pulumi HTTP adapter package that this part maps to 503. Proof: package internal/api/pulumi
 
 ## What Changes
@@ -59,10 +61,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Store finalizes a state version. (`pkg/store/postgres/workspaces.go:661 (func Store.FinalizeStateVersion)`)
 - TFE adapter writes state versions. (`internal/api/tfe/states.go:602 (func Handler.writeStateVersion)`)
-- TFE adapter locks a workspace. (`internal/api/tfe/locks.go:103 (func Handler.lockWorkspace)`)
-- TFE adapter unlocks a workspace. (`internal/api/tfe/locks.go:216 (func Handler.unlockWorkspace)`)
+- TFE adapter locks a workspace. (`internal/api/tfe/locks.go:134 (func Handler.lockWorkspace)`)
+- TFE adapter unlocks a workspace. (`internal/api/tfe/locks.go:266 (func Handler.unlockWorkspace)`)
 
 ## ADR check
 
