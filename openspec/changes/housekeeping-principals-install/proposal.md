@@ -57,11 +57,11 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The list route reads the `kind` filter and no `source` filter. (`internal/api/server/principals.go:730 (func listPrincipals)`)
+- The list route reads the `kind` filter and no `source` filter. (`internal/api/server/principals.go:793 (func listPrincipals)`)
 - The store port takes the kind and no source. (`pkg/principal/store.go:58 (Store.ListPrincipals)`)
-- The service parses the kind. (`pkg/principal/service.go:201 (Service.ListPrincipals)`)
-- The source constants stop at `ldap`, `scim`, `oidc` and `oauth` next to `local`. (`pkg/principal/principal.go:116`)
-- The source check refuses any other value. (`pkg/principal/principal.go:631 (func validateSource)`)
+- The service parses the kind. (`pkg/principal/service.go:200 (Service.ListPrincipals)`)
+- The source constants stop at `ldap`, `scim`, `oidc` and `oauth` next to `local`. (`pkg/principal/principal.go:132`)
+- The source check refuses any other value. (`pkg/principal/principal.go:649 (func validateSource)`)
 
 ## ADR check
 
@@ -94,7 +94,7 @@ none
 Questions considered and answered:
 
 - Which purposes get a principal? The eleven purposes of the design document ("Purposes on main"). Task 0.1 checked the list on main on 17 November 2026.
-- What happens to the seeded rows on a restore? The stage deletes them before it loads the backup, as it does for the installation row and the two policy rows; the backup holds its own rows. The existing step in `pkg/store/sqlite/backup_stage_portable.go` and `pkg/store/postgres/backup_stage_portable.go` is the precedent. Design decision 5.
+- What happens to the seeded rows on a restore? The stage deletes them before it loads the backup, as it does for the installation row and the two policy rows; the backup holds its own rows. The existing step in `internal/store/sqlite/backup_stage_portable.go` and `internal/store/postgres/backup_stage_portable.go` is the precedent. Design decision 5.
 - Does a housekeeping principal belong to a namespace? No. It is a principal of the installation. Its grants name the objects that its purpose touches.
 - Who is the creator of the install grants? The install, recorded as the creator with the install time, as ADR 338 decision 1 did for the namespace grant.
 - What about the existing namespaces? No installation exists, so no migration (ADR 322).
