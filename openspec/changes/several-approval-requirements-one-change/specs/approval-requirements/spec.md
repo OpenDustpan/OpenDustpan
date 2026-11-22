@@ -143,10 +143,10 @@ When a person approves, the server SHALL check the person against each gate of t
 
 ### Requirement: The starter fills only the gates that allow the starter
 
-The server SHALL let the person who started the job fill a gate only when that gate sets `AllowSelf`.
+The server SHALL let the person who started the job fill a gate only when that gate sets the flag that lets the starter approve (the rule field `authorMayApprove`).
 
 #### Scenario: The starter approves
-- **WHEN** the starter is in the group of a gate that does not set `AllowSelf` and approves
+- **WHEN** the starter is in the group of a gate that does not set the flag that lets the starter approve and approves
 - **THEN** the server refuses with `job.self-approval`
 
 ### Requirement: Each approval names its requirements in the audit log

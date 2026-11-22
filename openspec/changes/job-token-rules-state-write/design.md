@@ -1,14 +1,14 @@
 ## Context
 
-The state-write adapters pass no job claim, so the gate service cannot apply the job-token rule. A new source builds the claim from the verified job token for each write.
+The gate subject of a job token has no job, so the gate service refuses each job-token state write. The subject source builds the job claim from the job record for each write.
 
 ## Decisions
 
-1. **Resolve JobClaim at the adapter boundary.** A new unexported resolver builds the JobClaim fresh for each write request from the verified job token and passes it to Evaluate.
+1. **Resolve JobClaim in the subject source.** `Service.GuardStateWrite` asks the `gate.SubjectSource` for the subject of the principal on each write. A new subject source in pkg/dustpan wraps the principal subject source and, for a job-token principal, reads the job by `Principal.JobID` and sets `Subject.Job`. No field is added to `gate.StateWrite`, and no adapter builds a claim. A job that does not resolve, a job in a terminal state, or a principal with an empty job ID gives an error that wraps identity.ErrDenied.
 
 ## Structure
 
-Unexported type jobClaimSource in the new file internal/api/stategate/jobclaim.go, made only by newJobClaimSource; call sites cannot write a JobClaim literal.
+Unexported type jobClaimSubjects in the new file pkg/dustpan/jobclaim.go, made only by newJobClaimSubjects, which takes the job reader and the inner subject source; call sites cannot write a JobClaim literal. The state-guard builder in pkg/dustpan/stateguard.go uses it in place of principalSubjects.
 
 ## Risks
 
@@ -18,7 +18,7 @@ Unexported type jobClaimSource in the new file internal/api/stategate/jobclaim.g
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| port adapter | The adapter accepts only a JobClaim built by the resolver from a verified job token. | Send a write with a forged job ID and phase; it fails with identity.ErrDenied. |
+| subject source | Only the subject source sets Subject.Job, from the job record of the verified token. | Send a write with a forged job ID and phase; it fails with identity.ErrDenied. |
 | service | The service refuses any write except the plan lock or lease when PassedApply is false or the unit is outside the job. | Skip the adapter check; the service still refuses out-of-phase and cross-unit writes. |
 | HTTP handler | The handler declares the state.write action and returns the denial. | Call each tool write route with an out-of-phase job token; the refusal is the same. |
 
@@ -31,8 +31,11 @@ sequenceDiagram
 participant R as runner
 participant A as adapter
 participant G as gate service
+participant S as subject source
 R->>A: write with job token
-A->>G: GuardStateWrite with JobClaim
+A->>G: GuardStateWrite
+G->>S: Subject of the principal
+S-->>G: Subject with JobClaim
 G-->>R: allow or identity.ErrDenied
 ```
 
@@ -65,7 +68,7 @@ R[runner with job token]
 end
 subgraph serverzone[Server boundary]
 A[state-write adapter]
-C[claim source]
+C[subject source]
 G[gate service]
 end
 subgraph storezone[Storage boundary]
@@ -80,7 +83,7 @@ G --> S
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | runner boundary | E | A job token writes state outside its phase or unit. | boundary check | Accept only a server-issued job token. | Send a forged token; it is refused. |
-| runner boundary | E | A job token writes state outside its phase or unit. | encode or contain | Use only the claim source output. | Send client fields naming another job; they are ignored. |
+| runner boundary | E | A job token writes state outside its phase or unit. | encode or contain | Use only the subject source output. | Send client fields naming another job; they are ignored. |
 | runner boundary | E | A job token writes state outside its phase or unit. | limit | A plan phase writes only its lock or lease. | Send a plan-phase body write; it is refused. |
 | runner boundary | E | A job token writes state outside its phase or unit. | authorize at point of use | Check the unit against the units of the job. | Write another unit; it is refused. |
 | runner boundary | E | A job token writes state outside its phase or unit. | fail closed | Refuse when the claim does not resolve. | Delete the job first; the write is refused. |
@@ -89,7 +92,7 @@ G --> S
 
 **gate**
 
-- Invariant: Each job-token write evaluates with a freshly resolved JobClaim.
+- Invariant: Each job-token write evaluates with a JobClaim that the subject source reads from the job record on that call.
 - Invariant: A phase that did not pass change.apply writes only the lock or lease of its plan.
 - `GuardStateWrite`: pre: The caller and the unit are known.. Post: The write is evaluated with the claim or refused with identity.ErrDenied..
 

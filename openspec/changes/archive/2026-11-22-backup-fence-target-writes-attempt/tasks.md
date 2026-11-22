@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none. Confirmed by: the archive pull request body, section "Task 0.1" (one difference: a test moved 2 lines).
 
 ## 1. Failing tests first
 
@@ -28,4 +28,4 @@
 
 - [x] 4.1 Run e2e backup plus check against the real directory: `POST /api/dustpan/v1/backups`, poll `GET /api/dustpan/v1/backups/{id}`, then `GET /api/dustpan/v1/backups/{id}/check`, each with the administrator bearer token (`Authorization: Bearer <token>`, the credential of the helpers in e2e/dev_backup_test.go), with a stale holder delete replayed after finish. Check: `GET /api/dustpan/v1/backups/{id}/check` with the administrator bearer token reports complete after a stale-holder run against the real directory
 - [x] 4.2 Update the existing file docs/guides/several-instances.md for the attempt layout and the cleanup. Check: docs/guides/several-instances.md shows the attempt layout, the fixed pointer `live.json` and the orphan cleanup by the live holder. `make docs-lint` passes on the edited guide (sentence cap 25 words).
-- [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings.
+- [x] 4.3 Moved to the person-steps backlog (task 4.3 in openspec/changes/person-steps/tasks.md): the usability check from the docs page. Check: the Operator completes the path from docs/guides/several-instances.md alone and each error names the one command that helps. A person's step. The `make check` part: Check: `make check` with zero findings. Confirmed by: CI. CI is green on main commit f2735bd6b (61 check runs: 48 success, 13 skipped, 0 failed).
