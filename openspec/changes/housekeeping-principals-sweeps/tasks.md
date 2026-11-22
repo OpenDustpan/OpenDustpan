@@ -1,6 +1,6 @@
 SECURITY: this change is security code (ADR 250): it decides what the server does with no person in the loop. Each layer has its own hostile test, and each guard has a mutation test. Review: a cheap-model review of the change, a Claude review for security, and the Opus review of the stack.
 
-Order: part 1 (`housekeeping-principals-install`) is on main first.
+Order: part 1 (`housekeeping-principals-install`) is on main first. It makes the principals, the roles, the actions (including `job:reconcile`) and the grants on each namespace.
 
 ## 0. Confirm against the code first
 
@@ -11,12 +11,14 @@ Order: part 1 (`housekeeping-principals-install`) is on main first.
 - [ ] 1.1 SECURITY. Each sweep is attributed. Test file: NEW `pkg/job/housekeeping_attribution_test.go`. Check: NEW test `TestEachSweepIsAttributed` fails on main.
 - [ ] 1.2 SECURITY. A revoke stops only its sweep. Test file: NEW `pkg/job/housekeeping_revoke_test.go`. Check: NEW test `TestRevokeStopsOnlyItsSweep` fails on main.
 
+- [ ] 1.3 SECURITY. The reconcile holds no start action, and the namespace purposes work with the reach setting `false`. Test files: NEW `pkg/job/housekeeping_reconcile_test.go` (`TestReconcileHoldsNoStartAction`) and NEW `pkg/job/housekeeping_reach_test.go` (`TestNamespacePurposesWorkWithoutInstallationReach`). Check: both fail on main.
+
 ## 2. Build
 
-- [ ] 2.1 SECURITY. Each housekeeping service takes its principal and authorizes before it acts, for each purpose of the design document ("Callers on main"): `pkg/job/artifactsweep.go:654`, `pkg/job/reconcile.go`, `pkg/savedview/service.go`, `pkg/history/redaction.go` (and `pkg/history/history.go`, with the test helper `internal/history/historytest/redactor.go`), `internal/localusersvc/locks.go`, `internal/agent/reaper.go`, `pkg/stack/superseded_sweep.go` and `pkg/workspace/service.go`. Check: 1.1 and 1.2 pass; removing the authorize call of one service makes 1.2 fail (mutation list in the pull request).
+- [ ] 2.1 SECURITY. Each housekeeping service takes its principal and authorizes before it acts, for each purpose of the design document ("Callers on main"): `pkg/job/artifactsweep.go:654`, `pkg/job/reconcile.go`, `pkg/savedview/service.go`, `pkg/history/redaction.go` (and `pkg/history/history.go`, with the test helper `internal/history/historytest/redactor.go`), `internal/localusersvc/locks.go`, `internal/agent/reaper.go`, `pkg/stack/superseded_sweep.go` and `pkg/workspace/service.go`. Each service checks the action and the object of decision 5 of the design document. `pkg/job/reconcile.go` checks `job:reconcile` (NEW in part 1) inside `reconcileRun.apply`, and `reconcileAction` stays only for the audit entry. `internal/agent/reaper.go` makes two checks. Check: 1.1, 1.2 and 1.3 pass; removing the authorize call of one service makes 1.2 fail (mutation list in the pull request).
 - [ ] 2.2 Pass each principal to its service at the construction in `pkg/dustpan/dustpan.go`. Do not edit the namespace service principal, its authorizer rule, its allowlist rule, its guard or the checks in the trigger and job start path: the dispatcher starts every triggered plan with it. No route: the test builds the module and scans the housekeeping services only. Check: `go build ./...` passes and no housekeeping service uses `identity.NamespaceService`.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Agent pre-run (human run-through in person-steps (housekeeping-principals-sweeps 3.1)): Usability check: an operator finds who ran each of these sweeps in the audit log from the entry alone. Check: the check is recorded in the pull request. Record the transcript in the pull request body.
-- [ ] 3.2 Full check. Check: `make check` reports zero findings.
+- [ ] 3.2 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
