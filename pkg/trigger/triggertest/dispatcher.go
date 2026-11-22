@@ -22,6 +22,7 @@ func dispatcherCases() []suiteCase {
 		{"dispatcher: upstream starts nothing for a unit that nothing follows", caseUpstreamNoFollowers},
 		{"dispatcher: upstream refuses a state version that is not a final version of the unit", caseUpstreamMismatch},
 		{"dispatcher: upstream refuses an invalid event", caseUpstreamInvalid},
+		{"dispatcher: an older version that a newer apply overtakes during the check starts nothing", caseUpstreamOvertaken},
 		{"dispatcher: an error of one follower does not stop the others", caseUpstreamPartial},
 		{"dispatcher: scheduled starts the plan of one slot once", caseScheduled},
 		{"dispatcher: scheduled refuses a trigger that is off, unknown or not a schedule", caseScheduledRefusals},
@@ -165,6 +166,30 @@ func caseUpstreamMismatch(t *testing.T, h Harness, rec *Recorder) {
 
 	if len(rec.Starts()) != 0 {
 		t.Errorf("a version that is not a final version of the unit started %v", rec.Starts())
+	}
+}
+
+// caseUpstreamOvertaken models an apply that finishes between the check of an
+// older version and its starts. The older event must start nothing, and the
+// newer version must still be the one that counts.
+func caseUpstreamOvertaken(t *testing.T, h Harness, rec *Recorder) {
+	t.Helper()
+
+	a, b := unit(acme, "a"), unit(acme, "b")
+
+	follower(t, h, "f1", b, a)
+
+	older := h.Doubles.Final(t, a)
+
+	h.Doubles.AfterNextLastFinal(func() {
+		h.Doubles.Final(t, a)
+	})
+
+	_, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: older})
+	wantErr(t, "older version overtaken during the check", err, trigger.ErrVersionMismatch)
+
+	if got := rec.Starts(); len(got) != 0 {
+		t.Errorf("an older version overtaken by a newer apply started %+v", got)
 	}
 }
 

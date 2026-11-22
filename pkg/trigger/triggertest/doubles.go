@@ -22,9 +22,10 @@ type Doubles struct {
 	revoked map[string]bool
 	reused  map[string]string
 	audited map[namespace.Name][]audit.Entry
-	last    map[graph.Unit]string
-	next    int
-	mu      sync.Mutex
+	last      map[graph.Unit]string
+	afterLast func()
+	next      int
+	mu        sync.Mutex
 }
 
 // NewDoubles returns doubles that allow every saver and know no state version.
@@ -168,12 +169,31 @@ func (d *Doubles) Append(_ context.Context, fence namespace.Fence, e audit.Entry
 	return e, nil
 }
 
-// LastFinal implements trigger.Versions.
-func (d *Doubles) LastFinal(_ context.Context, unit graph.Unit) (string, bool, error) {
+// AfterNextLastFinal makes the next LastFinal call run fn once, after it reads
+// the last final version and before it returns. A test uses it to model a
+// final state version that lands between the check of a dispatcher and its
+// starts.
+func (d *Doubles) AfterNextLastFinal(fn func()) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	d.afterLast = fn
+}
+
+// LastFinal implements trigger.Versions.
+func (d *Doubles) LastFinal(_ context.Context, unit graph.Unit) (string, bool, error) {
+	d.mu.Lock()
+
 	id, ok := d.last[unit]
+	fn := d.afterLast
+	d.afterLast = nil
+
+	d.mu.Unlock()
+
+	// The hook runs without mu, because it may call Final.
+	if fn != nil {
+		fn()
+	}
 
 	return id, ok, nil
 }
