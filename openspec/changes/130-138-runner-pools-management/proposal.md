@@ -48,4 +48,6 @@ Out of scope: any new route, field, error code, store change or API change; crea
 - ADR 130 (runner pools, owner-tagged): this change adds no behavior of a pool. Quote: "A pool has a purpose that never changes (owner)." The command only reads.
 - ADR 17: "Give every feature a REST API" is met; the command is a client of the existing API.
 
-Open questions: none.
+## Open questions
+
+None.
