@@ -10,11 +10,11 @@ When the store is unavailable, the server SHALL answer GET /health/ready with 50
 
 ### Requirement: live-stays-green
 
-While the store is unavailable, the server SHALL answer GET /health/live with 200 without a store check.
+While the store is unavailable, the server SHALL answer GET /health/live with 204 without a store check.
 
 #### Scenario: Database stopped
 - **WHEN** PostgreSQL is stopped and GET /health/live arrives
-- **THEN** the instance answers 200 without a store check
+- **THEN** the instance answers 204 without a store check
 
 ### Requirement: write-503-shape
 
