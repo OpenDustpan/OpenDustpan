@@ -1077,21 +1077,30 @@ func failedTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
 }
 
 // TestWALGuardBusyWritesStayFast holds a read transaction open so every
-// TRUNCATE checkpoint stays busy, runs writes for 1 s past the threshold,
-// and proves writers are rarely blocked: one tick tries at most 2 slow
-// attempts and gives up until the next tick, so the p99 write latency stays
-// close to the p99 of the same writes with no reader. One tick stalls writers
-// for about 105 ms at most (2 slow attempts with a 50 ms busy timeout plus a
-// 5 ms retry delay, plus the time of a successful checkpoint copy). The test
-// first measures the same writes in the same run with no reader, so a loaded
-// machine slows both runs alike. It then bounds the busy p99 by a multiple of
-// the idle p99 plus that stall. Each run has at least 200 writes, so p99 is
-// not the maximum. It also proves the bound itself through the test hook:
-// every failed tick tried at most 2 slow attempts.
+// TRUNCATE checkpoint stays busy, runs writes past the threshold, and proves
+// writers are rarely blocked: one tick tries at most 2 slow attempts and gives
+// up until the next tick, so the write latency stays close to the latency of
+// the same writes with no reader. One tick stalls writers for about 105 ms at
+// most (2 slow attempts with a 50 ms busy timeout plus a 5 ms retry delay,
+// plus the time of a successful checkpoint copy).
+//
+// A p99 of one sample of 200 writes is the second largest write, so one stall
+// of a shared runner (CPU steal, GC, the scheduler under -race) moved it by a
+// factor of 10 while p50 and p90 stayed normal. The test therefore runs idle
+// and busy rounds one after the other, so both see the same load over time. It
+// compares the median of the busy round p99 values with the median of the idle
+// round p99 values. A runner stall hits one round and the median ignores it. A
+// guard that stalls writers on each tick moves every busy round and fails the
+// bound. The test also proves the bound itself through the test hook, with no
+// clock: every failed tick tried at most 2 slow attempts.
 func TestWALGuardBusyWritesStayFast(t *testing.T) {
 	t.Parallel()
 
-	const threshold = int64(1 << 16)
+	const (
+		threshold = int64(1 << 16)
+		rounds    = 5
+		window    = 250 * time.Millisecond
+	)
 
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
@@ -1101,87 +1110,46 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 		sqlite.WithWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond),
 	)
 
-	const window = 1 * time.Second
+	idleP99s := make([]time.Duration, 0, rounds)
+	busyP99s := make([]time.Duration, 0, rounds)
 
-	// Idle baseline: the same writes in the same run with no reader, so every
-	// checkpoint succeeds. A loaded machine slows this run as much as the busy
-	// run below.
-	idleLatencies := writeStacksForWindow(ctx, t, walTimedWrites{
-		store:     s,
-		ns:        ns,
-		tx:        nil,
-		window:    window,
-		minWrites: minTimedWrites,
-		prefix:    "fast-idle",
-	})
+	var busyWrites int
 
-	slices.Sort(idleLatencies)
+	for round := range rounds {
+		idle := writeStacksForWindow(ctx, t, walTimedWrites{
+			store:     s,
+			ns:        ns,
+			tx:        nil,
+			window:    window,
+			minWrites: minTimedWrites,
+			prefix:    "fast-idle-" + strconv.Itoa(round),
+		})
 
-	idleP99 := percentileLatency(idleLatencies, 0.99)
+		slices.Sort(idle)
 
-	raw, tx := holdWALReader(ctx, t, path)
+		idleP99s = append(idleP99s, percentileLatency(idle, 0.99))
 
-	t.Cleanup(func() {
-		if closeErr := raw.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	})
+		busy := runBusyWriteRound(ctx, t, walBusyRound{
+			store:     s,
+			ns:        ns,
+			path:      path,
+			threshold: threshold,
+			round:     round,
+			window:    window,
+		})
 
-	writeStacksPastThreshold(ctx, t, walWriteJob{
-		store:     s,
-		ns:        ns,
-		path:      path,
-		threshold: threshold,
-		prefix:    "fast-setup",
-	})
+		slices.Sort(busy)
 
-	latencies := writeStacksForWindow(ctx, t, walTimedWrites{
-		store:     s,
-		ns:        ns,
-		tx:        tx,
-		window:    window,
-		minWrites: minTimedWrites,
-		prefix:    "fast",
-	})
-
-	if sizes := fileSizes(t, path); sizes.wal < threshold {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			t.Logf("roll back read transaction: %v", rbErr)
-		}
-
-		t.Fatalf(
-			"write-ahead log size = %d bytes, want at least %d bytes so every checkpoint stayed busy",
-			sizes.wal,
-			threshold,
-		)
+		busyP99s = append(busyP99s, percentileLatency(busy, 0.99))
+		busyWrites += len(busy)
 	}
 
-	slices.Sort(latencies)
-
-	p50 := percentileLatency(latencies, 0.5)
-	p90 := percentileLatency(latencies, 0.9)
-	p99 := percentileLatency(latencies, 0.99)
-
-	if len(latencies) == 0 {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			t.Logf("roll back read transaction: %v", rbErr)
-		}
-
-		t.Fatalf("no timed writes in %s, want at least one sample", window)
-	}
-
-	maxLatency := latencies[len(latencies)-1]
+	idleMedian := medianLatency(idleP99s)
+	busyMedian := medianLatency(busyP99s)
 
 	t.Logf(
-		"%d writes with the checkpoint busy: p50 = %s, p90 = %s, p99 = %s, max = %s; "+
-			"%d idle writes: p99 = %s",
-		len(latencies),
-		p50,
-		p90,
-		p99,
-		maxLatency,
-		len(idleLatencies),
-		idleP99,
+		"%d busy writes in %d rounds: p99 per round = %v, median = %s; idle p99 per round = %v, median = %s",
+		busyWrites, rounds, busyP99s, busyMedian, idleP99s, idleMedian,
 	)
 
 	// One failed tick stalls writers for about 105 ms at most. The busy p99
@@ -1192,24 +1160,86 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 		tickStall    = 105 * time.Millisecond
 	)
 
-	bound := idleMultiple*idleP99 + tickStall
+	bound := idleMultiple*idleMedian + tickStall
 
-	if p99 >= bound {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			t.Logf("roll back read transaction: %v", rbErr)
-		}
-
+	if busyMedian >= bound {
 		t.Fatalf(
-			"busy p99 write latency = %s over %d writes, want under %s (%d x idle p99 %s + %s)",
-			p99, len(latencies), bound, idleMultiple, idleP99, tickStall,
+			"median busy p99 write latency = %s over %d rounds, want under %s (%d x median idle p99 %s + %s)",
+			busyMedian, rounds, bound, idleMultiple, idleMedian, tickStall,
 		)
 	}
 
 	requireBusyTickSlowCapped(t, s)
+}
 
-	if rbErr := tx.Rollback(); rbErr != nil {
-		t.Fatalf("roll back read transaction: %v", rbErr)
+// walBusyRound holds one busy round: the store, the namespace, the database
+// path for size checks, the log size to reach, the round number for unique
+// stack names, and the window of the timed writes.
+type walBusyRound struct {
+	store     *sqlite.Store
+	ns        namespace.Namespace
+	path      string
+	threshold int64
+	round     int
+	window    time.Duration
+}
+
+// runBusyWriteRound holds a read transaction open, grows the write-ahead log
+// past the threshold, takes one timed write batch while every checkpoint is
+// busy, and ends the hold. It returns the write latencies.
+func runBusyWriteRound(ctx context.Context, t *testing.T, job walBusyRound) []time.Duration {
+	t.Helper()
+
+	path, threshold, round := job.path, job.threshold, job.round
+
+	raw, tx := holdWALReader(ctx, t, path)
+
+	// The reader ends here on each exit path, so a failure never leaves it open
+	// for the next round or the end of the test.
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			t.Logf("roll back read transaction: %v", rbErr)
+		}
+
+		if closeErr := raw.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	writeStacksPastThreshold(ctx, t, walWriteJob{
+		store:     job.store,
+		ns:        job.ns,
+		path:      path,
+		threshold: threshold,
+		prefix:    "fast-setup-" + strconv.Itoa(round),
+	})
+
+	latencies := writeStacksForWindow(ctx, t, walTimedWrites{
+		store:     job.store,
+		ns:        job.ns,
+		tx:        tx,
+		window:    job.window,
+		minWrites: minTimedWrites,
+		prefix:    "fast-" + strconv.Itoa(round),
+	})
+
+	if sizes := fileSizes(t, path); sizes.wal < threshold {
+		t.Fatalf(
+			"write-ahead log size = %d bytes in round %d, want at least %d bytes so every checkpoint stayed busy",
+			sizes.wal, round, threshold,
+		)
 	}
+
+	return latencies
+}
+
+// medianLatency returns the median of values. It sorts a copy and takes the
+// middle value, or the upper middle value for an even count.
+func medianLatency(values []time.Duration) time.Duration {
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+
+	return sorted[len(sorted)/2]
 }
 
 // percentileLatency returns the latency at fraction q of the sorted
