@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #3929. This change replaces the first cut of `130-138-runner-pools-management`. Main already serves the pool, join-token, drain and retire routes, and the guide `docs/guides/runner-pools.md` shows them with curl. The one missing part is a CLI command to list pools.
@@ -30,7 +30,7 @@ Evidence for the claims above:
 ## What Changes
 
 - The NEW file `internal/cli/runner_pools.go` holds the command `opendustpan runner pools list`.
-- The command table in `cmd/opendustpan/commands.go` and the reference table in `internal/cli/reference.go` get one row each.
+- The command table in `cmd/opendustpan/commands.go` and the reference table in `internal/cli/reference.go` get one row each. The usage text in `internal/cli/client/client.go` gets one line, and the generated `docs/reference/configuration.md` is regenerated.
 - `docs/guides/runner-pools.md` shows the command in the section "List the pools".
 
 Out of scope: any new route, field, error code, store change or API change; create, patch, delete, drain and retire commands.
