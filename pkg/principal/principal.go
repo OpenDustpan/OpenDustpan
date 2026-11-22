@@ -142,7 +142,19 @@ const (
 	// SourceOAuth is a person that the first sign-in through a plain
 	// OAuth 2.0 provider made.
 	SourceOAuth Source = "oauth"
+	// SourceBuiltin is a record that the server makes at the install.
+	SourceBuiltin Source = "builtin"
 )
+
+// ParseSource returns the Source that s names, or ErrInvalid.
+func ParseSource(s string) (Source, error) {
+	switch src := Source(s); src {
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth, SourceBuiltin:
+		return src, nil
+	default:
+		return "", fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
+	}
+}
 
 // Limits of the text fields, in bytes.
 const (
@@ -647,12 +659,11 @@ func (p Principal) validateNamespace() error {
 // validateSource returns ErrInvalid for a source that is not local, ldap,
 // scim, oidc or oauth.
 func validateSource(s Source) error {
-	switch s {
-	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth:
-		return nil
-	default:
-		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
+	if _, err := ParseSource(string(s)); err != nil {
+		return err
 	}
+
+	return nil
 }
 
 // Validate reports whether g holds usable values. It does not check ID or
