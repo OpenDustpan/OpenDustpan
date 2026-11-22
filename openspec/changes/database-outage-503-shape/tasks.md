@@ -9,7 +9,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Wire outage error, ready mapping, live bypass and per-API 503 mapping with 2 second store timeout in `internal/api/tfe/states.go:602` (Handler.writeStateVersion), `internal/api/tfe/locks.go:103` (Handler.lockWorkspace) and NEW file `pkg/dustpan/outage.go`. Check: `curl -s http://127.0.0.1:8080/health/ready` (credential: none, a public route of `publicRoutes`, pkg/dustpan/route_actions_test.go:36) shows 503 with Retry-After 30 during a stopped database; route `GET /health/ready`, public allowlist gate, no credential
+- [ ] 2.1 Wire outage error, ready mapping, live bypass and per-API 503 mapping with 2 second store timeout in `internal/api/tfe/states.go:602` (Handler.writeStateVersion), `internal/api/tfe/locks.go:134` (Handler.lockWorkspace) and NEW file `pkg/dustpan/outage.go`. Check: `curl -s http://127.0.0.1:8080/health/ready` (credential: none, a public route of `publicRoutes`, pkg/dustpan/route_actions_test.go:36) shows 503 with Retry-After 30 during a stopped database; route `GET /health/ready`, public allowlist gate, no credential
 - [ ] 2.2 Write docs page for outage signals and Retry-After 30 seconds in NEW file `docs/outage-signals.md`. Check: docs page command `curl -s http://127.0.0.1:8080/health/live` shows 200; route `GET /health/live`, credential: none, a public route on the public list `publicRoutes` (pkg/dustpan/route_actions_test.go:35, "liveness probe")
 
 ## 3. Side effects (computed from main)
@@ -18,4 +18,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wiring, route authorization actions unchanged, e2e step deferred, docs page, usability check Check: `make check` with zero findings; full long and short outage e2e is BLOCKED by database-outage-e2e-probe.
+- [ ] 4.1 Wiring, route authorization actions unchanged, e2e step deferred, docs page, usability check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only); full long and short outage e2e is BLOCKED by database-outage-e2e-probe.

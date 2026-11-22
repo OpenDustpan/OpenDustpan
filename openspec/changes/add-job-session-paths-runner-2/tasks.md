@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [x] 1.0 Tests for exchange, renew, step order and log caps and hash exist on main: internal/api/runnerapi/session_test.go:201 (TestSessionRoutes), :342 (TestOpenSession), :460 (TestSessionRenewExtendsTheLease), :650 (TestLogAndStepEnd), :836 (TestLogChunkHashIsChecked). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` passes on main
-- [ ] 1.1 Write failing tests for source, plan part upload, plan caps and the double commit in internal/api/runnerapi/session_test.go (existing file). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` fails on main
+- [ ] 1.1 Write failing tests for source, plan part upload, plan caps and the double commit in internal/api/runnerapi/session_test.go (existing file). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` fails on main, because the NEW `TestSessionPlanCommitTwice` and the five routes of PathSessionSource to PathSessionPlanCommit (pkg/runner/protocol/protocol.go:83-110) have no route in internal/api/runnerapi/routes.go
 - [ ] 1.2 Write failing hostile tests in internal/api/runnerapi/session_hostile_test.go (NEW): namespace pool with the sweep purpose, takeover during plan upload, runner key on the new session paths. Main has TestSweepExchangeIsRefused at internal/api/runnerapi/session_guard_test.go:337. Check: `go test ./internal/api/runnerapi/ -run TestSessionHostile -count=1` fails on main
 
 ## 2. Behavior and docs
@@ -23,4 +23,4 @@
 - [ ] 4.1 Run the session suites on SQLite and PostgreSQL. Check: `go test -race ./internal/api/runnerapi/... ./pkg/runner/...`
 - [ ] 4.2 Add the e2e step in e2e/job_session_paths_test.go (NEW): the real launcher calls the route POST /runner/v1/session with the credential kind handoff token, then the session paths with the session key proof (action runner:claim). Check: `make e2e` runs the session step.
 - [ ] 4.3 Check the usability of the path from the docs page alone. Check: Each error names one command that helps.
-- [ ] 4.4 Run the full check. Check: `make check` reports zero findings.
+- [ ] 4.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

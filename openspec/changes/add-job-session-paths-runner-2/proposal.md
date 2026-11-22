@@ -29,12 +29,12 @@ Evidence for the claims above:
 
 - The sweep claimer port exists and the runnerapi config holds it. Proof: Code fact for runner.SweepClaimer: internal/api/runnerapi/runnerapi.go:61 and pkg/runner/store.go:244 (main list).
 - The reference page for the runner API exists and must list each session path. Proof: docs/reference/runner-api.md exists in the pack paths.
-- Sweep types live in internal/unmanaged, so sweep code stays in other parts. Proof: Code fact for FindingStore: internal/unmanaged/ports.go:249.
+- Sweep types live in (read only) `internal/unmanaged`, so sweep code stays in other parts. Proof: Code fact for FindingStore: (read only) `internal/unmanaged/ports.go` line 249.
 
 ## What Changes
 
-- Main already has these routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go:164-199, PathSession* in pkg/runner/protocol/protocol.go:57-99). Main also has their tests in internal/api/runnerapi/session_test.go and session_guard_test.go, and the docs rows at docs/reference/runner-api.md:160-163.
-- This change adds the routes that main declares but does not route: PathSessionSource (protocol.go:65), PathSessionSourceObject (:68), PathSessionPlanPart (:71), PathSessionPlanUpload (:89) and PathSessionPlanCommit (:92). The credentials path (PathSessionCredentials) belongs to `add-job-session-paths-runner-token-issuer`. This change adds their caps, their tests and their docs rows.
+- Main already has these routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go:164-199, PathSession* in pkg/runner/protocol/protocol.go:75-117). Main also has their tests in internal/api/runnerapi/session_test.go and internal/api/runnerapi/session_guard_test.go, and the docs rows at docs/reference/runner-api.md:160-163.
+- This change adds the routes that main declares but does not route: PathSessionSource (pkg/runner/protocol/protocol.go:83), PathSessionSourceObject (:86), PathSessionPlanPart (:89), PathSessionPlanUpload (:107) and PathSessionPlanCommit (:110). The credentials path (PathSessionCredentials) belongs to `add-job-session-paths-runner-token-issuer`. This change adds their caps, their tests and their docs rows.
 - A runner key on a session path and a session key on a runner path both answer 401 bad-proof.
 - The session paths serve job claims only. A namespace pool with the sweep purpose is refused.
 - Upload caps, a log sequence rule, the Dustpan-Content-SHA256 check, and one plan commit with a stored result.
@@ -63,10 +63,10 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - runner.SweepClaimer is a port with no implementation. (`pkg/runner/store.go:244`)
 - The runnerapi config holds the sweep claimer. (`internal/api/runnerapi/runnerapi.go:61`)
-- The protocol package mentions the session key. (`pkg/runner/protocol/protocol.go:95`)
+- The protocol package mentions the session key. (`pkg/runner/protocol/protocol.go:115`)
 - ErrSessionWaitPassed exists in the runner package. (`pkg/runner/runner.go:100`)
 - RecordClaim is a store port method. (`pkg/runner/store.go:153`)
-- The job token credential kind exists. (`pkg/identity/identity.go:113`)
+- The job token credential kind exists. ((read only) `pkg/identity/identity.go` line 113)
 
 ## Owner decisions that apply
 
