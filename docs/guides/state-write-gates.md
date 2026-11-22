@@ -154,11 +154,12 @@ TFE-compatible API. They keep their earlier behavior. The
 `unchecked` list of the effective value names them (see
 [Check that the gates are on](#check-that-the-gates-are-on)).
 
-A write with the token of a job passes the gates only in two cases. The job
-decided the change before it started, so a phase that passed the apply decision
-writes to a unit of its own job with no gate. Each other phase takes only the
-lock of its plan. Each other write with a job token is denied, also a write to a
-unit that the job does not hold. The access limits still hold for a job token.
+A write with the token of a job is refused with `403`, unless it is one of two
+writes. The first is the lock or lease of the plan of a phase that did not pass
+the apply decision. The second is a write to a unit of its own job by a phase
+that passed the apply decision. The gates are not checked for either write. The
+access limits still hold for a job token. Each other write with a job token is
+denied, also a write to a unit that the job does not hold.
 
 The server cannot evaluate a gate for a job yet. So an enforced gate at
 `state.write` refuses the start of a job on its unit, and it also refuses each
@@ -374,6 +375,20 @@ Then `pulumi cancel` works again. The audit log records each change of a gate.
 The server log has the line `state write refused` with the unit, the error
 code and the ID of the decision record. The audit log has a `denied` entry
 with the action of the write and the unit (see the [audit log](audit-log.md)).
+
+### A job token refusal
+
+A job token write that the rules above deny answers `403` with the code
+`gate.denied`. The text is the same for each job token denial:
+
+```text
+The credential of the caller may not make this write.
+```
+
+The text does not name the unit or the phase. The refusal has no ID of a
+decision record. The server log line `state write refused` gives the unit and
+the code. The audit log has a `denied` entry for the write (see the
+[audit log](audit-log.md)).
 
 The tool-neutral inventory API answers `{"code": <status>, "message": "..."}`
 with the same message text. It answers 403 for a deny or an access limit, 409 for
