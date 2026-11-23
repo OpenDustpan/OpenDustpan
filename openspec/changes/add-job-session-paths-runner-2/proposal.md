@@ -1,5 +1,5 @@
 ---
-version: 12
+version: 13
 ---
 
 Issue: #982, #1026.
@@ -33,13 +33,13 @@ Evidence for the claims above:
 
 ## What Changes
 
-Most of the plan paths and session routes are already on main. This change adds only what main lacks. After the re-check against main 18f6d4d3d, the gaps are the phase caps of the log, the hostile tests of the plan caps and the sweep pool, and the docs rows for the caps.
+Most of the plan paths and session routes are already on main. This change adds only what main lacks. After the re-check against main 18f6d4d3d, the gaps are the phase caps of the log, the hostile tests of the plan caps and of a sweep-purpose pool at the session paths, and the docs rows for the caps.
 
 - Main already has the session routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go, PathSession* in pkg/runner/protocol/protocol.go:75-117), with tests in internal/api/runnerapi/session_test.go and internal/api/runnerapi/session_guard_test.go.
 - Main already routes and tests the three plan paths: PathSessionPlanUpload, PathSessionPlanCommit and PathSessionPlanPart, through `planRoutes` (internal/api/runnerapi/plan.go:22-47, called from `buildRoutes` in internal/api/runnerapi/routes.go:63). Their tests are in internal/api/runnerapi/plan_test.go (TestPlanUploadAndCommit, TestPlanCommitIsChecked, TestPlanRoutesWithALostClaim, TestPlanRoutesNeedTheKeyOfTheSession). The docs rows are at docs/reference/runner-api.md:170-172 and the e2e step is e2e/path_runner_apply_test.go. This change does not route them again.
 - The server refuses a log step with more than `protocol.MaxLogChunksPerStep` chunks (internal/api/runnerapi/session.go:557-575). `protocol.MaxLogBytesPerStep`, `protocol.MaxLogChunksPerPhase` and `protocol.MaxLogBytesPerPhase` (pkg/runner/protocol/protocol.go:156-162) are declared and the server does not enforce them: only the launcher checks the step cap (the log writer of the launcher run package). This change adds the server check of the three limits, in the transaction of the chunk write, with hostile tests.
 - A runner key on a session path and a session key on a runner path both answer 401 bad-proof. Main has tests for the plan paths (TestPlanRoutesNeedTheKeyOfTheSession); this change adds the same hostile test for the log and step paths.
-- The session paths serve job claims only. Main refuses a sweep claim at the exchange (TestSweepExchangeIsRefused, internal/api/runnerapi/session_guard_test.go:337). This change adds the hostile test for a namespace pool with the sweep purpose.
+- The session paths serve job claims only. Main refuses a sweep claim at the exchange (TestSweepExchangeIsRefused, internal/api/runnerapi/session_guard_test.go:337). This change adds the hostile test that a pool with the sweep purpose gets no job session. It does not refuse the sweep purpose on a pool: main has no installation (operator) pool, and namespace pools with the sweep purpose are a working feature of the scans (see "Not decided here" under the owner decision).
 - A plan commit follows ADR 131 decision 13. A repeat with the same parts and hashes under the same claim answers 204. Other parts after a commit answer `conflict`. Main already does this (the CommitPlan method of the job plan recorder port; TestPlanUploadAndCommit expects 204 for the second commit). This change adds no new error code.
 - Entries in docs/reference/runner-api.md for the log and plan caps (per phase and per step).
 
@@ -82,6 +82,8 @@ Each fact names its file, line and function on main. The change specifies only t
 The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
 
 - **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+
+Not decided here: main has no installation (operator) pool, and every pool belongs to a namespace (`pkg/runner/runner.go:232-236`). Main creates and uses namespace pools with the sweep purpose in the unmanaged scans and in the conformance suite. A refusal in the pool admin API or in `Pool.Validate` would stop that feature. So this change adds no refusal of the sweep purpose on a pool. The session paths already refuse a claim of a sweep-purpose pool. The refusal of the owner decision waits for an installation pool, and the owner decides the order. The question is in the decision queue.
 
 ## ADR check
 
@@ -131,7 +133,7 @@ none
 
 Questions considered and answered:
 
-- Can a sweep-purpose pool reach the job session paths? No. Owner decision, 13 Nov 2026 (queue P14), with ADR 130 decision 3: claim kinds come from the pool, and a namespace pool with the sweep purpose is refused.
+- Can a sweep-purpose pool reach the job session paths? No. Owner decision, 13 Nov 2026 (queue P14), with ADR 130 decision 3: claim kinds come from the pool, and a pool with the sweep purpose gets no job session. The refusal of the sweep purpose on a namespace pool is not part of this change.
 - Where do the source paths go? Out of this change: the source pipeline of ADR 135 has no adapter on main. A later change adds them after the pipeline lands.
 - Does the Idempotency-Key rule apply? No. ADR 210 decision 2 keeps runner paths outside the tool-neutral API; the replay rule of ADR 131 decision 13 applies.
 - Who routes the credentials path? `add-job-session-paths-runner-token-issuer`. This change adds no credentials route and no issue logic.
