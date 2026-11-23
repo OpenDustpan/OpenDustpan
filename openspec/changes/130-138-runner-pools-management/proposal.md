@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #3929. This change replaces the first cut of `130-138-runner-pools-management`. Main already serves the pool, join-token, drain and retire routes, and the guide `docs/guides/runner-pools.md` shows them with curl. The one missing part is a CLI command to list pools.
@@ -30,7 +30,7 @@ Evidence for the claims above:
 ## What Changes
 
 - The NEW file `internal/cli/runner_pools.go` holds the command `opendustpan runner pools list`.
-- The command table in `cmd/opendustpan/commands.go` and the reference table in `internal/cli/reference.go` get one row each.
+- The command table in `cmd/opendustpan/commands.go` and the reference table in `internal/cli/reference.go` get one row each. The usage text in `internal/cli/client/client.go` gets one line, and the generated `docs/reference/configuration.md` is regenerated.
 - `docs/guides/runner-pools.md` shows the command in the section "List the pools".
 
 Out of scope: any new route, field, error code, store change or API change; create, patch, delete, drain and retire commands.
@@ -46,6 +46,7 @@ Out of scope: any new route, field, error code, store change or API change; crea
 ## ADR check
 
 - ADR 130 (runner pools, owner-tagged): this change adds no behavior of a pool. Quote: "A pool has a purpose that never changes (owner)." The command only reads.
+- ADR 250 (defense in depth): step 5 writes a denial to the audit log. The server makes each denial of an action and writes that record. A client-side usage error in the CLI denies no action, so design.md states that these refusals are unaudited by design.
 - ADR 17: "Give every feature a REST API" is met; the command is a client of the existing API.
 
 ## Open questions

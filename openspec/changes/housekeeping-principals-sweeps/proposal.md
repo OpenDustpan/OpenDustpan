@@ -23,7 +23,9 @@ Evidence for the claims above:
 
 ## What Changes
 
-- NEW: each of these housekeeping services takes its principal and authorizes with the authorizer before it acts: the artifact sweep, the reconcile of jobs, the cleanup of saved views, the retention of history, the locks of local users, the reaper of agent runs, the sweep of superseded checkpoint blobs and the sweep of blobs of a workspace.
+- NEW: each of these housekeeping services takes its principal and authorizes with the authorizer before it acts: the artifact sweep, the reconcile of jobs, the cleanup of saved views, the retention of history, the locks of local users, the reaper of agent runs, the sweep of superseded checkpoint blobs and the sweep of blobs of a workspace. Each one checks the action of its row in the table "Roles of the housekeeping principals" of part 1 on the object of the work: a `server:*` action on `@server`, and the actions `unit:redact`, `view:delete`, `job:reconcile` and `namespace:manage-agent-runs` on the unit, the view or the namespace that the run changes. The grants on the namespaces come from part 1 (the namespace creation writes them).
+- NEW: the job service checks the action `job:reconcile` of part 1 for each change that the reconcile of jobs makes (owner, 2026-11-22). The reconcile principal holds no start action, so `reconcileAction` stops being the check and stays only as the name of the effect in the audit entry.
+- NEW: the reaper checks `namespace:manage-agent-runs` on the namespace of an orphan run and `server:sweep-agent-reveals` on `@server` for the sweep of expired reveals, as two checks that stand alone.
 - NEW: the audit entry and the run record of each of these runs name its principal.
 - NEW: a refused run changes nothing and writes an audit entry with the outcome `denied`.
 - The wiring in `pkg/dustpan/dustpan.go` passes each principal to its service at construction.
@@ -68,9 +70,9 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 
 **ADR 370: Housekeeping principals replace the namespace service principal** (owner-tagged (all decisions)).
 
-- Decisions that apply: 2 (current), 3 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Decisions that apply: 2 (current), 3 (current, amended: "the install step and each namespace creation").
+- Changed by: ADR 394 changes decision 3 (owner, 2026-11-22). Chain to the end: ADR 394.
+- Current rule: this ADR, with ADR 394.
 - Quote: "The record of each run names it."
 - Quote: "The install step writes the grants of each housekeeping principal as stored grants, with a creator and a time."
 - Quote: "A revoke of the grant of one housekeeping principal stops only its own work, and the server writes the denial to the audit log."
@@ -92,6 +94,9 @@ none
 
 Questions considered and answered:
 
+- Does the reconcile of jobs hold the start actions of the jobs it continues? No. The job service checks a NEW action `job:reconcile` (owner, 2026-11-22, option B). Option A (hold the five start and cancel actions) was not chosen, because a leaked credential of the principal could start a destroy. Part 1 makes the action and the role. Design decision 4.
+- Which actions do the sweeps without an action on main hold? The six NEW narrow actions of part 1 (owner, 2026-11-22, option A). Design decision 5.
+- How do the five per-namespace purposes reach a namespace? Through a grant on each namespace, which part 1 writes at the namespace creation (owner, 2026-11-22, option C). These purposes do not depend on `access.installationGrantsReachNamespaces`. Design decision 6.
 - Which purposes are in this part? The eight of the design document ("Callers on main") that touch no file of the access token, identity or sign-in packages. Part 3 has the other three.
 - Is `@server` removed? No. It stays as the object of a grant on the installation. A run never acts as `@server`.
 
