@@ -4435,3 +4435,27 @@ decisions:
   accepted_artifact: "docs/adr/0394-housekeeping-grants-follow-each-namespace-and-each-sweep-has-its-own-action.md"
   evidence:
   - "docs/adr/0394-housekeeping-grants-follow-each-namespace-and-each-sweep-has-its-own-action.md"
+- id: "adr-0395"
+  title: "ADR 395: A deny gate also stops a job-token write"
+  decision: "The project owner decided decision 1 on 22 November 2026: option 1, yes. The product manager derived decisions 2 to 4 from it on 23 November 2026. The owner has not reviewed them.\n1. **A deny gate stops a job token (owner, 2026-11-22).** A `deny` gate at `state.write` refuses a job-token write. This holds when the job model allows the write. The gates run after `jobTokenWrite` allows the write. No rule passes a `deny` gate for a job token.\n2. **A decision record (PM, derived, 2026-11-23).** A job-token write that reaches the gates writes a decision record. The record has the fence of its namespace, as for a person. A job token has no break-glass pass.\n3. **The job model stays first (PM, derived, 2026-11-23).** A write that the job model refuses is refused with `identity.ErrDenied` before any gate runs. The gates cannot allow a write that the job model refuses.\n4. **The gate is the way out (PM, derived, 2026-11-23).** A person who wants a job to write again edits or removes the gate. The edit needs the actions and the fresh authentication of ADR 224 decision 12."
+  reason: "ADR 335 decision 1 says that a deny gate on a cancel or a force-unlock stays. It names those two writes. It does not name a write with a job token. On main, `Evaluate` in `pkg/gate/service.go` returns `jobTokenWrite` for a job token before any gate runs. `evaluateStateWrite` is not called, and no decision record is written. A `deny` gate cannot stop a running job. An administrator can only cancel the job."
+  scope:
+  - "pkg/gate/service.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-23"
+  accepted_artifact: "docs/adr/0395-a-deny-gate-also-stops-a-job-token-write.md"
+  evidence:
+  - "docs/adr/0395-a-deny-gate-also-stops-a-job-token-write.md"
+- id: "adr-0396"
+  title: "ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors"
+  decision: "1. **Sweeps run on the team's runners (owner, 2026-11-23).** A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access. ADR 164 decision 1 and ADR 343 decision 3 say so, and main implements it. The line \"a sweep never runs on user runners\" no longer holds. The answer of 13 November 2026 about an installation pool no longer holds. The server has no installation sweep pool. The pool management API accepts the sweep purpose on a pool of a namespace. It applies the same rules as for any other purpose. The owner answered: \"Sweeps must run on the user's own runners as we most recently re-designed it.\"\n2. **The CLI does not audit a client-side refusal (owner, 2026-11-23).** The owner answered: \"Exempt client-side refusals, but document this\". A refusal that the CLI makes before it sends any request is a usage error. It has no audit entry. The server audits each call that reaches it. ADR 250 step 5 applies to the audit log of the server. The user guide of runner pools says this. The security section of `CLAUDE.md` says this too."
+  reason: "The change `130-138-runner-pools-management` and the changes that copy its owner line stopped on two questions. The product manager put them to the project owner. - On 13 November 2026 the owner answered queue item P14. The answer said that only an installation pool may have the sweep purpose, never a pool of a namespace. It kept an older line, \"a sweep never runs on user runners\". ADR 164 and ADR 343 put a sweep on the team's runner, with the read-only identity of its host. The two did not fit. The pool management API refused the sweep purpose on a pool of a namespace."
+  scope:
+  - "CLAUDE.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-23"
+  accepted_artifact: "docs/adr/0396-sweeps-run-on-the-teams-own-runners-and-the-cli-does-not-audit-its-own-usage-errors.md"
+  evidence:
+  - "docs/adr/0396-sweeps-run-on-the-teams-own-runners-and-the-cli-does-not-audit-its-own-usage-errors.md"

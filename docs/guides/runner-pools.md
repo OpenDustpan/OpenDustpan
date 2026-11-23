@@ -106,3 +106,7 @@ curl -sS -X POST https://dustpan.example.com/api/dustpan/v1/namespaces/acme/runn
 A caller who cannot read the namespace gets `404`. A caller who can read the
 namespace but lacks the action of the route gets `403`. A change writes one
 audit entry. The [audit log guide](audit-log.md) shows how to read it.
+
+The CLI refuses some input before it sends a request, for example a pool name
+that is not valid. This is a usage error. It has no audit entry. The server
+audits each call that reaches it.

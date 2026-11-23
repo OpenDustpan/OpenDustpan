@@ -34,11 +34,11 @@ When the server releases a workspace lock, the server SHALL commit the unlockWor
 
 ### Requirement: lockWorkspace committed lock survives
 
-While a workspace lock from lockWorkspace is committed, the server SHALL keep the lock held with holder identity until release or fenced takeover.
+While a workspace lock from lockWorkspace is committed, the server SHALL keep the lock held with holder identity until release or force-unlock. The lock has no expiry.
 
-#### Scenario: Takeover of lockWorkspace lock after instance loss
+#### Scenario: Committed lockWorkspace lock stays held after instance loss
 - **WHEN** the holder instance is lost after the lockWorkspace commit
-- **THEN** another instance takes over the lockWorkspace lock with fencing after expiry
+- **THEN** the lock stays held on every instance and a force-unlock releases it
 
 ### Requirement: writeStateVersion idempotent retry
 
