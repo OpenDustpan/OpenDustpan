@@ -16,12 +16,46 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // Pool returns the connection pool of s, so a test can read or change rows
 // with direct SQL.
 func Pool(s *Store) *pgxpool.Pool {
 	return s.pool
+}
+
+// StateCommitForTest is the unexported fenced transaction guard of the
+// workspace store, so a black-box test can commit through it.
+type StateCommitForTest struct {
+	commit stateCommit
+}
+
+// NewStateCommitForTest returns the guard that commits state and lock writes
+// of s under fence.
+func NewStateCommitForTest(s *Store, fence namespace.Fence) StateCommitForTest {
+	return StateCommitForTest{commit: newStateCommit(s, fence)}
+}
+
+// FinalizeStateVersion commits sv with the guard.
+func (c StateCommitForTest) FinalizeStateVersion(
+	ctx context.Context, sv workspace.StateVersion,
+) error {
+	return c.commit.FinalizeStateVersion(ctx, sv)
+}
+
+// AcquireLock takes the lock of id with the guard.
+func (c StateCommitForTest) AcquireLock(
+	ctx context.Context, id workspace.ID, lock workspace.Lock,
+) (workspace.Workspace, error) {
+	return c.commit.AcquireLock(ctx, id, lock)
+}
+
+// ReleaseLock releases the lock of id with the guard.
+func (c StateCommitForTest) ReleaseLock(
+	ctx context.Context, id workspace.ID, holder, lockID string, at time.Time,
+) (workspace.Workspace, error) {
+	return c.commit.ReleaseLock(ctx, id, holder, lockID, at)
 }
 
 // CheckSettingFence runs the comparison of the fence and the namespace that

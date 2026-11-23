@@ -405,7 +405,13 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 
 		var writeErr error
 
-		known, writeErr = s.writeCheckpoint(ctx, unitStateTx{q: q, logger: s.logger}, cp, stackID, row)
+		known, writeErr = s.writeCheckpoint(
+			ctx,
+			unitStateTx{q: q, logger: s.logger, retryFinalize: false},
+			cp,
+			stackID,
+			row,
+		)
 
 		return writeErr
 	})

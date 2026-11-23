@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -20,5 +20,5 @@
 - [ ] 3.1 Wrap state version commit and current pointer in one fenced transaction. The task adds the NEW top-level test `TestStateCommit` in a `_test.go` file of `internal/store/postgres`, so that the Check runs it. Check: `go test -race ./internal/store/postgres/ -run TestStateCommit -timeout 60m`
 - [ ] 3.2 Wrap lock acquire and release in one fenced transaction with holder identity. The task adds the NEW top-level tests `TestLockAcquire`, `TestUnlock` in a `_test.go` file of `internal/store/postgres`, so that the Check runs them. Check: `go test -race ./internal/store/postgres/ -run TestLockAcquire|TestUnlock -timeout 60m`
 - [ ] 3.3 Wire the atomic paths through the existing TFE routes with existing gates. Check: GET /health/ready plus `tofu apply` against the real CLI on PostgreSQL with an access token.
-- [ ] 3.4 Document the retry behavior after a failed write in NEW file docs/guides/database-outage-recovery.md. Check: the docs page for outage recovery states the atomic commit behavior. `make docs-lint` passes on each edited guide.
+- [x] 3.4 Document the retry behavior after a failed write in NEW file docs/guides/database-outage-recovery.md. Check: the docs page for outage recovery states the atomic commit behavior. `make docs-lint` passes on each edited guide.
 - [ ] 3.5 Pass the full check suite. Check: `make check` with zero findings. Confirmed by: CI
