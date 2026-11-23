@@ -75,7 +75,7 @@ func runJobSessionLogCap(t *testing.T, store e2e.Store) {
 		return launcher.PutLog(ctx, t, pathOf(protocol.PathSessionLog, step, 0), chunk)
 	})
 
-	now := time.Now().UTC()
+	now := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
 	wantNoContent(t, "end the step", func() (int, []byte) {
 		return launcher.Post(ctx, t, pathOf(protocol.PathSessionStepEnd, step, 0), protocol.StepEnd{
 			ExitCode: 0, StartedAt: now, FinishedAt: now.Add(time.Second), LogChunks: 1, LogSHA256: sum,
