@@ -233,6 +233,32 @@ func checkRefusalJob(t *testing.T, err error, wantJob string) {
 	}
 }
 
+// TestStateWriteClaimlessDenialIsNotWrapped checks that GuardStateWrite
+// returns the job-model denial of a job token with no claim unchanged: the
+// error is identity.ErrDenied and is not a *RefusalError, so a refusal with
+// no claim never becomes a job-model refusal.
+func TestStateWriteClaimlessDenialIsNotWrapped(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+
+	w := swWrite(t, "runner", "web", gate.OperationLock)
+	w.PlanLock = true
+
+	_, err := e.svc.GuardStateWrite(t.Context(), w)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("GuardStateWrite() = %v, want identity.ErrDenied from the job model", err)
+	}
+
+	if refusal, ok := errors.AsType[*gate.RefusalError](err); ok {
+		t.Fatalf("GuardStateWrite() = %+v, want the job-model denial unchanged, not a *RefusalError", refusal)
+	}
+
+	if recs := e.records(t); len(recs) != 0 {
+		t.Fatalf("records = %d, want none: the job model refused before the gates", len(recs))
+	}
+}
+
 // nilRefusalFences is a fence source whose error is a typed-nil
 // *RefusalError.
 type nilRefusalFences struct{}
