@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -11,14 +11,14 @@
 ## 2. Behavior and docs
 
 - [ ] 2.1 Check the step and phase caps in the chunk transaction of the job recorder (job.DurableRecorder.AppendLog), with the limits of pkg/runner/protocol/protocol.go:156-162, and map a breach to invalid in internal/api/runnerapi/session.go (existing). A refused chunk keeps no bytes. Check: `go test ./internal/api/runnerapi/ -run 'TestSession|TestLogPhaseCap' -count=1` passes
-- [ ] 2.2 Add rows to docs/reference/runner-api.md for the step and phase caps of the log and the plan part caps. Main has the rows for the session paths (:160-172) and the plan commit text (:226-236). Check: `make docs-lint` passes
+- [x] 2.2 Add rows to docs/reference/runner-api.md for the step and phase caps of the log and the plan part caps. Main has the rows for the session paths (:160-172) and the plan commit text (:226-236). Check: `make docs-lint` passes
 - [ ] 2.3 Add the hostile test `TestSessionHostileNamespaceSweepPool` in internal/api/runnerapi/session_hostile_test.go (NEW): a claim of a pool with the sweep purpose gets no job session (main refuses it at internal/api/runnerapi/session_guard_test.go:337). Make no change to the pool admin API, to `Pool.Validate` or to any store: main has no installation pool, and the refusal of the sweep purpose waits for it. Check: `go test ./internal/api/runnerapi/ -run TestSessionHostileNamespaceSweepPool -count=1` passes
 - [ ] 2.4 Make the store enforce the log caps in the chunk transaction: add NEW `job.LogCaps` with the method NEW `PlanChunk` in pkg/job/logcaps.go (NEW). internal/api/runnerapi builds it from the `protocol.MaxLogBytesPerStep`, `protocol.MaxLogChunksPerPhase` and `protocol.MaxLogBytesPerPhase` constants and gives it to the recorder. internal/store/jobstore/record.go (existing, near :134) calls NEW `LogCaps.PlanChunk`, not `job.PlanChunk`. pkg/runner/protocol imports no new package. Check: `go test ./internal/store/... ./pkg/job/... -run 'Log|Chunk' -count=1` passes
 - [ ] 2.5 Write one audit entry through the shared denial limiter (internal/api/refusal) for each log cap refusal in internal/api/runnerapi/session.go (existing, near :616), with the NEW action name `runner.log.refused`, the claim, the job and the cap that failed, and no chunk bytes. Add `TestLogCapRefusalIsAudited` in internal/api/runnerapi/session_hostile_test.go (NEW): ten refusals in one window write one entry and the next entry carries the count. Check: `go test ./internal/api/runnerapi/ -run TestLogCapRefusalIsAudited -count=1` passes
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Set the round-trip budgets of each request flow that the change changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request, or the pull request body says that the cap check adds no round trip.
+- [x] 3.1 Set the round-trip budgets of each request flow that the change changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request, or the pull request body says that the cap check adds no round trip.
 
 ## 4. Definition of done
 

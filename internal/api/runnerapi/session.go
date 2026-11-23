@@ -15,8 +15,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -612,10 +614,15 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	if err = h.recorder.AppendLog(ctx, sp.claim, name, seq, bytes.NewReader(chunk)); err != nil {
-		if errors.Is(err, job.ErrInvalid) {
-			// The cap or the rule of the sequence failed. The answer names the
-			// rule; the log holds the counters and the cap that failed.
+	err = h.recorder.AppendLogCapped(ctx, sp.claim, job.CappedChunk{
+		Step: name, Seq: seq, Body: bytes.NewReader(chunk), Caps: sessionLogCaps(),
+	})
+	if err != nil {
+		// Only a cap of the log gets the cap message and an audit entry. A
+		// chunk out of order or with another hash keeps its own message.
+		if capErr, ok := errors.AsType[*job.LogCapError](err); ok {
+			h.recordLogCapRefusal(r, c, &sp, name, capErr)
+
 			err = fmt.Errorf("%w: the log of the step or of the phase is at its cap", runner.ErrInvalid)
 		}
 
@@ -625,6 +632,43 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// actionLogRefused is the action of the audit entry of a log chunk that a cap
+// of the log refused.
+const actionLogRefused identity.Action = "runner.log.refused"
+
+// sessionLogCaps returns the caps of the log of a job session, from the limits
+// of the protocol. The recorder checks them in the transaction that reserves a
+// chunk.
+func sessionLogCaps() job.LogCaps {
+	return job.LogCaps{
+		ChunksPerStep: protocol.MaxLogChunksPerStep, BytesPerStep: protocol.MaxLogBytesPerStep,
+		ChunksPerPhase: protocol.MaxLogChunksPerPhase, BytesPerPhase: protocol.MaxLogBytesPerPhase,
+	}
+}
+
+// recordLogCapRefusal writes the audit entry of a log chunk that the cap of
+// capErr refused, through the shared denial limiter: for one runner and one
+// namespace, the first refusal of a window writes an entry and the limiter
+// counts the others. The entry names the claim, the job, the step and the cap.
+// It never holds the bytes of the chunk.
+func (h *Handler) recordLogCapRefusal(
+	r *http.Request, c *call, sp *sessionPhase, step string, capErr *job.LogCapError,
+) {
+	p := identity.Principal{
+		Subject: c.session.Runner, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "",
+		JobID: string(sp.claim.Job),
+	}
+
+	reason := fmt.Sprintf("log chunk refused: the cap %s of %d; claim %s token %d; job %s; step %s",
+		capErr.Cap, capErr.Limit, c.session.Operation, c.session.Token, sp.claim.Job, step)
+
+	h.refusals.Record(r.Context(), r, p, refusal.Denial{
+		Action: actionLogRefused, Object: identity.NamespaceObject(sp.pool.Namespace), Reason: reason,
+		ReasonWithin: nil, Window: 0,
+	})
 }
 
 // finish ends the phase with the outcome of the launcher. A second finish

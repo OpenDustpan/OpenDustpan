@@ -12,7 +12,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/runner/protocol"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -132,7 +131,12 @@ func (s *Store) ReserveLogChunk(
 			template = &newLog.Log
 		}
 
-		plan, err = protocol.SessionLogCaps().PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
+		// The caps of the log are checked here, against the job row of this
+		// transaction, so a refused chunk keeps no row and no counter.
+		// Defense in depth: the session handler refuses a chunk number at the
+		// step chunk cap too; this check stays so that it does not rely on the
+		// handler, and it is the only check of the byte and phase caps.
+		plan, err = c.Caps.PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
 		if err != nil {
 			return err
 		}

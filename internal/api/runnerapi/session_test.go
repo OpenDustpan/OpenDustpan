@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -766,23 +767,50 @@ func checkStepEnd(t *testing.T, l *launcher, chunks [][]byte) {
 	l.expect(t, "end", l.post(path, end), 204, "")
 }
 
+// logSeedOf is the log counter that a cap case seeds for one step.
+type logSeedOf struct {
+	step   string
+	chunks int
+	bytes  int64
+}
+
+// seedSteps returns n seeded steps of the phase. Each one counts the given
+// number of chunks and size bytes.
+func seedSteps(n, chunks int, size int64) []logSeedOf {
+	out := make([]logSeedOf, 0, n)
+	for i := range n {
+		out = append(out, logSeedOf{step: "seeded-" + strconv.Itoa(i), chunks: chunks, bytes: size})
+	}
+
+	return out
+}
+
 // TestLogPhaseCapStoresNothing proves the caps of the log in the reserve of a
 // chunk: a chunk that passes the byte cap of its step, or the chunk or byte
 // cap of the phase, is refused with invalid and the server keeps no byte of
-// it. The reserve runs the shared rule of the store adapters.
+// it. The reserve runs the shared rule of the store adapters with the caps
+// that the handler gives. In a phase case, each seeded step is below the caps
+// of a step and the step of the chunk has no log, so only the phase check can
+// refuse the chunk. The audit entry names the cap that refused it.
 func TestLogPhaseCapStoresNothing(t *testing.T) {
 	t.Parallel()
 
+	// The fewest steps below the step caps whose sum reaches the phase cap.
+	chunkSteps := protocol.MaxLogChunksPerPhase/(protocol.MaxLogChunksPerStep-1) + 1
+	byteSteps := protocol.MaxLogBytesPerPhase/(protocol.MaxLogBytesPerStep-1) + 1
+
 	cases := []struct {
-		name   string
-		step   string
-		chunks int
-		bytes  int64
-		seq    int
+		name string
+		seed []logSeedOf
+		seq  int
+		cap  job.LogCap
 	}{
-		{"step byte cap", "init", 1, protocol.MaxLogBytesPerStep, 1},
-		{"phase chunk cap", "plan", protocol.MaxLogChunksPerPhase, 0, 0},
-		{"phase byte cap", "plan", 1, protocol.MaxLogBytesPerPhase, 0},
+		{"step byte cap", []logSeedOf{{"init", 1, protocol.MaxLogBytesPerStep}}, 1, job.LogCapStepBytes},
+		{
+			"phase chunk cap", seedSteps(chunkSteps, protocol.MaxLogChunksPerStep-1, 0), 0,
+			job.LogCapPhaseChunks,
+		},
+		{"phase byte cap", seedSteps(byteSteps, 1, protocol.MaxLogBytesPerStep-1), 0, job.LogCapPhaseBytes},
 	}
 
 	for _, b := range backends() {
@@ -790,20 +818,37 @@ func TestLogPhaseCapStoresNothing(t *testing.T) {
 			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				s := newSessionEnv(t, b)
-				s.jobs.seedLog(tc.step, tc.chunks, tc.bytes)
-				l := s.launch()
-
-				status, body := l.do(l.upload(logPath(tc.seq), []byte("x")))
-				if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
-					t.Fatalf("a chunk above the cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
-				}
-
-				if got := s.jobs.logChunks("init"); len(got) != 0 {
-					t.Fatalf("a refused chunk stored %d chunks", len(got))
-				}
+				checkCapStoresNothing(t, b, tc.seed, tc.seq, tc.cap)
 			})
 		}
+	}
+}
+
+// checkCapStoresNothing seeds the log counters, sends chunk seq of the step
+// init, and checks that the cap want refuses it with invalid, that no byte is
+// stored, and that one audit entry names the cap.
+func checkCapStoresNothing(t *testing.T, b backend, seeds []logSeedOf, seq int, want job.LogCap) {
+	t.Helper()
+
+	s, log := newAuditedSessionEnv(t, b, nil)
+	for _, seed := range seeds {
+		s.jobs.seedLog(seed.step, seed.chunks, seed.bytes)
+	}
+
+	l := s.launch()
+
+	status, body := l.do(l.upload(logPath(seq), []byte("x")))
+	if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+		t.Fatalf("a chunk above the cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
+	}
+
+	if got := s.jobs.logChunks("init"); len(got) != 0 {
+		t.Fatalf("a refused chunk stored %d chunks", len(got))
+	}
+
+	entries := log.logRefusals()
+	if len(entries) != 1 || !strings.Contains(entries[0].Reason, "the cap "+string(want)+" ") {
+		t.Fatalf("refusal entries = %+v, want one that names the cap %s", entries, want)
 	}
 }
 

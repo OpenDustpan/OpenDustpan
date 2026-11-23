@@ -208,7 +208,10 @@ the bytes that it received before it stores any of them, and answers
 `bad-proof` for another body. A step has at most 20,000 chunks and 256 MiB.
 All the steps of a phase have at most 100,000 chunks and 1 GiB. A new chunk
 that passes one of these caps gets `invalid`, and the server stores none of its
-bytes.
+bytes. The server writes an audit entry with the action `runner.log.refused` in
+the namespace of the pool. The entry names the claim, the job, the step and the
+cap, and never holds the bytes of the chunk. For one runner, the audit log
+keeps the first refusal of each window and counts the others in the next entry.
 
 The end of a step names the number of chunks and the SHA-256 of the whole log.
 The server compares both with the log that it stored, and answers `conflict`

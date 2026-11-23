@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -119,21 +121,23 @@ func (f *sessionJobs) EndStepChecked(
 }
 
 func (f *sessionJobs) AppendLog(_ context.Context, c job.PhaseClaim, step string, seq int, chunk io.Reader) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	return f.appendChunk(c, &fakeChunk{step: step, seq: seq, body: chunk, data: nil, caps: nil})
+}
 
-	f.calls = append(f.calls, fmt.Sprintf("log:%s:%d", step, seq))
+// AppendLogCapped checks the caps that the handler gives, with the shared rule
+// of the store adapters (job.LogCaps.PlanChunk).
+func (f *sessionJobs) AppendLogCapped(_ context.Context, c job.PhaseClaim, ch job.CappedChunk) error {
+	return f.appendChunk(c, &fakeChunk{step: ch.Step, seq: ch.Seq, body: ch.Body, data: nil, caps: &ch.Caps})
+}
 
-	if err := f.failure["log"]; err != nil {
-		return err
-	}
-
-	data, err := io.ReadAll(chunk)
-	if err != nil {
-		return fmt.Errorf("read chunk: %w", err)
-	}
-
-	return f.reserveLog(c, step, seq, data)
+// fakeChunk is one chunk that the fake reserves: its body, the bytes read from
+// it, and the caps of the call or nil.
+type fakeChunk struct {
+	step string
+	seq  int
+	body io.Reader
+	data []byte
+	caps *job.LogCaps
 }
 
 func (*sessionJobs) PutPlan(context.Context, job.PhaseClaim, []job.PlanUpload) (job.PlanRef, error) {
@@ -202,13 +206,35 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	}, nil
 }
 
+// appendChunk records the call, reads the body of ch and reserves it.
+func (f *sessionJobs) appendChunk(c job.PhaseClaim, ch *fakeChunk) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls = append(f.calls, fmt.Sprintf("log:%s:%d", ch.step, ch.seq))
+
+	if err := f.failure["log"]; err != nil {
+		return err
+	}
+
+	data, err := io.ReadAll(ch.body)
+	if err != nil {
+		return fmt.Errorf("read chunk: %w", err)
+	}
+
+	ch.data = data
+
+	return f.reserveLog(c, ch)
+}
+
 // reserveLog decides the chunk with the shared rule of the store adapters, so
 // a case of a cap sees the rule that the reserve runs in its transaction.
-func (f *sessionJobs) reserveLog(c job.PhaseClaim, step string, seq int, data []byte) error {
+func (f *sessionJobs) reserveLog(c job.PhaseClaim, ch *fakeChunk) error {
+	step, seq, data := ch.step, ch.seq, ch.data
 	j := f.logJob(c)
 	sum := sha256.Sum256(data)
 
-	reserve := job.ChunkReserve{Seq: seq, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))}
+	reserve := job.ChunkReserve{Seq: seq, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data)), Caps: ch.caps}
 	newLog := testLogRef("jlv-test", 0, 0)
 
 	lookup := func(_ string, at int) (job.ChunkRow, bool, error) {
@@ -224,7 +250,7 @@ func (f *sessionJobs) reserveLog(c job.PhaseClaim, step string, seq int, data []
 		}, true, nil
 	}
 
-	plan, err := protocol.SessionLogCaps().PlanChunk(&j, job.StepKey{Phase: c.Phase, Token: c.Claim.Token, Name: step},
+	plan, err := reserve.Caps.PlanChunk(&j, job.StepKey{Phase: c.Phase, Token: c.Claim.Token, Name: step},
 		reserve, newLog, lookup)
 	if err != nil {
 		return err
@@ -244,7 +270,8 @@ func (f *sessionJobs) reserveLog(c job.PhaseClaim, step string, seq int, data []
 }
 
 // logJob returns the job that the reserve of a chunk reads: the phase of the
-// claim with the steps of the fake, and the counters that the case seeded.
+// claim with the steps of the fake, the steps that a case seeded only, and the
+// counters that the case seeded.
 func (f *sessionJobs) logJob(c job.PhaseClaim) job.Job {
 	phases := make([]job.Phase, c.Phase+1)
 	for i := range phases {
@@ -254,8 +281,15 @@ func (f *sessionJobs) logJob(c job.PhaseClaim) job.Job {
 		}
 	}
 
-	steps := make([]job.StepRecord, 0, 2)
-	for _, name := range []string{"init", "plan"} {
+	names := []string{"init", "plan"}
+	for _, name := range slices.Sorted(maps.Keys(f.seed)) {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+
+	steps := make([]job.StepRecord, 0, len(names))
+	for _, name := range names {
 		steps = append(steps, job.StepRecord{
 			Name: name, Token: c.Claim.Token, ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{},
 			Log: f.logRef(name),

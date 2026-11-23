@@ -1,7 +1,8 @@
 //go:build e2e
 
-// This file covers the caps of the job session paths. A fake launcher opens a
-// job session with the handoff token of a claim, begins the first step, sends
+// This file covers the caps of the job session paths. The e2e launcher client
+// (e2e.FakeLauncher, from Env.OpenSession) opens a job session with the handoff
+// token of a claim, begins the first step, sends
 // a chunk at the step chunk cap, and gets invalid. It then stores chunk 0,
 // ends the step with one chunk, and the server holds the one chunk: the
 // refused chunk kept no bytes and moved no counter.

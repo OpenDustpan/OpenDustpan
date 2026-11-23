@@ -273,7 +273,7 @@ func TestEndStepRecord(t *testing.T) {
 
 // chunkOf returns the reserve of chunk seq with the content.
 func chunkOf(seq int, content string) job.ChunkReserve {
-	return job.ChunkReserve{Seq: seq, SHA256: sum(content), Size: int64(len(content))}
+	return job.ChunkReserve{Seq: seq, SHA256: sum(content), Size: int64(len(content)), Caps: nil}
 }
 
 // newLogRef returns the log version that a chunk 0 creates.
@@ -297,8 +297,8 @@ func TestPlanChunk(t *testing.T) {
 		return withSteps(openRec(token, openLog(chunks)))
 	}
 
-	tooBig := job.ChunkReserve{Seq: 0, SHA256: sum("a"), Size: job.MaxLogChunk + 1}
-	noHash := job.ChunkReserve{Seq: 0, SHA256: "", Size: 1}
+	tooBig := job.ChunkReserve{Seq: 0, SHA256: sum("a"), Size: job.MaxLogChunk + 1, Caps: nil}
+	noHash := job.ChunkReserve{Seq: 0, SHA256: "", Size: 1, Caps: nil}
 	none := job.ChunkPlan{Version: "", CreateLog: false, Insert: false, Duplicate: false}
 
 	tests := []struct {
@@ -386,38 +386,44 @@ func TestPlanChunkCaps(t *testing.T) {
 		prepare func(j *job.Job)
 		c       job.ChunkReserve
 		newLog  *job.LogRef
-		caps    job.LogCaps
+		caps    *job.LogCaps
 		want    error
+		// wantCap is the cap that a LogCapError names, or empty for none.
+		wantCap job.LogCap
 	}{
 		{
 			"a first chunk above the phase chunk cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
-			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: phaseCap, BytesPerPhase: roomy},
-			job.ErrInvalid,
+			&job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: phaseCap, BytesPerPhase: roomy},
+			job.ErrInvalid, job.LogCapPhaseChunks,
 		},
 		{
 			"a first chunk above the phase byte cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
-			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: phaseCap},
-			job.ErrInvalid,
+			&job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: phaseCap},
+			job.ErrInvalid, job.LogCapPhaseBytes,
 		},
 		{
 			"a chunk above the step chunk cap", targetStepCap, chunkOf(stepCap, "a"), nil,
-			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
-			job.ErrInvalid,
+			&job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
+			job.ErrInvalid, job.LogCapStepChunks,
 		},
 		{
 			"a chunk above the step byte cap", targetByteCap, chunkOf(1, "a"), nil,
-			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: 1, ChunksPerPhase: roomy, BytesPerPhase: roomy},
-			job.ErrInvalid,
+			&job.LogCaps{ChunksPerStep: roomy, BytesPerStep: 1, ChunksPerPhase: roomy, BytesPerPhase: roomy},
+			job.ErrInvalid, job.LogCapStepBytes,
 		},
 		{
 			"caps that are not positive", targetEmpty, chunkOf(0, "a"), newLogRef(),
-			job.LogCaps{ChunksPerStep: 0, BytesPerStep: 0, ChunksPerPhase: 0, BytesPerPhase: 0},
-			job.ErrInvalid,
+			&job.LogCaps{ChunksPerStep: 0, BytesPerStep: 0, ChunksPerPhase: 0, BytesPerPhase: 0},
+			job.ErrInvalid, "",
 		},
 		{
 			"a retry of a counted chunk at the step cap", targetStepCap, chunkOf(0, "a"), nil,
-			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
-			nil,
+			&job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
+			nil, "",
+		},
+		{
+			"no caps: the phase above every cap of a session takes a chunk", targetEmpty, chunkOf(0, "a"),
+			newLogRef(), nil, nil, "",
 		},
 	}
 
@@ -447,6 +453,15 @@ func TestPlanChunkCaps(t *testing.T) {
 			got, err := tt.caps.PlanChunk(j, key, tt.c, tt.newLog, lookup)
 			if !expect(err, tt.want) {
 				t.Fatalf("PlanChunk = %+v, %v; want %v", got, err, tt.want)
+			}
+
+			gotCap := job.LogCap("")
+			if capErr, ok := errors.AsType[*job.LogCapError](err); ok {
+				gotCap = capErr.Cap
+			}
+
+			if gotCap != tt.wantCap {
+				t.Fatalf("PlanChunk refused with the cap %q, want %q", gotCap, tt.wantCap)
 			}
 		})
 	}

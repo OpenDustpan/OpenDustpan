@@ -357,9 +357,10 @@ func (h *Handler) updatePool(w http.ResponseWriter, r *http.Request, c *call) {
 
 	next, changes := patch.apply(&old, h.now())
 
-	// A pool with a purpose that differs is refused as immutable by the
-	// store. A pool that already has the sweep purpose is refused here.
-	if refused := refuseSweepPurpose(next.Purpose); refused != nil && old.Purpose == next.Purpose {
+	// A namespace pool never gets or keeps the sweep purpose, whatever its old
+	// purpose. Defense in depth: the store refuses a change of the purpose as
+	// immutable too; this check stays so that it does not rely on that rule.
+	if refused := refuseSweepPurpose(next.Purpose); refused != nil {
 		h.writeError(ctx, w, ScopeAuthorized, refused)
 
 		return

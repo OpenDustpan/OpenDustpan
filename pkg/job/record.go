@@ -62,11 +62,14 @@ type NewPlan struct {
 }
 
 // ChunkReserve is one chunk of a log, as the store records it before the
-// blob exists: the number, the SHA-256 and the size of its plaintext.
+// blob exists: the number, the SHA-256 and the size of its plaintext. Caps are
+// the caps of the log that the reserve checks in its transaction; nil sets no
+// cap (see LogCaps.PlanChunk).
 type ChunkReserve struct {
 	Seq    int
 	SHA256 string
 	Size   int64
+	Caps   *LogCaps
 }
 
 // ChunkRow is the stored record of one chunk of a log version. Confirmed is
@@ -349,17 +352,6 @@ func ValidHash(h string) bool {
 	return true
 }
 
-// LogCaps bounds the log of one session: the chunks and the bytes of one step
-// and of all the steps of one phase. LogCaps.PlanChunk refuses a new chunk
-// that passes one of the caps with ErrInvalid. A caller passes a positive value for each
-// field; a cap that is not positive fails closed.
-type LogCaps struct {
-	ChunksPerStep  int
-	BytesPerStep   int64
-	ChunksPerPhase int
-	BytesPerPhase  int64
-}
-
 // PlanChunk decides the reserve of the chunk c of the log of the step k of j.
 // lookup reads the stored row of a chunk, and reports false when none exists.
 // newLog is the log version that a chunk 0 creates when the step has no log.
@@ -401,82 +393,6 @@ func PlanChunk(
 	}
 
 	return planNextChunk(log, k.Name, &c, row, ok)
-}
-
-// PlanChunk is the function PlanChunk with the caps of the log of a session.
-// A new chunk that passes a cap is ErrInvalid.
-func (caps LogCaps) PlanChunk(
-	j *Job, k StepKey, c ChunkReserve, newLog *LogRef,
-	lookup func(version string, seq int) (ChunkRow, bool, error),
-) (ChunkPlan, error) {
-	plan, err := PlanChunk(j, k, c, newLog, lookup)
-	if err != nil {
-		return plan, err
-	}
-
-	log, err := openLogOf(j, k)
-	if err != nil {
-		return ChunkPlan{}, err
-	}
-
-	var step logCount
-
-	if log != nil {
-		if !plan.Insert {
-			return plan, nil
-		}
-
-		step = logCount{chunks: log.Chunks, bytes: log.Size}
-	}
-
-	return plan, caps.check(k.Phase, c.Size, step, logTotals(j, k.Phase))
-}
-
-// logCount is the number of chunks and of bytes of one log or of the logs of
-// one phase.
-type logCount struct {
-	chunks int
-	bytes  int64
-}
-
-// logTotals returns the chunks and the bytes of the logs of the steps of the
-// phase at index phase of j. A step with no log counts nothing.
-func logTotals(j *Job, phase int) logCount {
-	var total logCount
-
-	if phase < 0 || phase >= len(j.Phases) {
-		return total
-	}
-
-	for i := range j.Phases[phase].Steps {
-		if l := j.Phases[phase].Steps[i].Log; l != nil {
-			total.chunks += l.Chunks
-			total.bytes += l.Size
-		}
-	}
-
-	return total
-}
-
-// check returns ErrInvalid when a new chunk of size bytes passes a cap. step is
-// the count of the log of the step before the chunk, and phase the count of
-// the logs of the phase with the index at before the chunk.
-func (caps LogCaps) check(at int, size int64, step, phase logCount) error {
-	switch {
-	case caps.ChunksPerStep <= 0 || caps.BytesPerStep <= 0 || caps.ChunksPerPhase <= 0 ||
-		caps.BytesPerPhase <= 0:
-		return fmt.Errorf("%w: the caps of the log are not positive", ErrInvalid)
-	case step.chunks >= caps.ChunksPerStep:
-		return fmt.Errorf("%w: the log of the step passes %d chunks", ErrInvalid, caps.ChunksPerStep)
-	case step.bytes+size > caps.BytesPerStep:
-		return fmt.Errorf("%w: the log of the step passes %d bytes", ErrInvalid, caps.BytesPerStep)
-	case phase.chunks >= caps.ChunksPerPhase:
-		return fmt.Errorf("%w: the logs of phase %d pass %d chunks", ErrInvalid, at, caps.ChunksPerPhase)
-	case phase.bytes+size > caps.BytesPerPhase:
-		return fmt.Errorf("%w: the logs of phase %d pass %d bytes", ErrInvalid, at, caps.BytesPerPhase)
-	default:
-		return nil
-	}
 }
 
 // valid reports whether c has a number below MaxLogChunks, a size up to
