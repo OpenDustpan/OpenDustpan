@@ -4,6 +4,7 @@ Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 
 Changed by:
 
+- ADR 395 extends decision 1: a deny gate also refuses a write with a job token.
 - ADR 377 extends decision 7: the ADR of the external Cedar service adapter.
 
 Changes:
