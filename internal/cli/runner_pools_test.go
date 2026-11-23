@@ -146,21 +146,59 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 	t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
 	t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
 
-	for name, answer := range map[string]string{
-		"hostile pool ID":    `{"pools":[` + poolAnswer("../other", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
-		"missing pool ID":    `{"pools":[{"name":"jobs","purpose":"jobs","concurrency":1}]}`,
-		"no pool prefix":     `{"pools":[` + poolAnswer("xx-0123456789abcdefghij", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
-		"bare pool prefix":   `{"pools":[` + poolAnswer("rp-", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
-		"pool ID with space": `{"pools":[` + poolAnswer("rp-a b", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
-		"pool ID too long": `{"pools":[` + poolAnswer("rp-"+strings.Repeat("a", 62), "jobs", "jobs", 1,
-			`["kubernetes"]`) + `]}`,
-		"concurrency too big": `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", runner.MaxConcurrency+1, `["kubernetes"]`) + `]}`,
-		"null answer":         `null`,
-		"unknown purpose":     `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "other", 1, `["kubernetes"]`) + `]}`,
-		"hostile name":        `{"pools":[` + poolAnswer(testPoolIDJobs, "Bad name", "jobs", 1, `["kubernetes"]`) + `]}`,
-		"bad concurrency":     `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 0, `["kubernetes"]`) + `]}`,
-		"unknown isolation":   `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["unknown"]`) + `]}`,
-		"isolation not text":  `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `[1]`) + `]}`,
+	const (
+		invalidID          = "invalid runner pool in the server answer: run opendustpan runner pools list"
+		invalidName        = "invalid runner pool name in the server answer: run opendustpan runner pools list"
+		unknownPurpose     = "unknown runner pool purpose in the server answer: run opendustpan runner pools list"
+		invalidConcurrency = "invalid runner pool concurrency in the server answer: run opendustpan runner pools list"
+		unknownIsolation   = "unknown runner pool isolation in the server answer: run opendustpan runner pools list"
+		noPoolsList        = "runner pools list: the server answer has no pools list: " +
+			"run opendustpan runner pools list again"
+		isolationNotText = "runner pools list: decode server answer: json: cannot unmarshal number into " +
+			"poolListAnswer.pools.0.isolation.0 of type string: run opendustpan runner pools list again"
+	)
+
+	for name, tc := range map[string]struct {
+		answer    string
+		errorText string
+	}{
+		"hostile pool ID": {
+			`{"pools":[` + poolAnswer("../other", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`, invalidID,
+		},
+		"missing pool ID": {`{"pools":[{"name":"jobs","purpose":"jobs","concurrency":1}]}`, invalidID},
+		"no pool prefix": {
+			`{"pools":[` + poolAnswer("xx-0123456789abcdefghij", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`, invalidID,
+		},
+		"bare pool prefix": {
+			`{"pools":[` + poolAnswer("rp-", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`, invalidID,
+		},
+		"pool ID with space": {
+			`{"pools":[` + poolAnswer("rp-a b", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`, invalidID,
+		},
+		"pool ID too long": {
+			`{"pools":[` + poolAnswer("rp-"+strings.Repeat("a", 62), "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
+			invalidID,
+		},
+		"concurrency too big": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", runner.MaxConcurrency+1, `["kubernetes"]`) + `]}`,
+			invalidConcurrency,
+		},
+		"null answer": {`null`, noPoolsList},
+		"unknown purpose": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "other", 1, `["kubernetes"]`) + `]}`, unknownPurpose,
+		},
+		"hostile name": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "Bad name", "jobs", 1, `["kubernetes"]`) + `]}`, invalidName,
+		},
+		"bad concurrency": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 0, `["kubernetes"]`) + `]}`, invalidConcurrency,
+		},
+		"unknown isolation": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["unknown"]`) + `]}`, unknownIsolation,
+		},
+		"isolation not text": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `[1]`) + `]}`, isolationNotText,
+		},
 	} {
 		for _, extra := range [][]string{{}, {"--output", "json"}} {
 			t.Run(name+" "+strings.Join(extra, " "), func(t *testing.T) {
@@ -168,13 +206,13 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 				t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
 
 				srv := serveCollectionCommands(t, []commandAnswer{
-					{"GET", runnerPoolsPath, "", 200, answer},
+					{"GET", runnerPoolsPath, "", 200, tc.answer},
 				})
 
 				args := append([]string{"--server", srv.URL, "--namespace", "acme"}, extra...)
 				got := runCommand(t, "runner pools list", args, "variable")
 
-				checkCollectionResult(t, got, "", "opendustpan runner pools list")
+				checkCollectionResult(t, got, "", tc.errorText)
 			})
 		}
 	}
