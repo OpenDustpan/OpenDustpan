@@ -562,10 +562,13 @@ func (e *env) createSweepPool() string {
 
 	now := e.clock.now()
 
-	p, err := e.store.runners.CreatePool(e.t.Context(), runner.Pool{
-		Namespace: "acme", Name: "scan", Purpose: runner.PurposeSweeps,
-		CreatedAt: now, UpdatedAt: now,
-	}, e.fence, nil)
+	// The other fields keep their zero value, so the pool takes the defaults.
+	var pool runner.Pool
+
+	pool.Namespace, pool.Name, pool.Purpose = "acme", "scan", runner.PurposeSweeps
+	pool.CreatedAt, pool.UpdatedAt = now, now
+
+	p, err := e.store.runners.CreatePool(e.t.Context(), pool, e.fence, nil)
 	if err != nil {
 		e.t.Fatalf("create the sweep pool: %v", err)
 	}

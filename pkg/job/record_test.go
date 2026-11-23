@@ -391,36 +391,32 @@ func TestPlanChunkCaps(t *testing.T) {
 	}{
 		{
 			"a first chunk above the phase chunk cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
-			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: phaseCap,
-				BytesPerPhase: roomy},
+			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: phaseCap, BytesPerPhase: roomy},
 			job.ErrInvalid,
 		},
 		{
 			"a first chunk above the phase byte cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
-			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: roomy,
-				BytesPerPhase: phaseCap},
+			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: phaseCap},
 			job.ErrInvalid,
 		},
 		{
 			"a chunk above the step chunk cap", targetStepCap, chunkOf(stepCap, "a"), nil,
-			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy,
-				BytesPerPhase: roomy},
+			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
 			job.ErrInvalid,
 		},
 		{
 			"a chunk above the step byte cap", targetByteCap, chunkOf(1, "a"), nil,
-			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: 1, ChunksPerPhase: roomy,
-				BytesPerPhase: roomy},
+			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: 1, ChunksPerPhase: roomy, BytesPerPhase: roomy},
 			job.ErrInvalid,
 		},
 		{
-			"caps that are not positive", targetEmpty, chunkOf(0, "a"), newLogRef(), job.LogCaps{},
+			"caps that are not positive", targetEmpty, chunkOf(0, "a"), newLogRef(),
+			job.LogCaps{ChunksPerStep: 0, BytesPerStep: 0, ChunksPerPhase: 0, BytesPerPhase: 0},
 			job.ErrInvalid,
 		},
 		{
 			"a retry of a counted chunk at the step cap", targetStepCap, chunkOf(0, "a"), nil,
-			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy,
-				BytesPerPhase: roomy},
+			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
 			nil,
 		},
 	}
@@ -448,7 +444,7 @@ func TestPlanChunkCaps(t *testing.T) {
 
 			key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
 
-			got, err := job.PlanChunkCapped(j, key, tt.c, tt.newLog, tt.caps, lookup)
+			got, err := tt.caps.PlanChunk(j, key, tt.c, tt.newLog, lookup)
 			if !expect(err, tt.want) {
 				t.Fatalf("PlanChunk = %+v, %v; want %v", got, err, tt.want)
 			}

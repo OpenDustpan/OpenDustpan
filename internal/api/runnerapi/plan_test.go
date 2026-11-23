@@ -92,7 +92,10 @@ func (f *fakePlans) CommitPlan(_ context.Context, c job.PhaseClaim, parts []job.
 
 	f.stored = slices.Clone(parts)
 
-	return job.PlanRef{}, nil
+	// The handler reads no field of the reference.
+	var ref job.PlanRef
+
+	return ref, nil
 }
 
 // storedParts returns the parts of the plan that the last commit stored.
@@ -242,7 +245,7 @@ func newPlanEnv(t *testing.T, b backend, phase int, stored *job.PlanRef) *planEn
 	t.Helper()
 
 	jobs := &planJobs{sessionJobs: newSessionJobs(), plan: stored}
-	plans := &fakePlans{mu: sync.Mutex{}, puts: nil, commits: nil, putErr: nil, commitErr: nil}
+	plans := &fakePlans{mu: sync.Mutex{}, puts: nil, commits: nil, putErr: nil, commitErr: nil, stored: nil}
 	reads := &fakeReads{
 		mu: sync.Mutex{}, reads: nil, err: nil,
 		content: map[job.OutputKind]string{job.OutputPlanDisplay: planDisplayText, job.OutputPlanApply: planApplyText},

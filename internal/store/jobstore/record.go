@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/runner/protocol"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
@@ -131,7 +132,7 @@ func (s *Store) ReserveLogChunk(
 			template = &newLog.Log
 		}
 
-		plan, err = job.PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
+		plan, err = protocol.SessionLogCaps().PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
 		if err != nil {
 			return err
 		}

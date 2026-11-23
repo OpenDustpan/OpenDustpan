@@ -90,9 +90,8 @@ func runJobSessionLogCap(t *testing.T, store e2e.Store) {
 		}
 	}
 
-	if status, body := launcher.Post(ctx, t, protocol.PathSessionFinish, protocol.Finish{
-		Succeeded: true, Message: "cap step done",
-	}); status != http.StatusNoContent {
+	finish := protocol.Finish{Succeeded: true, Message: "cap step done"}
+	if status, body := launcher.Post(ctx, t, protocol.PathSessionFinish, finish); status != http.StatusNoContent {
 		t.Fatalf("finish = %d %s, want 204", status, body)
 	}
 }

@@ -350,8 +350,8 @@ func ValidHash(h string) bool {
 }
 
 // LogCaps bounds the log of one session: the chunks and the bytes of one step
-// and of all the steps of one phase. PlanChunkCapped refuses a new chunk that passes
-// one of the caps with ErrInvalid. A caller passes a positive value for each
+// and of all the steps of one phase. LogCaps.PlanChunk refuses a new chunk
+// that passes one of the caps with ErrInvalid. A caller passes a positive value for each
 // field; a cap that is not positive fails closed.
 type LogCaps struct {
 	ChunksPerStep  int
@@ -373,29 +373,13 @@ type LogCaps struct {
 //     it is confirmed), and another hash is ErrConflict,
 //   - a chunk with no row must be the next one (LogRef.Chunks) and below
 //     MaxLogChunks, else ErrInvalid,
-//   - with caps (PlanChunkCapped), a new chunk must stay within the caps of its
-//     step and of its phase, else ErrInvalid. A repeated chunk counts no
+//   - with caps (LogCaps.PlanChunk), a new chunk must stay within the caps of
+//     its step and of its phase, else ErrInvalid. A repeated chunk counts no
 //     second time.
 //
-// PlanChunk sets no cap. PlanChunkCapped is the same call with the caps.
+// PlanChunk sets no cap. LogCaps.PlanChunk is the same call with the caps.
 func PlanChunk(
 	j *Job, k StepKey, c ChunkReserve, newLog *LogRef,
-	lookup func(version string, seq int) (ChunkRow, bool, error),
-) (ChunkPlan, error) {
-	return planChunk(j, k, c, newLog, nil, lookup)
-}
-
-// PlanChunkCapped is PlanChunk with the caps of the log of a session. A new
-// chunk that passes a cap is ErrInvalid.
-func PlanChunkCapped(
-	j *Job, k StepKey, c ChunkReserve, newLog *LogRef, caps LogCaps,
-	lookup func(version string, seq int) (ChunkRow, bool, error),
-) (ChunkPlan, error) {
-	return planChunk(j, k, c, newLog, &caps, lookup)
-}
-
-func planChunk(
-	j *Job, k StepKey, c ChunkReserve, newLog *LogRef, caps *LogCaps,
 	lookup func(version string, seq int) (ChunkRow, bool, error),
 ) (ChunkPlan, error) {
 	if !c.valid() {
@@ -407,15 +391,8 @@ func planChunk(
 		return ChunkPlan{}, err
 	}
 
-	phaseChunks, phaseBytes := logTotals(j, k.Phase)
-
 	if log == nil {
-		plan, err := planFirstChunk(k.Name, c.Seq, newLog)
-		if err != nil {
-			return ChunkPlan{}, err
-		}
-
-		return plan, checkLogCaps(caps, k, c, 0, 0, phaseChunks, phaseBytes)
+		return planFirstChunk(k.Name, c.Seq, newLog)
 	}
 
 	row, ok, err := lookup(log.ID, c.Seq)
@@ -423,64 +400,80 @@ func planChunk(
 		return ChunkPlan{}, err
 	}
 
-	plan, err := planNextChunk(log, k.Name, &c, row, ok)
-	if err != nil || !plan.Insert {
+	return planNextChunk(log, k.Name, &c, row, ok)
+}
+
+// PlanChunk is the function PlanChunk with the caps of the log of a session.
+// A new chunk that passes a cap is ErrInvalid.
+func (caps LogCaps) PlanChunk(
+	j *Job, k StepKey, c ChunkReserve, newLog *LogRef,
+	lookup func(version string, seq int) (ChunkRow, bool, error),
+) (ChunkPlan, error) {
+	plan, err := PlanChunk(j, k, c, newLog, lookup)
+	if err != nil {
 		return plan, err
 	}
 
-	return plan, checkLogCaps(caps, k, c, log.Chunks, log.Size, phaseChunks, phaseBytes)
+	log, err := openLogOf(j, k)
+	if err != nil {
+		return ChunkPlan{}, err
+	}
+
+	var step logCount
+
+	if log != nil {
+		if !plan.Insert {
+			return plan, nil
+		}
+
+		step = logCount{chunks: log.Chunks, bytes: log.Size}
+	}
+
+	return plan, caps.check(k.Phase, c.Size, step, logTotals(j, k.Phase))
+}
+
+// logCount is the number of chunks and of bytes of one log or of the logs of
+// one phase.
+type logCount struct {
+	chunks int
+	bytes  int64
 }
 
 // logTotals returns the chunks and the bytes of the logs of the steps of the
 // phase at index phase of j. A step with no log counts nothing.
-func logTotals(j *Job, phase int) (int, int64) {
+func logTotals(j *Job, phase int) logCount {
+	var total logCount
+
 	if phase < 0 || phase >= len(j.Phases) {
-		return 0, 0
+		return total
 	}
-
-	var chunks int
-
-	var size int64
 
 	for i := range j.Phases[phase].Steps {
 		if l := j.Phases[phase].Steps[i].Log; l != nil {
-			chunks += l.Chunks
-			size += l.Size
+			total.chunks += l.Chunks
+			total.bytes += l.Size
 		}
 	}
 
-	return chunks, size
+	return total
 }
 
-// checkLogCaps returns ErrInvalid when the new chunk c of the step k passes a
-// cap. stepChunks and stepBytes are the counters of the log of the step
-// before c, and phaseChunks and phaseBytes the counters of the phase before
-// c.
-func checkLogCaps(
-	caps *LogCaps,
-	k StepKey,
-	c ChunkReserve,
-	stepChunks int,
-	stepBytes int64,
-	phaseChunks int,
-	phaseBytes int64,
-) error {
-	if caps == nil {
-		return nil
-	}
-
+// check returns ErrInvalid when a new chunk of size bytes passes a cap. step is
+// the count of the log of the step before the chunk, and phase the count of
+// the logs of the phase with the index at before the chunk.
+func (caps LogCaps) check(at int, size int64, step, phase logCount) error {
 	switch {
 	case caps.ChunksPerStep <= 0 || caps.BytesPerStep <= 0 || caps.ChunksPerPhase <= 0 ||
 		caps.BytesPerPhase <= 0:
 		return fmt.Errorf("%w: the caps of the log are not positive", ErrInvalid)
-	case stepChunks+1 > caps.ChunksPerStep:
+	case step.chunks >= caps.ChunksPerStep:
 		return fmt.Errorf("%w: the log of the step passes %d chunks", ErrInvalid, caps.ChunksPerStep)
-	case stepBytes+c.Size > caps.BytesPerStep:
+	case step.bytes+size > caps.BytesPerStep:
 		return fmt.Errorf("%w: the log of the step passes %d bytes", ErrInvalid, caps.BytesPerStep)
-	case phaseChunks+1 > caps.ChunksPerPhase:
-		return fmt.Errorf("%w: the logs of phase %d pass %d chunks", ErrInvalid, k.Phase, caps.ChunksPerPhase)
-	case phaseBytes+c.Size > caps.BytesPerPhase:
-		return fmt.Errorf("%w: the logs of phase %d pass %d bytes", ErrInvalid, k.Phase, caps.BytesPerPhase)
+	case phase.chunks >= caps.ChunksPerPhase:
+		return fmt.Errorf("%w: the logs of phase %d pass %d chunks", ErrInvalid, at, caps.ChunksPerPhase)
+	case phase.bytes+size > caps.BytesPerPhase:
+		return fmt.Errorf("%w: the logs of phase %d pass %d bytes", ErrInvalid, at, caps.BytesPerPhase)
 	default:
 		return nil
 	}
