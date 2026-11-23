@@ -26,7 +26,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The registry domain has an Archive type used by the publish path. Proof: internal/registry/service/publish.go:307:	if !existing.SameContent(rel) {
-- SameContent decides republish equality in the SQL adapters. Proof: pkg/store/sqlite/registry.go:137:		if relErr == nil && stored.SameContent(rel) {
+- SameContent decides republish equality in the SQL adapters. Proof: internal/store/sqlite/registry.go:137:		if relErr == nil && stored.SameContent(rel) {
 - The publish path carries a protocols list from the request into stored releases. Proof: internal/api/registry/handlers.go:55:	Protocols []string      `json:"protocols"`
 
 ## What Changes
@@ -58,9 +58,9 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - SameContent decides republish equality. (`pkg/registry/registry.go:397`)
 - Publish path compares existing release with SameContent. (`internal/registry/service/publish.go:307`)
-- SQLite adapter compares stored release with SameContent. (`pkg/store/sqlite/registry.go:137`)
+- SQLite adapter compares stored release with SameContent. (`internal/store/sqlite/registry.go:137`)
 - Publish request carries protocols list. (`internal/api/registry/handlers.go:55`)
-- Registrystore encodes archives for storage. (`pkg/store/internal/registrystore/registrystore.go:109`)
+- Registrystore encodes archives for storage. (`internal/store/registrystore/registrystore.go:109`)
 
 ## ADR check
 
