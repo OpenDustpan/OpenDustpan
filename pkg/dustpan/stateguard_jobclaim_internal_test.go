@@ -134,8 +134,8 @@ func createClaimGuardWorkspace(t *testing.T, st *sqlite.Store, fence namespace.F
 
 	w := workspace.Workspace{
 		NamespaceID:  "",
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		CreatedAt:    time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC),
 		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease:  workspace.NoRelease(),
 		ID:           workspace.ID("ws-claim-" + string(name)),
