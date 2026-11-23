@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +180,17 @@ func (e *Env) browserLocation(ctx context.Context, tb testing.TB, client *http.C
 func (e *Env) browserDo(ctx context.Context, tb testing.TB, client *http.Client, r browserRequest) (int, string) {
 	tb.Helper()
 
+	status, _, body := e.browserDoHeader(ctx, tb, client, r)
+
+	return status, body
+}
+
+// browserDoHeader is browserDo that also returns the headers of the answer.
+func (e *Env) browserDoHeader(
+	ctx context.Context, tb testing.TB, client *http.Client, r browserRequest,
+) (int, http.Header, string) {
+	tb.Helper()
+
 	req, err := http.NewRequestWithContext(ctx, r.method, r.target, strings.NewReader(r.body))
 	if err != nil {
 		tb.Fatalf("request %s %s: %v", r.method, r.target, err)
@@ -200,7 +212,7 @@ func (e *Env) browserDo(ctx context.Context, tb testing.TB, client *http.Client,
 		tb.Fatalf("read %s %s: %v", r.method, r.target, err)
 	}
 
-	return resp.StatusCode, string(body)
+	return resp.StatusCode, resp.Header, string(body)
 }
 
 // SessionAPIStatus signs in the person principalID with a fresh sign-in
@@ -338,6 +350,18 @@ func (e *Env) PrepareFreshAdmin(ctx context.Context, tb testing.TB) {
 func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifMatch, body string) (int, string) {
 	tb.Helper()
 
+	status, _, answer := e.freshAdminMergePatchHeader(ctx, tb, path, ifMatch, body)
+
+	return status, answer
+}
+
+// freshAdminMergePatchHeader is FreshAdminMergePatch that also returns the
+// headers of the answer.
+func (e *Env) freshAdminMergePatchHeader(
+	ctx context.Context, tb testing.TB, path, ifMatch, body string,
+) (int, http.Header, string) {
+	tb.Helper()
+
 	if e.signIn == nil {
 		tb.Fatal("FreshAdminMergePatch needs an env from NewEnvWithSignIn")
 	}
@@ -350,7 +374,7 @@ func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifM
 	header.Set("If-Match", ifMatch)
 	header.Set("Idempotency-Key", NewIdempotencyKey())
 
-	return e.browserDo(ctx, tb, browser, browserRequest{
+	return e.browserDoHeader(ctx, tb, browser, browserRequest{
 		method: http.MethodPatch, target: e.URL + path, body: body, header: header,
 	})
 }
@@ -388,10 +412,98 @@ func (e *Env) EnableFreshAuth(ctx context.Context, tb testing.TB) {
 
 	tb.Cleanup(func() {
 		restoreCtx := context.WithoutCancel(ctx)
+		deadline := time.Now().Add(freshAuthRestoreLimit)
 
-		_, tag := e.readFreshAuth(restoreCtx, tb)
-		e.patchFreshAuth(restoreCtx, tb, tag, false)
+		read, ok := retryFreshAuth(restoreCtx, tb, deadline, func() freshAuthAnswer {
+			return e.getFreshAuth(restoreCtx, tb)
+		})
+		if !ok {
+			return
+		}
+
+		_, tag := decodeFreshAuth(tb, read)
+
+		retryFreshAuth(restoreCtx, tb, deadline, func() freshAuthAnswer {
+			return e.sendFreshAuth(restoreCtx, tb, tag, false)
+		})
 	})
+}
+
+// freshAuthRestoreLimit is the longest time that the cleanup of
+// EnableFreshAuth tries again while the database does not answer.
+const freshAuthRestoreLimit = 30 * time.Second
+
+// freshAuthAnswer is one answer of the settings resource. what names the
+// request in a failure message.
+type freshAuthAnswer struct {
+	what   string
+	status int
+	header http.Header
+	body   string
+}
+
+// unavailableWait returns the wait of the Retry-After header when the answer
+// is 503 with the code namespace.unavailable. It returns false for each other
+// answer.
+func (a freshAuthAnswer) unavailableWait() (time.Duration, bool) {
+	if a.status != http.StatusServiceUnavailable {
+		return 0, false
+	}
+
+	var doc struct {
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal([]byte(a.body), &doc); err != nil || doc.ErrorCode != "namespace.unavailable" {
+		return 0, false
+	}
+
+	seconds, err := strconv.Atoi(a.header.Get("Retry-After"))
+	if err != nil || seconds < 0 {
+		return 0, false
+	}
+
+	return time.Duration(seconds) * time.Second, true
+}
+
+// retryFreshAuth sends a request with send until the answer is 200. While the
+// answer is 503 namespace.unavailable, it waits until the Retry-After time and
+// sends again. It stops the test on each other answer. When the next try
+// cannot start before deadline, it marks the test as failed with tb.Errorf and
+// returns false.
+func retryFreshAuth(
+	ctx context.Context, tb testing.TB, deadline time.Time, send func() freshAuthAnswer,
+) (freshAuthAnswer, bool) {
+	tb.Helper()
+
+	for {
+		answer := send()
+		if answer.status == http.StatusOK {
+			return answer, true
+		}
+
+		wait, ok := answer.unavailableWait()
+		if !ok {
+			tb.Fatalf("%s = %d: %s", answer.what, answer.status, answer.body)
+		}
+
+		if time.Now().Add(wait).After(deadline) {
+			tb.Errorf("%s = %d for %s, stop: %s", answer.what, answer.status, freshAuthRestoreLimit, answer.body)
+
+			return answer, false
+		}
+
+		timer := time.NewTimer(wait)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			tb.Errorf("%s: wait for the Retry-After time: %v", answer.what, ctx.Err())
+
+			return answer, false
+		case <-timer.C:
+		}
+	}
 }
 
 // freshAuthItem is the part of one setting of the settings resource that
@@ -406,18 +518,41 @@ type freshAuthItem struct {
 func (e *Env) readFreshAuth(ctx context.Context, tb testing.TB) (bool, string) {
 	tb.Helper()
 
+	answer := e.getFreshAuth(ctx, tb)
+	if answer.status != http.StatusOK {
+		tb.Fatalf("%s = %d: %s", answer.what, answer.status, answer.body)
+	}
+
+	return decodeFreshAuth(tb, answer)
+}
+
+// getFreshAuth sends one GET of the settings resource with the administrator
+// token. It stops the test when the request cannot be sent.
+func (e *Env) getFreshAuth(ctx context.Context, tb testing.TB) freshAuthAnswer {
+	tb.Helper()
+
 	resp, err := e.ServerAPIStatusTyped(ctx, TypedRequest{
 		Token: e.token, Method: http.MethodGet, Path: freshAuthSettingsPath, ContentType: "", Body: "", IfMatch: "",
 	})
-	if err != nil || resp.Status != http.StatusOK {
+	if err != nil {
 		tb.Fatalf("GET %s = %d, %v: %s", freshAuthSettingsPath, resp.Status, err, resp.Body)
 	}
+
+	return freshAuthAnswer{
+		what: "GET " + freshAuthSettingsPath, status: resp.Status, header: resp.Header, body: resp.Body,
+	}
+}
+
+// decodeFreshAuth returns the value of freshAuthEnabled and the revision tag
+// of a 200 answer of the settings resource.
+func decodeFreshAuth(tb testing.TB, resp freshAuthAnswer) (bool, string) {
+	tb.Helper()
 
 	var doc struct {
 		Settings []freshAuthItem `json:"settings"`
 	}
 
-	if err := json.Unmarshal([]byte(resp.Body), &doc); err != nil {
+	if err := json.Unmarshal([]byte(resp.body), &doc); err != nil {
 		tb.Fatalf("decode the settings: %v", err)
 	}
 
@@ -431,10 +566,10 @@ func (e *Env) readFreshAuth(ctx context.Context, tb testing.TB) (bool, string) {
 			tb.Fatalf("freshAuthEnabled has the value %v, want a boolean", s.Value)
 		}
 
-		return on, resp.Header.Get("ETag")
+		return on, resp.header.Get("ETag")
 	}
 
-	tb.Fatalf("the settings have no freshAuthEnabled: %s", resp.Body)
+	tb.Fatalf("the settings have no freshAuthEnabled: %s", resp.body)
 
 	return false, ""
 }
@@ -445,13 +580,22 @@ func (e *Env) readFreshAuth(ctx context.Context, tb testing.TB) (bool, string) {
 func (e *Env) patchFreshAuth(ctx context.Context, tb testing.TB, tag string, on bool) {
 	tb.Helper()
 
+	answer := e.sendFreshAuth(ctx, tb, tag, on)
+	if answer.status != http.StatusOK {
+		tb.Fatalf("%s = %d: %s", answer.what, answer.status, answer.body)
+	}
+}
+
+// sendFreshAuth sends one change of freshAuthEnabled to on at the revision
+// tag, as patchFreshAuth does, and returns the answer. It stops the test when
+// the request cannot be sent.
+func (e *Env) sendFreshAuth(ctx context.Context, tb testing.TB, tag string, on bool) freshAuthAnswer {
+	tb.Helper()
+
 	body := fmt.Sprintf(`{"freshAuthEnabled":%t}`, on)
 
 	if e.signIn != nil {
-		status, answer := e.FreshAdminMergePatch(ctx, tb, freshAuthSettingsPath, tag, body)
-		if status != http.StatusOK {
-			tb.Fatalf("PATCH %s %s with a console session = %d: %s", freshAuthSettingsPath, body, status, answer)
-		}
+		status, header, answer := e.freshAdminMergePatchHeader(ctx, tb, freshAuthSettingsPath, tag, body)
 
 		// The sign-in of the administrator changed the person of the test
 		// provider. A later browser sign-in of the step expects the person of
@@ -462,16 +606,24 @@ func (e *Env) patchFreshAuth(ctx context.Context, tb testing.TB, tag string, on 
 			e.signIn.mu.Unlock()
 		}
 
-		return
+		return freshAuthAnswer{
+			what:   fmt.Sprintf("PATCH %s %s with a console session", freshAuthSettingsPath, body),
+			status: status, header: header, body: answer,
+		}
 	}
 
 	resp, err := e.ServerAPIStatusKeyed(ctx, TypedRequest{
 		Token: e.token, Method: http.MethodPatch, Path: freshAuthSettingsPath,
 		ContentType: "application/merge-patch+json", Body: body, IfMatch: tag,
 	}, NewIdempotencyKey())
-	if err != nil || resp.Status != http.StatusOK {
+	if err != nil {
 		tb.Fatalf("PATCH %s %s with the administrator token = %d, %v: %s",
 			freshAuthSettingsPath, body, resp.Status, err, resp.Body)
+	}
+
+	return freshAuthAnswer{
+		what:   fmt.Sprintf("PATCH %s %s with the administrator token", freshAuthSettingsPath, body),
+		status: resp.Status, header: resp.Header, body: resp.Body,
 	}
 }
 
