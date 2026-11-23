@@ -22,4 +22,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add an e2e step runner-sweep-claim in the NEW file e2e/runner_sweep_claim_test.go against the real runner binary and the real TLS server. The runner joins a sweep pool with a join token and polls with its runner key proof, on the existing routes under /runner/v1. The launcher opens a session with the handoff token, then uploads the report on the new route `POST /runner/v1/session/sweep/report` and finishes on the new route `POST /runner/v1/session/sweep/finish`, both with its job-session key proof. Check: `make e2e` runs the runner-sweep-claim step against the TLS server.
-- [ ] 4.2 Check the route actions, the wiring, the docs page and the usability walk, then run the full check. Check: `make check` reports zero findings.
+- [ ] 4.2 Check the route actions, the wiring, the docs page and the usability walk, then run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
