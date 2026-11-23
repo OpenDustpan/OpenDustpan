@@ -16,7 +16,7 @@
 
 ## 2. build
 
-- [ ] 2.1 Implement the sqlite and postgres adapters with the fence and data-key encryption, in NEW pkg/store/sqlite/history.go and NEW pkg/store/postgres/history.go. Check: go test ./pkg/store/... -run History -timeout 60m
+- [ ] 2.1 Implement the sqlite and postgres adapters with the fence and data-key encryption, in NEW internal/store/sqlite/history.go and NEW internal/store/postgres/history.go. Check: go test ./pkg/store/... -run History -timeout 60m
 - [ ] 2.2 Wire the NEW history, blame, point-in-time and redact routes with the NEW actions. The declaration file is NEW internal/api/apidesc/history_routes.go and the adapter file is NEW pkg/dustpan/history_routes.go. Check: route test lists each action; the NEW history route returns 200 with an access token
 - [ ] 2.3 Wire artifact expiry and Restore to the existing schedules and restore routes, in pkg/dustpan/schedules.go and pkg/workspace/service.go:1771 (func Restore). Check: the existing ANY /api/inventory/deleted-units/{}/{}/restore returns success inside 30 days with an access token
 - [ ] 2.4 Add the CLI history read and redact steps in NEW cmd/dustpan/history.go. Check: CLI redact with reason secret-exposure prints the redaction record

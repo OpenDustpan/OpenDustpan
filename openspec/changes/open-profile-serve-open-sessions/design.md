@@ -110,8 +110,8 @@ Modules that the change touches, and their imports on main:
 flowchart LR
 P1[pkg/profile]
 P2[internal/api/profile]
-P3[pkg/store/sqlite]
-P4[pkg/store/postgres]
+P3[internal/store/sqlite]
+P4[internal/store/postgres]
 P5[internal/expr]
 P6[pkg/dustpan]
 P2 --> P1

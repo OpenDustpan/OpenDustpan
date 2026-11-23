@@ -18,21 +18,21 @@ stored reference uses the stable ID of the entity.
 
 ## Evidence
 
-- `pkg/store/internal/jobstore/store.go:460` (func checkNewJob), which the
+- `internal/store/jobstore/store.go:460` (func checkNewJob), which the
   SQLite and the PostgreSQL job stores share (`jobstore.New` in
-  `pkg/store/sqlite/jobs.go` and `pkg/store/postgres/jobs.go:41`), compares
+  `internal/store/sqlite/jobs.go` and `internal/store/postgres/jobs.go:41`), compares
   only `j.Spec.Unit.Namespace()` with `fence.Namespace`. It never reads the
   unit row of `j.Spec.Unit.UnitID()`.
-- `pkg/store/internal/jobstore/store.go:78` (func createIn) uses that unit
+- `internal/store/jobstore/store.go:78` (func createIn) uses that unit
   ID in `checkLimits` (:85) and in the stored job, inside the write
   transaction that `Runner.Write` opens after the fence check.
 - The memory double of the job suite, `pkg/job/jobtest/mem_test.go:739`
   (func memDB.admit), checks the fence and the namespace of the reference
   only, though it holds the units by ID (`units`, :78).
 - The unit ID is unique in the installation: `inventory_unit_id` index
-  (`pkg/store/sqlite/migrations/0168_baseline.sql:1521`) and the query
+  (`internal/store/sqlite/migrations/0168_baseline.sql:1521`) and the query
   `GetInventoryEntryByUnitID` ("One live unit by its stable ID, which is
-  unique in the installation", `pkg/store/sqlite/queries.sql:675`).
+  unique in the installation", `internal/store/sqlite/queries.sql:675`).
 - The open pull request #2916 adds a job store suite case that builds such
   a job through the harness. Once this change lands, that case must expect
   the refusal.

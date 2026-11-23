@@ -9,7 +9,7 @@ Refusals at state.write name a record ID, but no route reads it. This change add
 
 ## Structure
 
-The package internal/api/decisionrecord holds the handler (internal/api/decisionrecord/decisionrecord.go), the operations (internal/api/decisionrecord/operations.go), the routes (internal/api/decisionrecord/routes.go), the read service (internal/api/decisionrecord/service.go) and the port (internal/api/decisionrecord/port.go). The service checks the gdr- ID and the scope before it calls the port, and checks the scope again after the load. It returns the sentinels of pkg/gate. The handler maps denial and absence to 404 gate.not-found and a store error to 503 gate.unavailable. The store adapter pkg/store/internal/gatestore/records.go translates a driver error into gate.ErrUnavailable, so that the handler never sees a raw driver error.
+The package internal/api/decisionrecord holds the handler (internal/api/decisionrecord/decisionrecord.go), the operations (internal/api/decisionrecord/operations.go), the routes (internal/api/decisionrecord/routes.go), the read service (internal/api/decisionrecord/service.go) and the port (internal/api/decisionrecord/port.go). The service checks the gdr- ID and the scope before it calls the port, and checks the scope again after the load. It returns the sentinels of pkg/gate. The handler maps denial and absence to 404 gate.not-found and a store error to 503 gate.unavailable. The store adapter internal/store/gatestore/records.go translates a driver error into gate.ErrUnavailable, so that the handler never sees a raw driver error.
 
 ## Risks
 

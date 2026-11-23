@@ -27,7 +27,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Forge domain code exists in the server. Proof: pkg/forge, pkg/forge/forgetest, internal/forgelinksvc
-- The forge link model exists in the store. Proof: pkg/forgelink, pkg/forgelink/forgelinktest, pkg/store/internal/forgelinkstore
+- The forge link model exists in the store. Proof: pkg/forgelink, pkg/forgelink/forgelinktest, internal/store/forgelinkstore
 - RFC 56 is a draft and the design is still needed. Proof: part: Design needed: RFC 56 is a draft.
 - The context pack names no ADR for this item. Proof: adrs: []
 - Registry version routes exist for providers and modules. Proof: route GET /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions and GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions

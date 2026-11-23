@@ -10,7 +10,7 @@
 ## 2. Implementation
 
 - [ ] 2.1 Add the NEW Retention type and its NEW constructor in the NEW file `pkg/idempotency/retention.go`. Check: go test ./pkg/idempotency
-- [ ] 2.2 Extend the existing file `pkg/store/internal/codec/idempotency.go` in place to store the expiry in the codec, and run the conformance suite. Check: go test ./pkg/store/... -timeout 60m
+- [ ] 2.2 Extend the existing file `internal/store/codec/idempotency.go` in place to store the expiry in the codec, and run the conformance suite. Check: go test ./pkg/store/... -timeout 60m
 
 ## 3. Side effects (computed from main)
 

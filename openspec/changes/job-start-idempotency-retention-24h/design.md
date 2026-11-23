@@ -23,7 +23,7 @@ Modules that the change touches, and their imports on main:
 ```mermaid
 flowchart LR
 P1[pkg/idempotency]
-P2[pkg/store/internal/codec]
+P2[internal/store/codec]
 P2 --> P1
 ```
 

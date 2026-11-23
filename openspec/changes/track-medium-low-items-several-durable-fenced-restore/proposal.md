@@ -24,7 +24,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main has fenced restore helper and worker restore cases. Proof: pkg/store/postgres/restore_operation.go:100 (func fencedRestore); pkg/store/storetest/restore_worker_cases.go:534 (func workerRig.failoverVersion)
+- Main has fenced restore helper and worker restore cases. Proof: internal/store/postgres/restore_operation.go:100 (func fencedRestore); pkg/store/storetest/restore_worker_cases.go:534 (func workerRig.failoverVersion)
 - Main has restore error codes and restore tests. Proof: restore.blobs-missing, restore.live-blobs-damaged, restore.live-blobs-missing, restore.swapped, restore.ended; TestRestoreSwappedManifestIsRefusedAtEachStep; TestShutdownDuringWriteStepLeavesTheBackupForAnotherWorker
 - Issue 670 tracks medium and low multi-instance items. Proof: #670, #717, #718 with scope M8 to M24 except M22
 - Main splits api and worker and checks audit chain once with a durable store. Proof: pkg/dustpan/components_split_test.go:32 (TestSplitTopologyWorkerFinishesWhatAPIStarted)
@@ -53,9 +53,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main has fenced restore helper in postgres store. (`pkg/store/postgres/restore_operation.go:100 (func fencedRestore)`)
+- Main has fenced restore helper in postgres store. (`internal/store/postgres/restore_operation.go:100 (func fencedRestore)`)
 - Main has worker restore cases with failover version helper. (`pkg/store/storetest/restore_worker_cases.go:534 (func workerRig.failoverVersion)`)
-- Main has lock timeout helpers. (`pkg/store/postgres/maintenance_revocations.go:252 (func isLockTimeout)`)
+- Main has lock timeout helpers. (`internal/store/postgres/maintenance_revocations.go:252 (func isLockTimeout)`)
 - Main refuses a swapped manifest at each restore step. (`pkg/backup/restore_manifest_swap_test.go:17 (func TestRestoreSwappedManifestIsRefusedAtEachStep)`)
 - Main leaves a backup for another worker after shutdown during a write step. (`pkg/backup/service_durable_test.go:480 (func TestShutdownDuringWriteStepLeavesTheBackupForAnotherWorker)`)
 - Main splits api and worker in tests. (`pkg/dustpan/components_split_test.go:32 (func TestSplitTopologyWorkerFinishesWhatAPIStarted)`)

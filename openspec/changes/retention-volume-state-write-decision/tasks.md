@@ -12,7 +12,7 @@
 ## 2. Build
 
 - [x] 2.1 Add pruneExpired to the Records port in pkg/gate/store.go and the pruneRequest constructor in NEW pkg/gate/prune.go. Check: `go test ./pkg/gate/... -count=1` passes.
-- [x] 2.2 Implement the method in the shared store code pkg/store/internal/gatestore/tx.go and pkg/store/internal/gatestore/records.go, add the query in pkg/store/sqlite/queries.sql and pkg/store/postgres/queries.sql, wire the adapters in pkg/store/sqlite/gate.go and pkg/store/postgres/gate.go, and run the conformance suite. Check: `go test -timeout 60m ./pkg/store/... -run Prune` passes.
+- [x] 2.2 Implement the method in the shared store code internal/store/gatestore/tx.go and internal/store/gatestore/records.go, add the query in internal/store/sqlite/queries.sql and internal/store/postgres/queries.sql, wire the adapters in internal/store/sqlite/gate.go and internal/store/postgres/gate.go, and run the conformance suite. Check: `go test -timeout 60m ./pkg/store/... -run Prune` passes.
 
 ## 3. Side effects (computed from main)
 

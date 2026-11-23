@@ -24,7 +24,7 @@ Modules that the change touches, and their imports on main:
 flowchart LR
 P1[cmd/opendustpan]
 P2[pkg/dustpan]
-P3[pkg/store/postgres]
+P3[internal/store/postgres]
 P1 --> P2
 P1 --> P3
 ```

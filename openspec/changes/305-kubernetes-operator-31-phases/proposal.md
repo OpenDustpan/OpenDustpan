@@ -32,7 +32,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Main already names coordinator Kubernetes jobs through runner tests and keeps no operator state. (`pkg/runner/coordinator_test.go:63 (TestKubernetesJobName)`)
-- Main already refuses hostile blueprint rows in the self-service blueprint store. (`pkg/store/postgres/self_service_blueprints_internal_test.go:93 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
+- Main already refuses hostile blueprint rows in the self-service blueprint store. (`internal/store/postgres/self_service_blueprints_internal_test.go:93 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
 - Main already gates job phases on manual locks by phase start time. (`pkg/dustpan/manual_lock_authorizer_test.go:179 (TestManualLockPassesOnlyAPhaseThatStartedBeforeIt)`)
 
 ## ADR check
