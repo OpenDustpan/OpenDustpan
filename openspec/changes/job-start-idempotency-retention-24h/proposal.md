@@ -25,14 +25,14 @@ Evidence for the claims above:
 - The package pkg/idempotency exists. Proof: The pack lists the path pkg/idempotency with exists true.
 - A test for the idempotency of a job start exists on main. Proof: TestStartIdempotency at pkg/job/service_test.go:984.
 - The server takes an idempotency store through an option. Proof: WithIdempotencyStore at pkg/dustpan/dustpan.go:381.
-- The PostgreSQL adapter has a function that completes an idempotency record. Proof: completeIdempotencyRecord at pkg/store/postgres/idempotency.go:186.
+- The PostgreSQL adapter has a function that completes an idempotency record. Proof: completeIdempotencyRecord at internal/store/postgres/idempotency.go:186.
 - A restore empties the idempotency records. Proof: testRestoreEmptiesIdempotencyRecords at pkg/store/storetest/durable_restore.go:191.
 
 ## What Changes
 
 - A job-start idempotency record has a retention of 24 hours in the durable store.
 - NEW: a Retention type in pkg/idempotency holds the retention and is made only by its constructor.
-- The store codec (pkg/store/internal/codec) keeps the expiry time with each record.
+- The store codec (internal/store/codec) keeps the expiry time with each record.
 - A retry after a restart or a failover within the retention gets the stored answer.
 
 Out of scope:
@@ -57,7 +57,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The server takes an idempotency store through an option (func WithIdempotencyStore). (`pkg/dustpan/dustpan.go:381`)
-- The PostgreSQL adapter completes idempotency records (func completeIdempotencyRecord). (`pkg/store/postgres/idempotency.go:186`)
+- The PostgreSQL adapter completes idempotency records (func completeIdempotencyRecord). (`internal/store/postgres/idempotency.go:186`)
 - A test covers the idempotency of a job start (TestStartIdempotency). (`pkg/job/service_test.go:984`)
 - A restore test checks that idempotency records are emptied (testRestoreEmptiesIdempotencyRecords). (`pkg/store/storetest/durable_restore.go:191`)
 
