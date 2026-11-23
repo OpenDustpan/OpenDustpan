@@ -22,14 +22,18 @@ When a runner claims a job whose source is now outside the stored source filter,
 
 ### Requirement: Sweep pool rule
 
-If a sweep target names a pool that is not an operator pool with the sweep purpose, then the server SHALL refuse the sweep with the error code runner.invalid.
+If a sweep target names a pool that is not a pool of the namespace with the sweep purpose, then the server SHALL refuse the sweep with the error code runner.invalid.
 
-#### Scenario: Namespace pool
-- **WHEN** the target names a namespace pool with the sweep purpose
+#### Scenario: Pool of another namespace
+- **WHEN** the target names a pool of another namespace
 - **THEN** the server answers 409 runner.invalid
 
+#### Scenario: Pool of the namespace
+- **WHEN** the target names a pool of the namespace with the sweep purpose
+- **THEN** the server accepts the target
+
 #### Scenario: Wrong purpose
-- **WHEN** the target names an operator pool with the jobs purpose
+- **WHEN** the target names a pool of the namespace with the jobs purpose
 - **THEN** the server answers 409 runner.invalid
 
 ### Requirement: Sweep claim dispatch

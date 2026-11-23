@@ -10,7 +10,7 @@ The user path this change must make work:
 
 1. **API.** Set the source filter with PUT /api/dustpan/v1/namespaces/{namespace}/source-filter, using an access token.
 2. **API.** A runner claims a sweep through the runner protocol under /runner/v1, using its runner key.
-3. **Docs page.** Follow the NEW guide docs/guides/runners.md to set the filter, pick an operator sweep pool and read the report bounds.
+3. **Docs page.** Follow the NEW guide docs/guides/runners.md to set the filter, pick a sweep pool of the namespace and read the report bounds.
 4. **E2e.** Set a filter with an access token, create a job outside the filter, and expect the refusal.
 
 Errors the person may hit, and the one command that helps:
@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Job create names a code source outside the source filter. | The server answers 403 `source.filter-invalid`: the source is not allowed. Read the filter. | `GET /api/dustpan/v1/namespaces/{namespace}/source-filter` |
-| A sweep target names a namespace pool, or a pool without the sweep purpose. | The server answers 409 `runner.invalid`: a sweep runs only on an operator pool with the sweep purpose. Read the pools. | `GET /api/runners/{namespace}/pools` |
+| A sweep target names a pool without the sweep purpose, or a pool of another namespace. | The server answers 409 `runner.invalid`: a sweep runs only on a pool of the namespace with the sweep purpose. Read the pools. | `GET /api/runners/{namespace}/pools` |
 | A report header lists a scope or a region outside the target. | The server answers 422 `runner.invalid`: the scope is not in the target. The sweep ends failed and closes no finding. | `GET /api/runners/{namespace}/pools` |
 | A report is over a bound. | The server answers 413 `runner.limit`: the report is over the bound. The sweep ends failed. Narrow the regions and start again. | `GET /api/runners/{namespace}/pools` |
 
@@ -32,7 +32,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Check the stored source.Filter when a job names a code source.
-- Refuse a sweep target whose pool is not an operator pool with the sweep purpose.
+- Refuse a sweep target whose pool is not a pool of the namespace with the sweep purpose.
 - Refuse a report header scope or region outside the target, a wrong format and an unknown version.
 - Enforce the report bounds, each with its own test.
 - Fail a truncated or oversize sweep: it never reaches matching and closes no finding.
@@ -56,7 +56,7 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - The create error for a blocked source names the filter route, but not which pattern blocked it. The audit entry names it.
-- A runner operator learns the report bounds only from the guide, so the guide lists each bound.
+- A runner administrator learns the report bounds only from the guide, so the guide lists each bound.
 
 ## What main already does
 
@@ -73,7 +73,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
 
-- **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+- **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**: sweeps run on the user's own runners. The owner answered: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the namespace that has the sweep purpose. The host identity of the pool has no write access. No installation sweep pool exists. The pool API accepts the sweep purpose on a namespace pool with the same rules as for any other purpose.
 
 ## ADR check
 
@@ -116,6 +116,15 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: A sweep runs only on a runner.
 - Conflict: none.
 
+**ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors** (owner-tagged: decision 1).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR, with ADR 164, 343.
+- Quote: "A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access."
+- Effect: A sweep target names a pool of the namespace with the sweep purpose. The server refuses a pool without that purpose. No installation sweep pool exists.
+- Conflict: none. ADR 396 changes ADR 164 decision 5. It extends ADR 343 decision 3.
+
 ## Open questions
 
 none
@@ -123,7 +132,7 @@ none
 Questions considered and answered:
 
 - Does a job create need a new gate for the source check? No. ADR 222 decision 4 keeps the source filter a fixed control, so the service checks it.
-- Which pool may run a sweep? Owner decision, 13 Nov 2026 (queue P14): only an operator pool with the sweep purpose. A namespace pool with the sweep purpose is refused, fail closed.
+- Which pool may run a sweep? Owner decision, 23 Nov 2026 (ADR 396): a pool of the namespace with the sweep purpose. The server refuses a pool without the sweep purpose and fails closed.
 - Does the source filter apply to a sweep? No. A sweep has a command and no code source. ADR 164 decisions 8 and 13 give its checks.
 - What happens when the filter or target is narrowed after create? The filter is checked at create and at the claim of a job. A narrowed target fails the header check.
 - What is the end state of a truncated or oversize report? The sweep ends failed. ADR 164 decision 13 says what a sweep may close, and a failed sweep closes nothing.
