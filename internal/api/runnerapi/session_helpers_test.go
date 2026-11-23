@@ -36,6 +36,16 @@ type sessionJobs struct {
 	logs    map[string]map[int][]byte
 	ended   map[string]int
 	failure map[string]error
+	// seed holds log counters above the bytes that the case sent, so a case of
+	// a cap does not write 256 MiB. The reserve adds them to the stored chunks.
+	seed map[string]logSeed
+}
+
+// logSeed is the log counter of a step that a cap case sets without writing
+// the bytes.
+type logSeed struct {
+	chunks int
+	bytes  int64
 }
 
 var _ job.CheckedRecorder = (*sessionJobs)(nil)
@@ -43,7 +53,7 @@ var _ job.CheckedRecorder = (*sessionJobs)(nil)
 func newSessionJobs() *sessionJobs {
 	return &sessionJobs{
 		mu: sync.Mutex{}, calls: nil, logs: map[string]map[int][]byte{}, ended: map[string]int{},
-		failure: map[string]error{},
+		failure: map[string]error{}, seed: map[string]logSeed{},
 	}
 }
 
@@ -108,7 +118,7 @@ func (f *sessionJobs) EndStepChecked(
 	return f.EndStep(ctx, c, r)
 }
 
-func (f *sessionJobs) AppendLog(_ context.Context, _ job.PhaseClaim, step string, seq int, chunk io.Reader) error {
+func (f *sessionJobs) AppendLog(_ context.Context, c job.PhaseClaim, step string, seq int, chunk io.Reader) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -123,17 +133,101 @@ func (f *sessionJobs) AppendLog(_ context.Context, _ job.PhaseClaim, step string
 		return fmt.Errorf("read chunk: %w", err)
 	}
 
-	if f.logs[step] == nil {
-		f.logs[step] = map[int][]byte{}
+	return f.reserveLog(c, step, seq, data)
+}
+
+// reserveLog decides the chunk with the shared rule of the store adapters, so
+// a case of a cap sees the rule that the reserve runs in its transaction.
+func (f *sessionJobs) reserveLog(c job.PhaseClaim, step string, seq int, data []byte) error {
+	j := f.logJob(c)
+	sum := sha256.Sum256(data)
+
+	reserve := job.ChunkReserve{Seq: seq, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))}
+	newLog := &job.NewLog{Log: job.LogRef{ID: "jlv-test", Version: 1}}
+
+	lookup := func(_ string, at int) (job.ChunkRow, bool, error) {
+		stored, ok := f.logs[step][at]
+		if !ok {
+			return job.ChunkRow{}, false, nil
+		}
+
+		hash := sha256.Sum256(stored)
+
+		return job.ChunkRow{SHA256: hex.EncodeToString(hash[:]), Size: int64(len(stored)), Confirmed: true}, true, nil
 	}
 
-	if old, ok := f.logs[step][seq]; ok && !bytes.Equal(old, data) {
-		return job.ErrConflict
+	plan, err := job.PlanChunkCapped(&j, job.StepKey{Phase: c.Phase, Token: c.Claim.Token, Name: step}, reserve,
+		&newLog.Log, protocol.SessionLogCaps(), lookup)
+	if err != nil {
+		return err
+	}
+
+	if plan.Duplicate {
+		return nil
+	}
+
+	if f.logs[step] == nil {
+		f.logs[step] = map[int][]byte{}
 	}
 
 	f.logs[step][seq] = data
 
 	return nil
+}
+
+// logJob returns the job that the reserve of a chunk reads: the phase of the
+// claim with the steps of the fake, and the counters that the case seeded.
+func (f *sessionJobs) logJob(c job.PhaseClaim) job.Job {
+	phases := make([]job.Phase, c.Phase+1)
+	for i := range phases {
+		phases[i] = job.Phase{Kind: job.PhasePlan}
+	}
+
+	steps := []job.StepRecord{{Name: "init", Token: c.Claim.Token}, {Name: "plan", Token: c.Claim.Token}}
+	for i := range steps {
+		steps[i].Log = f.logRef(steps[i].Name)
+	}
+
+	phases[c.Phase].Steps = steps
+
+	return job.Job{ID: c.Job, Phases: phases}
+}
+
+// logRef returns the log of a step with the chunks that the case stored and
+// the counters that it seeded, or nil for a step with no log.
+func (f *sessionJobs) logRef(step string) *job.LogRef {
+	chunks, size := f.seed[step].chunks, f.seed[step].bytes
+	for _, data := range f.logs[step] {
+		chunks++
+		size += int64(len(data))
+	}
+
+	if chunks == 0 {
+		return nil
+	}
+
+	return &job.LogRef{ID: "jlv-stored", Version: 1, Chunks: chunks, Size: size}
+}
+
+// seedLog sets the log counter of the step that a cap case needs.
+func (f *sessionJobs) seedLog(step string, chunks int, bytes int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.seed[step] = logSeed{chunks: chunks, bytes: bytes}
+}
+
+// logChunks returns the chunks that the fake stored for the step.
+func (f *sessionJobs) logChunks(step string) map[int]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[int]string, len(f.logs[step]))
+	for seq, data := range f.logs[step] {
+		out[seq] = string(data)
+	}
+
+	return out
 }
 
 func (*sessionJobs) PutPlan(context.Context, job.PhaseClaim, []job.PlanUpload) (job.PlanRef, error) {

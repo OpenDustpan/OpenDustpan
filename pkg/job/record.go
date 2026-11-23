@@ -349,6 +349,17 @@ func ValidHash(h string) bool {
 	return true
 }
 
+// LogCaps bounds the log of one session: the chunks and the bytes of one step
+// and of all the steps of one phase. PlanChunkCapped refuses a new chunk that passes
+// one of the caps with ErrInvalid. A caller passes a positive value for each
+// field; a cap that is not positive fails closed.
+type LogCaps struct {
+	ChunksPerStep  int
+	BytesPerStep   int64
+	ChunksPerPhase int
+	BytesPerPhase  int64
+}
+
 // PlanChunk decides the reserve of the chunk c of the log of the step k of j.
 // lookup reads the stored row of a chunk, and reports false when none exists.
 // newLog is the log version that a chunk 0 creates when the step has no log.
@@ -361,9 +372,30 @@ func ValidHash(h string) bool {
 //   - a chunk with a stored row and the same hash is no change (Duplicate when
 //     it is confirmed), and another hash is ErrConflict,
 //   - a chunk with no row must be the next one (LogRef.Chunks) and below
-//     MaxLogChunks, else ErrInvalid.
+//     MaxLogChunks, else ErrInvalid,
+//   - with caps (PlanChunkCapped), a new chunk must stay within the caps of its
+//     step and of its phase, else ErrInvalid. A repeated chunk counts no
+//     second time.
+//
+// PlanChunk sets no cap. PlanChunkCapped is the same call with the caps.
 func PlanChunk(
 	j *Job, k StepKey, c ChunkReserve, newLog *LogRef,
+	lookup func(version string, seq int) (ChunkRow, bool, error),
+) (ChunkPlan, error) {
+	return planChunk(j, k, c, newLog, nil, lookup)
+}
+
+// PlanChunkCapped is PlanChunk with the caps of the log of a session. A new
+// chunk that passes a cap is ErrInvalid.
+func PlanChunkCapped(
+	j *Job, k StepKey, c ChunkReserve, newLog *LogRef, caps LogCaps,
+	lookup func(version string, seq int) (ChunkRow, bool, error),
+) (ChunkPlan, error) {
+	return planChunk(j, k, c, newLog, &caps, lookup)
+}
+
+func planChunk(
+	j *Job, k StepKey, c ChunkReserve, newLog *LogRef, caps *LogCaps,
 	lookup func(version string, seq int) (ChunkRow, bool, error),
 ) (ChunkPlan, error) {
 	if !c.valid() {
@@ -375,8 +407,15 @@ func PlanChunk(
 		return ChunkPlan{}, err
 	}
 
+	phaseChunks, phaseBytes := logTotals(j, k.Phase)
+
 	if log == nil {
-		return planFirstChunk(k.Name, c.Seq, newLog)
+		plan, err := planFirstChunk(k.Name, c.Seq, newLog)
+		if err != nil {
+			return ChunkPlan{}, err
+		}
+
+		return plan, checkLogCaps(caps, k, c, 0, 0, phaseChunks, phaseBytes)
 	}
 
 	row, ok, err := lookup(log.ID, c.Seq)
@@ -384,7 +423,67 @@ func PlanChunk(
 		return ChunkPlan{}, err
 	}
 
-	return planNextChunk(log, k.Name, &c, row, ok)
+	plan, err := planNextChunk(log, k.Name, &c, row, ok)
+	if err != nil || !plan.Insert {
+		return plan, err
+	}
+
+	return plan, checkLogCaps(caps, k, c, log.Chunks, log.Size, phaseChunks, phaseBytes)
+}
+
+// logTotals returns the chunks and the bytes of the logs of the steps of the
+// phase at index phase of j. A step with no log counts nothing.
+func logTotals(j *Job, phase int) (int, int64) {
+	if phase < 0 || phase >= len(j.Phases) {
+		return 0, 0
+	}
+
+	var chunks int
+
+	var size int64
+
+	for i := range j.Phases[phase].Steps {
+		if l := j.Phases[phase].Steps[i].Log; l != nil {
+			chunks += l.Chunks
+			size += l.Size
+		}
+	}
+
+	return chunks, size
+}
+
+// checkLogCaps returns ErrInvalid when the new chunk c of the step k passes a
+// cap. stepChunks and stepBytes are the counters of the log of the step
+// before c, and phaseChunks and phaseBytes the counters of the phase before
+// c.
+func checkLogCaps(
+	caps *LogCaps,
+	k StepKey,
+	c ChunkReserve,
+	stepChunks int,
+	stepBytes int64,
+	phaseChunks int,
+	phaseBytes int64,
+) error {
+	if caps == nil {
+		return nil
+	}
+
+	switch {
+	case caps.ChunksPerStep <= 0 || caps.BytesPerStep <= 0 || caps.ChunksPerPhase <= 0 ||
+		caps.BytesPerPhase <= 0:
+		return fmt.Errorf("%w: the caps of the log are not positive", ErrInvalid)
+	case stepChunks+1 > caps.ChunksPerStep:
+		return fmt.Errorf("%w: the log of the step passes %d chunks", ErrInvalid, caps.ChunksPerStep)
+	case stepBytes+c.Size > caps.BytesPerStep:
+		return fmt.Errorf("%w: the log of the step passes %d bytes", ErrInvalid, caps.BytesPerStep)
+	case phaseChunks+1 > caps.ChunksPerPhase:
+		return fmt.Errorf("%w: the logs of phase %d pass %d chunks", ErrInvalid, k.Phase, caps.ChunksPerPhase)
+	case phaseBytes+c.Size > caps.BytesPerPhase:
+		return fmt.Errorf("%w: the logs of phase %d pass %d bytes", ErrInvalid, k.Phase, caps.BytesPerPhase)
+	default:
+		return nil
+	}
 }
 
 // valid reports whether c has a number below MaxLogChunks, a size up to

@@ -613,6 +613,12 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	if err = h.recorder.AppendLog(ctx, sp.claim, name, seq, bytes.NewReader(chunk)); err != nil {
+		if errors.Is(err, job.ErrInvalid) {
+			// The cap or the rule of the sequence failed. The answer names the
+			// rule; the log holds the counters and the cap that failed.
+			err = fmt.Errorf("%w: the log of the step or of the phase is at its cap", runner.ErrInvalid)
+		}
+
 		h.writeError(ctx, w, err)
 
 		return

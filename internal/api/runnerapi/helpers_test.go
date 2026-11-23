@@ -554,6 +554,25 @@ func (e *env) createPool() string {
 	return pool.ID
 }
 
+// createSweepPool makes the pool scan for sweeps through the store and returns
+// its ID. The management API refuses the sweep purpose in a namespace, so a
+// test of the sweep paths makes the pool that the operator makes.
+func (e *env) createSweepPool() string {
+	e.t.Helper()
+
+	now := e.clock.now()
+
+	p, err := e.store.runners.CreatePool(e.t.Context(), runner.Pool{
+		Namespace: "acme", Name: "scan", Purpose: runner.PurposeSweeps,
+		CreatedAt: now, UpdatedAt: now,
+	}, e.fence, nil)
+	if err != nil {
+		e.t.Fatalf("create the sweep pool: %v", err)
+	}
+
+	return p.ID
+}
+
 // joinToken makes a join token of the pool and returns its secret.
 func (e *env) joinToken(pool string) string {
 	e.t.Helper()

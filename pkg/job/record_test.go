@@ -363,6 +363,99 @@ func TestPlanChunk(t *testing.T) {
 	}
 }
 
+// TestPlanChunkCaps proves the caps of the log in the reserve of a chunk: a
+// new chunk that passes the cap of its step or of the phase is ErrInvalid and
+// keeps nothing, and a retry of a counted chunk changes nothing.
+func TestPlanChunkCaps(t *testing.T) {
+	t.Parallel()
+
+	const (
+		stepCap  = 3
+		phaseCap = 6
+		roomy    = 100
+	)
+
+	// A step with no log, and a step of an earlier claim of the phase with a
+	// log of the size of the phase cap.
+	targetEmpty := withSteps(openRec(token, nil), openRec(token+1, openLog(phaseCap)))
+	targetStepCap := withSteps(openRec(token, openLog(stepCap)))
+	targetByteCap := withSteps(openRec(token, openLog(1)))
+
+	tests := []struct {
+		name    string
+		prepare func(j *job.Job)
+		c       job.ChunkReserve
+		newLog  *job.LogRef
+		caps    job.LogCaps
+		want    error
+	}{
+		{
+			"a first chunk above the phase chunk cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
+			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: phaseCap,
+				BytesPerPhase: roomy},
+			job.ErrInvalid,
+		},
+		{
+			"a first chunk above the phase byte cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
+			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: roomy,
+				BytesPerPhase: phaseCap},
+			job.ErrInvalid,
+		},
+		{
+			"a chunk above the step chunk cap", targetStepCap, chunkOf(stepCap, "a"), nil,
+			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy,
+				BytesPerPhase: roomy},
+			job.ErrInvalid,
+		},
+		{
+			"a chunk above the step byte cap", targetByteCap, chunkOf(1, "a"), nil,
+			job.LogCaps{ChunksPerStep: roomy, BytesPerStep: 1, ChunksPerPhase: roomy,
+				BytesPerPhase: roomy},
+			job.ErrInvalid,
+		},
+		{
+			"caps that are not positive", targetEmpty, chunkOf(0, "a"), newLogRef(), job.LogCaps{},
+			job.ErrInvalid,
+		},
+		{
+			"a retry of a counted chunk at the step cap", targetStepCap, chunkOf(0, "a"), nil,
+			job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy,
+				BytesPerPhase: roomy},
+			nil,
+		},
+	}
+
+	rows := map[int]job.ChunkRow{
+		0: {SHA256: sum("a"), Size: 1, Confirmed: true, BlobKey: ""},
+	}
+
+	lookup := func(_ string, seq int) (job.ChunkRow, bool, error) {
+		if seq < 0 {
+			return job.ChunkRow{}, false, job.ErrInvalid
+		}
+
+		r, ok := rows[seq]
+
+		return r, ok, nil
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := recordJob()
+			tt.prepare(j)
+
+			key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
+
+			got, err := job.PlanChunkCapped(j, key, tt.c, tt.newLog, tt.caps, lookup)
+			if !expect(err, tt.want) {
+				t.Fatalf("PlanChunk = %+v, %v; want %v", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfirmChunkRecord(t *testing.T) {
 	t.Parallel()
 

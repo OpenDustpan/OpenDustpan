@@ -766,6 +766,71 @@ func checkStepEnd(t *testing.T, l *launcher, chunks [][]byte) {
 	l.expect(t, "end", l.post(path, end), 204, "")
 }
 
+// TestLogPhaseCapStoresNothing proves the caps of the log in the reserve of a
+// chunk: a chunk that passes the byte cap of its step, or the chunk or byte
+// cap of the phase, is refused with invalid and the server keeps no byte of
+// it. The reserve runs the shared rule of the store adapters.
+func TestLogPhaseCapStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		step   string
+		chunks int
+		bytes  int64
+		seq    int
+	}{
+		{"step byte cap", "init", 1, protocol.MaxLogBytesPerStep, 1},
+		{"phase chunk cap", "plan", protocol.MaxLogChunksPerPhase, 0, 0},
+		{"phase byte cap", "plan", 1, protocol.MaxLogBytesPerPhase, 0},
+	}
+
+	for _, b := range backends() {
+		for _, tc := range cases {
+			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				s := newSessionEnv(t, b)
+				s.jobs.seedLog(tc.step, tc.chunks, tc.bytes)
+				l := s.launch()
+
+				status, body := l.do(l.upload(logPath(tc.seq), []byte("x")))
+				if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+					t.Fatalf("a chunk above the cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
+				}
+
+				if got := s.jobs.logChunks("init"); len(got) != 0 {
+					t.Fatalf("a refused chunk stored %d chunks", len(got))
+				}
+			})
+		}
+	}
+}
+
+// TestLogStepChunkCapStoresNothing proves the cap of the chunks of one step:
+// the chunk at the cap is refused and stores nothing.
+func TestLogStepChunkCapStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range wiringBackends() {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSessionEnv(t, b)
+			l := s.launch()
+
+			status, body := l.do(l.upload(logPath(protocol.MaxLogChunksPerStep), []byte("x")))
+			if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+				t.Fatalf("a chunk at the step cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
+			}
+
+			if got := s.jobs.logChunks("init"); len(got) != 0 {
+				t.Fatalf("a refused chunk stored %d chunks", len(got))
+			}
+		})
+	}
+}
+
 // requestCheck is a request of a valid session that fails a check of the
 // handler.
 type requestCheck struct {

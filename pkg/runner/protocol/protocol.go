@@ -13,6 +13,8 @@ package protocol
 import (
 	"slices"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // Prefix is the path of every request of the runner protocol.
@@ -165,6 +167,15 @@ const (
 	// commit.
 	MaxPlanParts = 8
 )
+
+// SessionLogCaps returns the caps of the log of a job session, for the job
+// recorder that reserves a chunk.
+func SessionLogCaps() job.LogCaps {
+	return job.LogCaps{
+		ChunksPerStep: MaxLogChunksPerStep, BytesPerStep: MaxLogBytesPerStep,
+		ChunksPerPhase: MaxLogChunksPerPhase, BytesPerPhase: MaxLogBytesPerPhase,
+	}
+}
 
 // NoncePaths are the paths whose requests are not safe to repeat. The
 // server keeps the nonce of each proof on them until

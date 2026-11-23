@@ -166,9 +166,9 @@ runner key cannot call them.
 | `POST /session/renew` | none | the new expiry, `canceled` |
 | `POST /session/steps/{step}/begin` | none | 204 |
 | `POST /session/steps/{step}/end` | the exit code, the times, the number of chunks and the SHA-256 of the log | 204 |
-| `PUT /session/steps/{step}/logs/{seq}` | one chunk of the log, at most 1 MiB | 204 |
+| `PUT /session/steps/{step}/logs/{seq}` | one chunk of the log, at most 1 MiB, within the caps of the step and the phase | 204 |
 | `PUT /session/plan/uploads/{part}` | one part of the plan, `plan-display` or `plan-apply` | 204 |
-| `POST /session/plan/commit` | the kind, the size and the SHA-256 of each part | 204 |
+| `POST /session/plan/commit` | the kind, the size and the SHA-256 of each part, 1 to 8 parts | 204 |
 | `GET /session/plan/parts/{part}` | none | the part, with its size and hash in the headers |
 | `POST /session/credentials` | the name of the step | the job token of the step and its expiry |
 | `POST /session/finish` | `succeeded` and a reason | 204 |
@@ -205,7 +205,10 @@ number and the same body, the server stores it once. A known number with another
 gets `conflict`. The header `Dustpan-Content-SHA256` has the SHA-256 of the body
 in hex, and the proof signs that value. The server compares it with the hash of
 the bytes that it received before it stores any of them, and answers
-`bad-proof` for another body. A step has at most 20,000 chunks.
+`bad-proof` for another body. A step has at most 20,000 chunks and 256 MiB.
+All the steps of a phase have at most 100,000 chunks and 1 GiB. A new chunk
+that passes one of these caps gets `invalid`, and the server stores none of its
+bytes.
 
 The end of a step names the number of chunks and the SHA-256 of the whole log.
 The server compares both with the log that it stored, and answers `conflict`
