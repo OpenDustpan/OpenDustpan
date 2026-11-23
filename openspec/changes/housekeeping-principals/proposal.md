@@ -32,7 +32,7 @@ Evidence for the claims above:
 - The namespace service principal stays in this change. The first trigger change removes it (its subject, authorizer rule, guard, checks in the trigger and job start path, and its glossary term) together with the run-as principal that replaces it. Reason: the dispatcher starts every triggered plan with it today (`pkg/trigger/dispatcher.go:249`), and ADR 370 lands this change before the trigger changes "or with them".
 - NEW: the sweep of access tokens, the expiry of temporary administrators (also at the use of a record) and the rotation of issuer keys run as their housekeeping principals of part 1. Each authorizes before it acts and names its principal in each audit entry. A revoke stops only that purpose.
 - NEW: each layer that refuses a credential for the namespace service subject refuses one for a housekeeping subject too, on its own: the authenticator guard, the principal check, the session check and the token service. A person cannot sign in as a housekeeping principal, and no access token names one.
-- NEW: a grant to a housekeeping principal of a role that its purpose does not hold is refused.
+- NEW: a grant to a housekeeping principal of a role that its purpose does not hold is refused. The roles are those of the table "Roles of the housekeeping principals" of part 1: the token sweep checks `server:manage-token-policy` on `@server`, the expiry of temporary administrators checks the NEW `server:expire-temporary-administrators` on `@server`, and the rotation of issuer keys checks `namespace:manage-issuer` on the namespace, through the grant that part 1 writes at each namespace creation (owner, 2026-11-22).
 - A docs page: add the new file `docs/explanation/housekeeping-principals.md`.
 - The principals, the grants and the `source` filter are part 1. The other eight sweeps are part 2.
 
@@ -81,11 +81,11 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 
 **ADR 370: Housekeeping principals replace the namespace service principal** (owner-tagged (all decisions)).
 
-- Decisions that apply: 2 (current), 3 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Decisions that apply: 2 (current), 3 (current, amended).
+- Changed by: ADR 394 changes decision 3 (owner, 2026-11-22). Chain to the end: ADR 394.
+- Current rule: this ADR, with ADR 394.
 - Quote: "The namespace service principal is removed (owner, 2026-11-14)."
-- Quote: "The install step writes the grants of each housekeeping principal as stored grants, with a creator and a time."
+- Quote: "The install step and each namespace creation write the grants of each housekeeping principal as stored grants, with a creator and a time."
 - Quote: "A revoke of the grant of one housekeeping principal stops only its own work, and the server writes the denial to the audit log."
 - Effect: This part makes the last three purposes run as their principals, refuses a credential and an out-of-purpose grant for each housekeeping principal, and completes the revoke and denial of decision 3. Part 1 made the principals and grants. Part 2 covers the other eight purposes. The first trigger change builds decision 1.
 - Conflict: none.
@@ -128,5 +128,6 @@ Questions considered and answered:
 - Is `@server` removed? No. It stays as the object of a grant on the installation (`pkg/identity/identity.go:802 (ServerObject)`). A run never acts as `@server`.
 - Who is the creator of the install grants? The install, recorded as the creator with the install time, as ADR 338 decision 1 did for the namespace grant.
 - What about the existing namespaces? No installation exists, so no migration (ADR 322).
+- Which grants does a purpose hold, and where? The roles table of part 1 decides it (owner, 2026-11-22): a grant on `@server` at install for the purposes that act on the installation, and a grant on each namespace at its creation for the purposes that act inside a namespace. The issuer rotation is of the second kind.
 
 Drafted by the PM from ADR 370, as part 3 of 3 of the change that was named `housekeeping-principals` alone.
