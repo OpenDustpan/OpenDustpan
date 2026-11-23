@@ -16,4 +16,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wiring, route authorization actions unchanged, e2e step deferred, usability check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only); full long and short outage e2e is BLOCKED by database-outage-e2e-probe.
+- [x] 4.1 Wiring, route authorization actions unchanged, e2e step deferred, usability check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only); full long and short outage e2e is BLOCKED by database-outage-e2e-probe.
