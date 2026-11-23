@@ -4,11 +4,11 @@ version: 3
 
 ## Why
 
-**Persona: namespace administrator.** Namespace administrator wants to define which cloud accounts a sweep may read, then start, cancel and list sweeps, without giving the server a cloud credential. The sweep runs on an operator pool of the installation, never on a namespace pool.
+**Persona: namespace administrator.** Namespace administrator wants to define which cloud accounts a sweep may read, then start, cancel and list sweeps, without giving the server a cloud credential. The sweep runs on a runner pool of the namespace that has the sweeps purpose.
 
 The user path this change must make work:
 
-1. **API.** Create a sweep target with the NEW route `POST /api/dustpan/v1/namespaces/{namespace}/sweep-targets`, with an operator pool, scopes and a command, using an access token.
+1. **API.** Create a sweep target with the NEW route `POST /api/dustpan/v1/namespaces/{namespace}/sweep-targets`, with a pool of the namespace, scopes and a command, using an access token.
 2. **API.** Start, list and cancel sweeps with the NEW routes under `/api/dustpan/v1/namespaces/{namespace}/sweeps`.
 3. **CLI.** Run the same calls with the generated CLI of the API description.
 4. **Docs page.** Read the target guide: command rules, read-only identity note and the error list.
@@ -19,7 +19,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | 404 unmanaged.target-not-found | Target not found in this namespace. List the targets. | `GET /api/dustpan/v1/namespaces/{namespace}/sweep-targets` (NEW route) |
 | 409 unmanaged.scan-busy | The target has a sweep that did not end. Cancel it or wait. | `GET /api/dustpan/v1/namespaces/{namespace}/sweeps?target={id}` (NEW route) |
-| 422 unmanaged.pool-not-sweeps | The pool is a namespace pool or has no sweeps purpose. Use an operator pool with the sweeps purpose. | `GET /api/dustpan/v1/namespaces/{namespace}/sweep-targets` (NEW route) |
+| 422 unmanaged.pool-not-sweeps | The pool has no sweeps purpose, or it is a pool of another namespace. Use a pool of the namespace with the sweeps purpose. | `GET /api/dustpan/v1/namespaces/{namespace}/sweep-targets` (NEW route) |
 | 422 unmanaged.command-invalid | The command breaks the rules: 1 to 256 arguments, 131072 bytes, no NUL byte, bare or clean absolute program. The error repeats nothing of the input. | `POST /api/dustpan/v1/namespaces/{namespace}/sweep-targets` (NEW route) |
 | 409 unmanaged.target-disabled | The target is disabled. Enable it, then start again. | `GET /api/dustpan/v1/namespaces/{namespace}/sweep-targets` (NEW route) |
 
@@ -72,7 +72,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
 
-- **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+- **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**: sweeps run on the user's own runners. The owner answered: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the namespace that has the sweep purpose. The host identity of the pool has no write access. No installation sweep pool exists. The pool API accepts the sweep purpose on a namespace pool with the same rules as for any other purpose.
 
 ## ADR check
 
@@ -95,7 +95,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 164, 300, 343.
 - Quote: "A runner of a pool for sweeps claims only `unmanaged.sweep.<pool ID>`."
 - Quote: "A delete of a pool fails with `runner.ErrPoolInUse` while a job that is not terminal or a sweep target names it."
-- Effect: A target accepts only an operator pool with the sweeps purpose. The purpose is never changed. A pool in use is not deleted.
+- Effect: A target accepts only a pool of the namespace with the sweeps purpose. The purpose is never changed. A pool in use is not deleted.
 - Conflict: none.
 
 **ADR 343: Runner work: tool imports, sweeps and the runner repository** (owner-tagged (all decisions)).
@@ -107,13 +107,22 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: No cloud code in the server.
 - Conflict: none.
 
+**ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors** (owner-tagged: decision 1).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR, with ADR 164, 343.
+- Quote: "A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access."
+- Effect: A sweep target names a pool of the namespace with the sweep purpose. The server refuses a pool without that purpose. No installation sweep pool exists.
+- Conflict: none. ADR 396 changes ADR 164 decision 5. It extends ADR 343 decision 3.
+
 ## Open questions
 
 none
 
 Questions considered and answered:
 
-- Which pools may a target name? Owner decision, 13 Nov 2026 (queue P14): only an operator pool with the sweeps purpose. A namespace pool is refused with 422 unmanaged.pool-not-sweeps.
+- Which pools may a target name? Owner decision, 23 Nov 2026 (ADR 396): a pool of the namespace with the sweeps purpose. The server refuses a pool without it with 422 unmanaged.pool-not-sweeps.
 - Does a sweep use the job model? No. ADR 164 decision 2.
 - Can the pool purpose change under a target? No. ADR 130 decision 3 (owner) forbids it. ADR 130 decision 10 refuses a pool delete.
 - Final route paths? ADR 210 puts tool-neutral routes under /api/dustpan/v1, so the NEW paths above are used with no alias, because no tag shipped the proposal paths of ADR 164.

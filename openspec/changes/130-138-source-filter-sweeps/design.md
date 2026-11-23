@@ -123,14 +123,14 @@ I-->B
 
 - Invariant: One active sweep for each target.
 - Invariant: A claim binds one runner to the scopes of the target.
-- `ClaimSweep`: pre: The sweep is queued.; The pool is an operator pool with the sweep purpose.. Post: It returns the assignment only when the pool and the start action allow it..
+- `ClaimSweep`: pre: The sweep is queued.; The pool belongs to the namespace and has the sweep purpose.. Post: It returns the assignment only when the pool and the start action allow it..
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Sweep dispatch | The runner stops after the claim. | The lease expires and a runner of the same pool claims the sweep again. | queued |
-| Report intake | The stream breaks or breaks a bound. | The operator starts a new sweep. The server keeps no prefix for matching. | failed |
+| Report intake | The stream breaks or breaks a bound. | The namespace administrator starts a new sweep. The server keeps no prefix for matching. | failed |
 
 ## Change impact (computed from main)
 

@@ -1,13 +1,13 @@
 ## Context
 
-Runners of operator sweep pools claim the work in a later part. This part stores targets and queued sweeps and cancels them.
+Runners of sweep pools of the namespace claim the work in a later part. This part stores targets and queued sweeps and cancels them.
 
 ## Decisions
 
 1. **Stable IDs.** Rows hold the namespace ID and the pool ID, never names. Target ID prefix trg-, sweep ID prefix swp-. The name is a label.
 2. **One open sweep in SQL.** A partial unique index on the target ID for sweeps with status queued, dispatched, running or matching makes two open sweeps impossible. The loser of a race gets ErrScanBusy from the constraint.
 3. **Start and cancel.** StartScan inserts the sweep and the durable operation in one transaction. Cancel moves queued and dispatched sweeps to canceled and stops the durable operation in the same transaction. A sweep in running or matching is refused with 409 unmanaged.scan-not-cancelable in this part.
-4. **Pool check.** The store checks in its transaction that the pool is an operator pool with the sweeps purpose. A pool delete is refused while a target names it.
+4. **Pool check.** The store checks in its transaction that the pool belongs to the namespace and has the sweeps purpose. A pool delete is refused while a target names it.
 5. **Backup class.** The target table goes in backup.Tables. The sweep tables are rebuildable and a backup leaves them out. A purge deletes all rows of the namespace ID.
 6. **Limits.** A command has at most 256 arguments and 131072 bytes. A namespace has at most 100 targets. A list answer has at most 200 sweeps for each page.
 
@@ -95,7 +95,7 @@ end
 subgraph Store[Storage boundary]
 D[(ScanStore SQL)]
 end
-subgraph Runner[Operator runner pool, later part]
+subgraph Runner[Runner pool of the namespace, later part]
 R[Runner starts the stored command]
 end
 C-->H
@@ -111,11 +111,11 @@ D-.->R
 | Client to server | T | A hostile command or scope is stored and a runner later starts it. | limit | 256 arguments, 131072 bytes, 100 targets for each namespace | TestTargetLimitsRefuseOverflow |
 | Client to server | T | A hostile command or scope is stored and a runner later starts it. | authorize at point of use | namespace:manage-sweeps on the namespace in the service | TestSweepRoutesRefuseWithoutGrant |
 | Client to server | T | A hostile command or scope is stored and a runner later starts it. | fail closed | an unknown pool, purpose or provider is refused and the refusal is audited | TestUnknownPoolRefusedAndAudited |
-| Client to server | E | A caller names a namespace pool or a pool of another namespace to run a sweep on user runners. | boundary check | the pool ID must match the pool ID allowlist form | TestPoolIDFormRefused |
-| Client to server | E | A caller names a namespace pool or a pool of another namespace to run a sweep on user runners. | encode or contain | the store joins the pool by its stable ID and the operator flag | TestStoreRefusesNamespacePool |
-| Client to server | E | A caller names a namespace pool or a pool of another namespace to run a sweep on user runners. | limit | purpose is fixed and never changes | TestPurposeChangeRefused |
-| Client to server | E | A caller names a namespace pool or a pool of another namespace to run a sweep on user runners. | authorize at point of use | the store checks the pool in the transaction of the write | TestRacingPoolSwapRefused |
-| Client to server | E | A caller names a namespace pool or a pool of another namespace to run a sweep on user runners. | fail closed | 422 unmanaged.pool-not-sweeps on any doubt | TestNamespacePoolRefused |
+| Client to server | E | A caller names a pool without the sweeps purpose or a pool of another namespace for a sweep. | boundary check | the pool ID must match the pool ID allowlist form | TestPoolIDFormRefused |
+| Client to server | E | A caller names a pool without the sweeps purpose or a pool of another namespace for a sweep. | encode or contain | the store joins the pool by its stable ID, its namespace ID and its purpose | TestStoreRefusesPoolWithoutSweepPurpose |
+| Client to server | E | A caller names a pool without the sweeps purpose or a pool of another namespace for a sweep. | limit | purpose is fixed and never changes | TestPurposeChangeRefused |
+| Client to server | E | A caller names a pool without the sweeps purpose or a pool of another namespace for a sweep. | authorize at point of use | the store checks the pool in the transaction of the write | TestRacingPoolSwapRefused |
+| Client to server | E | A caller names a pool without the sweeps purpose or a pool of another namespace for a sweep. | fail closed | 422 unmanaged.pool-not-sweeps on any doubt | TestPoolWithoutSweepPurposeRefused |
 | Client to server | D | Many starts or cancels flood the durable operation table. | boundary check | start accepts only a stored target ID | TestStartUnknownTargetRefused |
 | Client to server | D | Many starts or cancels flood the durable operation table. | encode or contain | a partial unique index keeps one open sweep for each target | TestConcurrentStartsOneWins |
 | Client to server | D | Many starts or cancels flood the durable operation table. | limit | one open sweep for each target and 200 rows for each list page | TestListPageLimit |
@@ -132,10 +132,10 @@ D-.->R
 **unmanaged target and sweep**
 
 - Invariant: The key is the stable ID. The name is a label.
-- Invariant: A target names an operator pool with the sweeps purpose.
+- Invariant: A target names a pool of the namespace with the sweeps purpose.
 - Invariant: The command has 1 to 256 arguments, at most 131072 bytes, no NUL byte.
 - Invariant: One open sweep for each target.
-- `CreateTarget`: pre: The fence holds.; The pool is an operator sweeps pool.. Post: A target row exists with a trg- ID..
+- `CreateTarget`: pre: The fence holds.; The pool belongs to the namespace and has the sweeps purpose.. Post: A target row exists with a trg- ID..
 - `UpdateTarget`: pre: The fence holds.; The target exists.. Post: The row holds the new fields and an audit entry exists..
 - `DeleteTarget`: pre: The fence holds.; No open sweep.. Post: The row is gone..
 - `StartScan`: pre: The target is enabled.; No open sweep.. Post: A queued sweep and a durable operation exist..

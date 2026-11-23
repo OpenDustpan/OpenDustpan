@@ -4447,3 +4447,15 @@ decisions:
   accepted_artifact: "docs/adr/0395-a-deny-gate-also-stops-a-job-token-write.md"
   evidence:
   - "docs/adr/0395-a-deny-gate-also-stops-a-job-token-write.md"
+- id: "adr-0396"
+  title: "ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors"
+  decision: "1. **Sweeps run on the team's runners (owner, 2026-11-23).** A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access. ADR 164 decision 1 and ADR 343 decision 3 say so, and main implements it. The line \"a sweep never runs on user runners\" no longer holds. The answer of 13 November 2026 about an installation pool no longer holds. The server has no installation sweep pool. The pool management API accepts the sweep purpose on a pool of a namespace. It applies the same rules as for any other purpose. The owner answered: \"Sweeps must run on the user's own runners as we most recently re-designed it.\"\n2. **The CLI does not audit a client-side refusal (owner, 2026-11-23).** The owner answered: \"Exempt client-side refusals, but document this\". A refusal that the CLI makes before it sends any request is a usage error. It has no audit entry. The server audits each call that reaches it. ADR 250 step 5 applies to the audit log of the server. The user guide of runner pools says this. The security section of `CLAUDE.md` says this too."
+  reason: "The change `130-138-runner-pools-management` and the changes that copy its owner line stopped on two questions. The product manager put them to the project owner. - On 13 November 2026 the owner answered queue item P14. The answer said that only an installation pool may have the sweep purpose, never a pool of a namespace. It kept an older line, \"a sweep never runs on user runners\". ADR 164 and ADR 343 put a sweep on the team's runner, with the read-only identity of its host. The two did not fit. The pool management API refused the sweep purpose on a pool of a namespace."
+  scope:
+  - "CLAUDE.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-23"
+  accepted_artifact: "docs/adr/0396-sweeps-run-on-the-teams-own-runners-and-the-cli-does-not-audit-its-own-usage-errors.md"
+  evidence:
+  - "docs/adr/0396-sweeps-run-on-the-teams-own-runners-and-the-cli-does-not-audit-its-own-usage-errors.md"

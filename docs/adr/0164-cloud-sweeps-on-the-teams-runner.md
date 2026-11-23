@@ -9,6 +9,7 @@ Changed by:
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 343 changes decision 5: a sweep pool no longer runs only sweeps.
 - ADR 343 extends decision 9: converters run on a pool that has the sweep purpose.
+- ADR 396 changes decision 5: a sweep runs on a runner pool of the team that has the sweep purpose. No installation sweep pool exists.
 
 ## Context
 
