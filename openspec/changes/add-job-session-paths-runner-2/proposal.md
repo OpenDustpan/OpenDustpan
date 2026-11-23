@@ -1,5 +1,5 @@
 ---
-version: 15
+version: 16
 ---
 
 Issue: #982, #1026.
@@ -83,7 +83,7 @@ The project owner decided this on 23 Nov 2026. The decision binds this change. T
 
 - **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**. The owner said: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the team. The pool has the sweep purpose. The host identity of the pool has no write access. ADR 164 decisions 1 and 5 and ADR 343 decisions 3 to 5 say so. The server has no installation sweep pool. The pool management API accepts the sweep purpose on a pool of a namespace. It applies the same rules as for any other purpose. A pool with the sweep purpose still gets no job session (ADR 130 decision 3).
 
-Not decided here: nothing about the pool API. Main has no installation pool and every pool belongs to a namespace (`pkg/runner/runner.go:232-236`). Under ADR 396 this is the intended design. Main refuses the sweep purpose on a namespace pool, and that is not product intent. This change adds no refusal of the sweep purpose on a pool. It does not touch the pool admin API. The session paths already refuse a claim of a sweep-purpose pool. That refusal is on the job session path. It is not a refusal at pool creation.
+Not decided here: nothing about the pool API. Main has no installation pool and every pool belongs to a namespace (`pkg/runner/runner.go:232-236`). Main accepts the sweeps purpose on a pool of a namespace (`Purpose.Valid`, `pkg/runner/runner.go:143`). Under ADR 396 this is the intended design: a sweep runs on a pool of the team. This change adds no refusal of the sweep purpose on a pool and does not touch the pool admin API. The session paths already refuse a claim of a sweep-purpose pool. That refusal is on the job session path, not at pool creation.
 
 ## ADR check
 
