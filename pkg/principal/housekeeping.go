@@ -12,6 +12,7 @@ type HousekeepingPurpose struct {
 	name                string
 	subject             string
 	role                string
+	actsOnInstallation  bool
 	actsInsideNamespace bool
 }
 
@@ -28,6 +29,11 @@ func (p HousekeepingPurpose) ID() string { return "prn-housekeeping-" + p.name }
 // Role returns the name of the role of the purpose.
 func (p HousekeepingPurpose) Role() string { return p.role }
 
+// ActsOnInstallation reports whether the principal of the purpose holds a
+// grant of its role on the installation (@server). The baseline of each store
+// dialect writes this grant.
+func (p HousekeepingPurpose) ActsOnInstallation() bool { return p.actsOnInstallation }
+
 // ActsInsideNamespace reports whether the role holds actions that act inside a
 // namespace.
 func (p HousekeepingPurpose) ActsInsideNamespace() bool { return p.actsInsideNamespace }
@@ -38,47 +44,47 @@ func housekeepingPurposeList() []HousekeepingPurpose {
 	return []HousekeepingPurpose{
 		{
 			name: "agent-reaper", subject: "housekeeping:agent-reaper",
-			role: "housekeeping-agent-reaper", actsInsideNamespace: true,
+			role: "housekeeping-agent-reaper", actsOnInstallation: true, actsInsideNamespace: true,
 		},
 		{
 			name: "artifact-sweep", subject: "housekeeping:artifact-sweep",
-			role: "housekeeping-artifact-sweep", actsInsideNamespace: false,
+			role: "housekeeping-artifact-sweep", actsOnInstallation: true, actsInsideNamespace: false,
 		},
 		{
 			name: "blob-sweep", subject: "housekeeping:blob-sweep",
-			role: "housekeeping-blob-sweep", actsInsideNamespace: false,
+			role: "housekeeping-blob-sweep", actsOnInstallation: true, actsInsideNamespace: false,
 		},
 		{
 			name: "checkpoint-sweep", subject: "housekeeping:checkpoint-sweep",
-			role: "housekeeping-checkpoint-sweep", actsInsideNamespace: false,
+			role: "housekeeping-checkpoint-sweep", actsOnInstallation: true, actsInsideNamespace: false,
 		},
 		{
 			name: "history-retention", subject: "housekeeping:history-retention",
-			role: "housekeeping-history-retention", actsInsideNamespace: true,
+			role: "housekeeping-history-retention", actsOnInstallation: false, actsInsideNamespace: true,
 		},
 		{
 			name: "issuer-rotation", subject: "housekeeping:issuer-rotation",
-			role: "housekeeping-issuer-rotation", actsInsideNamespace: true,
+			role: "housekeeping-issuer-rotation", actsOnInstallation: false, actsInsideNamespace: true,
 		},
 		{
 			name: "job-reconcile", subject: "housekeeping:job-reconcile",
-			role: "housekeeping-job-reconcile", actsInsideNamespace: true,
+			role: "housekeeping-job-reconcile", actsOnInstallation: false, actsInsideNamespace: true,
 		},
 		{
 			name: "name-lock-prune", subject: "housekeeping:name-lock-prune",
-			role: "housekeeping-name-lock-prune", actsInsideNamespace: false,
+			role: "housekeeping-name-lock-prune", actsOnInstallation: true, actsInsideNamespace: false,
 		},
 		{
 			name: "saved-view-cleanup", subject: "housekeeping:saved-view-cleanup",
-			role: "housekeeping-saved-view-cleanup", actsInsideNamespace: true,
+			role: "housekeeping-saved-view-cleanup", actsOnInstallation: false, actsInsideNamespace: true,
 		},
 		{
 			name: "temp-admin-expiry", subject: "housekeeping:temp-admin-expiry",
-			role: "housekeeping-temp-admin-expiry", actsInsideNamespace: false,
+			role: "housekeeping-temp-admin-expiry", actsOnInstallation: true, actsInsideNamespace: false,
 		},
 		{
 			name: "token-sweep", subject: "housekeeping:token-sweep",
-			role: "housekeeping-token-sweep", actsInsideNamespace: false,
+			role: "housekeeping-token-sweep", actsOnInstallation: true, actsInsideNamespace: false,
 		},
 	}
 }

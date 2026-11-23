@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -129,6 +130,7 @@ func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkPrincipalMembers(ctx, t, env, fx)
 	checkPrincipalChanges(ctx, t, env, fx)
 	checkPrincipalPaging(ctx, t, env, fx)
+	checkHousekeepingPrincipals(ctx, t, env)
 
 	for _, step := range []principalStep{
 		{http.MethodDelete, members + "/" + alice.ID, "", http.StatusNoContent},
@@ -242,6 +244,139 @@ func checkPrincipalKind(ctx context.Context, t *testing.T, env *e2e.Env, fx prin
 	principalCall(ctx, t, env, principalStep{
 		http.MethodGet, "/api/server/principals?kind=robot", "", http.StatusBadRequest,
 	}, nil)
+}
+
+// housekeepingNamespace is the namespace that checkHousekeepingPrincipals
+// creates.
+const housekeepingNamespace = "housekeeping"
+
+// checkHousekeepingPrincipals lists the housekeeping principals with the
+// source filter, reads the grants that each one holds on the installation
+// through the access review, creates a namespace and reads the grants of the
+// housekeeping principals on it through the access review of the namespace.
+func checkHousekeepingPrincipals(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	checkHousekeepingList(ctx, t, env)
+
+	server := housekeepingReview{
+		acts:   principal.HousekeepingPurpose.ActsOnInstallation,
+		path:   "/api/server/access-review",
+		object: "@server",
+	}
+	if n := checkHousekeepingGrants(ctx, t, env, server); n != 7 {
+		t.Fatalf("housekeeping grants on @server = %d, want 7", n)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces", `{"name":"` + housekeepingNamespace + `"}`, http.StatusCreated,
+	}, nil)
+
+	ns := housekeepingReview{
+		acts:   principal.HousekeepingPurpose.ActsInsideNamespace,
+		path:   "/api/server/namespaces/" + housekeepingNamespace + "/access-review",
+		object: housekeepingNamespace,
+	}
+	if n := checkHousekeepingGrants(ctx, t, env, ns); n != 5 {
+		t.Fatalf("housekeeping grants on %s = %d, want 5", housekeepingNamespace, n)
+	}
+}
+
+// checkHousekeepingList lists the principals of the source builtin and
+// fails unless the list holds one service for each housekeeping purpose.
+func checkHousekeepingList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var list struct {
+		NextCursor string         `json:"nextCursor"`
+		Principals []e2ePrincipal `json:"principals"`
+		Total      int64          `json:"total"`
+	}
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals?kind=service&source=builtin", "", http.StatusOK,
+	}, &list)
+
+	purposes := principal.HousekeepingPurposes()
+
+	ids := make([]string, 0, len(list.Principals))
+	for i := range list.Principals {
+		ids = append(ids, list.Principals[i].ID)
+
+		if list.Principals[i].Source != "builtin" || list.Principals[i].Kind != "service" {
+			t.Fatalf("builtin principal = %+v, want a service of the source builtin", list.Principals[i])
+		}
+	}
+
+	want := make([]string, 0, len(purposes))
+	for _, p := range purposes {
+		want = append(want, p.ID())
+	}
+
+	if !slices.Equal(ids, want) || list.Total != int64(len(purposes)) || list.NextCursor != "" {
+		t.Fatalf("builtin principals = %+v, want %v", list, want)
+	}
+}
+
+// housekeepingReview is one access review that checkHousekeepingGrants reads:
+// the path of the review, the object of the grants, and whether a purpose
+// holds a grant on that object.
+type housekeepingReview struct {
+	acts   func(principal.HousekeepingPurpose) bool
+	path   string
+	object string
+}
+
+// checkHousekeepingGrants reads the access review of r with the subject
+// filter of each housekeeping principal. A principal for which r.acts is true
+// must hold one grant of its role on r.object, and any other principal none.
+// It returns the count of the principals that hold a grant on r.object.
+func checkHousekeepingGrants(ctx context.Context, t *testing.T, env *e2e.Env, r housekeepingReview) int {
+	t.Helper()
+
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		rows := reviewOf(ctx, t, env, r.path, url.Values{"subject": {"principal:" + p.ID()}})
+		rows = housekeepingRows(rows, r.object)
+
+		if !r.acts(p) {
+			if len(rows) != 0 {
+				t.Fatalf("grants of %s on %s = %+v, want none", p.Subject(), r.object, rows)
+			}
+
+			continue
+		}
+
+		checkHousekeepingRow(t, p, r.object, rows)
+
+		n++
+	}
+
+	return n
+}
+
+// housekeepingRows returns the rows of rows on object, and leaves out the rows
+// that a grant on a containing object gives.
+func housekeepingRows(rows []e2eReviewRow, object string) []e2eReviewRow {
+	return slices.DeleteFunc(slices.Clone(rows), func(r e2eReviewRow) bool {
+		return r.Object != object || r.InheritedFrom != ""
+	})
+}
+
+// checkHousekeepingRow fails unless rows is one current grant of the role of
+// p on object, with the server as the creator and a time.
+func checkHousekeepingRow(t *testing.T, p principal.HousekeepingPurpose, object string, rows []e2eReviewRow) {
+	t.Helper()
+
+	if len(rows) != 1 {
+		t.Fatalf("grants of %s on %s = %+v, want 1", p.Subject(), object, rows)
+	}
+
+	r := rows[0]
+	if r.Role != p.Role() || r.Subject != "principal:"+p.ID() || r.GrantedBy != "@server" ||
+		r.GrantedAtMs == nil || r.RevokedAtMs != nil || r.Source != "grant" {
+		t.Fatalf("grant of %s on %s = %+v, want the role %s from @server with a time", p.Subject(), object, r, p.Role())
+	}
 }
 
 // checkPageRefusals reads pages with a bad limit, prefix or cursor: each

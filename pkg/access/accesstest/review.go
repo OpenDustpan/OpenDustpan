@@ -21,6 +21,7 @@ func reviewCases() []struct {
 		test func(t *testing.T, s access.Store)
 		name string
 	}{
+		{name: "review reads the install grants of the housekeeping principals", test: testReviewInstallGrants},
 		{name: "review reads each scope", test: testReviewScopes},
 		{name: "review filters by subject", test: testReviewSubject},
 		{name: "review pages in the order of grant time and ID", test: testReviewPaging},
@@ -148,6 +149,20 @@ func review(
 	return rows
 }
 
+// seededGrants returns the number of grants that the baseline seeds: one on
+// @server for each housekeeping purpose that acts on the installation.
+func seededGrants() int {
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsOnInstallation() {
+			n++
+		}
+	}
+
+	return n
+}
+
 // installGrantIDs returns the IDs of the grants that the baseline seeds, in
 // the order of the review. Call it before the test adds a grant.
 func installGrantIDs(t *testing.T, rs access.ReviewStore) []string {
@@ -158,8 +173,9 @@ func installGrantIDs(t *testing.T, rs access.ReviewStore) []string {
 		t.Fatalf("read the install grants: %v", err)
 	}
 
-	if total != int64(len(rows)) || len(rows) == 0 {
-		t.Fatalf("install grants = %d rows, total %d, want the seeded grants", len(rows), total)
+	want := seededGrants()
+	if total != int64(want) || len(rows) != want {
+		t.Fatalf("install grants = %d rows, total %d, want %d", len(rows), total, want)
 	}
 
 	out := make([]string, 0, len(rows))
@@ -168,6 +184,45 @@ func installGrantIDs(t *testing.T, rs access.ReviewStore) []string {
 	}
 
 	return out
+}
+
+// testReviewInstallGrants reads the grants that the baseline seeds: one grant
+// on @server of the role of each housekeeping purpose that acts on the
+// installation, with the server as the creator, and no other grant.
+func testReviewInstallGrants(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reviewStore(t, s)
+
+	rows, _, err := rs.ReviewGrants(t.Context(), everyRow(allScope()))
+	if err != nil {
+		t.Fatalf("read the install grants: %v", err)
+	}
+
+	byRole := map[string]access.Grant{}
+	for i := range rows {
+		byRole[rows[i].Grant.Role] = rows[i].Grant
+	}
+
+	if len(rows) != seededGrants() || len(byRole) != seededGrants() {
+		t.Fatalf("install grants = %d rows of %d roles, want %d", len(rows), len(byRole), seededGrants())
+	}
+
+	for _, p := range principal.HousekeepingPurposes() {
+		g, ok := byRole[p.Role()]
+		if ok != p.ActsOnInstallation() {
+			t.Fatalf("install grant of role %q = %t, want %t", p.Role(), ok, p.ActsOnInstallation())
+		}
+
+		if !ok {
+			continue
+		}
+
+		if g.Subject != principalSubject(p.ID()) || g.Object.String() != identity.ServerObject().String() ||
+			g.CreatedBy != "@server" {
+			t.Fatalf("install grant of %s = %+v, want %s on @server from @server", p.Subject(), g, p.Role())
+		}
+	}
 }
 
 func testReviewScopes(t *testing.T, s access.Store) {
