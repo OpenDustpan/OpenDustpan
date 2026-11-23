@@ -1,7 +1,7 @@
 # housekeeping-principals Specification
 
 ## Purpose
-TBD - created by archiving change housekeeping-principals-install. Update Purpose after archive.
+Each housekeeping purpose of the server (the sweeps, the retention, the expiry of temporary administrators) exists as a named principal with stored grants that an operator can list and read in the access review.
 
 ## Requirements
 
