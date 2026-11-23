@@ -23,6 +23,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step in the NEW file e2e/job_token_state_write_test.go for a runner plan then apply on both tools, using the job token credential on the routes that call the guard on main. The job token comes from add-job-session-paths-runner-token-issuer, which is on main. Check: make e2e.
+- [ ] 4.1 Add an e2e step in the NEW file e2e/job_token_state_write_test.go for a runner plan then apply on both tools, using the job token credential on the routes that call the guard on main: POST /api/v2/workspaces/{id}/actions/lock, POST /api/v2/workspaces/{id}/actions/unlock and POST /api/v2/workspaces/{id}/state-versions for OpenTofu, and POST /api/stacks/{namespace}/{project}/{stack}/import and POST /api/stacks/{namespace}/{project}/{stack}/restore/{version} for the Pulumi CLI (credential: job token). The job token comes from add-job-session-paths-runner-token-issuer, which is on main. Check: make e2e.
 - [ ] 4.2 Document the refusal and the plan lock on the state.write docs page under docs/guides/. At docs/guides/state-write-gates.md line 374, the `state write refused` line also has the job ID and the phase name. Check: make docs-lint
 - [ ] 4.3 Wiring, route actions, docs page and usability check done. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).
