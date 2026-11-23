@@ -38,7 +38,19 @@ The message never repeats the value that you sent. These are the valid values:
 | `isolation` | A list of `kubernetes`, `firecracker`, `gvisor` or `process`. |
 | `gitCredentials.mode` | `none`, `forge` or `custom`. |
 
-List the pools of the namespace:
+## List the pools
+
+List the pools of the namespace with the CLI:
+
+```sh
+opendustpan runner pools list --namespace acme --server https://dustpan.example.com
+```
+
+The command prints one line for each pool, with the columns name, id, purpose,
+concurrency and isolation separated by one tab, sorted by name. Add
+`--output json` to print the server answer unchanged.
+
+To list the pools with curl, use `GET` on the same path:
 
 ```sh
 curl -sS https://dustpan.example.com/api/dustpan/v1/namespaces/acme/runner-pools \

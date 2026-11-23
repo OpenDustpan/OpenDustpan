@@ -21,4 +21,4 @@
 - [ ] 3.4 Add OpenTofu e2e step against the real CLI in the NEW file e2e/39_reveal_state_value_tofu_test.go, which calls the NEW route `POST /api/dustpan/v1/units/{ref}/state/reveal` (declaration file `internal/api/apidesc/units_state.go`, adapter file `internal/api/state/units_state.go`) with an access token. Check: e2e step runs real OpenTofu apply then calls the NEW `POST /api/dustpan/v1/units/{ref}/state/reveal` with an access token; BLOCKED by the NEW route until wired.
 - [ ] 3.5 Write the NEW docs page docs/guides/revealing-state-values.md for reveal. Check: docs page command runs as written from a clean install.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 3.6 Agent pre-run (human run-through in person-steps (39-reveal-state-value 3.6)): Run usability check Check: Developer completes the path from the docs page alone, each error names one command. Record the transcript in the pull request body.
-- [ ] 3.7 Run full check Check: `make check` with zero findings.
+- [ ] 3.7 Run full check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only)

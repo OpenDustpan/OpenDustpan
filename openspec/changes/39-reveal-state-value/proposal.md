@@ -2,6 +2,8 @@
 version: 1
 ---
 
+Issue: #3563.
+
 ## Why
 
 **Persona: developer.** A Developer needs to reveal one secret value of a stack or workspace when plain text is needed, with a clear audit record.
@@ -46,7 +48,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- main reads the secrets provider name of a Pulumi state (`pkg/stack/reveal_test.go:56 (func TestSecretsProviderNamesOther)`)
+- main reads the secrets provider name of a Pulumi state (`pkg/stack/reveal_test.go:59 (func TestSecretsProviderNamesOther)`)
 
 ## ADR check
 

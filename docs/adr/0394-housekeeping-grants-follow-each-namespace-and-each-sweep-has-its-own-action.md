@@ -35,7 +35,7 @@ The owner answered on 22 November 2026: Q1 option C, Q2 option A, Q3 option B.
 1. **Each namespace creation writes the grants of the housekeeping roles
    (owner, 2026-11-22).** The owner chose option C for Q1. The creation of a
    namespace writes one stored grant on that namespace for each of the five
-   roles that act inside a namespace: `housekeeping-agent-reaper`,
+   roles that act inside a namespace: `housekeeping-agent-run-reaper`,
    `housekeeping-history-retention`, `housekeeping-issuer-rotation`,
    `housekeeping-job-reconcile` and `housekeeping-saved-view-cleanup`. Each
    grant has a creator and a time. A person can list, audit and revoke each
@@ -52,6 +52,19 @@ The owner answered on 22 November 2026: Q1 option C, Q2 option A, Q3 option B.
    the job service. The reconcile principal holds no start action and no
    `job:cancel`, so a leaked credential of it cannot start a plan, an apply or
    a destroy.
+4. **No role granted on `@server` holds a namespace action (owner,
+   2026-11-23).** The owner chose "Split the role" for the finding of the
+   security review of the namespace grants: an installation role with server
+   actions only, plus a per-namespace role that holds
+   `namespace:manage-agent-runs`. The purpose `agent-reaper` holds two roles.
+   `housekeeping-agent-reveal-sweep` holds only `server:sweep-agent-reveals`
+   and is granted on `@server` at the install. `housekeeping-agent-run-reaper`
+   holds only `namespace:manage-agent-runs` and is granted on each namespace at
+   its creation (decision 1). A revoke of the namespace grant then denies the
+   action on that namespace, and no role granted on `@server` holds a
+   namespace action. Before this decision one role, `housekeeping-agent-reaper`,
+   held both actions and was granted on both objects, so the revoke of the
+   namespace grant had no effect.
 
 ## Consequences
 
@@ -67,3 +80,11 @@ The owner answered on 22 November 2026: Q1 option C, Q2 option A, Q3 option B.
 - The changes `housekeeping-principals-install`,
   `housekeeping-principals-sweeps` and `housekeeping-principals` build these
   decisions.
+
+## Changelog
+
+- 2026-11-23, wording refinement with the owner's word (decision 4): decision
+  1 listed the namespace role `housekeeping-agent-reaper`. It now lists
+  `housekeeping-agent-run-reaper`, because decision 4 splits that role in two.
+  The intent is in decision 4: no role granted on `@server` holds a namespace
+  action.

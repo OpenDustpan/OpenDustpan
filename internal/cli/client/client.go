@@ -36,6 +36,7 @@ var ErrUsage = errors.New(
 		"  opendustpan placement add <namespace>\n" +
 		"  opendustpan placement list <namespace>\n" +
 		"  opendustpan placement delete <namespace> <rule-id>\n" +
+		"  opendustpan runner pools list --namespace <namespace>\n" +
 		"  opendustpan host create-temp-admin <person>\n" +
 		"  opendustpan audit-chain status\n" +
 		"  opendustpan audit-chain approve\n" +

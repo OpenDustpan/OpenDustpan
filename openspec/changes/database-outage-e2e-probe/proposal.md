@@ -2,6 +2,8 @@
 version: 3
 ---
 
+Issue: #3931.
+
 Roadmap: `docs/roadmap.md:475` (Add long and short outage steps with retry measurement.).
 
 ## Why
@@ -26,9 +28,9 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Main has the OpenTofu state version write path that the probe exercises Proof: internal/api/tfe/states.go:602 (func Handler.writeStateVersion)
-- Main has the workspace lock and unlock handlers that the probe checks for no leftover lock Proof: internal/api/tfe/locks.go:103 (func Handler.lockWorkspace)
+- Main has the workspace lock and unlock handlers that the probe checks for no leftover lock Proof: internal/api/tfe/locks.go:134 (func Handler.lockWorkspace)
 - Main has the readiness and liveness routes that the probe polls on each instance Proof: GET /health/ready in route table or API description
-- Main has the suite helpers for tofu apply, tofu plan, and pulumi preview steps Proof: pkg/dustpan/jobservice.go:846 (func tofuApplySteps)
+- Main has the suite helpers for tofu apply, tofu plan, and pulumi preview steps Proof: pkg/dustpan/jobservice.go:890 (func tofuApplySteps)
 
 ## What Changes
 
@@ -60,12 +62,12 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Suite helpers run tofu apply steps (`pkg/dustpan/jobservice.go:846 (func tofuApplySteps)`)
+- Suite helpers run tofu apply steps (`pkg/dustpan/jobservice.go:890 (func tofuApplySteps)`)
 - Handler writes a state version in the TFE-compatible API (`internal/api/tfe/states.go:602 (func Handler.writeStateVersion)`)
-- Handler locks a workspace (`internal/api/tfe/locks.go:103 (func Handler.lockWorkspace)`)
-- Handler unlocks a workspace (`internal/api/tfe/locks.go:216 (func Handler.unlockWorkspace)`)
-- Suite helper runs a pulumi preview step (`pkg/dustpan/jobservice.go:900 (func pulumiPreviewStep)`)
-- Suite helpers run tofu plan steps (`pkg/dustpan/jobservice.go:831 (func tofuPlanSteps)`)
+- Handler locks a workspace (`internal/api/tfe/locks.go:134 (func Handler.lockWorkspace)`)
+- Handler unlocks a workspace (`internal/api/tfe/locks.go:266 (func Handler.unlockWorkspace)`)
+- Suite helper runs a pulumi preview step (`pkg/dustpan/jobservice.go:944 (func pulumiPreviewStep)`)
+- Suite helpers run tofu plan steps (`pkg/dustpan/jobservice.go:875 (func tofuPlanSteps)`)
 
 ## ADR check
 
