@@ -680,6 +680,16 @@ var Settings = []*Setting{
 		referenceNone,
 	),
 	stringSetting(
+		"namespace", "", "",
+		"namespace that the command reads on the server",
+		referenceNone,
+	),
+	stringSetting(
+		"output", "", "",
+		"print the server answer as json, unchanged",
+		referenceNone,
+	),
+	stringSetting(
 		"backup", "", "",
 		"backup ID to check or restore, for example bkp-aaa",
 		referenceNone,

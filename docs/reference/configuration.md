@@ -253,8 +253,9 @@ set a variable with the prefix `DUSTPAN_`: the launcher refuses it.
 
 `opendustpan namespace create`, the `opendustpan collection` and
 `opendustpan placement` commands, `opendustpan backup`, `opendustpan backup
-check`, `opendustpan upgrade check`, `opendustpan restore` and the
-`opendustpan audit-chain` commands call a running server. They read the
+check`, `opendustpan upgrade check`, `opendustpan restore`, the
+`opendustpan audit-chain` commands and `opendustpan runner pools list` call
+a running server. They read the
 server URL from `--server` or
 `DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or
 `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
@@ -270,6 +271,7 @@ Each client command takes only the flags in its row:
 | `opendustpan placement add <namespace>` | `--server`, `--ca-file`, `--tool`, `--project`, `--stack`, `--collection`, `--position` |
 | `opendustpan placement list <namespace>` | `--server`, `--ca-file` |
 | `opendustpan placement delete <namespace> <rule-id>` | `--server`, `--ca-file` |
+| `opendustpan runner pools list --namespace <namespace>` | `--server`, `--ca-file`, `--namespace`, `--output` |
 | `opendustpan backup` | `--server`, `--ca-file` |
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
@@ -293,6 +295,11 @@ An unknown name makes no rule. Run `opendustpan collection list` to see the name
 stack pattern and collection ID. `placement delete` takes the namespace and rule ID.
 Deleting a rule does not move stacks or workspaces that it already placed.
 The [quickstart](../guides/quickstart.md) shows the create and add commands.
+
+`opendustpan runner pools list` prints one line for each runner pool of the namespace,
+with the columns name, id, purpose, concurrency and isolation separated by one tab,
+sorted by name. `--output json` prints the server answer unchanged. The
+[runner pools guide](../guides/runner-pools.md) shows the command.
 
 `opendustpan key generate` calls no server and opens no database. It writes a
 new key-encryption key file to the path in `--out` and refuses a file that
