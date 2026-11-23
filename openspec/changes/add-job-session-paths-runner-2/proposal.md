@@ -1,5 +1,5 @@
 ---
-version: 14
+version: 15
 ---
 
 Issue: #982, #1026.
@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | The launcher calls a session path with a bad, expired or replayed session proof, or with a runner key. | 401 {"code": "bad-proof", "message": "session proof failed"} | `POST /runner/v1/session/renew` (new in this change) with a fresh proof of the session key |
 | The launcher writes after a takeover, cancel or expiry ended the claim. | 409 {"code": "claim-lost", "message": "claim no longer live"} | `POST /runner/v1` poll path of the runner (route of main under /runner/v1) with the runner key to take the next claim |
-| The launcher sends a log chunk above 1 MiB, above a step or phase cap, out of order or with a wrong hash. | 400 {"code": "invalid", "message": "log chunk refused"} | `POST /runner/v1/session/logs` (new in this change) with the same sequence number and the correct Dustpan-Content-SHA256 |
+| The launcher sends a log chunk above 1 MiB, above a step or phase cap, or out of order. | 400 {"code": "invalid"}. The message names the rule: "the log of the step or of the phase is at its cap", or "chunk <n> of step <step> is not the next one, which is <m>" | `POST /runner/v1/session/logs` (new in this change) with the same sequence number and the correct Dustpan-Content-SHA256 |
 | The launcher commits other plan parts after a commit stored the plan. | 409 {"code": "conflict", "message": "..."} (ADR 131 decision 13; a repeat with the same parts and hashes answers 204) | `POST /runner/v1/session/renew` to keep the claim, then stop: the first commit stands |
 
 Evidence for the claims above:
