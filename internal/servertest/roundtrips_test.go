@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // This file holds the regression benchmark of database round trips: for each
@@ -1643,9 +1644,45 @@ func restoreModel() costModel {
 // principal for each purpose, one grant on the installation for each purpose
 // that acts on it and one grant on acme for each purpose that acts inside a
 // namespace), fewer rows than one batch, so the load writes one batch
-// transaction for each of the 2 tables: begin, the bounds, the search path,
-// the insert and the commit. The count does not grow with the units.
-const housekeepingSeedTrips = 2 + 2*5
+// transaction for each of the 2 tables. The count does not grow with the
+// units. TestHousekeepingSeedFitsOneBatch fails when the seeded rows need more
+// than one batch.
+const housekeepingSeedTrips = seedTables + seedTables*batchTransactionTrips
+
+// seedTables is the number of tables that hold the housekeeping seed: the
+// principals and the grants.
+const seedTables = 2
+
+// batchTransactionTrips is the number of statements of one batch transaction
+// of the load: begin, the bounds, the search path, the insert and the commit.
+const batchTransactionTrips = 5
+
+// loadBatchRows is the number of rows of one batch transaction of the load.
+// It is the same value as portableBatchRows of the store packages.
+const loadBatchRows = 200
+
+// TestHousekeepingSeedFitsOneBatch checks that the housekeeping rows that the
+// backup holds fit in one batch for each table, as housekeepingSeedTrips
+// counts. A new purpose that makes a table need a second batch fails here.
+func TestHousekeepingSeedFitsOneBatch(t *testing.T) {
+	t.Parallel()
+	purposes := principal.HousekeepingPurposes()
+	grants := 0
+	for i := range purposes {
+		if purposes[i].ActsOnInstallation() {
+			grants++
+		}
+		if purposes[i].ActsInsideNamespace() {
+			grants++
+		}
+	}
+	if len(purposes) > loadBatchRows {
+		t.Errorf("housekeeping principals = %d, want at most %d (one batch)", len(purposes), loadBatchRows)
+	}
+	if grants > loadBatchRows {
+		t.Errorf("housekeeping grants = %d, want at most %d (one batch)", grants, loadBatchRows)
+	}
+}
 
 // swappedSettingTrips is the number of round trips of the read of the restore
 // access setting row in the swap transaction: one SELECT after the swap and
