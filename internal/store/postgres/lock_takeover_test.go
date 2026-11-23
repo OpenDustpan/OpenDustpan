@@ -65,6 +65,31 @@ func TestCommittedLockStaysHeld(t *testing.T) {
 		env.lockAsBob(t)
 	})
 
+	t.Run("a second store on the same schema sees the lock", func(t *testing.T) {
+		t.Parallel()
+
+		env := newLockEnv(t, base)
+		env.lockAsAlice(t)
+
+		second := env.onSecondStore(t)
+
+		_, err := second.svc.LockWithID(t.Context(), second.ws.ID, "bob", "takeover", "lock-2")
+		if !errors.Is(err, workspace.ErrLocked) {
+			t.Fatalf("lock as bob on the second store = %v, want workspace.ErrLocked", err)
+		}
+
+		second.wantHolder(t, "alice", "lock-1")
+
+		noOverrides := namespace.Overrides{Forced: false, Unlocked: false}
+		_, _, err = second.svc.ForceUnlock(t.Context(), second.ws.ID, "admin", noOverrides, nil, forceUnlockEntry())
+		if err != nil {
+			t.Fatalf("force-unlock on the second store: %v", err)
+		}
+
+		second.lockAsBob(t)
+		env.wantHolder(t, "bob", "lock-2")
+	})
+
 	t.Run("two concurrent lock acquires: exactly one wins", func(t *testing.T) {
 		t.Parallel()
 
@@ -74,7 +99,7 @@ func TestCommittedLockStaysHeld(t *testing.T) {
 	t.Run("two concurrent state version writes: the stale fence fails", func(t *testing.T) {
 		t.Parallel()
 
-		raceStateWrites(t, openTakeoverStore(t, base))
+		raceStateWrites(t, openTakeoverStore(t, pgtest.MigratedURL(t, base)))
 	})
 }
 
@@ -201,10 +226,11 @@ func takeoverStart() time.Time {
 	return time.UnixMilli(1_700_000_100_000).UTC()
 }
 
-func openTakeoverStore(t *testing.T, base string) *postgres.Store {
+// openTakeoverStore opens a store on the database at url.
+func openTakeoverStore(t *testing.T, url string) *postgres.Store {
 	t.Helper()
 
-	s, err := postgres.Open(t.Context(), pgtest.MigratedURL(t, base))
+	s, err := postgres.Open(t.Context(), url)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -218,6 +244,7 @@ func openTakeoverStore(t *testing.T, base string) *postgres.Store {
 // free workspace and a clock that the test moves. The lock tests and the
 // retry test of an upload use it.
 type lockEnv struct {
+	url   string
 	s     *postgres.Store
 	svc   *workspace.Service
 	clock *takeoverClock
@@ -227,8 +254,26 @@ type lockEnv struct {
 func newLockEnv(t *testing.T, base string) lockEnv {
 	t.Helper()
 
-	s := openTakeoverStore(t, base)
+	url := pgtest.MigratedURL(t, base)
+	s := openTakeoverStore(t, url)
 	ws, _ := seedLockWorkspace(t, s)
+
+	return lockEnvOn(t, url, s, ws)
+}
+
+// onSecondStore returns a lock environment over a second store on the
+// database of e, with its own workspace service and the same workspace.
+func (e lockEnv) onSecondStore(t *testing.T) lockEnv {
+	t.Helper()
+
+	return lockEnvOn(t, e.url, openTakeoverStore(t, e.url), e.ws)
+}
+
+// lockEnvOn returns a lock environment with a real workspace service over s,
+// the store on the database at url that holds ws.
+func lockEnvOn(t *testing.T, url string, s *postgres.Store, ws workspace.Workspace) lockEnv {
+	t.Helper()
+
 	clock := &takeoverClock{mu: sync.Mutex{}, now: takeoverStart()}
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: s, Now: clock.Now, Installation: "eu-west"})
@@ -258,7 +303,7 @@ func newLockEnv(t *testing.T, base string) lockEnv {
 		t.Fatalf("workspace service: %v", err)
 	}
 
-	return lockEnv{s: s, svc: svc, clock: clock, ws: ws}
+	return lockEnv{url: url, s: s, svc: svc, clock: clock, ws: ws}
 }
 
 // lockAsAlice takes the lock of the workspace of e as alice under lock-1.
