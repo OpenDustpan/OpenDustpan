@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing gate service tests for out-of-phase, cross-unit, plan-lock, no-phase, cancelled-job, deny-gate (an allowed apply write and the plan lock, each refused with a decision record), no-gate-match (an allowed write with a record) and unlocked-write cases in the new file pkg/gate/statewrite_jobclaim_test.go. Check: go test ./pkg/gate/... -run TestStateWriteJobClaim -count=1
+- [x] 1.1 Write failing gate service tests for out-of-phase, cross-unit, plan-lock, no-phase, cancelled-job, deny-gate (an allowed apply write and the plan lock, each refused with a decision record), no-gate-match (an allowed write with a record) and unlocked-write cases in the new file pkg/gate/statewrite_jobclaim_test.go. Check: go test ./pkg/gate/... -run TestStateWriteJobClaim -count=1
 - [x] 1.2 Write failing subject source tests in the new file pkg/dustpan/jobclaim_test.go (the inner source is `principalSubjects` at pkg/dustpan/stateguard.go:395): a job that resolves gives the claim; an unknown job, an empty job ID and a terminal job each give identity.ErrDenied; a second call after a phase change gives the new phase. Check: go test ./pkg/dustpan/... -run TestJobClaimSubjects -count=1
 - [x] 1.3 Write route-level tests for the routes that call `GuardStateWrite` on main (Pulumi import, restore, cancel, delete and rename; TFE lock, force unlock, rollback and delete): an apply-phase job token on the unit of its job is allowed, and the lock of its plan is allowed (these fail on main, because `principalSubjects.Subject` gives no job and the gate refuses each job-token write); a plan-only job token, a token of another unit and a route unit other than the job's unit are refused with 403, each as identity.ErrDenied through the state.write gate with an audit entry. Put the Pulumi cases in the new file internal/api/stategate/jobtoken_pulumi_test.go and the TFE cases in the new file internal/api/stategate/jobtoken_tfe_test.go. Add a test in the new file pkg/stack/preview_no_state_test.go that pins that a preview or a dry run writes no journal batch and no checkpoint (it passes on main by design). Check: go test ./internal/api/stategate/... ./pkg/stack/... -run 'JobToken|PreviewNoState' -count=1
 
@@ -17,7 +17,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Not applicable: the change adds no route and no field, so `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves the golden file and the clients unchanged.
+- [x] 3.1 Not applicable: the change adds no route and no field, so `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves the golden file and the clients unchanged.
 
 ## 4. Definition of done
 
