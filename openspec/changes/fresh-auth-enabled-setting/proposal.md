@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #3257.
@@ -62,6 +62,7 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - internal/api/tfe/freshness.go, internal/api/pulumi/freshness.go, internal/api/profile/freshness.go, internal/api/issuer/freshness.go: hold the same `Guard`.
 - internal/api/tfe/tfe.go, internal/api/pulumi/pulumi.go, internal/api/profile/profile.go, internal/api/issuer/issuer.go, internal/api/jobs/jobs.go, internal/issuersvc/issuersvc.go: the struct that holds the `Guard` field.
 - internal/store/jobstore/store.go, internal/store/jobstore/apply.go, internal/store/jobstore/record.go: pass the policy to `checkDestroyProof`.
+- internal/trustrulesvc/service.go, internal/trustrulesvc/service_bundle.go: `requireFresh` takes the `Guard` and `requireWriter` (`service_bundle.go:164`) passes it, so the bundle writes use the same policy.
 - pkg/accesstoken/service.go, pkg/profile/service.go, pkg/profile/issuer_settings.go, internal/issuersvc/settings.go, pkg/dustpan/auditchain.go: hold a `Guard`.
 - pkg/job/service_approve.go, pkg/job/gate.go, internal/store/jobstore/events.go, internal/api/jobs/approve.go: the destroy approval reads the policy.
 - pkg/dustpan (wiring): makes the one `Policy` and the `Guard` of each layer.
