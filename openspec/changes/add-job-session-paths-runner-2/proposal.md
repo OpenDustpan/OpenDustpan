@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 12
 ---
 
 Issue: #982, #1026.
@@ -14,7 +14,7 @@ The user path this change must make work:
 2. **API.** The launcher opens a job session with the handoff token, then renews the claim through the session renew path.
 3. **API.** The launcher begins and ends steps, streams log chunks, uploads plan parts and commits the plan. A repeat of the same commit answers 204.
 4. **Docs page.** The runner operator reads docs/reference/runner-api.md for each session path, cap and error code.
-5. **E2e.** The step drives the real launcher against POST /runner/v1/session with a handoff token, then the session paths with the session key proof (action runner:claim).
+5. **E2e.** The step drives the e2e launcher client (`e2e.FakeLauncher`, which speaks the session protocol; the `dustpan-launcher` binary has its own change) against POST /runner/v1/session with a handoff token, then the session paths with the session key proof (action runner:claim).
 
 Errors the person may hit, and the one command that helps:
 
