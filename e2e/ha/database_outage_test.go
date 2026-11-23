@@ -37,15 +37,62 @@ const (
 
 var errOutageLockStays = errors.New("the workspace stays locked after a lock during the outage")
 
-// outageSetup holds the real installation that the probe drives.
+// outageSetup holds the real installation that the probe drives and the
+// installed CLI of each version of the matrix.
 type outageSetup struct {
-	env       *e2e.Env
-	cluster   *e2e.HACluster
-	probe     *ha.DatabaseOutageProbe
-	matrix    []ha.CLIVersion
-	pulumi    e2e.Install
-	tofu      e2e.Install
-	reportKey map[string]string
+	env     *e2e.Env
+	cluster *e2e.HACluster
+	probe   *ha.DatabaseOutageProbe
+	matrix  []ha.CLIVersion
+	pulumis []e2e.Install
+	tofus   []e2e.Install
+}
+
+// outageRound is one pair of installed CLI versions that one outage step
+// runs. The index names the projects and the step of the round.
+type outageRound struct {
+	index        int
+	pulumi, tofu e2e.Install
+}
+
+// rounds pairs the versions of the two matrices, so that each version runs in
+// at least one round. The shorter matrix repeats its last version.
+func (s *outageSetup) rounds() []outageRound {
+	rounds := make([]outageRound, 0, max(len(s.pulumis), len(s.tofus)))
+
+	for i := range max(len(s.pulumis), len(s.tofus)) {
+		rounds = append(rounds, outageRound{
+			index:  i,
+			pulumi: s.pulumis[min(i, len(s.pulumis)-1)],
+			tofu:   s.tofus[min(i, len(s.tofus)-1)],
+		})
+	}
+
+	return rounds
+}
+
+// installOutageMatrix installs each version of the matrix of tool. A version
+// that cannot be installed fails the test, and the failure names the version.
+func installOutageMatrix(ctx context.Context, t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool) []e2e.Install {
+	t.Helper()
+
+	labels := tool.Versions()
+	if len(labels) == 0 {
+		t.Fatalf("the %s matrix has no version", tool.Name)
+	}
+
+	installs := make([]e2e.Install, 0, len(labels))
+
+	for _, label := range labels {
+		install, err := fetcher.Install(ctx, tool, label)
+		if err != nil {
+			t.Fatalf("install %s %s: %v", tool.Name, label, err)
+		}
+
+		installs = append(installs, install)
+	}
+
+	return installs
 }
 
 // probeProxy adapts the database control of the environment to the fixture.
@@ -114,28 +161,16 @@ func newOutageSetup(t *testing.T) *outageSetup {
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cache}
 
-	pulumiTool, tofuTool := e2e.Pulumi(), e2e.OpenTofu()
-	pulumiInstall, err := fetcher.Install(ctx, pulumiTool, pulumiTool.Single())
-	if err != nil {
-		t.Fatalf("install the Pulumi CLI: %v", err)
+	pulumis := installOutageMatrix(ctx, t, fetcher, e2e.Pulumi())
+	tofus := installOutageMatrix(ctx, t, fetcher, e2e.OpenTofu())
+
+	matrix := make([]ha.CLIVersion, 0, len(pulumis)+len(tofus))
+
+	for _, install := range slices.Concat(pulumis, tofus) {
+		matrix = append(matrix, ha.CLIVersion{Tool: install.Tool, Version: install.Version})
 	}
 
-	tofuInstall, err := fetcher.Install(ctx, tofuTool, tofuTool.Single())
-	if err != nil {
-		t.Fatalf("install the OpenTofu CLI: %v", err)
-	}
-
-	matrix := make([]ha.CLIVersion, 0, len(pulumiTool.Versions())+len(tofuTool.Versions()))
-
-	for _, version := range pulumiTool.Versions() {
-		matrix = append(matrix, ha.CLIVersion{Tool: pulumiTool.Name, Version: version})
-	}
-
-	for _, version := range tofuTool.Versions() {
-		matrix = append(matrix, ha.CLIVersion{Tool: tofuTool.Name, Version: version})
-	}
-
-	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, pulumiInstall, e2e.StorePostgres)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, pulumis[0], e2e.StorePostgres)
 	cluster := env.HA(t)
 
 	targets := make([]ha.Instance, 0, cluster.Size())
@@ -153,12 +188,8 @@ func newOutageSetup(t *testing.T) *outageSetup {
 		cluster: cluster,
 		probe:   probe,
 		matrix:  matrix,
-		pulumi:  pulumiInstall,
-		tofu:    tofuInstall,
-		reportKey: map[string]string{
-			pulumiTool.Name: ha.VersionLabel(pulumiTool.Name, pulumiInstall.Version),
-			tofuTool.Name:   ha.VersionLabel(tofuTool.Name, tofuInstall.Version),
-		},
+		pulumis: pulumis,
+		tofus:   tofus,
 	}
 }
 
@@ -226,13 +257,15 @@ type outageProject struct {
 	pulumiMarker, tofuMarker string
 }
 
-func newOutageProject(ctx context.Context, t *testing.T, s *outageSetup, name string) outageProject {
+func newOutageProject(
+	ctx context.Context, t *testing.T, s *outageSetup, round *outageRound, name string,
+) outageProject {
 	t.Helper()
 
 	pulumiDir, tofuDir, markers := t.TempDir(), t.TempDir(), t.TempDir()
 	project := outageProject{
-		pulumi:       outageCLI{env: s.env, install: s.pulumi, dir: pulumiDir},
-		tofu:         outageCLI{env: s.env, install: s.tofu, dir: tofuDir},
+		pulumi:       outageCLI{env: s.env, install: round.pulumi, dir: pulumiDir},
+		tofu:         outageCLI{env: s.env, install: round.tofu, dir: tofuDir},
 		stack:        e2e.Namespace + "/" + name + "/dev",
 		workspace:    name,
 		pulumiMarker: filepath.Join(markers, "pulumi-started"),
@@ -484,11 +517,21 @@ func outageWritesAt(t *testing.T, marker string) time.Time {
 	return info.ModTime().Add(outageWork * time.Second)
 }
 
+// longOutageStep names the recorder step of the long outage of round.
+func longOutageStep(round *outageRound) string {
+	return fmt.Sprintf("long database outage %d", round.index)
+}
+
 func recordOutageRetries(
-	t *testing.T, s *outageSetup, step string, report *ha.RetryReport, writesAt map[string]time.Time,
+	t *testing.T, s *outageSetup, round *outageRound, report *ha.RetryReport, writesAt map[string]time.Time,
 ) {
 	t.Helper()
 
+	step := longOutageStep(round)
+	reportKey := map[string]string{
+		e2e.ToolPulumi: ha.VersionLabel(round.pulumi.Tool, round.pulumi.Version),
+		e2e.ToolTofu:   ha.VersionLabel(round.tofu.Tool, round.tofu.Version),
+	}
 	entries := s.env.Recorder.Entries()
 
 	for i := range entries {
@@ -511,7 +554,7 @@ func recordOutageRetries(
 			continue
 		}
 
-		version, found := s.reportKey[name]
+		version, found := reportKey[name]
 		if !found || entry.At.Before(writesAt[name]) {
 			continue
 		}
@@ -594,16 +637,43 @@ func checkOutageStop(
 	}
 }
 
+// runLongOutage runs the long outage once for each round, so that each
+// version of the matrix retries its writes. A version with no retry window
+// fails the test, and the failure names the version.
 func runLongOutage(t *testing.T, s *outageSetup) *ha.RetryReport {
 	t.Helper()
 
-	ctx := t.Context()
-	project := newOutageProject(ctx, t, s, "haoutage")
 	report := ha.NewRetryReport(s.matrix)
+
+	rounds := s.rounds()
+	for i := range rounds {
+		runLongOutageRound(t, s, &rounds[i], report)
+	}
+
+	if unmeasured := report.Unmeasured(); len(unmeasured) > 0 {
+		t.Fatalf("no retry window measured for %s: each version of the matrix must retry a refused write",
+			strings.Join(unmeasured, ", "))
+	}
+
+	t.Logf("retry report: %s", report)
+
+	if _, err := s.probe.ShortWindow(report); err != nil {
+		t.Fatalf("short window from the retry report: %v", err)
+	}
+
+	return report
+}
+
+func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report *ha.RetryReport) {
+	t.Helper()
+
+	ctx := t.Context()
+	project := newOutageProject(ctx, t, s, round, fmt.Sprintf("haoutage%d", round.index))
 	before := outageVersions(ctx, t, s.env, project.workspace)
 	idsBefore := outageInstanceIDs(s.cluster)
 
-	s.env.Recorder.SetStep("long database outage")
+	t.Logf("long outage with pulumi %s and tofu %s", round.pulumi.Version, round.tofu.Version)
+	s.env.Recorder.SetStep(longOutageStep(round))
 
 	write := outageWriteRequest(s.env)
 	checkOutageStop(ctx, t, s, project, write)
@@ -656,7 +726,7 @@ func runLongOutage(t *testing.T, s *outageSetup) *ha.RetryReport {
 
 	checkOutageRun(t, "pulumi up", runs.up)
 	checkOutageRun(t, "tofu apply", runs.apply)
-	recordOutageRetries(t, s, "long database outage", report, writesAt)
+	recordOutageRetries(t, s, round, report, writesAt)
 
 	// A failed apply must leave no state version. A successful apply commits one.
 	if runs.apply.res.ExitCode != 0 {
@@ -671,14 +741,6 @@ func runLongOutage(t *testing.T, s *outageSetup) *ha.RetryReport {
 	project.pulumi.run(ctx, t, "up", "--yes", "--non-interactive", "--stack", project.stack)
 	project.tofu.run(ctx, t, "apply", "-input=false", "-auto-approve", "-no-color")
 	checkOutageNoChanges(ctx, t, s, project)
-
-	t.Logf("retry report: %s", report)
-
-	if _, err := s.probe.ShortWindow(report); err != nil {
-		t.Fatalf("short window from the retry report: %v", err)
-	}
-
-	return report
 }
 
 // TestDatabaseOutageLongOutage proves that a 60 s stop during both CLIs ends
@@ -692,7 +754,8 @@ func TestDatabaseOutageLongOutage(t *testing.T) {
 }
 
 // TestDatabaseOutageShortOutage measures the retry window in the long step and
-// stops PostgreSQL for half of the smallest window in the same run.
+// stops PostgreSQL for half of the smallest window in the same run, once for
+// each round of the matrix.
 func TestDatabaseOutageShortOutage(t *testing.T) {
 	t.Parallel()
 
@@ -705,11 +768,23 @@ func TestDatabaseOutageShortOutage(t *testing.T) {
 		t.Fatalf("short window: %v", err)
 	}
 
+	rounds := s.rounds()
+	for i := range rounds {
+		runShortOutageRound(t, s, &rounds[i], window, report)
+	}
+}
+
+func runShortOutageRound(
+	t *testing.T, s *outageSetup, round *outageRound, window time.Duration, report *ha.RetryReport,
+) {
+	t.Helper()
+
 	ctx := t.Context()
-	project := newOutageProject(ctx, t, s, "haquick")
+	project := newOutageProject(ctx, t, s, round, fmt.Sprintf("haquick%d", round.index))
 	before := outageVersions(ctx, t, s.env, project.workspace)
 
-	s.env.Recorder.SetStep("short database outage")
+	t.Logf("short outage with pulumi %s and tofu %s", round.pulumi.Version, round.tofu.Version)
+	s.env.Recorder.SetStep(fmt.Sprintf("short database outage %d", round.index))
 
 	write := outageWriteRequest(s.env)
 	checkOutageStop(ctx, t, s, project, write)

@@ -113,6 +113,20 @@ func (r *RetryReport) Shortest() time.Duration {
 	return shortest
 }
 
+// Unmeasured returns the label of each CLI version of the matrix that has no
+// refused write attempt, in matrix order.
+func (r *RetryReport) Unmeasured() []string {
+	var labels []string
+
+	for _, label := range r.order {
+		if !r.attempted[label] {
+			labels = append(labels, label)
+		}
+	}
+
+	return labels
+}
+
 // String names each CLI version and the seconds it retried one write. A
 // version with no refused attempt is "not measured".
 func (r *RetryReport) String() string {

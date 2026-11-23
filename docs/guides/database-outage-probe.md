@@ -10,8 +10,10 @@ Before each outage, the suite stops PostgreSQL, checks that each instance
 refuses a write with `503`, and starts PostgreSQL again. If a write is not
 refused, the outage test fails before it starts a CLI command.
 
-The suite runs one OpenTofu apply and one Pulumi up through the proxy. Then
-the suite stops PostgreSQL for 60 seconds.
+The suite installs each Pulumi CLI and OpenTofu version of the suite matrix.
+If the suite cannot install a version, the test fails and names that version. For
+each version, the suite runs one OpenTofu apply and one Pulumi up through the
+proxy. Then the suite stops PostgreSQL for 60 seconds.
 
 During the stop, each instance answers `503` on `GET /health/ready`. Each API
 write answers `503` with `Retry-After: 5`.
@@ -60,8 +62,8 @@ when `DUSTPAN_TEST_POSTGRES_URL` has no value.
 ## Check the results
 
 The retry report lists each CLI version and the seconds it retried one state
-write in the long outage. A version with no refused write shows
-`not measured`. The short outage uses that report in the same run.
+write in the long outage. If a version has no refused write, the test fails
+and names that version. The short outage uses that report in the same run.
 
 ## References
 

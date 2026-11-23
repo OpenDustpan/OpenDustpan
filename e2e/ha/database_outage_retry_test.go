@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -225,5 +226,9 @@ func TestDatabaseOutageRetryReportNotMeasured(t *testing.T) {
 
 	if got, want := report.String(), "pulumi 3.262.0: 8s, pulumi 3.200.0: not measured"; got != want {
 		t.Errorf("retry report is %q, want %q", got, want)
+	}
+
+	if got, want := report.Unmeasured(), []string{"pulumi 3.200.0"}; !slices.Equal(got, want) {
+		t.Errorf("unmeasured versions are %v, want %v", got, want)
 	}
 }
