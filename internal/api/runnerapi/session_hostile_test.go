@@ -36,7 +36,7 @@ func TestSessionHostileRunnerKeyOnLogAndStep(t *testing.T) {
 
 			s := newSessionEnv(t, b)
 			l := s.launch()
-			now := time.Now().UTC()
+			now := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
 
 			calls := []struct {
 				name string
@@ -700,7 +700,7 @@ func TestSessionHostileNamespaceSweepPool(t *testing.T) {
 			// the check of the exchange failed.
 			s = newSweepEnv(t, b)
 			l := s.launchSweep()
-			now := time.Now().UTC()
+			now := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
 
 			calls := []struct {
 				name string
