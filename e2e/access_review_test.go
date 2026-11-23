@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // e2eReviewRow and e2eReview decode the access-review wire forms.
@@ -315,6 +316,25 @@ func grantRows(rows []e2eReviewRow) []e2eReviewRow {
 	return slices.DeleteFunc(slices.Clone(rows), func(r e2eReviewRow) bool { return r.Holder != "" })
 }
 
+// seedReviewOf returns the rows of reviewOf without the grants that the
+// server gives to the housekeeping principals: on the installation at
+// install, and on each namespace when it is created. A row counts as one of
+// them only when it holds the role of the purpose of its principal.
+func seedReviewOf(ctx context.Context, t *testing.T, env *e2e.Env, path string, query url.Values) []e2eReviewRow {
+	t.Helper()
+
+	roles := make(map[string]string)
+	for _, p := range principal.HousekeepingPurposes() {
+		roles["principal:"+p.ID()] = p.Role()
+	}
+
+	return slices.DeleteFunc(reviewOf(ctx, t, env, path, query), func(r e2eReviewRow) bool {
+		role, ok := roles[r.Subject]
+
+		return ok && role == r.Role
+	})
+}
+
 // bootstrapRows returns the count of the rows of bootstrap admin tokens in
 // an export with query: one for each of the two tokens of the harness, or
 // none with a subject filter.
@@ -383,13 +403,13 @@ func checkReviewScopes(ctx context.Context, t *testing.T, env *e2e.Env, f review
 			"maintainer@pulumi:review/web/prod<",
 		)},
 	} {
-		got := reviewRoles(reviewOf(ctx, t, env, c.path, c.query))
+		got := reviewRoles(seedReviewOf(ctx, t, env, c.path, c.query))
 		if !slices.Equal(got, c.want) {
 			t.Fatalf("%s rows = %q, want %q", c.path, got, c.want)
 		}
 	}
 
-	rows := reviewOf(ctx, t, env, "/api/server/access-review", url.Values{})
+	rows := seedReviewOf(ctx, t, env, "/api/server/access-review", url.Values{})
 	for i := range rows {
 		// The site administrator of the fresh sessions is not part of the seed.
 		if rows[i].GrantID == "grt-e2e-fresh-admin" {
@@ -505,7 +525,7 @@ func checkReviewHistory(ctx context.Context, t *testing.T, env *e2e.Env, f revie
 		http.MethodDelete, "/api/server/groups/" + f.reviewers.ID + "/members/" + f.carol.ID, "", http.StatusNoContent,
 	}, nil)
 
-	if rows := reviewOf(ctx, t, env, "/api/server/access-review", url.Values{}); len(rows) != 5 {
+	if rows := seedReviewOf(ctx, t, env, "/api/server/access-review", url.Values{}); len(rows) != 5 {
 		t.Fatalf("snapshot after the revoke = %q, want 5 rows, with the site administrator of the fresh sessions",
 			reviewRoles(rows))
 	}
@@ -519,7 +539,7 @@ func checkReviewHistory(ctx context.Context, t *testing.T, env *e2e.Env, f revie
 		"to":   {strconv.FormatInt(time.Now().UnixMilli()+1, 10)},
 	}
 
-	rows := reviewOf(ctx, t, env, "/api/server/access-review", window)
+	rows := seedReviewOf(ctx, t, env, "/api/server/access-review", window)
 	if len(rows) != 6 {
 		t.Fatalf("history = %q, want 6 rows, with the site administrator of the fresh sessions", reviewRoles(rows))
 	}

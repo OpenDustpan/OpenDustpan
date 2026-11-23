@@ -35,12 +35,11 @@ func housekeepingCases() []struct {
 // created namespace gets: one grant for each purpose that acts inside a
 // namespace, with the server as the creator and the time of the namespace.
 func housekeepingNamespaceGrants(ns namespace.Namespace) ([]access.Grant, []audit.Entry) {
-	var (
-		grants  []access.Grant
-		entries []audit.Entry
-	)
+	purposes := principal.HousekeepingPurposes()
+	grants := make([]access.Grant, 0, len(purposes))
+	entries := make([]audit.Entry, 0, len(purposes))
 
-	for _, p := range principal.HousekeepingPurposes() {
+	for _, p := range purposes {
 		if !p.ActsInsideNamespace() {
 			continue
 		}
