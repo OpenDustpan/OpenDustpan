@@ -22,6 +22,6 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Add e2e step against the real runner and the real directory over 3 units in NEW file e2e/run_all_on_runner_discovery_test.go through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Real runner claims a wrapper job over 3 Terragrunt units through ANY /runner/v1 with a runner token and the preview lists 3 unit references with no state version.
-- [ ] 3.2 Write the Terragrunt discovery docs page in NEW file docs/guides/terragrunt-discovery.md in the same pull request. Check: Docs page command sequence runs as written against a test installation.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
+- [ ] 3.2 Write the Terragrunt discovery docs page in NEW file docs/guides/terragrunt-discovery.md in the same pull request. Check: Docs page command sequence runs as written against a test installation. A Go e2e test runs each command of the docs page against the e2e test server. `make docs-lint` passes on each edited guide.
 - [ ] 3.3 Agent pre-run (human run-through in person-steps (run-all-on-runner-discovery 3.3)): Run the usability check of the discovery path. Check: Runner operator completes discovery from the docs page alone and each error names the one command that helps. Record the transcript in the pull request body.
 - [ ] 3.4 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only)
