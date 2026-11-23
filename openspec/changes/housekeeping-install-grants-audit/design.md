@@ -18,8 +18,8 @@
 
 Tables:
 
-- `installation` gets one column: `housekeeping_installed_at_ms INTEGER NULL` (PostgreSQL: `BIGINT NULL`), in the baseline of both dialects and in `internal/store/schema/migrations/0168_baseline.sql`, with `make generate` for the code of `internal/db`. The seven `INSERT INTO grants` rows leave the baseline files (SQLite lines 2079-2085, PostgreSQL lines 1814-1820 in the branch of `housekeeping-principals-install`). The `INSERT INTO principals` rows stay.
-- No other schema change. The new query `MarkHousekeepingInstalled` is in the `queries.sql` file of each dialect.
+- `installation` gets one column: `housekeeping_installed_at_ms INTEGER NULL` (PostgreSQL: `BIGINT NULL`), in the baseline of both dialects and in `internal/store/schema/migrations/0168_baseline.sql`, with `make generate` for the generated code of `internal/store/sqlite/internal/db` and `internal/store/postgres/internal/db`. The seven `INSERT INTO grants` rows leave the baseline files (SQLite lines 2079-2085, PostgreSQL lines 1814-1820 in the branch of `housekeeping-principals-install`). The `INSERT INTO principals` rows stay.
+- No other schema change. The new query `MarkHousekeepingInstalled` is in `internal/store/sqlite/queries.sql` and `internal/store/postgres/queries.sql`.
 
 Files (install and restore):
 
@@ -28,7 +28,7 @@ Files (install and restore):
 - `internal/store/sqlite/backup_stage_portable.go` and `internal/store/postgres/backup_stage_portable.go`, `internal/store/sqlite/restore.go`: no behavior change; tests only (task 1.3). The stage keeps the marker of the live installation row.
 - `pkg/access/access.go`: NEW `ErrHousekeepingInstall`.
 - NEW test files `internal/store/sqlite/housekeeping_install_internal_test.go` and `internal/store/postgres/housekeeping_install_internal_test.go`.
-- Conformance: NEW cases in `pkg/access/accesstest` (an installation has seven grants with the install time and one audit entry each) and in `pkg/audit` conformance for the chain.
+- Conformance: NEW cases in `pkg/access/accesstest` (an installation has seven grants with the install time and one audit entry each) and in `pkg/audit/audittest` for the chain.
 
 No route, no action and no role is new. The existing routes show the result: `GET /api/server/access-review` and `GET /api/audit/entries`.
 
