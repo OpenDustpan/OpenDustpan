@@ -37,6 +37,12 @@ func NewStateCommitForTest(s *Store, fence namespace.Fence) StateCommitForTest {
 	return StateCommitForTest{commit: newStateCommit(s, fence)}
 }
 
+// NewStateCommitRetryForTest returns the guard with the idempotent retry of a
+// finalize, so a test can repeat a finalize that already committed.
+func NewStateCommitRetryForTest(s *Store, fence namespace.Fence) StateCommitForTest {
+	return StateCommitForTest{commit: newStateCommit(s, fence).withRetry()}
+}
+
 // FinalizeStateVersion commits sv with the guard.
 func (c StateCommitForTest) FinalizeStateVersion(
 	ctx context.Context, sv workspace.StateVersion,

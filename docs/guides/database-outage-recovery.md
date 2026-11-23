@@ -25,13 +25,18 @@ Wait until the database returns, and run the same command again:
 tofu apply
 ```
 
-A retry with the same lock identity returns the result that the first request committed when the reply was lost.
+Sometimes the commit finished but the reply did not arrive.
+Then a retry of the same upload with the same content returns the committed state version.
 The server writes no second state version.
 When the first commit rolled back, the retry writes the state version once.
 
-A committed lock stays held by its holder.
-When the lock expires, another instance can take it over.
-You do not need to unlock the workspace by hand.
+A lock acquire that rolled back leaves no held lock, so you do not need to unlock the workspace by hand.
+A committed lock stays held by its holder until the holder releases it.
+If the lock stays held after the outage, release it with the lock ID that OpenTofu shows:
+
+```sh
+tofu force-unlock <lock-id>
+```
 
 ## Check the state
 

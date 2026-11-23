@@ -26,7 +26,7 @@ func TestRetryWithSameIdentityMakesNoDuplicate(t *testing.T) {
 		t.Fatalf("CreateStateVersion: %v", createErr)
 	}
 
-	commit := postgres.NewStateCommitForTest(s, fence)
+	commit := postgres.NewStateCommitRetryForTest(s, fence)
 	if finErr := commit.FinalizeStateVersion(ctx, sv); finErr != nil {
 		t.Fatalf("FinalizeStateVersion: %v", finErr)
 	}

@@ -11,30 +11,31 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-const committedLockExpiry = 30 * time.Second
-
 // stateCommit wraps fenced state and lock writes in one transaction.
 type stateCommit struct {
 	store *Store
 	fence namespace.Fence
+	// retryFinalize lets a repeated finalize report the result that already
+	// committed. Without it, a finalize of a version that is not pending is
+	// refused as before.
+	retryFinalize bool
 }
 
 // newStateCommit builds the unexported transaction guard for fenced state
-// and lock writes. Only it may mark a state version current or a lock held.
+// and lock writes. It marks a state version current or a lock held only
+// inside one fenced transaction.
 func newStateCommit(store *Store, fence namespace.Fence) stateCommit {
-	return stateCommit{store: store, fence: fence}
+	return stateCommit{store: store, fence: fence, retryFinalize: false}
 }
 
 func (c stateCommit) FinalizeStateVersion(ctx context.Context, sv workspace.StateVersion) error {
-	row, err := codec.FinalizeStateVersionRow(sv)
-	if err != nil {
-		return err
-	}
-	return c.store.inFencedTx(ctx, c.fence, func(q *db.Queries) error {
-		return finalizeInTx(
-			ctx, unitStateTx{q: q, logger: c.store.logger, retryFinalize: true}, sv, row, nil,
-		)
-	})
+	return c.commitFinalize(ctx, sv, nil)
+}
+
+func (c stateCommit) FinalizeStateVersionExpecting(
+	ctx context.Context, sv workspace.StateVersion, expect workspace.StateVersionID,
+) error {
+	return c.commitFinalize(ctx, sv, &expect)
 }
 
 func (c stateCommit) AcquireLock(
@@ -44,39 +45,17 @@ func (c stateCommit) AcquireLock(
 
 	var got workspace.Workspace
 	err := c.store.inFencedTx(ctx, c.fence, func(q *db.Queries) error {
-		wrow, err := q.LockWorkspaceForFinalize(ctx, id.String())
+		wrow, err := lockWorkspace(ctx, q, id.String())
 		if err != nil {
 			return err
 		}
-		w := codec.FromWorkspaceRow(codec.WorkspaceRow{
-			Namespace:           wrow.Namespace,
-			NamespaceID:         "",
-			Name:                wrow.Name,
-			ID:                  wrow.ID,
-			LockID:              wrow.LockID,
-			LockHolder:          wrow.LockHolder,
-			LockReason:          wrow.LockReason,
-			CurrentStateVersion: wrow.CurrentStateVersionID,
-			AllowForcedWrites:   wrow.AllowForcedWrites,
-			AllowUnlockedWrites: wrow.AllowUnlockedWrites,
-			Revision:            wrow.Revision,
-			LockedAtMs:          wrow.LockedAtMs,
-			CreatedAtMs:         wrow.CreatedAtMs,
-			UpdatedAtMs:         wrow.UpdatedAtMs,
-			LastReleaseLockID:   wrow.LastReleaseLockID,
-			LastReleaseHolder:   wrow.LastReleaseHolder,
-			LastReleaseBy:       wrow.LastReleaseBy,
-			LastReleaseKind:     wrow.LastReleaseKind,
-			LastReleaseAtMs:     wrow.LastReleaseAtMs,
-		})
+		w := workspaceFromRow(wrow, "")
 		if w.Lock.Locked() {
 			if w.Lock.Holder == holder && w.Lock.ID == lockID {
 				got = w
 				return nil
 			}
-			if at.Sub(w.Lock.LockedAt) < committedLockExpiry || w.Lock.Holder == holder {
-				return workspace.ErrLocked
-			}
+			return workspace.ErrLocked
 		}
 		w.Lock = workspace.Lock{LockedAt: at, ID: lockID, Holder: holder, Reason: reason}
 		w.Revision++
@@ -98,31 +77,11 @@ func (c stateCommit) ReleaseLock(
 ) (workspace.Workspace, error) {
 	var got workspace.Workspace
 	err := c.store.inFencedTx(ctx, c.fence, func(q *db.Queries) error {
-		wrow, err := q.LockWorkspaceForFinalize(ctx, id.String())
+		wrow, err := lockWorkspace(ctx, q, id.String())
 		if err != nil {
 			return err
 		}
-		w := codec.FromWorkspaceRow(codec.WorkspaceRow{
-			Namespace:           wrow.Namespace,
-			NamespaceID:         "",
-			Name:                wrow.Name,
-			ID:                  wrow.ID,
-			LockID:              wrow.LockID,
-			LockHolder:          wrow.LockHolder,
-			LockReason:          wrow.LockReason,
-			CurrentStateVersion: wrow.CurrentStateVersionID,
-			AllowForcedWrites:   wrow.AllowForcedWrites,
-			AllowUnlockedWrites: wrow.AllowUnlockedWrites,
-			Revision:            wrow.Revision,
-			LockedAtMs:          wrow.LockedAtMs,
-			CreatedAtMs:         wrow.CreatedAtMs,
-			UpdatedAtMs:         wrow.UpdatedAtMs,
-			LastReleaseLockID:   wrow.LastReleaseLockID,
-			LastReleaseHolder:   wrow.LastReleaseHolder,
-			LastReleaseBy:       wrow.LastReleaseBy,
-			LastReleaseKind:     wrow.LastReleaseKind,
-			LastReleaseAtMs:     wrow.LastReleaseAtMs,
-		})
+		w := workspaceFromRow(wrow, "")
 		repeat := workspace.ReleaseRepeat{LockID: lockID, Holder: "", Caller: holder, Kind: workspace.ReleaseNormal}
 		if w.RepeatsRelease(at, repeat) {
 			got = w
@@ -154,6 +113,33 @@ func (c stateCommit) ReleaseLock(
 		return workspace.Workspace{}, fmt.Errorf("release lock %s: %w", id, err)
 	}
 	return got, nil
+}
+
+// withRetry returns the guard with the idempotent retry of a finalize.
+func (c stateCommit) withRetry() stateCommit {
+	c.retryFinalize = true
+	return c
+}
+
+// commitFinalize finalizes sv in one fenced transaction, with the expected
+// current version when expect is set.
+func (c stateCommit) commitFinalize(
+	ctx context.Context, sv workspace.StateVersion, expect *workspace.StateVersionID,
+) error {
+	row, err := codec.FinalizeStateVersionRow(sv)
+	if err != nil {
+		return err
+	}
+
+	return c.store.inFencedTx(ctx, c.fence, func(q *db.Queries) error {
+		return finalizeInTx(
+			ctx,
+			unitStateTx{q: q, logger: c.store.logger, retryFinalize: c.retryFinalize},
+			sv,
+			row,
+			expect,
+		)
+	})
 }
 
 func saveLockRow(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
