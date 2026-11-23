@@ -65,6 +65,11 @@ type StateWrite struct {
 // A write that the job model allows then meets the gates of state.write and
 // writes a decision record, as the write of a person does, so a deny gate
 // refuses it. The access limits hold for a job token too.
+//
+// A refusal of a write with a job token is a *RefusalError whose Job is the
+// claim of the subject: a refusal of the job model wraps identity.ErrDenied
+// and no gate sentinel. A refusal of the subject source has no subject, so it
+// has no claim.
 func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, error) {
 	ctx = withFactMemo(ctx)
 
@@ -73,6 +78,40 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 		return Decision{}, fmt.Errorf("state.write: %w", err)
 	}
 
+	d, err := s.guardSubjectWrite(ctx, w, subject)
+	if err != nil {
+		return Decision{}, withJobClaim(err, subject.Job)
+	}
+
+	return d, nil
+}
+
+// withJobClaim returns err with the job claim on its refusal. A refusal of
+// the job model is not a *RefusalError, so it becomes one that wraps it. Any
+// other error comes back unchanged.
+func withJobClaim(err error, job *JobClaim) error {
+	if job == nil {
+		return err
+	}
+
+	if refused, ok := errors.AsType[*RefusalError](err); ok {
+		if refused != nil {
+			refused.Job = job
+		}
+
+		return err
+	}
+
+	if errors.Is(err, identity.ErrDenied) {
+		return &RefusalError{Err: err, Record: "", Messages: nil, Job: job}
+	}
+
+	return err
+}
+
+// guardSubjectWrite checks the access limits and evaluates the gates of w
+// for subject.
+func (s *Service) guardSubjectWrite(ctx context.Context, w StateWrite, subject Subject) (Decision, error) {
 	if !subject.BreakGlassAccount {
 		call := AccessCall{Principal: w.Principal, Action: w.Action, Object: w.Unit}
 
@@ -176,7 +215,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy Appro
 	// depth: the adapter reads the state from the store, and the facts
 	// builder checks the change again. This check does not rely on either.
 	if err = checkStateChange(c); err != nil {
-		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}}
+		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}, Job: nil}
 	}
 
 	run, err := s.newStateWriteRun(ctx, c, policy)
@@ -196,6 +235,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy Appro
 			Err:      fmt.Errorf("%w: write the decision record: %w", ErrUnavailable, err),
 			Record:   rec.ID,
 			Messages: []string{"The decision record could not be written, so the write is refused."},
+			Job:      nil,
 		}
 	}
 
@@ -303,15 +343,17 @@ func (r *stateWriteRun) decide(rec *Record, total *unitEffect, engineDown bool) 
 
 	switch {
 	case len(total.denies) > 0:
-		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.denies}
+		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.denies, Job: nil}
 	case engineDown:
 		rec.Result = ResultError
-		r.refusal = &RefusalError{Err: ErrUnavailable, Record: "", Messages: []string{cleanText(r.engineErr.Error())}}
+		r.refusal = &RefusalError{
+			Err: ErrUnavailable, Record: "", Messages: []string{cleanText(r.engineErr.Error())}, Job: nil,
+		}
 	case len(total.errs) > 0:
-		r.refusal = &RefusalError{Err: ErrRuleFailed, Record: "", Messages: total.errs}
+		r.refusal = &RefusalError{Err: ErrRuleFailed, Record: "", Messages: total.errs, Job: nil}
 	case len(total.approvals) > 0:
 		// A CLI cannot wait for people, so an approval outcome refuses.
-		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.approvals}
+		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.approvals, Job: nil}
 	default:
 	}
 }
@@ -877,6 +919,7 @@ func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key Br
 		r.refusal = &RefusalError{
 			Err: fmt.Errorf("%w: break-glass pass: %w", ErrUnavailable, err), Record: "",
 			Messages: []string{"The break-glass pass could not be checked, so the write is refused."},
+			Job:      nil,
 		}
 	}
 }

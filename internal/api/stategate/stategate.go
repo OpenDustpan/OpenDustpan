@@ -383,7 +383,7 @@ func stateUnreadable(cause error) *gate.RefusalError {
 	// also stay gate.limit without this branch. This branch does not rely on
 	// that ranking.
 	if errors.Is(cause, gate.ErrLimit) {
-		return &gate.RefusalError{Err: cause, Record: "", Messages: []string{StateUnreadableText}}
+		return &gate.RefusalError{Err: cause, Record: "", Messages: []string{StateUnreadableText}, Job: nil}
 	}
 
 	return unavailable(cause, "", StateUnreadableText)
@@ -422,11 +422,26 @@ func guardError(ctx context.Context, log *slog.Logger, w Write, record Recorder,
 	}
 
 	refused, ok := errors.AsType[*gate.RefusalError](err)
-	if !ok || refused.Err == nil {
+	if !ok || refused.Err == nil || jobModelDenial(refused) {
+		var job *gate.JobClaim
+		if ok {
+			job = refused.Job
+		}
+
 		refused = notDecided(ctx, log, err)
+		refused.Job = job
 	}
 
 	return refuse(ctx, log, w, record, refused)
+}
+
+// jobModelDenial reports whether refused is a refusal of the job model: it
+// wraps identity.ErrDenied and no gate sentinel. The guard puts the job claim
+// on it, and the write is refused as each other denial of the credential.
+func jobModelDenial(refused *gate.RefusalError) bool {
+	_, known := gate.Code(refused)
+
+	return !known && errors.Is(refused.Err, identity.ErrDenied)
 }
 
 // admitDecision allows a decision with the result allow or warn. Any other
@@ -464,6 +479,7 @@ func notDecided(ctx context.Context, log *slog.Logger, err error) *gate.RefusalE
 			Err:      fmt.Errorf("%w: %w", gate.ErrDenied, err),
 			Record:   "",
 			Messages: []string{DeniedText},
+			Job:      nil,
 		}
 	}
 
@@ -475,7 +491,7 @@ func notDecided(ctx context.Context, log *slog.Logger, err error) *gate.RefusalE
 // unavailable returns the refusal of a guard that could not decide.
 func unavailable(cause error, rec gate.RecordID, message string) *gate.RefusalError {
 	return &gate.RefusalError{
-		Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, cause), Record: rec, Messages: []string{message},
+		Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, cause), Record: rec, Messages: []string{message}, Job: nil,
 	}
 }
 
@@ -489,8 +505,16 @@ func refuse(ctx context.Context, log *slog.Logger, w Write, record Recorder, ref
 		code = errcode.GateUnavailable
 	}
 
+	// The job ID and the phase name come from the job record of the server. A
+	// write by a person, and a refusal with no claim, log both fields empty.
+	var jobID, phase string
+	if refused.Job != nil {
+		jobID, phase = refused.Job.Job, refused.Job.Phase
+	}
+
 	log.InfoContext(ctx, "state write refused", slog.String("object", w.Unit.String()),
-		slog.String("code", code), slog.String("record", oneLine(string(refused.Record))))
+		slog.String("code", code), slog.String("record", oneLine(string(refused.Record))),
+		slog.String("job", oneLine(jobID)), slog.String("phase", oneLine(phase)))
 
 	if record != nil {
 		record(ctx, "state.write refused with "+code)

@@ -379,7 +379,10 @@ sets the `unless` clause of the gate to `context.operation.kind == "unlock"`.
 Then `pulumi cancel` works again. The audit log records each change of a gate.
 
 The server log has the line `state write refused` with the unit, the error
-code and the ID of the decision record. The audit log has a `denied` entry
+code, the ID of the decision record, the job ID (`job`) and the phase name
+(`phase`). The job ID and the phase name come from the job record of the
+server, for a write with a job token. For a write by a person, and for a job
+token whose job the server cannot read, both fields are empty. The audit log has a `denied` entry
 with the action of the write and the unit (see the [audit log](audit-log.md)).
 
 ### A job token refusal

@@ -163,6 +163,71 @@ func recordNamesMatchedGate(rec gate.Record, id gate.ID) bool {
 	})
 }
 
+// TestStateWriteRefusalCarriesTheJobClaim checks that GuardStateWrite puts the
+// job claim of the subject on each refusal, and that a refusal with no claim
+// has no job: a person, a job token with no claim, and a refusal of the
+// subject source.
+func TestStateWriteRefusalCarriesTheJobClaim(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		subject  string
+		unit     string
+		denyGate bool
+		wantJob  string
+	}{
+		{name: "job model refusal", subject: "runner-plan", unit: "web", denyGate: false, wantJob: "42"},
+		{name: "cross-unit refusal", subject: "runner-apply", unit: "other", denyGate: false, wantJob: "42"},
+		{name: "deny gate refusal", subject: "runner-apply", unit: "web", denyGate: true, wantJob: "42"},
+		{name: "person refused by a deny gate", subject: "bo", unit: "web", denyGate: true, wantJob: ""},
+		{name: "job token with no claim", subject: "runner", unit: "web", denyGate: false, wantJob: ""},
+		{name: "refusal of the subject source", subject: "runner-canceled", unit: "web", denyGate: false, wantJob: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+			if tt.denyGate {
+				e.putGate(t, newSWGate(atUnit, "deny-jobs", "", gate.OutcomeDeny, "No job writes this unit."))
+			}
+
+			_, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, tt.subject, tt.unit, gate.OperationApply))
+			checkRefusalJob(t, err, tt.wantJob)
+		})
+	}
+}
+
+// checkRefusalJob fails t unless err is a refusal whose job claim names the
+// job wantJob in the phase apply, or, for an empty wantJob, a refusal with no
+// claim.
+func checkRefusalJob(t *testing.T, err error, wantJob string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("GuardStateWrite() = nil, want a refusal")
+	}
+
+	refusal, ok := errors.AsType[*gate.RefusalError](err)
+	if wantJob == "" {
+		if ok && refusal.Job != nil {
+			t.Fatalf("refusal job = %+v, want none", refusal.Job)
+		}
+
+		return
+	}
+
+	if !ok || refusal.Job == nil {
+		t.Fatalf("GuardStateWrite() = %v, want a refusal with the job claim", err)
+	}
+
+	if refusal.Job.Job != wantJob || refusal.Job.Phase != "apply" {
+		t.Fatalf("refusal job = %+v, want job %s in the phase apply", refusal.Job, wantJob)
+	}
+}
+
 // TestStateWriteJobClaimSetsNoBreakGlass checks that a job token cannot pass
 // a gate with a break-glass pass: Evaluate refuses the change before any gate.
 func TestStateWriteJobClaimSetsNoBreakGlass(t *testing.T) {
