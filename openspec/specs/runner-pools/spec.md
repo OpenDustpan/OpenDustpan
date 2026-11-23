@@ -1,7 +1,7 @@
 # runner-pools Specification
 
 ## Purpose
-TBD - created by archiving change 130-138-runner-pools-management. Update Purpose after archive.
+The runner pools of a namespace can be listed from the CLI with one command. The command reads the pool list that the server returns, checks each pool of the answer before it prints, and writes no audit entry for a refusal that it makes before it sends a request.
 
 ## Requirements
 
