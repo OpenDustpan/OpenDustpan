@@ -67,7 +67,7 @@ func TestRunnerPoolsList(t *testing.T) {
 			status:      403,
 			answer:      `{"message":"access denied","errorCode":"access.denied"}`,
 			output:      "",
-			errorText:   "access.denied",
+			errorText:   "access denied",
 			extraOutput: "",
 		},
 		{
