@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -389,6 +390,46 @@ func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
 				t.Fatalf("NewHandler error = %v, want ErrMissingDependency", err)
 			}
 		})
+	}
+}
+
+// TestNewHandlerRefusesNoAuditStore proves the check of the audit store in
+// validate: a server with no audit store does not start, and the error is the
+// one of validate. The refusal recorder refuses a nil store with
+// refusal.ErrNoStore, so without the check of validate the error wraps
+// refusal.ErrNoStore and the test fails.
+func TestNewHandlerRefusesNoAuditStore(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := configFor(t, wiringBackends()[0].open(t), serveOptions{
+		now: time.Now, authz: identity.AdminOnly{}, claimer: nil, recorder: nil,
+		jobs: nil, logger: nil, mutate: nil,
+	})
+	cfg.Audit = nil
+
+	h, err := runnerapi.NewHandler(cfg)
+	if h != nil || !errors.Is(err, runnerapi.ErrMissingDependency) || errors.Is(err, refusal.ErrNoStore) ||
+		!strings.Contains(err.Error(), "audit store") {
+		t.Fatalf("NewHandler = %v, %v; want no handler and ErrMissingDependency of the audit store from validate",
+			h, err)
+	}
+}
+
+// TestDenialsRefusesNoAuditStore proves the check after refusal.New alone: the
+// call skips validate, and a nil audit store gives ErrMissingDependency that
+// wraps refusal.ErrNoStore. With the check removed, the call returns no error.
+func TestDenialsRefusesNoAuditStore(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := configFor(t, wiringBackends()[0].open(t), serveOptions{
+		now: time.Now, authz: identity.AdminOnly{}, claimer: nil, recorder: nil,
+		jobs: nil, logger: nil, mutate: nil,
+	})
+	cfg.Audit = nil
+
+	err := runnerapi.Denials(cfg)
+	if !errors.Is(err, runnerapi.ErrMissingDependency) || !errors.Is(err, refusal.ErrNoStore) {
+		t.Fatalf("denials = %v, want ErrMissingDependency that wraps refusal.ErrNoStore", err)
 	}
 }
 

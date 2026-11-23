@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -766,6 +767,128 @@ func checkStepEnd(t *testing.T, l *launcher, chunks [][]byte) {
 	l.expect(t, "end", l.post(path, end), 204, "")
 }
 
+// logSeedOf is the log counter that a cap case seeds for one step.
+type logSeedOf struct {
+	step   string
+	chunks int
+	bytes  int64
+}
+
+// seedSteps returns n seeded steps of the phase. Each one counts the given
+// number of chunks and size bytes.
+func seedSteps(n, chunks int, size int64) []logSeedOf {
+	out := make([]logSeedOf, 0, n)
+	for i := range n {
+		out = append(out, logSeedOf{step: "seeded-" + strconv.Itoa(i), chunks: chunks, bytes: size})
+	}
+
+	return out
+}
+
+// TestLogPhaseCapStoresNothing proves the caps of the log in the reserve of a
+// chunk: a chunk that passes the byte cap of its step, or the chunk or byte
+// cap of the phase, is refused with invalid and the server keeps no byte of
+// it. The reserve runs the shared rule of the store adapters with the caps
+// that the handler gives. In a phase case, each seeded step is below the caps
+// of a step and the step of the chunk has no log, so only the phase check can
+// refuse the chunk. The audit entry names the reason of the cap: cap-step or
+// cap-phase.
+func TestLogPhaseCapStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	// The fewest steps below the step caps whose sum reaches the phase cap.
+	chunkSteps := protocol.MaxLogChunksPerPhase/(protocol.MaxLogChunksPerStep-1) + 1
+	byteSteps := protocol.MaxLogBytesPerPhase/(protocol.MaxLogBytesPerStep-1) + 1
+
+	cases := []struct {
+		name string
+		seed []logSeedOf
+		seq  int
+		cap  job.LogCap
+	}{
+		{"step byte cap", []logSeedOf{{"init", 1, protocol.MaxLogBytesPerStep}}, 1, job.LogCapStepBytes},
+		{
+			"phase chunk cap", seedSteps(chunkSteps, protocol.MaxLogChunksPerStep-1, 0), 0,
+			job.LogCapPhaseChunks,
+		},
+		{"phase byte cap", seedSteps(byteSteps, 1, protocol.MaxLogBytesPerStep-1), 0, job.LogCapPhaseBytes},
+	}
+
+	for _, b := range backends() {
+		for _, tc := range cases {
+			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				checkCapStoresNothing(t, b, tc.seed, tc.seq, tc.cap)
+			})
+		}
+	}
+}
+
+// checkCapStoresNothing seeds the log counters, sends chunk seq of the step
+// init, and checks that the cap want refuses it with invalid, that no byte is
+// stored, and that one audit entry names the reason of the cap.
+func checkCapStoresNothing(t *testing.T, b backend, seeds []logSeedOf, seq int, want job.LogCap) {
+	t.Helper()
+
+	s, log := newAuditedSessionEnv(t, b, nil)
+	for _, seed := range seeds {
+		s.jobs.seedLog(seed.step, seed.chunks, seed.bytes)
+	}
+
+	l := s.launch()
+
+	status, body := l.do(l.upload(logPath(seq), []byte("x")))
+
+	var e protocol.Error
+
+	decode(t, body, &e)
+
+	if status != http.StatusBadRequest || e.Code != protocol.ErrorInvalid ||
+		e.Message != "the log of the step or of the phase is at its cap" {
+		t.Fatalf("a chunk above the cap %s = %d %s, want 400 %s with the cap message", want, status, body,
+			protocol.ErrorInvalid)
+	}
+
+	if got := s.jobs.initChunks(); len(got) != 0 {
+		t.Fatalf("a refused chunk stored %d chunks", len(got))
+	}
+
+	reason := "cap-phase"
+	if want == job.LogCapStepBytes {
+		reason = "cap-step"
+	}
+
+	entries := log.logRefusals()
+	if len(entries) != 1 || !strings.Contains(entries[0].Reason, "reason "+reason+";") {
+		t.Fatalf("refusal entries = %+v, want one with the reason %s", entries, reason)
+	}
+}
+
+// TestLogStepChunkCapStoresNothing proves the cap of the chunks of one step:
+// the chunk at the cap is refused and stores nothing.
+func TestLogStepChunkCapStoresNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range wiringBackends() {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSessionEnv(t, b)
+			l := s.launch()
+
+			status, body := l.do(l.upload(logPath(protocol.MaxLogChunksPerStep), []byte("x")))
+			if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+				t.Fatalf("a chunk at the step cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
+			}
+
+			if got := s.jobs.initChunks(); len(got) != 0 {
+				t.Fatalf("a refused chunk stored %d chunks", len(got))
+			}
+		})
+	}
+}
+
 // requestCheck is a request of a valid session that fails a check of the
 // handler.
 type requestCheck struct {
@@ -859,7 +982,23 @@ func requestChecks() []requestCheck {
 		{"finish with an unknown field", func(l *launcher) lcall {
 			return l.post(protocol.PathSessionFinish, map[string]any{"ok": true})
 		}, protocol.ErrorInvalid},
+		{"finish with a JSON body above the body cap", func(l *launcher) lcall {
+			return overBodyCap(l.post(protocol.PathSessionFinish, protocol.Finish{Succeeded: true, Message: ""}))
+		}, protocol.ErrorInvalid},
+		{"step end with a JSON body above the body cap", func(l *launcher) lcall {
+			return overBodyCap(l.post(stepPath(protocol.PathSessionStepEnd, "init"), protocol.StepEnd{
+				ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{}, LogChunks: 0, LogSHA256: "",
+			}))
+		}, protocol.ErrorInvalid},
 	}
+}
+
+// overBodyCap pads the JSON body of c with spaces to one byte above
+// protocol.MaxBody. The body stays valid JSON, so only the body cap refuses it.
+func overBodyCap(c lcall) lcall {
+	c.body = append(c.body, bytes.Repeat([]byte(" "), protocol.MaxBody+1-len(c.body))...)
+
+	return c
 }
 
 // TestSessionRequestsAreChecked proves the checks of the handler on a request
@@ -936,9 +1075,84 @@ func TestLogChunkHashIsChecked(t *testing.T) {
 	}
 }
 
+// sendProved sends the call c of l with a session proof that it signs here, and
+// returns the value of the proof header that it sent and the status.
+func sendProved(t *testing.T, l *launcher, c lcall) (string, int) {
+	t.Helper()
+
+	proof := signedProof(t, &c)
+
+	req, err := http.NewRequestWithContext(t.Context(), c.method, l.e.server.URL+c.path, bytes.NewReader(c.body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	req.Header.Set(protocol.HeaderRelease, c.release)
+	req.Header.Set(protocol.HeaderProof, proof)
+
+	if c.content != nil {
+		req.Header.Set(protocol.HeaderContentSHA256, hex.EncodeToString(sum(c.content)))
+	}
+
+	status, _ := l.e.send(req)
+
+	return proof, status
+}
+
+// proofSecrets returns the secrets of a proof header value: the whole value and
+// its signature.
+func proofSecrets(proof string) []string {
+	_, sig, ok := strings.Cut(proof, "sig=")
+	if !ok || sig == "" {
+		return []string{proof}
+	}
+
+	return []string{proof, sig}
+}
+
+// writeSecrets sends a log chunk, a tampered log chunk and three finishes with
+// the chunk and the reason, and returns the secrets of the proofs that it sent.
+func writeSecrets(t *testing.T, l *launcher, chunk, reason string) []string {
+	t.Helper()
+
+	proof, status := sendProved(t, l, l.upload(logPath(0), []byte(chunk)))
+	if status != http.StatusNoContent {
+		t.Fatalf("chunk 0 = %d, want 204: the proof must be valid", status)
+	}
+
+	secrets := proofSecrets(proof)
+
+	tampered := l.upload(logPath(1), []byte(chunk))
+	tampered.body = []byte("tampered " + chunk)
+	l.do(tampered)
+
+	// A finish that is not valid, a finish, and a second finish.
+	finishes := []struct {
+		message string
+		status  int
+	}{
+		{"bad\x00" + reason, http.StatusBadRequest},
+		{reason, http.StatusNoContent},
+		{reason, http.StatusConflict},
+	}
+
+	for _, f := range finishes {
+		proof, status = sendProved(t, l, l.post(protocol.PathSessionFinish,
+			protocol.Finish{Succeeded: false, Message: f.message}))
+		if status != f.status {
+			t.Fatalf("finish %q = %d, want %d", f.message, status, f.status)
+		}
+
+		secrets = append(secrets, proofSecrets(proof)...)
+	}
+
+	return secrets
+}
+
 // TestSecretsNeverReachTheLog proves that the log the server writes holds none
-// of the secrets that pass through a session: the handoff token, the reason of
-// a finish, and the content of a log chunk, also when the request fails.
+// of the secrets that pass through a session: the handoff token, the session
+// proof header values, the reason of a finish, and the content of a log chunk,
+// also when the request fails.
 func TestSecretsNeverReachTheLog(t *testing.T) {
 	t.Parallel()
 
@@ -972,21 +1186,10 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 
 			l := &launcher{e: s, id: opened.Session, pub: x.pub, priv: x.priv}
 
-			secrets := []string{token, chunkLine, reasonText, hex.EncodeToString(x.priv.Seed())}
-
-			// Valid, failed and refused writes that carry the secrets.
-			l.do(l.upload(logPath(0), []byte(chunkLine)))
-
-			tampered := l.upload(logPath(1), []byte(chunkLine))
-			tampered.body = []byte("tampered " + chunkLine)
-			l.do(tampered)
-
-			l.do(l.post(protocol.PathSessionFinish,
-				protocol.Finish{Succeeded: false, Message: "bad\x00" + reasonText}))
-			l.do(l.post(protocol.PathSessionFinish,
-				protocol.Finish{Succeeded: false, Message: reasonText}))
-			l.do(l.post(protocol.PathSessionFinish,
-				protocol.Finish{Succeeded: false, Message: reasonText}))
+			// Valid, failed and refused writes that carry the secrets. Each
+			// session proof header value is a secret too.
+			secrets := append([]string{token, chunkLine, reasonText, hex.EncodeToString(x.priv.Seed())},
+				writeSecrets(t, l, chunkLine, reasonText)...)
 
 			logged := s.logs.String()
 			for _, secret := range secrets {

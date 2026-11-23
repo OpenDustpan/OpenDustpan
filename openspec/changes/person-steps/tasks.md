@@ -94,6 +94,7 @@ only if the transcript leaves doubt; most need no second pass. Tick each task wh
 - [ ] 4.3 Run usability check from the docs page alone Check: an Operator completes the matrix from docs/guides/backup-restore-upgrade.md alone and each error names the one helping command. A person's step.
 - [ ] 3.5 Usability check from the docs draft. Check: The persona completes the path and each error names one command. A person's step.
 - [ ] 4.3 Usability check from the docs page of backup-fence-target-writes-attempt. Check: an Operator completes the path from docs/guides/several-instances.md alone (start a backup, check it, read the target layout and the cleanup step) and each error names the one command that helps. A person's step.
+- [ ] 4.3 Usability check from the docs page of add-job-session-paths-runner-2 (docs/reference/runner-api.md) Check: Each error names one command that helps. A person's step.
 - [ ] 3.3 Usability check from the docs page of 130-138-runner-pools-management. Check: the persona lists the pools with one command and each error names one command. Known gap from the agent pre-run: the second half fails for 403 and 404: the CLI prints only the server message; the CLI adds a hint only for 5xx, internal/cli/collection.go:440 / :307. A person's step.
 
 ## Move staged workflows into place
