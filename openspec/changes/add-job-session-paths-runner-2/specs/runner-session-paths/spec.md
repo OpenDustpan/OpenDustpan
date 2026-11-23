@@ -32,10 +32,6 @@ If the pool of the claim has the sweep purpose, then the server SHALL refuse a j
 - **WHEN** a runner of a pool with the sweep purpose asks for a job session
 - **THEN** the server refuses the session and opens none
 
-#### Scenario: Namespace sweep pool
-- **WHEN** a namespace pool is set to the sweep purpose
-- **THEN** the server refuses the setting
-
 ### Requirement: Cancel on renew
 
 When a cancel is requested for the claim, the server SHALL answer canceled true on the session renew.
