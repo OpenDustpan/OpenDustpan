@@ -10,12 +10,11 @@ Issue: #623, #627, #633.
 
 The user path this change must make work:
 
-1. **Docs page.** The site administrator opens the guide for break-glass accounts and reads the setup rule and the guard.
+1. **Docs page.** The site administrator opens the guide for break-glass accounts and reads the floor and the guard.
 2. **API.** The site administrator lists the break-glass accounts with the new read route and adds accounts with a passkey or a hardware key. The console and the CLI use the same routes.
 3. **API.** The site administrator tries a change that lowers the count of working paths below the floor and gets 409 with the count.
 4. **CLI.** The site administrator rotates a break-glass credential in one call. The new credential works before the old one stops.
 5. **Server start.** The operator restores a backup. A restore that leaves fewer than two working paths is refused before the swap.
-6. **E2e.** The shared e2e first setup makes two break-glass accounts, so each other e2e step still starts from a finished setup.
 
 Errors the person may hit, and the one command that helps:
 
@@ -23,7 +22,6 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | A revoke, credential change, passkey removal, expiry change, policy block or IP allowlist change leaves fewer than two working break-glass paths. | 409 with code break-glass.floor and text that names the live count. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A disable, delete or sweep removes the last enabled break-glass account. | 409 with code break-glass.last-enabled. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
-| First-setup finish with fewer than two break-glass accounts. | 409 with code break-glass.setup-incomplete and the missing count. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A restore leaves fewer than two working paths. | 409 with code break-glass.restore-refused before the swap. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A concurrent write holds the lock on the break-glass set past the lock timeout. | 409 with code break-glass.busy. No change is written. A retry is safe. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names the page that enrolls a factor. | `GET /api/dustpan/v1/break-glass/accounts` |
@@ -45,13 +43,14 @@ Evidence for the claims above:
 - A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. A revoke of that grant, a membership change or a move of a principal runs the guard.
 - A guard in the write transaction of each covered change. Disable, delete and sweep refuse when no enabled account would stay. Each disable writes an audit entry and notifies the other administrators. Re-enable stays checked and a disable works in maintenance mode. Every other lowering change refuses when it lowers the count below two. Each refusal writes an audit entry.
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
-- A first-setup gate on two break-glass accounts with a passkey or a hardware key. The restore check reads the same count on staged data, and the swap runs in a transaction that counts again.
-- The lock timeout is an installation setting, breakGlassLockSeconds, with a default of 5 and its effective value shown in the settings resource.
-- The shared e2e first-setup step makes two break-glass accounts.
-- A guide section for the break-glass accounts, the guard and the setup rule.
+- The restore check reads the same count on staged data, and the swap runs in a transaction that counts again.
+- The lock timeout is an installation setting, breakGlassLockSeconds, with a default of 5 and its effective value shown in the settings resource. It is declared in NEW file pkg/principal/breakglass_setting.go, like `pkg/session/breakglass.go`.
+- Rotation is one new method of the passkey port, RotatePasskey in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that two parallel rotations leave exactly one working credential.
+- A guide section for the break-glass accounts, the guard and the floor.
 
 Out of scope:
 
+- The first-setup gate on two break-glass accounts and the shared e2e first-setup step. No setup-finish flow exists on main, so a placeholder change owns both (change keep-two-break-glass-at-setup, which depends on this change).
 - Typed reason, alert and session limit of break-glass sign-in, and the per-use review text (change break-glass-sign-in-typed).
 - Reach recheck and act-as edges, and their guide text (change check-reach-when-grant-membership).
 - Group trust switches and protected groups, and their guide text (change let-group-trust-identity-provider).
@@ -69,13 +68,15 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - A refused change costs one round trip. The 409 text names the live count and the route that lists the accounts.
-- Setup with one account stops at finish. The list route names the missing count and the passkey enrollment step.
+- An installation with one account sees the missing count in the list route, and the add route names the passkey enrollment step.
 - A person with no factor gets a refusal that names the enrollment page.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
+- The passkey port removes a passkey in its own transaction. This change adds the rotation method next to it. (`pkg/mfa/mfa.go:227 (func RemovePasskey of PasskeyStore)`)
+- The service removes a passkey of the caller. The rotation service method sits next to it. (`internal/mfasvc/service.go:553 (func RemovePasskey)`)
 - A test shows that the inactivity sweep never disables a break-glass account. This change replaces that rule with the last-enabled rule for the sweep. (`pkg/accesstoken/accesstoken_test.go:1271 (func TestSweepNeverDisablesBreakGlass)`)
 - A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1218 (func TestSweepDisablesInactiveTokensAndAccounts)`)
 - A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:85 (func TestExpiredTempAdminStaysDenied)`)
@@ -117,7 +118,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 273 changes decision 8. Chain to the end: ADR 273, ADR 286.
 - Current rule: this ADR, with ADR 273.
 - Quote: "Break-glass accounts of a namespace. On OpenDustpan Cloud, the break-glass accounts of ADR 70 decision 23 are principals of the namespace with the role `admin` on it, not holders of `account-administrator` on the install"
-- Effect: On the hosted service the count, the setup and the restore check use the principals of the namespace with the role admin, for that namespace. On a self-hosted installation they use the installation.
+- Effect: On the hosted service the count and the restore check use the principals of the namespace with the role admin, for that namespace. On a self-hosted installation they use the installation.
 - Conflict: none.
 
 **ADR 320: One sign-in path for every sign-in method** (not owner-tagged).
@@ -144,7 +145,7 @@ none
 
 Questions considered and answered:
 
-- Which threshold applies to which change? Owner decision, 13 Nov 2026 (queue P19), provisional and built as the reading: disable, delete and sweep stop at the last enabled account (ADR 306 d3, d6). Every other change keeps the floor of two working paths (ADR 70 d24). First setup needs two.
+- Which threshold applies to which change? Owner decision, 13 Nov 2026 (queue P19), provisional and built as the reading: disable, delete and sweep stop at the last enabled account (ADR 306 d3, d6). Every other change keeps the floor of two working paths (ADR 70 d24). First setup needs two, and the change keep-two-break-glass-at-setup builds that part.
 - Does a disable that leaves one enabled account break ADR 70 decision 24? No. ADR 306 decision 3 changes decision 24 for disable, delete and sweep. The change passes and the answer carries the live count.
 - Does ADR 70 decision 25, no job disables a break-glass account, conflict with the sweep? ADR 306 decision 6 changes decisions 25 and 26 for the sweep. The sweep follows the not-the-last-one rule and writes an audit record.
 - What counts as a working account? ADR 70 decision 24 gives enabled, not expired, not blocked by a policy, not dependent on the identity provider. ADR 70 decision 23 and ADR 320 decision 23 give the passkey or hardware key.
@@ -153,6 +154,6 @@ Questions considered and answered:
 - Which scope does the count use? ADR 216 decision 13: the namespace on the hosted service, the installation when self-hosted.
 - Can an installation below the floor add an account? Yes. A change that raises the count or does not lower it is never refused, also at zero accounts.
 - Does the guide cover protected groups and reach? No. Other changes own that text. Owner decision, 13 Nov 2026 (queue P21) belongs to let-group-trust-identity-provider.
-- Does the stricter first setup break the e2e suites of other steps? It would, so a task updates the shared e2e first-setup fixture to make two accounts.
+- Where does the first-setup gate live? Not in this change: no setup-finish flow exists on main. The change keep-two-break-glass-at-setup owns the gate, its test and the shared e2e first-setup step.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
