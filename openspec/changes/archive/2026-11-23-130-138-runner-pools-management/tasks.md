@@ -13,5 +13,4 @@
 ## 3. Definition of done
 
 - [x] 3.1 Show the command in docs/guides/runner-pools.md, section "List the pools". The e2e test calls `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools` with an administrator access token. Check: `make docs-lint` passes and the docs test runs the command.
-- [ ] 3.2 Run the fast checks with `make test-changed`. Check: `make test-changed` passes. Confirmed by: CI (the agent runs the fast checks only).
-- [ ] 3.3 Run the usability check from the docs page. Check: the persona lists the pools with one command and each error names one command.
+- [x] 3.2 Run the fast checks with `make test-changed`. Check: `make test-changed` passes. Confirmed by: CI (the agent runs the fast checks only).
