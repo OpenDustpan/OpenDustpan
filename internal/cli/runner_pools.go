@@ -309,6 +309,8 @@ func (c *keyChecker) key(top *keyFrame, tok json.Token) error {
 		return nil
 	}
 
+	// Defense in depth: the decoder returns only string keys; this check stays
+	// so that a later change cannot skip it.
 	key, ok := tok.(string)
 	if !ok {
 		return errAnswerKeyNotText
