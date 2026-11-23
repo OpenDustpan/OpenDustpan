@@ -690,14 +690,7 @@ func (s *Store) DeleteExpiredPendingStateVersions(
 func (s *Store) FinalizeStateVersion(
 	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
-	row, err := codec.FinalizeStateVersionRow(sv)
-	if err != nil {
-		return err
-	}
-
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return finalizeInTx(ctx, unitStateTx{q: q, logger: s.logger}, sv, row, nil)
-	})
+	return newStateCommit(s, fence).FinalizeStateVersion(ctx, sv)
 }
 
 // FinalizeStateVersionExpecting implements workspace.StateStore. It runs the
@@ -706,14 +699,7 @@ func (s *Store) FinalizeStateVersion(
 func (s *Store) FinalizeStateVersionExpecting(
 	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, expect workspace.StateVersionID,
 ) error {
-	row, err := codec.FinalizeStateVersionRow(sv)
-	if err != nil {
-		return err
-	}
-
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return finalizeInTx(ctx, unitStateTx{q: q, logger: s.logger}, sv, row, &expect)
-	})
+	return newStateCommit(s, fence).FinalizeStateVersionExpecting(ctx, sv, expect)
 }
 
 // FenceAndUnlock implements workspace.StateStore: it releases the lock of w,
