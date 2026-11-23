@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -881,148 +880,59 @@ func finalizeFenceRow(ctx context.Context, q *db.Queries, row codec.StateVersion
 }
 
 // finalizeInTx runs the finalize checks and writes in one transaction, holding
-// the workspace row FOR UPDATE throughout. A repeated finalize of a version
-// that already committed with the same identity reports success and writes
-// nothing.
+// the workspace row FOR UPDATE throughout.
 func finalizeInTx(
 	ctx context.Context, tx unitStateTx, sv workspace.StateVersion, row codec.StateVersionRow,
 	expect *workspace.StateVersionID,
 ) error {
-	wrow, done, err := checkFinalizeGuards(ctx, tx, sv, row, expect)
+	wrow, err := checkFinalizeGuards(ctx, tx.q, sv, row, expect)
 	if err != nil {
 		return err
-	}
-
-	if done {
-		return nil
 	}
 
 	return writeFinalize(ctx, tx, wrow, row)
 }
 
 // checkFinalizeGuards locks the workspace row and runs the port checks of a
-// finalize, returning the locked workspace row the finalize stamps. It reports
-// done when a repeated finalize already committed.
+// finalize, returning the locked workspace row the finalize stamps.
 func checkFinalizeGuards(
-	ctx context.Context, tx unitStateTx, sv workspace.StateVersion, row codec.StateVersionRow,
+	ctx context.Context, q *db.Queries, sv workspace.StateVersion, row codec.StateVersionRow,
 	expect *workspace.StateVersionID,
-) (db.Workspace, bool, error) {
-	wrow, err := lockWorkspace(ctx, tx.q, row.WorkspaceID)
+) (db.Workspace, error) {
+	wrow, err := lockWorkspace(ctx, q, row.WorkspaceID)
 	if err != nil {
-		return db.Workspace{}, false, err
+		return db.Workspace{}, err
 	}
 
-	done, pendingErr := checkFinalizePendingOrDone(ctx, tx, row, wrow)
-	if pendingErr != nil {
-		return db.Workspace{}, false, pendingErr
+	if pendingErr := checkFinalizePending(ctx, q, row.ID); pendingErr != nil {
+		return db.Workspace{}, pendingErr
 	}
 
-	if done {
-		return wrow, true, nil
-	}
-
-	if lockErr := checkFinalizeHolder(ctx, tx.q, row, wrow); lockErr != nil {
-		return db.Workspace{}, false, lockErr
+	if lockErr := checkFinalizeHolder(ctx, q, row, wrow); lockErr != nil {
+		return db.Workspace{}, lockErr
 	}
 
 	// The expected current version is read from the locked workspace row, so
 	// a write by the same holder under the same lock cannot slip in between.
 	if expect != nil && wrow.CurrentStateVersionID != expect.String() {
-		return db.Workspace{}, false, workspace.ErrConcurrentModification
+		return db.Workspace{}, workspace.ErrConcurrentModification
 	}
 
-	if forcedErr := checkFinalizeForced(ctx, tx.q, sv, wrow); forcedErr != nil {
-		return db.Workspace{}, false, forcedErr
+	if forcedErr := checkFinalizeForced(ctx, q, sv, wrow); forcedErr != nil {
+		return db.Workspace{}, forcedErr
 	}
 
 	if !sv.Force {
-		if orderErr := checkFinalizeOrder(ctx, tx.q, row); orderErr != nil {
-			return db.Workspace{}, false, orderErr
+		if orderErr := checkFinalizeOrder(ctx, q, row); orderErr != nil {
+			return db.Workspace{}, orderErr
 		}
 	}
 
-	if restoreErr := checkFinalizeRestore(ctx, tx.q, row); restoreErr != nil {
-		return db.Workspace{}, false, restoreErr
+	if restoreErr := checkFinalizeRestore(ctx, q, row); restoreErr != nil {
+		return db.Workspace{}, restoreErr
 	}
 
-	return wrow, false, nil
-}
-
-// checkFinalizePendingOrDone reports done when a finalize that already
-// committed repeats, and ErrUploadDenied unless the stored version is pending.
-//
-// Defense in depth: the workspace service detects a retry of the same upload
-// too, before it calls the store; this check stays so that a retry that
-// reaches the store by another path commits no duplicate, and it does not
-// rely on the service check.
-func checkFinalizePendingOrDone(
-	ctx context.Context, tx unitStateTx, row codec.StateVersionRow, wrow db.Workspace,
-) (bool, error) {
-	pendingErr := checkFinalizePending(ctx, tx.q, row.ID)
-	if pendingErr == nil {
-		return false, nil
-	}
-
-	if !errors.Is(pendingErr, workspace.ErrUploadDenied) {
-		return false, pendingErr
-	}
-
-	done, err := finalizeAlreadyDone(ctx, tx.q, wrow, row)
-	if err != nil {
-		return false, err
-	}
-
-	if !done {
-		return false, pendingErr
-	}
-
-	return true, nil
-}
-
-// finalizeAlreadyDone reports whether a refused finalize already committed:
-// the stored version is finalized with the same content, lineage, serial and
-// lock identity as the request, and it is the current version of the
-// workspace. A lost reply makes the client send the same finalize again; that
-// retry reports success and writes nothing. An unlocked write stays refused:
-// it has no lock identity to repeat.
-func finalizeAlreadyDone(
-	ctx context.Context, q *db.Queries, wrow db.Workspace, row codec.StateVersionRow,
-) (bool, error) {
-	if row.UnlockedWrite || row.LockID == "" {
-		return false, nil
-	}
-
-	stored, err := q.GetStateVersion(ctx, row.ID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("read state version: %w", err)
-	}
-
-	return sameFinalize(stored, wrow, row), nil
-}
-
-// sameFinalize reports whether stored is the version that the request already
-// committed as the current version of the workspace.
-func sameFinalize(stored db.StateVersion, wrow db.Workspace, row codec.StateVersionRow) bool {
-	return stored.Status == string(workspace.StatusFinalized) &&
-		stored.WorkspaceID == wrow.ID &&
-		wrow.CurrentStateVersionID == stored.ID &&
-		stored.Holder == row.Holder &&
-		stored.LockID == row.LockID &&
-		sameFinalizeContent(stored, row)
-}
-
-// sameFinalizeContent reports whether stored holds the content that the
-// request names.
-func sameFinalizeContent(stored db.StateVersion, row codec.StateVersionRow) bool {
-	return stored.Lineage == row.Lineage &&
-		stored.Serial == row.Serial &&
-		stored.Size == row.Size &&
-		stored.ContentKey == row.ContentKey &&
-		bytes.Equal(stored.Md5, row.MD5)
+	return wrow, nil
 }
 
 // checkFinalizeHolder checks the lock of a finalize. A version declared under

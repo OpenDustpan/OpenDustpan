@@ -215,7 +215,8 @@ func openTakeoverStore(t *testing.T, base string) *postgres.Store {
 }
 
 // lockEnv is a real workspace service over its own PostgreSQL store, with one
-// free workspace and a clock that the test moves.
+// free workspace and a clock that the test moves. The lock tests and the
+// retry test of an upload use it.
 type lockEnv struct {
 	s     *postgres.Store
 	svc   *workspace.Service
@@ -248,7 +249,7 @@ func newLockEnv(t *testing.T, base string) lockEnv {
 
 	svc, err := workspace.NewService(workspace.Config{
 		BlobGuard: blobguardtest.None{}, ManualLocks: nil, Workspaces: s, States: s, Blobs: blobs,
-		Namespaces: namespaces, OutOfScope: workspacetest.NewRefusals(), Sealer: noSealer{},
+		Namespaces: namespaces, OutOfScope: workspacetest.NewRefusals(), Sealer: plainSealer{},
 		Logger: slog.New(slog.DiscardHandler), Now: clock.Now, MaxStateBytes: 0, MaxPendingVersions: 0,
 		Retention:    0,
 		OnDeleteWait: nil,
@@ -315,27 +316,26 @@ func (c *takeoverClock) advanceTo(at time.Time) {
 	c.now = at
 }
 
-// errNoSeal is the error of noSealer: the lock tests seal no state.
-var errNoSeal = errors.New("the lock tests seal no state")
+// plainSealer is a workspace.Sealer that keeps each content as it is. These
+// tests check the store, not the encryption of the state.
+type plainSealer struct{}
 
-// noSealer is a workspace.Sealer that refuses each call. The lock tests write
-// no state, so no call reaches it.
-type noSealer struct{}
-
-func (noSealer) SealState(context.Context, namespace.Name, string, string, io.Reader) (io.Reader, error) {
-	return nil, errNoSeal
+func (plainSealer) SealState(_ context.Context, _ namespace.Name, _, _ string, r io.Reader) (io.Reader, error) {
+	return r, nil
 }
 
-func (noSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.ReadCloser, error) {
-	return nil, errNoSeal
+func (plainSealer) OpenState(
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
+) (io.ReadCloser, error) {
+	return io.NopCloser(r), nil
 }
 
-func (noSealer) SealOutputs(context.Context, namespace.Name, string, string, []byte) ([]byte, error) {
-	return nil, errNoSeal
+func (plainSealer) SealOutputs(_ context.Context, _ namespace.Name, _, _ string, b []byte) ([]byte, error) {
+	return b, nil
 }
 
-func (noSealer) OpenOutputs(context.Context, namespace.Name, string, string, []byte) ([]byte, error) {
-	return nil, errNoSeal
+func (plainSealer) OpenOutputs(_ context.Context, _ namespace.Name, _, _ string, b []byte) ([]byte, error) {
+	return b, nil
 }
 
 // forceUnlockEntry is the audit entry of the force-unlock of the test.
