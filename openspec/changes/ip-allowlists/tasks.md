@@ -25,10 +25,10 @@ Each security test below sends hostile input to one layer, as if the other layer
 
 ## 4. Side effects (computed from main)
 
-- [ ] 4.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`), the clients (`make clients-generate`), `sqlc` output (`make generate`) and the golden files of `internal/errcode/testdata/catalog` with their generators. Never edit a generated file by hand. Do not change `info.version` or `internal/api/apidesc/openapi.pin`. Check: the named files change in the same pull request, `sqlc diff` is clean and `make pin-frozen` passes.
+- [ ] 4.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`), the clients (`make clients-generate`), `sqlc` output (`make generate`) and the golden files of `internal/errcode/testdata/catalog` (the catalog is in `internal/errcode/catalog.go`) with their generators. Never edit a generated file by hand. Do not change `info.version` or the pin of the API description. Check: the named files change in the same pull request, `sqlc diff` is clean and `make pin-frozen` passes.
 
 ## 5. Definition of done
 
 - [ ] 5.1 Extend the e2e step with the real Pulumi CLI and OpenTofu (`e2e/ipallow_test.go`), which calls `GET /api/dustpan/v1/namespaces/{namespace}/units` with an access token credential: a namespace list set through the view, from an allowed and a denied address, with the setting alone turning the lists on. Check: `TestIPAllowlists` passes with the new cases. Confirmed by: CI.
 - [ ] 5.2 Do the usability check from the docs page alone. Check: the site administrator completes the path of the proposal, from the settings call to the denied sign-in.
-- [ ] 5.3 Run the full check. Check: `make check` with zero findings.
+- [ ] 5.3 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

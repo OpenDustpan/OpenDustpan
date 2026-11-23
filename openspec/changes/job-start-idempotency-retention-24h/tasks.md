@@ -22,4 +22,4 @@
 - [ ] 4.2 Add an e2e step in the NEW file `e2e/job_start_idempotency_test.go` that starts a job with POST /api/dustpan/v1/namespaces/{namespace}/jobs and an access token of a service principal, restarts the real server binary, and retries the same request with the same Idempotency-Key. Check: make e2e.
 - [ ] 4.3 Update the retention time in the NEW section "Idempotency-Key retention" of the NEW file `docs/reference/job-start-idempotency.md`. Check: make docs-lint
 - [ ] 4.4 Check that the agent completes the retry path from the docs page. Check: manual usability check of the docs page.
-- [ ] 4.5 Run all checks. Check: make check.
+- [ ] 4.5 Run all checks. Check: make check. Confirmed by: CI (the agent runs the fast checks only).
