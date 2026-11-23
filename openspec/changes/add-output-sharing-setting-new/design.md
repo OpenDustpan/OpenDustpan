@@ -62,8 +62,8 @@ Modules that the change touches, and their imports on main:
 flowchart LR
 H[internal/api/inventory] --> V[internal/outputsharesvc]
 V --> P[pkg/outputshare]
-SQ[pkg/store/sqlite] --> P
-PG[pkg/store/postgres] --> P
+SQ[internal/store/sqlite] --> P
+PG[internal/store/postgres] --> P
 D[pkg/dustpan] --> V
 ```
 

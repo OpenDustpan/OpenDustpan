@@ -26,7 +26,7 @@ Evidence for the claims above:
 
 - The group code lives in pkg/principal and internal/api/server. Proof: The pack paths pkg/principal/principal.go, pkg/principal/principaltest and internal/api/server exist.
 - A Freshness type exists in the access token package. Proof: The pack main list gives type Freshness at pkg/accesstoken/service.go:50.
-- Membership columns for suspension exist in the stored data. Proof: The pack rg of suspended_at gives pkg/backup/portable_tables.go:554 and pkg/store/sqlite/internal/db/queries.sql.go:100. This change adds only the trust rule to the membership function.
+- Membership columns for suspension exist in the stored data. Proof: The pack rg of suspended_at gives pkg/backup/portable_tables.go:554 and internal/store/sqlite/internal/db/queries.sql.go:100. This change adds only the trust rule to the membership function.
 - Group routes exist under /api/server, and no trust route exists. Proof: The pack main list gives ANY /api/server/groups and ANY /api/server/groups/{}/members, and no trust route.
 - A settings registry exists in the CLI package. The pack shows no REST settings route for full sync, so the dependency add-one-generic-settings-api provides it. Proof: The pack path internal/cli/settings.go exists, and its rg output lists soft-delete-retention at internal/cli/settings.go:345.
 

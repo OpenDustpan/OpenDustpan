@@ -67,7 +67,7 @@ Evidence for the claims above:
   `signed-request` and `none`. Proof: `internal/cli/settings.go:370`
   (`"recovery-mode", "DUSTPAN_RECOVERY_MODE", "bootstrap"`).
 - No store keeps the recovery mode or a key. Proof: `rg -n 'recovery_mode'
-  pkg/store/sqlite/migrations pkg/store/postgres/migrations` gives no line.
+  internal/store/sqlite/migrations internal/store/postgres/migrations` gives no line.
   `docs/guides/host-recovery.md:25` says "no store keeps the mode yet".
 - No ID of the installation exists. Proof: `rg -n 'InstallationID' --type go`
   hits only the installations of the Git host app (`pkg/forge/connection.go`).
@@ -144,8 +144,8 @@ only the difference.
 
 - `pkg/breakglass` has the kind `temp-admin`, in `@server`, with a time limit (`pkg/breakglass/breakglass.go:82 (KindTempAdmin)`)
 - `pkg/breakglass` checks the kind of a use (`pkg/breakglass/breakglass.go:135 (validateKind)`)
-- `pkg/breakglass` has a store adapter in SQLite, so the condition of ADR 372 decision 4 holds (`pkg/store/sqlite/breakglass.go:33 (BreakGlass)`)
-- `pkg/breakglass` has a store adapter in PostgreSQL (`pkg/store/postgres/breakglass.go:35 (BreakGlass)`)
+- `pkg/breakglass` has a store adapter in SQLite, so the condition of ADR 372 decision 4 holds (`internal/store/sqlite/breakglass.go:33 (BreakGlass)`)
+- `pkg/breakglass` has a store adapter in PostgreSQL (`internal/store/postgres/breakglass.go:35 (BreakGlass)`)
 - The host issuer makes the person, the grant, the record and the token in one transaction (`pkg/accesstoken/host.go:55 (CreateHostRecovery)`)
 - The host command knows the three modes `modeBootstrap`, `modeSignedRequest` and `modeNone` (`cmd/opendustpan/host.go:86 (modeBootstrap)`)
 - A verifier of the signature format of `ssh-keygen -Y sign` exists on the standard library (`internal/sshsig/verifier.go:27 (NewVerifier)`)

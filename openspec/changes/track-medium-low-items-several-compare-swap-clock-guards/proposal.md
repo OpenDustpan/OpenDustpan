@@ -61,8 +61,8 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main defines the durable claim step fence type. (`pkg/durable/durable.go:150 (func Claim.Step)`)
 - Main has a database clock port and a test for it. (`pkg/blob/attempt.go:75 (func CheckAttempt)`)
 - Main has a database clock test in the store suite. (`pkg/store/storetest/attempt_deadline.go:286 (func testDatabaseClock)`)
-- Main keeps restore swap helpers in the postgres store. (`pkg/store/postgres/restore.go:391 (func keepControlTables)`)
-- Main keeps the one-running guard for restores in the baseline of each dialect. (`pkg/store/postgres/migrations/0168_baseline.sql:2407`)
+- Main keeps restore swap helpers in the postgres store. (`internal/store/postgres/restore.go:391 (func keepControlTables)`)
+- Main keeps the one-running guard for restores in the baseline of each dialect. (`internal/store/postgres/migrations/0168_baseline.sql:2407`)
 - Main keeps chain append concurrency tests in the audit suite. (`pkg/audit/audittest/chain.go:615 (func testChainConcurrentEnds)`)
 
 ## ADR check
