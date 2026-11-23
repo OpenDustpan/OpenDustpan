@@ -4,11 +4,11 @@ OpenTofu state version writes and workspace lock writes must survive a database 
 
 ## Decisions
 
-1. **One fenced transaction per commit.** Wrap each state version commit and each lock acquire and release with the namespace fence in one store transaction. A commit that cannot finish rolls back the whole transaction. A committed lock row carries holder identity so another instance can take it over after expiry. Lock refresh keeps the existing refresh path unchanged.
+1. **One fenced transaction per commit.** Wrap each state version commit and each lock acquire and release with the namespace fence in one store transaction. A commit that cannot finish rolls back the whole transaction. A committed lock row carries holder identity. The lock has no expiry: it stays held until release or force-unlock. Lock refresh keeps the existing refresh path unchanged.
 
 ## Structure
 
-Unexported transaction guard built by the NEW constructor `newStateCommit()` in the workspace store adapter; only that constructor can mark a state version current or a lock held, and it checks the fence before commit.
+Lock writes stay on the workspace port method `SaveWorkspace`, which runs the fence check and the lock write in one transaction on each store. The unexported guard built by the NEW constructor `newStateCommit()` in the PostgreSQL adapter covers the state version commit only.
 
 ## Risks
 
