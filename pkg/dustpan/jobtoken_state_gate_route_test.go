@@ -197,7 +197,12 @@ func setupJobTokenStateGate(t *testing.T) gateEnv {
 	// database checks the start time of each blob write attempt of a Pulumi
 	// checkpoint against its own clock, and refuses an attempt that started
 	// more than a few minutes away from it.
-	now := time.Now().UTC().Truncate(time.Second)
+	now, err := st.DatabaseNow(t.Context())
+	if err != nil {
+		t.Fatalf("database now: %v", err)
+	}
+
+	now = now.UTC().Truncate(time.Second)
 
 	srv, jobStore, tokenStore := newJobTokenStateGateServer(t, st, blobs, now)
 
