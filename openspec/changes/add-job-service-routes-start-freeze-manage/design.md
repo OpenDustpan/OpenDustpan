@@ -93,7 +93,25 @@ end
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | limit | Single active freeze per namespace ID enforced by a unique partial index with bounded retry on conflict | Insert two concurrent creates and check that one gets 409 and only one active row remains |
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | fail closed | Race loser fails closed with 409 and dispatch loser fails closed with 403 | Race two creates and race a start with a concurrent freeze and check one 409, one 403, and a single active freeze |
 
-## Contracts
+## Contract
+
+The port stays as on main (`pkg/job/gate.go`, `FreezeStore`). This change adds these members in NEW `pkg/job/freeze.go`:
+
+```go
+// ErrFreezeActive is returned by the guard when an active freeze of the
+// namespace exists and a second one is created.
+var ErrFreezeActive = errors.New("an active freeze exists")
+
+// ErrNoActiveFreeze is returned when an end names a namespace that has no
+// active freeze.
+var ErrNoActiveFreeze = errors.New("no active freeze")
+
+// CheckReason returns ErrInvalid for a reason of fewer than 1 or more than
+// 500 characters.
+func CheckReason(reason string) error
+```
+
+The routes are in `internal/api/jobs/routes.go` and NEW `internal/api/jobs/freeze.go`. The store keeps one open freeze for each namespace with a unique partial index on `job_freezes` where `ends_at_ms = 0`.
 
 **freeze**
 
