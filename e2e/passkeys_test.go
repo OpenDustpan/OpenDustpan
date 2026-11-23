@@ -97,6 +97,10 @@ func runPasskeysOnStore(t *testing.T, env *e2e.Env) {
 		t.Fatalf("list = %s, want %s and no key", listed.body, key.ID)
 	}
 
+	// The refusal of the removal with a token needs freshAuthEnabled on. With
+	// the default off, the token removes the passkey.
+	c.env.EnableFreshAuth(t.Context(), t)
+
 	c.send(t, http.MethodDelete, "/api/dustpan/v1/me/passkeys/"+key.ID, "", asAdmin()).
 		want(t, "remove with a token", http.StatusForbidden, "mfa.fresh-step-required")
 

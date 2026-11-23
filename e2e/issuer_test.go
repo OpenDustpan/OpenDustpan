@@ -159,9 +159,13 @@ type patchCall struct {
 }
 
 // issuerSettings changes the settings with a merge patch, and shows that a
-// change that reduces security needs a fresh sign-in.
+// change that reduces security needs a fresh sign-in. The step turns
+// freshAuthEnabled on first: with the default off, the access token makes the
+// change.
 func issuerSettings(t *testing.T, env *e2e.Env, token string, st *issuerState) {
 	t.Helper()
+
+	env.EnableFreshAuth(t.Context(), t)
 
 	remember := func(body string) error {
 		var got struct {

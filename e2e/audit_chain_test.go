@@ -70,6 +70,11 @@ func TestAuditChain(t *testing.T) {
 			ctx := t.Context()
 			env := e2e.NewEnvWithSignIn(ctx, t, cli, db)
 
+			// checkAuditChainTokenRefused expects the fresh step of an access
+			// token. The server refuses a sign-in in maintenance mode, so the
+			// setting goes on before the first restart.
+			env.EnableFreshAuth(ctx, t)
+
 			if got := readAuditChain(ctx, t, env); got.State != "on" || got.Setting != "on" || got.Pending {
 				t.Fatalf("audit chain of a new installation = %+v, want on with no waiting change", got)
 			}

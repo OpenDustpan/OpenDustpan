@@ -33,6 +33,6 @@
 - [ ] 3.1 Each site of 1.1 has a test with the setting off and on. Check: the tests of 1.4 pass
 - [ ] 3.2 Route keeps its authorization actions. Check: Route test passes
 - [ ] 3.3 E2E step `settingsFreshAuthEnabled` (NEW) in e2e/settings_test.go: `PATCH /api/dustpan/v1/settings` with an administrator console session sets `freshAuthEnabled` to `true` and then to `false`, and `GET /api/dustpan/v1/settings` shows the effective value and its source after each change. The approval of a `destroy` by an access token has no e2e step: the jobs API cannot start a `destroy` job, and `TestDestroyApprovalByTokenFollowsSetting` is the proof of it. Check: `make e2e` passes
-- [ ] 3.4 In the guides named in the Files list, state the setting, its default, that off means an access token with the grant may approve a `destroy` and make a setting weaker, and that `enforced` shows a stored rule that is not in force. Check: make docs-lint
+- [x] 3.4 In the guides named in the Files list, state the setting, its default, that off means an access token with the grant may approve a `destroy` and make a setting weaker, and that `enforced` shows a stored rule that is not in force. Check: make docs-lint
 - [ ] 3.5 Usability check from the docs page alone. Check: Site administrator turns the setting on and off from the docs page.
 - [ ] 3.6 Run make check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

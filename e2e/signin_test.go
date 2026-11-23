@@ -391,9 +391,13 @@ func checkPulumiWhoami(ctx context.Context, t *testing.T, env *e2e.Env, token st
 // checkTokenFreshness proves the token freshness window: a session whose
 // sign-in is older than 15 minutes cannot create a token, and gets the
 // path of a new sign-in; that sign-in asks the provider for a new
-// authentication, and its session creates a token.
+// authentication, and its session creates a token. The step turns
+// freshAuthEnabled on first: with the default off, a stale session creates
+// the token.
 func checkTokenFreshness(t *testing.T, b browser) {
 	t.Helper()
+
+	b.env.EnableFreshAuth(t.Context(), t)
 
 	clock := b.env.Clock(t)
 	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)

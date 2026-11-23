@@ -115,9 +115,12 @@ func checkSessionPolicyChange(ctx context.Context, t *testing.T, env *e2e.Env) {
 // checkSessionPolicyRoles gives a person the account-administrator role and
 // another the site-administrator role on the installation. Both read the
 // policy. Only the site administrator changes it: the account administrator
-// gets 403.
+// gets 403. The step turns freshAuthEnabled on first: with the default off,
+// the token of the site administrator makes the change.
 func checkSessionPolicyRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
+
+	env.EnableFreshAuth(ctx, t)
 
 	steps := []struct {
 		subject, role string

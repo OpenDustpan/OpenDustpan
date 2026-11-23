@@ -44,6 +44,10 @@ func TestDecisionRecordRetentionSetting(t *testing.T) {
 func retentionScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
+	// The refusals of an access token below and in retentionShorter need
+	// freshAuthEnabled on. It goes on before the first read of the revision.
+	env.EnableFreshAuth(ctx, t)
+
 	// The first read shows keep-forever from the default.
 	read, doc := settingsRead(ctx, t, env, settingsRoute)
 

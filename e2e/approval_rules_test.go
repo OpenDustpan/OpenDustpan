@@ -63,6 +63,10 @@ func runApprovalRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkReady(ctx, t, env)
 
+	// The steps expect the fresh step of a rule write with an access token,
+	// so freshAuthEnabled goes on. With the default off, the token writes.
+	env.EnableFreshAuth(ctx, t)
+
 	checkApprovalCreateNamespace(ctx, t, approvalEnv{env: env, person: ""})
 	approvalGroups(ctx, t, approvalEnv{env: env, person: ""})
 

@@ -355,6 +355,126 @@ func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifM
 	})
 }
 
+// freshAuthSettingsPath is the settings resource of the installation that
+// EnableFreshAuth changes.
+const freshAuthSettingsPath = "/api/dustpan/v1/settings"
+
+// EnableFreshAuth sets the installation setting freshAuthEnabled to true, so
+// that each step of a dangerous action asks for a fresh authentication. The
+// default is false: with it, an access token with the grant makes the change.
+// A step that expects 403 mfa.fresh-step-required for an access token calls
+// EnableFreshAuth first, before it reads a revision of the settings. An env
+// from NewEnvWithSignIn makes the change with a console session of a site
+// administrator, and sets the value back when the test ends: the change to
+// off needs a fresh step while the setting is on. An env with no sign-in makes
+// the change with the administrator token, because a change to on needs no
+// step. Its value stays until the env stops with its test, because no session
+// of that env can give the fresh step of the change back to off.
+func (e *Env) EnableFreshAuth(ctx context.Context, tb testing.TB) {
+	tb.Helper()
+
+	if e.signIn != nil {
+		// The first sign-in of the administrator can restart a binary server,
+		// which moves the revision. Make it before the read.
+		e.freshAdmin(ctx, tb)
+	}
+
+	before, tag := e.readFreshAuth(ctx, tb)
+	e.patchFreshAuth(ctx, tb, tag, true)
+
+	if before || e.signIn == nil {
+		return
+	}
+
+	tb.Cleanup(func() {
+		restoreCtx := context.WithoutCancel(ctx)
+
+		_, tag := e.readFreshAuth(restoreCtx, tb)
+		e.patchFreshAuth(restoreCtx, tb, tag, false)
+	})
+}
+
+// freshAuthItem is the part of one setting of the settings resource that
+// readFreshAuth reads.
+type freshAuthItem struct {
+	Key   string `json:"key"`
+	Value any    `json:"value"`
+}
+
+// readFreshAuth reads the effective value of freshAuthEnabled and the
+// revision tag of the settings resource with the administrator token.
+func (e *Env) readFreshAuth(ctx context.Context, tb testing.TB) (bool, string) {
+	tb.Helper()
+
+	resp, err := e.ServerAPIStatusTyped(ctx, TypedRequest{
+		Token: e.token, Method: http.MethodGet, Path: freshAuthSettingsPath, ContentType: "", Body: "", IfMatch: "",
+	})
+	if err != nil || resp.Status != http.StatusOK {
+		tb.Fatalf("GET %s = %d, %v: %s", freshAuthSettingsPath, resp.Status, err, resp.Body)
+	}
+
+	var doc struct {
+		Settings []freshAuthItem `json:"settings"`
+	}
+
+	if err := json.Unmarshal([]byte(resp.Body), &doc); err != nil {
+		tb.Fatalf("decode the settings: %v", err)
+	}
+
+	for _, s := range doc.Settings {
+		if s.Key != "freshAuthEnabled" {
+			continue
+		}
+
+		on, ok := s.Value.(bool)
+		if !ok {
+			tb.Fatalf("freshAuthEnabled has the value %v, want a boolean", s.Value)
+		}
+
+		return on, resp.Header.Get("ETag")
+	}
+
+	tb.Fatalf("the settings have no freshAuthEnabled: %s", resp.Body)
+
+	return false, ""
+}
+
+// patchFreshAuth sets freshAuthEnabled to on at the revision tag. An env from
+// NewEnvWithSignIn sends the change with a console session of a site
+// administrator. Another env sends it with the administrator token.
+func (e *Env) patchFreshAuth(ctx context.Context, tb testing.TB, tag string, on bool) {
+	tb.Helper()
+
+	body := fmt.Sprintf(`{"freshAuthEnabled":%t}`, on)
+
+	if e.signIn != nil {
+		status, answer := e.FreshAdminMergePatch(ctx, tb, freshAuthSettingsPath, tag, body)
+		if status != http.StatusOK {
+			tb.Fatalf("PATCH %s %s with a console session = %d: %s", freshAuthSettingsPath, body, status, answer)
+		}
+
+		// The sign-in of the administrator changed the person of the test
+		// provider. A later browser sign-in of the step expects the person of
+		// testUser, so the provider signs that person in again.
+		if e.signIn.idp != nil {
+			e.signIn.mu.Lock()
+			e.signIn.idp.SetUser(testUser())
+			e.signIn.mu.Unlock()
+		}
+
+		return
+	}
+
+	resp, err := e.ServerAPIStatusKeyed(ctx, TypedRequest{
+		Token: e.token, Method: http.MethodPatch, Path: freshAuthSettingsPath,
+		ContentType: "application/merge-patch+json", Body: body, IfMatch: tag,
+	}, NewIdempotencyKey())
+	if err != nil || resp.Status != http.StatusOK {
+		tb.Fatalf("PATCH %s %s with the administrator token = %d, %v: %s",
+			freshAuthSettingsPath, body, resp.Status, err, resp.Body)
+	}
+}
+
 // FreshAdminAPIStatusFrom is FreshAdminAPIStatus for a request that leaves
 // from the local address source. The sign-in itself leaves from the default
 // address. A step uses it for a route that an IP allowlist limits.
