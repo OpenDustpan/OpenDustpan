@@ -42,11 +42,19 @@ When a job makes a state.write call, the server SHALL resolve its JobClaim again
 
 ### Requirement: Deny gates first
 
-When a job token writes only the lock or lease of its plan, the server SHALL apply each deny gate to the write.
+When the job model allows a write with a job token, the server SHALL apply the gates of state.write to the write and SHALL write a decision record for it.
 
 #### Scenario: Deny gate on cancel
 - **WHEN** a deny gate refuses a Pulumi update cancel
 - **THEN** the server refuses it even for the own lock of the token
+
+#### Scenario: Deny gate on an allowed apply write
+- **WHEN** a deny gate matches the unit and a token of a phase that passed change.apply writes that unit of its job
+- **THEN** the server refuses the write and writes a decision record that names the gate
+
+#### Scenario: Job model refuses first
+- **WHEN** a token of a plan phase writes a unit outside its job and no gate matches
+- **THEN** the server refuses the write with identity.ErrDenied and runs no gate
 
 ### Requirement: Unlocked-write rule
 
