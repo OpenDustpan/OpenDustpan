@@ -590,7 +590,7 @@ func checkChunkKeyRefused(t *testing.T, step string, seq int) {
 			job.ChunkNameOrNumberInvalid)
 	}
 
-	if step != "" && strings.Contains(err.Error(), step) {
+	if step != "" && err != nil && strings.Contains(err.Error(), step) {
 		t.Fatalf("CheckChunkKey(%q, %d) = %v, holds the name", step, seq, err)
 	}
 }
