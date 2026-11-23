@@ -30,6 +30,14 @@ The flow on main, which this change keeps:
 13. **Each requirement keeps its own fresh window (owner, 2026-11-20).** A requirement with `freshAuthSeconds` becomes a gate with the NEW field `FreshAuthSeconds` (the pair `Set` and `Seconds` of `gate.FreshAuth`, `pkg/gate/rules.go:83`). `Approve` adds a gate to `For` only when the fresh step of the approver meets the window of that gate. The approval already records the time of the fresh step (Approval.AuthAt). An approval that fills no gate because of the windows is refused with `mfa.fresh-step-required`. The window of a gate is never longer than the one window of the installation (ADR 227 decision 4). `freshAuthEnabled` is read at the one place that ADR 385 names, and when it is off no window is enforced and the job response shows the stored value with `"enforced": false`. A person with no fresh step fills only the gates with no window.
 14. **No `unless` on a job (owner, 2026-11-20).** `DefaultRequirements` keeps its refusal. The error text names the requirement and says to remove the `unless` body. The test of the decider fixes it, also when the `unless` default is the second requirement. No evaluation of `unless` is added, so ADR 353 decision 6 has no fact to read.
 15. **The kind of the approver is not changed here.** `checkApprover` refuses an agent and nothing else by kind, as main does. The rule for a service principal, a job token and an access token is in the change `machine-approvals`, which starts after this change and after the ADR that follows RFC 134. This design adds no code path that a token approval needs, and the matcher reads no credential. A machine approval is not part of any task here, and nothing here counts it.
+16. **The ports and the wiring of Part B.** This decision names the readers that decisions 11 and 12 need. It does not change their rules.
+    - The struct-field preflight of task 5.0 adds the NEW fields of `Approvers` and `Gate` first, with zero values. The literals of these types are in more than 10 files.
+    - At save, the config service resolves each user name through the NEW port `gate.UserResolver`. The port is the NEW optional field `Users` of `ConfigServiceConfig`. The NEW type `userDirectory` in `pkg/dustpan/gateconfig.go` is its adapter over the principal store. With a nil port, a save that names a user fails with `gate.ErrUnavailable`. An unknown user fails the save with the NEW reason `ApproversUserMissing`. The API hides that reason from a caller without `server:read-principals`, as it hides a missing group. So a role of a namespace cannot learn which users exist.
+    - At approval, `Approve` reads the ID of the subject through the NEW port `job.PrincipalIDs` (decision 11). The port is the NEW optional field `Principals` of `ServiceConfig`, and `jobGroups` in `pkg/dustpan/jobgroups.go` is its adapter. With a nil port, a gate with users holds no one.
+    - A gate with unit owners holds the NEW field `Scope`. `gatesOf` sets it from the chain: a requirement that names approvers is `default/<scope key>`, so it has exactly one scope (ADR 225 decision 4). `UnitOwnerReader` reads at that scope and the wider scopes. The NEW type `jobOwners` in the NEW file `pkg/dustpan/jobowners.go` is its adapter over the context store. A zero `Scope` on a gate with unit owners refuses the approval.
+    - A `group:<name>` owner goes through the NEW port `job.GroupNames`, then through `GroupReader` by ID. `jobGroups` is its adapter. A missing group counts no one. A read error or a nil port refuses the approval. The name is read once, at the approval. The approval stores only the names of the gates in `For`, and no group name.
+    - The job store keeps `users`, `userIds`, `unitOwners` and `scope` in `gateBody`. A scope key that does not parse fails the decode, so a gate never loses its scope in silence.
+    - The jobs API shows `users` and `unitOwners` on each gate. `userIds` stays in the store only, as `groupIds` does.
 
 ## Contract
 
@@ -46,9 +54,12 @@ type Gate struct {
     // the requirement names, Users holds their names for display, UnitOwners
     // is true when the requirement names the owners of the unit, and
     // FreshAuth is the window of the requirement.
+    // Scope is the scope of the default that gave the requirement. It is set
+    // for a requirement that names approvers, and it is zero for "default".
     Users      []string
     UserIDs    []string
     UnitOwners bool
+    Scope      gate.Scope // NEW
     FreshAuth  gate.FreshAuth
 }
 
@@ -86,6 +97,30 @@ type UnitOwnerReader interface {
     UnitOwners(ctx context.Context, unit identity.Object, scope gate.Scope) ([]objectcontext.Owner, error)
 }
 
+// GroupNames is NEW (Part B). It resolves the group of a "group:<name>"
+// owner. ErrNotFound means that no group has the name: the owner counts no
+// one. Any other error refuses the approval.
+type GroupNames interface {
+    // GroupIDOf returns the stable ID of the group that is called name now.
+    GroupIDOf(ctx context.Context, name string) (string, error)
+}
+
+// pkg/gate/config.go (Part B, NEW). With a nil port in ConfigServiceConfig,
+// a save that names a user fails with ErrUnavailable.
+type UserRef struct {
+    ID   string // the stable principal ID
+    Name string // the current name, for display
+}
+
+type UserResolver interface {
+    // ResolveUser returns the principal that has the subject name. It
+    // returns ErrNotFound when no principal has it.
+    ResolveUser(ctx context.Context, name string) (UserRef, error)
+}
+
+// pkg/gate/approvers_error.go (Part B): the NEW reason ApproversUserMissing,
+// a user that does not exist, after ApproversCountAbove.
+
 // pkg/job/service_start.go (NEW, unexported). Errors: ErrInvalid.
 func checkGates(gates []Gate) error
 ```
@@ -96,7 +131,7 @@ Endpoints: no new route. The response of `GET /api/dustpan/v1/namespaces/{namesp
 
 Stored shape: `jobs.body` JSON of both dialects gets `gates[].name` and `approvals[].for`. No table, column or migration changes.
 
-Stored shape of Part B: `gates[].userIds`, `gates[].users`, `gates[].unitOwners` and `gates[].freshAuth` in the same JSON body. The response of the jobs API gets `gates[].freshAuthSeconds` and `gates[].freshAuthEnforced`.
+Stored shape of Part B: `gates[].userIds`, `gates[].users`, `gates[].unitOwners`, `gates[].scope` and `gates[].freshAuth` in the same JSON body. The response of the jobs API gets `gates[].users` and `gates[].unitOwners` (tasks 5.1 and 5.2), and `gates[].freshAuthSeconds` and `gates[].freshAuthEnforced` (task 5.4).
 
 Audit entry of an approval: the changes `job`, `verdict`, `phase`, `operation`, `event` and `plan` as on main, plus `requirements` (comma-separated names from `For`).
 
@@ -124,6 +159,7 @@ The service checks `job:read` and `job:approve` again on the unit (`authorizedJo
 | Matcher (`pkg/job/match.go`) | One subject fills one slot. An approval with an empty `For`, an agent, a reject verdict, a subject that the policy does not count, or the starter on a gate with no AllowSelf fills no slot. | A table in `pkg/job/match_test.go`: one person who holds both gates fills one slot; two approvals of one subject fill one; a greedy order that fails and a maximum matching that succeeds; the reverse order of the same approvals gives the same result. |
 | Service (`pkg/job`, `Approve`) | `checkApprover` and `checkGroups` check each gate by group ID with the reader. A failed read, no reader, a gate with no IDs, or an empty `For` is a `*DeniedError` on `job:approve`. | Extend `pkg/job/service_approve_groups_test.go`: a member of group A only fills gate A; a member of neither group is refused; an inactive member is refused; a read error is refused; the refusal names the gates. |
 | Decider, Part B | `gatesOf` refuses a user entry with no ID, and `DefaultRequirements` refuses an `unless` body, also in the second scope. | A table with a user with no ID and an `unless` default in the second scope. Each row wants `gate.ErrUnavailable`. |
+| Config, Part B (`pkg/gate`, `checkApprovers`) | A save resolves each user name to its ID. An unknown user, a nil `UserResolver` or a read error fails the save. The ID that a caller gives is dropped. The API hides `ApproversUserMissing` from a caller without `server:read-principals`. | The NEW file `pkg/gate/config_users_test.go` and `internal/api/server/gate_config_test.go`: an unknown user, a nil port, a caller-given ID, and a caller without `server:read-principals`. Each row fails when the guard is removed. |
 | Service, Part B (`Approve`) | The owner read, the principal ID read and the window check each fail closed: a read error, no reader, a text owner, a user with no ID, or a stale fresh step fills no gate and refuses the approval. | Extend `pkg/job/service_approve_groups_test.go`: a read error of the context is refused; a text owner counts no one; a stale step with a gate that has a window fills only the gates with none; with `freshAuthEnabled` off no window applies. Each row fails when the guard is removed. |
 | Reconciler (`pkg/job/reconcile.go`) | `dispatchJob` dispatches only when `GatesStatus` is open, computed from the stored `For`. | A job with 2 gates, 3 approvals from 2 people: stays queued until the third distinct person. |
 | Store (`internal/store/jobstore`) | The store keeps the codec round trip of `name` and `for`, and `Store.Apply` for `EventDispatch` keeps its checks. | The job store conformance suite (`pkg/job/jobtest`): a job with 2 named gates and approvals with `for` round-trips on both dialects. |
@@ -147,6 +183,8 @@ Hostile cases for the matcher and the service (each is a row in the table tests)
 | A user is removed and made again with the same name | the new user fills no slot: the gate holds the old principal ID |
 | The context read fails at an approval of a unit-owner gate | the approval is refused with 403, and an audit entry is written |
 | The context names an owner as plain text | that owner fills no slot |
+| A gate with unit owners has a zero scope, or no group resolver is set | the approval is refused with 403 |
+| A save names a user that does not exist, and the caller lacks `server:read-principals` | the answer does not say that the user is missing |
 | The owners change after Bo approved | the approval of Bo still fills its slot |
 | A fresh step of 10 minutes, gate A window 300 s, gate B no window | `For` holds gate B only |
 | A default with an `unless` body in the second scope | the start fails with `gate.ErrUnavailable` |
