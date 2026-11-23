@@ -33,5 +33,5 @@ The reconcile of jobs SHALL authorize each change with the action `job:reconcile
 The housekeeping purposes that act inside a namespace SHALL work through the stored grants on the namespace, also when the installation grant does not reach namespaces.
 
 #### Scenario: Reach setting is false
-- **WHEN** `access.installationGrantsReachNamespaces` is `false` and the retention of history runs on a namespace
+- **WHEN** the installation grant does not reach namespaces (the setting `access.installationGrantsReachNamespaces` is `false` once the change `installation-grants-reach-namespaces-setting` adds it) and the retention of history runs on a namespace
 - **THEN** the redaction is authorized by the grant on that namespace
