@@ -260,16 +260,15 @@ func (cfg Config) denials() (*denylimit.Limiter, *refusal.Recorder, error) {
 // Operations, Recorder, Jobs, JobTokens, Starters, Sessions, Now and
 // PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
-	// The refusal recorder is built first, so that its own check of the audit
-	// store refuses a nil store and no log refusal goes unrecorded.
-	limiter, refusals, err := cfg.denials()
-	if err != nil {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	// Defense in depth: the refusal recorder refuses a nil audit store too;
-	// validate checks it again so that the check does not rely on that package.
-	if err := cfg.validate(); err != nil {
+	// Defense in depth: validate refuses a nil audit store first; the refusal
+	// recorder checks its dependencies too, so that no log refusal goes
+	// unrecorded when a new caller skips validate.
+	limiter, refusals, err := cfg.denials()
+	if err != nil {
 		return nil, err
 	}
 

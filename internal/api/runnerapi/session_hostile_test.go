@@ -1,10 +1,12 @@
 package runnerapi_test
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -242,26 +244,27 @@ func checkLogRefusal(t *testing.T, s *sessionEnv, e *audit.Entry, reason, chunk 
 	}
 }
 
+// logRefusalReasons returns the reasons of the audit entry of a refused log
+// chunk.
+func logRefusalReasons() []string {
+	return []string{
+		"cap-chunk-number", "cap-step", "cap-phase", "chunk-too-large", "hash-header", "hash-mismatch",
+		"out-of-order", "step-invalid", "name-or-number-invalid",
+	}
+}
+
 // TestLogRefusalKeepsItsMessage proves that each log refusal keeps its own
-// answer and writes one audit entry with its reason: a chunk out of order
-// answers 400 invalid with the message of the order, and a chunk with another
-// hash for a stored number answers 409 conflict with the message of the hash.
-// The server keeps no byte of a refused chunk.
+// message, and writes one audit entry with its reason. The table names each
+// reason of logRefusalReasons.
 func TestLogRefusalKeepsItsMessage(t *testing.T) {
 	t.Parallel()
 
-	tests := []logRefusalCase{
-		{
-			"a chunk out of order", func(*testing.T, *launcher) {}, 2, http.StatusBadRequest, protocol.ErrorInvalid,
-			"chunk 2 of step init is not the next chunk of the log", "out-of-order",
-		},
-		{
-			"chunk 0 with another hash", func(t *testing.T, l *launcher) {
-				t.Helper()
-				l.expect(t, "chunk 0", l.upload(logPath(0), []byte("first")), http.StatusNoContent, "")
-			}, 0, http.StatusConflict, protocol.ErrorConflict,
-			"chunk 0 of step init has another hash", "hash-mismatch",
-		},
+	tests := logRefusalCases()
+
+	for _, reason := range logRefusalReasons() {
+		if !slices.ContainsFunc(tests, func(tc logRefusalCase) bool { return tc.reason == reason }) {
+			t.Errorf("no case of the reason %s", reason)
+		}
 	}
 
 	for _, b := range wiringBackends() {
@@ -269,59 +272,260 @@ func TestLogRefusalKeepsItsMessage(t *testing.T) {
 			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				checkLogRefusalCase(t, b, &tc)
+				checkLogRefusalMessage(t, b, &tc)
 			})
 		}
 	}
 }
 
-// logRefusalCase is one refused log chunk: the calls before it, its number,
-// and the answer and the audit reason that it must get.
-type logRefusalCase struct {
-	name    string
-	prepare func(t *testing.T, l *launcher)
-	seq     int
-	status  int
-	code    string
-	message string
-	reason  string
-}
-
-// checkLogRefusalCase sends the refused chunk of tc on a new session, and
-// checks its answer, that no byte of it is stored and that one audit entry
-// names its reason.
-func checkLogRefusalCase(t *testing.T, b backend, tc *logRefusalCase) {
+// checkLogRefusalMessage sends the hostile chunk of tc, and checks the answer
+// and its message, and one audit entry with the reason of tc.
+func checkLogRefusalMessage(t *testing.T, b backend, tc *logRefusalCase) {
 	t.Helper()
 
-	const refused = "refused-chunk-bytes"
+	got := sendLogRefusal(t, b, tc)
+	if got.status != tc.status || got.answer.Code != tc.code || got.answer.Message != tc.message {
+		t.Fatalf("%s = %d %+v, want %d %s %q", tc.name, got.status, got.answer, tc.status, tc.code, tc.message)
+	}
+
+	if len(got.entries) != 1 || !strings.Contains(got.entries[0].Reason, "reason "+tc.reason+";") {
+		t.Fatalf("entries of %s = %+v, want 1 with the reason %s", tc.name, got.entries, tc.reason)
+	}
+}
+
+// TestSessionHostileLogRefusal sends one hostile chunk for each reason, and
+// proves that its guard refuses it alone: the answer and the reason are the
+// ones of the guard, the server keeps no byte of the chunk, the entry names the
+// claim and the job and holds no byte of the chunk and no step name that is
+// not valid, and a guard of the handler refuses the chunk before any call of
+// the recorder. With the guard of a case removed, the chunk gets the answer or
+// the reason of a later check, or is stored, and the case fails.
+func TestSessionHostileLogRefusal(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range wiringBackends() {
+		for _, tc := range logRefusalCases() {
+			t.Run(b.name+"/"+tc.reason+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				checkHostileLogChunk(t, b, &tc)
+			})
+		}
+	}
+}
+
+// checkHostileLogChunk sends the hostile chunk of tc, and checks that its
+// guard alone refused it.
+func checkHostileLogChunk(t *testing.T, b backend, tc *logRefusalCase) {
+	t.Helper()
+
+	got := sendLogRefusal(t, b, tc)
+	if got.status != tc.status || got.answer.Code != tc.code {
+		t.Fatalf("%s (guard: %s) = %d %+v, want %d %s", tc.name, tc.guard, got.status, got.answer,
+			tc.status, tc.code)
+	}
+
+	if !maps.Equal(got.after, got.before) ||
+		slices.Contains(slices.Collect(maps.Values(got.after)), refusedChunk) {
+		t.Fatalf("stored chunks = %v, want %v and no byte of the refused chunk", got.after, got.before)
+	}
+
+	if len(got.entries) != 1 {
+		t.Fatalf("entries of %s = %+v, want 1", tc.name, got.entries)
+	}
+
+	checkLogRefusal(t, got.s, &got.entries[0], tc.reason, refusedChunk)
+
+	if strings.Contains(got.entries[0].Reason, hostileStep) {
+		t.Fatalf("entry = %+v, holds the step name that is not valid", got.entries[0])
+	}
+
+	reached := slices.ContainsFunc(got.called, func(c string) bool { return strings.HasPrefix(c, "log:") })
+	if !tc.recorder && reached {
+		t.Fatalf("the hostile chunk reached the recorder past its guard %s: %v", tc.guard, got.called)
+	}
+}
+
+// refusedChunk is the body of each hostile chunk. No stored log and no audit
+// entry may hold it.
+const refusedChunk = "refused-chunk-bytes"
+
+// hostileStep is a step name that is not valid. No audit entry may hold it.
+const hostileStep = "Init_SECRET"
+
+// logSender sends the hostile chunk of a case and returns the answer.
+type logSender func(t *testing.T, s *sessionEnv, l *launcher) (int, []byte)
+
+// uploadLog sends body as the chunk at the path value seq of the step step.
+func uploadLog(step, seq string, body []byte) logSender {
+	return func(_ *testing.T, _ *sessionEnv, l *launcher) (int, []byte) {
+		path := strings.NewReplacer("{step}", step, "{seq}", seq).Replace(protocol.PathSessionLog)
+
+		return l.do(l.upload(path, body))
+	}
+}
+
+// putLogSigned calls the handler of the chunk alone, with signed as the hash
+// that the proof signed. The proof check refuses a header that is not a
+// SHA-256 first, so only this call reaches the check of the handler.
+func putLogSigned(signed []byte) logSender {
+	return func(t *testing.T, s *sessionEnv, _ *launcher) (int, []byte) {
+		t.Helper()
+
+		sess := runner.Session{
+			ID: "", Kind: runner.SessionKindLauncher, Operation: s.work.Operation, Token: s.work.Token,
+			Runner: s.runner.id, Key: runner.Key{Public: nil, CreatedAt: time.Time{}}, CreatedAt: time.Time{},
+		}
+
+		return runnerapi.PutLog(t.Context(), s.handler, sess, runnerapi.LogPut{
+			Step: "init", Seq: "0", Signed: signed, Body: []byte(refusedChunk),
+		})
+	}
+}
+
+// logRefusalCases returns one hostile chunk for each reason of a log refusal,
+// with the guard that refuses it.
+func logRefusalCases() []logRefusalCase {
+	const capMessage = "the log of the step or of the phase is at its cap"
+
+	none := func(*testing.T, *sessionEnv, *launcher) {}
+	chunk := []byte(refusedChunk)
+	tooLarge := bytes.Repeat(chunk, job.MaxLogChunk/len(chunk)+1)
+
+	return []logRefusalCase{
+		{
+			name: "a chunk number at the step cap", guard: "putLog, the chunk number cap",
+			prepare: none, send: uploadLog("init", strconv.Itoa(protocol.MaxLogChunksPerStep), chunk),
+			recorder: false, status: http.StatusBadRequest, code: protocol.ErrorInvalid, message: capMessage,
+			reason: "cap-chunk-number",
+		},
+		{
+			name: "a chunk above the step byte cap", guard: "LogCaps.PlanChunk, the step byte cap",
+			prepare: func(_ *testing.T, s *sessionEnv, _ *launcher) {
+				s.jobs.seedLog("init", 1, protocol.MaxLogBytesPerStep)
+			},
+			send: uploadLog("init", "1", chunk), recorder: true,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid, message: capMessage, reason: "cap-step",
+		},
+		{
+			name: "a chunk above the phase chunk cap", guard: "LogCaps.PlanChunk, the phase chunk cap",
+			prepare: func(_ *testing.T, s *sessionEnv, _ *launcher) {
+				s.jobs.seedLog("other", protocol.MaxLogChunksPerPhase, 0)
+			},
+			send: uploadLog("init", "0", chunk), recorder: true,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid, message: capMessage, reason: "cap-phase",
+		},
+		{
+			name: "a chunk above 1 MiB", guard: "putLog, the size of a chunk",
+			prepare: none, send: uploadLog("init", "0", tooLarge), recorder: false,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: fmt.Sprintf("a log chunk has at most %d bytes", job.MaxLogChunk), reason: "chunk-too-large",
+		},
+		{
+			name: "a signed hash that is not a SHA-256", guard: "putLog, the length of the signed hash",
+			prepare: none, send: putLogSigned([]byte("short")), recorder: false,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: fmt.Sprintf("the %s header is not a SHA-256 in hex", protocol.HeaderContentSHA256),
+			reason:  "hash-header",
+		},
+		{
+			name: "chunk 0 with another hash", guard: "PlanChunk, the hash of a stored chunk",
+			prepare: func(t *testing.T, _ *sessionEnv, l *launcher) {
+				t.Helper()
+				l.expect(t, "chunk 0", l.upload(logPath(0), []byte("first")), http.StatusNoContent, "")
+			},
+			send: uploadLog("init", "0", chunk), recorder: true,
+			status: http.StatusConflict, code: protocol.ErrorConflict,
+			message: "chunk 0 of step init has another hash", reason: "hash-mismatch",
+		},
+		{
+			name: "a chunk after the next one", guard: "PlanChunk, the order of the chunks",
+			prepare: func(t *testing.T, _ *sessionEnv, l *launcher) {
+				t.Helper()
+				l.expect(t, "chunk 0", l.upload(logPath(0), []byte("first")), http.StatusNoContent, "")
+			},
+			send: uploadLog("init", "3", chunk), recorder: true,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: "chunk 3 of step init is not the next one, which is 1", reason: "out-of-order",
+		},
+		{
+			name: "a step name that is not valid", guard: "stepOf",
+			prepare: none, send: uploadLog(hostileStep, "0", chunk), recorder: false,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: fmt.Sprintf("the step name is 1 to %d lowercase letters, digits and '-'", job.MaxStepName),
+			reason:  "step-invalid",
+		},
+		{
+			name: "a negative chunk number", guard: "putLog, the chunk number",
+			prepare: none, send: uploadLog("init", "-1", chunk), recorder: false,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: fmt.Sprintf("the number of a log chunk is 0 to %d", protocol.MaxLogChunksPerStep-1),
+			reason:  "name-or-number-invalid",
+		},
+		{
+			name: "a name or number that the recorder refuses", guard: "job.CheckChunkKey in the recorder",
+			prepare: func(_ *testing.T, s *sessionEnv, _ *launcher) {
+				// The recorder refuses the key, as if the checks of the handler
+				// failed.
+				s.jobs.failWith("log", job.CheckChunkKey("", 0))
+			},
+			send: uploadLog("init", "0", chunk), recorder: true,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: "the step name or the number of the log chunk is not valid", reason: "name-or-number-invalid",
+		},
+	}
+}
+
+// logRefusalCase is one hostile log chunk: the guard that refuses it, the calls
+// before it, how to send it, and the answer and the audit reason that it must
+// get. recorder is true when the recorder refuses the chunk; a guard of the
+// handler refuses it before any call of the recorder.
+type logRefusalCase struct {
+	name     string
+	guard    string
+	prepare  func(t *testing.T, s *sessionEnv, l *launcher)
+	send     logSender
+	recorder bool
+	status   int
+	code     string
+	message  string
+	reason   string
+}
+
+// logRefusalResult is what a hostile chunk left: the answer, the audit entries
+// of log refusals, the chunks of the step init before and after it, and the
+// calls of the recorder.
+type logRefusalResult struct {
+	s       *sessionEnv
+	status  int
+	answer  protocol.Error
+	entries []audit.Entry
+	before  map[int]string
+	after   map[int]string
+	called  []string
+}
+
+// sendLogRefusal sends the hostile chunk of tc on a new session.
+func sendLogRefusal(t *testing.T, b backend, tc *logRefusalCase) logRefusalResult {
+	t.Helper()
 
 	s, log := newAuditedSessionEnv(t, b, nil)
 	l := s.launch()
-	tc.prepare(t, l)
+	tc.prepare(t, s, l)
 
 	before := s.jobs.initChunks()
+	called := len(s.jobs.called())
 
-	status, body := l.do(l.upload(logPath(tc.seq), []byte(refused)))
+	status, body := tc.send(t, s, l)
 
 	var e protocol.Error
 
 	decode(t, body, &e)
 
-	if status != tc.status || e.Code != tc.code || e.Message != tc.message {
-		t.Fatalf("%s = %d %s, want %d %s %q", tc.name, status, body, tc.status, tc.code, tc.message)
+	return logRefusalResult{
+		s: s, status: status, answer: e, entries: log.logRefusals(), before: before, after: s.jobs.initChunks(),
+		called: s.jobs.called()[called:],
 	}
-
-	if got := s.jobs.initChunks(); !maps.Equal(got, before) ||
-		slices.Contains(slices.Collect(maps.Values(got)), refused) {
-		t.Fatalf("stored chunks = %v, want %v and no byte of the refused chunk", got, before)
-	}
-
-	entries := log.logRefusals()
-	if len(entries) != 1 {
-		t.Fatalf("entries of %s = %+v, want 1", tc.name, entries)
-	}
-
-	checkLogRefusal(t, s, &entries[0], tc.reason, refused)
 }
 
 // TestSessionHostilePlanCommitOtherParts proves the rule of a repeated plan

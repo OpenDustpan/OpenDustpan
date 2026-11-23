@@ -383,9 +383,11 @@ func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
 	}
 }
 
-// TestNewHandlerRefusesNoAuditStore proves the check of the refusal recorder in
-// NewHandler: a server with no audit store does not start, and the error names
-// the refusal recorder, which has nowhere to write the log refusals.
+// TestNewHandlerRefusesNoAuditStore proves the check of the audit store in
+// validate: a server with no audit store does not start, and the error is the
+// one of validate. The refusal recorder refuses a nil store with
+// refusal.ErrNoStore, so without the check of validate the error wraps
+// refusal.ErrNoStore and the test fails.
 func TestNewHandlerRefusesNoAuditStore(t *testing.T) {
 	t.Parallel()
 
@@ -396,8 +398,10 @@ func TestNewHandlerRefusesNoAuditStore(t *testing.T) {
 	cfg.Audit = nil
 
 	h, err := runnerapi.NewHandler(cfg)
-	if h != nil || !errors.Is(err, runnerapi.ErrMissingDependency) || !errors.Is(err, refusal.ErrNoStore) {
-		t.Fatalf("NewHandler = %v, %v; want no handler and ErrMissingDependency of the refusal recorder", h, err)
+	if h != nil || !errors.Is(err, runnerapi.ErrMissingDependency) || errors.Is(err, refusal.ErrNoStore) ||
+		!strings.Contains(err.Error(), "audit store") {
+		t.Fatalf("NewHandler = %v, %v; want no handler and ErrMissingDependency of the audit store from validate",
+			h, err)
 	}
 }
 

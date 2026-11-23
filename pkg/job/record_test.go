@@ -508,11 +508,12 @@ func TestPlanChunkNamesTheRule(t *testing.T) {
 		log  *job.LogRef
 		c    job.ChunkReserve
 		rule job.ChunkRule
+		next int
 		want error
 	}{
-		{"a first chunk that is not 0", nil, chunkOf(2, "a"), job.ChunkOutOfOrder, job.ErrInvalid},
-		{"a chunk after the next one", openLog(1), chunkOf(3, "a"), job.ChunkOutOfOrder, job.ErrInvalid},
-		{"a stored chunk with another hash", openLog(1), chunkOf(0, "z"), job.ChunkHashMismatch, job.ErrConflict},
+		{"a first chunk that is not 0", nil, chunkOf(2, "a"), job.ChunkOutOfOrder, 0, job.ErrInvalid},
+		{"a chunk after the next one", openLog(1), chunkOf(3, "a"), job.ChunkOutOfOrder, 1, job.ErrInvalid},
+		{"a stored chunk with another hash", openLog(1), chunkOf(0, "z"), job.ChunkHashMismatch, 0, job.ErrConflict},
 	}
 
 	lookup := func(_ string, seq int) (job.ChunkRow, bool, error) {
@@ -535,10 +536,62 @@ func TestPlanChunkNamesTheRule(t *testing.T) {
 			_, err := job.PlanChunk(j, job.StepKey{Phase: 0, Token: token, Name: stepRun}, tt.c, newLogRef(), lookup)
 
 			chunkErr, ok := errors.AsType[*job.ChunkError](err)
-			if !ok || chunkErr.Rule != tt.rule || !errors.Is(err, tt.want) {
-				t.Fatalf("PlanChunk = %v, want a ChunkError of the rule %s that is %v", err, tt.rule, tt.want)
+			if !ok || chunkErr.Rule != tt.rule || chunkErr.Next != tt.next || !errors.Is(err, tt.want) {
+				t.Fatalf("PlanChunk = %v, want a ChunkError of the rule %s, next %d, that is %v", err, tt.rule,
+					tt.next, tt.want)
 			}
 		})
+	}
+}
+
+// TestCheckChunkKeyNamesTheRule proves that a step name that is not valid and a
+// chunk number out of range are a ChunkError of the rule
+// ChunkNameOrNumberInvalid, are ErrInvalid, and never hold the name.
+func TestCheckChunkKeyNamesTheRule(t *testing.T) {
+	t.Parallel()
+
+	for _, seq := range []int{0, job.MaxLogChunks - 1} {
+		if err := job.CheckChunkKey("init", seq); err != nil {
+			t.Fatalf("CheckChunkKey(init, %d) = %v, want nil", seq, err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		step string
+		seq  int
+	}{
+		{"an empty name", "", 0},
+		{"a name with capitals", "Init-SECRET", 0},
+		{"a name that is too long", strings.Repeat("a", job.MaxStepName+1), 0},
+		{"a negative number", "init", -1},
+		{"a number at the cap", "init", job.MaxLogChunks},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkChunkKeyRefused(t, tt.step, tt.seq)
+		})
+	}
+}
+
+// checkChunkKeyRefused checks that CheckChunkKey refuses step and seq with the
+// rule ChunkNameOrNumberInvalid, and that the error holds no name.
+func checkChunkKeyRefused(t *testing.T, step string, seq int) {
+	t.Helper()
+
+	err := job.CheckChunkKey(step, seq)
+
+	chunkErr, isChunk := errors.AsType[*job.ChunkError](err)
+	if !isChunk || chunkErr.Rule != job.ChunkNameOrNumberInvalid || !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("CheckChunkKey(%q, %d) = %v, want a ChunkError of the rule %s", step, seq, err,
+			job.ChunkNameOrNumberInvalid)
+	}
+
+	if step != "" && strings.Contains(err.Error(), step) {
+		t.Fatalf("CheckChunkKey(%q, %d) = %v, holds the name", step, seq, err)
 	}
 }
 

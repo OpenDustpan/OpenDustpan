@@ -217,6 +217,11 @@ func (f *sessionJobs) appendChunk(c job.PhaseClaim, ch *fakeChunk) error {
 		return err
 	}
 
+	// The fake checks the name and the number as the recorder does.
+	if err := job.CheckChunkKey(ch.step, ch.seq); err != nil {
+		return err
+	}
+
 	data, err := io.ReadAll(ch.body)
 	if err != nil {
 		return fmt.Errorf("read chunk: %w", err)

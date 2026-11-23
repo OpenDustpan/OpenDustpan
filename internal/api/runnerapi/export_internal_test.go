@@ -1,6 +1,7 @@
 package runnerapi
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,32 @@ func JobPhaseOf(ctx context.Context, h *Handler, sess runner.Session) error {
 	_, err := h.jobPhaseOf(httptest.NewRequestWithContext(ctx, http.MethodPost, "/", http.NoBody), &c)
 
 	return err
+}
+
+// LogPut is a log chunk request: the path values Step and Seq, the hash that
+// the proof signed and the body.
+type LogPut struct {
+	Step, Seq string
+	Signed    []byte
+	Body      []byte
+}
+
+// PutLog calls the handler of a log chunk on h, for the session sess, with the
+// request p. It skips the proof check, so that a test reaches each check of
+// the handler alone. It returns the status and the body of the answer.
+func PutLog(ctx context.Context, h *Handler, sess runner.Session, p LogPut) (int, []byte) {
+	var c call
+
+	c.session, c.contentSHA256 = sess, p.Signed
+
+	r := httptest.NewRequestWithContext(ctx, http.MethodPut, "/", bytes.NewReader(p.Body))
+	r.SetPathValue("step", p.Step)
+	r.SetPathValue("seq", p.Seq)
+
+	w := httptest.NewRecorder()
+	h.putLog(w, r, &c)
+
+	return w.Code, w.Body.Bytes()
 }
 
 // JobPhaseWithoutReader is JobPhaseOf with the job reader of h cleared for the

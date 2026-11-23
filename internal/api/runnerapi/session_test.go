@@ -791,7 +791,8 @@ func seedSteps(n, chunks int, size int64) []logSeedOf {
 // it. The reserve runs the shared rule of the store adapters with the caps
 // that the handler gives. In a phase case, each seeded step is below the caps
 // of a step and the step of the chunk has no log, so only the phase check can
-// refuse the chunk. The audit entry names the cap that refused it.
+// refuse the chunk. The audit entry names the reason of the cap: cap-step or
+// cap-phase.
 func TestLogPhaseCapStoresNothing(t *testing.T) {
 	t.Parallel()
 
@@ -826,7 +827,7 @@ func TestLogPhaseCapStoresNothing(t *testing.T) {
 
 // checkCapStoresNothing seeds the log counters, sends chunk seq of the step
 // init, and checks that the cap want refuses it with invalid, that no byte is
-// stored, and that one audit entry names the cap.
+// stored, and that one audit entry names the reason of the cap.
 func checkCapStoresNothing(t *testing.T, b backend, seeds []logSeedOf, seq int, want job.LogCap) {
 	t.Helper()
 
@@ -844,9 +845,9 @@ func checkCapStoresNothing(t *testing.T, b backend, seeds []logSeedOf, seq int, 
 	decode(t, body, &e)
 
 	if status != http.StatusBadRequest || e.Code != protocol.ErrorInvalid ||
-		!strings.Contains(e.Message, "the log cap "+string(want)+" ") {
-		t.Fatalf("a chunk above the cap = %d %s, want 400 %s that names the cap %s", status, body,
-			protocol.ErrorInvalid, want)
+		e.Message != "the log of the step or of the phase is at its cap" {
+		t.Fatalf("a chunk above the cap %s = %d %s, want 400 %s with the cap message", want, status, body,
+			protocol.ErrorInvalid)
 	}
 
 	if got := s.jobs.initChunks(); len(got) != 0 {
@@ -854,7 +855,7 @@ func checkCapStoresNothing(t *testing.T, b backend, seeds []logSeedOf, seq int, 
 	}
 
 	reason := "cap-phase"
-	if want == job.LogCapStepChunks || want == job.LogCapStepBytes {
+	if want == job.LogCapStepBytes {
 		reason = "cap-step"
 	}
 

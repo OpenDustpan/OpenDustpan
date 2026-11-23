@@ -461,11 +461,15 @@ func (h *Handler) sessionRenew(w http.ResponseWriter, r *http.Request, c *call) 
 func stepOf(r *http.Request) (string, error) {
 	name := r.PathValue("step")
 	if !job.ValidStepName(name) {
-		return "", fmt.Errorf("%w: the step name is 1 to %d lowercase letters, digits and '-'", runner.ErrInvalid,
-			job.MaxStepName)
+		return "", fmt.Errorf("%w: %s", runner.ErrInvalid, stepNameMessage())
 	}
 
 	return name, nil
+}
+
+// stepNameMessage returns the message of a step name that is not valid.
+func stepNameMessage() string {
+	return fmt.Sprintf("the step name is 1 to %d lowercase letters, digits and '-'", job.MaxStepName)
 }
 
 // stepBegin records the begin of the step in the path. For a step that
@@ -568,37 +572,12 @@ func checkStepEnd(req *protocol.StepEnd) error {
 // putLog stores one chunk of the log of a step. The proof signed the hash of
 // the body, so the handler compares it with the bytes that it got before the
 // recorder stores any of them.
+//
+// Each refusal of the chunk, by the handler or by the recorder, writes an
+// audit entry with its reason (refuseLog). The handler resolves the phase
+// first, so that each entry names the claim and the job.
 func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
-
-	seq, err := strconv.Atoi(r.PathValue("seq"))
-	if err != nil || seq < 0 || seq >= protocol.MaxLogChunksPerStep {
-		h.writeError(ctx, w,
-			fmt.Errorf("%w: the number of a log chunk is 0 to %d", runner.ErrInvalid, protocol.MaxLogChunksPerStep-1))
-
-		return
-	}
-
-	chunk, err := io.ReadAll(io.LimitReader(r.Body, job.MaxLogChunk+1))
-	if err != nil {
-		h.writeError(ctx, w, fmt.Errorf("%w: the body is not readable", runner.ErrInvalid))
-
-		return
-	}
-
-	if len(chunk) > job.MaxLogChunk {
-		h.writeError(ctx, w,
-			fmt.Errorf("%w: a log chunk has at most %d bytes", runner.ErrInvalid, job.MaxLogChunk))
-
-		return
-	}
-
-	got := sha256.Sum256(chunk)
-	if err = runner.CheckContentHash(c.contentSHA256, got[:]); err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
 
 	sp, err := h.jobPhaseOf(r, c)
 	if err != nil {
@@ -607,7 +586,13 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	name, err := stepOf(r)
+	chunk, err := readLogChunk(r, c)
+	if refused, ok := errors.AsType[*logRefusalError](err); ok {
+		h.refuseLog(w, r, c, &sp, refused)
+
+		return
+	}
+
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -615,16 +600,14 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	err = h.recorder.AppendLogCapped(ctx, sp.claim, job.CappedChunk{
-		Step: name, Seq: seq, Body: bytes.NewReader(chunk), Caps: sessionLogCaps(),
+		Step: chunk.step, Seq: chunk.seq, Body: bytes.NewReader(chunk.data), Caps: sessionLogCaps(),
 	})
 	if err != nil {
-		// A cap, a chunk out of order and a chunk with another hash each get
-		// their own message and an audit entry. Other errors keep the answer
-		// of their sentinel.
-		if refused, ok := logRefusalOf(err, name, seq); ok {
-			h.recordLogRefusal(r, c, &sp, name, refused.reason)
+		// A refusal of the recorder gets its own message and an audit entry.
+		// Other errors keep the answer of their sentinel.
+		if refused, ok := logRefusalOf(err, chunk.step, chunk.seq); ok {
 			h.logRefused(ctx, err, refused.status, refused.body.Code, refused.body.Message)
-			h.writeJSON(ctx, w, refused.status, refused.body)
+			h.refuseLog(w, r, c, &sp, refused)
 
 			return
 		}
@@ -637,61 +620,155 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// actionLogRefused is the action of the audit entry of a log chunk that a cap,
-// the order of the chunks or the hash of a stored chunk refused.
+// logChunk is a log chunk that passed the checks of the handler: the checked
+// step name, the number and the bytes.
+type logChunk struct {
+	step string
+	seq  int
+	data []byte
+}
+
+// readLogChunk checks the path values and reads the body of a log chunk. A
+// refusal of the chunk is a *logRefusalError; other errors keep their sentinel.
+func readLogChunk(r *http.Request, c *call) (logChunk, error) {
+	var chunk logChunk
+
+	// The name is checked first, so that no later entry holds an unchecked
+	// name. The entry of a name that is not valid holds no name.
+	name, err := stepOf(r)
+	if err != nil {
+		return chunk, invalidLog(logRefusedStepInvalid, "", stepNameMessage())
+	}
+
+	seq, err := strconv.Atoi(r.PathValue("seq"))
+	if err != nil || seq < 0 {
+		return chunk, invalidLog(logRefusedNameOrNumber, name,
+			fmt.Sprintf("the number of a log chunk is 0 to %d", protocol.MaxLogChunksPerStep-1))
+	}
+
+	if seq >= protocol.MaxLogChunksPerStep {
+		return chunk, invalidLog(logRefusedCapChunkNumber, name, logCapMessage)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(r.Body, job.MaxLogChunk+1))
+	if err != nil {
+		return chunk, fmt.Errorf("%w: the body is not readable", runner.ErrInvalid)
+	}
+
+	if len(data) > job.MaxLogChunk {
+		return chunk, invalidLog(logRefusedChunkTooLarge, name,
+			fmt.Sprintf("a log chunk has at most %d bytes", job.MaxLogChunk))
+	}
+
+	// Defense in depth: the proof check refuses a header that is not a
+	// SHA-256 before the session is known; this check stays so that a new
+	// caller of putLog cannot store a chunk with no signed hash.
+	if len(c.contentSHA256) != sha256.Size {
+		return chunk, invalidLog(logRefusedHashHeader, name,
+			fmt.Sprintf("the %s header is not a SHA-256 in hex", protocol.HeaderContentSHA256))
+	}
+
+	// The proof signed the header, so a body with another hash is a proof that
+	// does not verify: bad-proof, as for the other session paths.
+	got := sha256.Sum256(data)
+	if err = runner.CheckContentHash(c.contentSHA256, got[:]); err != nil {
+		return chunk, fmt.Errorf("log chunk: %w", err)
+	}
+
+	return logChunk{step: name, seq: seq, data: data}, nil
+}
+
+// actionLogRefused is the action of the audit entry of a refused log chunk.
 const actionLogRefused identity.Action = "runner.log.refused"
 
 // The reasons of the audit entry of a refused log chunk.
 const (
-	logRefusedCapStep  = "cap-step"
-	logRefusedCapPhase = "cap-phase"
+	logRefusedCapChunkNumber = "cap-chunk-number"
+	logRefusedCapStep        = "cap-step"
+	logRefusedCapPhase       = "cap-phase"
+	logRefusedChunkTooLarge  = "chunk-too-large"
+	logRefusedHashHeader     = "hash-header"
+	logRefusedHashMismatch   = "hash-mismatch"
+	logRefusedOutOfOrder     = "out-of-order"
+	logRefusedStepInvalid    = "step-invalid"
+	logRefusedNameOrNumber   = "name-or-number-invalid"
 )
 
-// logRefusal is the answer and the audit reason of a refused log chunk.
-type logRefusal struct {
+// logCapMessage is the message of a chunk that a cap of the log refused.
+const logCapMessage = "the log of the step or of the phase is at its cap"
+
+// logRefusalError is the refusal of a log chunk: the audit reason, the checked
+// step name (empty when the name is not valid) and the answer.
+type logRefusalError struct {
 	reason string
+	step   string
 	status int
 	body   protocol.Error
 }
 
-// logRefusalOf returns the answer and the audit reason of err, when err is the
-// refusal of chunk seq of step by a cap of the log (400 invalid), by the order
-// of the chunks (400 invalid) or by the hash of a stored chunk (409 conflict).
-// It reports false for any other error.
-func logRefusalOf(err error, step string, seq int) (logRefusal, bool) {
-	refuse := func(reason string, status int, code, message string) (logRefusal, bool) {
-		return logRefusal{
-			reason: reason, status: status,
-			body: protocol.Error{Code: code, Message: message, Supported: ""},
-		}, true
+// Error implements error with the message of the answer.
+func (e *logRefusalError) Error() string {
+	return e.body.Message
+}
+
+// invalidLog returns the refusal of a chunk of step with the reason and the
+// answer 400 invalid with message.
+func invalidLog(reason, step, message string) *logRefusalError {
+	return &logRefusalError{
+		reason: reason, step: step, status: http.StatusBadRequest,
+		body: protocol.Error{Code: protocol.ErrorInvalid, Message: message, Supported: ""},
 	}
+}
 
+// logRefusalOf returns the answer and the audit reason of err, when err is the
+// refusal of chunk seq of step by the recorder: a cap of the log, the order of
+// the chunks or the name and the number of the chunk (400 invalid), or the
+// hash of a stored chunk (409 conflict). It reports false for any other error.
+func logRefusalOf(err error, step string, seq int) (*logRefusalError, bool) {
 	if capErr, ok := errors.AsType[*job.LogCapError](err); ok {
-		reason := logRefusedCapPhase
-		if capErr.Cap == job.LogCapStepChunks || capErr.Cap == job.LogCapStepBytes {
-			reason = logRefusedCapStep
+		switch capErr.Cap {
+		case job.LogCapStepChunks:
+			return invalidLog(logRefusedCapChunkNumber, step, logCapMessage), true
+		case job.LogCapStepBytes:
+			return invalidLog(logRefusedCapStep, step, logCapMessage), true
+		case job.LogCapPhaseChunks, job.LogCapPhaseBytes:
+			return invalidLog(logRefusedCapPhase, step, logCapMessage), true
+		default:
+			// Fail closed: an unknown cap keeps the answer of its sentinel.
+			return nil, false
 		}
-
-		return refuse(reason, http.StatusBadRequest, protocol.ErrorInvalid,
-			fmt.Sprintf("chunk %d of step %s passes the log cap %s of %d", seq, step, capErr.Cap, capErr.Limit))
 	}
 
 	chunkErr, ok := errors.AsType[*job.ChunkError](err)
 	if !ok {
-		return logRefusal{reason: "", status: 0, body: protocol.Error{Code: "", Message: "", Supported: ""}}, false
+		return nil, false
 	}
 
 	switch chunkErr.Rule {
 	case job.ChunkOutOfOrder:
-		return refuse(string(job.ChunkOutOfOrder), http.StatusBadRequest, protocol.ErrorInvalid,
-			fmt.Sprintf("chunk %d of step %s is not the next chunk of the log", seq, step))
+		return invalidLog(logRefusedOutOfOrder, step,
+			fmt.Sprintf("chunk %d of step %s is not the next one, which is %d", seq, step, chunkErr.Next)), true
 	case job.ChunkHashMismatch:
-		return refuse(string(job.ChunkHashMismatch), http.StatusConflict, protocol.ErrorConflict,
+		refused := invalidLog(logRefusedHashMismatch, step,
 			fmt.Sprintf("chunk %d of step %s has another hash", seq, step))
+		refused.status, refused.body.Code = http.StatusConflict, protocol.ErrorConflict
+
+		return refused, true
+	case job.ChunkNameOrNumberInvalid:
+		return invalidLog(logRefusedNameOrNumber, step, "the step name or the number of the log chunk is not valid"),
+			true
 	default:
 		// Fail closed: an unknown rule keeps the answer of its sentinel.
-		return logRefusal{reason: "", status: 0, body: protocol.Error{Code: "", Message: "", Supported: ""}}, false
+		return nil, false
 	}
+}
+
+// refuseLog writes the audit entry of the refused log chunk and answers it.
+func (h *Handler) refuseLog(
+	w http.ResponseWriter, r *http.Request, c *call, sp *sessionPhase, refused *logRefusalError,
+) {
+	h.recordLogRefusal(r, c, sp, refused.step, refused.reason)
+	h.writeJSON(r.Context(), w, refused.status, refused.body)
 }
 
 // sessionLogCaps returns the caps of the log of a job session, from the limits
@@ -707,13 +784,17 @@ func sessionLogCaps() job.LogCaps {
 // recordLogRefusal writes the audit entry of a refused log chunk, through the
 // shared denial limiter: for one runner and one namespace, the first refusal of
 // a window writes an entry and the limiter counts the others. The entry names
-// the reason, the claim, the job and the step. It never holds the bytes of the
-// chunk.
+// the reason, the claim, the job and the checked step. It never holds the bytes
+// of the chunk, and never holds a step name that is not valid (step empty).
 func (h *Handler) recordLogRefusal(r *http.Request, c *call, sp *sessionPhase, step, why string) {
 	p := identity.Principal{
 		Subject: c.session.Runner, DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: "", Credential: "",
 		JobID: string(sp.claim.Job),
+	}
+
+	if step == "" {
+		step = "(not valid)"
 	}
 
 	reason := fmt.Sprintf("log chunk refused: reason %s; claim %s token %d; job %s; step %s",

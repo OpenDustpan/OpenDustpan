@@ -25,6 +25,46 @@ func (noRefusalsInternal) RecordOutOfScope(context.Context, namespace.ID, string
 	return nil
 }
 
+// TestAppendLogCappedChecksTheKey proves the name and number check of the
+// recorder alone: the recorder has no store, so a chunk that passed the check
+// would panic. A step name or a chunk number that is not valid is a ChunkError
+// of the rule ChunkNameOrNumberInvalid, and no store call happens.
+func TestAppendLogCappedChecksTheKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		step string
+		seq  int
+	}{
+		{"a step name that is not valid", "Init", 0},
+		{"a negative chunk number", "init", -1},
+		{"a chunk number at the cap", "init", MaxLogChunks},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				r DurableRecorder
+				c PhaseClaim
+			)
+
+			err := r.AppendLogCapped(t.Context(), c, CappedChunk{
+				Step: tt.step, Seq: tt.seq, Body: strings.NewReader("x"),
+				Caps: LogCaps{ChunksPerStep: 1, BytesPerStep: 1, ChunksPerPhase: 1, BytesPerPhase: 1},
+			})
+
+			chunkErr, ok := errors.AsType[*ChunkError](err)
+			if !ok || chunkErr.Rule != ChunkNameOrNumberInvalid || !errors.Is(err, ErrInvalid) {
+				t.Fatalf("AppendLogCapped(%q, %d) = %v, want a ChunkError of the rule %s", tt.step, tt.seq, err,
+					ChunkNameOrNumberInvalid)
+			}
+		})
+	}
+}
+
 // TestDeletePartsLogsAFailedDelete proves that the recorder logs a warning for
 // each plan part that it did not store and could not delete, and logs nothing
 // for a delete that succeeds. The logger is injected through the recorder.

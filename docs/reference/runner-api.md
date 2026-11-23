@@ -203,18 +203,34 @@ that ignores a cancel cannot keep its claim longer than this.
 A log chunk has a number from 0. If the launcher sends a chunk again with the same
 number and the same body, the server stores it once. A known number with another body
 gets `conflict` with the message "chunk <n> of step <step> has another hash". A
-new chunk that is not the next number gets `invalid`. The header `Dustpan-Content-SHA256` has the SHA-256 of the body
+new chunk that is not the next number gets `invalid` with the message "chunk <n>
+of step <step> is not the next one, which is <m>". The header `Dustpan-Content-SHA256` has the SHA-256 of the body
 in hex, and the proof signs that value. The server compares it with the hash of
 the bytes that it received before it stores any of them, and answers
 `bad-proof` for another body. A step has at most 20,000 chunks and 256 MiB.
 All the steps of a phase have at most 100,000 chunks and 1 GiB. A new chunk
-that passes one of these caps gets `invalid`, and the message names the cap. The
-server stores none of the bytes of a refused chunk. For each of these refusals,
-the server writes an audit entry with the action `runner.log.refused` in the
-namespace of the pool. The entry names the reason (`cap-step`, `cap-phase`,
-`out-of-order` or `hash-mismatch`), the claim, the job and the step, and never
-holds the bytes of the chunk. For one runner, the audit log
-keeps the first refusal of each window and counts the others in the next entry.
+that passes one of these caps gets `invalid` with the message "the log of the
+step or of the phase is at its cap". The server stores none of the bytes of a
+refused chunk.
+
+For each refused chunk, the server writes an audit entry with the action
+`runner.log.refused` in the namespace of the pool. The entry names the reason,
+the claim, the job and the step, and never holds the bytes of the chunk. The
+entry of a step name that is not valid does not hold the name. For one runner,
+the audit log keeps the first refusal of each window and counts the others in
+the next entry.
+
+| Reason | Cause | Answer |
+| --- | --- | --- |
+| `cap-chunk-number` | the number of the chunk is at the cap of 20,000 chunks of a step | `invalid` |
+| `cap-step` | the chunk passes the cap of 256 MiB of a step | `invalid` |
+| `cap-phase` | the chunk passes the cap of 100,000 chunks or 1 GiB of a phase | `invalid` |
+| `chunk-too-large` | the chunk has more than 1 MiB | `invalid` |
+| `hash-header` | the signed `Dustpan-Content-SHA256` is not a SHA-256 | `invalid` |
+| `hash-mismatch` | a stored chunk with the same number has another hash | `conflict` |
+| `out-of-order` | the chunk is not the next one | `invalid` |
+| `step-invalid` | the step name is not valid | `invalid` |
+| `name-or-number-invalid` | the chunk number is not a number from 0, or the recorder refuses the step name or the number | `invalid` |
 
 The end of a step names the number of chunks and the SHA-256 of the whole log.
 The server compares both with the log that it stored, and answers `conflict`

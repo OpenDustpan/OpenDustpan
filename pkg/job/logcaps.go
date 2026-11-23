@@ -63,13 +63,42 @@ const (
 	ChunkOutOfOrder ChunkRule = "out-of-order"
 	// ChunkHashMismatch refuses a chunk with another hash for a stored number.
 	ChunkHashMismatch ChunkRule = "hash-mismatch"
+	// ChunkNameOrNumberInvalid refuses a chunk whose step name is not the name
+	// of a step or whose number is not 0 to MaxLogChunks-1.
+	ChunkNameOrNumberInvalid ChunkRule = "name-or-number-invalid"
 )
 
-// ChunkError is the refusal of a chunk by the rule Rule. errors.Is reports
-// ChunkOutOfOrder as ErrInvalid and ChunkHashMismatch as ErrConflict.
+// ChunkError is the refusal of a chunk by the rule Rule. Next is the number of
+// the next chunk of the log for ChunkOutOfOrder, and 0 for the other rules.
+// errors.Is reports ChunkHashMismatch as ErrConflict and the other rules as
+// ErrInvalid.
 type ChunkError struct {
 	Rule ChunkRule
+	Next int
 	err  error
+}
+
+// CheckChunkKey returns a ChunkError of the rule ChunkNameOrNumberInvalid when
+// step is not the name of a step or seq is not 0 to MaxLogChunks-1. The error
+// text never holds the name.
+func CheckChunkKey(step string, seq int) error {
+	if checkStepName(step) != nil {
+		return &ChunkError{
+			Rule: ChunkNameOrNumberInvalid, Next: 0,
+			err: fmt.Errorf("%w: the step name is 1 to %d lowercase letters, digits and '-'", ErrInvalid,
+				MaxStepName),
+		}
+	}
+
+	if seq < 0 || seq >= MaxLogChunks {
+		return &ChunkError{
+			Rule: ChunkNameOrNumberInvalid, Next: 0,
+			err: fmt.Errorf("%w: chunk number %d is not 0 to %d", ErrInvalid, seq,
+				MaxLogChunks-1),
+		}
+	}
+
+	return nil
 }
 
 // Error implements error.

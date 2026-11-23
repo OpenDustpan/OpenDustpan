@@ -555,8 +555,9 @@ func (e *env) createPool() string {
 }
 
 // createSweepPool makes the pool scan for sweeps through the store and returns
-// its ID. The management API refuses the sweep purpose in a namespace, so a
-// test of the sweep paths makes the pool that the operator makes.
+// its ID. The test needs a pool with the sweep purpose, and the store makes it
+// with no detour through the pool admin API. That API does not refuse the sweep
+// purpose.
 func (e *env) createSweepPool() string {
 	e.t.Helper()
 

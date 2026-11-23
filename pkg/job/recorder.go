@@ -406,12 +406,8 @@ type chunkAppend struct {
 func (r *DurableRecorder) storeLogChunk(ctx context.Context, c PhaseClaim, a *chunkAppend) error {
 	step, seq := a.step, a.seq
 
-	if err := checkStepName(step); err != nil {
+	if err := CheckChunkKey(step, seq); err != nil {
 		return err
-	}
-
-	if seq < 0 || seq >= MaxLogChunks {
-		return fmt.Errorf("%w: chunk number %d", ErrInvalid, seq)
 	}
 
 	data, sum, err := readChunk(a.chunk)
