@@ -13,8 +13,8 @@
 ## 2. Build
 
 - [ ] 2.1 Add the sweep store ports to the existing file internal/unmanaged/ports.go and the memory adapter to the existing internal/unmanaged/unmanagedtest/mem_test.go harness. Check: the sweep store cases (Conformance) of unmanagedtest.Run passes under TestMem.
-- [ ] 2.2 Add the SQLite adapter in NEW file pkg/store/sqlite/unmanaged.go and the PostgreSQL adapter in NEW file pkg/store/postgres/unmanaged.go. Add the tests in NEW files pkg/store/sqlite/unmanaged_test.go and pkg/store/postgres/unmanaged_test.go. Edit the baseline migrations and sqlc queries in the same two packages. Check: the sweep store cases (Conformance) of unmanagedtest.Run/sqlite and /postgres pass with DUSTPAN_TEST_POSTGRES_URL set. `sqlc diff` is clean.
-- [ ] 2.3 Add the sweep tables to the table list of the backup in pkg/store/sqlite and pkg/store/postgres, in the NEW files pkg/store/sqlite/unmanaged_tables.go and pkg/store/postgres/unmanaged_tables.go. Check: The backup round trip test covers the sweep tables.
+- [ ] 2.2 Add the SQLite adapter in NEW file internal/store/sqlite/unmanaged.go and the PostgreSQL adapter in NEW file internal/store/postgres/unmanaged.go. Add the tests in NEW files internal/store/sqlite/unmanaged_test.go and internal/store/postgres/unmanaged_test.go. Edit the baseline migrations and sqlc queries in the same two packages. Check: the sweep store cases (Conformance) of unmanagedtest.Run/sqlite and /postgres pass with DUSTPAN_TEST_POSTGRES_URL set. `sqlc diff` is clean.
+- [ ] 2.3 Add the sweep tables to the table list of the backup in internal/store/sqlite and internal/store/postgres, in the NEW files internal/store/sqlite/unmanaged_tables.go and internal/store/postgres/unmanaged_tables.go. Check: The backup round trip test covers the sweep tables.
 
 ## 3. Side effects (computed from main)
 

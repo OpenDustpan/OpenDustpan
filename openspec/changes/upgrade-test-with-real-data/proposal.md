@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main has a schema upgrade test from released tags. Proof: pkg/store/postgres/upgrade_schema_test.go:23 (func TestUpgradeSchemaFromReleasedTags)
+- Main has a schema upgrade test from released tags. Proof: internal/store/postgres/upgrade_schema_test.go:23 (func TestUpgradeSchemaFromReleasedTags)
 - Main has a rolling upgrade test. Proof: pkg/dustpan/workerwatch_internal_test.go:240 (func TestRollingUpgradeGivesNoRefusal)
 - Main serves the upgrade-check route. Proof: ANY/GET /api/dustpan/v1/upgrade-check in the route table of the pack
 - The upgrade test order covers real CLI data, secrets, held lock and the empty-database case. Proof: ADR 33 decision 7, ADR 72 decision 10 and ADR 75 decision 4 in the pack
@@ -56,9 +56,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Store suite checks schema upgrade from released tags. (`pkg/store/postgres/upgrade_schema_test.go:23 (func TestUpgradeSchemaFromReleasedTags)`)
+- Store suite checks schema upgrade from released tags. (`internal/store/postgres/upgrade_schema_test.go:23 (func TestUpgradeSchemaFromReleasedTags)`)
 - Worker watch suite checks that a rolling upgrade gives no refusal. (`pkg/dustpan/workerwatch_internal_test.go:240 (func TestRollingUpgradeGivesNoRefusal)`)
-- Postgres store deletes a held manual lock. (`pkg/store/postgres/manual_locks.go:429 (func Store.deleteHeldLock)`)
+- Postgres store deletes a held manual lock. (`internal/store/postgres/manual_locks.go:429 (func Store.deleteHeldLock)`)
 
 ## ADR check
 

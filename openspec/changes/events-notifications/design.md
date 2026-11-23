@@ -124,7 +124,7 @@ A-->B-->C-->D-->E
 
 Tests:
 
-- `pkg/store/internal/notifystore/notifystore_test.go` names `notify.Types`
+- `internal/store/notifystore/notifystore_test.go` names `notify.Types`
 - `internal/subscriptionsvc/history_test.go` names `notify.Types`
 - `pkg/notify/notify_test.go` names `notify.Types`
 

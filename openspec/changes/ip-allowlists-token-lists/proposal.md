@@ -29,7 +29,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- No list on an access token. Proof: `rg -n -i 'ip_allow|ipallow' pkg/accesstoken pkg/identity/identity.go --glob '!*_test.go'` finds a match only for the word "allowlist of the kinds" in `pkg/accesstoken/accesstoken.go:87`, and the `access_tokens` table has no list column (`pkg/store/sqlite/migrations/0168_baseline.sql:278-290`, `pkg/store/postgres/migrations/0168_baseline.sql:31-44`).
+- No list on an access token. Proof: `rg -n -i 'ip_allow|ipallow' pkg/accesstoken pkg/identity/identity.go --glob '!*_test.go'` finds a match only for the word "allowlist of the kinds" in `pkg/accesstoken/accesstoken.go:87`, and the `access_tokens` table has no list column (`internal/store/sqlite/migrations/0168_baseline.sql:278-290`, `internal/store/postgres/migrations/0168_baseline.sql:31-44`).
 - `GetTokenByDigest` carries no list. Proof: `pkg/accesstoken/store.go:35-41`.
 - The checker holds a namespace slot that no production call fills. Proof: the four calls of `newAllowChecker` outside tests pass `nil` for it (`pkg/dustpan/ipallow.go:178,200,221,224`).
 

@@ -9,22 +9,22 @@
 - [ ] 2.1 Add the tables `redactions` and `redaction_targets` to the baseline of both dialects, in name order, and the queries in `queries.sql` of both dialects, then run `make generate`. NEW tables, so this task names the registry files `pkg/backup/backup.go` and `pkg/backup/portable_tables.go` and puts both tables on the portable list.
   - Check: `go test -race ./pkg/backup/... ./pkg/store/...` and `sqlc diff`
   - Confirmed by: CI
-  - OpenDustpan: `pkg/store/sqlite/migrations/`, `pkg/store/postgres/migrations/`, `pkg/store/sqlite/queries.sql`, `pkg/store/postgres/queries.sql`, `pkg/backup/backup.go`, `pkg/backup/portable_tables.go`
+  - OpenDustpan: `internal/store/sqlite/migrations/`, `internal/store/postgres/migrations/`, `internal/store/sqlite/queries.sql`, `internal/store/postgres/queries.sql`, `pkg/backup/backup.go`, `pkg/backup/portable_tables.go`
 - [ ] 2.2 Implement `history.RedactionLog` in both store adapters and run `historytest.RunRedactions` against SQLite and PostgreSQL.
   - Check: `go test -race ./pkg/store/... -run Redactions -timeout 60m`
   - Confirmed by: CI
-  - OpenDustpan: `pkg/store/internal/jobstore/`, `pkg/store/sqlite/`, `pkg/store/postgres/`
+  - OpenDustpan: `internal/store/jobstore/`, `internal/store/sqlite/`, `internal/store/postgres/`
 
 ## 3. The job record and the store port
 
 - [ ] 3.1 Add `StepRecord.Earlier`, `LogRef.Replaces` and `LogVersionOf`. Make `logOfRow` and `service_redact.go` call `LogVersionOf`.
   - Check: table test `TestLogVersionOf` (fails on main: no such function), and the unit test that a retry finds the older version
   - Confirmed by: CI
-  - OpenDustpan: `pkg/job/step.go`, `pkg/job/service_redact.go`, `pkg/store/internal/jobstore/record.go`
+  - OpenDustpan: `pkg/job/step.go`, `pkg/job/service_redact.go`, `internal/store/jobstore/record.go`
 - [ ] 3.2 Add `RedactionStore` with `PutLogVersion` and `RedactItem`, with the conformance cases in `pkg/job/jobtest` first, then both SQL adapters.
   - Check: `go test -race ./pkg/job/... ./pkg/store/... -timeout 60m`
   - Confirmed by: CI
-  - OpenDustpan: `pkg/job/`, `pkg/job/jobtest/`, `pkg/store/internal/jobstore/tx.go`
+  - OpenDustpan: `pkg/job/`, `pkg/job/jobtest/`, `internal/store/jobstore/tx.go`
 
 ## 4. The adapter
 

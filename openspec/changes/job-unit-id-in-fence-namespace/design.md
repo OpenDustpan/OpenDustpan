@@ -7,7 +7,7 @@ transaction.
 ## Contract
 
 - NEW method of `jobstore.Tx`: `UnitNamespace(ctx context.Context, unitID string) (namespace.Name, bool, error)`. It returns the namespace of the live unit with the ID, and false when no live unit has the ID. It reads in the transaction of the write.
-- NEW sqlc query `GetUnitNamespaceByID :one` in `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`, in name order next to `GetInventoryEntryByUnitID`: `SELECT namespace FROM inventory WHERE unit_id = ?` (PostgreSQL `$1`).
+- NEW sqlc query `GetUnitNamespaceByID :one` in `internal/store/sqlite/queries.sql` and `internal/store/postgres/queries.sql`, in name order next to `GetInventoryEntryByUnitID`: `SELECT namespace FROM inventory WHERE unit_id = ?` (PostgreSQL `$1`).
 - `jobstore.Store.Create`: returns `job.ErrInvalid` and writes nothing when the unit ID names a live unit of another namespace than the fence, or no live unit.
 
 ## Layers (defense in depth)

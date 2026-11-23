@@ -25,7 +25,7 @@ Evidence for the claims above:
 
 - The package pkg/gate exists. Proof: The pack lists the path pkg/gate with exists true.
 - Main has a TFE state write handler and Pulumi update-create routes. Proof: internal/api/tfe/state_write.go:253 (Handler.writeStateVersionCreate) and internal/api/pulumi/routes.go:310 (Handler.updateCreateRoutes).
-- Main has an audit placement function and a grant check. Proof: pkg/store/postgres/audit.go:283 (placeAuditEntry) and pkg/access/check.go:139 (Service.grantCheck).
+- Main has an audit placement function and a grant check. Proof: internal/store/postgres/audit.go:283 (placeAuditEntry) and pkg/access/check.go:139 (Service.grantCheck).
 - No ADR decides the store, the route field or the proof kind. Proof: The pack lists no ADR for this item, and the roadmap step says no ADR decides these shapes.
 
 ## What Changes
@@ -60,7 +60,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - The TFE state write handler exists. (`internal/api/tfe/state_write.go:253 (Handler.writeStateVersionCreate)`)
 - The Pulumi update-create routes exist. (`internal/api/pulumi/routes.go:310 (Handler.updateCreateRoutes)`)
 - The grant check exists. (`pkg/access/check.go:139 (Service.grantCheck)`)
-- The audit placement function exists. (`pkg/store/postgres/audit.go:283 (placeAuditEntry)`)
+- The audit placement function exists. (`internal/store/postgres/audit.go:283 (placeAuditEntry)`)
 
 ## ADR check
 
