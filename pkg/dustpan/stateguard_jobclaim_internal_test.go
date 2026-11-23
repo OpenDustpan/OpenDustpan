@@ -3,6 +3,8 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -39,6 +42,55 @@ func (s *claimGuardJobStore) Get(_ context.Context, id job.ID) (job.Job, error) 
 // over a real store, with the job store jobs. A nil jobs builds a server with
 // no job store.
 func newClaimGuard(t *testing.T, jobs job.Store) *gateService {
+	t.Helper()
+
+	cfg, nss := newClaimGuardSettings(t, jobs)
+
+	gates, err := newStateWriteGates(cfg, nss)
+	if err != nil || gates.svc == nil {
+		t.Fatalf("newStateWriteGates() = %v, %v", gates.svc, err)
+	}
+
+	return gates.svc
+}
+
+// newClaimGuardWithSubjects returns the state.write gate service with the
+// parts that newStateWriteGates gives it, over a real store, but with the
+// subject source subjects. A test uses it to put a job claim source that the
+// server cannot build in front of the gates.
+func newClaimGuardWithSubjects(t *testing.T, subjects gate.SubjectSource) *gateService {
+	t.Helper()
+
+	cfg, nss := newClaimGuardSettings(t, nil)
+
+	store, ok := cfg.namespaceStore.(gate.Store)
+	if !ok {
+		t.Fatal("the store keeps no gates")
+	}
+
+	kindReader, err := newGateKindReader(cfg)
+	if err != nil {
+		t.Fatalf("newGateKindReader: %v", err)
+	}
+
+	svc, err := gate.NewService(gate.ServiceConfig{
+		Store: store, Engine: newGateEngine(), Producers: nil,
+		Units: newInventoryFacts(cfg), Subjects: subjects,
+		Fences:     namespaceFences{namespaces: nss},
+		KindReader: kindReader, IsDev: principal.IsDevSubject, Now: cfg.now, Log: slog.Default(),
+		BreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("gate.NewService: %v", err)
+	}
+
+	return svc
+}
+
+// newClaimGuardSettings returns the settings and the namespace service of a
+// server over a real store, with the namespace acme, the workspace web and
+// the job store jobs.
+func newClaimGuardSettings(t *testing.T, jobs job.Store) (*settings, *namespace.Service) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -73,12 +125,7 @@ func newClaimGuard(t *testing.T, jobs job.Store) *gateService {
 	cfg.installationKind = installation.KindProduction
 	cfg.jobStore = jobs
 
-	gates, err := newStateWriteGates(cfg, nss)
-	if err != nil || gates.svc == nil {
-		t.Fatalf("newStateWriteGates() = %v, %v", gates.svc, err)
-	}
-
-	return gates.svc
+	return cfg, nss
 }
 
 // createClaimGuardWorkspace creates the workspace name in the namespace acme.
@@ -217,6 +264,108 @@ func TestStateWriteGatesJobClaimRefusalsAudited(t *testing.T) {
 
 			if len(reasons) != 1 || !strings.Contains(reasons[0], errcode.GateDenied) {
 				t.Fatalf("audit reasons = %q, want one entry that names %s", reasons, errcode.GateDenied)
+			}
+		})
+	}
+}
+
+// claimGuardFailingJobStore is a job store whose Get fails with an error that
+// is not a denial. Only Get is answered.
+type claimGuardFailingJobStore struct {
+	job.Store
+}
+
+// Get implements job.Store with the error errDiskGone.
+func (claimGuardFailingJobStore) Get(_ context.Context, _ job.ID) (job.Job, error) {
+	return job.Job{}, errDiskGone
+}
+
+// deniedInnerSubjects gives the subject of a job token together with a
+// denial, so that only the check of the inner error refuses the principal.
+type deniedInnerSubjects struct{}
+
+// Subject implements gate.SubjectSource.
+func (deniedInnerSubjects) Subject(_ context.Context, p identity.Principal) (gate.Subject, error) {
+	var s gate.Subject
+
+	s.ID = p.Subject
+	s.Credential = gate.CredentialJobToken
+
+	return s, fmt.Errorf("%w: the inner source refuses the principal", identity.ErrDenied)
+}
+
+// TestStateWriteGatesJobClaimSourceRefusalsAudited proves that the refusals
+// of the job claim source that the server build cannot reach (no inner
+// source, an inner error) and a job store error reach the admission of the
+// adapters with one audit entry. The job is an apply-phase job of the unit
+// web that the gates allow. With the guard gone, the case with no inner
+// source panics, the case with an inner error is allowed, and the store
+// error becomes a phase denial with the code gate.denied.
+func TestStateWriteGatesJobClaimSourceRefusalsAudited(t *testing.T) {
+	t.Parallel()
+
+	web, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	j := testPlanJob("job-1", 1)
+	j.Spec.Unit = web
+
+	tests := []struct {
+		name     string
+		subjects gate.SubjectSource
+		code     string
+		denied   bool
+		want     string
+	}{
+		{
+			name:     "no inner source",
+			subjects: newJobClaimSubjects(&claimGuardJobStore{Store: nil, j: j}, nil),
+			code:     errcode.GateDenied, denied: true, want: "has no inner source",
+		},
+		{
+			name:     "inner source error",
+			subjects: newJobClaimSubjects(&claimGuardJobStore{Store: nil, j: j}, deniedInnerSubjects{}),
+			code:     errcode.GateDenied, denied: true, want: "the inner source refuses the principal",
+		},
+		{
+			// A store error is not a decision: the write is refused as a guard
+			// that could not decide, not as a denial.
+			name: "job store error",
+			subjects: newJobClaimSubjects(claimGuardFailingJobStore{Store: nil},
+				fakeInnerSubjects{}),
+			code: errcode.GateUnavailable, denied: false, want: errDiskGone.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			admitter, err := stategate.New(newClaimGuardWithSubjects(t, tt.subjects), nil)
+			if err != nil {
+				t.Fatalf("stategate.New: %v", err)
+			}
+
+			p := gatePrincipal("job-token-1", "", identity.CredentialJobToken)
+			p.JobID = "job-1"
+
+			var reasons []string
+
+			out := admitter.Admit(t.Context(), stategate.Write{
+				Principal: p, Unit: web, Operation: gate.OperationLock, Action: identity.ActionUnitWrite,
+				Source: gate.SourceCLI, State: nil, StateErr: nil,
+			}, func(_ context.Context, reason string) { reasons = append(reasons, reason) })
+
+			if out.Allowed || out.Refusal == nil || out.Code != tt.code ||
+				errors.Is(out.Refusal, identity.ErrDenied) != tt.denied ||
+				!strings.Contains(out.Refusal.Error(), tt.want) {
+				t.Fatalf("Admit() = %+v, want a refusal with %s that says %q", out, tt.code, tt.want)
+			}
+
+			if len(reasons) != 1 || !strings.Contains(reasons[0], tt.code) {
+				t.Fatalf("audit reasons = %q, want one entry that names %s", reasons, tt.code)
 			}
 		})
 	}
