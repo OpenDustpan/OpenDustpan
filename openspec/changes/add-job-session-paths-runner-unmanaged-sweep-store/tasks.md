@@ -6,7 +6,7 @@
 
 - [ ] 1.1 Add the sweep store cases to the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go (unmanagedtest.Run at :59, run by TestMem in internal/unmanaged/unmanagedtest/mem_test.go:1085 and by the SQL store tests). Check: the sweep store cases (Conformance) of unmanagedtest.Run fails on main.
 - [ ] 1.2 Write the fence cases as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Fence) of unmanagedtest.Run fails on main.
-- [ ] 1.3 Write the pool cases, including a pool that changes after the save, as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Pool) of unmanagedtest.Run fails on main.
+- [ ] 1.3 Write the pool cases (a pool for jobs, a sweep pool of another namespace, a sweep pool of the team, and a pool that is deleted after the save), as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Pool) of unmanagedtest.Run fails on main.
 - [ ] 1.4 Write the busy, transition and delete cases, with concurrent starts, as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Busy) of unmanagedtest.Run, the sweep store cases (Transitions) of unmanagedtest.Run and the sweep store cases (DeleteTarget) of unmanagedtest.Run fail on main.
 - [ ] 1.5 Write the bounds, concurrency and rollback cases as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Bounds) of unmanagedtest.Run, the sweep store cases (ConcurrentFence) of unmanagedtest.Run and the sweep store cases (Rollback) of unmanagedtest.Run fail on main.
 
