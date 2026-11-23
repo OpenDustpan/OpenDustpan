@@ -597,40 +597,26 @@ func grantQuery(req PageRequest) (GrantQuery, error) {
 // namespace: the server itself.
 const housekeepingGrantCreator = "@server"
 
-// housekeepingGrantReason is the reason in the audit entry of each housekeeping
-// grant of a new namespace.
-const housekeepingGrantReason = "housekeeping grants of namespace creation"
-
 // housekeepingNamespaceGrants returns the grants of the housekeeping
-// principals that act inside a namespace, on ns, and the audit entry of each
-// one. The creator of each grant is the server and its time is the creation
-// time of the namespace. newID makes the ID of each grant.
-func housekeepingNamespaceGrants(
-	newID func(prefix string) string, e audit.Entry, ns namespace.Namespace,
-) ([]Grant, []audit.Entry) {
-	var (
-		grants  []Grant
-		entries []audit.Entry
-	)
+// principals that act inside a namespace, on ns. The creator of each grant is
+// the server and its time is the creation time of the namespace. newID makes
+// the ID of each grant. The store writes the audit entry of each grant.
+func housekeepingNamespaceGrants(newID func(prefix string) string, ns namespace.Namespace) []Grant {
+	var grants []Grant
 
 	for _, p := range principal.HousekeepingPurposes() {
 		if !p.ActsInsideNamespace() {
 			continue
 		}
 
-		g := Grant{
+		grants = append(grants, Grant{
 			CreatedAt: ns.CreatedAt, Condition: nil, Object: identity.NamespaceObject(ns.Name),
 			ID: newID(grantIDPrefix), Role: p.NamespaceRole(), CreatedBy: housekeepingGrantCreator,
 			Subject: Subject{Kind: SubjectPrincipal, ID: p.ID()},
-		}
-		entry := change(e, g.CreatedAt, GrantRef(g))
-		entry.Reason = housekeepingGrantReason
-
-		grants = append(grants, g)
-		entries = append(entries, entry)
+		})
 	}
 
-	return grants, entries
+	return grants
 }
 
 // CreateNamespace stores ns with the entry e. It stores the grants of the
@@ -647,12 +633,12 @@ func (s *Service) CreateNamespace(
 ) (*Grant, error) {
 	record, err := s.directory.GetPrincipalBySubject(ctx, creator.Subject)
 
-	grants, entries := housekeepingNamespaceGrants(s.newID, e, ns)
+	grants := housekeepingNamespaceGrants(s.newID, ns)
 
 	switch {
 	case errors.Is(err, principal.ErrNotFound) && creator.Admin:
 		entry := change(e, s.Now(), "namespace:"+ns.Name.String())
-		if createErr := s.store.CreateNamespaceWithGrants(ctx, ns, grants, entry, entries); createErr != nil {
+		if createErr := s.store.CreateNamespaceWithGrants(ctx, ns, grants, entry); createErr != nil {
 			return nil, fmt.Errorf("create namespace %q: %w", ns.Name, createErr)
 		}
 
@@ -669,9 +655,8 @@ func (s *Service) CreateNamespace(
 	creatorEntry := change(e, g.CreatedAt, GrantRef(g))
 
 	grants = append([]Grant{g}, grants...)
-	entries = append([]audit.Entry{creatorEntry}, entries...)
 
-	if err := s.store.CreateNamespaceWithGrants(ctx, ns, grants, creatorEntry, entries); err != nil {
+	if err := s.store.CreateNamespaceWithGrants(ctx, ns, grants, creatorEntry); err != nil {
 		return nil, fmt.Errorf("create namespace %q: %w", ns.Name, err)
 	}
 

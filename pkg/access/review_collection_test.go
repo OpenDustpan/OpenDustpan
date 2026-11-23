@@ -73,24 +73,17 @@ func TestReviewOfACollection(t *testing.T) {
 		{
 			name: "payments holds its collection, its units and the namespace",
 			obj:  identity.CollectionObject("acme", "payments"),
-			want: []string{
-				"prn-housekeeping-agent-reaper", "prn-onapiunit", "prn-oncollection", "prn-onnamespace",
-				"prn-onwebunit",
-			},
+			want: []string{"prn-onapiunit", "prn-oncollection", "prn-onnamespace", "prn-onwebunit"},
 		},
 		{
 			name: "billing holds its own collection and unit only",
 			obj:  identity.CollectionObject("acme", "billing"),
-			want: []string{
-				"prn-housekeeping-agent-reaper", "prn-onbilling", "prn-onbillingunit", "prn-onnamespace",
-			},
+			want: []string{"prn-onbilling", "prn-onbillingunit", "prn-onnamespace"},
 		},
 		{
 			name: "a collection of another namespace holds nothing of acme",
 			obj:  identity.CollectionObject("beta", "ledger"),
-			want: []string{
-				"prn-housekeeping-agent-reaper", "prn-onbeta", "prn-onledger", "prn-onledgerunit",
-			},
+			want: []string{"prn-onbeta", "prn-onledger", "prn-onledgerunit"},
 		},
 	}
 

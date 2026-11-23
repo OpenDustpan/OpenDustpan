@@ -656,10 +656,12 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	ns := newNamespace("acme")
 	g := newGrant("grt-one", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"))
+	// The entry of @server names the namespace: the store builds the entry of
+	// the grant itself.
 	e := entry()
-	e.Object = access.GrantRef(g)
+	e.Object = "namespace:acme"
 
-	if err := s.CreateNamespaceWithGrants(ctx, ns, []access.Grant{g}, e, []audit.Entry{e}); err != nil {
+	if err := s.CreateNamespaceWithGrants(ctx, ns, []access.Grant{g}, e); err != nil {
 		t.Fatalf("create namespace with grant: %v", err)
 	}
 
@@ -679,7 +681,7 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	checkCreatorGrantEntry(t, s, g, e)
 
 	// No grant stores the namespace alone.
-	if err = s.CreateNamespaceWithGrants(ctx, newNamespace("beta"), nil, entry(), nil); err != nil {
+	if err = s.CreateNamespaceWithGrants(ctx, newNamespace("beta"), nil, entry()); err != nil {
 		t.Fatalf("create namespace without grant: %v", err)
 	}
 
@@ -691,10 +693,11 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	assertIDs(t, "grants on beta", grantsOf(list))
 }
 
-// checkCreatorGrantEntry proves that the create wrote the grant of the
+// checkCreatorGrantEntry proves that the store wrote the grant of the
 // creator as the first entry of the chain of the new namespace, with the
-// same action and object as the entry of @server, and that the chain of the
-// new namespace checks as valid. A store without the audit log skips it.
+// action of the entry e of @server, the object of the grant and its time,
+// and that the chain of the new namespace checks as valid. A store without
+// the audit log skips it.
 func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audit.Entry) {
 	t.Helper()
 
@@ -717,8 +720,8 @@ func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audi
 
 	first := listing.Entries[len(listing.Entries)-1]
 	if first.Sequence != 1 || first.Namespace != ns || first.Action != e.Action ||
-		first.Object != e.Object || first.Kind != audit.KindChange {
-		t.Fatalf("first entry of %q = %+v, want the admin grant %q", ns, first, e.Object)
+		first.Object != access.GrantRef(g) || !first.At.Equal(g.CreatedAt) || first.Kind != audit.KindChange {
+		t.Fatalf("first entry of %q = %+v, want the admin grant %q", ns, first, access.GrantRef(g))
 	}
 
 	check, err := log.Check(ctx, ns)
@@ -738,7 +741,7 @@ func testNamespaceWithGrantTaken(t *testing.T, s access.Store) {
 	ns := newNamespace("acme")
 	first := newGrant("grt-one", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"))
 
-	if err := s.CreateNamespaceWithGrants(ctx, ns, []access.Grant{first}, entry(), []audit.Entry{entry()}); err != nil {
+	if err := s.CreateNamespaceWithGrants(ctx, ns, []access.Grant{first}, entry()); err != nil {
 		t.Fatalf("create namespace with grant: %v", err)
 	}
 
@@ -749,7 +752,7 @@ func testNamespaceWithGrantTaken(t *testing.T, s access.Store) {
 		identity.NamespaceObject("acme"),
 	)
 
-	err := s.CreateNamespaceWithGrants(ctx, ns, []access.Grant{second}, entry(), []audit.Entry{entry()})
+	err := s.CreateNamespaceWithGrants(ctx, ns, []access.Grant{second}, entry())
 	if !errors.Is(err, namespace.ErrAlreadyExists) {
 		t.Fatalf("create taken namespace = %v, want namespace.ErrAlreadyExists", err)
 	}
@@ -1123,7 +1126,7 @@ func testRefusedEntry(t *testing.T, s access.Store) {
 
 	err = s.CreateNamespaceWithGrants(ctx, newNamespace("gamma"), []access.Grant{newGrant(
 		"grt-ns", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("gamma"),
-	)}, refused(), []audit.Entry{entry()})
+	)}, refused())
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("namespace with a refused entry = %v, want audit.ErrInvalidEntry", err)
 	}

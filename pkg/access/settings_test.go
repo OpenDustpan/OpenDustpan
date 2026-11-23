@@ -356,10 +356,9 @@ func TestReviewOfACollectionAtTheCap(t *testing.T) {
 				t.Fatalf("review: %v", err)
 			}
 
-			// The total counts the bootstrap row and the install grant of the
-			// agent reaper, which reaches every namespace.
-			if page.Total == nil || *page.Total != 2 {
-				t.Fatalf("total = %v, want 2", page.Total)
+			// The total counts the bootstrap row.
+			if page.Total == nil || *page.Total != 1 {
+				t.Fatalf("total = %v, want 1", page.Total)
 			}
 		})
 	}

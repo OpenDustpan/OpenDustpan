@@ -439,15 +439,15 @@ func (s *Store) GrantsWithRoles(
 // CreateNamespaceWithGrants implements access.GrantStore: the namespace, its
 // grants and the entries commit together. An empty list of grants stores the
 // namespace and the entry alone. With grants it stores the entry e in the
-// scope @server and the entry of each grant in the chain of the new
+// scope @server and builds the entry of each grant in the chain of the new
 // namespace, so the chain starts with the grants. The namespace did not exist
 // before, so no fence check runs.
 func (s *Store) CreateNamespaceWithGrants(
-	ctx context.Context, ns namespace.Namespace, grants []access.Grant, e audit.Entry, grantEntries []audit.Entry,
+	ctx context.Context, ns namespace.Namespace, grants []access.Grant, e audit.Entry,
 ) error {
 	row := codec.ToNamespaceRow(ns)
 
-	entries, err := validateNamespaceGrantEntries(ns, grants, e, grantEntries)
+	entries, err := namespaceGrantEntries(ns, grants, e)
 	if err != nil {
 		return err
 	}
@@ -461,30 +461,26 @@ func (s *Store) CreateNamespaceWithGrants(
 	})
 }
 
-// validateNamespaceGrantEntries checks the entries of CreateNamespaceWithGrants:
-// e lives in the scope @server, each grant has an ID and one entry, and each
-// entry is valid in the chain of the new namespace. It returns the entries
-// with the namespace set.
-func validateNamespaceGrantEntries(
-	ns namespace.Namespace, grants []access.Grant, e audit.Entry, grantEntries []audit.Entry,
-) ([]audit.Entry, error) {
+// namespaceGrantEntries builds the entries of CreateNamespaceWithGrants: e
+// lives in the scope @server, each grant has an ID, and the entry of each
+// grant is e in the chain of the new namespace, with the object of the grant
+// and its time. It checks that each entry is valid.
+func namespaceGrantEntries(ns namespace.Namespace, grants []access.Grant, e audit.Entry) ([]audit.Entry, error) {
 	if err := validServerEntry(e); err != nil {
 		return nil, err
 	}
 
-	if len(grants) != len(grantEntries) {
-		return nil, fmt.Errorf("%w: %d grants and %d grant entries", access.ErrInvalid, len(grants), len(grantEntries))
-	}
-
-	entries := make([]audit.Entry, len(grantEntries))
+	entries := make([]audit.Entry, len(grants))
 
 	for i := range grants {
 		if grants[i].ID == "" {
 			return nil, fmt.Errorf("%w: grant %d has no ID", access.ErrInvalid, i)
 		}
 
-		entries[i] = grantEntries[i]
+		entries[i] = e
 		entries[i].Namespace = ns.Name
+		entries[i].Object = access.GrantRef(grants[i])
+		entries[i].At = grants[i].CreatedAt
 
 		if err := entries[i].Validate(); err != nil {
 			return nil, fmt.Errorf("audit entry: %w", err)

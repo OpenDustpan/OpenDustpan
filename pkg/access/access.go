@@ -565,14 +565,13 @@ type GrantStore interface {
 	// on it from the start, and the housekeeping principals hold their roles
 	// on it. An empty list of grants stores the namespace and the entry e
 	// alone. It returns namespace.ErrAlreadyExists when the name is taken, and
-	// ErrInvalid when the lists differ in length or a grant has no ID. The
-	// entry e stays in the scope audit.ServerScope. grantEntries holds the
-	// entry of each grant, in the order of grants: the store appends each one
-	// in the chain of the new namespace, so the chain starts with the grants.
-	// A grant that fails to insert leaves no namespace row.
-	CreateNamespaceWithGrants(
-		ctx context.Context, ns namespace.Namespace, grants []Grant, e audit.Entry, grantEntries []audit.Entry,
-	) error
+	// ErrInvalid when a grant has no ID. The entry e stays in the scope
+	// audit.ServerScope. The store builds the entry of each grant from e, with
+	// the object GrantRef of the grant and the time of the grant, and appends
+	// it in the chain of the new namespace, in the order of grants, so the
+	// chain starts with the grants. A grant that fails to insert leaves no
+	// namespace row.
+	CreateNamespaceWithGrants(ctx context.Context, ns namespace.Namespace, grants []Grant, e audit.Entry) error
 }
 
 // GrantLookups reads the current grants that a change of who holds them

@@ -27,31 +27,26 @@ func TestReviewRowSources(t *testing.T) {
 		t.Fatalf("review: %v", err)
 	}
 
-	// The export holds the test grant, the install grant of the agent reaper,
-	// which reaches every namespace, and the bootstrap row.
-	if len(page.Entries) != 3 {
-		t.Fatalf("export of acme = %+v, want the grants of alice and of the install, and the bootstrap row",
-			page.Entries)
+	if len(page.Entries) != 2 {
+		t.Fatalf("export of acme = %+v, want the grant of alice and the bootstrap row", page.Entries)
 	}
 
-	grantRows := 0
+	var grant, boot *access.ReviewEntry
 
 	for i := range page.Entries {
-		entry := &page.Entries[i]
-		if entry.Holder == access.BootstrapHolder {
-			checkBootstrapSource(t, entry)
-
-			continue
+		if page.Entries[i].Holder == access.BootstrapHolder {
+			boot = &page.Entries[i]
+		} else {
+			grant = &page.Entries[i]
 		}
-
-		checkGrantSource(t, entry)
-
-		grantRows++
 	}
 
-	if grantRows != 2 {
-		t.Fatalf("export of acme = %+v, want two grant rows", page.Entries)
+	if grant == nil || boot == nil {
+		t.Fatalf("export of acme = %+v, want one grant row and one bootstrap row", page.Entries)
 	}
+
+	checkGrantSource(t, grant)
+	checkBootstrapSource(t, boot)
 }
 
 // checkGrantSource proves that a row of a stored grant names source "grant"

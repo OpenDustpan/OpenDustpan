@@ -2,8 +2,6 @@ package accesstest
 
 import (
 	"errors"
-	"slices"
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -27,17 +25,16 @@ func housekeepingCases() []struct {
 		{name: "a namespace without a creator has the housekeeping grants", test: testNamespaceHousekeepingGrantsAlone},
 		{name: "a grant that fails to insert leaves no namespace", test: testNamespaceHousekeepingGrantFails},
 		{name: "a taken namespace is not given the housekeeping grants again", test: testNamespaceHousekeepingTaken},
-		{name: "grants and grant entries of different length are ErrInvalid", test: testNamespaceHousekeepingLength},
+		{name: "a grant with no ID is ErrInvalid", test: testNamespaceHousekeepingNoID},
 	}
 }
 
-// housekeepingNamespaceGrants returns the grants and the entries that a
-// created namespace gets: one grant for each purpose that acts inside a
-// namespace, with the server as the creator and the time of the namespace.
-func housekeepingNamespaceGrants(ns namespace.Namespace) ([]access.Grant, []audit.Entry) {
+// housekeepingNamespaceGrants returns the grants that a created namespace
+// gets: one grant for each purpose that acts inside a namespace, with the
+// server as the creator and the time of the namespace.
+func housekeepingNamespaceGrants(ns namespace.Namespace) []access.Grant {
 	purposes := principal.HousekeepingPurposes()
 	grants := make([]access.Grant, 0, len(purposes))
-	entries := make([]audit.Entry, 0, len(purposes))
 
 	for _, p := range purposes {
 		if !p.ActsInsideNamespace() {
@@ -50,15 +47,10 @@ func housekeepingNamespaceGrants(ns namespace.Namespace) ([]access.Grant, []audi
 		g.CreatedBy = "@server"
 		g.CreatedAt = ns.CreatedAt
 
-		e := entry()
-		e.Object = access.GrantRef(g)
-		e.Reason = "housekeeping grants of namespace creation"
-
 		grants = append(grants, g)
-		entries = append(entries, e)
 	}
 
-	return grants, entries
+	return grants
 }
 
 // wantHousekeepingGrants checks that the grants on the namespace are exactly
@@ -93,10 +85,13 @@ func wantHousekeepingGrants(t *testing.T, s access.Store, ns namespace.Namespace
 	}
 }
 
-// wantNamespaceEntries checks that the chain of the namespace holds one entry
-// for each grant, with the reason of the housekeeping grants, and checks as
-// valid. A store without the audit log skips it.
-func wantNamespaceEntries(t *testing.T, s access.Store, ns namespace.Namespace, want []access.Grant) {
+// wantNamespaceEntries checks that the chain of the namespace holds exactly
+// one entry for each grant, written by the store from the entry e of @server:
+// the action of e, the object of the grant and its time. It checks that the
+// chain is valid. A store without the audit log skips it.
+func wantNamespaceEntries(
+	t *testing.T, s access.Store, ns namespace.Namespace, e audit.Entry, want []access.Grant,
+) {
 	t.Helper()
 
 	log, ok := s.(audit.Store)
@@ -110,21 +105,11 @@ func wantNamespaceEntries(t *testing.T, s access.Store, ns namespace.Namespace, 
 	}
 
 	if len(listing.Entries) != len(want) {
-		t.Fatalf("entries of %q = %d, want %d", ns.Name, len(listing.Entries), len(want))
+		t.Fatalf("entries of %q = %d, want one for each of the %d grants", ns.Name, len(listing.Entries), len(want))
 	}
 
-	objects := make([]string, 0, len(want))
 	for i := range want {
-		objects = append(objects, access.GrantRef(want[i]))
-	}
-
-	for i := range listing.Entries {
-		e := &listing.Entries[i]
-		housekeeping := strings.Contains(e.Object, " housekeeping-")
-		hasReason := e.Reason == "housekeeping grants of namespace creation"
-		if !slices.Contains(objects, e.Object) || housekeeping != hasReason {
-			t.Fatalf("entry of %q = %+v, want a housekeeping grant entry", ns.Name, e)
-		}
+		checkGrantEntry(t, listing.Entries, e, &want[i])
 	}
 
 	check, err := log.Check(t.Context(), ns.Name)
@@ -133,11 +118,38 @@ func wantNamespaceEntries(t *testing.T, s access.Store, ns namespace.Namespace, 
 	}
 }
 
+// checkGrantEntry checks that entries hold exactly one entry of the grant w,
+// with the action of e, the kind change and a time not before the grant.
+func checkGrantEntry(t *testing.T, entries []audit.Entry, e audit.Entry, w *access.Grant) {
+	t.Helper()
+
+	found := 0
+
+	for j := range entries {
+		got := &entries[j]
+		if got.Object != access.GrantRef(*w) {
+			continue
+		}
+
+		found++
+
+		// The time never goes back along the chain, so an entry after an
+		// earlier grant can take its time.
+		if got.Action != e.Action || got.Kind != audit.KindChange || got.At.Before(w.CreatedAt) {
+			t.Fatalf("entry of grant %q = %+v, want the action %q from %v", w.ID, got, e.Action, w.CreatedAt)
+		}
+	}
+
+	if found != 1 {
+		t.Fatalf("entries of grant %q = %d, want 1", w.ID, found)
+	}
+}
+
 func testNamespaceHousekeepingGrants(t *testing.T, s access.Store) {
 	t.Helper()
 
 	ns := newNamespace("acme")
-	grants, entries := housekeepingNamespaceGrants(ns)
+	grants := housekeepingNamespaceGrants(ns)
 
 	if len(grants) != 5 {
 		t.Fatalf("housekeeping grants of a namespace = %d, want 5", len(grants))
@@ -150,9 +162,8 @@ func testNamespaceHousekeepingGrants(t *testing.T, s access.Store) {
 	creatorEntry.Object = access.GrantRef(creator)
 
 	all := append([]access.Grant{creator}, grants...)
-	allEntries := append([]audit.Entry{creatorEntry}, entries...)
 
-	if err := s.CreateNamespaceWithGrants(t.Context(), ns, all, creatorEntry, allEntries); err != nil {
+	if err := s.CreateNamespaceWithGrants(t.Context(), ns, all, creatorEntry); err != nil {
 		t.Fatalf("create namespace with grants: %v", err)
 	}
 
@@ -178,33 +189,38 @@ func testNamespaceHousekeepingGrants(t *testing.T, s access.Store) {
 		}
 	}
 
-	wantNamespaceEntries(t, s, ns, all)
+	wantNamespaceEntries(t, s, ns, creatorEntry, all)
 }
 
 func testNamespaceHousekeepingGrantsAlone(t *testing.T, s access.Store) {
 	t.Helper()
 
 	ns := newNamespace("acme")
-	grants, entries := housekeepingNamespaceGrants(ns)
+	grants := housekeepingNamespaceGrants(ns)
 
-	if err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry(), entries); err != nil {
+	// The entry of @server names the namespace: the store builds the entry of
+	// each grant.
+	e := entry()
+	e.Object = "namespace:acme"
+
+	if err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, e); err != nil {
 		t.Fatalf("create namespace with grants: %v", err)
 	}
 
 	wantHousekeepingGrants(t, s, ns, grants)
-	wantNamespaceEntries(t, s, ns, grants)
+	wantNamespaceEntries(t, s, ns, e, grants)
 }
 
 func testNamespaceHousekeepingGrantFails(t *testing.T, s access.Store) {
 	t.Helper()
 
 	ns := newNamespace("acme")
-	grants, entries := housekeepingNamespaceGrants(ns)
+	grants := housekeepingNamespaceGrants(ns)
 
 	// The last grant repeats the ID of the first: its insert fails.
 	grants[len(grants)-1].ID = grants[0].ID
 
-	if err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry(), entries); err == nil {
+	if err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry()); err == nil {
 		t.Fatal("create namespace with a duplicate grant ID = nil, want an error")
 	}
 
@@ -223,18 +239,18 @@ func testNamespaceHousekeepingTaken(t *testing.T, s access.Store) {
 	t.Helper()
 
 	ns := newNamespace("acme")
-	grants, entries := housekeepingNamespaceGrants(ns)
+	grants := housekeepingNamespaceGrants(ns)
 
-	if err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry(), entries); err != nil {
+	if err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry()); err != nil {
 		t.Fatalf("create namespace with grants: %v", err)
 	}
 
-	again, againEntries := housekeepingNamespaceGrants(ns)
+	again := housekeepingNamespaceGrants(ns)
 	for i := range again {
 		again[i].ID += "-again"
 	}
 
-	err := s.CreateNamespaceWithGrants(t.Context(), ns, again, entry(), againEntries)
+	err := s.CreateNamespaceWithGrants(t.Context(), ns, again, entry())
 	if !errors.Is(err, namespace.ErrAlreadyExists) {
 		t.Fatalf("create taken namespace = %v, want namespace.ErrAlreadyExists", err)
 	}
@@ -242,15 +258,16 @@ func testNamespaceHousekeepingTaken(t *testing.T, s access.Store) {
 	wantHousekeepingGrants(t, s, ns, grants)
 }
 
-func testNamespaceHousekeepingLength(t *testing.T, s access.Store) {
+func testNamespaceHousekeepingNoID(t *testing.T, s access.Store) {
 	t.Helper()
 
 	ns := newNamespace("acme")
-	grants, entries := housekeepingNamespaceGrants(ns)
+	grants := housekeepingNamespaceGrants(ns)
+	grants[len(grants)-1].ID = ""
 
-	err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry(), entries[:len(entries)-1])
+	err := s.CreateNamespaceWithGrants(t.Context(), ns, grants, entry())
 	if !errors.Is(err, access.ErrInvalid) {
-		t.Fatalf("create with a missing grant entry = %v, want ErrInvalid", err)
+		t.Fatalf("create with a grant with no ID = %v, want ErrInvalid", err)
 	}
 
 	if nss, ok := s.(namespace.Store); ok {
