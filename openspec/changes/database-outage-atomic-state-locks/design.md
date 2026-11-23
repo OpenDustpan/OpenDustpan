@@ -63,7 +63,7 @@ state_version_id
 - Invariant: One workspace holds at most one held workspace lock.
 - Invariant: One state version is current for one workspace.
 - Invariant: A state version row is immutable once marked current.
-- `writeStateVersion`: pre: Caller holds the workspace lock for the write.; Caller supplies the fence and the lock identity of the write.. Post: Either the new state version is current and visible, or no new state version row remains visible.; A repeated request with the same lock identity returns the committed result without a duplicate state version..
+- `writeStateVersion`: pre: Caller holds the workspace lock for the write.; Caller supplies the fence and the upload token of the write.. Post: Either the new state version is current and visible, or no new state version row remains visible.; A repeated request with the same upload token returns the committed result without a duplicate state version..
 - `lockWorkspace`: pre: Workspace exists and caller passes authorization.; Caller supplies the fence and the requested lock identity.. Post: Either the lock row is held by the caller, or no lock row remains held.; A repeated acquire with the same lock identity returns the held lock without a second lock row..
 - `unlockWorkspace`: pre: Caller supplies the lock identity it holds and the fence of the release.. Post: The caller lock is released, or the lock already belongs to another holder after fenced takeover.; A repeated release with the same lock identity returns success without changing another holder lock..
 
