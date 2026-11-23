@@ -690,12 +690,43 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 		}
 	}
 
+	checkSiteAdministratorActions(t)
+}
+
+// checkSiteAdministratorActions checks that the site administrator holds each
+// action of its families, except the actions that only the housekeeping roles
+// hold.
+func checkSiteAdministratorActions(t *testing.T) {
+	t.Helper()
+
+	// Only the housekeeping roles hold these actions. No other built-in role
+	// gets them from its family, the site administrator included.
+	housekeepingOnly := []identity.Action{
+		identity.ActionServerSweepArtifacts,
+		identity.ActionServerSweepBlobs,
+		identity.ActionServerSweepCheckpoints,
+		identity.ActionServerPruneNameLocks,
+		identity.ActionServerExpireTemporaryAdministrators,
+		identity.ActionServerSweepAgentReveals,
+		identity.ActionJobReconcile,
+		identity.ActionUnitRedact,
+		identity.ActionNamespaceManageAgentRuns,
+	}
+
 	site, _ := access.BuiltInRole(access.RoleSiteAdministrator)
 	families := []access.Family{
 		access.FamilyOperator, access.FamilyAdministration, access.FamilyData, access.FamilyDelegation,
 	}
 	for _, f := range families {
 		for _, a := range access.Actions(f) {
+			if slices.Contains(housekeepingOnly, a) {
+				if site.Has(a) {
+					t.Errorf("site administrator holds the housekeeping action %s", a)
+				}
+
+				continue
+			}
+
 			if !site.Has(a) {
 				t.Errorf("site administrator lacks %s", a)
 			}

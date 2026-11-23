@@ -478,8 +478,8 @@ func validateNamespaceGrantEntries(
 
 	entries := make([]audit.Entry, len(grantEntries))
 
-	for i, g := range grants {
-		if g.ID == "" {
+	for i := range grants {
+		if grants[i].ID == "" {
 			return nil, fmt.Errorf("%w: grant %d has no ID", access.ErrInvalid, i)
 		}
 
@@ -531,8 +531,8 @@ func appendNamespaceGrantEntries(
 	e audit.Entry,
 	grantEntries []audit.Entry,
 ) error {
-	for _, g := range grants {
-		if err := insertGrant(ctx, tx.q, g); err != nil {
+	for i := range grants {
+		if err := insertGrant(ctx, tx.q, grants[i]); err != nil {
 			return err
 		}
 	}
@@ -541,8 +541,8 @@ func appendNamespaceGrantEntries(
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
-	for _, ge := range grantEntries {
-		if _, err := appendAuditEntry(ctx, tx.q, ge); err != nil {
+	for i := range grantEntries {
+		if _, err := appendAuditEntry(ctx, tx.q, grantEntries[i]); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 	}

@@ -74,16 +74,20 @@ func wantHousekeepingGrants(t *testing.T, s access.Store, ns namespace.Namespace
 		t.Fatalf("grants on %q = %d (total %d), want %d", ns.Name, len(list), total, len(want))
 	}
 
-	for _, w := range want {
+	for i := range want {
+		w := &want[i]
+
 		got, getErr := s.GetGrant(t.Context(), w.ID)
 		if getErr != nil {
 			t.Fatalf("get grant %q: %v", w.ID, getErr)
 		}
 
-		assertGrant(t, got, w)
+		assertGrant(t, got, *w)
 
 		if got.CreatedBy != "@server" || !got.CreatedAt.Equal(ns.CreatedAt) {
-			t.Fatalf("grant %q creator = %q at %v, want @server at %v", w.ID, got.CreatedBy, got.CreatedAt, ns.CreatedAt)
+			t.Fatalf(
+				"grant %q creator = %q at %v, want @server at %v", w.ID, got.CreatedBy, got.CreatedAt, ns.CreatedAt,
+			)
 		}
 	}
 }
@@ -109,13 +113,15 @@ func wantNamespaceEntries(t *testing.T, s access.Store, ns namespace.Namespace, 
 	}
 
 	objects := make([]string, 0, len(want))
-	for _, g := range want {
-		objects = append(objects, access.GrantRef(g))
+	for i := range want {
+		objects = append(objects, access.GrantRef(want[i]))
 	}
 
-	for _, e := range listing.Entries {
+	for i := range listing.Entries {
+		e := &listing.Entries[i]
 		housekeeping := strings.Contains(e.Object, " housekeeping-")
-		if !slices.Contains(objects, e.Object) || housekeeping != (e.Reason == "housekeeping grants of namespace creation") {
+		hasReason := e.Reason == "housekeeping grants of namespace creation"
+		if !slices.Contains(objects, e.Object) || housekeeping != hasReason {
 			t.Fatalf("entry of %q = %+v, want a housekeeping grant entry", ns.Name, e)
 		}
 	}
@@ -136,7 +142,9 @@ func testNamespaceHousekeepingGrants(t *testing.T, s access.Store) {
 		t.Fatalf("housekeeping grants of a namespace = %d, want 5", len(grants))
 	}
 
-	creator := newGrant("grt-creator", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"))
+	creator := newGrant(
+		"grt-creator", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"),
+	)
 	creatorEntry := entry()
 	creatorEntry.Object = access.GrantRef(creator)
 
@@ -156,7 +164,9 @@ func testNamespaceHousekeepingGrants(t *testing.T, s access.Store) {
 		t.Fatalf("grants on acme = %d, want the creator and five housekeeping grants", len(list))
 	}
 
-	for _, w := range grants {
+	for i := range grants {
+		w := &grants[i]
+
 		got, getErr := s.GetGrant(t.Context(), w.ID)
 		if getErr != nil {
 			t.Fatalf("get grant %q: %v", w.ID, getErr)

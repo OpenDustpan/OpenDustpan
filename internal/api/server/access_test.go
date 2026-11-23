@@ -796,16 +796,21 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 	var list grantListDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/namespaces/gamma/grants", "", http.StatusOK}, &list)
 
-	if len(list.Grants) != 1 || list.Grants[0].Subject != "principal:prn-ann" ||
-		list.Grants[0].Role != access.RoleAdmin {
-		t.Fatalf("gamma grants = %+v, want admin to ann", list.Grants)
+	people := otherGrants(list.Grants)
+	if len(people) != 1 || people[0].Subject != "principal:prn-ann" || people[0].Role != access.RoleAdmin {
+		t.Fatalf("gamma grants = %+v, want admin to ann", people)
 	}
 
-	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/namespaces/delta/grants", "", http.StatusOK}, &list)
+	checkHousekeepingGrants(t, "gamma", housekeepingGrants(list.Grants))
 
-	if len(list.Grants) != 0 {
-		t.Fatalf("delta grants = %+v, want none", list.Grants)
+	var deltaList grantListDoc
+	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/namespaces/delta/grants", "", http.StatusOK}, &deltaList)
+
+	if people := otherGrants(deltaList.Grants); len(people) != 0 {
+		t.Fatalf("delta grants = %+v, want none", people)
 	}
+
+	checkHousekeepingGrants(t, "delta", housekeepingGrants(deltaList.Grants))
 
 	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
 	if err != nil {
@@ -827,14 +832,87 @@ func TestNamespaceCreateGrantsTheCreator(t *testing.T) {
 	}
 }
 
-// list0 returns the one grant on gamma.
+// list0 returns the one grant on gamma that is not a housekeeping grant.
 func list0(t *testing.T, f accessFixture) grantDoc {
 	t.Helper()
 
 	var list grantListDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/namespaces/gamma/grants", "", http.StatusOK}, &list)
 
-	return list.Grants[0]
+	people := otherGrants(list.Grants)
+	if len(people) != 1 {
+		t.Fatalf("gamma grants = %+v, want one grant that is not a housekeeping grant", people)
+	}
+
+	return people[0]
+}
+
+// housekeepingNamespaceRoles maps the subject of each housekeeping principal
+// that acts inside a namespace to the role of its grant.
+func housekeepingNamespaceRoles() map[string]string {
+	roles := map[string]string{}
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsInsideNamespace() {
+			roles["principal:"+p.ID()] = p.Role()
+		}
+	}
+
+	return roles
+}
+
+// housekeepingGrants returns the grants of the housekeeping principals that
+// act inside a namespace.
+func housekeepingGrants(grants []grantDoc) []grantDoc {
+	roles := housekeepingNamespaceRoles()
+
+	return grantsWhere(grants, func(subject string) bool {
+		_, ok := roles[subject]
+
+		return ok
+	})
+}
+
+// otherGrants returns the grants that are not grants of the housekeeping
+// principals that act inside a namespace.
+func otherGrants(grants []grantDoc) []grantDoc {
+	roles := housekeepingNamespaceRoles()
+
+	return grantsWhere(grants, func(subject string) bool {
+		_, ok := roles[subject]
+
+		return !ok
+	})
+}
+
+// grantsWhere returns the grants whose subject keep accepts.
+func grantsWhere(grants []grantDoc, keep func(subject string) bool) []grantDoc {
+	var out []grantDoc
+
+	for i := range grants {
+		if keep(grants[i].Subject) {
+			out = append(out, grants[i])
+		}
+	}
+
+	return out
+}
+
+// checkHousekeepingGrants checks that a created namespace has one grant for
+// each housekeeping principal that acts inside a namespace, with its role.
+func checkHousekeepingGrants(t *testing.T, name string, grants []grantDoc) {
+	t.Helper()
+
+	roles := housekeepingNamespaceRoles()
+	if len(grants) != len(roles) {
+		t.Fatalf("%s housekeeping grants = %+v, want %d", name, grants, len(roles))
+	}
+
+	for i := range grants {
+		if roles[grants[i].Subject] != grants[i].Role {
+			t.Errorf("%s grant %+v, want role %q", name, grants[i], roles[grants[i].Subject])
+		}
+	}
 }
 
 // TestGrantChangesWriteAuditEntries checks one entry for each grant and

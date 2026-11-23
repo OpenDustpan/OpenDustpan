@@ -116,7 +116,8 @@ func TestCreateNamespaceHousekeepingGrantStaysRevoked(t *testing.T) {
 		t.Fatal("no grant of the role housekeeping-job-reconcile on gamma")
 	}
 
-	if _, err := f.svc.Revoke(t.Context(), testEntry(), admin(), identity.NamespaceObject("gamma"), revoked.ID); err != nil {
+	_, err := f.svc.Revoke(t.Context(), testEntry(), admin(), identity.NamespaceObject("gamma"), revoked.ID)
+	if err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 

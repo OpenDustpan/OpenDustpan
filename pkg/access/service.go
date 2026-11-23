@@ -604,8 +604,10 @@ const housekeepingGrantReason = "housekeeping grants of namespace creation"
 // housekeepingNamespaceGrants returns the grants of the housekeeping
 // principals that act inside a namespace, on ns, and the audit entry of each
 // one. The creator of each grant is the server and its time is the creation
-// time of the namespace.
-func (s *Service) housekeepingNamespaceGrants(e audit.Entry, ns namespace.Namespace) ([]Grant, []audit.Entry) {
+// time of the namespace. newID makes the ID of each grant.
+func housekeepingNamespaceGrants(
+	newID func(prefix string) string, e audit.Entry, ns namespace.Namespace,
+) ([]Grant, []audit.Entry) {
 	var (
 		grants  []Grant
 		entries []audit.Entry
@@ -618,7 +620,7 @@ func (s *Service) housekeepingNamespaceGrants(e audit.Entry, ns namespace.Namesp
 
 		g := Grant{
 			CreatedAt: ns.CreatedAt, Condition: nil, Object: identity.NamespaceObject(ns.Name),
-			ID: s.newID(grantIDPrefix), Role: p.Role(), CreatedBy: housekeepingGrantCreator,
+			ID: newID(grantIDPrefix), Role: p.Role(), CreatedBy: housekeepingGrantCreator,
 			Subject: Subject{Kind: SubjectPrincipal, ID: p.ID()},
 		}
 		entry := change(e, g.CreatedAt, GrantRef(g))
@@ -645,7 +647,7 @@ func (s *Service) CreateNamespace(
 ) (*Grant, error) {
 	record, err := s.directory.GetPrincipalBySubject(ctx, creator.Subject)
 
-	grants, entries := s.housekeepingNamespaceGrants(e, ns)
+	grants, entries := housekeepingNamespaceGrants(s.newID, e, ns)
 
 	switch {
 	case errors.Is(err, principal.ErrNotFound) && creator.Admin:

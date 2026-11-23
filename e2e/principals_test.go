@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // e2ePrincipal and e2eGroup decode the principal and group wire forms.
@@ -165,9 +166,11 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 		&first,
 	)
 
+	// The total holds the housekeeping principals that the install writes.
+	wantTotal := int64(3 + len(principal.HousekeepingPurposes()))
 	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" ||
-		first.Total != 3 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
-		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 3", first)
+		first.Total != wantTotal || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
+		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of %d", first, wantTotal)
 	}
 
 	principalCall(ctx, t, env, principalStep{
@@ -202,11 +205,21 @@ func checkPrincipalKind(ctx context.Context, t *testing.T, env *e2e.Env, fx prin
 		Total      int64          `json:"total"`
 	}
 
+	// The housekeeping principals are services too. Their subjects sort after
+	// ci-deploy.
+	purposes := principal.HousekeepingPurposes()
+	services := make([]string, 0, 1+len(purposes))
+
+	services = append(services, fx.deploy.ID)
+	for _, p := range purposes {
+		services = append(services, p.ID())
+	}
+
 	for _, c := range []struct {
 		query string
 		want  []string
 	}{
-		{"kind=service", []string{fx.deploy.ID}},
+		{"kind=service", services},
 		{"kind=person&prefix=al&limit=1", []string{fx.alice.ID}},
 		{"kind=person&prefix=ci-", nil},
 		{"kind=workload", nil},
@@ -286,9 +299,13 @@ func checkPrincipalLists(ctx context.Context, t *testing.T, env *e2e.Env, fx pri
 	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
 
 	// The third principal is the administrator of the console session that the
-	// membership changes need.
-	if len(list.Principals) != 3 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
-		t.Fatalf("principals = %+v, want alice, ci-deploy and the session administrator", list.Principals)
+	// membership changes need. The housekeeping principals that the install
+	// writes come after it.
+	want := 3 + len(principal.HousekeepingPurposes())
+	if len(list.Principals) != want || list.Principals[0].ID != fx.alice.ID ||
+		list.Principals[1].ID != fx.deploy.ID {
+		t.Fatalf("principals = %+v, want alice, ci-deploy, the session administrator and the housekeeping principals",
+			list.Principals)
 	}
 
 	var one e2ePrincipal
