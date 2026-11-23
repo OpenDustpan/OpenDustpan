@@ -15,14 +15,14 @@ separate bug; this change covers only the namespace-ID half.
 - `pkg/notify/notify.go:254` — `Scope      namespace.Name` — a notification scope is a namespace name.
 - `pkg/notify/route.go:89` — `Scope      namespace.Name` (sink); `route.go:671` — `Scope     namespace.Name` (subscription); `pkg/notify/ports.go:71` — `Scope    namespace.Name` (cursor move); `ports.go:253` — `Scope        namespace.Name` (delivery); `ports.go:434` — `Scope namespace.Name` (claim request).
 - `pkg/notify/route.go:532` — `type Filter struct {`; `route.go:534` — `Objects     []string`; `route.go:561` — `return matchList(f.Types, string(n.Type), ".*") && matchList(f.Objects, n.Object, "/*")` — the filter matches the object name text. This is the half that stays out.
-- `pkg/store/sqlite/migrations/0168_baseline.sql:1183-1192` — `CREATE TABLE notification_sinks (` with `scope      TEXT    NOT NULL,` and no foreign key. The same `scope` column is at lines 1195, 1204, 1210, 1230, 1235, 1243 and 1256.
+- `internal/store/sqlite/migrations/0168_baseline.sql:1183-1192` — `CREATE TABLE notification_sinks (` with `scope      TEXT    NOT NULL,` and no foreign key. The same `scope` column is at lines 1195, 1204, 1210, 1230, 1235, 1243 and 1256.
 - `pkg/namespace/namespace.go:97` — `// namespace gets a new ID, so rows that hold the old ID never reach the new` — the notification rows do not follow this rule.
 - `pkg/notify/route.go:749` — `CanRead(ctx context.Context, id string, n Notification) (bool, error)` — the port's only input about the scope is `n.Scope`, a `namespace.Name`.
 - `pkg/notify/notify_test.go:355` — `func (r reader) CanRead(_ context.Context, id string, _ notify.Notification) (bool, error) {` — the only implementation in the checkout is this test fake. No production adapter exists, so the claimed read leak after a recreated name cannot be verified here. The fix makes the namespace ID the only scope value, so the implementation can decide by ID.
 - `pkg/notify/seal.go:325` — `scope, err := secret.NewScope(s.Scope, s.ID)` — the sink secret uses the sink scope as its secret item scope. A secret item is keyed by the namespace name, so the fix keeps the name for this one call and changes only the row key. The store resolves the name from the namespace row.
 - `pkg/notify/webhook/encode.go:59` — `Scope:         n.Scope.String(),` and `pkg/notify/chat/sender.go:380` — `add("Namespace", n.Scope.String())` — the webhook payload and the chat message show the scope as text.
 - `internal/api/notifications/handlers.go:106` — `ID: s.ID, Namespace: s.Scope.String(), Kind: string(s.Kind), Platform: s.Platform, Name: s.Name,` — the sink answer shows the scope as its `namespace` field.
-- No production delete of a namespace exists. The only delete is the test hook `pkg/store/sqlite/inventory_changes_internal_test.go:44` (and the PostgreSQL counterpart). It deletes the namespace row and keeps the rows that name it; `pkg/store/storetest/lifecycle.go:1158` states that a purge does this. The notification rows therefore stay, and with the ID they reach no new namespace. A later delete of a namespace must remove them.
+- No production delete of a namespace exists. The only delete is the test hook `internal/store/sqlite/inventory_changes_internal_test.go:44` (and the PostgreSQL counterpart). It deletes the namespace row and keeps the rows that name it; `pkg/store/storetest/lifecycle.go:1158` states that a purge does this. The notification rows therefore stay, and with the ID they reach no new namespace. A later delete of a namespace must remove them.
 
 ## Fix boundary
 
@@ -34,11 +34,11 @@ separate bug; this change covers only the namespace-ID half.
 - `internal/api/notifications/handlers.go` and `subscriptions.go`: the `namespace` field of the answers stays the display name.
 - `pkg/notify/ports.go`: the `Outbox`, `Subscriptions` and `Deliveries` methods that name a scope take the ID.
 - `internal/subscriptionsvc/subscriptionsvc.go`: `Create`, `List`, `Get`, `History`, `Redeliver` and `Caller` resolve the namespace ID through `Namespaces.Get` or `WritableHere` and pass it.
-- `pkg/store/sqlite/notifications.go` and `pkg/store/postgres/notifications.go`: `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes`, `MoveCursor` read, write and compare the ID.
-- `pkg/store/sqlite/sinks.go` and `pkg/store/postgres/sinks.go`: sink reads and writes. The sink row scope is the namespace ID; the sink secret item keeps the namespace name for its secret scope.
+- `internal/store/sqlite/notifications.go` and `internal/store/postgres/notifications.go`: `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes`, `MoveCursor` read, write and compare the ID.
+- `internal/store/sqlite/sinks.go` and `internal/store/postgres/sinks.go`: sink reads and writes. The sink row scope is the namespace ID; the sink secret item keeps the namespace name for its secret scope.
 - `pkg/notify/seal.go`: `SinkSealer.sealValue` and `openValue` use the namespace name of the sink, not the row scope ID, for the secret item.
-- `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`: the notification queries read the display name from the namespace row; regenerate the generated query code with `make generate`.
-- `pkg/store/sqlite/backup_notifications.go`, `backup_notification_sinks.go` and the PostgreSQL counterparts: the backup rows carry the ID.
+- `internal/store/sqlite/queries.sql` and `internal/store/postgres/queries.sql`: the notification queries read the display name from the namespace row; regenerate the generated query code with `make generate`.
+- `internal/store/sqlite/backup_notifications.go`, `backup_notification_sinks.go` and the PostgreSQL counterparts: the backup rows carry the ID.
 - `pkg/notify/notifytest/notifytest.go`: the conformance suite.
 
 **OUT**
@@ -49,7 +49,7 @@ separate bug; this change covers only the namespace-ID half.
 
 ## Check
 
-- **Guard: the scope is the ID.** Test `TestNotificationConformance`, case "a namespace made again gets no notification rows", in `pkg/store/sqlite` and `pkg/store/postgres`. The case creates a namespace, a sink and a subscription, deletes the namespace row with the test hook, and creates a namespace with the same name. It lists the sinks and subscriptions of the new namespace. Mutation: store the namespace name in `scope`; the case finds the old rows.
+- **Guard: the scope is the ID.** Test `TestNotificationConformance`, case "a namespace made again gets no notification rows", in `internal/store/sqlite` and `internal/store/postgres`. The case creates a namespace, a sink and a subscription, deletes the namespace row with the test hook, and creates a namespace with the same name. It lists the sinks and subscriptions of the new namespace. Mutation: store the namespace name in `scope`; the case finds the old rows.
 - **Guard: the route compares the ID.** Test `TestRouteComparesTheScopeID` in `pkg/notify`. It builds two scopes with the same namespace name and different IDs. Mutation: compare names; the subscription of the other ID matches.
 - **Guard: the reader receives the ID.** Test `TestCanReadUsesTheScopeID` with the first production `notify.Reader` implementation. It gives a principal of the new namespace a notification of the old ID. Mutation: resolve the scope by name; the answer is true. No implementation exists today, so this test lands with it.
 - **Guard: the API resolves the ID.** Test `TestRecreatedNamespaceListsNoSinks` in `internal/api/notifications`. Mutation: pass the path namespace name to the service; the new namespace lists the old sinks.

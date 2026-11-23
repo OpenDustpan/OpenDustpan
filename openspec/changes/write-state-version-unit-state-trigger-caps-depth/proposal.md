@@ -27,7 +27,7 @@ Evidence for the claims above:
 
 - Issue 1214 asks for caps on trigger.Store.Put, a depth counter with refusal above a fixed depth, audit entry and log line, and a docs page. Proof: Issue 1214 scope: The caps on `trigger.Store.Put`, with conformance cases first. A depth counter in the origin of the job that a trigger starts, and a refusal in the dispatcher above a fixed depth. The refusal writes an audit entry and a log line. A docs page (ADR 214).
 - This part enforces 20 followers per unit and 50 followers per source, refuses a cycle at save, stops chains deeper than 10 at run time. Proof: Roadmap step of the pack: This part enforces 20 followers per unit and 50 followers per source. It refuses a cycle at save time and stops chains deeper than 10 at run time.
-- Main writes unit state only in publishUnitState, inside the fenced transaction. No observer port exists or is added. Proof: PM decision on the parent change: publishUnitState (pkg/store/sqlite/unit_state.go:97) is the one write path and closes awaiting jobs with jobstore.CloseAwaiting.
+- Main writes unit state only in publishUnitState, inside the fenced transaction. No observer port exists or is added. Proof: PM decision on the parent change: publishUnitState (internal/store/sqlite/unit_state.go:97) is the one write path and closes awaiting jobs with jobstore.CloseAwaiting.
 
 ## What Changes
 
@@ -59,10 +59,10 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Unit state is written only in publishUnitState inside the fenced transaction. It closes awaiting jobs with jobstore.CloseAwaiting. No observer port exists. (`pkg/store/sqlite/unit_state.go:97`)
+- Unit state is written only in publishUnitState inside the fenced transaction. It closes awaiting jobs with jobstore.CloseAwaiting. No observer port exists. (`internal/store/sqlite/unit_state.go:97`)
 - Trigger cycle error code exists. (`internal/errcode/catalog_trigger.go:7`)
 - Trigger invalid error code exists. (`internal/errcode/catalog_trigger.go:13`)
-- A followers query test exists in the trigger store suite. (`pkg/store/internal/triggerstore/triggerstore_test.go:198`)
+- A followers query test exists in the trigger store suite. (`internal/store/triggerstore/triggerstore_test.go:198`)
 
 ## ADR check
 

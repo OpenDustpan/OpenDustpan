@@ -29,38 +29,38 @@ What the person gains: an exchange in a namespace with 100,000 rules costs about
 
 - The issue measures the cost on PostgreSQL 18 with 200,000 rows in `trust_rules`: 172.7 ms for a namespace of 100,000 rules (500 bytes of `conditions_json` each; a parallel scan, then an external merge sort of 27.8 MB on disk, over 40 MB moved for each exchange), and 0.56 ms for a namespace of 100 rules. The issue found no cap on the rules of a namespace.
 - The issue proposes the fix: a read of the rule by ID, then `SELECT id FROM trust_rules WHERE namespace=$1 AND bundle_id=$2 AND spiffe_id_pattern=$3 LIMIT 2`, with an index on `(namespace, bundle_id, spiffe_id_pattern)`. This change builds that fix, and the code shows that the first read is not needed (see "What main already does": `RecordExchange` reads the rule row before the recheck).
-- The match is an equality test in Go today: the compare of the bundle ID and of the pattern with the SPIFFE ID of the exchange (`pkg/store/internal/trustrulestore/trustrulestore.go:345`, func CheckExchangeMatch, loop at line 364). An equality in SQL on the same two columns gives the same set of rows. The check also never compares a wildcard: `CheckExchange` refuses a SPIFFE ID with a `*` before the transaction (`pkg/store/internal/trustrulestore/trustrulestore.go:234`, func CheckExchange). The index lookup therefore changes no outcome, with or without a stored wildcard pattern. The dependency on the wildcard refusal (see "Dependencies") is a PM direction for one reason: the service and the store must read one rule set.
-- The message of the refusal is not asserted on. Run on main (bebc30fa5, 19 Nov 2026): `rg -n "rules name the SPIFFE|want only its rule" --glob '*.go' .` prints only `pkg/store/internal/trustrulestore/trustrulestore.go:371`. The tests check the sentinel (`pkg/store/internal/trustrulestore/exchange_check_test.go:129`).
+- The match is an equality test in Go today: the compare of the bundle ID and of the pattern with the SPIFFE ID of the exchange (`internal/store/trustrulestore/trustrulestore.go:345`, func CheckExchangeMatch, loop at line 364). An equality in SQL on the same two columns gives the same set of rows. The check also never compares a wildcard: `CheckExchange` refuses a SPIFFE ID with a `*` before the transaction (`internal/store/trustrulestore/trustrulestore.go:234`, func CheckExchange). The index lookup therefore changes no outcome, with or without a stored wildcard pattern. The dependency on the wildcard refusal (see "Dependencies") is a PM direction for one reason: the service and the store must read one rule set.
+- The message of the refusal is not asserted on. Run on main (bebc30fa5, 19 Nov 2026): `rg -n "rules name the SPIFFE|want only its rule" --glob '*.go' .` prints only `internal/store/trustrulestore/trustrulestore.go:371`. The tests check the sentinel (`internal/store/trustrulestore/exchange_check_test.go:129`).
 - A benchmark task (task 4.2) runs the benchmark of the issue before and after, so the pull request shows the number and not a claim.
 
 ## What main already does
 
 Each fact names its file, line and function on main (bebc30fa5). The change specifies only the difference.
 
-- The recheck of an mTLS exchange returns nil for a `jwt-exchange`, fails closed for another kind, and for `mtls-exchange` calls the query ListTrustRulesOfNamespace, then `CheckExchangeMatch(list, x)`, then the query GetTrustBundleOfNamespace, then `CheckExchangeBundle(row, list, x)` in Postgres (`pkg/store/postgres/trustrules.go:346 (func recheckExchange)`)
-- The SQLite twin of the recheck does the same four steps (`pkg/store/sqlite/trustrules.go:363 (func recheckExchange)`)
-- `RecordExchange` reads the rule row of the rule of the exchange with the existing query `GetTrustRule` (all columns, key namespace and ID), checks it with `CheckExchangeRule`, and only then calls the recheck, inside `inFencedAuditedTx`, in Postgres (`pkg/store/postgres/trustrules.go:299 (func RecordExchange)`)
-- The SQLite `RecordExchange` does the same, and calls the recheck at line 337 (`pkg/store/sqlite/trustrules.go:313 (func RecordExchange)`)
-- That row carries the bundle ID and the SPIFFE ID pattern (`pkg/store/postgres/trustrules.go:277 (func trustRuleRow)`)
-- `ListTrustRulesOfNamespace` selects 14 columns of every rule of the namespace and sorts by name and ID with the "C" collation in Postgres (`pkg/store/postgres/queries.sql:6096`)
-- The SQLite copy sorts by name and ID (`pkg/store/sqlite/queries.sql:5563`)
-- `ListTrustRulesOfNamespace` has another caller, which this change leaves as it is: the list of the rules of a namespace for the service and the list route (`pkg/store/postgres/trustrules.go:101 (func List)`, call at line 106)
-- The SQLite list of the rules is the same (`pkg/store/sqlite/trustrules.go:106 (func List)`, call at line 114)
-- `CheckExchangeMatch(rows []Row, x)` returns nil for an exchange with no SPIFFE ID, finds the bundle of the row of the rule of the exchange in `rows`, refuses with `ErrNotFound` when that bundle is empty, collects the IDs of the rows with that bundle and the pattern of the SPIFFE ID, and refuses with `ErrNotFound` unless there is exactly one and it is the rule of the exchange (`pkg/store/internal/trustrulestore/trustrulestore.go:345 (func CheckExchangeMatch)`)
-- `CheckExchangeBundle(row *BundleRow, rows []Row, x)` uses `rows` for one value: the bundle ID of the row of the rule of the exchange (`pkg/store/internal/trustrulestore/trustrulestore.go:293 (func CheckExchangeBundle)`)
-- The bundle check of the kind `mtls-exchange` finds that value in a loop (`pkg/store/internal/trustrulestore/trustrulestore.go:315 (func checkMtlsExchangeBundle)`)
-- `Row` has the fields `ID` and `BundleID`, and the pattern field, among 14 (`pkg/store/internal/trustrulestore/trustrulestore.go:74 (type Row)`)
-- `CheckExchange` refuses a `*` in the SPIFFE ID of the exchange before the transaction (`pkg/store/internal/trustrulestore/trustrulestore.go:234 (func CheckExchange)`)
-- The table `trust_rules` has the columns `namespace`, `bundle_id` (nullable) and `spiffe_id_pattern` in Postgres. A JWT rule has `bundle_id` NULL and an empty `spiffe_id_pattern` (`pkg/store/postgres/migrations/0168_baseline.sql:1459`)
-- The SQLite table has the same three columns (`pkg/store/sqlite/migrations/0168_baseline.sql:1197`)
-- The indexes of `trust_rules` are the primary key on `id`, the unique `trust_rules_name (namespace, name)` and `trust_rules_principal (principal_id)`. None starts with the columns namespace, bundle ID and SPIFFE ID pattern (`pkg/store/postgres/migrations/0168_baseline.sql:2323`)
-- The SQLite file has the same two indexes (`pkg/store/sqlite/migrations/0168_baseline.sql:1847`)
-- The queries of the trust rules sit in one area of `queries.sql`, with the read of one rule before the list (`pkg/store/postgres/queries.sql:6088`)
+- The recheck of an mTLS exchange returns nil for a `jwt-exchange`, fails closed for another kind, and for `mtls-exchange` calls the query ListTrustRulesOfNamespace, then `CheckExchangeMatch(list, x)`, then the query GetTrustBundleOfNamespace, then `CheckExchangeBundle(row, list, x)` in Postgres (`internal/store/postgres/trustrules.go:346 (func recheckExchange)`)
+- The SQLite twin of the recheck does the same four steps (`internal/store/sqlite/trustrules.go:363 (func recheckExchange)`)
+- `RecordExchange` reads the rule row of the rule of the exchange with the existing query `GetTrustRule` (all columns, key namespace and ID), checks it with `CheckExchangeRule`, and only then calls the recheck, inside `inFencedAuditedTx`, in Postgres (`internal/store/postgres/trustrules.go:299 (func RecordExchange)`)
+- The SQLite `RecordExchange` does the same, and calls the recheck at line 337 (`internal/store/sqlite/trustrules.go:313 (func RecordExchange)`)
+- That row carries the bundle ID and the SPIFFE ID pattern (`internal/store/postgres/trustrules.go:277 (func trustRuleRow)`)
+- `ListTrustRulesOfNamespace` selects 14 columns of every rule of the namespace and sorts by name and ID with the "C" collation in Postgres (`internal/store/postgres/queries.sql:6096`)
+- The SQLite copy sorts by name and ID (`internal/store/sqlite/queries.sql:5563`)
+- `ListTrustRulesOfNamespace` has another caller, which this change leaves as it is: the list of the rules of a namespace for the service and the list route (`internal/store/postgres/trustrules.go:101 (func List)`, call at line 106)
+- The SQLite list of the rules is the same (`internal/store/sqlite/trustrules.go:106 (func List)`, call at line 114)
+- `CheckExchangeMatch(rows []Row, x)` returns nil for an exchange with no SPIFFE ID, finds the bundle of the row of the rule of the exchange in `rows`, refuses with `ErrNotFound` when that bundle is empty, collects the IDs of the rows with that bundle and the pattern of the SPIFFE ID, and refuses with `ErrNotFound` unless there is exactly one and it is the rule of the exchange (`internal/store/trustrulestore/trustrulestore.go:345 (func CheckExchangeMatch)`)
+- `CheckExchangeBundle(row *BundleRow, rows []Row, x)` uses `rows` for one value: the bundle ID of the row of the rule of the exchange (`internal/store/trustrulestore/trustrulestore.go:293 (func CheckExchangeBundle)`)
+- The bundle check of the kind `mtls-exchange` finds that value in a loop (`internal/store/trustrulestore/trustrulestore.go:315 (func checkMtlsExchangeBundle)`)
+- `Row` has the fields `ID` and `BundleID`, and the pattern field, among 14 (`internal/store/trustrulestore/trustrulestore.go:74 (type Row)`)
+- `CheckExchange` refuses a `*` in the SPIFFE ID of the exchange before the transaction (`internal/store/trustrulestore/trustrulestore.go:234 (func CheckExchange)`)
+- The table `trust_rules` has the columns `namespace`, `bundle_id` (nullable) and `spiffe_id_pattern` in Postgres. A JWT rule has `bundle_id` NULL and an empty `spiffe_id_pattern` (`internal/store/postgres/migrations/0168_baseline.sql:1459`)
+- The SQLite table has the same three columns (`internal/store/sqlite/migrations/0168_baseline.sql:1197`)
+- The indexes of `trust_rules` are the primary key on `id`, the unique `trust_rules_name (namespace, name)` and `trust_rules_principal (principal_id)`. None starts with the columns namespace, bundle ID and SPIFFE ID pattern (`internal/store/postgres/migrations/0168_baseline.sql:2323`)
+- The SQLite file has the same two indexes (`internal/store/sqlite/migrations/0168_baseline.sql:1847`)
+- The queries of the trust rules sit in one area of `queries.sql`, with the read of one rule before the list (`internal/store/postgres/queries.sql:6088`)
 - The service-side read of the JWT path lists every rule of the namespace once, outside the transaction (`internal/trustrulesvc/exchange.go:269 (func match)`)
 - The pattern check still allows a trailing `/*` (`pkg/trustrule/trustrule.go:489 (func checkSpiffeSegment)`)
 - The conformance suite already has the mTLS cases of `RecordExchange` (`pkg/trustrule/trustruletest/mtls_exchange_cases.go:26 (func mtlsExchangeCases)`)
-- The hostile unit table of the match check exists (`pkg/store/internal/trustrulestore/exchange_check_test.go:92 (func TestCheckExchangeMatch)`)
-- The hostile unit table of the bundle check exists (`pkg/store/internal/trustrulestore/exchange_bundle_check_test.go:19 (func TestCheckExchangeBundle)`)
+- The hostile unit table of the match check exists (`internal/store/trustrulestore/exchange_check_test.go:92 (func TestCheckExchangeMatch)`)
+- The hostile unit table of the bundle check exists (`internal/store/trustrulestore/exchange_bundle_check_test.go:19 (func TestCheckExchangeBundle)`)
 
 ## The earlier change and the open pull request
 

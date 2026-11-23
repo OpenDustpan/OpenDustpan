@@ -62,7 +62,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - The trigger.Dispatcher port exists. (`pkg/trigger/ports.go:173`)
 - Trigger test doubles build a Dispatcher. (`pkg/trigger/triggertest/doubles.go:47`)
 - The make check target exists. (`Makefile:14`)
-- The trigger store constructor exists. (`pkg/store/internal/triggerstore/triggerstore.go:110`)
+- The trigger store constructor exists. (`internal/store/triggerstore/triggerstore.go:110`)
 
 ## ADR check
 

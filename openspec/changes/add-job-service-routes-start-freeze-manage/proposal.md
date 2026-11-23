@@ -26,7 +26,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- The pack names the freeze domain package. Proof: package internal/freeze where internal/freeze
+- The freeze record and port are in package pkg/job. Proof: package pkg/job where pkg/job/gate.go
 - The pack names a freeze test on main. Proof: test TestFreeze where pkg/job/gate_test.go:764
 - The route table already holds job routes on namespaces. Proof: route ANY/GET/POST /api/dustpan/v1/namespaces/{}/jobs where route table or API description
 
@@ -80,7 +80,7 @@ none
 Questions considered and answered:
 
 - Does this change include job lifecycle or runner session routes? No. The roadmap split for this part covers freeze create, end, and list routes with guard checks on job start and on other mutating job actions such as cancel and phase dispatch. Job lifecycle routes with cancel, the TFE link, runner session routes, and the launcher binary stay in the sibling change and out of scope here.
-- Does freeze already exist on main? No. The pack names package internal/freeze and TestFreeze at pkg/job/gate_test.go:764, but no freeze REST routes. The change adds the freeze REST routes and wires the guard into job start and dispatch.
+- Does freeze already exist on main? In part. The record (`Freeze`, pkg/job/gate.go:449), the port (`FreezeStore`: CreateFreeze, EndFreeze, ListFreezes, pkg/job/gate.go:494), the table job_freezes and the start refusal (internal/api/jobs/start.go:193, reasonFrozen) exist, and TestFreeze is at pkg/job/gate_test.go:764. The REST routes and the single-active-freeze rule do not exist. The change adds the routes in the jobs adapter, the rule, and the guard on cancel and phase dispatch. internal/freeze is the schedule package and is not the record.
 - Which ADR governs freeze? The pack adrs list is empty and names no ADR. No quoted decision applies, so the check is empty.
 - Does the freeze guard stop actions other than job start? No. The guard stops job start and other mutating job actions (cancel and phase dispatch or claim) during an active freeze. Reads, list, and log reads keep working.
 

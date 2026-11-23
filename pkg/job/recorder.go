@@ -148,6 +148,11 @@ type CheckedRecorder interface {
 	// open. A step that has no begin record under c is ErrInvalid, as for
 	// EndStep. A retry after a successful end compares the stored closed log.
 	EndStepChecked(ctx context.Context, c PhaseClaim, rec StepRecord, want LogExpectation) error
+	// AppendLogCapped is AppendLog of chunk with the caps of the log of a
+	// session. The store checks chunk.Caps in the transaction that reserves the
+	// chunk: a new chunk that passes a cap is a LogCapError (ErrInvalid), and
+	// the recorder keeps no byte of it.
+	AppendLogCapped(ctx context.Context, c PhaseClaim, chunk CappedChunk) error
 }
 
 var _ CheckedRecorder = (*DurableRecorder)(nil)
@@ -185,45 +190,13 @@ func stepRecordOf(j *Job, c PhaseClaim, name string) (*StepRecord, bool) {
 // first attempt that commits, and an attempt that loses deletes only its own
 // blob.
 func (r *DurableRecorder) AppendLog(ctx context.Context, c PhaseClaim, step string, seq int, chunk io.Reader) error {
-	if err := checkStepName(step); err != nil {
-		return err
-	}
+	return r.storeLogChunk(ctx, c, &chunkAppend{step: step, seq: seq, chunk: chunk, caps: nil})
+}
 
-	if seq < 0 || seq >= MaxLogChunks {
-		return fmt.Errorf("%w: chunk number %d", ErrInvalid, seq)
-	}
-
-	data, sum, err := readChunk(chunk)
-	if err != nil {
-		return err
-	}
-
-	j, err := r.jobOf(ctx, c)
-	if err != nil {
-		return err
-	}
-
-	newLog, err := r.newLogVersion(&j, c, step, seq)
-	if err != nil {
-		return err
-	}
-
-	plan, err := r.store.ReserveLogChunk(
-		ctx,
-		c,
-		step,
-		ChunkReserve{Seq: seq, SHA256: sum, Size: int64(len(data))},
-		newLog,
-	)
-	if err != nil {
-		return err
-	}
-
-	if plan.Duplicate {
-		return nil
-	}
-
-	return r.writeChunk(ctx, c, &j, &chunkWrite{step: step, version: plan.Version, seq: seq, data: data})
+// AppendLogCapped implements CheckedRecorder. It is AppendLog of chunk, and the
+// reserve checks chunk.Caps in its transaction.
+func (r *DurableRecorder) AppendLogCapped(ctx context.Context, c PhaseClaim, chunk CappedChunk) error {
+	return r.storeLogChunk(ctx, c, &chunkAppend{step: chunk.Step, seq: chunk.Seq, chunk: chunk.Body, caps: &chunk.Caps})
 }
 
 // readChunk reads a chunk of at most MaxLogChunk bytes, and returns it with
@@ -417,6 +390,59 @@ type chunkWrite struct {
 	version string
 	seq     int
 	data    []byte
+}
+
+// chunkAppend is one chunk that AppendLog or AppendLogCapped stores, with the
+// caps of the log or nil.
+type chunkAppend struct {
+	step  string
+	seq   int
+	chunk io.Reader
+	caps  *LogCaps
+}
+
+// storeLogChunk stores the chunk a. The reserve checks a.caps in its
+// transaction.
+func (r *DurableRecorder) storeLogChunk(ctx context.Context, c PhaseClaim, a *chunkAppend) error {
+	step, seq := a.step, a.seq
+
+	// Defense in depth: the session handler checks the name and the number too;
+	// this check stays so that another caller of the recorder cannot skip it.
+	if err := CheckChunkKey(step, seq); err != nil {
+		return err
+	}
+
+	data, sum, err := readChunk(a.chunk)
+	if err != nil {
+		return err
+	}
+
+	j, err := r.jobOf(ctx, c)
+	if err != nil {
+		return err
+	}
+
+	newLog, err := r.newLogVersion(&j, c, step, seq)
+	if err != nil {
+		return err
+	}
+
+	plan, err := r.store.ReserveLogChunk(
+		ctx,
+		c,
+		step,
+		ChunkReserve{Seq: seq, SHA256: sum, Size: int64(len(data)), Caps: a.caps},
+		newLog,
+	)
+	if err != nil {
+		return err
+	}
+
+	if plan.Duplicate {
+		return nil
+	}
+
+	return r.writeChunk(ctx, c, &j, &chunkWrite{step: step, version: plan.Version, seq: seq, data: data})
 }
 
 // writeChunk stores the blob of one attempt of a chunk under a key of its own,

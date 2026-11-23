@@ -23,7 +23,7 @@ After this change:
 ```mermaid
 sequenceDiagram
 participant W as pkg/backup
-participant S as pkg/store/postgres
+participant S as internal/store/postgres
 participant H as pkg/dustpan
 W->>S: claim drop step with fence token
 W->>S: SET LOCAL lock_timeout then DROP SCHEMA old live
