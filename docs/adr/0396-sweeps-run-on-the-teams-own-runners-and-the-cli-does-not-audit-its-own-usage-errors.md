@@ -22,7 +22,7 @@ The change `130-138-runner-pools-management` and the changes that copy its owner
 
 ## Consequences
 
-- The changes that quote the answer of 13 November 2026 get a correction. The tasks that refuse the sweep purpose on a pool of a namespace go away. The change `add-job-session-paths-runner-2` task 2.3 keeps the removal of that refusal.
+- The changes that quote the answer of 13 November 2026 get a correction. The tasks that refuse the sweep purpose on a pool of a namespace go away. Task 2.3 of `add-job-session-paths-runner-2` adds no refusal. It tests that a claim on a pool with the sweep purpose gets no job session.
 - A reviewer does not ask for an audit entry for a usage error of the CLI. The reviewer checks that the server audits each call that reaches it.
 - A sweep pool of a team shows in the pool list with its purpose. Its host identity is a stored grant like any other.
 - ADR 164 and ADR 343 list this ADR in their "Changed by" lists.
