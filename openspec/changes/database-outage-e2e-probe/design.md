@@ -9,7 +9,7 @@ Three serve instances behind a round-robin proxy on one PostgreSQL database. A d
 
 ## Structure
 
-No new server structure. The bug class is a missing outage regression. The constructor is the NEW suite fixture `NewDatabaseOutageProbe` that takes the proxy control, the instance list, and the CLI matrix, and refuses an empty matrix or a short window at or above 50 percent of the smallest measured retry window.
+No new server structure. The bug class is a missing outage regression. The constructor is the NEW suite fixture `NewDatabaseOutageProbe` that takes the proxy control, the instance list, and the CLI matrix, and refuses an empty matrix or a short window above 50 percent of the smallest measured retry window.
 
 ## Risks
 
