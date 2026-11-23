@@ -12,6 +12,8 @@
 
 - [ ] 2.1 Check the step and phase caps in the chunk transaction of the job recorder (job.DurableRecorder.AppendLog), with the limits of pkg/runner/protocol/protocol.go:156-162, and map a breach to invalid in internal/api/runnerapi/session.go (existing). A refused chunk keeps no bytes. Check: `go test ./internal/api/runnerapi/ -run 'TestSession|TestLogPhaseCap' -count=1` passes
 - [ ] 2.2 Add rows to docs/reference/runner-api.md for the step and phase caps of the log and the plan part caps. Main has the rows for the session paths (:160-172) and the plan commit text (:226-236). Check: `make docs-lint` passes
+- [ ] 2.3 Refuse the sweep purpose on a namespace pool in internal/api/runnerpools/admin.go. Refuse `sweeps` when a pool is created (internal/api/runnerpools/admin.go:200) and when it is updated (:262), with the code runner.invalid, and add the cases to internal/api/runnerpools/pool_field_errors_test.go (existing). Add one line to docs/guides/runner-pools.md that says a namespace pool cannot have the sweep purpose. Check: `go test ./internal/api/runnerpools/ ./internal/api/runnerapi/ -run 'TestSessionHostileNamespaceSweepPool|TestPoolFieldErrors' -count=1` passes
+- [ ] 2.4 Make the store enforce the log caps in the chunk transaction: in internal/store/jobstore/record.go (existing, near :134) call NEW `job.PlanChunkCapped` with NEW `protocol.SessionLogCaps()`, not `job.PlanChunk`. Check: `go test ./internal/store/... ./pkg/job/... -run 'Log|Chunk' -count=1` passes
 
 ## 3. Side effects (computed from main)
 
