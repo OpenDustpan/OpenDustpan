@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #3257.
@@ -62,12 +62,16 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - internal/api/tfe/freshness.go, internal/api/pulumi/freshness.go, internal/api/profile/freshness.go, internal/api/issuer/freshness.go: hold the same `Guard`.
 - internal/api/tfe/tfe.go, internal/api/pulumi/pulumi.go, internal/api/profile/profile.go, internal/api/issuer/issuer.go, internal/api/jobs/jobs.go, internal/issuersvc/issuersvc.go: the struct that holds the `Guard` field.
 - internal/store/jobstore/store.go, internal/store/jobstore/apply.go, internal/store/jobstore/record.go: pass the policy to `checkDestroyProof`.
+- internal/trustrulesvc/service.go, internal/trustrulesvc/service_bundle.go: `requireFresh` takes the `Guard` and `requireWriter` (`service_bundle.go:164`) passes it, so the bundle writes use the same policy.
 - pkg/accesstoken/service.go, pkg/profile/service.go, pkg/profile/issuer_settings.go, internal/issuersvc/settings.go, pkg/dustpan/auditchain.go: hold a `Guard`.
 - pkg/job/service_approve.go, pkg/job/gate.go, internal/store/jobstore/events.go, internal/api/jobs/approve.go: the destroy approval reads the policy.
 - pkg/dustpan (wiring): makes the one `Policy` and the `Guard` of each layer.
 - internal/api/apidesc (openapi.json), clients/typescript: regenerated.
 - docs/guides/approval-rules.md, docs/guides/access-tokens.md, docs/guides/console-sign-in.md: the setting and its effect.
 - e2e/signin_token.go (new): the helper `EnableFreshAuth`. e2e/tokens_test.go, e2e/audit_chain_test.go, e2e/sessionpolicy_test.go, e2e/decision_record_retention_setting_test.go, e2e/restore_access_setting_test.go, e2e/issuer_test.go, e2e/profiles_test.go, e2e/e2e_test.go, e2e/signin_test.go, e2e/approval_rules_test.go, e2e/gate_routes_test.go, e2e/proxy_rules_test.go, e2e/namespace_principals_test.go, e2e/localusers_test.go, e2e/passkeys_test.go: call it, because the default is off and these steps expect a fresh step for an access token.
+- pkg/job/service.go: the new field `ServiceConfig.FreshGuard` (a `freshstep.Guard`). The zero value requires a fresh step, so a missing field fails closed.  e2e/coverage_jobs.go, internal/api/jobs/ipallow_test.go, internal/api/jobs/pool_answer_test.go, internal/api/jobs/routes_test.go, internal/api/server/githost_fixture_test.go, internal/api/server/signin_test.go, pkg/job/service_test.go: set the new field in each `ServiceConfig` literal, because exhaustruct needs every field.
+- internal/store/jobstore/export_internal_test.go: the test export `CheckDestroyProofStepOn` and `CheckDestroyProofStepOff`, so that the black-box store test can call `checkDestroyProof`.
+- internal/api/tfe/freshstep_policy_test.go, internal/api/pulumi/freshstep_policy_test.go, internal/api/profile/freshstep_policy_test.go, internal/api/issuer/freshstep_policy_test.go, internal/issuersvc/freshstep_policy_test.go, internal/trustrulesvc/freshstep_policy_test.go, pkg/accesstoken/freshstep_policy_test.go (new): the table of each layer with the setting off and on.
 - e2e/settings_test.go: the step that changes `freshAuthEnabled` and reads its effective value. No e2e step approves a `destroy` with an access token: the jobs API cannot start a `destroy` job (`job.unsupported`), so `TestDestroyApprovalByTokenFollowsSetting` proves that case.
 
 ## Check

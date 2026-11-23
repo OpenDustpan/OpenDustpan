@@ -92,18 +92,26 @@ When the launcher calls the sweep finish route, the server SHALL close the sessi
 - **WHEN** the launcher calls finish after its claim expired
 - **THEN** the server answers 409 and keeps the sweep state.
 
-### Requirement: refuse-sweep-namespace-pool
+### Requirement: sweep-purpose-on-team-pool
 
-When a caller creates or updates a namespace pool with the sweep purpose, the server SHALL refuse the write.
+When a caller creates a pool of a namespace with the sweep purpose, the server SHALL apply the same rules as for the jobs purpose.
 
-#### Scenario: Namespace pool refused
-- **WHEN** a caller creates or updates a namespace pool with the sweep purpose
-- **THEN** the server answers 422 and stores no change.
+#### Scenario: Team pool with the sweep purpose accepted
+- **WHEN** a caller with the grant to manage runner pools creates a pool of a namespace with the sweep purpose
+- **THEN** the server stores the pool, and the pool list shows the purpose sweeps.
 
-#### Scenario: Installation pool accepted
-- **WHEN** an operator creates an installation pool with the sweep purpose
-- **THEN** the server stores the pool.
+#### Scenario: No installation pool
+- **WHEN** a caller creates a runner pool
+- **THEN** the pool belongs to one namespace, whatever its purpose.
 
-#### Scenario: Purpose change with open operations
-- **WHEN** a caller changes the purpose of a pool that has queued or claimed operations of the old purpose
-- **THEN** the server answers 422 and keeps the purpose.
+#### Scenario: Unknown purpose
+- **WHEN** a caller creates a pool with a purpose that is not jobs or sweeps
+- **THEN** the server answers 400 and stores no pool.
+
+#### Scenario: Purpose change refused
+- **WHEN** a caller updates a pool with a purpose that differs from the stored purpose
+- **THEN** the server answers 409 and keeps the purpose.
+
+#### Scenario: Sweep runner polls under the pool
+- **WHEN** a runner that joined a pool of a namespace with the sweep purpose polls under /runner/v1
+- **THEN** the server claims only sweep work of that pool, and the sweep work carries no job credential.

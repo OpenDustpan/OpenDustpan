@@ -4,7 +4,7 @@ version: 4
 
 ## Why
 
-**Persona: runner operator.** A runner operator runs a pool for sweeps. The launcher must stream a sweep report to the server under its claim. The server must accept only a valid version 1 report inside the target scopes. A namespace administrator then lists and triages the findings.
+**Persona: runner administrator.** A runner administrator runs a pool for sweeps. The launcher must stream a sweep report to the server under its claim. The server must accept only a valid version 1 report inside the target scopes. A namespace administrator then lists and triages the findings.
 
 The user path this change must make work:
 
@@ -61,7 +61,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
 
-- **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+- **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**: sweeps run on the user's own runners. The owner answered: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the namespace that has the sweep purpose. The host identity of the pool has no write access. No installation sweep pool exists. The pool API accepts the sweep purpose on a namespace pool with the same rules as for any other purpose.
 
 ## ADR check
 
@@ -95,6 +95,15 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: The upload stays under /runner/v1.
 - Conflict: none.
 
+**ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors** (owner-tagged: decision 1).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR, with ADR 164, 343.
+- Quote: "A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access."
+- Effect: A sweep target names a pool of the namespace with the sweep purpose. The server refuses a pool without that purpose. No installation sweep pool exists.
+- Conflict: none. ADR 396 changes ADR 164 decision 5. It extends ADR 343 decision 3.
+
 ## Open questions
 
 none
@@ -103,6 +112,6 @@ Questions considered and answered:
 
 - Where does the upload path live? ADR 164 decision 12 and ADR 210 decision 2: the runner protocol, not REST.
 - Does a later sweep reopen a triaged finding? No. Deduplication is by namespace ID and resource key. A later sweep updates the last time seen and never changes triage.
-- Which pool runs sweeps? Owner decision, 13 Nov 2026 (queue P14): only an operator pool has the sweep purpose; this change adds no pool rule.
+- Which pool runs sweeps? Owner decision, 23 Nov 2026 (ADR 396): a pool of the namespace with the sweep purpose. This change adds no pool rule.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

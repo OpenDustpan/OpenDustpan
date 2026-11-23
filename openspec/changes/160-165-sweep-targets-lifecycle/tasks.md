@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for each spec scenario, including hostile commands, namespace pool refusal, disabled target, 404, 403 and audit entry. Check: TestSweepTargetsSpec in internal/unmanagedsvc fails on main
+- [ ] 1.1 Write failing tests for each spec scenario, including hostile commands, refusal of a pool without the sweeps purpose, disabled target, 404, 403 and audit entry. Check: TestSweepTargetsSpec in internal/unmanagedsvc fails on main
 - [ ] 1.2 Write failing store conformance tests, including the concurrent start test, in the NEW file internal/unmanaged/storetest/scan_targets_test.go. Check: TestScanStoreTargetsAndSweeps in storetest fails on main
 
 ## 2. Build
