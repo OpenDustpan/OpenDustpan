@@ -17,6 +17,8 @@
 
 - [ ] 2.4 In internal/api/stategate/stategate.go (the `state write refused` log line, line 492), add the job ID and the phase name of the job claim as two more log fields. A write by a person logs both fields empty. Both values come from the server (the job record), and the line stays one line. Add a table test of the log line for a job token and for a person. Check: go test ./internal/api/stategate/...
 
+- [ ] 2.4 In internal/api/stategate/stategate.go (the `state write refused` log line, line 492), add the job ID and the phase name of the job claim as two more log fields. A write by a person logs both fields empty. Both values come from the server (the job record), and the line stays one line. Add a table test of the log line for a job token and for a person. Check: go test ./internal/api/stategate/...
+
 ## 3. Side effects (computed from main)
 
 - [x] 3.1 Not applicable: the change adds no route and no field, so `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves the golden file and the clients unchanged.
