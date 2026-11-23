@@ -72,6 +72,9 @@ New imports of this change (each one allowed by the module rules):
 - `internal/api/runnerapi` imports `pkg/runner`
 - `internal/api/runnerapi` imports (read only) `pkg/job`
 - `internal/api/runnerapi` imports (read only) `pkg/identity`
+- `internal/store/jobstore` imports nothing new: `job.LogCaps` lives in `pkg/job`. `pkg/runner/protocol` gets no import of `pkg/job`, so the launcher and the public SDK do not link the job domain.
+
+Audit of refusals: a log cap refusal is a domain refusal that a caller can repeat, so it writes its audit entry through the shared denial limiter (ADR 382 decision 3; ADR 250 decision 3). The sweep refusals of a namespace pool in the pool admin API are input checks of an authorized admin, not denials, and write no entry.
 
 States on main in the touched packages:
 
