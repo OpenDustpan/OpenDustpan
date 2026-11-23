@@ -406,8 +406,11 @@ The credential of the caller may not make this write.
 ```
 
 The text does not name the unit or the phase. The refusal has no ID of a
-decision record. The server log line `state write refused` gives the unit and
-the code. The audit log has a `denied` entry for the write (see the
+decision record. The server log line `state write refused` gives the unit, the
+code, the job ID (`job`) and the phase name (`phase`) when the token has a
+claim to a job, and the gate messages (`messages`). A gate message in the
+log has no control or format characters, and the log cuts a message to 256 characters.
+The audit log has a `denied` entry for the write (see the
 [audit log](audit-log.md)).
 
 A job token write that a gate denies answers like the write of a person: the

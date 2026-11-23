@@ -90,11 +90,19 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 // the job model is not a *RefusalError, so it becomes one that wraps it. Any
 // other error comes back unchanged.
 func withJobClaim(err error, job *JobClaim) error {
+	// Defense in depth: the subject source sets a claim only for a job token,
+	// and the log of the refusal checks for a nil claim too; this check does
+	// not rely on them and stays so that a refusal with no claim never becomes
+	// a job-model refusal.
 	if job == nil {
 		return err
 	}
 
 	if refused, ok := errors.AsType[*RefusalError](err); ok {
+		// Defense in depth: the gate code builds each refusal as a non-nil
+		// value, and the subject, unit and fence sources return their own
+		// errors; this check does not rely on them and stays so that a typed
+		// nil from a new source cannot panic here.
 		if refused != nil {
 			refused.Job = job
 		}

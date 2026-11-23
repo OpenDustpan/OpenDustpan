@@ -1,12 +1,17 @@
 package gate_test
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	principalpkg "opendustpan.org/opendustpan/pkg/principal"
 )
 
 // TestStateWriteJobClaim checks each rule of a state.write with a job token:
@@ -225,6 +230,52 @@ func checkRefusalJob(t *testing.T, err error, wantJob string) {
 
 	if refusal.Job.Job != wantJob || refusal.Job.Phase != "apply" {
 		t.Fatalf("refusal job = %+v, want job %s in the phase apply", refusal.Job, wantJob)
+	}
+}
+
+// nilRefusalFences is a fence source whose error is a typed-nil
+// *RefusalError.
+type nilRefusalFences struct{}
+
+func (nilRefusalFences) Fence(context.Context, namespace.Name) (namespace.Fence, error) {
+	var refused *gate.RefusalError
+
+	return namespace.Fence{}, refused
+}
+
+// TestStateWriteTypedNilRefusal sends a typed-nil *RefusalError through
+// GuardStateWrite for a job token with a claim. The call must return the
+// error and must not panic, as if no other code kept a typed nil out of the
+// error chain.
+func TestStateWriteTypedNilRefusal(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+
+	svc, err := gate.NewService(gate.ServiceConfig{
+		Store:      e.store,
+		Engine:     cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")),
+		Producers:  nil,
+		Units:      swUnits{collections: nil, labels: nil},
+		Subjects:   swSubjects{},
+		Fences:     nilRefusalFences{},
+		KindReader: fixedKind("production"),
+		IsDev:      principalpkg.IsDevSubject,
+		BreakGlass: nil,
+		Now:        nil,
+		Log:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.GuardStateWrite(t.Context(), swWrite(t, "runner-apply", "web", gate.OperationApply))
+	if err == nil {
+		t.Fatal("GuardStateWrite() = nil, want the error of the fence source")
+	}
+
+	if refused, ok := errors.AsType[*gate.RefusalError](err); !ok || refused != nil {
+		t.Fatalf("GuardStateWrite() = %v, want the typed-nil refusal unchanged in the chain", err)
 	}
 }
 

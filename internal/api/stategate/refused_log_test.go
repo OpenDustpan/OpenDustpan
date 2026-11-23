@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +89,107 @@ func TestRefusedLogLineNamesTheJob(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRefusedLogLineCarriesTheGateMessages checks that the "state write
+// refused" log line has the gate messages of the refusal, with each control
+// and format character removed and each message cut to 256 runes. The
+// messages are hostile, as if the gate and the log handler did not clean
+// them.
+func TestRefusedLogLineCarriesTheGateMessages(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("é", 300)
+
+	// The right-to-left override, the line separator and the paragraph
+	// separator, built from their code points.
+	formatted := "Fro" + string(rune(0x202e)) + "zen." + string(rune(0x2028)) + string(rune(0x2029))
+
+	cases := []struct {
+		name     string
+		messages []string
+		want     []string
+	}{
+		{name: "plain message", messages: []string{"Frozen."}, want: []string{"Frozen."}},
+		{
+			name:     "CR and LF",
+			messages: []string{"Frozen.\r\nlevel=INFO msg=\"state write allowed\""},
+			want:     []string{"Frozen.level=INFO msg=\"state write allowed\""},
+		},
+		{
+			name:     "ANSI escape and other control characters",
+			messages: []string{"\x1b[2J\x1b[31mFrozen.\x1b[0m\x00\t\x7f" + string(rune(0x85))},
+			want:     []string{"[2J[31mFrozen.[0m"},
+		},
+		{
+			name:     "format and line separator characters",
+			messages: []string{formatted},
+			want:     []string{"Frozen."},
+		},
+		{
+			name:     "long message",
+			messages: []string{long},
+			want:     []string{strings.Repeat("é", 256) + "..."},
+		},
+		{
+			name:     "two messages",
+			messages: []string{"Frozen.\n", "\x1bOn call."},
+			want:     []string{"Frozen.", "On call."},
+		},
+		{name: "no message", messages: nil, want: []string{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+
+			guard := &fakeGuard{
+				mu: sync.Mutex{}, decision: decision("", ""), got: nil,
+				err: &gate.RefusalError{Err: gate.ErrDenied, Record: "rec-1", Messages: tc.messages, Job: nil},
+			}
+
+			a, err := stategate.New(guard, slog.New(slog.NewJSONHandler(&buf, nil)))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			rec := &recorder{mu: sync.Mutex{}, reasons: nil}
+
+			person := principal(identity.CredentialAccessToken, "")
+			out := a.Admit(t.Context(), write(t, gate.OperationLock, person), rec.record)
+			checkRefused(t, out, rec, "gate.denied")
+
+			if got := refusedMessages(t, buf.String()); !slices.Equal(got, tc.want) {
+				t.Fatalf("messages = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// refusedMessages returns the messages field of the one "state write
+// refused" line of the JSON log text.
+func refusedMessages(t *testing.T, text string) []string {
+	t.Helper()
+
+	raw, ok := refusedLine(t, text)["messages"].([]any)
+	if !ok {
+		t.Fatalf("log line has no messages list: %q", text)
+	}
+
+	got := make([]string, 0, len(raw))
+
+	for _, m := range raw {
+		s, isString := m.(string)
+		if !isString {
+			t.Fatalf("message %v is not a string", m)
+		}
+
+		got = append(got, s)
+	}
+
+	return got
 }
 
 // refusedLine returns the fields of the one "state write refused" line of
