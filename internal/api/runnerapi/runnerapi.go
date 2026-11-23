@@ -250,7 +250,7 @@ func (cfg Config) denials() (*denylimit.Limiter, *refusal.Recorder, error) {
 
 	r, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
 	if err != nil {
-		return nil, nil, fmt.Errorf("refusal recorder: %w", err)
+		return nil, nil, fmt.Errorf("%w: refusal recorder: %w", ErrMissingDependency, err)
 	}
 
 	return limiter, r.WithLimiter(limiter).WithSurface("runner"), nil
@@ -260,6 +260,15 @@ func (cfg Config) denials() (*denylimit.Limiter, *refusal.Recorder, error) {
 // Operations, Recorder, Jobs, JobTokens, Starters, Sessions, Now and
 // PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
+	// The refusal recorder is built first, so that its own check of the audit
+	// store refuses a nil store and no log refusal goes unrecorded.
+	limiter, refusals, err := cfg.denials()
+	if err != nil {
+		return nil, err
+	}
+
+	// Defense in depth: the refusal recorder refuses a nil audit store too;
+	// validate checks it again so that the check does not rely on that package.
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -281,11 +290,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 	interval := cfg.PollInterval
 	if interval <= 0 {
 		interval = defaultPollInterval
-	}
-
-	limiter, refusals, err := cfg.denials()
-	if err != nil {
-		return nil, err
 	}
 
 	h := &Handler{

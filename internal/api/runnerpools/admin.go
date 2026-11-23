@@ -177,29 +177,11 @@ func change(key, value string) audit.Change {
 	return audit.Change{Key: key, Old: nil, New: value, Layer: "", TakesEffect: ""}
 }
 
-// refuseSweepPurpose returns a field error for the sweep purpose. A namespace
-// pool runs jobs only: a sweep runs on the installation pool. The store keeps
-// the capability for that pool, so this check is a layer of the management
-// API and does not rely on the store.
-func refuseSweepPurpose(p runner.Purpose) error {
-	if p == runner.PurposeSweeps {
-		return runner.NewFieldError("purpose", "use jobs. A namespace pool cannot run sweeps.")
-	}
-
-	return nil
-}
-
 func (h *Handler) createPool(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
 
 	var req poolRequest
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeAuthorized, err)
-
-		return
-	}
-
-	if err := refuseSweepPurpose(runner.Purpose(req.Purpose)); err != nil {
 		h.writeError(ctx, w, ScopeAuthorized, err)
 
 		return
@@ -356,16 +338,6 @@ func (h *Handler) updatePool(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	next, changes := patch.apply(&old, h.now())
-
-	// A namespace pool never gets or keeps the sweep purpose, whatever its old
-	// purpose. Defense in depth: the store refuses a change of the purpose as
-	// immutable too; this check stays so that it does not rely on that rule.
-	if refused := refuseSweepPurpose(next.Purpose); refused != nil {
-		h.writeError(ctx, w, ScopeAuthorized, refused)
-
-		return
-	}
-
 	e := h.manageEntry(r, c, runner.EventPoolChanged, old.ID, changes...)
 
 	stored, err := h.pools.UpdatePool(ctx, next, fence, []audit.Entry{e})

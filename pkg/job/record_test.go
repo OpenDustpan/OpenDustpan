@@ -467,6 +467,81 @@ func TestPlanChunkCaps(t *testing.T) {
 	}
 }
 
+// TestPlanChunkCapsFailsClosedOnAClosedLog proves that LogCaps.PlanChunk reads
+// the log of the step again before it counts the caps, and refuses the chunk
+// when that read fails: here the lookup closes the log after the plan without
+// caps accepted the chunk.
+func TestPlanChunkCapsFailsClosedOnAClosedLog(t *testing.T) {
+	t.Parallel()
+
+	j := recordJob()
+	withSteps(openRec(token, openLog(1)))(j)
+
+	lookup := func(string, int) (job.ChunkRow, bool, error) {
+		j.Phases[0].Steps[0].Log.ClosedAt = epoch()
+
+		var none job.ChunkRow
+
+		return none, false, nil
+	}
+
+	caps := &job.LogCaps{ChunksPerStep: 100, BytesPerStep: 100, ChunksPerPhase: 100, BytesPerPhase: 100}
+	key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
+
+	got, err := caps.PlanChunk(j, key, chunkOf(1, "a"), nil, lookup)
+	if !errors.Is(err, job.ErrInvalid) || !strings.Contains(err.Error(), "is closed") {
+		t.Fatalf("PlanChunk = %+v, %v; want ErrInvalid for the closed log", got, err)
+	}
+
+	if got != (job.ChunkPlan{Version: "", CreateLog: false, Insert: false, Duplicate: false}) {
+		t.Fatalf("PlanChunk = %+v, want the zero plan", got)
+	}
+}
+
+// TestPlanChunkNamesTheRule proves that a chunk out of order and a chunk with
+// another hash name their rule in a ChunkError, and keep their sentinel.
+func TestPlanChunkNamesTheRule(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		log  *job.LogRef
+		c    job.ChunkReserve
+		rule job.ChunkRule
+		want error
+	}{
+		{"a first chunk that is not 0", nil, chunkOf(2, "a"), job.ChunkOutOfOrder, job.ErrInvalid},
+		{"a chunk after the next one", openLog(1), chunkOf(3, "a"), job.ChunkOutOfOrder, job.ErrInvalid},
+		{"a stored chunk with another hash", openLog(1), chunkOf(0, "z"), job.ChunkHashMismatch, job.ErrConflict},
+	}
+
+	lookup := func(_ string, seq int) (job.ChunkRow, bool, error) {
+		if seq != 0 {
+			var none job.ChunkRow
+
+			return none, false, nil
+		}
+
+		return job.ChunkRow{SHA256: sum("a"), Size: 1, Confirmed: true, BlobKey: ""}, true, nil
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := recordJob()
+			withSteps(openRec(token, tt.log))(j)
+
+			_, err := job.PlanChunk(j, job.StepKey{Phase: 0, Token: token, Name: stepRun}, tt.c, newLogRef(), lookup)
+
+			chunkErr, ok := errors.AsType[*job.ChunkError](err)
+			if !ok || chunkErr.Rule != tt.rule || !errors.Is(err, tt.want) {
+				t.Fatalf("PlanChunk = %v, want a ChunkError of the rule %s that is %v", err, tt.rule, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfirmChunkRecord(t *testing.T) {
 	t.Parallel()
 

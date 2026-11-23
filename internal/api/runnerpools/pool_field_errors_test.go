@@ -36,11 +36,6 @@ func TestPoolCreateNamesTheInvalidField(t *testing.T) {
 		{"purpose missing", map[string]any{"name": "prod"}, "purpose: use jobs or sweeps."},
 		{"purpose unknown", map[string]any{"name": "prod", "purpose": "scan"}, "purpose: use jobs or sweeps."},
 		{
-			"purpose sweeps on a namespace pool",
-			map[string]any{"name": "prod", "purpose": "sweeps"},
-			"purpose: use jobs. A namespace pool cannot run sweeps.",
-		},
-		{
 			"lease too short",
 			map[string]any{"name": "prod", "purpose": "jobs", "lease": 1000},
 			"lease: use 0, or 30000 to 600000 milliseconds.",

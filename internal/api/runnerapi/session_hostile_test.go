@@ -2,6 +2,7 @@ package runnerapi_test
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -84,7 +85,7 @@ func TestSessionHostileTakeoverDuringLogWrite(t *testing.T) {
 			l.expect(t, "chunk 1 after the takeover", l.upload(logPath(1), []byte("after")),
 				http.StatusConflict, protocol.ErrorClaimLost)
 
-			got := s.jobs.logChunks("init")
+			got := s.jobs.initChunks()
 			if len(got) != 1 || got[0] != "before" {
 				t.Fatalf("stored chunks = %v, want only chunk 0", got)
 			}
@@ -206,7 +207,7 @@ func TestLogCapRefusalIsAudited(t *testing.T) {
 			}
 
 			for i := range entries {
-				checkLogRefusal(t, s, &entries[i], bytesOf)
+				checkLogRefusal(t, s, &entries[i], "cap-step", bytesOf)
 			}
 		})
 	}
@@ -224,15 +225,16 @@ func refuseChunks(t *testing.T, l *launcher, n int, chunk string) {
 }
 
 // checkLogRefusal checks that e is a denial of the runner of s that names the
-// claim, the job and the step byte cap, and holds no byte of the chunk.
-func checkLogRefusal(t *testing.T, s *sessionEnv, e *audit.Entry, chunk string) {
+// reason, the claim and the job, and holds no byte of the chunk.
+func checkLogRefusal(t *testing.T, s *sessionEnv, e *audit.Entry, reason, chunk string) {
 	t.Helper()
 
 	if e.Outcome != audit.OutcomeDenied || e.Subject != s.runner.id || e.JobID == "" ||
+		!strings.Contains(e.Reason, "reason "+reason+";") ||
 		!strings.Contains(e.Reason, "claim "+s.work.Operation+" ") ||
-		!strings.Contains(e.Reason, "job "+e.JobID+";") ||
-		!strings.Contains(e.Reason, "the cap "+string(job.LogCapStepBytes)+" ") {
-		t.Errorf("entry = %+v, want a denial of the runner that names the claim, the job and the cap", e)
+		!strings.Contains(e.Reason, "job "+e.JobID+";") {
+		t.Errorf("entry = %+v, want a denial of the runner that names the reason %s, the claim and the job",
+			e, reason)
 	}
 
 	if strings.Contains(fmt.Sprintf("%+v", *e), chunk) {
@@ -240,84 +242,144 @@ func checkLogRefusal(t *testing.T, s *sessionEnv, e *audit.Entry, chunk string) 
 	}
 }
 
-// TestLogRefusalKeepsItsMessage proves that only a cap of the log gets the cap
-// message and an audit entry: a chunk out of order keeps the message of the
-// sequence rule, and a chunk with another hash for a stored number keeps the
-// conflict. Neither writes a refusal entry.
+// TestLogRefusalKeepsItsMessage proves that each log refusal keeps its own
+// answer and writes one audit entry with its reason: a chunk out of order
+// answers 400 invalid with the message of the order, and a chunk with another
+// hash for a stored number answers 409 conflict with the message of the hash.
+// The server keeps no byte of a refused chunk.
 func TestLogRefusalKeepsItsMessage(t *testing.T) {
 	t.Parallel()
 
-	for _, b := range wiringBackends() {
-		t.Run(b.name, func(t *testing.T) {
-			t.Parallel()
-
-			s, log := newAuditedSessionEnv(t, b, nil)
-			l := s.launch()
-
-			status, body := l.do(l.upload(logPath(2), []byte("x")))
-
-			var e protocol.Error
-
-			decode(t, body, &e)
-
-			if status != http.StatusBadRequest || e.Code != protocol.ErrorInvalid ||
-				strings.Contains(e.Message, "cap") {
-				t.Fatalf("a chunk out of order = %d %s, want 400 %s without the cap message", status, body,
-					protocol.ErrorInvalid)
-			}
-
-			l.expect(t, "chunk 0", l.upload(logPath(0), []byte("first")), http.StatusNoContent, "")
-
-			status, body = l.do(l.upload(logPath(0), []byte("other")))
-			if status != http.StatusConflict || errorCode(t, body) != protocol.ErrorConflict {
-				t.Fatalf("chunk 0 with another hash = %d %s, want 409 %s", status, body, protocol.ErrorConflict)
-			}
-
-			if got := log.logRefusals(); len(got) != 0 {
-				t.Fatalf("refusals that are not caps wrote cap entries: %+v", got)
-			}
-		})
+	tests := []logRefusalCase{
+		{
+			"a chunk out of order", func(*testing.T, *launcher) {}, 2, http.StatusBadRequest, protocol.ErrorInvalid,
+			"chunk 2 of step init is not the next chunk of the log", "out-of-order",
+		},
+		{
+			"chunk 0 with another hash", func(t *testing.T, l *launcher) {
+				t.Helper()
+				l.expect(t, "chunk 0", l.upload(logPath(0), []byte("first")), http.StatusNoContent, "")
+			}, 0, http.StatusConflict, protocol.ErrorConflict,
+			"chunk 0 of step init has another hash", "hash-mismatch",
+		},
 	}
+
+	for _, b := range wiringBackends() {
+		for _, tc := range tests {
+			t.Run(b.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				checkLogRefusalCase(t, b, &tc)
+			})
+		}
+	}
+}
+
+// logRefusalCase is one refused log chunk: the calls before it, its number,
+// and the answer and the audit reason that it must get.
+type logRefusalCase struct {
+	name    string
+	prepare func(t *testing.T, l *launcher)
+	seq     int
+	status  int
+	code    string
+	message string
+	reason  string
+}
+
+// checkLogRefusalCase sends the refused chunk of tc on a new session, and
+// checks its answer, that no byte of it is stored and that one audit entry
+// names its reason.
+func checkLogRefusalCase(t *testing.T, b backend, tc *logRefusalCase) {
+	t.Helper()
+
+	const refused = "refused-chunk-bytes"
+
+	s, log := newAuditedSessionEnv(t, b, nil)
+	l := s.launch()
+	tc.prepare(t, l)
+
+	before := s.jobs.initChunks()
+
+	status, body := l.do(l.upload(logPath(tc.seq), []byte(refused)))
+
+	var e protocol.Error
+
+	decode(t, body, &e)
+
+	if status != tc.status || e.Code != tc.code || e.Message != tc.message {
+		t.Fatalf("%s = %d %s, want %d %s %q", tc.name, status, body, tc.status, tc.code, tc.message)
+	}
+
+	if got := s.jobs.initChunks(); !maps.Equal(got, before) ||
+		slices.Contains(slices.Collect(maps.Values(got)), refused) {
+		t.Fatalf("stored chunks = %v, want %v and no byte of the refused chunk", got, before)
+	}
+
+	entries := log.logRefusals()
+	if len(entries) != 1 {
+		t.Fatalf("entries of %s = %+v, want 1", tc.name, entries)
+	}
+
+	checkLogRefusal(t, s, &entries[0], tc.reason, refused)
 }
 
 // TestSessionHostilePlanCommitOtherParts proves the rule of a repeated plan
 // commit at the handler: the same parts again answer 204, and other parts
-// after a commit answer conflict and leave the stored plan. The plan recorder
-// here is a double. The rule of the real recorder on each SQL store, that the
-// first plan stays, is the conformance case "plan parts: a second commit with
-// the same parts is the same plan, with other parts ErrConflict" (testCommitTwice
-// in pkg/job/jobtest), which TestRecorderConformance runs on SQLite and
-// PostgreSQL.
+// after a commit answer conflict and leave the stored plan. It runs the flow
+// two times: with a double of the plan recorder, and with the real recorder
+// over the SQLite store, the real job claimer and a real dispatched plan job.
+// The real case reads the plan of the phase back from the store, and checks
+// that the conflict comes from the recorder's check of a phase that has a
+// plan with other parts.
 func TestSessionHostilePlanCommitOtherParts(t *testing.T) {
 	t.Parallel()
 
+	want := []job.PlanCommitPart{
+		{Kind: job.OutputPlanDisplay, Size: int64(len(planDisplayText)), SHA256: textHash(planDisplayText)},
+		{Kind: job.OutputPlanApply, Size: int64(len(planApplyText)), SHA256: textHash(planApplyText)},
+	}
+
+	commitTwiceThenOther := func(t *testing.T, l *launcher) {
+		t.Helper()
+
+		l.expect(t, "upload display", l.upload(planUploadPath("plan-display"), []byte(planDisplayText)), 204, "")
+		l.expect(t, "upload apply", l.upload(planUploadPath("plan-apply"), []byte(planApplyText)), 204, "")
+		l.expect(t, "commit", l.post(protocol.PathSessionPlanCommit, commitOf()), 204, "")
+		l.expect(t, "same commit", l.post(protocol.PathSessionPlanCommit, commitOf()), 204, "")
+
+		other := commitOf()
+		other.Parts[0].SHA256 = textHash("another plan")
+
+		l.expect(t, "other parts after the commit", l.post(protocol.PathSessionPlanCommit, other),
+			http.StatusConflict, protocol.ErrorConflict)
+	}
+
 	for _, b := range wiringBackends() {
-		t.Run(b.name, func(t *testing.T) {
+		t.Run(b.name+"/double", func(t *testing.T) {
 			t.Parallel()
 
 			s := newPlanEnv(t, b, 0, nil)
-			l := s.launch()
+			commitTwiceThenOther(t, s.launch())
 
-			l.expect(t, "upload display", l.upload(planUploadPath("plan-display"), []byte(planDisplayText)), 204, "")
-			l.expect(t, "upload apply", l.upload(planUploadPath("plan-apply"), []byte(planApplyText)), 204, "")
-			l.expect(t, "commit", l.post(protocol.PathSessionPlanCommit, commitOf()), 204, "")
-			l.expect(t, "same commit", l.post(protocol.PathSessionPlanCommit, commitOf()), 204, "")
-
-			other := commitOf()
-			other.Parts[0].SHA256 = textHash("another plan")
-
-			l.expect(t, "other parts after the commit", l.post(protocol.PathSessionPlanCommit, other),
-				http.StatusConflict, protocol.ErrorConflict)
-
-			want := []job.PlanCommitPart{
-				{Kind: job.OutputPlanDisplay, Size: int64(len(planDisplayText)), SHA256: textHash(planDisplayText)},
-				{Kind: job.OutputPlanApply, Size: int64(len(planApplyText)), SHA256: textHash(planApplyText)},
-			}
 			if got := s.plans.storedParts(); !slices.Equal(got, want) {
 				t.Fatalf("stored plan parts = %+v, want the first commit", got)
 			}
 		})
 	}
+
+	t.Run("sqlite/real recorder", func(t *testing.T) {
+		t.Parallel()
+
+		s := newDurablePlanEnv(t)
+		commitTwiceThenOther(t, s.launch())
+
+		checkRealRecommitConflict(t, s)
+
+		if got := s.storedPlanParts(t); !slices.Equal(got, want) {
+			t.Fatalf("stored plan parts = %+v, want the first commit", got)
+		}
+	})
 }
 
 // requireSweepPool checks that the claim of s is in a namespace pool with the

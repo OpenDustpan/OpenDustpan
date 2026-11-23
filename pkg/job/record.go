@@ -406,12 +406,18 @@ func (c ChunkReserve) valid() bool {
 func planNextChunk(log *LogRef, step string, c *ChunkReserve, row ChunkRow, ok bool) (ChunkPlan, error) {
 	switch {
 	case ok && row.SHA256 != c.SHA256:
-		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q has another hash", ErrConflict, c.Seq, step)
+		return ChunkPlan{}, &ChunkError{
+			Rule: ChunkHashMismatch,
+			err:  fmt.Errorf("%w: chunk %d of step %q has another hash", ErrConflict, c.Seq, step),
+		}
 	case ok:
 		return ChunkPlan{Version: log.ID, CreateLog: false, Insert: false, Duplicate: row.Confirmed}, nil
 	case c.Seq != log.Chunks:
-		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q is not the next one, which is %d", ErrInvalid, c.Seq,
-			step, log.Chunks)
+		return ChunkPlan{}, &ChunkError{
+			Rule: ChunkOutOfOrder,
+			err: fmt.Errorf("%w: chunk %d of step %q is not the next one, which is %d", ErrInvalid, c.Seq,
+				step, log.Chunks),
+		}
 	default:
 		return ChunkPlan{Version: log.ID, CreateLog: false, Insert: true, Duplicate: false}, nil
 	}
@@ -444,7 +450,10 @@ func openLogOf(j *Job, k StepKey) (*LogRef, error) {
 func planFirstChunk(step string, seq int, newLog *LogRef) (ChunkPlan, error) {
 	switch {
 	case seq != 0:
-		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q comes before chunk 0", ErrInvalid, seq, step)
+		return ChunkPlan{}, &ChunkError{
+			Rule: ChunkOutOfOrder,
+			err:  fmt.Errorf("%w: chunk %d of step %q comes before chunk 0", ErrInvalid, seq, step),
+		}
 	case newLog == nil || newLog.ID == "" || newLog.Version != 1 || newLog.Chunks != 0 || !newLog.ClosedAt.IsZero():
 		return ChunkPlan{}, fmt.Errorf("%w: chunk 0 of step %q needs a new open log version", ErrInvalid, step)
 	default:

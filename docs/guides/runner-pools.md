@@ -32,7 +32,7 @@ The message never repeats the value that you sent. These are the valid values:
 | Field | Valid values |
 | --- | --- |
 | `name` | 1 to 63 lowercase letters, digits and `-`. It starts and ends with a letter or a digit. |
-| `purpose` | `jobs`. The field is required. A namespace pool cannot have the `sweeps` purpose. |
+| `purpose` | `jobs` or `sweeps`. The field is required. |
 | `lease` | 0, or 30000 to 600000 milliseconds. Zero takes 90000. |
 | `concurrency` | 0, or 1 to 64. Zero takes 1. |
 | `isolation` | A list of `kubernetes`, `firecracker`, `gvisor` or `process`. |

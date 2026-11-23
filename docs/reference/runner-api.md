@@ -202,15 +202,18 @@ that ignores a cancel cannot keep its claim longer than this.
 
 A log chunk has a number from 0. If the launcher sends a chunk again with the same
 number and the same body, the server stores it once. A known number with another body
-gets `conflict`. The header `Dustpan-Content-SHA256` has the SHA-256 of the body
+gets `conflict` with the message "chunk <n> of step <step> has another hash". A
+new chunk that is not the next number gets `invalid`. The header `Dustpan-Content-SHA256` has the SHA-256 of the body
 in hex, and the proof signs that value. The server compares it with the hash of
 the bytes that it received before it stores any of them, and answers
 `bad-proof` for another body. A step has at most 20,000 chunks and 256 MiB.
 All the steps of a phase have at most 100,000 chunks and 1 GiB. A new chunk
-that passes one of these caps gets `invalid`, and the server stores none of its
-bytes. The server writes an audit entry with the action `runner.log.refused` in
-the namespace of the pool. The entry names the claim, the job, the step and the
-cap, and never holds the bytes of the chunk. For one runner, the audit log
+that passes one of these caps gets `invalid`, and the message names the cap. The
+server stores none of the bytes of a refused chunk. For each of these refusals,
+the server writes an audit entry with the action `runner.log.refused` in the
+namespace of the pool. The entry names the reason (`cap-step`, `cap-phase`,
+`out-of-order` or `hash-mismatch`), the claim, the job and the step, and never
+holds the bytes of the chunk. For one runner, the audit log
 keeps the first refusal of each window and counts the others in the next entry.
 
 The end of a step names the number of chunks and the SHA-256 of the whole log.

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -379,6 +380,24 @@ func TestNewHandlerRefusesARecorderWithoutAJobReader(t *testing.T) {
 				t.Fatalf("NewHandler error = %v, want ErrMissingDependency", err)
 			}
 		})
+	}
+}
+
+// TestNewHandlerRefusesNoAuditStore proves the check of the refusal recorder in
+// NewHandler: a server with no audit store does not start, and the error names
+// the refusal recorder, which has nowhere to write the log refusals.
+func TestNewHandlerRefusesNoAuditStore(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := configFor(t, wiringBackends()[0].open(t), serveOptions{
+		now: time.Now, authz: identity.AdminOnly{}, claimer: nil, recorder: nil,
+		jobs: nil, logger: nil, mutate: nil,
+	})
+	cfg.Audit = nil
+
+	h, err := runnerapi.NewHandler(cfg)
+	if h != nil || !errors.Is(err, runnerapi.ErrMissingDependency) || !errors.Is(err, refusal.ErrNoStore) {
+		t.Fatalf("NewHandler = %v, %v; want no handler and ErrMissingDependency of the refusal recorder", h, err)
 	}
 }
 

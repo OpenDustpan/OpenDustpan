@@ -838,17 +838,29 @@ func checkCapStoresNothing(t *testing.T, b backend, seeds []logSeedOf, seq int, 
 	l := s.launch()
 
 	status, body := l.do(l.upload(logPath(seq), []byte("x")))
-	if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
-		t.Fatalf("a chunk above the cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
+
+	var e protocol.Error
+
+	decode(t, body, &e)
+
+	if status != http.StatusBadRequest || e.Code != protocol.ErrorInvalid ||
+		!strings.Contains(e.Message, "the log cap "+string(want)+" ") {
+		t.Fatalf("a chunk above the cap = %d %s, want 400 %s that names the cap %s", status, body,
+			protocol.ErrorInvalid, want)
 	}
 
-	if got := s.jobs.logChunks("init"); len(got) != 0 {
+	if got := s.jobs.initChunks(); len(got) != 0 {
 		t.Fatalf("a refused chunk stored %d chunks", len(got))
 	}
 
+	reason := "cap-phase"
+	if want == job.LogCapStepChunks || want == job.LogCapStepBytes {
+		reason = "cap-step"
+	}
+
 	entries := log.logRefusals()
-	if len(entries) != 1 || !strings.Contains(entries[0].Reason, "the cap "+string(want)+" ") {
-		t.Fatalf("refusal entries = %+v, want one that names the cap %s", entries, want)
+	if len(entries) != 1 || !strings.Contains(entries[0].Reason, "reason "+reason+";") {
+		t.Fatalf("refusal entries = %+v, want one with the reason %s", entries, reason)
 	}
 }
 
@@ -869,7 +881,7 @@ func TestLogStepChunkCapStoresNothing(t *testing.T) {
 				t.Fatalf("a chunk at the step cap = %d %s, want 400 %s", status, body, protocol.ErrorInvalid)
 			}
 
-			if got := s.jobs.logChunks("init"); len(got) != 0 {
+			if got := s.jobs.initChunks(); len(got) != 0 {
 				t.Fatalf("a refused chunk stored %d chunks", len(got))
 			}
 		})
@@ -1046,9 +1058,84 @@ func TestLogChunkHashIsChecked(t *testing.T) {
 	}
 }
 
+// sendProved sends the call c of l with a session proof that it signs here, and
+// returns the value of the proof header that it sent and the status.
+func sendProved(t *testing.T, l *launcher, c lcall) (string, int) {
+	t.Helper()
+
+	proof := signedProof(t, &c)
+
+	req, err := http.NewRequestWithContext(t.Context(), c.method, l.e.server.URL+c.path, bytes.NewReader(c.body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	req.Header.Set(protocol.HeaderRelease, c.release)
+	req.Header.Set(protocol.HeaderProof, proof)
+
+	if c.content != nil {
+		req.Header.Set(protocol.HeaderContentSHA256, hex.EncodeToString(sum(c.content)))
+	}
+
+	status, _ := l.e.send(req)
+
+	return proof, status
+}
+
+// proofSecrets returns the secrets of a proof header value: the whole value and
+// its signature.
+func proofSecrets(proof string) []string {
+	_, sig, ok := strings.Cut(proof, "sig=")
+	if !ok || sig == "" {
+		return []string{proof}
+	}
+
+	return []string{proof, sig}
+}
+
+// writeSecrets sends a log chunk, a tampered log chunk and three finishes with
+// the chunk and the reason, and returns the secrets of the proofs that it sent.
+func writeSecrets(t *testing.T, l *launcher, chunk, reason string) []string {
+	t.Helper()
+
+	proof, status := sendProved(t, l, l.upload(logPath(0), []byte(chunk)))
+	if status != http.StatusNoContent {
+		t.Fatalf("chunk 0 = %d, want 204: the proof must be valid", status)
+	}
+
+	secrets := proofSecrets(proof)
+
+	tampered := l.upload(logPath(1), []byte(chunk))
+	tampered.body = []byte("tampered " + chunk)
+	l.do(tampered)
+
+	// A finish that is not valid, a finish, and a second finish.
+	finishes := []struct {
+		message string
+		status  int
+	}{
+		{"bad\x00" + reason, http.StatusBadRequest},
+		{reason, http.StatusNoContent},
+		{reason, http.StatusConflict},
+	}
+
+	for _, f := range finishes {
+		proof, status = sendProved(t, l, l.post(protocol.PathSessionFinish,
+			protocol.Finish{Succeeded: false, Message: f.message}))
+		if status != f.status {
+			t.Fatalf("finish %q = %d, want %d", f.message, status, f.status)
+		}
+
+		secrets = append(secrets, proofSecrets(proof)...)
+	}
+
+	return secrets
+}
+
 // TestSecretsNeverReachTheLog proves that the log the server writes holds none
-// of the secrets that pass through a session: the handoff token, the reason of
-// a finish, and the content of a log chunk, also when the request fails.
+// of the secrets that pass through a session: the handoff token, the session
+// proof header values, the reason of a finish, and the content of a log chunk,
+// also when the request fails.
 func TestSecretsNeverReachTheLog(t *testing.T) {
 	t.Parallel()
 
@@ -1082,21 +1169,10 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 
 			l := &launcher{e: s, id: opened.Session, pub: x.pub, priv: x.priv}
 
-			secrets := []string{token, chunkLine, reasonText, hex.EncodeToString(x.priv.Seed())}
-
-			// Valid, failed and refused writes that carry the secrets.
-			l.do(l.upload(logPath(0), []byte(chunkLine)))
-
-			tampered := l.upload(logPath(1), []byte(chunkLine))
-			tampered.body = []byte("tampered " + chunkLine)
-			l.do(tampered)
-
-			l.do(l.post(protocol.PathSessionFinish,
-				protocol.Finish{Succeeded: false, Message: "bad\x00" + reasonText}))
-			l.do(l.post(protocol.PathSessionFinish,
-				protocol.Finish{Succeeded: false, Message: reasonText}))
-			l.do(l.post(protocol.PathSessionFinish,
-				protocol.Finish{Succeeded: false, Message: reasonText}))
+			// Valid, failed and refused writes that carry the secrets. Each
+			// session proof header value is a secret too.
+			secrets := append([]string{token, chunkLine, reasonText, hex.EncodeToString(x.priv.Seed())},
+				writeSecrets(t, l, chunkLine, reasonText)...)
 
 			logged := s.logs.String()
 			for _, secret := range secrets {

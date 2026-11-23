@@ -54,6 +54,34 @@ func (*LogCapError) Is(target error) bool {
 	return target == ErrInvalid
 }
 
+// ChunkRule names a rule of the order and the content of the chunks of a log.
+type ChunkRule string
+
+// The rules of the chunks of a log.
+const (
+	// ChunkOutOfOrder refuses a new chunk that is not the next one.
+	ChunkOutOfOrder ChunkRule = "out-of-order"
+	// ChunkHashMismatch refuses a chunk with another hash for a stored number.
+	ChunkHashMismatch ChunkRule = "hash-mismatch"
+)
+
+// ChunkError is the refusal of a chunk by the rule Rule. errors.Is reports
+// ChunkOutOfOrder as ErrInvalid and ChunkHashMismatch as ErrConflict.
+type ChunkError struct {
+	Rule ChunkRule
+	err  error
+}
+
+// Error implements error.
+func (e *ChunkError) Error() string {
+	return e.err.Error()
+}
+
+// Unwrap returns the error of the rule, which wraps ErrInvalid or ErrConflict.
+func (e *ChunkError) Unwrap() error {
+	return e.err
+}
+
 // PlanChunk is the function PlanChunk with the caps of the log of a session. A
 // new chunk that passes a cap is a LogCapError, and a repeated chunk counts no
 // second time. Nil caps set no cap: the call is the function PlanChunk. The

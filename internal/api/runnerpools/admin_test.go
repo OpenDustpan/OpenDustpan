@@ -380,7 +380,7 @@ func TestPoolUpdate(t *testing.T) {
 		body any
 		want int
 	}{
-		{"the sweep purpose on a namespace pool", map[string]any{"purpose": "sweeps"}, http.StatusBadRequest},
+		{"a purpose that differs", map[string]any{"purpose": "sweeps"}, http.StatusConflict},
 		{"an unknown field", map[string]any{"flavor": "red"}, http.StatusBadRequest},
 		{"a name that is not valid", map[string]any{"name": "Prod!"}, http.StatusBadRequest},
 	}
@@ -402,58 +402,6 @@ func TestPoolUpdate(t *testing.T) {
 
 	if !e.auditActions()[string(runner.EventPoolChanged)] {
 		t.Errorf("audit log has no entry for %s", runner.EventPoolChanged)
-	}
-}
-
-// TestPoolUpdateRefusesTheSweepPurpose proves that an update never leaves a
-// namespace pool with the sweep purpose, whatever its old purpose: a jobs pool
-// that asks for sweeps, and a pool that the store made with the sweep purpose
-// (a restored row), are both refused with runner.invalid and do not change.
-func TestPoolUpdateRefusesTheSweepPurpose(t *testing.T) {
-	t.Parallel()
-
-	e := newEnv(t)
-	jobs := e.createPool()
-
-	now := e.clock.now()
-
-	// The other fields keep their zero value, so the pool takes the defaults.
-	var seeded runner.Pool
-
-	seeded.Namespace, seeded.Name, seeded.Purpose = "acme", "scan", runner.PurposeSweeps
-	seeded.CreatedAt, seeded.UpdatedAt = now, now
-
-	sweeps, err := e.store.runners.CreatePool(t.Context(), seeded, e.fence, nil)
-	if err != nil {
-		t.Fatalf("create the sweep pool in the store: %v", err)
-	}
-
-	tests := []struct {
-		name string
-		pool string
-		body map[string]any
-		want runner.Purpose
-	}{
-		{"a jobs pool that asks for sweeps", jobs, map[string]any{"purpose": "sweeps"}, runner.PurposeJobs},
-		{"a sweep pool that keeps sweeps", sweeps.ID, map[string]any{"purpose": "sweeps"}, runner.PurposeSweeps},
-		{"a sweep pool with a new name only", sweeps.ID, map[string]any{"name": "renamed"}, runner.PurposeSweeps},
-	}
-
-	for _, tc := range tests {
-		status, body := e.admin(http.MethodPatch, "/api/dustpan/v1/namespaces/acme/runner-pools/"+tc.pool, tc.body)
-		if status != http.StatusBadRequest || !strings.Contains(string(body), `"errorCode":"runner.invalid"`) ||
-			!strings.Contains(string(body), "A namespace pool cannot run sweeps.") {
-			t.Errorf("%s = %d %s, want 400 runner.invalid with the purpose rule", tc.name, status, body)
-		}
-
-		got, getErr := e.store.runners.Pool(t.Context(), tc.pool)
-		if getErr != nil {
-			t.Fatalf("%s: read the pool: %v", tc.name, getErr)
-		}
-
-		if got.Purpose != tc.want || got.Name == "renamed" {
-			t.Errorf("%s: pool = %+v, want it unchanged with the purpose %s", tc.name, got, tc.want)
-		}
 	}
 }
 

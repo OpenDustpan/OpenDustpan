@@ -333,13 +333,13 @@ func (f *sessionJobs) seedLog(step string, chunks int, size int64) {
 	f.seed[step] = logSeed{chunks: chunks, bytes: size}
 }
 
-// logChunks returns the chunks that the fake stored for the step.
-func (f *sessionJobs) logChunks(step string) map[int]string {
+// initChunks returns the chunks that the fake stored for the step init.
+func (f *sessionJobs) initChunks() map[int]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	out := make(map[int]string, len(f.logs[step]))
-	for seq, data := range f.logs[step] {
+	out := make(map[int]string, len(f.logs["init"]))
+	for seq, data := range f.logs["init"] {
 		out[seq] = string(data)
 	}
 
