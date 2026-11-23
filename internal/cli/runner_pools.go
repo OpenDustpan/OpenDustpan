@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -35,6 +36,7 @@ const runnerPoolsCommand = "runner pools list"
 var (
 	errAnswerDuplicateKey = errors.New("the server answer has a duplicate key")
 	errAnswerKeyNotText   = errors.New("the server answer has a key that is not text")
+	errAnswerUnknownKey   = errors.New("the server answer has an unknown top-level key")
 )
 
 // poolEntry is one pool as the management API answers it. The command reads
@@ -198,9 +200,10 @@ func validatePools(raw []byte, namespace string) ([]poolLine, error) {
 	}
 
 	// Defense in depth: json.Unmarshal keeps the last value of a duplicate
-	// key, but --output json prints the raw answer with each value. This
-	// check stays so that the printed answer cannot hold a pools list that
-	// the field checks did not see. It does not rely on the server.
+	// key and matches a key without regard to case, but --output json prints
+	// the raw answer with each value. This check stays so that the printed
+	// answer cannot hold a pools list or a pool field that the field checks
+	// did not see. It does not rely on the server.
 	if err := checkUniqueKeys(raw); err != nil {
 		return nil, fmt.Errorf("%w: %s: %w: run opendustpan %s again",
 			ErrInventoryRequest, runnerPoolsCommand, err, runnerPoolsCommand)
@@ -229,47 +232,138 @@ func checkRawText(raw []byte) error {
 	return nil
 }
 
-// checkUniqueKeys refuses a top-level JSON object that holds one key two
-// times. A value that is not an object has no keys: the shape check refuses
-// it.
+// answerTopKey is the only key of the top-level answer object, in its exact
+// case.
+const answerTopKey = "pools"
+
+// keyFrame is one open object or array of the answer during the key check.
+type keyFrame struct {
+	object  bool
+	wantKey bool
+	// keys maps the case-folded form of each key of the object to the key.
+	keys map[string]string
+}
+
+// checkUniqueKeys refuses an answer that holds one key two times in one
+// object, at any depth. It compares the keys with strings.EqualFold, because
+// encoding/json matches a field name without regard to case. It also refuses
+// a top-level key other than "pools" in its exact case. A top-level value
+// that is not an object has no keys: the shape check refuses it.
 func checkUniqueKeys(raw []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 
-	tok, err := dec.Token()
-	if err != nil {
-		return fmt.Errorf("decode server answer: %w", err)
+	var checker keyChecker
+
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+
+		if err != nil {
+			return fmt.Errorf("decode server answer: %w", err)
+		}
+
+		if err := checker.step(tok); err != nil {
+			return err
+		}
+	}
+}
+
+// keyChecker follows the tokens of the answer and checks each key. The stack
+// is a slice, not recursion, so a deep answer cannot use up the goroutine
+// stack.
+type keyChecker struct {
+	stack []*keyFrame
+}
+
+// step checks one token of the answer.
+func (c *keyChecker) step(tok json.Token) error {
+	if len(c.stack) > 0 {
+		if top := c.stack[len(c.stack)-1]; top.object && top.wantKey {
+			return c.key(top, tok)
+		}
 	}
 
-	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
-		return nil
-	}
-
-	seen := make(map[string]bool)
-
-	for dec.More() {
-		keyTok, keyErr := dec.Token()
-		if keyErr != nil {
-			return fmt.Errorf("decode server answer: %w", keyErr)
-		}
-
-		key, ok := keyTok.(string)
-		if !ok {
-			return errAnswerKeyNotText
-		}
-
-		if seen[key] {
-			return errAnswerDuplicateKey
-		}
-
-		seen[key] = true
-
-		var value json.RawMessage
-		if valueErr := dec.Decode(&value); valueErr != nil {
-			return fmt.Errorf("decode server answer: %w", valueErr)
-		}
+	switch tok {
+	case json.Delim('{'):
+		c.stack = append(c.stack, &keyFrame{object: true, wantKey: true, keys: make(map[string]string)})
+	case json.Delim('['):
+		c.stack = append(c.stack, &keyFrame{object: false, wantKey: false, keys: nil})
+	case json.Delim(']'), json.Delim('}'):
+		c.closeFrame()
+	default:
+		c.valueDone()
 	}
 
 	return nil
+}
+
+// key checks tok in the place of a key of the object frame top. It refuses a
+// key that matches an earlier key of the object with strings.EqualFold, and a
+// key of the top-level object other than answerTopKey.
+func (c *keyChecker) key(top *keyFrame, tok json.Token) error {
+	if tok == json.Delim('}') {
+		c.closeFrame()
+
+		return nil
+	}
+
+	key, ok := tok.(string)
+	if !ok {
+		return errAnswerKeyNotText
+	}
+
+	folded := foldKey(key)
+
+	if earlier, found := top.keys[folded]; found && strings.EqualFold(earlier, key) {
+		return errAnswerDuplicateKey
+	}
+
+	if len(c.stack) == 1 && key != answerTopKey {
+		return errAnswerUnknownKey
+	}
+
+	top.keys[folded] = key
+	top.wantKey = false
+
+	return nil
+}
+
+// closeFrame removes the innermost frame and marks it as a complete value of
+// its parent.
+func (c *keyChecker) closeFrame() {
+	if len(c.stack) == 0 {
+		return
+	}
+
+	c.stack = c.stack[:len(c.stack)-1]
+	c.valueDone()
+}
+
+// valueDone marks the end of one value. In an object, the next token is a
+// key or the end of the object.
+func (c *keyChecker) valueDone() {
+	if len(c.stack) > 0 && c.stack[len(c.stack)-1].object {
+		c.stack[len(c.stack)-1].wantKey = true
+	}
+}
+
+// foldKey answers one form for all the keys that strings.EqualFold matches:
+// each rune becomes the smallest rune of its simple case-folding orbit.
+func foldKey(key string) string {
+	var b strings.Builder
+
+	for _, r := range key {
+		smallest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			smallest = min(smallest, f)
+		}
+
+		b.WriteRune(smallest)
+	}
+
+	return b.String()
 }
 
 // printPools prints one line per pool.

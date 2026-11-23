@@ -83,7 +83,7 @@ func TestRunnerPoolsList(t *testing.T) {
 			status:      200,
 			answer:      `{"items":[]}`,
 			output:      "",
-			errorText:   "no pools list",
+			errorText:   "unknown top-level key",
 			extraOutput: "",
 		},
 		{
@@ -160,6 +160,8 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 			"run opendustpan runner pools list again"
 		otherNamespace = "runner pool of another namespace in the server answer: run opendustpan runner pools list"
 		duplicateKey   = "runner pools list: the server answer has a duplicate key: run opendustpan runner pools list again"
+		unknownKey     = "runner pools list: the server answer has an unknown top-level key: " +
+			"run opendustpan runner pools list again"
 	)
 
 	jobs := poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["kubernetes"]`)
@@ -167,7 +169,7 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 	// withNote puts text in a field that the command does not decode, so only
 	// the check of the raw answer sees it.
 	withNote := func(text string) string {
-		return `{"pools":[` + jobs + `],"note":"` + text + `"}`
+		return `{"pools":[` + strings.TrimSuffix(jobs, `}`) + `,"note":"` + text + `"}]}`
 	}
 
 	for name, tc := range map[string]struct {
@@ -224,6 +226,17 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["unknown"]`) + `],"pools":[]}`,
 			duplicateKey,
 		},
+		"pools and Pools keys": {`{"pools":[` + jobs + `],"Pools":[]}`, duplicateKey},
+		"duplicate namespace in a pool": {
+			`{"pools":[` + strings.Replace(jobs, `"namespace":"acme"`, `"namespace":"other","namespace":"acme"`, 1) + `]}`,
+			duplicateKey,
+		},
+		"duplicate name in a pool with another case": {
+			`{"pools":[` + strings.Replace(jobs, `"name":"jobs"`, `"name":"jobs","NAME":"sweeps"`, 1) + `]}`,
+			duplicateKey,
+		},
+		"unknown top-level key": {`{"pools":[` + jobs + `],"note":"text"}`, unknownKey},
+		"Pools key only":        {`{"Pools":[` + jobs + `]}`, unknownKey},
 	} {
 		for _, extra := range [][]string{{}, {"--output", "json"}} {
 			t.Run(name+" "+strings.Join(extra, " "), func(t *testing.T) {
