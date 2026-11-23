@@ -42,8 +42,8 @@ While a workspace lock from lockWorkspace is committed, the server SHALL keep th
 
 ### Requirement: writeStateVersion idempotent retry
 
-When the server receives a repeated writeStateVersion request with the same lock identity after a lost reply, the server SHALL return the committed result without creating a duplicate state version.
+When the server receives a repeated writeStateVersion request with the same upload token after a lost reply, the server SHALL return the committed result without creating a duplicate state version. The retry is answered by the workspace service. A finalize of a version that is not pending stays refused by the store with `ErrUploadDenied`.
 
 #### Scenario: writeStateVersion retry after lost reply makes no duplicate
-- **WHEN** the client retries a writeStateVersion request with the same lock identity after a lost reply
+- **WHEN** the client retries a writeStateVersion request with the same upload token after a lost reply
 - **THEN** the server returns the committed result without a second state version

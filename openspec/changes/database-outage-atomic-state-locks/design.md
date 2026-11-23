@@ -71,7 +71,7 @@ state_version_id
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Commit state version in one transaction. | Database stops after row insert but before commit. | Caller retries the same write after the database returns with the same lock identity. | Transaction rolls back; no current state version changes and no lock stays held. |
+| Commit state version in one transaction. | Database stops after row insert but before commit. | Caller retries the same write after the database returns with the same upload token. | Transaction rolls back; no current state version changes and no lock stays held. |
 | Acquire workspace lock in one transaction. | Database stops after lock insert but before commit. | Caller retries lock acquire after the database returns with the same lock identity. | Transaction rolls back; workspace has no held lock. |
-| Reply after commit. | Connection is lost after commit but before the reply. | Caller retries with the same lock identity; the server returns the committed result without a duplicate row. | Committed state stays current and committed lock stays held. |
+| Reply after commit. | Connection is lost after commit but before the reply. | Caller retries with the same upload token; the server returns the committed result without a duplicate row. | Committed state stays current and committed lock stays held. |
 | Release workspace lock in one transaction. | Lock release fails mid-outage. | Caller retries release with the same lock identity after the database returns, or fenced takeover runs after expiry. | Lock stays held until retry succeeds or takeover moves it. |
