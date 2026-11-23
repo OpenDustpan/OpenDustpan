@@ -60,9 +60,11 @@ const (
 	// gets later.
 	RoleTokenManager = "token-manager"
 
-	// RoleHousekeepingAgentReaper ends orphan agent runs in a namespace and
-	// sweeps expired agent reveals on the installation.
-	RoleHousekeepingAgentReaper = "housekeeping-agent-reaper"
+	// RoleHousekeepingAgentRevealSweep sweeps expired agent reveals on the
+	// installation. It holds no action inside a namespace.
+	RoleHousekeepingAgentRevealSweep = "housekeeping-agent-reveal-sweep"
+	// RoleHousekeepingAgentRunReaper ends orphan agent runs in a namespace.
+	RoleHousekeepingAgentRunReaper = "housekeeping-agent-run-reaper"
 	// RoleHousekeepingArtifactSweep sweeps expired job artifacts.
 	RoleHousekeepingArtifactSweep = "housekeeping-artifact-sweep"
 	// RoleHousekeepingBlobSweep sweeps expired blobs.
@@ -119,8 +121,12 @@ var builtInDescriptions = []struct {
 		"Makes, rotates and revokes the tokens of a service principal, and so acts as that principal.",
 	},
 	{
-		RoleHousekeepingAgentReaper,
-		"Ends orphan agent runs in a namespace and sweeps expired agent reveals.",
+		RoleHousekeepingAgentRevealSweep,
+		"Sweeps expired agent reveals.",
+	},
+	{
+		RoleHousekeepingAgentRunReaper,
+		"Ends orphan agent runs in a namespace.",
 	},
 	{
 		RoleHousekeepingArtifactSweep,
@@ -297,13 +303,8 @@ type housekeepingRole struct {
 // housekeeping role, in catalog order.
 func housekeepingRoleActions() []housekeepingRole {
 	return []housekeepingRole{
-		{
-			id: RoleHousekeepingAgentReaper,
-			actions: []identity.Action{
-				identity.ActionNamespaceManageAgentRuns,
-				identity.ActionServerSweepAgentReveals,
-			},
-		},
+		{id: RoleHousekeepingAgentRevealSweep, actions: []identity.Action{identity.ActionServerSweepAgentReveals}},
+		{id: RoleHousekeepingAgentRunReaper, actions: []identity.Action{identity.ActionNamespaceManageAgentRuns}},
 		{id: RoleHousekeepingArtifactSweep, actions: []identity.Action{identity.ActionServerSweepArtifacts}},
 		{id: RoleHousekeepingBlobSweep, actions: []identity.Action{identity.ActionServerSweepBlobs}},
 		{id: RoleHousekeepingCheckpointSweep, actions: []identity.Action{identity.ActionServerSweepCheckpoints}},

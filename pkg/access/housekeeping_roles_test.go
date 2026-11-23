@@ -2,10 +2,12 @@ package access_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // housekeepingRoleCase is one row of the table "Roles of the housekeeping
@@ -19,11 +21,12 @@ type housekeepingRoleCase struct {
 func housekeepingRoles() []housekeepingRoleCase {
 	return []housekeepingRoleCase{
 		{
-			role: access.RoleHousekeepingAgentReaper,
-			actions: []identity.Action{
-				identity.ActionNamespaceManageAgentRuns,
-				identity.ActionServerSweepAgentReveals,
-			},
+			role:    access.RoleHousekeepingAgentRevealSweep,
+			actions: []identity.Action{identity.ActionServerSweepAgentReveals},
+		},
+		{
+			role:    access.RoleHousekeepingAgentRunReaper,
+			actions: []identity.Action{identity.ActionNamespaceManageAgentRuns},
 		},
 		{
 			role:    access.RoleHousekeepingArtifactSweep,
@@ -205,5 +208,52 @@ func TestHousekeepingActionFamilies(t *testing.T) {
 		if !ok || got != tc.family {
 			t.Errorf("FamilyOf(%q) = (%q,%v), want (%q,true)", tc.action, got, ok, tc.family)
 		}
+	}
+}
+
+// inNamespaceArea reports whether a is an action of a namespace area: an
+// action on a namespace, a unit, a job or a saved view.
+func inNamespaceArea(a identity.Action) bool {
+	for _, area := range []string{"namespace:", "unit:", "job:", "view:"} {
+		if strings.HasPrefix(string(a), area) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestNoServerGrantHoldsNamespaceAction checks that no role that a
+// housekeeping principal holds on the installation holds an action of a
+// namespace area. Such an action would stay allowed in each namespace after a
+// revoke of the grant on that namespace.
+func TestNoServerGrantHoldsNamespaceAction(t *testing.T) {
+	t.Parallel()
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if !p.ActsOnInstallation() {
+			continue
+		}
+
+		r, ok := access.BuiltInRole(p.InstallationRole())
+		if !ok {
+			t.Fatalf("purpose %q: no built-in role %q", p.Name(), p.InstallationRole())
+		}
+
+		for _, a := range r.Actions {
+			if inNamespaceArea(a) {
+				t.Errorf("role %q on @server of purpose %q holds the namespace action %s", r.ID, p.Name(), a)
+			}
+		}
+	}
+
+	reveal, ok := access.BuiltInRole(access.RoleHousekeepingAgentRevealSweep)
+	if !ok {
+		t.Fatalf("no built-in role %q", access.RoleHousekeepingAgentRevealSweep)
+	}
+
+	want := []identity.Action{identity.ActionServerSweepAgentReveals}
+	if !slices.Equal(reveal.Actions, want) {
+		t.Fatalf("role %q actions = %v, want %v", reveal.ID, reveal.Actions, want)
 	}
 }

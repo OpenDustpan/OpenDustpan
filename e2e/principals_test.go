@@ -260,12 +260,12 @@ func checkHousekeepingPrincipals(ctx context.Context, t *testing.T, env *e2e.Env
 	checkHousekeepingList(ctx, t, env)
 
 	server := housekeepingReview{
-		acts:   principal.HousekeepingPurpose.ActsOnInstallation,
+		role:   principal.HousekeepingPurpose.InstallationRole,
 		path:   "/api/server/access-review",
 		object: "@server",
 	}
-	if n := checkHousekeepingGrants(ctx, t, env, server); n != 7 {
-		t.Fatalf("housekeeping grants on @server = %d, want 7", n)
+	if n, want := checkHousekeepingGrants(ctx, t, env, server), server.holders(); n != want {
+		t.Fatalf("housekeeping grants on @server = %d, want %d", n, want)
 	}
 
 	principalCall(ctx, t, env, principalStep{
@@ -273,12 +273,12 @@ func checkHousekeepingPrincipals(ctx context.Context, t *testing.T, env *e2e.Env
 	}, nil)
 
 	ns := housekeepingReview{
-		acts:   principal.HousekeepingPurpose.ActsInsideNamespace,
+		role:   principal.HousekeepingPurpose.NamespaceRole,
 		path:   "/api/server/namespaces/" + housekeepingNamespace + "/access-review",
 		object: housekeepingNamespace,
 	}
-	if n := checkHousekeepingGrants(ctx, t, env, ns); n != 5 {
-		t.Fatalf("housekeeping grants on %s = %d, want 5", housekeepingNamespace, n)
+	if n, want := checkHousekeepingGrants(ctx, t, env, ns), ns.holders(); n != want {
+		t.Fatalf("housekeeping grants on %s = %d, want %d", housekeepingNamespace, n, want)
 	}
 }
 
@@ -318,17 +318,30 @@ func checkHousekeepingList(ctx context.Context, t *testing.T, env *e2e.Env) {
 }
 
 // housekeepingReview is one access review that checkHousekeepingGrants reads:
-// the path of the review, the object of the grants, and whether a purpose
-// holds a grant on that object.
+// the path of the review, the object of the grants, and the role that a
+// purpose holds on that object ("" for none).
 type housekeepingReview struct {
-	acts   func(principal.HousekeepingPurpose) bool
+	role   func(principal.HousekeepingPurpose) string
 	path   string
 	object string
 }
 
+// holders returns the count of the purposes that hold a role on r.object.
+func (r housekeepingReview) holders() int {
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if r.role(p) != "" {
+			n++
+		}
+	}
+
+	return n
+}
+
 // checkHousekeepingGrants reads the access review of r with the subject
-// filter of each housekeeping principal. A principal for which r.acts is true
-// must hold one grant of its role on r.object, and any other principal none.
+// filter of each housekeeping principal. A principal with a role in r.role
+// must hold one grant of that role on r.object, and any other principal none.
 // It returns the count of the principals that hold a grant on r.object.
 func checkHousekeepingGrants(ctx context.Context, t *testing.T, env *e2e.Env, r housekeepingReview) int {
 	t.Helper()
@@ -339,7 +352,8 @@ func checkHousekeepingGrants(ctx context.Context, t *testing.T, env *e2e.Env, r 
 		rows := reviewOf(ctx, t, env, r.path, url.Values{"subject": {"principal:" + p.ID()}})
 		rows = housekeepingRows(rows, r.object)
 
-		if !r.acts(p) {
+		role := r.role(p)
+		if role == "" {
 			if len(rows) != 0 {
 				t.Fatalf("grants of %s on %s = %+v, want none", p.Subject(), r.object, rows)
 			}
@@ -347,7 +361,7 @@ func checkHousekeepingGrants(ctx context.Context, t *testing.T, env *e2e.Env, r 
 			continue
 		}
 
-		checkHousekeepingRow(t, p, r.object, rows)
+		checkHousekeepingRow(t, p, role, r.object, rows)
 
 		n++
 	}
@@ -363,9 +377,11 @@ func housekeepingRows(rows []e2eReviewRow, object string) []e2eReviewRow {
 	})
 }
 
-// checkHousekeepingRow fails unless rows is one current grant of the role of
-// p on object, with the server as the creator and a time.
-func checkHousekeepingRow(t *testing.T, p principal.HousekeepingPurpose, object string, rows []e2eReviewRow) {
+// checkHousekeepingRow fails unless rows is one current grant of role to p on
+// object, with the server as the creator and a time.
+func checkHousekeepingRow(
+	t *testing.T, p principal.HousekeepingPurpose, role, object string, rows []e2eReviewRow,
+) {
 	t.Helper()
 
 	if len(rows) != 1 {
@@ -373,9 +389,9 @@ func checkHousekeepingRow(t *testing.T, p principal.HousekeepingPurpose, object 
 	}
 
 	r := rows[0]
-	if r.Role != p.Role() || r.Subject != "principal:"+p.ID() || r.GrantedBy != "@server" ||
+	if r.Role != role || r.Subject != "principal:"+p.ID() || r.GrantedBy != "@server" ||
 		r.GrantedAtMs == nil || r.RevokedAtMs != nil || r.Source != "grant" {
-		t.Fatalf("grant of %s on %s = %+v, want the role %s from @server with a time", p.Subject(), object, r, p.Role())
+		t.Fatalf("grant of %s on %s = %+v, want the role %s from @server with a time", p.Subject(), object, r, role)
 	}
 }
 

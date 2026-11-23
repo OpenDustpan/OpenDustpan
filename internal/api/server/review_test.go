@@ -103,15 +103,17 @@ func TestReviewScopesAndActions(t *testing.T) {
 
 	// The bootstrap admin token holds every action with no grant. An account
 	// administrator and a namespace admin can both change who has access.
-	// The role of the agent reaper holds an action inside a namespace. Its
-	// grant on @server does not reach the namespace; the namespace grant does.
+	// The agent reaper holds a server action through its grant on @server and
+	// a namespace action through its own grant on the namespace. Its grant on
+	// @server holds no namespace action, so the review of acme does not list
+	// it. The fixture seeds acme with no grant of the housekeeping principals;
+	// checkAgentReaperRows reads both grants of the agent reaper.
 	want := []string{
 		"bootstrap admin token admin @server <@server grant=true",
 		"principal:prn-alice admin acme < grant=true",
 		"principal:prn-ann account-administrator @server <@server grant=true",
-		"principal:prn-housekeeping-agent-reaper housekeeping-agent-reaper @server <@server grant=false",
 	}
-	if !slices.Equal(got, want) || ns.Total == nil || *ns.Total != 4 || ns.AsOfMs == nil {
+	if !slices.Equal(got, want) || ns.Total == nil || *ns.Total != int64(len(want)) || ns.AsOfMs == nil {
 		t.Fatalf("export of acme = %q (total %v, as of %v), want %q", got, ns.Total, ns.AsOfMs, want)
 	}
 
@@ -135,11 +137,13 @@ func TestReviewScopesAndActions(t *testing.T) {
 	var all reviewDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/access-review", "", http.StatusOK}, &all)
 
-	// The total is the 4 fixture rows and the 7 grants of the installation
-	// principals.
-	if all.Total == nil || *all.Total != 11 {
-		t.Fatalf("export of the installation = %+v, want the 3 seeded grants, the bootstrap admin and 7 install grants",
-			all)
+	// The total is the 4 fixture rows and the grants of the housekeeping
+	// principals on the installation.
+	if want := int64(4 + seededInstallationGrants()); all.Total == nil || *all.Total != want {
+		t.Fatalf(
+			"export of the installation = %+v, want the 3 seeded grants, the bootstrap admin and %d install grants",
+			all, seededInstallationGrants(),
+		)
 	}
 
 	f.as(t, "ann", apiCall{
@@ -148,6 +152,60 @@ func TestReviewScopesAndActions(t *testing.T) {
 	f.as(t, "ann", apiCall{
 		http.MethodGet, "/api/server/access-review?expand=everyone", "", http.StatusBadRequest,
 	}, nil)
+
+	checkAgentReaperRows(t, f)
+}
+
+// seededInstallationGrants returns the count of the grants that the baseline
+// seeds on @server: one for each housekeeping purpose that acts on the
+// installation.
+func seededInstallationGrants() int {
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsOnInstallation() {
+			n++
+		}
+	}
+
+	return n
+}
+
+// checkAgentReaperRows creates the namespace gamma and checks the two grants
+// of the agent reaper: the installation review lists its grant of the reveal
+// sweep on @server and its grant of the run reaper on gamma, and the review
+// of gamma lists only the grant on gamma.
+func checkAgentReaperRows(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	f.as(t, "ann", apiCall{http.MethodPost, "/api/server/namespaces", `{"name":"gamma"}`, http.StatusCreated}, nil)
+
+	const subject = "principal:prn-housekeeping-agent-reaper"
+
+	onServer := subject + " " + access.RoleHousekeepingAgentRevealSweep + " @server"
+	onGamma := subject + " " + access.RoleHousekeepingAgentRunReaper + " gamma"
+
+	for _, c := range []struct {
+		path string
+		want []string
+	}{
+		{"/api/server/access-review", []string{onServer, onGamma}},
+		{"/api/server/namespaces/gamma/access-review", []string{onGamma}},
+	} {
+		var doc reviewDoc
+		f.as(t, "ann", apiCall{http.MethodGet, c.path + "?subject=" + subject, "", http.StatusOK}, &doc)
+
+		got := make([]string, 0, len(doc.Grants))
+		for i := range doc.Grants {
+			got = append(got, doc.Grants[i].Subject+" "+doc.Grants[i].Role+" "+doc.Grants[i].Object)
+		}
+
+		slices.Sort(got)
+
+		if !slices.Equal(got, c.want) {
+			t.Errorf("review %s of the agent reaper = %q, want %q", c.path, got, c.want)
+		}
+	}
 }
 
 // checkTrackedRows checks that each principal row says that the last
@@ -232,8 +290,9 @@ func TestReviewPagesOneSnapshot(t *testing.T) {
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/access-review?limit=2", "", http.StatusOK}, &first)
 
 	// The bootstrap row counts inside the limit. The total is the 4 fixture
-	// rows and the 7 grants of the installation principals.
-	if first.Total == nil || *first.Total != 11 || first.AsOfMs == nil || first.NextCursor == "" ||
+	// rows and the grants of the housekeeping principals on the installation.
+	total := int64(4 + seededInstallationGrants())
+	if first.Total == nil || *first.Total != total || first.AsOfMs == nil || first.NextCursor == "" ||
 		len(first.Grants) != 2 || first.Grants[0].Holder != access.BootstrapHolder {
 		t.Fatalf("first page = %+v, want the bootstrap row, one more grant, a total and a time", first)
 	}

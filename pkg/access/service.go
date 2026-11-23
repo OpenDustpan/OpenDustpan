@@ -620,7 +620,7 @@ func housekeepingNamespaceGrants(
 
 		g := Grant{
 			CreatedAt: ns.CreatedAt, Condition: nil, Object: identity.NamespaceObject(ns.Name),
-			ID: newID(grantIDPrefix), Role: p.Role(), CreatedBy: housekeepingGrantCreator,
+			ID: newID(grantIDPrefix), Role: p.NamespaceRole(), CreatedBy: housekeepingGrantCreator,
 			Subject: Subject{Kind: SubjectPrincipal, ID: p.ID()},
 		}
 		entry := change(e, g.CreatedAt, GrantRef(g))

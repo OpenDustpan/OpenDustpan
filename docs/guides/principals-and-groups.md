@@ -120,7 +120,10 @@ the sweep of expired tokens. Each one has the kind `service` and the source
 them may do, send `GET /api/server/access-review?subject=principal:<id>` with
 the `id` of the principal. Each row has a role, an object, the creator and a
 time. A created namespace gives a grant to each of the five housekeeping
-principals that act inside a namespace. The access review of the namespace,
+principals that act inside a namespace. A role on the installation holds no
+action inside a namespace. So `housekeeping:agent-reaper` holds two roles:
+`housekeeping-agent-reveal-sweep` on the installation and
+`housekeeping-agent-run-reaper` on each namespace. The access review of the namespace,
 `GET /api/server/namespaces/{namespace}/access-review?subject=principal:<id>`,
 lists it. The route `GET /api/server/principals/{principal}/grants` lists the
 grants on the principal as an object, not the grants that it holds. A

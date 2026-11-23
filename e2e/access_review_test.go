@@ -323,15 +323,14 @@ func grantRows(rows []e2eReviewRow) []e2eReviewRow {
 func seedReviewOf(ctx context.Context, t *testing.T, env *e2e.Env, path string, query url.Values) []e2eReviewRow {
 	t.Helper()
 
-	roles := make(map[string]string)
+	roles := make(map[[2]string]bool)
 	for _, p := range principal.HousekeepingPurposes() {
-		roles["principal:"+p.ID()] = p.Role()
+		roles[[2]string{"principal:" + p.ID(), p.InstallationRole()}] = p.ActsOnInstallation()
+		roles[[2]string{"principal:" + p.ID(), p.NamespaceRole()}] = p.ActsInsideNamespace()
 	}
 
 	return slices.DeleteFunc(reviewOf(ctx, t, env, path, query), func(r e2eReviewRow) bool {
-		role, ok := roles[r.Subject]
-
-		return ok && role == r.Role
+		return roles[[2]string{r.Subject, r.Role}]
 	})
 }
 

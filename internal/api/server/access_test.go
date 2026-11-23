@@ -854,7 +854,7 @@ func housekeepingNamespaceRoles() map[string]string {
 
 	for _, p := range principal.HousekeepingPurposes() {
 		if p.ActsInsideNamespace() {
-			roles["principal:"+p.ID()] = p.Role()
+			roles["principal:"+p.ID()] = p.NamespaceRole()
 		}
 	}
 

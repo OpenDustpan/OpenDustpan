@@ -58,31 +58,33 @@ func TestCreateNamespaceHousekeepingGrants(t *testing.T) {
 	var want int
 
 	for _, p := range principal.HousekeepingPurposes() {
-		if !p.ActsInsideNamespace() {
-			if _, found := got[p.Role()]; found {
-				t.Errorf("namespace has a grant of role %q, which does not act inside a namespace", p.Role())
-			}
+		if _, found := got[p.InstallationRole()]; found {
+			t.Errorf("namespace has a grant of the installation role %q", p.InstallationRole())
+		}
 
+		if !p.ActsInsideNamespace() {
 			continue
 		}
 
 		want++
 
-		g, found := got[p.Role()]
+		role := p.NamespaceRole()
+
+		g, found := got[role]
 		if !found {
-			t.Errorf("namespace has no grant of role %q", p.Role())
+			t.Errorf("namespace has no grant of role %q", role)
 
 			continue
 		}
 
 		if g.CreatedBy != "@server" || !g.CreatedAt.Equal(ns.CreatedAt) ||
 			g.Subject != (access.Subject{Kind: access.SubjectPrincipal, ID: p.ID()}) {
-			t.Errorf("grant of role %q = %+v, want the server as creator at %v", p.Role(), g, ns.CreatedAt)
+			t.Errorf("grant of role %q = %+v, want the server as creator at %v", role, g, ns.CreatedAt)
 		}
 	}
 
-	if want != 5 || len(got) != want {
-		t.Fatalf("housekeeping grants = %d, want 5 (purposes: %d)", len(got), want)
+	if want != namespaceHousekeepingRoles() || len(got) != want {
+		t.Fatalf("housekeeping grants = %d, want %d", len(got), want)
 	}
 }
 
@@ -96,8 +98,8 @@ func TestCreateNamespaceHousekeepingGrantsOfBootstrapAdmin(t *testing.T) {
 		t.Fatalf("bootstrap admin create namespace = %v, %v, want no creator grant", g, err)
 	}
 
-	if got := housekeepingGrantsOn(t, f, "delta"); len(got) != 5 {
-		t.Fatalf("housekeeping grants = %d, want 5", len(got))
+	if got, want := housekeepingGrantsOn(t, f, "delta"), namespaceHousekeepingRoles(); len(got) != want {
+		t.Fatalf("housekeeping grants = %d, want %d", len(got), want)
 	}
 }
 
@@ -126,11 +128,81 @@ func TestCreateNamespaceHousekeepingGrantStaysRevoked(t *testing.T) {
 	}
 
 	got := housekeepingGrantsOn(t, f, "gamma")
-	if _, found := got["housekeeping-job-reconcile"]; found || len(got) != 4 {
-		t.Fatalf("housekeeping grants on gamma = %d, want 4 without the revoked one", len(got))
+	if _, found := got["housekeeping-job-reconcile"]; found || len(got) != namespaceHousekeepingRoles()-1 {
+		t.Fatalf("housekeeping grants on gamma = %d, want %d without the revoked one",
+			len(got), namespaceHousekeepingRoles()-1)
 	}
 
-	if other := housekeepingGrantsOn(t, f, "omega"); len(other) != 5 {
-		t.Fatalf("housekeeping grants on omega = %d, want 5", len(other))
+	if other, want := housekeepingGrantsOn(t, f, "omega"), namespaceHousekeepingRoles(); len(other) != want {
+		t.Fatalf("housekeeping grants on omega = %d, want %d", len(other), want)
 	}
+}
+
+// TestRevokedNamespaceGrantDeniesManageAgentRuns checks that a revoke of the
+// grant of the agent reaper on a namespace denies namespace:manage-agent-runs
+// on that namespace. The grant of the agent reaper on @server reaches each
+// namespace, so that grant must hold no namespace action. The sweep of
+// reveals on @server stays allowed.
+func TestRevokedNamespaceGrantDeniesManageAgentRuns(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	account := f.person(t, "account")
+
+	if _, err := f.svc.CreateNamespace(t.Context(), testEntry(), account, housekeepingNamespace("gamma")); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	reaper := agentReaperPurpose(t)
+	caller := principal.Housekeeping(reaper)
+	gamma := identity.NamespaceObject("gamma")
+
+	assertChecks(t, f.authz, caller, []check{
+		{obj: gamma, action: identity.ActionNamespaceManageAgentRuns, allow: true},
+		{obj: identity.ServerObject(), action: identity.ActionServerSweepAgentReveals, allow: true},
+	})
+
+	revoked := housekeepingGrantsOn(t, f, "gamma")[access.RoleHousekeepingAgentRunReaper]
+	if revoked.ID == "" {
+		t.Fatalf("no grant of the role %s on gamma", access.RoleHousekeepingAgentRunReaper)
+	}
+
+	if _, err := f.svc.Revoke(t.Context(), testEntry(), admin(), gamma, revoked.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	assertChecks(t, f.authz, caller, []check{
+		{obj: gamma, action: identity.ActionNamespaceManageAgentRuns, allow: false},
+		{obj: identity.ServerObject(), action: identity.ActionServerSweepAgentReveals, allow: true},
+	})
+}
+
+// agentReaperPurpose returns the purpose that holds the role of the reaper of
+// agent runs on each namespace.
+func agentReaperPurpose(t *testing.T) principal.HousekeepingPurpose {
+	t.Helper()
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.NamespaceRole() == access.RoleHousekeepingAgentRunReaper {
+			return p
+		}
+	}
+
+	t.Fatalf("no purpose holds the role %s", access.RoleHousekeepingAgentRunReaper)
+
+	return principal.HousekeepingPurpose{}
+}
+
+// namespaceHousekeepingRoles returns the count of the purposes that hold a
+// role on each namespace.
+func namespaceHousekeepingRoles() int {
+	n := 0
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if p.ActsInsideNamespace() {
+			n++
+		}
+	}
+
+	return n
 }

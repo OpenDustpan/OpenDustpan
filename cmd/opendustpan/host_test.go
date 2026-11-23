@@ -788,7 +788,7 @@ func requireOnlySeededGrants(t *testing.T, listed []access.ListedGrant, total in
 
 	for _, p := range principal.HousekeepingPurposes() {
 		if p.ActsOnInstallation() {
-			seeded["principal:"+p.ID()] = p.Role()
+			seeded["principal:"+p.ID()] = p.InstallationRole()
 		}
 	}
 

@@ -22,7 +22,7 @@ func TestPortableStageKeepsHousekeepingRows(t *testing.T) {
 	ctx := t.Context()
 
 	serverPurposes := housekeepingServerPurposes(t)
-	revokedID := seededHousekeepingGrantID(t, s, serverPurposes[0].Role())
+	revokedID := seededHousekeepingGrantID(t, s, serverPurposes[0].InstallationRole())
 
 	const revokedAt = int64(1_700_000_000_000)
 
@@ -52,17 +52,22 @@ func TestPortableStageKeepsHousekeepingRows(t *testing.T) {
 	checkStagedHousekeepingGrants(t, staged, serverPurposes, revokedID, revokedAt)
 }
 
-// housekeepingServerPurposes returns the purposes whose role holds a server
-// action, so the install writes one grant on @server for each of them.
+// housekeepingServerPurposes returns the purposes whose installation role
+// holds a server action, so the install writes one grant on @server for each
+// of them.
 func housekeepingServerPurposes(t *testing.T) []principal.HousekeepingPurpose {
 	t.Helper()
 
 	var out []principal.HousekeepingPurpose
 
 	for _, purpose := range principal.HousekeepingPurposes() {
-		role, ok := access.BuiltInRole(purpose.Role())
+		if !purpose.ActsOnInstallation() {
+			continue
+		}
+
+		role, ok := access.BuiltInRole(purpose.InstallationRole())
 		if !ok {
-			t.Fatalf("purpose %q has no built-in role %q", purpose.Name(), purpose.Role())
+			t.Fatalf("purpose %q has no built-in role %q", purpose.Name(), purpose.InstallationRole())
 		}
 
 		for _, action := range role.Actions {
@@ -245,15 +250,17 @@ func checkStagedGrantsOfPurposes(
 	wantObject := identity.ServerObject().String()
 
 	for _, purpose := range purposes {
-		grant, ok := byRole[purpose.Role()]
+		role := purpose.InstallationRole()
+
+		grant, ok := byRole[role]
 		if !ok {
-			t.Errorf("staged grants with role %q = 0, want 1", purpose.Role())
+			t.Errorf("staged grants with role %q = 0, want 1", role)
 
 			continue
 		}
 
 		if grant.object != wantObject {
-			t.Errorf("staged grant of role %q names object %q, want %q", purpose.Role(), grant.object, wantObject)
+			t.Errorf("staged grant of role %q names object %q, want %q", role, grant.object, wantObject)
 		}
 	}
 }

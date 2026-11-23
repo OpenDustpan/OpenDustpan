@@ -44,7 +44,9 @@ func housekeepingNamespaceGrants(ns namespace.Namespace) ([]access.Grant, []audi
 			continue
 		}
 
-		g := newGrant("grt-"+p.Name(), principalSubject(p.ID()), p.Role(), identity.NamespaceObject(ns.Name))
+		g := newGrant(
+			"grt-"+p.Name(), principalSubject(p.ID()), p.NamespaceRole(), identity.NamespaceObject(ns.Name),
+		)
 		g.CreatedBy = "@server"
 		g.CreatedAt = ns.CreatedAt
 

@@ -209,9 +209,13 @@ func testReviewInstallGrants(t *testing.T, s access.Store) {
 	}
 
 	for _, p := range principal.HousekeepingPurposes() {
-		g, ok := byRole[p.Role()]
+		if _, ok := byRole[p.NamespaceRole()]; ok {
+			t.Fatalf("install grants hold the namespace role %q", p.NamespaceRole())
+		}
+
+		g, ok := byRole[p.InstallationRole()]
 		if ok != p.ActsOnInstallation() {
-			t.Fatalf("install grant of role %q = %t, want %t", p.Role(), ok, p.ActsOnInstallation())
+			t.Fatalf("install grant of %s = %t, want %t", p.Subject(), ok, p.ActsOnInstallation())
 		}
 
 		if !ok {
@@ -220,7 +224,7 @@ func testReviewInstallGrants(t *testing.T, s access.Store) {
 
 		if g.Subject != principalSubject(p.ID()) || g.Object.String() != identity.ServerObject().String() ||
 			g.CreatedBy != "@server" {
-			t.Fatalf("install grant of %s = %+v, want %s on @server from @server", p.Subject(), g, p.Role())
+			t.Fatalf("install grant of %s = %+v, want %s on @server from @server", p.Subject(), g, p.InstallationRole())
 		}
 	}
 }

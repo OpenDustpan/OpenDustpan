@@ -1001,7 +1001,7 @@ _Avoid_: Trigger user, robot, bot account
 _Copy says_: "namespace service principal".
 
 **Housekeeping principal**:
-A built-in principal of the kind `service` and the source `builtin`. The server makes one for each automatic task, for example the sweep of expired tokens. Its subject is `housekeeping:<purpose>`. Each one holds one role of its own, through stored grants that a user can list and revoke. It has no token and no session. A created namespace gets the grants of the housekeeping principals that act inside a namespace.
+A built-in principal of the kind `service` and the source `builtin`. The server makes one for each automatic task, for example the sweep of expired tokens. Its subject is `housekeeping:<purpose>`. Each one holds one or two roles of its own, through stored grants that a user can list and revoke. It has no token and no session. A created namespace gets the grants of the housekeeping principals that act inside a namespace.
 _Avoid_: System user, robot, bot account
 _Copy says_: "housekeeping principal".
 

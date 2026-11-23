@@ -1811,7 +1811,7 @@ INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, 
     ('prn-housekeeping-token-sweep', 'housekeeping:token-sweep', 'housekeeping:token-sweep', 'service', 'builtin', 0, 0);
 
 INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, created_at_ms, created_by) VALUES
-    ('grt-housekeeping-agent-reaper', 'principal:prn-housekeeping-agent-reaper', 'principal', 'prn-housekeeping-agent-reaper', 'housekeeping-agent-reaper', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-agent-reveal-sweep', 'principal:prn-housekeeping-agent-reaper', 'principal', 'prn-housekeeping-agent-reaper', 'housekeeping-agent-reveal-sweep', '@server', '@server', 'installation', 0, '@server'),
     ('grt-housekeeping-artifact-sweep', 'principal:prn-housekeeping-artifact-sweep', 'principal', 'prn-housekeeping-artifact-sweep', 'housekeeping-artifact-sweep', '@server', '@server', 'installation', 0, '@server'),
     ('grt-housekeeping-blob-sweep', 'principal:prn-housekeeping-blob-sweep', 'principal', 'prn-housekeeping-blob-sweep', 'housekeeping-blob-sweep', '@server', '@server', 'installation', 0, '@server'),
     ('grt-housekeeping-checkpoint-sweep', 'principal:prn-housekeeping-checkpoint-sweep', 'principal', 'prn-housekeeping-checkpoint-sweep', 'housekeeping-checkpoint-sweep', '@server', '@server', 'installation', 0, '@server'),

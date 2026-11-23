@@ -879,15 +879,16 @@ func withoutFreshAdmin(list e2eGrantList) e2eGrantList {
 // each namespace when it is created. A grant counts as one of them only when
 // it holds the role of the purpose of its principal.
 func withoutHousekeeping(list e2eGrantList) e2eGrantList {
-	roles := make(map[string]string)
+	roles := make(map[[2]string]bool)
 	for _, p := range principal.HousekeepingPurposes() {
-		roles["principal:"+p.ID()] = p.Role()
+		roles[[2]string{"principal:" + p.ID(), p.InstallationRole()}] = p.ActsOnInstallation()
+		roles[[2]string{"principal:" + p.ID(), p.NamespaceRole()}] = p.ActsInsideNamespace()
 	}
 
 	kept := list.Grants[:0:0]
 
 	for _, g := range list.Grants {
-		if role, ok := roles[g.Subject]; ok && role == g.Role {
+		if roles[[2]string{g.Subject, g.Role}] {
 			list.Total--
 
 			continue
