@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #3289.
@@ -13,8 +13,8 @@ Decision: ADR 370. Part 1 of 3 of the housekeeping principals. Part 2 is `housek
 The user path this part must make work:
 
 1. **API.** The operator lists the principals of the installation: the existing route `GET /api/server/principals?kind=service&source=builtin` (NEW `source` filter and NEW `builtin` source). The answer lists one housekeeping principal for each purpose, for example `housekeeping:artifact-sweep`, with its stable ID.
-2. **API.** The operator lists the grants of one housekeeping principal: the existing route `GET /api/server/principals/{principal}/grants`. Each grant has a role, an object, a creator (the install) and a time.
-3. **API.** The operator creates a namespace with the existing route `POST /api/server/namespaces`. The grants of `housekeeping:history-retention` then list a grant of its role on the new namespace, with the server as the creator and the creation time. The same holds for the four other roles that act inside namespaces.
+2. **API.** The operator lists the grants that one housekeeping principal holds: the existing route `GET /api/server/access-review?subject=principal:<id>`. Each row has a role, an object, a creator (the install) and a time. The route `GET /api/server/principals/{principal}/grants` lists the grants on the principal as an object, so it lists none of these.
+3. **API.** The operator creates a namespace with the existing route `POST /api/server/namespaces`. The access review of the namespace with `subject=principal:<id>` of `housekeeping:history-retention` then lists a grant of its role on the new namespace, with the server as the creator and the creation time. The same holds for the four other roles that act inside namespaces.
 4. **Docs page.** The `source` row of the principal fields in `docs/guides/principals-and-groups.md` lists the `builtin` value.
 
 Errors the person may hit, and the one command that helps:
