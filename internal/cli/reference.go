@@ -297,8 +297,9 @@ func writeClients(out *strings.Builder) {
 	out.WriteString("\n")
 	out.WriteString("`opendustpan namespace create`, the `opendustpan collection` and\n")
 	out.WriteString("`opendustpan placement` commands, `opendustpan backup`, `opendustpan backup\n")
-	out.WriteString("check`, `opendustpan upgrade check`, `opendustpan restore` and the\n")
-	out.WriteString("`opendustpan audit-chain` commands call a running server. They read the\n")
+	out.WriteString("check`, `opendustpan upgrade check`, `opendustpan restore`, the\n")
+	out.WriteString("`opendustpan audit-chain` commands and `opendustpan runner pools list` call\n")
+	out.WriteString("a running server. They read the\n")
 	out.WriteString("server URL from `--server` or\n")
 	out.WriteString("`DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or\n")
 	out.WriteString("`DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates\n")
@@ -315,6 +316,11 @@ func writeClients(out *strings.Builder) {
 
 	out.WriteString("\n")
 	writePlacementCommands(out)
+	out.WriteString("`opendustpan runner pools list` prints one line for each runner pool of the namespace,\n")
+	out.WriteString("with the columns name, id, purpose, concurrency and isolation separated by one tab,\n")
+	out.WriteString("sorted by name. `--output json` prints the server answer unchanged. The\n")
+	out.WriteString("[runner pools guide](../guides/runner-pools.md) shows the command.\n")
+	out.WriteString("\n")
 	out.WriteString("`opendustpan key generate` calls no server and opens no database. It writes a\n")
 	out.WriteString("new key-encryption key file to the path in `--out` and refuses a file that\n")
 	out.WriteString("exists.\n")
@@ -367,6 +373,7 @@ func clientRows() []clientRow {
 		{"opendustpan placement add <namespace>", PlacementAddCommand(nil)},
 		{"opendustpan placement list <namespace>", PlacementListCommand(nil)},
 		{"opendustpan placement delete <namespace> <rule-id>", PlacementDeleteCommand(nil)},
+		{"opendustpan runner pools list --namespace <namespace>", RunnerPoolsListCommand(nil)},
 		{"opendustpan backup", BackupCommand(nil)},
 		{"opendustpan backup check --backup <id>", BackupCheckCommand(nil)},
 		{"opendustpan restore --backup <id>", RestoreCommand(nil)},
