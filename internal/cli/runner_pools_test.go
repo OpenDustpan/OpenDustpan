@@ -75,7 +75,7 @@ func TestRunnerPoolsList(t *testing.T) {
 			status:      404,
 			answer:      `{"message":"namespace not found","errorCode":"namespace.not-found"}`,
 			output:      "",
-			errorText:   "namespace.not-found",
+			errorText:   "namespace not found",
 			extraOutput: "",
 		},
 		{
