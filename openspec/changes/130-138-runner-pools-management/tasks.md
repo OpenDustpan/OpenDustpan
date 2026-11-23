@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add a table-driven test of the command with a fake server: a list of two pools, an empty list, a 403, a 404 and an unknown JSON shape. Check: NEW TestRunnerPoolsList in internal/cli fails on main because the command does not exist.
+- [x] 1.1 Add a table-driven test of the command with a fake server: a list of two pools, an empty list, a 403, a 404 and an unknown JSON shape. Check: NEW TestRunnerPoolsList in internal/cli fails on main because the command does not exist.
 
 ## 2. Build
 
