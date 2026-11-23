@@ -356,6 +356,45 @@ func TestHealthReadySlowCheck(t *testing.T) {
 	}
 }
 
+// TestHealthReadyRetryAfterOnStoreFailure proves GET /health/ready answers 503
+// with Retry-After 5 when the store ping fails.
+func TestHealthReadyRetryAfterOnStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	ts := newReadinessServer(t, failPing(errStoreCanary), nil)
+
+	status, header, body := getProbe(t, ts, "/health/ready")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health/ready status %d, want %d (body %q)", status, http.StatusServiceUnavailable, body)
+	}
+
+	if got := header.Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5 (body %q)", got, body)
+	}
+
+	if !strings.Contains(body, `"status":"unavailable"`) {
+		t.Fatalf("body %q missing unavailable status", body)
+	}
+}
+
+// TestHealthReadyRetryAfterOnStoreStall proves GET /health/ready answers 503
+// with Retry-After 5 when the store ping never answers. The probe's own limit
+// ends the request, so the test sets no bound on the wall clock.
+func TestHealthReadyRetryAfterOnStoreStall(t *testing.T) {
+	t.Parallel()
+
+	ts := newReadinessServer(t, blockPing, nil)
+
+	status, header, body := getProbe(t, ts, "/health/ready")
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health/ready status %d, want %d (body %q)", status, http.StatusServiceUnavailable, body)
+	}
+
+	if got := header.Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5 (body %q)", got, body)
+	}
+}
+
 // TestDrainPeriodIsChecked proves that NewServer refuses a drain that is
 // negative or that, with the shutdown, passes the grace period of the pod.
 func TestDrainPeriodIsChecked(t *testing.T) {

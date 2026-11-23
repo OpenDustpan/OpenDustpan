@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/store/schema"
@@ -305,6 +306,7 @@ func (rd *readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	problem.SetStoreRetryAfter(w)
 	rd.failures.Inc()
 	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable, readinessDoc{Status: statusUnavailable, Failed: failed})
 }
@@ -424,6 +426,7 @@ func (rd *readiness) serveComponents(w http.ResponseWriter, r *http.Request, par
 		return
 	}
 
+	problem.SetStoreRetryAfter(w)
 	rd.failures.Inc()
 	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable, doc)
 }

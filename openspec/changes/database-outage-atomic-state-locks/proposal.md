@@ -1,6 +1,8 @@
 ---
-version: 3
+version: 4
 ---
+
+Issue: #3931.
 
 Roadmap: `docs/roadmap.md:475` (Make state and lock commits atomic with fencing.).
 
@@ -21,9 +23,9 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main has separate TFE state version write and workspace lock paths. Proof: internal/api/tfe/states.go:602 (func Handler.writeStateVersion) and internal/api/tfe/locks.go:103 (func Handler.lockWorkspace)
-- Main has a Postgres state version finalize path. Proof: pkg/store/postgres/workspaces.go:661 (func Store.FinalizeStateVersion)
-- Main has a TFE unlock path. Proof: internal/api/tfe/locks.go:216 (func Handler.unlockWorkspace)
+- Main has separate TFE state version write and workspace lock paths. Proof: internal/api/tfe/states.go:602 (func Handler.writeStateVersion) and internal/api/tfe/locks.go:134 (func Handler.lockWorkspace)
+- Main has a Postgres state version finalize path. Proof: internal/store/postgres/workspaces.go:690 (func Store.FinalizeStateVersion)
+- Main has a TFE unlock path. Proof: internal/api/tfe/locks.go:266 (func Handler.unlockWorkspace)
 
 ## What Changes
 
@@ -54,10 +56,10 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Handler writes a TFE state version. (`internal/api/tfe/states.go:602 (func Handler.writeStateVersion)`)
-- Handler creates a TFE state version record. (`internal/api/tfe/state_write.go:253 (func Handler.writeStateVersionCreate)`)
-- Postgres store finalizes a state version. (`pkg/store/postgres/workspaces.go:661 (func Store.FinalizeStateVersion)`)
-- Handler locks a workspace. (`internal/api/tfe/locks.go:103 (func Handler.lockWorkspace)`)
-- Handler unlocks a workspace. (`internal/api/tfe/locks.go:216 (func Handler.unlockWorkspace)`)
+- Handler creates a TFE state version record. (`internal/api/tfe/state_write.go:264 (func Handler.writeStateVersionCreate)`)
+- Postgres store finalizes a state version. (`internal/store/postgres/workspaces.go:690 (func Store.FinalizeStateVersion)`)
+- Handler locks a workspace. (`internal/api/tfe/locks.go:134 (func Handler.lockWorkspace)`)
+- Handler unlocks a workspace. (`internal/api/tfe/locks.go:266 (func Handler.unlockWorkspace)`)
 
 ## ADR check
 
