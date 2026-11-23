@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -165,19 +166,22 @@ type Handler struct {
 	// limiter bounds the audit entries of refused handoff tokens.
 	limiter             *denylimit.Limiter
 	onHandoffSuppressed func()
-	logger              *slog.Logger
-	release             runner.Release
-	serverURL           string
-	now                 func() time.Time
-	interval            time.Duration
-	polls               sync.Map
-	mux                 *patternMux
-	routes              []Route
-	plans               job.PlanRecorder
-	artifacts           job.ArtifactReader
-	proxies             *proxysessionsvc.Service
-	claims              *workspace.ClaimRegistry
-	authenticator       identity.Authenticator
+	// refusals writes the audit entries of the refused log chunks, through
+	// limiter.
+	refusals      *refusal.Recorder
+	logger        *slog.Logger
+	release       runner.Release
+	serverURL     string
+	now           func() time.Time
+	interval      time.Duration
+	polls         sync.Map
+	mux           *patternMux
+	routes        []Route
+	plans         job.PlanRecorder
+	artifacts     job.ArtifactReader
+	proxies       *proxysessionsvc.Service
+	claims        *workspace.ClaimRegistry
+	authenticator identity.Authenticator
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -234,11 +238,38 @@ func (cfg Config) validatePlans() error {
 	return nil
 }
 
+// denials returns the limiter of the audit entries of refusals, and the
+// recorder of the refused log chunks. DenialLimiter nil takes a limiter of this
+// handler only. The recorder shares the limiter with the other refusals, so a
+// launcher that repeats a refused chunk writes one entry for each window.
+func (cfg Config) denials() (*denylimit.Limiter, *refusal.Recorder, error) {
+	limiter := cfg.DenialLimiter
+	if limiter == nil {
+		limiter = denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
+	}
+
+	r, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: refusal recorder: %w", ErrMissingDependency, err)
+	}
+
+	return limiter, r.WithLimiter(limiter).WithSurface("runner"), nil
+}
+
 // NewHandler returns a Handler. Every Config field except Claimer, Sweeps,
 // Operations, Recorder, Jobs, JobTokens, Starters, Sessions, Now and
 // PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	// Defense in depth: validate refuses a nil audit store first; the refusal
+	// recorder checks its dependencies too, so that no log refusal goes
+	// unrecorded when a new caller skips validate. No input reaches this check
+	// past validate; TestDenialsRefusesNoAuditStore covers the denials layer.
+	limiter, refusals, err := cfg.denials()
+	if err != nil {
 		return nil, err
 	}
 
@@ -261,11 +292,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 		interval = defaultPollInterval
 	}
 
-	limiter := cfg.DenialLimiter
-	if limiter == nil {
-		limiter = denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
-	}
-
 	h := &Handler{
 		namespaces:          cfg.Namespaces,
 		pools:               cfg.Pools,
@@ -284,6 +310,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditErr:          cfg.OnAuditFailure,
 		limiter:             limiter,
 		onHandoffSuppressed: cfg.OnHandoffRefusalSuppressed,
+		refusals:            refusals,
 		release:             cfg.Release,
 		serverURL:           cfg.ServerURL,
 		now:                 now,

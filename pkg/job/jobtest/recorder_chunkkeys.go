@@ -38,7 +38,7 @@ func reserveFirstChunk(t *testing.T, h RecorderHarness, a *job.Assignment) strin
 
 	plan, err := h.Records.ReserveLogChunk(
 		t.Context(), a.Claim, stepPrepare,
-		job.ChunkReserve{Seq: 0, SHA256: hashOf(content), Size: int64(len(content))}, nl,
+		job.ChunkReserve{Seq: 0, SHA256: hashOf(content), Size: int64(len(content)), Caps: nil}, nl,
 	)
 	if err != nil {
 		t.Fatalf("ReserveLogChunk(0) = %v", err)

@@ -196,7 +196,7 @@ func newSweepFixture(t *testing.T, h ArtifactSweepHarness) *sweepFixture {
 func reserveChunk(t *testing.T, h ArtifactSweepHarness, a *job.Assignment, seq int, content string) {
 	t.Helper()
 
-	c := job.ChunkReserve{Seq: seq, SHA256: hashOf(content), Size: int64(len(content))}
+	c := job.ChunkReserve{Seq: seq, SHA256: hashOf(content), Size: int64(len(content)), Caps: nil}
 
 	if _, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, c, nil); err != nil {
 		t.Fatalf("ReserveLogChunk(%d) = %v", seq, err)
