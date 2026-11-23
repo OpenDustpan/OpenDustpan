@@ -14,11 +14,23 @@ The server SHALL write, in the transaction of each namespace creation, one store
 
 #### Scenario: New namespace
 - **WHEN** an operator creates a namespace
-- **THEN** the namespace has one stored grant of each of the roles `housekeeping-agent-reaper`, `housekeeping-history-retention`, `housekeeping-issuer-rotation`, `housekeeping-job-reconcile` and `housekeeping-saved-view-cleanup`, each with a creator and a time
+- **THEN** the namespace has one stored grant of each of the roles `housekeeping-agent-run-reaper`, `housekeeping-history-retention`, `housekeeping-issuer-rotation`, `housekeeping-job-reconcile` and `housekeeping-saved-view-cleanup`, each with a creator and a time
 
 #### Scenario: Revoked grant stays revoked
 - **WHEN** an operator revokes one of these grants and then creates another namespace
 - **THEN** the revoked grant stays revoked and the new namespace has its own five grants
+
+### Requirement: No role granted on the installation holds a namespace action
+
+The server SHALL NOT give any role that a housekeeping principal holds on `@server` an action that acts inside a namespace, and the purpose `agent-reaper` SHALL hold the role `housekeeping-agent-reveal-sweep` on `@server` and the role `housekeeping-agent-run-reaper` on each namespace.
+
+#### Scenario: Revoke of the namespace grant
+- **WHEN** an operator revokes the grant of `housekeeping-agent-run-reaper` on a namespace
+- **THEN** the action `namespace:manage-agent-runs` is denied for `housekeeping:agent-reaper` on that namespace, and `server:sweep-agent-reveals` stays allowed on `@server`
+
+#### Scenario: Roles on the installation
+- **WHEN** the roles that the install grants on `@server` are listed
+- **THEN** none of them holds an action of a namespace area
 
 ### Requirement: Each sweep has its own narrow action
 
