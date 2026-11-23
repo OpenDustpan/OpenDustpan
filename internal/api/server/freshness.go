@@ -213,6 +213,13 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	return h.checkSignInFreshness(r)
 }
 
+// SetFreshPolicy sets the policy that says if a change needs a fresh
+// authentication. The server sets it once, before the handler serves a
+// request. With no policy, each change needs the step.
+func (h *Handler) SetFreshPolicy(p freshstep.Policy) {
+	h.freshPolicy = p
+}
+
 // freshRequired reports whether the installation requires a fresh step. A
 // handler with no policy requires it (fail closed).
 func (h *Handler) freshRequired(ctx context.Context) bool {

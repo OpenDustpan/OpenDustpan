@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -88,6 +89,9 @@ type Config struct {
 	// job service does, so that the filled slots in the answer are the ones that
 	// the matching counts. The zero value is the policy of a dev installation.
 	Approvers gate.ApproverPolicy
+	// FreshPolicy says if the approval of a destroy needs a fresh
+	// authentication. Nil requires the step (fail closed).
+	FreshPolicy freshstep.Policy
 }
 
 // Handler serves the jobs API under /api/dustpan/v1/.
@@ -108,8 +112,11 @@ type Handler struct {
 	sessions   *sessionauth.Checker
 	guard      *refusal.Recorder
 	logger     *slog.Logger
-	mux        *patternMux
-	routes     []Route
+	// fresh says if the approval of a destroy needs a fresh authentication.
+	// Nil requires the step (fail closed).
+	fresh  freshstep.Policy
+	mux    *patternMux
+	routes []Route
 }
 
 // NewHandler returns a Handler. Every Config field except Sessions is
@@ -152,6 +159,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions:   cfg.Sessions,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("jobs"),
 		logger:     cfg.Logger,
+		fresh:      cfg.FreshPolicy,
 		mux:        newPatternMux(),
 		routes:     nil,
 	}

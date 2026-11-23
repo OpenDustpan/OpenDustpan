@@ -23,5 +23,17 @@ func CheckReservedPlan(
 	return checkReserved(ctx, tx, j, pc, p)
 }
 
+// CheckDestroyProofStepOn exposes checkDestroyProof with the setting
+// freshAuthEnabled on to the black-box tests.
+func CheckDestroyProofStepOn(j *job.Job, ap *job.Approval, now time.Time) error {
+	return checkDestroyProof(j, ap, writeRules{now: now, freshRequired: true})
+}
+
+// CheckDestroyProofStepOff exposes checkDestroyProof with the setting
+// freshAuthEnabled off to the black-box tests.
+func CheckDestroyProofStepOff(j *job.Job, ap *job.Approval, now time.Time) error {
+	return checkDestroyProof(j, ap, writeRules{now: now, freshRequired: false})
+}
+
 // NextJobUpdateAt exposes nextUpdateAt to the black-box tests.
 func NextJobUpdateAt(now, stored time.Time) time.Time { return nextUpdateAt(now, stored) }

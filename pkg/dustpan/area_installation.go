@@ -145,10 +145,13 @@ func newServerHandler(in *serverHandlerInputs) (http.Handler, error) {
 		InstallationKind:   in.installationKind, StateWriteGates: in.stateWrite,
 		Instances: in.instances, StoreChecks: in.checks, Cursors: in.cursors,
 		ProxyRules: in.proxyRules,
-	}, serverapi.WithFreshPolicy(in.fresh))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}
+
+	// The handler asks the same policy as the services and the store.
+	handler.SetFreshPolicy(in.fresh)
 
 	return handler, nil
 }

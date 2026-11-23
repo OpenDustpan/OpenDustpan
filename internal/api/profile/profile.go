@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/profile"
@@ -90,8 +91,11 @@ type Handler struct {
 	policy   SessionPolicy
 	idem     *idempotent.Middleware
 	logger   *slog.Logger
-	mux      *route.Mux
-	routes   []Route
+	// freshPolicy says if a change needs a fresh authentication. Nil
+	// requires the step (fail closed).
+	freshPolicy freshstep.Policy
+	mux         *route.Mux
+	routes      []Route
 }
 
 // NewHandler returns a Handler.
@@ -120,17 +124,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		profiles: cfg.Profiles,
-		opens:    opens,
-		authn:    cfg.Authenticator,
-		authz:    cfg.Authorizer,
-		guard:    recorder.WithLimiter(cfg.DenialLimiter).WithSurface("profile"),
-		sessions: cfg.Sessions,
-		policy:   cfg.SessionPolicy,
-		idem:     cfg.Idempotency,
-		logger:   cfg.Logger,
-		mux:      route.NewMux(),
-		routes:   nil,
+		profiles:    cfg.Profiles,
+		opens:       opens,
+		authn:       cfg.Authenticator,
+		authz:       cfg.Authorizer,
+		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("profile"),
+		sessions:    cfg.Sessions,
+		policy:      cfg.SessionPolicy,
+		idem:        cfg.Idempotency,
+		logger:      cfg.Logger,
+		freshPolicy: nil,
+		mux:         route.NewMux(),
+		routes:      nil,
 	}
 
 	h.routes = h.buildRoutes()

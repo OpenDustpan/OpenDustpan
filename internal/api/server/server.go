@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -274,8 +275,11 @@ type Handler struct {
 	storeChecks   *storecheck.Service
 	cursors       secret.Wrapper
 	proxyRules    *jobproxysvc.Service
-	mux           *patternMux
-	routes        []Route
+	// freshPolicy says if a change needs a fresh authentication. Nil
+	// requires the step (fail closed).
+	freshPolicy freshstep.Policy
+	mux         *patternMux
+	routes      []Route
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
@@ -357,9 +361,10 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		gitHost:   cfg.GitHost,
 		idem:      cfg.Idempotency,
 		instances: cfg.Instances, storeChecks: cfg.StoreChecks, cursors: cfg.Cursors,
-		proxyRules: cfg.ProxyRules,
-		mux:        newPatternMux(),
-		routes:     nil,
+		proxyRules:  cfg.ProxyRules,
+		freshPolicy: nil,
+		mux:         newPatternMux(),
+		routes:      nil,
 	}
 
 	if h.now == nil {

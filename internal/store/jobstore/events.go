@@ -10,12 +10,24 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
+// writeRules holds what a change checks besides its own fields: the database
+// clock of the transaction, and whether the installation requires a fresh
+// step.
+type writeRules struct {
+	now           time.Time
+	freshRequired bool
+}
+
 // change makes the fields of c on next, and checks the rules of its event.
 // It keeps nothing on an error.
-func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.Time) error {
-	// Defense in depth: the service checks the session proof before this
-	// write. Check its age again on the database clock in this transaction.
-	if err := checkDestroyProof(next, c.Approval, now); err != nil {
+func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, rules writeRules) error {
+	now := rules.now
+
+	// Defense in depth: the service and the HTTP handler check the session
+	// proof before this write, with the same policy. Check its age again on
+	// the database clock in this transaction, so that a new caller cannot
+	// skip it.
+	if err := checkDestroyProof(next, c.Approval, rules); err != nil {
 		return err
 	}
 
@@ -42,15 +54,32 @@ func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.T
 }
 
 // checkDestroyProof refuses an approval whose proof expired before the
-// signature write. A rejection needs no fresh step.
-func checkDestroyProof(j *job.Job, ap *job.Approval, now time.Time) error {
+// signature write. A rejection needs no fresh step. When the installation
+// requires no fresh step (the setting freshAuthEnabled is off), an approval
+// of a person that records the authentication none needs no proof. An agent
+// is refused in each case.
+func checkDestroyProof(j *job.Job, ap *job.Approval, rules writeRules) error {
 	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
 		return nil
 	}
 
+	if ap.Verdict != job.VerdictApprove || ap.Agent != "" {
+		return job.ErrAuthStale
+	}
+
+	if !rules.freshRequired && ap.Auth == job.ConfirmAuthNone && ap.AuthAt.IsZero() {
+		return nil
+	}
+
+	return checkProofAge(ap, rules.now)
+}
+
+// checkProofAge refuses an approval with no MFA proof, or with a proof that
+// expired before the signature write at now.
+func checkProofAge(ap *job.Approval, now time.Time) error {
 	// The database clock has millisecond precision, as the stored times do.
 	at, proof, current := ap.At.UnixMilli(), ap.AuthAt.UnixMilli(), now.UnixMilli()
-	if ap.Verdict != job.VerdictApprove || ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA ||
+	if ap.Auth != job.ConfirmAuthMFA ||
 		ap.AuthAt.IsZero() || proof > at || proof > current || at > current ||
 		current-proof > job.ConfirmFreshness.Milliseconds() {
 		return job.ErrAuthStale

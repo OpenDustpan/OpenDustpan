@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
-	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
@@ -88,10 +87,12 @@ func newKeyedSettingsEnvAs(t *testing.T, reg *setting.Registry, authz identity.A
 		return item.Value == "true", nil
 	})
 
-	h, err := newCheckedHandler(t, cfg, apiserver.WithFreshPolicy(policy))
+	h, err := newCheckedHandler(t, cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	h.SetFreshPolicy(policy)
 
 	return keyedSettingsEnv{h: h, st: st, sessions: sessions}
 }

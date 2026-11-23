@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -37,6 +38,9 @@ const createAttempts = 2
 // Store serves job.Store and job.FreezeStore from one Runner.
 type Store struct {
 	run Runner
+	// fresh says if the approval of a destroy needs a fresh step. Nil
+	// requires the step (fail closed).
+	fresh freshstep.Policy
 }
 
 var (
@@ -47,7 +51,21 @@ var (
 
 // New returns the job stores over run.
 func New(run Runner) *Store {
-	return &Store{run: run}
+	return &Store{run: run, fresh: nil}
+}
+
+// SetFreshPolicy sets the policy that says if the approval of a destroy needs
+// a fresh step. The server sets it once, before the store serves a request.
+// With no policy, each approval of a destroy needs the step.
+func (s *Store) SetFreshPolicy(p freshstep.Policy) {
+	s.fresh = p
+}
+
+// FreshStepRequired reports whether the approval of a destroy needs a fresh
+// step. It is true with no policy, and when the policy cannot read the
+// setting.
+func (s *Store) FreshStepRequired(ctx context.Context) bool {
+	return freshstep.IsRequired(ctx, s.fresh)
 }
 
 // Create implements job.Store.

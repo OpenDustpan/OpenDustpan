@@ -302,10 +302,12 @@ func newFAFixture(t *testing.T) faFixture {
 		StoreChecks:        nil,
 		Reach:              reach,
 		FirstAdministrator: spy,
-	}, apiserver.WithFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return false })))
+	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	handler.SetFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return false }))
 
 	f := faFixture{
 		store: st, path: path, sessions: sessions, handler: handler, limiter: limiter, spy: spy, log: logs,
@@ -1054,6 +1056,18 @@ func TestStepsThatStayAreNotGated(t *testing.T) {
 		if bytes.Contains(source, []byte(banned)) {
 			t.Fatalf("firstadmin.go names %q: the redeem keeps its own step and does not take the policy", banned)
 		}
+	}
+
+	// The change of the own password is a factor change. Its young sign-in
+	// that replaces the current password does not ask the policy.
+	users, err := packageSources.ReadFile("localusers.go")
+	if err != nil {
+		t.Fatalf("read the source of the password route: %v", err)
+	}
+
+	if bytes.Contains(users, []byte("checkTokenFreshness")) ||
+		!bytes.Contains(users, []byte(`req.CurrentPassword == "" && h.checkSignInFreshness(r) == nil`)) {
+		t.Fatal("localusers.go: the password change must check the sign-in age with no policy")
 	}
 }
 

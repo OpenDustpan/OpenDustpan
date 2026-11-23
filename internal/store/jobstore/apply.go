@@ -29,8 +29,12 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 
 	var out job.Job
 
+	// The policy reads the setting before the transaction opens, so that the
+	// read does not wait on the write of this transaction.
+	fresh := s.FreshStepRequired(ctx)
+
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
-		next, err := applyIn(ctx, tx, &c, fence.Namespace)
+		next, err := applyIn(ctx, tx, &c, fence.Namespace, fresh)
 		if err != nil {
 			return err
 		}
@@ -48,8 +52,9 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 }
 
 // applyIn makes the change c in the transaction tx, and returns the job after
-// it. The job must belong to the namespace ns.
-func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.Job, error) {
+// it. The job must belong to the namespace ns. fresh tells whether the
+// installation requires a fresh step.
+func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh bool) (job.Job, error) {
 	cur, err := loadJob(ctx, tx, c.Job, ns)
 	if err != nil {
 		return job.Job{}, err
@@ -77,7 +82,7 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name) (job.
 
 	next := cloneJob(&cur)
 
-	if err := change(ctx, tx, &next, c, now); err != nil {
+	if err := change(ctx, tx, &next, c, writeRules{now: now, freshRequired: fresh}); err != nil {
 		return job.Job{}, err
 	}
 

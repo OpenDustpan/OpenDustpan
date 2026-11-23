@@ -754,7 +754,11 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 		return
 	}
 
-	fresh := req.CurrentPassword == "" && h.checkTokenFreshness(r) == nil
+	// A young sign-in replaces the current password. The change of a factor
+	// keeps this proof with the setting freshAuthEnabled off, so the check
+	// does not ask the policy: else a stolen session could change the
+	// password with no current password.
+	fresh := req.CurrentPassword == "" && h.checkSignInFreshness(r) == nil
 	actor := localusersvc.Actor{
 		Entry: callerEntry(r, p, identity.ActionCallerManageSignIn), PrincipalID: caller.Match.Owner.ID,
 		Admin: false,

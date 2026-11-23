@@ -432,10 +432,12 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 		DenialLimiter:      nil,
 		Instances:          nil,
 		StoreChecks:        nil,
-	}, apiserver.WithFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return freshOn.Load() })))
+	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
+	handler.SetFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return freshOn.Load() }))
 
 	rememberSessions(handler, sessions)
 

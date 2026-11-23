@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
@@ -74,9 +75,22 @@ type Service struct {
 	publicURL  string
 	now        func() time.Time
 	log        *slog.Logger
+	// freshPolicy says if a change of the issuer settings needs a fresh
+	// authentication. Nil requires the step (fail closed).
+	freshPolicy freshstep.Policy
 
 	mu    sync.Mutex
 	cache map[cacheKey]cachedKey
+}
+
+// Option changes a Service that NewService makes.
+type Option func(*Service)
+
+// WithFreshPolicy sets the policy that says if a change of the issuer
+// settings needs a fresh authentication. With no policy, each change needs
+// the step.
+func WithFreshPolicy(p freshstep.Policy) Option {
+	return func(s *Service) { s.freshPolicy = p }
 }
 
 var _ profile.Issuer = (*Service)(nil)
@@ -96,7 +110,7 @@ type cachedKey struct {
 
 // NewService returns a Service. It returns ErrMissingDependency when a
 // required port is missing.
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer == nil || cfg.Authorizer == nil {
 		return nil, fmt.Errorf("%w: store, namespaces, sealer and authorizer", ErrMissingDependency)
 	}
@@ -124,11 +138,19 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 
-	return &Service{
+	s := &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, authz: cfg.Authorizer,
 		notifier: cfg.Notifier, fetcher: cfg.Fetcher, issuerBase: cfg.IssuerBaseURL,
-		publicURL: publicURL, now: now, log: log, mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
-	}, nil
+		publicURL: publicURL, now: now, log: log, freshPolicy: nil,
+		mu: sync.Mutex{}, cache: map[cacheKey]cachedKey{},
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+
+	return s, nil
 }
 
 // checkPublicURL trims raw as the server does for its public URL and checks
