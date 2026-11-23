@@ -74,7 +74,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - ModeLDAP is a provider mode that Validate refuses until LDAP lands. (`pkg/session/provideroauth.go:28`)
 - ProviderConfig validation lists ModeLDAP with the modes that have no OAuth settings. (`pkg/session/providerconfig.go:173`)
 - The sign-in service calls ApplyGroupClaims. (`internal/signinsvc/service.go:614`)
-- The group applier implements ApplyGroupClaims. (`pkg/store/internal/groupclaims/groupclaims.go:192`)
+- The group applier implements ApplyGroupClaims. (`internal/store/groupclaims/groupclaims.go:192`)
 
 ## Owner decisions that apply
 

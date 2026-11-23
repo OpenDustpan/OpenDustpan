@@ -27,7 +27,7 @@ Evidence for the claims above:
 
 - The registry accepts only the registry-safe subset of a name. Proof: pkg/registry/registry.go:211:func validSlug(s string) bool {
 - The registry download routes take the namespace from the path. Proof: internal/api/tfe/registry.go:182:			Path:   registryPrefix + "{namespace}/{type}/versions",
-- The namespace store finds a namespace by name only. Proof: pkg/store/sqlite/sqlite.go:607:func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+- The namespace store finds a namespace by name only. Proof: internal/store/sqlite/sqlite.go:607:func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
 
 ## What Changes
 
@@ -52,7 +52,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The registry accepts only the registry-safe subset of a name. (`pkg/registry/registry.go:211`)
-- The namespace store finds a namespace by name. (`pkg/store/sqlite/sqlite.go:607`)
+- The namespace store finds a namespace by name. (`internal/store/sqlite/sqlite.go:607`)
 - The namespace has a stable ID that never changes. (`pkg/namespace/namespace.go:95`)
 - The download routes take the namespace from the path. (`internal/api/tfe/registry.go:182`)
 

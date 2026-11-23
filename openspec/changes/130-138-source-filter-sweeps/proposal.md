@@ -62,7 +62,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The store lists source filters. (`pkg/store/postgres/sourcefilter.go:21 (func Store.SourceFilters)`)
+- The store lists source filters. (`internal/store/postgres/sourcefilter.go:21 (func Store.SourceFilters)`)
 - The server wires source filters through an option. (`pkg/dustpan/sourcefilter.go:15 (func WithSourceFilters)`)
 - The runner package defines the sweep claim type. (`pkg/runner/store.go:269 (type SweepClaim)`)
 - The runner package defines the sweep claimer port. (`pkg/runner/store.go:244 (type SweepClaimer)`)

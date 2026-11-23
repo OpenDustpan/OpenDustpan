@@ -22,7 +22,7 @@ Evidence for the claims above:
 
 - The pack lists a durable recorder type in the job package. Proof: pkg/job/recorder.go:56 (type DurableRecorder)
 - The pack lists the function that builds the recorder in the server wiring. Proof: pkg/dustpan/runners.go:226 (func newDurableRecorder)
-- The pack lists a PostgreSQL function that starts a durable operation inside a state write. Proof: pkg/store/postgres/state_close.go:91 (func startDurableOperation)
+- The pack lists a PostgreSQL function that starts a durable operation inside a state write. Proof: internal/store/postgres/state_close.go:91 (func startDurableOperation)
 
 ## What Changes
 
@@ -52,8 +52,8 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The DurableRecorder type exists in the job package. (`pkg/job/recorder.go:56 (type DurableRecorder)`)
 - The server wiring builds the recorder. (`pkg/dustpan/runners.go:226 (func newDurableRecorder)`)
-- The PostgreSQL store starts a durable operation in a state close. (`pkg/store/postgres/state_close.go:91 (func startDurableOperation)`)
-- The PostgreSQL store exposes durable operations. (`pkg/store/postgres/durable.go:44 (func Store.DurableOperations)`)
+- The PostgreSQL store starts a durable operation in a state close. (`internal/store/postgres/state_close.go:91 (func startDurableOperation)`)
+- The PostgreSQL store exposes durable operations. (`internal/store/postgres/durable.go:44 (func Store.DurableOperations)`)
 
 ## ADR check
 

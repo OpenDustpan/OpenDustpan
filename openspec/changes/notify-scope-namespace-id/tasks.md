@@ -6,10 +6,10 @@
 
 ## 2. Storage and generated code
 
-- [ ] 2.1 Change `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes` and `MoveCursor` in `pkg/store/sqlite/notifications.go` and `pkg/store/postgres/notifications.go` to read, write and compare the ID. Check: `TestNotificationConformance` case "a namespace made again gets no notification rows" in both dialect packages.
-- [ ] 2.2 Change the sink reads and writes in `pkg/store/sqlite/sinks.go` and `pkg/store/postgres/sinks.go`. Keep the namespace name for the sink secret scope, and change `pkg/notify/seal.go` to use it. Check: the sink cases of the same suite pass.
-- [ ] 2.3 Change the notification queries in `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql` and run `make generate`. Check: `sqlc diff` is clean. Confirmed by: the driver's gates.
-- [ ] 2.4 Change the notification rows of `pkg/store/sqlite/backup_notifications.go` and `pkg/store/sqlite/backup_notification_sinks.go`, and the PostgreSQL counterparts in `pkg/store/postgres`. Check: the backup and restore cases of the suite keep the ID.
+- [ ] 2.1 Change `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes` and `MoveCursor` in `internal/store/sqlite/notifications.go` and `internal/store/postgres/notifications.go` to read, write and compare the ID. Check: `TestNotificationConformance` case "a namespace made again gets no notification rows" in both dialect packages.
+- [ ] 2.2 Change the sink reads and writes in `internal/store/sqlite/sinks.go` and `internal/store/postgres/sinks.go`. Keep the namespace name for the sink secret scope, and change `pkg/notify/seal.go` to use it. Check: the sink cases of the same suite pass.
+- [ ] 2.3 Change the notification queries in `internal/store/sqlite/queries.sql` and `internal/store/postgres/queries.sql` and run `make generate`. Check: `sqlc diff` is clean. Confirmed by: the driver's gates.
+- [ ] 2.4 Change the notification rows of `internal/store/sqlite/backup_notifications.go` and `internal/store/sqlite/backup_notification_sinks.go`, and the PostgreSQL counterparts in `internal/store/postgres`. Check: the backup and restore cases of the suite keep the ID.
 
 ## 3. Services and routes
 

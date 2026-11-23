@@ -26,7 +26,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Plain OAuth providers return no auth_time and the pending sign-in request carries no max_age. Proof: internal/oauth/plain.go:162:// no max_age: a plain OAuth provider returns no auth_time to check it
-- The server stores session rows with provider and auth_time for freshness checks. Proof: pkg/store/sqlite/internal/db/queries.sql.go:2438:INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
+- The server stores session rows with provider and auth_time for freshness checks. Proof: internal/store/sqlite/internal/db/queries.sql.go:2438:INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
 - No server code path names select_account. Proof: rg -n -F --glob '!*_test.go' 'select_account' pkg internal cmd matches 0
 - Main has passkey routes for a person. Proof: route GET /api/dustpan/v1/me/passkeys and POST /api/dustpan/v1/me/passkeys/register/begin in the route table
 

@@ -5,7 +5,7 @@ Job start and other mutating job actions must stop while a namespace freeze is a
 ## Decisions
 
 1. **Freeze as namespace record keyed by stable ID.** Freeze is stored per namespace ID with creator subject ID, reason of 1 to 500 characters, start time, and end record. Job start and dispatch read the active freeze with SELECT FOR UPDATE on PostgreSQL and an equivalent locked read in the same transaction as dispatch on SQLite, so a freeze made between check and dispatch still stops the start on both stores.
-2. **Single active freeze per namespace.** Only one active freeze exists per namespace, enforced by a unique partial index on namespace ID where ended time is null. A second create is refused with 409, and an end with no active freeze is refused with 404.
+2. **Single active freeze per namespace.** Only one active freeze exists per namespace, enforced by a unique partial index on namespace ID where ends_at_ms is 0 (an open freeze) in the baseline of each dialect. A second create is refused with 409, and an end with no active freeze is refused with 404.
 
 ## Structure
 
@@ -40,13 +40,13 @@ Modules that the change touches, and their imports on main:
 
 ```mermaid
 flowchart LR
-P1[internal/freeze]
+P1[pkg/job]
+P2[internal/api/jobs]
 ```
 
 New imports of this change (each one allowed by the module rules):
 
-- `internal/api/runnerapi` imports `internal/freeze`
-- `internal/api/route` imports `internal/freeze`
+- none: `internal/api/jobs` already imports `pkg/job`
 
 States and transitions after this change:
 
@@ -93,7 +93,25 @@ end
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | limit | Single active freeze per namespace ID enforced by a unique partial index with bounded retry on conflict | Insert two concurrent creates and check that one gets 409 and only one active row remains |
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | fail closed | Race loser fails closed with 409 and dispatch loser fails closed with 403 | Race two creates and race a start with a concurrent freeze and check one 409, one 403, and a single active freeze |
 
-## Contracts
+## Contract
+
+The port stays as on main (`pkg/job/gate.go`, `FreezeStore`). This change adds these members in NEW `pkg/job/freeze.go`:
+
+```go
+// ErrFreezeActive is returned by the guard when an active freeze of the
+// namespace exists and a second one is created.
+var ErrFreezeActive = errors.New("an active freeze exists")
+
+// ErrNoActiveFreeze is returned when an end names a namespace that has no
+// active freeze.
+var ErrNoActiveFreeze = errors.New("no active freeze")
+
+// CheckReason returns ErrInvalid for a reason of fewer than 1 or more than
+// 500 characters.
+func CheckReason(reason string) error
+```
+
+The routes are in `internal/api/jobs/routes.go` and NEW `internal/api/jobs/freeze.go`. The store keeps one open freeze for each namespace with a unique partial index on `job_freezes` where `ends_at_ms = 0`.
 
 **freeze**
 

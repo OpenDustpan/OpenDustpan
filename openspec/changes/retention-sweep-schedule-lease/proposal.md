@@ -26,13 +26,13 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above (commands run on main 344dec65):
 
-- The prune method exists and nothing calls it. Proof: `rg -n "PruneExpired" pkg internal cmd --type go` finds the interface (`pkg/gate/store.go:212`), the shared store code (`pkg/store/internal/gatestore/records.go`) and tests only.
+- The prune method exists and nothing calls it. Proof: `rg -n "PruneExpired" pkg internal cmd --type go` finds the interface (`pkg/gate/store.go:212`), the shared store code (`internal/store/gatestore/records.go`) and tests only.
 - The setting exists. Proof: `pkg/gate/retention_setting.go:12` (`RetentionKey`), `:41` (`RetentionPeriod`) and `pkg/dustpan/settings_resource.go:53` (`decisionRecordRetentionDeclaration`).
 - `internal/cron` holds a parser only. The pattern for a scheduled sweep is the constant `deletedSweepEvery` in `pkg/dustpan/sweep.go:22` and the durable schedule list in `pkg/dustpan/schedules.go:78`. Proof: `rg -n "durable|Lease" internal/cron` finds nothing.
 - `pkg/dustpan/area_retention.go` holds job retention only (`history.RetentionSettings`). Proof: it has no reference to `gate` or to decision records.
-- The lease is the durable schedule claim. `ScheduleStore.ClaimTick` (`pkg/durable/schedule.go`) lets one process claim each tick in one conditional update, and the `Runner` holds the started operation under a lease and takes over an expired lease (`pkg/durable/runner.go`). Proof: `pkg/store/sqlite/durable_schedules.go` and `pkg/store/postgres/durable_schedules.go:99`.
+- The lease is the durable schedule claim. `ScheduleStore.ClaimTick` (`pkg/durable/schedule.go`) lets one process claim each tick in one conditional update, and the `Runner` holds the started operation under a lease and takes over an expired lease (`pkg/durable/runner.go`). Proof: `internal/store/sqlite/durable_schedules.go` and `internal/store/postgres/durable_schedules.go:99`.
 - Without a durable store each other sweep runs as a ticker on each instance, with no lease (`pkg/dustpan/schedules.go:468-481`). A prune of evidence must not run twice at once, so this change does not add that fallback.
-- The count cannot be in the caller-built entry today. `PruneExpired` appends the entry that the caller gives before the delete count is known (`pkg/store/internal/gatestore/records.go:337-345`, `Runner.Write` at `pkg/store/internal/gatestore/tx.go:187`). The prune of name counts solves this in the store (`pkg/store/sqlite/namelocks.go:240-262`, `internal/authgate/namelock.go:269`).
+- The count cannot be in the caller-built entry today. `PruneExpired` appends the entry that the caller gives before the delete count is known (`internal/store/gatestore/records.go:337-345`, `Runner.Write` at `internal/store/gatestore/tx.go:187`). The prune of name counts solves this in the store (`internal/store/sqlite/namelocks.go:240-262`, `internal/authgate/namelock.go:269`).
 
 ## What Changes
 
@@ -40,7 +40,7 @@ Evidence for the claims above (commands run on main 344dec65):
 - Register the schedule in `Server.jobSchedules` and the Kind in `Server.jobKinds` (`pkg/dustpan/schedules.go:78`, `:149`), beside `nameLockPruneKind` (`:302`). The durable `Scheduler` and `Runner` already take their lists from these two functions. A duplicate Kind is refused at start (`pkg/durable/runner.go:223-234`).
 - The run reads the retention with `setting.Service.Effective(ctx, setting.InstallationScope(), gate.RetentionKey)` and `gate.RetentionPeriod`. A parse error fails the run and deletes nothing. `0` makes no call and writes no entry.
 - The run lists the namespaces with `namespace.Store.ListNamespaces`. For each namespace it asks `Records.Query` for one record of the decision point state.write before the cutoff. If there is none, it makes no call. Else it calls `Records.PruneExpired` with the namespace name, the request, the fence of the namespace and the entry in batches of `gate.MaxPruneBatch` until a short batch, a cap of batches for the run or the deadline. A fenced namespace is skipped. The server scope is never given to a call.
-- Change `PruneExpired` so that the entry carries the count: add NEW method `WriteCounted` to `Runner` in `pkg/store/internal/gatestore/tx.go`. It appends the change `pruned` with the count of the deleted records in the same transaction. Implement it in `pkg/store/sqlite/gate.go` and `pkg/store/postgres/gate.go`, and add a case to the records conformance suite `pkg/gate/gatetest/run_records.go`.
+- Change `PruneExpired` so that the entry carries the count: add NEW method `WriteCounted` to `Runner` in `internal/store/gatestore/tx.go`. It appends the change `pruned` with the count of the deleted records in the same transaction. Implement it in `internal/store/sqlite/gate.go` and `internal/store/postgres/gate.go`, and add a case to the records conformance suite `pkg/gate/gatetest/run_records.go`.
 - Replace the text "No job deletes decision records yet" in the declaration of the setting (`pkg/dustpan/settings_resource.go:48-62`).
 - Update `docs/guides/decision-record-retention.md`: the sections "Why the records grow", "The prune method" and "What is not available yet".
 - Add an e2e step to the HA suite (`e2e/ha_schedules_test.go`) and an internal test that ages records with the server clock.
@@ -70,7 +70,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main 344dec65. The change specifies only the difference.
 
 - The retention setting is declared. (`pkg/dustpan/settings_resource.go:53 (func decisionRecordRetentionDeclaration)`; `pkg/gate/retention_setting.go:12`, `:41 (func RetentionPeriod)`)
-- `PruneExpired` deletes at most `req.Batch()` records of one namespace at `state.write`, lowest ID first, and appends the caller's entry in the same transaction, also with no match. It refuses `audit.ServerScope`, an invalid name and a wrong fence. (`pkg/gate/store.go:212`; `pkg/store/internal/gatestore/records.go:309-358`)
+- `PruneExpired` deletes at most `req.Batch()` records of one namespace at `state.write`, lowest ID first, and appends the caller's entry in the same transaction, also with no match. It refuses `audit.ServerScope`, an invalid name and a wrong fence. (`pkg/gate/store.go:212`; `internal/store/gatestore/records.go:309-358`)
 - `gate.NewPruneRequest` refuses a zero cutoff and a batch outside 1 to 1000. (`pkg/gate/prune.go:20`)
 - The durable schedule list and Kind list are `Server.jobSchedules` and `Server.jobKinds`. (`pkg/dustpan/schedules.go:78`, `:149`)
 - A prune with a count in its entry exists for name counts. (`internal/localusersvc/locks.go:356-364`, `:488-548 (func PruneLocks)`; `internal/authgate/namelock.go:269 (func PrunedChange)`)
