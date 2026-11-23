@@ -406,6 +406,8 @@ type chunkAppend struct {
 func (r *DurableRecorder) storeLogChunk(ctx context.Context, c PhaseClaim, a *chunkAppend) error {
 	step, seq := a.step, a.seq
 
+	// Defense in depth: the session handler checks the name and the number too;
+	// this check stays so that another caller of the recorder cannot skip it.
 	if err := CheckChunkKey(step, seq); err != nil {
 		return err
 	}
