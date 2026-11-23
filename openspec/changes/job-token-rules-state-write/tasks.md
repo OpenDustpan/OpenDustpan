@@ -19,7 +19,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Not applicable: the change adds no route and no field, so `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves the golden file and the clients unchanged.
+- [x] 3.1 Not applicable: the change adds no route and no field, so `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves the golden file and the clients unchanged.
 
 ## 4. Definition of done
 
