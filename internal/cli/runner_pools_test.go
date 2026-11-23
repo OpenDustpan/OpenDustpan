@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"opendustpan.org/opendustpan/pkg/runner"
 )
 
 const (
@@ -147,47 +149,135 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 	for name, answer := range map[string]string{
 		"hostile pool ID":    `{"pools":[` + poolAnswer("../other", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
 		"missing pool ID":    `{"pools":[{"name":"jobs","purpose":"jobs","concurrency":1}]}`,
-		"unknown purpose":    `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "other", 1, `["kubernetes"]`) + `]}`,
-		"hostile name":       `{"pools":[` + poolAnswer(testPoolIDJobs, "Bad name", "jobs", 1, `["kubernetes"]`) + `]}`,
-		"bad concurrency":    `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 0, `["kubernetes"]`) + `]}`,
-		"unknown isolation":  `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["unknown"]`) + `]}`,
-		"isolation not text": `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `[1]`) + `]}`,
+		"no pool prefix":     `{"pools":[` + poolAnswer("xx-0123456789abcdefghij", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
+		"bare pool prefix":   `{"pools":[` + poolAnswer("rp-", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
+		"pool ID with space": `{"pools":[` + poolAnswer("rp-a b", "jobs", "jobs", 1, `["kubernetes"]`) + `]}`,
+		"pool ID too long": `{"pools":[` + poolAnswer("rp-"+strings.Repeat("a", 62), "jobs", "jobs", 1,
+			`["kubernetes"]`) + `]}`,
+		"concurrency too big": `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", runner.MaxConcurrency+1, `["kubernetes"]`) + `]}`,
+		"null answer":         `null`,
+		"unknown purpose":     `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "other", 1, `["kubernetes"]`) + `]}`,
+		"hostile name":        `{"pools":[` + poolAnswer(testPoolIDJobs, "Bad name", "jobs", 1, `["kubernetes"]`) + `]}`,
+		"bad concurrency":     `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 0, `["kubernetes"]`) + `]}`,
+		"unknown isolation":   `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["unknown"]`) + `]}`,
+		"isolation not text":  `{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `[1]`) + `]}`,
+	} {
+		for _, extra := range [][]string{{}, {"--output", "json"}} {
+			t.Run(name+" "+strings.Join(extra, " "), func(t *testing.T) {
+				t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+				t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
+
+				srv := serveCollectionCommands(t, []commandAnswer{
+					{"GET", runnerPoolsPath, "", 200, answer},
+				})
+
+				args := append([]string{"--server", srv.URL, "--namespace", "acme"}, extra...)
+				got := runCommand(t, "runner pools list", args, "variable")
+
+				checkCollectionResult(t, got, "", "opendustpan runner pools list")
+			})
+		}
+	}
+}
+
+// TestRunnerPoolsListRefusesBadFlags proves an unknown flag, a missing
+// --server and an --output value other than json are errors, and that no
+// request goes out.
+func TestRunnerPoolsListRefusesBadFlags(t *testing.T) {
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+	t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
+
+	for name, tc := range map[string]struct {
+		args      []string
+		noServer  bool
+		errorText string
+	}{
+		"unknown flag":    {[]string{"--namespace", "acme", "--bogus"}, false, "bogus"},
+		"no server":       {[]string{"--namespace", "acme"}, true, "--server"},
+		"output not json": {[]string{"--namespace", "acme", "--output", "yaml"}, false, "--output"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+			t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
+
+			srv := serveCollectionCommands(t, nil)
+
+			args := tc.args
+			if !tc.noServer {
+				args = append([]string{"--server", srv.URL}, args...)
+			}
+
+			checkCollectionResult(t, runCommand(t, "runner pools list", args, "variable"), "", tc.errorText)
+		})
+	}
+}
+
+// TestRunnerPoolsListRefusesBadServerOrToken proves a --server value that is
+// not a URL, a --server value with user information and a run without an admin
+// token are errors, and that no request goes out.
+func TestRunnerPoolsListRefusesBadServerOrToken(t *testing.T) {
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+	t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
+
+	for name, tc := range map[string]struct {
+		server      func(base string) string
+		tokenSource string
+		errorText   string
+	}{
+		"server not a URL": {
+			func(string) string { return "http://%zz" }, "variable", "the value is not a URL",
+		},
+		"server with user information": {
+			func(base string) string { return strings.Replace(base, "http://", "http://admin@", 1) },
+			"variable", "the URL has user information",
+		},
+		"no token": {
+			func(base string) string { return base }, "", "no admin token is set",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+			t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
+
+			srv := serveCollectionCommands(t, nil)
+
+			got := runCommand(t, "runner pools list",
+				[]string{"--server", tc.server(srv.URL), "--namespace", "acme"}, tc.tokenSource)
+
+			checkCollectionResult(t, got, "", tc.errorText)
+		})
+	}
+}
+
+// TestRunnerPoolsListBoundAnswers proves a body that is not JSON, a JSON value
+// of the wrong shape and a valid JSON body above the cap of the read are errors
+// that name the cause.
+func TestRunnerPoolsListBoundAnswers(t *testing.T) {
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+	t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
+
+	empty := `{"pools":[]}`
+
+	for name, tc := range map[string]struct {
+		answer    string
+		errorText string
+	}{
+		"not JSON":       {`{`, "decode server answer"},
+		"pools not list": {`{"pools":"text"}`, "decode server answer"},
+		"above the cap":  {empty + strings.Repeat(" ", 1<<20+1-len(empty)), "over 1048576 bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
 			t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
 
 			srv := serveCollectionCommands(t, []commandAnswer{
-				{"GET", runnerPoolsPath, "", 200, answer},
+				{"GET", runnerPoolsPath, "", 200, tc.answer},
 			})
 
 			got := runCommand(t, "runner pools list",
 				[]string{"--server", srv.URL, "--namespace", "acme"}, "variable")
 
-			checkCollectionResult(t, got, "", "opendustpan runner pools list")
-		})
-	}
-}
-
-// TestRunnerPoolsListBoundAnswers proves a body that is not JSON and a body
-// above the cap of the read are errors that name the command.
-func TestRunnerPoolsListBoundAnswers(t *testing.T) {
-	t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
-	t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
-
-	for _, answer := range []string{`{`, strings.Repeat("x", 1<<20+1)} {
-		t.Run(answer[:1], func(t *testing.T) {
-			t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
-			t.Setenv("DUSTPAN_ADMIN_TOKEN_FILE", "")
-
-			srv := serveCollectionCommands(t, []commandAnswer{
-				{"GET", runnerPoolsPath, "", 200, answer},
-			})
-
-			got := runCommand(t, "runner pools list",
-				[]string{"--server", srv.URL, "--namespace", "acme"}, "variable")
-
-			checkCollectionResult(t, got, "", "runner pools list")
+			checkCollectionResult(t, got, "", tc.errorText)
 		})
 	}
 }

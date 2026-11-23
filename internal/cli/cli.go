@@ -41,7 +41,6 @@ const (
 	commandKey             = "key"
 	commandList            = "list"
 	commandNamespace       = "namespace"
-	commandOutput          = "output"
 	commandPlacement       = "placement"
 	commandPools           = "pools"
 	commandRestore         = "restore"

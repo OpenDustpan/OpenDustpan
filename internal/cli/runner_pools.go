@@ -13,7 +13,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,9 +28,6 @@ import (
 // runnerPoolsCommand is the command path of the runner pool list, as the
 // errors name it.
 const runnerPoolsCommand = "runner pools list"
-
-// errAnswerBufferNil reports a nil answer buffer in UnmarshalJSON.
-var errAnswerBufferNil = errors.New("answer buffer is nil")
 
 // poolEntry is one pool as the management API answers it. The command reads
 // only the fields that it prints, so a new field of the answer changes
@@ -146,7 +142,7 @@ func RunnerPoolsList(ctx context.Context, args []string, stdout, stderr io.Write
 
 	// Defense in depth: keep the whole answer, so that --output json
 	// prints exactly what the server sent. The read cap still bounds it.
-	var raw answerBuffer
+	var raw json.RawMessage
 
 	err = inventoryDo(ctx, inventoryConn{server: server, caFile: f.caFile, token: token}, inventoryCall{
 		command: runnerPoolsCommand,
@@ -160,35 +156,41 @@ func RunnerPoolsList(ctx context.Context, args []string, stdout, stderr io.Write
 		return err
 	}
 
-	if strings.TrimSpace(f.output) == "json" {
-		return writeLine(stdout, runnerPoolsCommand, "%s\n", strings.TrimSpace(raw.String()))
+	// The answer is checked in both output formats before anything prints.
+	lines, err := validatePools(raw)
+	if err != nil {
+		return err
 	}
 
-	return printPools(stdout, raw.Bytes())
+	if strings.TrimSpace(f.output) == "json" {
+		return writeLine(stdout, runnerPoolsCommand, "%s\n", strings.TrimSpace(string(raw)))
+	}
+
+	return printPools(stdout, lines)
 }
 
-// printPools decodes the raw server answer, validates each pool, and prints
-// one line per pool sorted by name.
-func printPools(stdout io.Writer, raw []byte) error {
+// validatePools decodes the raw server answer and validates each pool. It
+// answers the rows in print order.
+func validatePools(raw []byte) ([]poolLine, error) {
 	var doc poolListAnswer
 
 	if err := decodeAnswer(raw, &doc); err != nil {
-		return fmt.Errorf("%w: %s: %w: run opendustpan %s again",
+		return nil, fmt.Errorf("%w: %s: %w: run opendustpan %s again",
 			ErrInventoryRequest, runnerPoolsCommand, err, runnerPoolsCommand)
 	}
 
 	// Defense in depth: a valid JSON value that is not the answer document
 	// is an error, not an empty list. Check the shape before it prints.
 	if doc.Pools == nil {
-		return fmt.Errorf("%w: %s: the server answer has no pools list: run opendustpan %s again",
+		return nil, fmt.Errorf("%w: %s: the server answer has no pools list: run opendustpan %s again",
 			ErrInventoryRequest, runnerPoolsCommand, runnerPoolsCommand)
 	}
 
-	lines, err := checkPools(doc)
-	if err != nil {
-		return err
-	}
+	return checkPools(doc)
+}
 
+// printPools prints one line per pool.
+func printPools(stdout io.Writer, lines []poolLine) error {
 	for _, line := range lines {
 		writeErr := writeLine(stdout, runnerPoolsCommand, "%s\t%s\t%s\t%d\t%s\n",
 			line.name, line.id, line.purpose, line.concurrency, line.isolation)
@@ -199,28 +201,6 @@ func printPools(stdout io.Writer, raw []byte) error {
 
 	return nil
 }
-
-// answerBuffer is the JSON decoder target that keeps the raw answer bytes.
-type answerBuffer struct {
-	raw []byte
-}
-
-// UnmarshalJSON implements json.Unmarshaler: it copies the raw bytes.
-func (b *answerBuffer) UnmarshalJSON(data []byte) error {
-	if b == nil {
-		return errAnswerBufferNil
-	}
-
-	b.raw = append(b.raw[:0], data...)
-
-	return nil
-}
-
-// Bytes answers the raw answer.
-func (b *answerBuffer) Bytes() []byte { return b.raw }
-
-// String answers the raw answer as text.
-func (b *answerBuffer) String() string { return string(b.raw) }
 
 // decodeAnswer decodes the raw answer of the server into doc.
 func decodeAnswer(raw []byte, doc *poolListAnswer) error {
