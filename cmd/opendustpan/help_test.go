@@ -37,6 +37,7 @@ func TestUsageGroupsByIntent(t *testing.T) {
 		{"Operate", []string{
 			"health", "namespace create", "collection create", "collection list",
 			"placement add", "placement list", "placement delete",
+			"runner pools list",
 			"host create-temp-admin", "audit-chain status", "audit-chain approve",
 			"store check",
 		}},
