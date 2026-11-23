@@ -74,21 +74,19 @@ func (r *RetryReport) Add(attempt WriteAttempt) error {
 
 	r.attempted[attempt.Version] = true
 
-	key := attempt.Version + "|" + attempt.Method + "|" + attempt.Path
+	version := attempt.Version
 
-	first, seen := r.first[key]
-	if !seen {
-		r.first[key] = attempt.At
-		r.last[key] = attempt.At
-	} else if attempt.At.After(r.last[key]) {
-		r.last[key] = attempt.At
+	first, seen := r.first[version]
+	if !seen || attempt.At.Before(first) {
+		r.first[version] = attempt.At
 	}
 
-	if seen && attempt.At.Before(first) {
-		r.first[key] = attempt.At
+	last, seen := r.last[version]
+	if !seen || attempt.At.After(last) {
+		r.last[version] = attempt.At
 	}
 
-	r.windows[attempt.Version] = r.last[key].Sub(r.first[key])
+	r.windows[version] = r.last[version].Sub(r.first[version])
 
 	return nil
 }

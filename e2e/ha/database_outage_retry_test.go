@@ -153,6 +153,50 @@ func TestDatabaseOutageRetryReportOneAttempt(t *testing.T) {
 	}
 }
 
+// TestDatabaseOutageRetryReportTwoPaths proves that the window of a version
+// runs from its earliest attempt to its latest attempt across all write
+// paths, also when the attempts arrive out of order.
+func TestDatabaseOutageRetryReportTwoPaths(t *testing.T) {
+	t.Parallel()
+
+	matrix := []ha.CLIVersion{{Tool: "pulumi", Version: "3.262.0"}}
+	report := ha.NewRetryReport(matrix)
+	base := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
+
+	attempts := []struct {
+		method string
+		path   string
+		at     time.Time
+	}{
+		{http.MethodPost, "/api/stacks/acme/web/dev/update", base.Add(2 * time.Second)},
+		{http.MethodPatch, "/api/stacks/acme/web/dev/update/u1/checkpoint", base.Add(5 * time.Second)},
+		{http.MethodPatch, "/api/stacks/acme/web/dev/update/u1/checkpoint", base.Add(9 * time.Second)},
+		{http.MethodPost, "/api/stacks/acme/web/dev/update", base},
+	}
+
+	for _, a := range attempts {
+		attempt := ha.WriteAttempt{
+			Version: "pulumi 3.262.0",
+			Method:  a.method,
+			Path:    a.path,
+			Status:  http.StatusServiceUnavailable,
+			At:      a.at,
+		}
+
+		if err := report.Add(attempt); err != nil {
+			t.Fatalf("record %s %s: %v", a.method, a.path, err)
+		}
+	}
+
+	if got := report.Shortest(); got != 9*time.Second {
+		t.Errorf("smallest retry window is %s, want 9s", got)
+	}
+
+	if got, want := report.String(), "pulumi 3.262.0: 9s"; got != want {
+		t.Errorf("retry report is %q, want %q", got, want)
+	}
+}
+
 // TestDatabaseOutageRetryReportNotMeasured proves that the report names a
 // matrix version with no attempt as not measured, not as a window of 0s.
 func TestDatabaseOutageRetryReportNotMeasured(t *testing.T) {
