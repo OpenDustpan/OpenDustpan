@@ -22,4 +22,4 @@
 - [x] 4.1 Confirm the wiring reuses the existing per-workspace backend with its authorization actions. Check: The route test passes with the existing per-workspace actions from local-run-all
 - [x] 4.2 Run the e2e CI form over 3 units against the real binary and real OpenTofu with an access token. The test calls GET /api/v2/state-versions?filter[workspace][name]=...&filter[organization][name]=... (the route that the TFE-compatible API serves, internal/api/tfe/states_test.go:213 and :646) with an access token. Check: `make e2e` Terragrunt CI step passes with an access token.
 - [ ] 4.3 Agent pre-run (human run-through in person-steps (run-all-in-ci-team 4.3)): Run the usability check from the docs page alone. Check: The person completes the path from the docs page alone and each error names one command. Record the transcript in the pull request body.
-- [ ] 4.4 Run the full check suite. Check: `make check` with zero findings.
+- [ ] 4.4 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
