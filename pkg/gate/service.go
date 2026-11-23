@@ -301,7 +301,9 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 			return Decision{}, denied
 		}
 
-		// A job token has no break-glass pass.
+		// A job token has no break-glass pass. Defense in depth: GuardStateWrite
+		// always passes an empty pass; this check stays so that a new caller of
+		// Evaluate cannot give a job token a pass.
 		if c.BreakGlass != "" {
 			return Decision{}, fmt.Errorf("%w: a job token sets no break-glass pass", identity.ErrDenied)
 		}
