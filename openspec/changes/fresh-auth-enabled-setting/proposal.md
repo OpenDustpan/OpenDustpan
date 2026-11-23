@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #3257.
@@ -67,7 +67,7 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - pkg/dustpan (wiring): makes the one `Policy` and the `Guard` of each layer.
 - internal/api/apidesc (openapi.json), clients/typescript: regenerated.
 - docs/guides/approval-rules.md, docs/guides/access-tokens.md, docs/guides/console-sign-in.md: the setting and its effect.
-- e2e/coverage_jobs.go: the step that approves a `destroy` with an access token.
+- e2e/settings_test.go: the step that changes `freshAuthEnabled` and reads its effective value. No e2e step approves a `destroy` with an access token: the jobs API cannot start a `destroy` job (`job.unsupported`), so `TestDestroyApprovalByTokenFollowsSetting` proves that case.
 
 ## Check
 
