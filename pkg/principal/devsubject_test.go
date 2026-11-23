@@ -119,7 +119,7 @@ func TestSignInDevAdministrator(t *testing.T) {
 
 	req := principal.PageRequest{Prefix: principal.DevSubjectPrefix, Cursor: "", Limit: 10}
 
-	page, err := f.svc.ListPrincipals(t.Context(), req, "")
+	page, err := f.svc.ListPrincipals(t.Context(), req, "", "")
 	if err != nil || page.Total != 1 {
 		t.Fatalf("people with the dev prefix = %d, %v; want 1", page.Total, err)
 	}

@@ -82,6 +82,7 @@ func testReviewHistoryHidesSuspendedMember(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 
 	ps, ok := s.(principal.Store)
 	if !ok {
@@ -133,12 +134,15 @@ func testReviewHistoryHidesSuspendedMember(t *testing.T, s access.Store) {
 	q.Expand = true
 	q.History, q.FromMs, q.ToMs = true, at(0).UnixMilli(), at(snapshotMinute).UnixMilli()
 
-	rows := review(t, rs, "expanded export without the suspended member", q, "grt-1")
-	if len(rows) != 1 || rows[0].Via == nil || rows[0].Via.PrincipalID != "prn-active" {
-		t.Fatalf("expanded row = %+v, want the active member", rows)
+	rows := review(t, rs, "expanded export without the suspended member", q,
+		slices.Concat(install, []string{"grt-1"})...)
+	row := rows[len(install)]
+
+	if len(rows) != len(install)+1 || row.Via == nil || row.Via.PrincipalID != "prn-active" {
+		t.Fatalf("expanded row = %+v, want the active member", row)
 	}
 
-	if rows[0].MemberCount == nil || *rows[0].MemberCount != 1 {
-		t.Fatalf("member count = %+v, want 1 active member", rows[0].MemberCount)
+	if row.MemberCount == nil || *row.MemberCount != 1 {
+		t.Fatalf("member count = %+v, want 1 active member", row.MemberCount)
 	}
 }

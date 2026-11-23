@@ -103,12 +103,15 @@ func TestReviewScopesAndActions(t *testing.T) {
 
 	// The bootstrap admin token holds every action with no grant. An account
 	// administrator and a namespace admin can both change who has access.
+	// The installation grant of the agent reaper reaches the namespace: its
+	// role holds an action inside it.
 	want := []string{
 		"bootstrap admin token admin @server <@server grant=true",
 		"principal:prn-alice admin acme < grant=true",
 		"principal:prn-ann account-administrator @server <@server grant=true",
+		"principal:prn-housekeeping-agent-reaper housekeeping-agent-reaper @server <@server grant=false",
 	}
-	if !slices.Equal(got, want) || ns.Total == nil || *ns.Total != 3 || ns.AsOfMs == nil {
+	if !slices.Equal(got, want) || ns.Total == nil || *ns.Total != 4 || ns.AsOfMs == nil {
 		t.Fatalf("export of acme = %q (total %v, as of %v), want %q", got, ns.Total, ns.AsOfMs, want)
 	}
 
@@ -132,8 +135,11 @@ func TestReviewScopesAndActions(t *testing.T) {
 	var all reviewDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/access-review", "", http.StatusOK}, &all)
 
-	if all.Total == nil || *all.Total != 4 {
-		t.Fatalf("export of the installation = %+v, want the 3 seeded grants and the bootstrap admin", all)
+	// The total is the 4 fixture rows and the 7 grants of the installation
+	// principals.
+	if all.Total == nil || *all.Total != 11 {
+		t.Fatalf("export of the installation = %+v, want the 3 seeded grants, the bootstrap admin and 7 install grants",
+			all)
 	}
 
 	f.as(t, "ann", apiCall{
@@ -225,10 +231,11 @@ func TestReviewPagesOneSnapshot(t *testing.T) {
 	var first reviewDoc
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/access-review?limit=2", "", http.StatusOK}, &first)
 
-	// The bootstrap row counts inside the limit.
-	if first.Total == nil || *first.Total != 4 || first.AsOfMs == nil || first.NextCursor == "" ||
+	// The bootstrap row counts inside the limit. The total is the 4 fixture
+	// rows and the 7 grants of the installation principals.
+	if first.Total == nil || *first.Total != 11 || first.AsOfMs == nil || first.NextCursor == "" ||
 		len(first.Grants) != 2 || first.Grants[0].Holder != access.BootstrapHolder {
-		t.Fatalf("first page = %+v, want the bootstrap row, 1 grant, a total and a time", first)
+		t.Fatalf("first page = %+v, want the bootstrap row, one more grant, a total and a time", first)
 	}
 
 	var next reviewDoc

@@ -195,9 +195,12 @@ func (s *Service) GetPrincipal(ctx context.Context, id string) (Principal, error
 
 // ListPrincipals returns one page of the principals, ordered by subject.
 // The prefix matches the start of the subject, exactly. A kind that is not
-// empty keeps the principals of that kind. An unknown kind returns
+// empty keeps the principals of that kind. A source that is not empty keeps
+// the principals of that source. An unknown kind or source returns
 // ErrInvalid.
-func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind) (Page[Principal], error) {
+func (s *Service) ListPrincipals(
+	ctx context.Context, req PageRequest, kind Kind, source Source,
+) (Page[Principal], error) {
 	if kind != "" {
 		parsed, err := ParseKind(string(kind))
 		if err != nil {
@@ -207,12 +210,21 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest, kind Kind
 		kind = parsed
 	}
 
+	if source != "" {
+		parsed, err := ParseSource(string(source))
+		if err != nil {
+			return Page[Principal]{}, err
+		}
+
+		source = parsed
+	}
+
 	q, limit, err := req.query(exactKey)
 	if err != nil {
 		return Page[Principal]{}, err
 	}
 
-	rows, total, err := s.store.ListPrincipals(ctx, q, kind)
+	rows, total, err := s.store.ListPrincipals(ctx, q, kind, source)
 	if err != nil {
 		return Page[Principal]{}, fmt.Errorf("list principals: %w", err)
 	}

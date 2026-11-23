@@ -128,9 +128,15 @@ var families = map[identity.Action]Family{
 	identity.ActionInstallationReadGates: FamilyOperator,
 	// The gates, the access limits and the approval rules of the installation
 	// act on every namespace, so a write of them is an operator action.
-	identity.ActionInstallationManageGates: FamilyOperator,
-	identity.ActionServerMaintenance:       FamilyOperator,
-	identity.ActionServerObserve:           FamilyOperator,
+	identity.ActionInstallationManageGates:             FamilyOperator,
+	identity.ActionServerMaintenance:                   FamilyOperator,
+	identity.ActionServerObserve:                       FamilyOperator,
+	identity.ActionServerSweepArtifacts:                FamilyOperator,
+	identity.ActionServerSweepBlobs:                    FamilyOperator,
+	identity.ActionServerSweepCheckpoints:              FamilyOperator,
+	identity.ActionServerPruneNameLocks:                FamilyOperator,
+	identity.ActionServerExpireTemporaryAdministrators: FamilyOperator,
+	identity.ActionServerSweepAgentReveals:             FamilyOperator,
 	// The version rows of the server processes: the list, and the delete of
 	// the row of a process that died.
 	identity.ActionServerReadInstances:  FamilyOperator,
@@ -225,8 +231,10 @@ var families = map[identity.Action]Family{
 	identity.ActionJobReadPlans:                      FamilyData,
 	identity.ActionJobCancel:                         FamilyData,
 	identity.ActionJobApprove:                        FamilyData,
+	identity.ActionJobReconcile:                      FamilyData,
 	identity.ActionNamespaceReadRunners:              FamilyData,
 	identity.ActionNamespaceManageRunners:            FamilyData,
+	identity.ActionNamespaceManageAgentRuns:          FamilyData,
 	identity.ActionUnitDefineSteps:                   FamilyData,
 	identity.ActionProfileRead:                       FamilyData,
 	identity.ActionProfileWrite:                      FamilyData,
@@ -240,6 +248,7 @@ var families = map[identity.Action]Family{
 	identity.ActionRegistryPublish:                   FamilyData,
 	identity.ActionRegistryManageKeys:                FamilyData,
 	identity.ActionNamespaceManageIssuer:             FamilyData,
+	identity.ActionUnitRedact:                        FamilyData,
 
 	identity.ActionCallerRead:               FamilySelf,
 	identity.ActionRoleRead:                 FamilySelf,
@@ -551,14 +560,19 @@ type GrantStore interface {
 	// holds with one of roles, on any object, in one query. It serves
 	// list-objects.
 	GrantsWithRoles(ctx context.Context, subjects []Subject, roles []string) ([]Grant, error)
-	// CreateNamespaceWithGrant persists ns, g and e in one transaction: the
-	// creator of a namespace holds the namespace-admin role on it from the
-	// start. A grant with no ID stores the namespace and the entry alone. It
-	// returns namespace.ErrAlreadyExists when the name is taken. With a grant
-	// it keeps the entry e in the scope audit.ServerScope and appends the same
-	// grant entry in the chain of the new namespace, so the chain starts with
-	// the grant of its creator.
-	CreateNamespaceWithGrant(ctx context.Context, ns namespace.Namespace, g Grant, e audit.Entry) error
+	// CreateNamespaceWithGrants persists ns, grants and their entries in one
+	// transaction: the creator of a namespace holds the namespace-admin role
+	// on it from the start, and the housekeeping principals hold their roles
+	// on it. An empty list of grants stores the namespace and the entry e
+	// alone. It returns namespace.ErrAlreadyExists when the name is taken, and
+	// ErrInvalid when the lists differ in length or a grant has no ID. The
+	// entry e stays in the scope audit.ServerScope. grantEntries holds the
+	// entry of each grant, in the order of grants: the store appends each one
+	// in the chain of the new namespace, so the chain starts with the grants.
+	// A grant that fails to insert leaves no namespace row.
+	CreateNamespaceWithGrants(
+		ctx context.Context, ns namespace.Namespace, grants []Grant, e audit.Entry, grantEntries []audit.Entry,
+	) error
 }
 
 // GrantLookups reads the current grants that a change of who holds them

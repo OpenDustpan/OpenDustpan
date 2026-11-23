@@ -657,7 +657,7 @@ func (p Principal) validateNamespace() error {
 }
 
 // validateSource returns ErrInvalid for a source that is not local, ldap,
-// scim, oidc or oauth.
+// scim, oidc, oauth or builtin.
 func validateSource(s Source) error {
 	if _, err := ParseSource(string(s)); err != nil {
 		return err

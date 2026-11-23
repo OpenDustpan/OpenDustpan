@@ -526,7 +526,6 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionRunnerClaim,
 		identity.ActionAgentUse,
 		identity.ActionAgentStartRun,
-		identity.ActionNamespaceManageAgentRuns,
 		identity.ActionNamespaceManageAgent,
 		identity.ActionServerManageAgent,
 		identity.ActionServerAcceptAgentSecretAccess,
@@ -541,7 +540,6 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionCollectionSetContext,
 		identity.ActionBlueprintRead,
 		identity.ActionBlueprintSetContext,
-		identity.ActionUnitRedact,
 		// The offer of the first administrator has a route and still no
 		// family, on purpose: only a principal with Admin passes the
 		// authorizer, and the route also needs the static bootstrap

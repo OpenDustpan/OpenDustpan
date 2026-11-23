@@ -3,6 +3,7 @@ package accesstest
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -76,6 +77,7 @@ func testReviewMembershipSources(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 	members := reviewMemberships()
 	seedReviewMembers(t, s, members)
 
@@ -84,9 +86,10 @@ func testReviewMembershipSources(t *testing.T, s access.Store) {
 		q.Expand, q.History = true, history
 		q.FromMs, q.ToMs = at(0).UnixMilli(), at(60).UnixMilli()
 
-		rows := review(t, rs, "membership sources", q, "grt-ops", "grt-ops", "grt-ops")
+		want := slices.Concat(install, []string{"grt-ops", "grt-ops", "grt-ops"})
+		rows := review(t, rs, "membership sources", q, want...)
 		for i := range members {
-			checkReviewMembership(t, rows[i].Via, wantVia{member: members[i], suspended: false})
+			checkReviewMembership(t, rows[i+len(install)].Via, wantVia{member: members[i], suspended: false})
 		}
 	}
 
@@ -130,6 +133,7 @@ func testReviewMembershipSuspension(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 	members := reviewMemberships()
 	members[1].State, members[1].SuspendedAt = principal.MembershipStateSuspended, at(20)
 	members[2].State, members[2].SuspendedAt = principal.MembershipStateSuspended, at(40)
@@ -146,14 +150,16 @@ func testReviewMembershipSuspension(t *testing.T, s access.Store) {
 	} {
 		q := everyRow(allScope())
 		q.Expand, q.AsOfMs = true, at(c.minute).UnixMilli()
-		rows := review(t, rs, "snapshot membership suspension", q, "grt-ops", "grt-ops", "grt-ops")
+
+		want := slices.Concat(install, []string{"grt-ops", "grt-ops", "grt-ops"})
+		rows := review(t, rs, "snapshot membership suspension", q, want...)
 
 		for i := range members {
-			checkReviewMembership(t, rows[i].Via, wantVia{member: members[i], suspended: c.want[i]})
+			checkReviewMembership(t, rows[i+len(install)].Via, wantVia{member: members[i], suspended: c.want[i]})
 		}
 	}
 
-	checkReviewSuspensionFilters(t, rs, members)
+	checkReviewSuspensionFilters(t, rs, members, install)
 
 	for i := range members {
 		q := callerQuery(snapshotMinute)
@@ -168,7 +174,9 @@ func testReviewMembershipSuspension(t *testing.T, s access.Store) {
 }
 
 // checkReviewSuspensionFilters checks expanded and filtered snapshots and histories.
-func checkReviewSuspensionFilters(t *testing.T, rs access.ReviewStore, members []principal.Membership) {
+func checkReviewSuspensionFilters(
+	t *testing.T, rs access.ReviewStore, members []principal.Membership, install []string,
+) {
 	t.Helper()
 
 	for _, history := range []bool{false, true} {
@@ -176,9 +184,9 @@ func checkReviewSuspensionFilters(t *testing.T, rs access.ReviewStore, members [
 		q.Expand, q.History = true, history
 		q.FromMs, q.ToMs = at(0).UnixMilli(), at(60).UnixMilli()
 
-		want := []string{"grt-ops", "grt-ops", "grt-ops"}
+		want := slices.Concat(install, []string{"grt-ops", "grt-ops", "grt-ops"})
 		if history {
-			want = want[:1]
+			want = slices.Concat(install, []string{"grt-ops"})
 		}
 
 		review(t, rs, "expanded membership suspension", q, want...)
@@ -244,6 +252,7 @@ func testReviewAsOf(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 
 	ps, ok := s.(principal.Store)
 	if !ok {
@@ -267,10 +276,10 @@ func testReviewAsOf(t *testing.T, s access.Store) {
 		return q
 	}
 
-	review(t, rs, "snapshot at minute 0", asOf(0))
-	review(t, rs, "snapshot at minute 1", asOf(1), "grt-1")
-	review(t, rs, "snapshot at minute 4", asOf(4), "grt-1", "grt-2")
-	review(t, rs, "snapshot at minute 5", asOf(5), "grt-2")
+	review(t, rs, "snapshot at minute 0", asOf(0), install...)
+	review(t, rs, "snapshot at minute 1", asOf(1), slices.Concat(install, []string{"grt-1"})...)
+	review(t, rs, "snapshot at minute 4", asOf(4), slices.Concat(install, []string{"grt-1", "grt-2"})...)
+	review(t, rs, "snapshot at minute 5", asOf(5), slices.Concat(install, []string{"grt-2"})...)
 
 	// alice is a member from minute 2 to 6 and from minute 8.
 	q := asOf(4)
@@ -291,6 +300,7 @@ func testReviewExpand(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 
 	ps, ok := s.(principal.Store)
 	if !ok {
@@ -309,34 +319,37 @@ func testReviewExpand(t *testing.T, s access.Store) {
 	q := everyRow(allScope())
 	q.Expand = true
 
-	rows := review(t, rs, "expanded export", q, "grt-1", "grt-2", "grt-2", "grt-3")
+	want := slices.Concat(install, []string{"grt-1", "grt-2", "grt-2", "grt-3"})
+	rows := review(t, rs, "expanded export", q, want...)
 
-	members := []string{rows[1].Via.PrincipalSubject, rows[2].Via.PrincipalSubject}
-	if members[0] != "xavier" || members[1] != "yvonne" || rows[1].Via.PrincipalID != "prn-x" {
+	offset := len(install)
+	members := []string{rows[offset+1].Via.PrincipalSubject, rows[offset+2].Via.PrincipalSubject}
+	if members[0] != "xavier" || members[1] != "yvonne" || rows[offset+1].Via.PrincipalID != "prn-x" {
 		t.Fatalf("member rows = %v, want xavier then yvonne", members)
 	}
 
-	if rows[3].Via != nil {
-		t.Fatalf("row of a group with no member = %+v, want no via", rows[3])
+	if rows[offset+3].Via != nil {
+		t.Fatalf("row of a group with no member = %+v, want no via", rows[offset+3])
 	}
 
-	checkExpandedPages(t, rs, q)
+	checkExpandedPages(t, rs, q, install)
 }
 
-// checkExpandedPages reads the expanded export of q two rows at a time. The
-// two members joined in the same millisecond, so a page can end between
-// them.
-func checkExpandedPages(t *testing.T, rs access.ReviewStore, q access.ReviewQuery) {
+// checkExpandedPages reads the expanded export with a page that ends between
+// xavier and yvonne. The seeded grants and grt-1 come first, so that page
+// holds the seeded grants, grt-1 and xavier.
+func checkExpandedPages(t *testing.T, rs access.ReviewStore, q access.ReviewQuery, install []string) {
 	t.Helper()
 
-	q.Limit, q.Count = 2, false
+	q.Limit, q.Count = len(install)+2, false
 
 	first, _, err := rs.ReviewGrants(t.Context(), q)
-	if err != nil || len(first) != 2 || first[1].Via == nil || first[1].Via.PrincipalID != "prn-x" {
-		t.Fatalf("first expanded page = %+v, %v; want grt-1 and xavier", first, err)
+	if err != nil || len(first) != q.Limit || first[len(first)-1].Via == nil ||
+		first[len(first)-1].Via.PrincipalID != "prn-x" {
+		t.Fatalf("first expanded page = %+v, %v; want the seeded grants, grt-1 and xavier", first, err)
 	}
 
-	q.After = first[1].Key()
+	q.After = first[len(first)-1].Key()
 
 	next, _, err := rs.ReviewGrants(t.Context(), q)
 	if err != nil || len(next) != 2 || next[0].Via == nil || next[0].Via.PrincipalID != "prn-y" {
@@ -425,14 +438,16 @@ func testReviewCount(t *testing.T, s access.Store) {
 	t.Helper()
 
 	rs := reviewStore(t, s)
+	install := installGrantIDs(t, rs)
 	seedReview(t, s)
 
 	q := everyRow(allScope())
 	q.Count = false
 
 	rows, total, err := rs.ReviewGrants(t.Context(), q)
-	if err != nil || len(rows) != 6 || total != 0 {
-		t.Fatalf("export with no count = %d rows, total %d, %v; want 6 rows and no count", len(rows), total, err)
+	if err != nil || len(rows) != 6+len(install) || total != 0 {
+		t.Fatalf("export with no count = %d rows, total %d, %v; want %d rows and no count",
+			len(rows), total, err, 6+len(install))
 	}
 }
 

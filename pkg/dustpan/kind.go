@@ -150,7 +150,7 @@ func (s *Server) warnDevPrincipals(ctx context.Context) {
 	for _, prefix := range devPrefixCases() {
 		req := principal.PageRequest{Prefix: prefix, Cursor: "", Limit: maxDevWarned}
 
-		page, listErr := svc.ListPrincipals(ctx, req, "")
+		page, listErr := svc.ListPrincipals(ctx, req, "", "")
 		if listErr != nil {
 			s.logger.WarnContext(ctx, "dev people check failed", slog.String("reason", listErr.Error()))
 

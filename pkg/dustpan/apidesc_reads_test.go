@@ -27,7 +27,7 @@ var undescribedQueryReads = map[string][]string{
 	"opendustpan.org/opendustpan/internal/api/inventory": {"organization", "unit"},
 	"opendustpan.org/opendustpan/internal/api/server": {
 		"action", "code", "cursor", "error", "expand", "fresh", "from", "holder", "kind", "limit", "object",
-		"prefix", "principal", "return", "role", "state", "status", "subject", "to", "tool", "type", "unit",
+		"prefix", "principal", "return", "role", "source", "state", "status", "subject", "to", "tool", "type", "unit",
 	},
 }
 

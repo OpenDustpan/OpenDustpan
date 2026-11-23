@@ -5,6 +5,10 @@ uses this route. A script can use it too.
 
 The path starts with `/api/server`.
 
+A created namespace gets five grants for the housekeeping principals. The
+grants route of each principal lists them
+(`GET /api/server/principals/{principal}/grants`).
+
 ## List the namespaces
 
 `GET /api/server/namespaces` answers one page of the namespaces where the

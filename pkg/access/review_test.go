@@ -146,13 +146,16 @@ func TestReviewBootstrapRows(t *testing.T) {
 		t.Fatalf("review: %v", err)
 	}
 
-	if len(page.Entries) != 1 {
-		t.Fatalf("export of acme = %+v, want the bootstrap admin only", page.Entries)
+	// The install grant of the agent reaper reaches every namespace: its role
+	// holds an action inside a namespace.
+	if len(page.Entries) != 2 {
+		t.Fatalf("export of acme = %+v, want the bootstrap admin and the install grant of the agent reaper",
+			page.Entries)
 	}
 
 	e := page.Entries[0]
 	if e.Holder != access.BootstrapHolder || e.Row.SubjectName != "admin" || !e.CanGrantAccess ||
-		e.InheritedFrom == nil || !e.InheritedFrom.IsServer() || *page.Total != 1 {
+		e.InheritedFrom == nil || !e.InheritedFrom.IsServer() || *page.Total != 2 {
 		t.Fatalf("bootstrap row = %+v, want the admin token on @server", e)
 	}
 
@@ -165,30 +168,67 @@ func TestReviewBootstrapRows(t *testing.T) {
 }
 
 // TestReviewBootstrapRowsCountInTheLimit pages an export one row at a
-// time: the bootstrap row fills the first page, and the grant comes next.
-// With no grant, the bootstrap row is the last page.
+// time: the bootstrap row fills the first page, and the grants come next.
+// With no test grant, the install grant of the agent reaper is the last page.
 func TestReviewBootstrapRowsCountInTheLimit(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	acme := identity.NamespaceObject("acme")
 
-	if empty := pageOf(t, f, acme, ""); len(empty.Entries) != 1 || empty.NextCursor != "" {
-		t.Fatalf("export of acme with no grant = %+v; want the bootstrap row only, no next page", empty)
-	}
+	first := pageOf(t, f, acme, "")
+	checkReviewPage(t, first, "admin", 2)
+	checkNextPage(t, first)
+
+	install := pageOf(t, f, acme, first.NextCursor)
+	checkReviewPage(t, install, "housekeeping:agent-reaper", 0)
+	checkLastPage(t, install)
 
 	f.person(t, "alice")
 	f.grant(t, prn("alice"), access.RoleViewer, acme)
 
-	first := pageOf(t, f, acme, "")
-	if len(first.Entries) != 1 || first.Entries[0].Holder != access.BootstrapHolder ||
-		first.NextCursor == "" || *first.Total != 2 {
-		t.Fatalf("first page = %+v; want the bootstrap row, a next page and a total of 2", first)
+	first = pageOf(t, f, acme, "")
+	checkReviewPage(t, first, "admin", 3)
+	checkNextPage(t, first)
+
+	alice := pageOf(t, f, acme, first.NextCursor)
+	checkReviewPage(t, alice, "alice", 0)
+	checkNextPage(t, alice)
+
+	last := pageOf(t, f, acme, alice.NextCursor)
+	checkReviewPage(t, last, "housekeeping:agent-reaper", 0)
+	checkLastPage(t, last)
+}
+
+// checkReviewPage checks one page of one row: its subject and its total when
+// wantTotal is not zero.
+func checkReviewPage(t *testing.T, page access.ReviewPage, subject string, wantTotal int64) {
+	t.Helper()
+
+	if len(page.Entries) != 1 || page.Entries[0].Row.SubjectName != subject {
+		t.Fatalf("page = %+v; want one row of the subject %q", page, subject)
 	}
 
-	if next := pageOf(t, f, acme, first.NextCursor); len(next.Entries) != 1 || next.Entries[0].Holder != "" ||
-		next.NextCursor != "" {
-		t.Fatalf("second page = %+v; want the grant of alice and no next page", next)
+	if wantTotal != 0 && (page.Total == nil || *page.Total != wantTotal) {
+		t.Fatalf("page total = %v; want %d", page.Total, wantTotal)
+	}
+}
+
+// checkNextPage checks that page is not the last page of the export.
+func checkNextPage(t *testing.T, page access.ReviewPage) {
+	t.Helper()
+
+	if page.NextCursor == "" {
+		t.Fatalf("page = %+v; want a next page", page)
+	}
+}
+
+// checkLastPage checks that page is the last page of the export.
+func checkLastPage(t *testing.T, page access.ReviewPage) {
+	t.Helper()
+
+	if page.NextCursor != "" {
+		t.Fatalf("page = %+v; want no next page", page)
 	}
 }
 

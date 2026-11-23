@@ -2059,3 +2059,27 @@ INSERT INTO access_token_policy (id, max_lifetime_ms, inactivity_ms, disable_tok
 INSERT INTO session_policy (id, idle_ms, max_length_ms, updated_at_ms, token_freshness_ms) VALUES (1, 900000, 43200000, 0, NULL);
 
 INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms) VALUES (1, 'on', 0, '', 0, 0, 0, 0);
+
+-- The install writes the housekeeping principals, and one grant on the
+-- installation for each purpose that acts on the installation.
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms) VALUES
+    ('prn-housekeeping-agent-reaper', 'housekeeping:agent-reaper', 'housekeeping:agent-reaper', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-artifact-sweep', 'housekeeping:artifact-sweep', 'housekeeping:artifact-sweep', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-blob-sweep', 'housekeeping:blob-sweep', 'housekeeping:blob-sweep', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-checkpoint-sweep', 'housekeeping:checkpoint-sweep', 'housekeeping:checkpoint-sweep', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-history-retention', 'housekeeping:history-retention', 'housekeeping:history-retention', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-issuer-rotation', 'housekeeping:issuer-rotation', 'housekeeping:issuer-rotation', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-job-reconcile', 'housekeeping:job-reconcile', 'housekeeping:job-reconcile', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-name-lock-prune', 'housekeeping:name-lock-prune', 'housekeeping:name-lock-prune', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-saved-view-cleanup', 'housekeeping:saved-view-cleanup', 'housekeeping:saved-view-cleanup', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-temp-admin-expiry', 'housekeeping:temp-admin-expiry', 'housekeeping:temp-admin-expiry', 'service', 'builtin', 0, 0),
+    ('prn-housekeeping-token-sweep', 'housekeeping:token-sweep', 'housekeeping:token-sweep', 'service', 'builtin', 0, 0);
+
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, created_at_ms, created_by) VALUES
+    ('grt-housekeeping-agent-reaper', 'principal:prn-housekeeping-agent-reaper', 'principal', 'prn-housekeeping-agent-reaper', 'housekeeping-agent-reaper', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-artifact-sweep', 'principal:prn-housekeeping-artifact-sweep', 'principal', 'prn-housekeeping-artifact-sweep', 'housekeeping-artifact-sweep', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-blob-sweep', 'principal:prn-housekeeping-blob-sweep', 'principal', 'prn-housekeeping-blob-sweep', 'housekeeping-blob-sweep', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-checkpoint-sweep', 'principal:prn-housekeeping-checkpoint-sweep', 'principal', 'prn-housekeeping-checkpoint-sweep', 'housekeeping-checkpoint-sweep', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-name-lock-prune', 'principal:prn-housekeeping-name-lock-prune', 'principal', 'prn-housekeeping-name-lock-prune', 'housekeeping-name-lock-prune', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-temp-admin-expiry', 'principal:prn-housekeeping-temp-admin-expiry', 'principal', 'prn-housekeeping-temp-admin-expiry', 'housekeeping-temp-admin-expiry', '@server', '@server', 'installation', 0, '@server'),
+    ('grt-housekeeping-token-sweep', 'principal:prn-housekeeping-token-sweep', 'principal', 'prn-housekeeping-token-sweep', 'housekeeping-token-sweep', '@server', '@server', 'installation', 0, '@server');

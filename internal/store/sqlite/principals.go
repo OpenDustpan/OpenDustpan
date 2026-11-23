@@ -102,26 +102,36 @@ func (s *Store) GetPrincipalBySubject(ctx context.Context, subject string) (prin
 // ListPrincipals implements principal.Store. It reads the page and the
 // total in one transaction.
 func (s *Store) ListPrincipals(
-	ctx context.Context, pq principal.Query, kind principal.Kind,
+	ctx context.Context, pq principal.Query, kind principal.Kind, source principal.Source,
 ) ([]principal.Principal, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	filter := principalFilter{kind: kind, source: source, ns: ""}
+
 	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
 		list: func(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
-			return listPrincipalRows(ctx, q, pq, kind, "")
+			return listPrincipalRows(ctx, q, pq, filter)
 		},
 		count: func(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
-			return countPrincipalRows(ctx, q, pq, kind, "")
+			return countPrincipalRows(ctx, q, pq, filter)
 		},
 		conv: principalFromList,
 	})
 }
 
-// listPrincipalRows reads one page of principals. An empty ns reads the
+// principalFilter is the filter of the reads of the principals. An empty kind,
+// source or namespace keeps every value, and an empty namespace reads the
 // principals of every namespace and of the installation.
+type principalFilter struct {
+	kind   principal.Kind
+	source principal.Source
+	ns     namespace.Name
+}
+
+// listPrincipalRows reads one page of principals.
 func listPrincipalRows(
-	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
+	ctx context.Context, q *db.Queries, pq principal.Query, f principalFilter,
 ) ([]db.ListPrincipalsRow, error) {
 	return q.ListPrincipals(
 		ctx,
@@ -129,18 +139,19 @@ func listPrincipalRows(
 			After:     pq.After,
 			Low:       pq.Low,
 			High:      pq.High,
-			Kind:      string(kind),
-			Namespace: ns.String(),
+			Kind:      string(f.kind),
+			Namespace: f.ns.String(),
 			RowLimit:  int64(pq.Limit),
+			Source:    string(f.source),
 		},
 	)
 }
 
 func countPrincipalRows(
-	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
+	ctx context.Context, q *db.Queries, pq principal.Query, f principalFilter,
 ) (int64, error) {
 	return q.CountPrincipals(ctx, db.CountPrincipalsParams{
-		Low: pq.Low, High: pq.High, Kind: string(kind), Namespace: ns.String(),
+		Low: pq.Low, High: pq.High, Kind: string(f.kind), Namespace: f.ns.String(), Source: string(f.source),
 	})
 }
 

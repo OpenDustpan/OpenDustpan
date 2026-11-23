@@ -593,10 +593,50 @@ func grantQuery(req PageRequest) (GrantQuery, error) {
 	return q, nil
 }
 
-// CreateNamespace stores ns with the entry e. When creator is a stored
-// principal, it stores the grant of the namespace-admin role on ns to
-// creator in the same transaction. The bootstrap admin token has no stored
-// principal: it already holds every action, so it gets no grant.
+// housekeepingGrantCreator is the creator of the housekeeping grants of a new
+// namespace: the server itself.
+const housekeepingGrantCreator = "@server"
+
+// housekeepingGrantReason is the reason in the audit entry of each housekeeping
+// grant of a new namespace.
+const housekeepingGrantReason = "housekeeping grants of namespace creation"
+
+// housekeepingNamespaceGrants returns the grants of the housekeeping
+// principals that act inside a namespace, on ns, and the audit entry of each
+// one. The creator of each grant is the server and its time is the creation
+// time of the namespace.
+func (s *Service) housekeepingNamespaceGrants(e audit.Entry, ns namespace.Namespace) ([]Grant, []audit.Entry) {
+	var (
+		grants  []Grant
+		entries []audit.Entry
+	)
+
+	for _, p := range principal.HousekeepingPurposes() {
+		if !p.ActsInsideNamespace() {
+			continue
+		}
+
+		g := Grant{
+			CreatedAt: ns.CreatedAt, Condition: nil, Object: identity.NamespaceObject(ns.Name),
+			ID: s.newID(grantIDPrefix), Role: p.Role(), CreatedBy: housekeepingGrantCreator,
+			Subject: Subject{Kind: SubjectPrincipal, ID: p.ID()},
+		}
+		entry := change(e, g.CreatedAt, GrantRef(g))
+		entry.Reason = housekeepingGrantReason
+
+		grants = append(grants, g)
+		entries = append(entries, entry)
+	}
+
+	return grants, entries
+}
+
+// CreateNamespace stores ns with the entry e. It stores the grants of the
+// housekeeping principals that act inside a namespace on ns in the same
+// transaction. When creator is a stored principal, it stores the grant of the
+// namespace-admin role on ns to creator too. The bootstrap admin token has no
+// stored principal: it already holds every action, so it gets no creator
+// grant.
 func (s *Service) CreateNamespace(
 	ctx context.Context,
 	e audit.Entry,
@@ -605,12 +645,12 @@ func (s *Service) CreateNamespace(
 ) (*Grant, error) {
 	record, err := s.directory.GetPrincipalBySubject(ctx, creator.Subject)
 
+	grants, entries := s.housekeepingNamespaceGrants(e, ns)
+
 	switch {
 	case errors.Is(err, principal.ErrNotFound) && creator.Admin:
-		var none Grant // A grant with no ID stores the namespace alone.
-
 		entry := change(e, s.Now(), "namespace:"+ns.Name.String())
-		if createErr := s.store.CreateNamespaceWithGrant(ctx, ns, none, entry); createErr != nil {
+		if createErr := s.store.CreateNamespaceWithGrants(ctx, ns, grants, entry, entries); createErr != nil {
 			return nil, fmt.Errorf("create namespace %q: %w", ns.Name, createErr)
 		}
 
@@ -624,8 +664,12 @@ func (s *Service) CreateNamespace(
 		Role: RoleNamespaceAdmin, CreatedBy: creator.Subject,
 		Subject: Subject{Kind: SubjectPrincipal, ID: record.ID},
 	}
+	creatorEntry := change(e, g.CreatedAt, GrantRef(g))
 
-	if err := s.store.CreateNamespaceWithGrant(ctx, ns, g, change(e, g.CreatedAt, GrantRef(g))); err != nil {
+	grants = append([]Grant{g}, grants...)
+	entries = append([]audit.Entry{creatorEntry}, entries...)
+
+	if err := s.store.CreateNamespaceWithGrants(ctx, ns, grants, creatorEntry, entries); err != nil {
 		return nil, fmt.Errorf("create namespace %q: %w", ns.Name, err)
 	}
 
@@ -1321,7 +1365,7 @@ func (s *Service) checkNamespaceTokenGranter(
 		return err
 	}
 
-	for _, a := range Actions(FamilyData) {
+	for _, a := range familyActions(FamilyData) {
 		if !held.has(a) {
 			return fmt.Errorf("%w: role %q holds %s, which needs every data action on namespace %q or %s "+
 				"on the installation",

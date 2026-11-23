@@ -1538,6 +1538,7 @@ WHERE p.deleted_at_ms IS NULL
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR p.kind = sqlc.arg('kind'))
   AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR p.namespace = sqlc.arg('namespace'))
+  AND (CAST(sqlc.arg('source') AS TEXT) = '' OR p.source = sqlc.arg('source'))
 ORDER BY p.subject
 LIMIT sqlc.arg('row_limit');
 
@@ -1547,7 +1548,8 @@ WHERE deleted_at_ms IS NULL
   AND subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'))
-  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR namespace = sqlc.arg('namespace'));
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR namespace = sqlc.arg('namespace'))
+  AND (CAST(sqlc.arg('source') AS TEXT) = '' OR source = sqlc.arg('source'));
 
 -- name: GetPrincipalNamespace :one
 -- The namespace of a current principal: empty for a principal of the

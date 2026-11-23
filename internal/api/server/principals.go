@@ -788,8 +788,9 @@ func createPrincipal(
 }
 
 // listPrincipals serves GET /api/server/principals: one page, ordered by
-// subject. The query parameter kind keeps the principals of one kind. An
-// unknown kind answers 400.
+// subject. The query parameter kind keeps the principals of one kind and the
+// query parameter source keeps the principals of one source. An unknown kind
+// or source answers 400.
 func listPrincipals(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
@@ -798,7 +799,13 @@ func listPrincipals(
 		return failed(""), err
 	}
 
-	page, err := svc.ListPrincipals(r.Context(), req, principal.Kind(queryOf(r).Get("kind")))
+	q := queryOf(r)
+	page, err := svc.ListPrincipals(
+		r.Context(),
+		req,
+		principal.Kind(q.Get("kind")),
+		principal.Source(q.Get("source")),
+	)
 	if err != nil {
 		return failed(""), err
 	}
