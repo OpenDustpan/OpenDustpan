@@ -43,7 +43,7 @@ func newAccessTokens(t *testing.T, st *sqlite.Store, clock *envClock) *accesstok
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers: nil,
-		Store:  st, Principals: st, Freshness: nil, Authorizer: nil, TempAdmins: nil,
+		Store:  st, Principals: st, Freshness: noFreshStepGuard(t), Authorizer: nil, TempAdmins: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},

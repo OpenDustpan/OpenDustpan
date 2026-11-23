@@ -309,7 +309,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 		Makers:     grants,
 		TempAdmins: nil,
 		Store:      hookedTokenStore{Store: st, onList: parts.tokenList},
-		Principals: st, Freshness: nil, Authorizer: authz,
+		Principals: st, Freshness: noFreshStepGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},

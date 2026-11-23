@@ -52,8 +52,9 @@ type Config struct {
 	// Freshness is the guard that asks for a fresh step before a create or
 	// a rotation. Its check returns nil when the caller passed a step inside
 	// the freshness window, and otherwise an error that asks for a new step.
-	// Nil asks for no step at this layer: the HTTP handler asks.
-	Freshness *freshstep.Guard
+	// It is required: NewService refuses a Guard that freshstep.NewGuard did
+	// not make.
+	Freshness freshstep.Guard
 	// Authorizer decides principal:manage-tokens on the service principal
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).
@@ -96,9 +97,8 @@ type Config struct {
 type Service struct {
 	store      Store
 	principals PrincipalReader
-	// freshGuard asks for a fresh step before a create or a rotation. Nil
-	// asks for no step at this layer.
-	freshGuard *freshstep.Guard
+	// freshGuard asks for a fresh step before a create or a rotation.
+	freshGuard freshstep.Guard
 	authz      identity.Authorizer
 	reach      access.ReachConfig
 	makers     MakerChecker
@@ -110,13 +110,16 @@ type Service struct {
 
 var _ identity.Authenticator = (*Service)(nil)
 
-// NewService returns a Service. Store and Principals are required.
+// NewService returns a Service. Store, Principals and Freshness are required.
+// A zero Freshness guard is an ErrMissingDependency (fail closed).
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: access token store", ErrMissingDependency)
 	case cfg.Principals == nil:
 		return nil, fmt.Errorf("%w: principal reader", ErrMissingDependency)
+	case cfg.Freshness.IsZero():
+		return nil, fmt.Errorf("%w: fresh step guard", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -865,18 +868,18 @@ func (s *Service) expiry(ctx context.Context, at, want time.Time) (time.Time, er
 	return expiry(p, at, want)
 }
 
-// requireFresh runs the fresh step guard when one is wired. The guard asks
-// for a step only when its policy requires one.
+// requireFresh runs the fresh step guard. The guard asks for a step only when
+// its policy requires one. A refusal writes a denial record to the log with
+// the subject and the reason. A zero guard refuses (fail closed).
 //
 // Defense in depth: the handler and the store ask the same policy too. This
 // guard stays so that a new caller of the service cannot skip the check, and
 // it does not rely on the handler or on the store.
 func (s *Service) requireFresh(ctx context.Context, subject string) error {
-	if s.freshGuard == nil {
-		return nil
-	}
-
 	if err := s.freshGuard.Require(ctx, subject); err != nil {
+		s.logger.WarnContext(ctx, "access token change denied: a fresh step is required",
+			slog.String("subject", subject), slog.String("error", err.Error()))
+
 		return fmt.Errorf("mfa freshness: %w", err)
 	}
 

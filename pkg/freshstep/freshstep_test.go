@@ -266,3 +266,21 @@ func TestNewGuardRefusesNil(t *testing.T) {
 		t.Fatal("NewGuard(nil check) error = nil, want an error")
 	}
 }
+
+// TestGuardIsZero checks that only a Guard of NewGuard is not zero.
+func TestGuardIsZero(t *testing.T) {
+	t.Parallel()
+
+	if !(freshstep.Guard{}).IsZero() {
+		t.Fatal("zero Guard: IsZero = false, want true")
+	}
+
+	g, err := freshstep.NewGuard(freshstep.PolicyFunc(nil), func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+
+	if g.IsZero() {
+		t.Fatal("Guard of NewGuard: IsZero = true, want false")
+	}
+}

@@ -183,8 +183,8 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 			Grants: e.store, Roles: e.store, Callers: e.store, Principals: e.store,
 			Collections: nil, Units: e.store,
 		},
-		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,
-		Now: testNow, NewID: nil,
+		Store: e.store, Principals: e.store, Freshness: noFreshStepGuard(e.t), Authorizer: nil, TempAdmins: nil,
+		Logger: nil, Now: testNow, NewID: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("token service: %v", err)

@@ -161,8 +161,8 @@ func wantRefusedAfterNoSweep(
 
 	checked, err := accesstoken.NewService(accesstoken.Config{
 		Makers: newNoSweepAccessService(t, &rf), TempAdmins: nil,
-		Store: rf.store, Principals: rf.store, Freshness: nil, Authorizer: rf.authorizerOf(t), Reach: rf.reach,
-		Logger: nil, Now: rf.clock.Now, NewID: nil,
+		Store: rf.store, Principals: rf.store, Freshness: noStepGuard(t), Authorizer: rf.authorizerOf(t),
+		Reach: rf.reach, Logger: nil, Now: rf.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

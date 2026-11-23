@@ -86,6 +86,12 @@ func NewGuard(p Policy, check func(ctx context.Context, subject string) error) (
 	return Guard{policy: p, check: check}, nil
 }
 
+// IsZero reports whether g has no policy or no check: NewGuard did not make
+// it. A service that requires a Guard refuses such a value.
+func (g Guard) IsZero() bool {
+	return g.policy == nil || g.check == nil
+}
+
 // Require returns nil when the policy does not require a step. Otherwise it
 // returns the result of the check, which is the refusal of the domain package.
 func (g Guard) Require(ctx context.Context, subject string) error {

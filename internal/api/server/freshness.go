@@ -82,7 +82,15 @@ type freshGuardKey struct{}
 
 // withFreshness returns ctx with the freshness check and the fresh step
 // guard of h. A handler that asks for a step calls it before requireFresh.
+// For a console session, ctx also carries the session and its sign-in, so the
+// fresh step guard of a service sees them.
 func (h *Handler) withFreshness(ctx context.Context) context.Context {
+	if caller, ok := ctx.Value(sessionKey{}).(sessionCaller); ok {
+		ctx = sessionauth.WithSignIn(sessionauth.WithSession(ctx), sessionauth.SignIn{
+			At: caller.Match.Session.AuthTime, Provider: caller.Match.Session.Provider,
+		})
+	}
+
 	ctx = context.WithValue(ctx, freshnessKey{}, h.checkTokenFreshness)
 
 	return context.WithValue(ctx, freshGuardKey{}, h.freshGuard)

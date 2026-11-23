@@ -37,7 +37,7 @@ func newMakerHarness(t *testing.T) makerHarness {
 		TempAdmins: nil,
 		Store:      st,
 		Principals: st,
-		Freshness:  nil,
+		Freshness:  noFreshStepGuard(t),
 		Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants:      nil,

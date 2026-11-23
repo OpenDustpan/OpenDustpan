@@ -1,8 +1,11 @@
 package accesstoken_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,29 +14,30 @@ import (
 	"opendustpan.org/opendustpan/pkg/freshstep"
 )
 
-// newPolicyService makes a token service over the store of f with the fresh
-// step guard g.
-func newPolicyService(t *testing.T, f *fixture, g *freshstep.Guard) *accesstoken.Service {
-	t.Helper()
-
-	svc, err := accesstoken.NewService(accesstoken.Config{
+// policyConfig returns the config of a token service over the store of f
+// with the fresh step guard g and the logger logger.
+func policyConfig(f *fixture, g freshstep.Guard, logger *slog.Logger) accesstoken.Config {
+	return accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
 		Store:      f.store, Principals: f.store, Freshness: g, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
-		Logger: nil, Now: f.clock.Now, NewID: nil,
-	})
+		Logger: logger, Now: f.clock.Now, NewID: nil,
+	}
+}
+
+// newPolicyService makes a token service over the store of f with the fresh
+// step guard g.
+func newPolicyService(t *testing.T, f *fixture, g freshstep.Guard) *accesstoken.Service {
+	t.Helper()
+
+	svc, err := accesstoken.NewService(policyConfig(f, g, nil))
 	if err != nil {
 		t.Fatalf("token service: %v", err)
 	}
 
 	return svc
-}
-
-// zeroGuard returns a guard that NewGuard did not make.
-func zeroGuard(*testing.T) *freshstep.Guard {
-	return &freshstep.Guard{}
 }
 
 func TestFreshPolicyGatesTheStep(t *testing.T) {
@@ -44,31 +48,12 @@ func TestFreshPolicyGatesTheStep(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		guard   func(t *testing.T) *freshstep.Guard
+		policy  freshstep.Policy
 		wantErr error
 	}{
-		{
-			name:    "setting off passes",
-			guard:   func(t *testing.T) *freshstep.Guard { t.Helper(); return freshGuard(t, off) },
-			wantErr: nil,
-		},
-		{
-			name:    "setting on refuses",
-			guard:   func(t *testing.T) *freshstep.Guard { t.Helper(); return freshGuard(t, on) },
-			wantErr: errStale,
-		},
-		{
-			name:    "no policy refuses",
-			guard:   func(t *testing.T) *freshstep.Guard { t.Helper(); return freshGuard(t, freshstep.PolicyFunc(nil)) },
-			wantErr: errStale,
-		},
-		{
-			// NewGuard refuses a nil policy (see TestFreshGuardRefusesNilPolicy).
-			// A guard that NewGuard did not make fails closed.
-			name:    "nil policy refuses",
-			guard:   zeroGuard,
-			wantErr: freshstep.ErrNilCheck,
-		},
+		{name: "setting off passes", policy: off, wantErr: nil},
+		{name: "setting on refuses", policy: on, wantErr: errStale},
+		{name: "no policy refuses", policy: freshstep.PolicyFunc(nil), wantErr: errStale},
 	}
 
 	for _, tc := range cases {
@@ -76,7 +61,7 @@ func TestFreshPolicyGatesTheStep(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t, nil)
-			svc := newPolicyService(t, &f, tc.guard(t))
+			svc := newPolicyService(t, &f, *freshGuard(t, tc.policy))
 
 			// Create with the service principal, as an administrator.
 			_, _, err := svc.Create(t.Context(), admin(), caller(), accesstoken.ScopeService,
@@ -118,17 +103,68 @@ func TestFreshGuardRefusesNilPolicy(t *testing.T) {
 	}
 }
 
-// A service with no guard keeps asking for no step at this layer.
-func TestFreshPolicyWithoutGuardAddsNoStep(t *testing.T) {
+// NewService refuses a zero guard: a service never runs without the fresh
+// step guard.
+func TestNewServiceRefusesZeroFreshGuard(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
-	svc := newPolicyService(t, &f, nil)
 
-	in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"}
+	svc, err := accesstoken.NewService(policyConfig(&f, freshstep.Guard{}, nil))
+	if !errors.Is(err, accesstoken.ErrMissingDependency) {
+		t.Fatalf("new service: err = %v, want ErrMissingDependency", err)
+	}
 
-	_, _, err := svc.Create(t.Context(), admin(), caller(), accesstoken.ScopeService, in)
+	if svc != nil {
+		t.Fatal("new service: got a service, want nil")
+	}
+}
+
+// With the step required and missing, requireFresh refuses the create and
+// the rotation, writes a denial record for each, and changes nothing.
+func TestRequireFreshRefusesWithDenialRecord(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
+		AddSource: false, Level: slog.LevelInfo, ReplaceAttr: nil,
+	}))
+
+	svc, err := accesstoken.NewService(policyConfig(&f, *freshGuard(t, freshstep.PolicyFunc(nil)), logger))
 	if err != nil {
-		t.Fatalf("create: %v", err)
+		t.Fatalf("token service: %v", err)
+	}
+
+	tok, _ := f.create(t, f.service, "seed")
+
+	_, _, err = svc.Create(t.Context(), admin(), caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
+	checkFreshErr(t, "create", err, errStale)
+
+	_, _, err = svc.Rotate(t.Context(), admin(), caller(), accesstoken.RotateInput{
+		OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeService,
+	})
+	checkFreshErr(t, "rotate", err, errStale)
+
+	records := strings.Count(logs.String(), `"msg":"access token change denied: a fresh step is required"`)
+	if records != 2 {
+		t.Fatalf("denial records = %d, want 2; log:\n%s", records, logs.String())
+	}
+
+	if !strings.Contains(logs.String(), `"subject":"`+caller().Subject+`"`) ||
+		!strings.Contains(logs.String(), errStale.Error()) {
+		t.Fatalf("denial record has no subject or reason; log:\n%s", logs.String())
+	}
+
+	got, err := svc.Get(t.Context(), tok.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got.ReplacedBy != "" {
+		t.Fatalf("replaced by = %q, want no rotation", got.ReplacedBy)
 	}
 }

@@ -36,7 +36,7 @@ func newHostFixture(t *testing.T) hostFixture {
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: f.store,
-		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: nil,
+		Store:      f.store, Principals: f.store, Freshness: noStepGuard(t), Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},

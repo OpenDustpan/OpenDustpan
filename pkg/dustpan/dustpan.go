@@ -84,6 +84,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forgelink"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -3568,9 +3569,19 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, fmt.Errorf("access token reach: %w", err)
 	}
 
+	policies, err := newSessionPolicyService(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("access token freshness: %w", err)
+	}
+
+	freshness, err := freshstep.NewGuard(freshPolicyOf(cfg), tokenFreshCheck(policies, cfg.now, cfg.logger))
+	if err != nil {
+		return nil, fmt.Errorf("access token freshness: %w", err)
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers: makers,
-		Store:  store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
+		Store:  store, Principals: principals, Freshness: freshness, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {
@@ -3578,6 +3589,41 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 	}
 
 	return svc, nil
+}
+
+// errTokenFreshStep is the refusal of the fresh step check of the access token
+// service: the request has no console session with a sign-in inside the token
+// freshness window.
+var errTokenFreshStep = fmt.Errorf("%w: %s", identity.ErrDenied, sessionauth.FreshStepRequiredMessage)
+
+// tokenFreshCheck returns the check of the fresh step guard of the access
+// token service. It returns nil only when the context carries a console
+// session whose sign-in is inside the token freshness window of the session
+// policy. A request with no console session, for example one with an access
+// token, a sign-in after now, and a window of 0 are refused.
+//
+// Defense in depth: the token handler runs its own check of the request
+// session first. This check stays so that a new caller of the service cannot
+// skip the step, and it does not rely on the handler.
+func tokenFreshCheck(
+	policies *session.Policies, now func() time.Time, logger *slog.Logger,
+) func(ctx context.Context, subject string) error {
+	if now == nil {
+		now = time.Now
+	}
+
+	return func(ctx context.Context, _ string) error {
+		in, ok := sessionauth.SignInFrom(ctx)
+		if !ok || !sessionauth.FromSession(ctx) {
+			return errTokenFreshStep
+		}
+
+		if !sessionauth.Fresh(now(), in.At, freshnessWindowOf(ctx, policies, logger)) {
+			return errTokenFreshStep
+		}
+
+		return nil
+	}
 }
 
 // tempReaderOf returns the temporary administrator reader of the namespace

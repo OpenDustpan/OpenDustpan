@@ -231,7 +231,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil,
+		Store:      s.tokens, Principals: s.principals, Freshness: noFreshStepGuard(b), Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},

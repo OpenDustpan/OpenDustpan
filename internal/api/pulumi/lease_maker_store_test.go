@@ -171,7 +171,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerRowIsGone(t *testing.T) {
 			tc.seed(t, st, at)
 
 			svc, err := accesstoken.NewService(accesstoken.Config{
-				Makers: makerChecker(t, st), TempAdmins: nil, Store: st, Principals: st, Freshness: nil,
+				Makers: makerChecker(t, st), TempAdmins: nil, Store: st, Principals: st, Freshness: noFreshStepGuard(t),
 				Authorizer: nil, Logger: nil, Now: makerAt, NewID: nil,
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,

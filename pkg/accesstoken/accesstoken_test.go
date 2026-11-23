@@ -79,9 +79,15 @@ func sweepStart() time.Time {
 	return time.Now().UTC().Truncate(time.Millisecond).Add(-accesstoken.DefaultInactivity - time.Hour)
 }
 
-// newFixtureAt returns a fixture whose clock starts at start.
+// newFixtureAt returns a fixture whose clock starts at start. A nil fresh
+// gives the guard of noStepGuard.
 func newFixtureAt(t *testing.T, fresh *freshstep.Guard, start time.Time) fixture {
 	t.Helper()
+
+	guard := noStepGuard(t)
+	if fresh != nil {
+		guard = *fresh
+	}
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
@@ -117,7 +123,7 @@ func newFixtureAt(t *testing.T, fresh *freshstep.Guard, start time.Time) fixture
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: fresh, Authorizer: nil, Reach: access.ReachConfig{
+		Store:      st, Principals: st, Freshness: guard, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: c.Now, NewID: nil,
@@ -237,7 +243,7 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	_, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      nil, Principals: nil, Freshness: nil, Authorizer: nil, Reach: access.ReachConfig{
+		Store:      nil, Principals: nil, Freshness: freshstep.Guard{}, Authorizer: nil, Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
 		Logger: nil, Now: nil, NewID: nil,
@@ -807,6 +813,21 @@ var errStale = errors.New("mfa step too old")
 
 func (staleMFA) RequireFresh(context.Context, string) error { return errStale }
 
+// noStepGuard returns a guard whose policy asks for no step: the setting
+// freshAuthEnabled off. Its check refuses, so a test that turns the policy
+// on sees the refusal.
+func noStepGuard(t *testing.T) freshstep.Guard {
+	t.Helper()
+
+	g, err := freshstep.NewGuard(freshstep.PolicyFunc(func(context.Context) bool { return false }),
+		staleMFA{}.RequireFresh)
+	if err != nil {
+		t.Fatalf("fresh guard: %v", err)
+	}
+
+	return g
+}
+
 // freshGuard returns a guard of the policy p with the check of staleMFA.
 func freshGuard(t *testing.T, p freshstep.Policy) *freshstep.Guard {
 	t.Helper()
@@ -1074,7 +1095,7 @@ func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *acc
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: f.store, Freshness: nil, Authorizer: authz,
+		Store:      f.store, Principals: f.store, Freshness: noStepGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
 		},
@@ -1615,7 +1636,7 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Authorizer: nil,
+		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: noStepGuard(t), Authorizer: nil,
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		}, Logger: nil,
@@ -1852,7 +1873,7 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	holder, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: reader, Freshness: nil,
+		Store:      f.store, Principals: reader, Freshness: noStepGuard(t),
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
@@ -1867,7 +1888,7 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	denied, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      f.store, Principals: reader, Freshness: nil,
+		Store:      f.store, Principals: reader, Freshness: noStepGuard(t),
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: nil,
