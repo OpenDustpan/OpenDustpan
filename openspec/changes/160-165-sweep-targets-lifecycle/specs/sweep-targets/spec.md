@@ -5,19 +5,19 @@
 When a holder of namespace:manage-sweeps sends a valid target, the server SHALL store it with a stable trg- ID through CreateTarget and write an audit entry that holds the command.
 
 #### Scenario: Create then list
-- **WHEN** the holder creates a target with an operator sweeps pool
+- **WHEN** the holder creates a target with a sweeps pool of the namespace
 - **THEN** the list holds the target with its ID, scopes, command and enabled flag, and the audit log holds one entry with the command
 
-### Requirement: Refuse non-operator pool
+### Requirement: Refuse a pool without the sweep purpose
 
-If the named pool is a namespace pool or lacks the sweeps purpose, then the server SHALL refuse the write with the error code unmanaged.pool-not-sweeps.
+If the named pool lacks the sweeps purpose or belongs to another namespace, then the server SHALL refuse the write with the error code unmanaged.pool-not-sweeps.
 
-#### Scenario: Namespace pool refused
-- **WHEN** the holder names a namespace pool with the sweeps purpose
+#### Scenario: Pool of another namespace refused
+- **WHEN** the holder names a sweeps pool of another namespace
 - **THEN** the server answers 422 unmanaged.pool-not-sweeps and stores nothing
 
 #### Scenario: Jobs pool refused
-- **WHEN** the holder names an operator pool with the jobs purpose
+- **WHEN** the holder names a pool of the namespace with the jobs purpose
 - **THEN** the server answers 422 unmanaged.pool-not-sweeps
 
 ### Requirement: Refuse bad command
@@ -41,7 +41,7 @@ When a holder of namespace:manage-sweeps changes or deletes a target, the server
 If a target names a pool, then the server SHALL refuse the delete of that pool with runner.ErrPoolInUse.
 
 #### Scenario: Pool delete refused
-- **WHEN** an operator deletes a pool that a target names
+- **WHEN** an administrator deletes a pool that a target names
 - **THEN** the server refuses and the pool stays
 
 ### Requirement: Start sweep
