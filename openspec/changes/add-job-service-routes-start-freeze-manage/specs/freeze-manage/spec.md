@@ -54,7 +54,7 @@ While a namespace has an active freeze, the server SHALL refuse a job start with
 
 #### Scenario: Start during freeze is refused
 - **WHEN** a principal without the break-freeze action on the namespace starts a job in a namespace with an active freeze
-- **THEN** the server answers 403 and starts no job
+- **THEN** the server answers 409 with code job.frozen and starts no job
 
 #### Scenario: Running jobs keep running at freeze start
 - **WHEN** a freeze starts while jobs are queued or running
@@ -66,7 +66,7 @@ While a namespace has an active freeze, the server SHALL refuse each cancel and 
 
 #### Scenario: Cancel during freeze is refused
 - **WHEN** a principal without the break-freeze action on the namespace cancels a job in a namespace with an active freeze
-- **THEN** the server answers 403 and changes no job
+- **THEN** the server answers 409 with code job.frozen and changes no job
 
 ### Requirement: Permit break-glass start
 
