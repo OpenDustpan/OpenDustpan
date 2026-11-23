@@ -83,7 +83,7 @@ func TestRunnerPoolsList(t *testing.T) {
 			status:      200,
 			answer:      `{"items":[]}`,
 			output:      "",
-			errorText:   "opendustpan runner pools list",
+			errorText:   "no pools list",
 			extraOutput: "",
 		},
 		{
