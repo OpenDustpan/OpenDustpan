@@ -4,6 +4,7 @@ Status: accepted · 2026-10-18. Part of ADR 222. Supersedes in part ADR 17 ("A p
 
 Changed by:
 
+- ADR 395 extends decision 16: a write with a job token meets the gates after the job model allows it.
 - ADR 241 extends decision 16: the operation kind unit-import at state.write.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
