@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 7
 ---
 
 Issue: #3257.
@@ -26,7 +26,7 @@ The path after this change:
   - `internal/api/tfe/freshness.go` (:54), `internal/api/pulumi/freshness.go` (:66), `internal/api/profile/freshness.go` (:62), `internal/api/issuer/freshness.go` (:62)
   - `pkg/accesstoken/service.go` (:165, :418, :805), `pkg/profile/service.go` (:498), `pkg/profile/issuer_settings.go` (:303), `internal/issuersvc/settings.go` (:142)
   - `pkg/setting/change.go` (:153), `pkg/dustpan/auditchain.go` (:557)
-  - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:279, `freshAuth`), `pkg/store/internal/jobstore/events.go` (:18, `checkDestroyProof`)
+  - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:279, `freshAuth`), `internal/store/jobstore/events.go` (:18, `checkDestroyProof`)
   - `internal/api/server/gate_config.go` (:120, :130, :365, :560, `freshAuthSeconds`)
   - `internal/trustrulesvc/service.go`: `requireFresh` (:586), called by `requireWriter` (`service_bundle.go:164`) and by the rule writes at `:263` and `:395`; `internal/api/trustrules/handlers.go` maps `ErrFreshRequired` and `ErrStaleToken` to the refusal (:208-211, :546-551)
 - Open work adds one more such check: the session-limit check of #3286. The trust rule check of #3283 is in the list above.
@@ -53,18 +53,22 @@ Out of scope:
 New:
 
 - pkg/freshstep/freshstep.go, pkg/freshstep/freshstep_test.go, pkg/freshstep/leak_test.go: `Policy`, `Guard`, `NewGuard`.
+- pkg/job/freshstep_policy_test.go, internal/api/server/freshstep_policy_test.go, internal/store/jobstore/events_freshstep_test.go, pkg/profile/profiletest/freshstep_policy_test.go: the table of each layer with the setting off and on.
 
 Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on current main):
 
 - pkg/setting/change.go, pkg/setting/setting.go: the on-to-off change is a weaker change.
-- internal/api/server/freshness.go, tokens.go, tokenpolicy.go, sessionpolicy.go, providers.go, githost_app.go, localusers.go, settings.go, gate_config.go: hold a `Guard`; the settings declaration; the `enforced` field.
+- internal/api/server/freshness.go, internal/api/server/tokens.go, internal/api/server/tokenpolicy.go, internal/api/server/sessionpolicy.go, internal/api/server/providers.go, internal/api/server/githost_app.go, internal/api/server/localusers.go, internal/api/server/settings.go, internal/api/server/gate_config.go, internal/api/server/server.go (the `Handler` and `Config` structs): hold a `Guard`; the settings declaration; the `enforced` field.
 - internal/api/tfe/freshness.go, internal/api/pulumi/freshness.go, internal/api/profile/freshness.go, internal/api/issuer/freshness.go: hold the same `Guard`.
+- internal/api/tfe/tfe.go, internal/api/pulumi/pulumi.go, internal/api/profile/profile.go, internal/api/issuer/issuer.go, internal/api/jobs/jobs.go, internal/issuersvc/issuersvc.go: the struct that holds the `Guard` field.
+- internal/store/jobstore/store.go, internal/store/jobstore/apply.go, internal/store/jobstore/record.go: pass the policy to `checkDestroyProof`.
 - pkg/accesstoken/service.go, pkg/profile/service.go, pkg/profile/issuer_settings.go, internal/issuersvc/settings.go, pkg/dustpan/auditchain.go: hold a `Guard`.
-- pkg/job/service_approve.go, pkg/job/gate.go, pkg/store/internal/jobstore/events.go, internal/api/jobs/approve.go: the destroy approval reads the policy.
+- pkg/job/service_approve.go, pkg/job/gate.go, internal/store/jobstore/events.go, internal/api/jobs/approve.go: the destroy approval reads the policy.
 - pkg/dustpan (wiring): makes the one `Policy` and the `Guard` of each layer.
 - internal/api/apidesc (openapi.json), clients/typescript: regenerated.
 - docs/guides/approval-rules.md, docs/guides/access-tokens.md, docs/guides/console-sign-in.md: the setting and its effect.
-- e2e: the step that approves a `destroy` with an access token.
+- e2e/signin_token.go (new): the helper `EnableFreshAuth`. e2e/tokens_test.go, e2e/audit_chain_test.go, e2e/sessionpolicy_test.go, e2e/decision_record_retention_setting_test.go, e2e/restore_access_setting_test.go, e2e/issuer_test.go, e2e/profiles_test.go, e2e/e2e_test.go, e2e/signin_test.go, e2e/approval_rules_test.go, e2e/gate_routes_test.go, e2e/proxy_rules_test.go, e2e/namespace_principals_test.go, e2e/localusers_test.go, e2e/passkeys_test.go: call it, because the default is off and these steps expect a fresh step for an access token.
+- e2e/settings_test.go: the step that changes `freshAuthEnabled` and reads its effective value. No e2e step approves a `destroy` with an access token: the jobs API cannot start a `destroy` job (`job.unsupported`), so `TestDestroyApprovalByTokenFollowsSetting` proves that case.
 
 ## Check
 
