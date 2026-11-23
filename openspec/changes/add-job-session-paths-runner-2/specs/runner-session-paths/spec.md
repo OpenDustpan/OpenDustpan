@@ -32,6 +32,8 @@ If the pool of the claim has the sweep purpose, then the server SHALL refuse a j
 - **WHEN** a runner of a pool with the sweep purpose asks for a job session
 - **THEN** the server refuses the session and opens none
 
+A namespace pool with the sweep purpose is accepted by design (ADR 396 decision 1); this change adds no refusal.
+
 ### Requirement: Cancel on renew
 
 When a cancel is requested for the claim, the server SHALL answer canceled true on the session renew.
@@ -57,6 +59,10 @@ For each such refusal, the server SHALL write one audit entry with a reason.
 #### Scenario: Wrong hash
 - **WHEN** the body hash differs from Dustpan-Content-SHA256
 - **THEN** the server refuses the chunk and the sequence does not move
+
+#### Scenario: Wrong body hash is audited
+- **WHEN** the body hash differs from the signed Dustpan-Content-SHA256
+- **THEN** the server answers 401 `bad-proof` and writes one audit entry with the action `runner.log.refused` and the reason `hash-body`
 
 #### Scenario: Out of order
 - **WHEN** the launcher sends a sequence number that skips one
