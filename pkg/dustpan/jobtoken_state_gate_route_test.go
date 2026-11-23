@@ -362,7 +362,7 @@ func (e gateEnv) bindJobToStack(t *testing.T) {
 
 	f := e.f
 
-	idColl := placementCollectionID(t, f)
+	idColl := placementCollectionID(t, f, "acme", "default")
 	mustDo(t, f, call{
 		method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/placement-rules",
 		body: `{"tool":"pulumi","project":"*","stack":"*","collectionID":"` + idColl + `"}`,

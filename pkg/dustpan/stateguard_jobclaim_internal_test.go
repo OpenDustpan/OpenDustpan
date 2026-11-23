@@ -140,6 +140,88 @@ func TestStateWriteGatesNoJobStoreAudited(t *testing.T) {
 	}
 }
 
+// TestStateWriteGatesJobClaimRefusalsAudited proves that each refusal of the
+// job claim reaches the admission of the adapters as a denial with one audit
+// entry. Each job here is an apply-phase job of the unit web that the gates
+// allow, so each case is allowed, or fails with another code, when its guard
+// is gone.
+func TestStateWriteGatesJobClaimRefusalsAudited(t *testing.T) {
+	t.Parallel()
+
+	web, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		tokenID string
+		jobID   job.ID
+		state   job.State
+		current int
+		want    string
+	}{
+		{
+			name: "empty job ID", tokenID: "", jobID: "", state: job.StateRunning, current: 1,
+			want: "names no job",
+		},
+		{
+			name: "blank job ID", tokenID: "  ", jobID: "  ", state: job.StateRunning, current: 1,
+			want: "names no job",
+		},
+		{
+			name: "unknown job", tokenID: "job-gone", jobID: "job-1", state: job.StateRunning, current: 1,
+			want: "does not exist",
+		},
+		{
+			name: "canceled job", tokenID: "job-1", jobID: "job-1", state: job.StateCanceled, current: 1,
+			want: "takes no state write",
+		},
+		{
+			name: "succeeded job", tokenID: "job-1", jobID: "job-1", state: job.StateSucceeded, current: 1,
+			want: "takes no state write",
+		},
+		{
+			name: "phase index past the last phase", tokenID: "job-1", jobID: "job-1", state: job.StateRunning,
+			current: 2, want: "has no phase at index 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := testPlanJob(tt.jobID, tt.current)
+			j.State = tt.state
+			j.Spec.Unit = web
+
+			admitter, err := stategate.New(newClaimGuard(t, &claimGuardJobStore{Store: nil, j: j}), nil)
+			if err != nil {
+				t.Fatalf("stategate.New: %v", err)
+			}
+
+			p := gatePrincipal("job-token-1", "", identity.CredentialJobToken)
+			p.JobID = tt.tokenID
+
+			var reasons []string
+
+			out := admitter.Admit(t.Context(), stategate.Write{
+				Principal: p, Unit: web, Operation: gate.OperationLock, Action: identity.ActionUnitWrite,
+				Source: gate.SourceCLI, State: nil, StateErr: nil,
+			}, func(_ context.Context, reason string) { reasons = append(reasons, reason) })
+
+			if out.Allowed || out.Refusal == nil || out.Code != errcode.GateDenied ||
+				!errors.Is(out.Refusal, identity.ErrDenied) || !strings.Contains(out.Refusal.Error(), tt.want) {
+				t.Fatalf("Admit() = %+v, want a refusal with %s that says %q", out, errcode.GateDenied, tt.want)
+			}
+
+			if len(reasons) != 1 || !strings.Contains(reasons[0], errcode.GateDenied) {
+				t.Fatalf("audit reasons = %q, want one entry that names %s", reasons, errcode.GateDenied)
+			}
+		})
+	}
+}
+
 // TestStateWriteGatesSeeTheJobClaim proves that the gate service that the
 // server builds reads the job of a job token: a job past change.apply writes
 // the state of its unit, and a plan-only job writes only its plan lock.
