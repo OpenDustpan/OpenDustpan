@@ -156,7 +156,19 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 			"run opendustpan runner pools list again"
 		isolationNotText = "runner pools list: decode server answer: json: cannot unmarshal number into " +
 			"poolListAnswer.pools.0.isolation.0 of type string: run opendustpan runner pools list again"
+		hiddenText = "runner pools list: the server answer has invalid UTF-8 or a hidden character: " +
+			"run opendustpan runner pools list again"
+		otherNamespace = "runner pool of another namespace in the server answer: run opendustpan runner pools list"
+		duplicateKey   = "runner pools list: the server answer has a duplicate key: run opendustpan runner pools list again"
 	)
+
+	jobs := poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["kubernetes"]`)
+
+	// withNote puts text in a field that the command does not decode, so only
+	// the check of the raw answer sees it.
+	withNote := func(text string) string {
+		return `{"pools":[` + jobs + `],"note":"` + text + `"}`
+	}
 
 	for name, tc := range map[string]struct {
 		answer    string
@@ -198,6 +210,19 @@ func TestRunnerPoolsListRejectsHostileAnswers(t *testing.T) {
 		},
 		"isolation not text": {
 			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `[1]`) + `]}`, isolationNotText,
+		},
+		"C1 OSC sequence":        {withNote("\u009d0;title\u009c"), hiddenText},
+		"C1 CSI":                 {withNote("\u009b2J"), hiddenText},
+		"right-to-left override": {withNote("abc" + string(rune(0x202e)) + "def"), hiddenText},
+		"raw 0x9B byte":          {withNote("\x9b2J"), hiddenText},
+		"CR between tokens":      {`{"pools":[` + jobs + `]` + "\r" + `}`, hiddenText},
+		"pool of another namespace": {
+			`{"pools":[` + strings.Replace(jobs, `"namespace":"acme"`, `"namespace":"other"`, 1) + `]}`,
+			otherNamespace,
+		},
+		"duplicate pools key": {
+			`{"pools":[` + poolAnswer(testPoolIDJobs, "jobs", "jobs", 1, `["unknown"]`) + `],"pools":[]}`,
+			duplicateKey,
 		},
 	} {
 		for _, extra := range [][]string{{}, {"--output", "json"}} {

@@ -11,14 +11,17 @@ package cli
 // code is 0 on success and 1 on any refusal.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	namespacedomain "opendustpan.org/opendustpan/pkg/namespace"
@@ -28,6 +31,11 @@ import (
 // runnerPoolsCommand is the command path of the runner pool list, as the
 // errors name it.
 const runnerPoolsCommand = "runner pools list"
+
+var (
+	errAnswerDuplicateKey = errors.New("the server answer has a duplicate key")
+	errAnswerKeyNotText   = errors.New("the server answer has a key that is not text")
+)
 
 // poolEntry is one pool as the management API answers it. The command reads
 // only the fields that it prints, so a new field of the answer changes
@@ -157,7 +165,17 @@ func RunnerPoolsList(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 
 	// The answer is checked in both output formats before anything prints.
-	lines, err := validatePools(raw)
+	lines, err := validatePools(raw, namespace)
+	if err != nil {
+		return err
+	}
+
+	// Defense in depth: --output json prints the raw bytes, not the decoded
+	// fields that checkPool validates. This check stays so that a hidden rune
+	// in a field that the command does not decode, or between two tokens,
+	// cannot reach the terminal. It does not rely on the field checks or on
+	// the server.
+	err = checkRawText(raw)
 	if err != nil {
 		return err
 	}
@@ -169,12 +187,21 @@ func RunnerPoolsList(ctx context.Context, args []string, stdout, stderr io.Write
 	return printPools(stdout, lines)
 }
 
-// validatePools decodes the raw server answer and validates each pool. It
-// answers the rows in print order.
-func validatePools(raw []byte) ([]poolLine, error) {
+// validatePools decodes the raw server answer and validates each pool of the
+// namespace. It answers the rows in print order.
+func validatePools(raw []byte, namespace string) ([]poolLine, error) {
 	var doc poolListAnswer
 
 	if err := decodeAnswer(raw, &doc); err != nil {
+		return nil, fmt.Errorf("%w: %s: %w: run opendustpan %s again",
+			ErrInventoryRequest, runnerPoolsCommand, err, runnerPoolsCommand)
+	}
+
+	// Defense in depth: json.Unmarshal keeps the last value of a duplicate
+	// key, but --output json prints the raw answer with each value. This
+	// check stays so that the printed answer cannot hold a pools list that
+	// the field checks did not see. It does not rely on the server.
+	if err := checkUniqueKeys(raw); err != nil {
 		return nil, fmt.Errorf("%w: %s: %w: run opendustpan %s again",
 			ErrInventoryRequest, runnerPoolsCommand, err, runnerPoolsCommand)
 	}
@@ -186,7 +213,63 @@ func validatePools(raw []byte) ([]poolLine, error) {
 			ErrInventoryRequest, runnerPoolsCommand, runnerPoolsCommand)
 	}
 
-	return checkPools(doc)
+	return checkPools(doc, namespace)
+}
+
+// checkRawText refuses a raw server answer that is not valid UTF-8 or that
+// holds a hidden rune other than a line feed or a tab.
+func checkRawText(raw []byte) error {
+	hidden := func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }
+
+	if !utf8.Valid(raw) || bytes.ContainsFunc(raw, hidden) {
+		return fmt.Errorf("%w: %s: the server answer has invalid UTF-8 or a hidden character: run opendustpan %s again",
+			ErrInventoryRequest, runnerPoolsCommand, runnerPoolsCommand)
+	}
+
+	return nil
+}
+
+// checkUniqueKeys refuses a top-level JSON object that holds one key two
+// times. A value that is not an object has no keys: the shape check refuses
+// it.
+func checkUniqueKeys(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("decode server answer: %w", err)
+	}
+
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+
+	for dec.More() {
+		keyTok, keyErr := dec.Token()
+		if keyErr != nil {
+			return fmt.Errorf("decode server answer: %w", keyErr)
+		}
+
+		key, ok := keyTok.(string)
+		if !ok {
+			return errAnswerKeyNotText
+		}
+
+		if seen[key] {
+			return errAnswerDuplicateKey
+		}
+
+		seen[key] = true
+
+		var value json.RawMessage
+		if valueErr := dec.Decode(&value); valueErr != nil {
+			return fmt.Errorf("decode server answer: %w", valueErr)
+		}
+	}
+
+	return nil
 }
 
 // printPools prints one line per pool.
@@ -214,13 +297,22 @@ func decodeAnswer(raw []byte, doc *poolListAnswer) error {
 // checkPools checks each pool of the answer before the command prints one
 // line, and answers the rows in print order: sorted by name. An unknown value
 // is an error, not partial output.
-func checkPools(doc poolListAnswer) ([]poolLine, error) {
+func checkPools(doc poolListAnswer, namespace string) ([]poolLine, error) {
 	lines := make([]poolLine, 0, len(doc.Pools))
 
 	for _, p := range doc.Pools {
 		line, err := checkPool(p)
 		if err != nil {
 			return nil, err
+		}
+
+		// Defense in depth: the request path names the namespace, and the
+		// server reads only that namespace. This check stays so that a pool
+		// of another namespace in the answer cannot print as a pool of
+		// --namespace. It does not rely on the server.
+		if p.Namespace != namespace {
+			return nil, fmt.Errorf("%w: runner pool of another namespace in the server answer: run opendustpan %s",
+				ErrInventoryRequest, runnerPoolsCommand)
 		}
 
 		lines = append(lines, line)
