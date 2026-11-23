@@ -13,7 +13,7 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Confirm that no request flow changed, so the round-trip budgets stand. Check:
+- [x] 2.1 Confirm that no request flow changed, so the round-trip budgets stand. Check:
 
 ## 3. Definition of done
 
