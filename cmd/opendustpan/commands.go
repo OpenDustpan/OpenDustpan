@@ -26,6 +26,7 @@ func commandTable() cli.Table {
 		cli.PlacementAddCommand(cli.PlacementAdd),
 		cli.PlacementListCommand(cli.PlacementList),
 		cli.PlacementDeleteCommand(cli.PlacementDelete),
+		cli.RunnerPoolsListCommand(cli.RunnerPoolsList),
 		cli.UpgradeCheckCommand(func(
 			ctx context.Context, args []string, stdout, stderr io.Writer,
 		) error {
