@@ -362,7 +362,16 @@ func (e gateEnv) bindJobToStack(t *testing.T) {
 
 	f := e.f
 
-	idColl := placementCollectionID(t, f, "acme", "default")
+	const collPath = "/api/dustpan/v1/namespaces/acme/collections/default"
+	collStatus, collBody := f.do(t, http.MethodGet, collPath, adminToken, "")
+	var coll struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(collBody), &coll); collStatus != http.StatusOK || err != nil || coll.ID == "" {
+		t.Fatalf("read collection %s = %d %s, %v", collPath, collStatus, collBody, err)
+	}
+	idColl := coll.ID
+
 	mustDo(t, f, call{
 		method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/placement-rules",
 		body: `{"tool":"pulumi","project":"*","stack":"*","collectionID":"` + idColl + `"}`,
