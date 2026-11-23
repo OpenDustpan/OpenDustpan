@@ -463,8 +463,9 @@ func (s *Store) CreateNamespaceWithGrants(
 
 // namespaceGrantEntries builds the entries of CreateNamespaceWithGrants: e
 // lives in the scope @server, each grant has an ID, and the entry of each
-// grant is e in the chain of the new namespace, with the object of the grant
-// and its time. It checks that each entry is valid.
+// grant is e in the chain of the new namespace, with the object of the grant,
+// its time and the reason access.NamespaceGrantsReason. It checks that each
+// entry is valid.
 func namespaceGrantEntries(ns namespace.Namespace, grants []access.Grant, e audit.Entry) ([]audit.Entry, error) {
 	if err := validServerEntry(e); err != nil {
 		return nil, err
@@ -481,6 +482,7 @@ func namespaceGrantEntries(ns namespace.Namespace, grants []access.Grant, e audi
 		entries[i].Namespace = ns.Name
 		entries[i].Object = access.GrantRef(grants[i])
 		entries[i].At = grants[i].CreatedAt
+		entries[i].Reason = access.NamespaceGrantsReason
 
 		if err := entries[i].Validate(); err != nil {
 			return nil, fmt.Errorf("audit entry: %w", err)

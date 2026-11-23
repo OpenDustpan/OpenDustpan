@@ -119,7 +119,8 @@ func wantNamespaceEntries(
 }
 
 // checkGrantEntry checks that entries hold exactly one entry of the grant w,
-// with the action of e, the kind change and a time not before the grant.
+// with the action of e, the kind change, the reason
+// access.NamespaceGrantsReason and a time not before the grant.
 func checkGrantEntry(t *testing.T, entries []audit.Entry, e audit.Entry, w *access.Grant) {
 	t.Helper()
 
@@ -137,6 +138,10 @@ func checkGrantEntry(t *testing.T, entries []audit.Entry, e audit.Entry, w *acce
 		// earlier grant can take its time.
 		if got.Action != e.Action || got.Kind != audit.KindChange || got.At.Before(w.CreatedAt) {
 			t.Fatalf("entry of grant %q = %+v, want the action %q from %v", w.ID, got, e.Action, w.CreatedAt)
+		}
+
+		if got.Reason != access.NamespaceGrantsReason {
+			t.Fatalf("entry of grant %q reason = %q, want %q", w.ID, got.Reason, access.NamespaceGrantsReason)
 		}
 	}
 
