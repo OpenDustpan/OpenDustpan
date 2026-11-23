@@ -58,6 +58,27 @@ func PutLog(ctx context.Context, h *Handler, sess runner.Session, p LogPut) (int
 	return w.Code, w.Body.Bytes()
 }
 
+// Denials calls the check of cfg that builds the refusal recorder, without the
+// check of validate first. It returns the error of the check.
+func Denials(cfg Config) error {
+	_, _, err := cfg.denials()
+
+	return err
+}
+
+// RecorderLogRefusal maps err, the error of the recorder for chunk seq of step,
+// with logRefusalOf, as putLog does. It returns the audit reason (empty when
+// err is no refusal) and the error that the answer uses (nil when the refusal
+// has its own answer).
+func RecorderLogRefusal(err error, step string, seq int) (string, error) {
+	refused, ok := logRefusalOf(err, step, seq)
+	if !ok {
+		return "", nil
+	}
+
+	return refused.reason, refused.cause
+}
+
 // JobPhaseWithoutReader is JobPhaseOf with the job reader of h cleared for the
 // call and put back after it.
 func JobPhaseWithoutReader(ctx context.Context, h *Handler, sess runner.Session) error {

@@ -2,6 +2,8 @@ package runnerapi_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -249,7 +251,34 @@ func checkLogRefusal(t *testing.T, s *sessionEnv, e *audit.Entry, reason, chunk 
 func logRefusalReasons() []string {
 	return []string{
 		"cap-chunk-number", "cap-step", "cap-phase", "chunk-too-large", "hash-header", "hash-mismatch",
-		"out-of-order", "step-invalid", "name-or-number-invalid",
+		"out-of-order", "step-invalid", "name-or-number-invalid", "hash-body", "unknown",
+	}
+}
+
+// TestLogRefusalOfAuditsAnUnknownRefusal proves that a cap or a chunk rule that
+// logRefusalOf does not know is a refusal with the reason unknown, and that
+// its answer stays the answer of the error of the recorder. With the default
+// branches changed back to no refusal, the two cases fail.
+func TestLogRefusalOfAuditsAnUnknownRefusal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"an unknown cap", &job.LogCapError{Cap: "other-cap", Limit: 1, Phase: 0}},
+		{"an unknown chunk rule", &job.ChunkError{Rule: "other-rule", Next: 0}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reason, cause := runnerapi.RecorderLogRefusal(fmt.Errorf("append: %w", tc.err), "init", 0)
+			if reason != "unknown" || !errors.Is(cause, tc.err) {
+				t.Fatalf("logRefusalOf(%s) = %q, %v; want unknown and the error", tc.name, reason, cause)
+			}
+		})
 	}
 }
 
@@ -391,6 +420,8 @@ func logRefusalCases() []logRefusalCase {
 	none := func(*testing.T, *sessionEnv, *launcher) {}
 	chunk := []byte(refusedChunk)
 	tooLarge := bytes.Repeat(chunk, job.MaxLogChunk/len(chunk)+1)
+	// otherHash is a SHA-256 that is not the hash of the chunk.
+	otherHash := sha256.Sum256([]byte("another body"))
 
 	return []logRefusalCase{
 		{
@@ -472,6 +503,21 @@ func logRefusalCases() []logRefusalCase {
 			send: uploadLog("init", "0", chunk), recorder: true,
 			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
 			message: "the step name or the number of the log chunk is not valid", reason: "name-or-number-invalid",
+		},
+		{
+			name: "a body with another hash than the signed one", guard: "putLog, the signed hash of the body",
+			prepare: none, send: putLogSigned(otherHash[:]), recorder: false,
+			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
+			message: runner.ErrBadProof.Error(), reason: "hash-body",
+		},
+		{
+			name: "a cap that the handler does not know", guard: "logRefusalOf, the unknown cap",
+			prepare: func(_ *testing.T, s *sessionEnv, _ *launcher) {
+				s.jobs.failWith("log", &job.LogCapError{Cap: "other-cap", Limit: 1, Phase: 0})
+			},
+			send: uploadLog("init", "0", chunk), recorder: true,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: job.ErrInvalid.Error(), reason: "unknown",
 		},
 	}
 }

@@ -405,6 +405,24 @@ func TestNewHandlerRefusesNoAuditStore(t *testing.T) {
 	}
 }
 
+// TestDenialsRefusesNoAuditStore proves the check after refusal.New alone: the
+// call skips validate, and a nil audit store gives ErrMissingDependency that
+// wraps refusal.ErrNoStore. With the check removed, the call returns no error.
+func TestDenialsRefusesNoAuditStore(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := configFor(t, wiringBackends()[0].open(t), serveOptions{
+		now: time.Now, authz: identity.AdminOnly{}, claimer: nil, recorder: nil,
+		jobs: nil, logger: nil, mutate: nil,
+	})
+	cfg.Audit = nil
+
+	err := runnerapi.Denials(cfg)
+	if !errors.Is(err, runnerapi.ErrMissingDependency) || !errors.Is(err, refusal.ErrNoStore) {
+		t.Fatalf("denials = %v, want ErrMissingDependency that wraps refusal.ErrNoStore", err)
+	}
+}
+
 // TestJobPhaseRefusesWithoutAJobReader proves the second layer, alone: the
 // handler has every dependency of the claim, and the claim is live, so the
 // phase resolves. With only the job reader cleared, the same call answers

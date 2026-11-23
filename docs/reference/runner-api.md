@@ -227,10 +227,12 @@ the next entry.
 | `cap-phase` | the chunk passes the cap of 100,000 chunks or 1 GiB of a phase | `invalid` |
 | `chunk-too-large` | the chunk has more than 1 MiB | `invalid` |
 | `hash-header` | the signed `Dustpan-Content-SHA256` is not a SHA-256 | `invalid` |
+| `hash-body` | the body has another SHA-256 than the signed `Dustpan-Content-SHA256` | `bad-proof` |
 | `hash-mismatch` | a stored chunk with the same number has another hash | `conflict` |
 | `out-of-order` | the chunk is not the next one | `invalid` |
 | `step-invalid` | the step name is not valid | `invalid` |
 | `name-or-number-invalid` | the chunk number is not a number from 0, or the recorder refuses the step name or the number | `invalid` |
+| `unknown` | the recorder refuses the chunk with a cap or a rule that the server does not know | the answer of the error of the recorder |
 
 The end of a step names the number of chunks and the SHA-256 of the whole log.
 The server compares both with the log that it stored, and answers `conflict`

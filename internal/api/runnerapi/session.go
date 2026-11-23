@@ -606,7 +606,11 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 		// A refusal of the recorder gets its own message and an audit entry.
 		// Other errors keep the answer of their sentinel.
 		if refused, ok := logRefusalOf(err, chunk.step, chunk.seq); ok {
-			h.logRefused(ctx, err, refused.status, refused.body.Code, refused.body.Message)
+			// A refusal with a cause is logged by writeError in refuseLog.
+			if refused.cause == nil {
+				h.logRefused(ctx, err, refused.status, refused.body.Code, refused.body.Message)
+			}
+
 			h.refuseLog(w, r, c, &sp, refused)
 
 			return
@@ -672,7 +676,10 @@ func readLogChunk(r *http.Request, c *call) (logChunk, error) {
 	// does not verify: bad-proof, as for the other session paths.
 	got := sha256.Sum256(data)
 	if err = runner.CheckContentHash(c.contentSHA256, got[:]); err != nil {
-		return chunk, fmt.Errorf("log chunk: %w", err)
+		return chunk, &logRefusalError{
+			reason: logRefusedHashBody, step: name, cause: fmt.Errorf("log chunk: %w", err),
+			status: 0, body: protocol.Error{Code: "", Message: "", Supported: ""},
+		}
 	}
 
 	return logChunk{step: name, seq: seq, data: data}, nil
@@ -692,30 +699,48 @@ const (
 	logRefusedOutOfOrder     = "out-of-order"
 	logRefusedStepInvalid    = "step-invalid"
 	logRefusedNameOrNumber   = "name-or-number-invalid"
+	logRefusedHashBody       = "hash-body"
+	logRefusedUnknown        = "unknown"
 )
 
 // logCapMessage is the message of a chunk that a cap of the log refused.
 const logCapMessage = "the log of the step or of the phase is at its cap"
 
 // logRefusalError is the refusal of a log chunk: the audit reason, the checked
-// step name (empty when the name is not valid) and the answer.
+// step name (empty when the name is not valid) and the answer. When cause is
+// not nil, the answer is the answer of cause (writeError), and status and body
+// are not used.
 type logRefusalError struct {
 	reason string
 	step   string
+	cause  error
 	status int
 	body   protocol.Error
 }
 
-// Error implements error with the message of the answer.
+// Error implements error with the message of the answer, or the text of cause.
 func (e *logRefusalError) Error() string {
+	if e.cause != nil {
+		return e.cause.Error()
+	}
+
 	return e.body.Message
+}
+
+// unknownLog returns the refusal of a chunk of step that no rule of
+// logRefusalOf knows. Its answer is the answer of err.
+func unknownLog(step string, err error) *logRefusalError {
+	return &logRefusalError{
+		reason: logRefusedUnknown, step: step, cause: err,
+		status: 0, body: protocol.Error{Code: "", Message: "", Supported: ""},
+	}
 }
 
 // invalidLog returns the refusal of a chunk of step with the reason and the
 // answer 400 invalid with message.
 func invalidLog(reason, step, message string) *logRefusalError {
 	return &logRefusalError{
-		reason: reason, step: step, status: http.StatusBadRequest,
+		reason: reason, step: step, cause: nil, status: http.StatusBadRequest,
 		body: protocol.Error{Code: protocol.ErrorInvalid, Message: message, Supported: ""},
 	}
 }
@@ -723,7 +748,9 @@ func invalidLog(reason, step, message string) *logRefusalError {
 // logRefusalOf returns the answer and the audit reason of err, when err is the
 // refusal of chunk seq of step by the recorder: a cap of the log, the order of
 // the chunks or the name and the number of the chunk (400 invalid), or the
-// hash of a stored chunk (409 conflict). It reports false for any other error.
+// hash of a stored chunk (409 conflict). An unknown cap or chunk rule is a
+// refusal with the reason unknown and the answer of err. It reports false for
+// any other error.
 func logRefusalOf(err error, step string, seq int) (*logRefusalError, bool) {
 	if capErr, ok := errors.AsType[*job.LogCapError](err); ok {
 		switch capErr.Cap {
@@ -734,8 +761,9 @@ func logRefusalOf(err error, step string, seq int) (*logRefusalError, bool) {
 		case job.LogCapPhaseChunks, job.LogCapPhaseBytes:
 			return invalidLog(logRefusedCapPhase, step, logCapMessage), true
 		default:
-			// Fail closed: an unknown cap keeps the answer of its sentinel.
-			return nil, false
+			// Fail closed: an unknown cap keeps the answer of its sentinel, and
+			// gets an audit entry.
+			return unknownLog(step, err), true
 		}
 	}
 
@@ -758,16 +786,25 @@ func logRefusalOf(err error, step string, seq int) (*logRefusalError, bool) {
 		return invalidLog(logRefusedNameOrNumber, step, "the step name or the number of the log chunk is not valid"),
 			true
 	default:
-		// Fail closed: an unknown rule keeps the answer of its sentinel.
-		return nil, false
+		// Fail closed: an unknown rule keeps the answer of its sentinel, and
+		// gets an audit entry.
+		return unknownLog(step, err), true
 	}
 }
 
-// refuseLog writes the audit entry of the refused log chunk and answers it.
+// refuseLog writes the audit entry of the refused log chunk and answers it. A
+// refusal with a cause gets the answer of the cause.
 func (h *Handler) refuseLog(
 	w http.ResponseWriter, r *http.Request, c *call, sp *sessionPhase, refused *logRefusalError,
 ) {
 	h.recordLogRefusal(r, c, sp, refused.step, refused.reason)
+
+	if refused.cause != nil {
+		h.writeError(r.Context(), w, refused.cause)
+
+		return
+	}
+
 	h.writeJSON(r.Context(), w, refused.status, refused.body)
 }
 
