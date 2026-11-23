@@ -33,7 +33,7 @@ admin->>server: POST freezes with reason
 server->>store: store active freeze
 starter->>server: POST jobs
 server->>store: lock freeze row and dispatch
-server-->>starter: 403 or job
+server-->>starter: 409 job.frozen or job
 ```
 
 Modules that the change touches, and their imports on main:
@@ -82,7 +82,7 @@ end
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | authorize at point of use | Route checks freeze manage, break-freeze, and read actions at the point of use | Replay create, end, break-glass start, and list as a caller with no grant and check 403 with no state change |
+| client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | authorize at point of use | Route checks freeze manage, break-freeze, and read actions at the point of use | Replay create, end, and list as a caller with no grant and check 403 with no state change, and replay a start without break-freeze during a freeze and check 409 with code job.frozen and no state change |
 | client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | boundary check | Reason length 1 to 500 checked at the boundary; overlong or empty input refused with 400 | Send 501-character and empty reasons to create and break-glass start and check 400 with no write |
 | client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | encode or contain | Reason is stored as text and returned as JSON text with encoding at render, never run | Store HTML and script text in a reason and check the list read returns it encoded with no execution |
 | client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | limit | Reason capped at 500 characters and list capped by page limit | Send a 1 MB reason and a list with a large limit and check 400 and capped pages |
@@ -91,7 +91,7 @@ end
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | authorize at point of use | Freeze read and job dispatch run in one transaction with a locked read so a freeze made between check and dispatch still refuses start | Insert a freeze between the guard read and dispatch in a test double and check that start is refused |
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | encode or contain | Freeze rows bound to namespace ID by placeholder query; no string-built SQL | Send a namespace ID with SQL text and check it matches no row and changes nothing |
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | limit | Single active freeze per namespace ID enforced by a unique partial index with bounded retry on conflict | Insert two concurrent creates and check that one gets 409 and only one active row remains |
-| server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | fail closed | Race loser fails closed with 409 and dispatch loser fails closed with 403 | Race two creates and race a start with a concurrent freeze and check one 409, one 403, and a single active freeze |
+| server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | fail closed | Race loser fails closed with 409 and dispatch loser fails closed with 409 and code job.frozen | Race two creates and race a start with a concurrent freeze and check one 409 for the second create, one 409 with code job.frozen for the start, and a single active freeze |
 
 ## Contract
 
