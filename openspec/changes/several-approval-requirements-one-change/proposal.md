@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 11
 ---
 
 Issue: #1158.
@@ -45,6 +45,8 @@ Part A (several group requirements on one job, with distinct people) is on main 
 - No `unless` on a job for now. `DefaultRequirements` keeps its refusal ((read only) `pkg/gate/requirements.go`, line 44), and a test and the guide fix it.
 - Rejection stays open to every holder of `job:approve`, as on main.
 - `pkg/gate/jobgate/jobgate.go`: `gatesOf` stops refusing users, unit owners and `freshAuthSeconds`, one task at a time.
+- The readers and the wiring of Part B (design decision 16). A struct-field preflight adds the NEW fields of `Approvers` and `Gate` first, because their literals are in more than 10 files (task 5.0). The config service resolves a user name to its ID at save through the NEW port `gate.UserResolver`, with its adapter in `pkg/dustpan/gateconfig.go`. `Approve` reads unit owners through the NEW port `UnitOwnerReader` and resolves a `group:<name>` owner through the NEW port `job.GroupNames`. Their adapters are in `pkg/dustpan/jobgroups.go` and the NEW file `pkg/dustpan/jobowners.go`. A gate with unit owners holds the NEW field `Scope`. Each port is optional, and a nil port fails closed.
+- A user that does not exist fails the save with the NEW code `gate.approvers-user-missing`. A caller without `server:read-principals` gets the general answer, as for a missing group.
 - `docs/guides/approval-rules.md` and `docs/guides/jobs.md`: show the users, the unit owners and the fresh window on a job.
 
 Out of scope:
@@ -171,6 +173,15 @@ Each quote is copied from the file in (read only) `docs/adr/` on main at `65b843
 
 - Changed by: ADR 363 extends decision 2. Current rule: this ADR, with ADR 363.
 - Effect: a gate names groups by their IDs and users by the NEW field `UserIDs`, and the matching keys its slots by the gate name, not by a display string. The owner applied the same rule to users (2026-11-20).
+
+**ADR 391: A stored reference to a unit or a collection is its stable ID** (owner-tagged: decisions 1 and 2, "(owner, 2026-11-20)").
+
+- Decisions that apply: 2.
+- Changed by: ADR 393 supersedes decisions 1 and 3. Decision 2 is not changed. Current rule: this ADR, with ADR 393.
+- Quote (decision 2, owner): "Each stored reference to an entity uses the stable ID of the entity. This holds when a user can rename the entity. [...] A name is a label for people. The store may keep a name next to the ID for display. A name never decides a match, a grant or a rule."
+- Quote ("Not decided here"): "The check of other stored references by name in accepted ADRs, RFCs and OpenSpec changes. ADR 362 lists some under \"Follow-ups for decision 1\". The audit in the pull request of this ADR lists more. Each needs its own ADR or RFC."
+- Effect: a gate stores users by `UserIDs` and groups by `GroupIDs`. The gate and the approval store no user name and no group name for a match. A context owner `group:<name>` is a stored reference by name of ADR 160 decision 3. ADR 391 leaves it to its own ADR or RFC. This change resolves it to the stable ID of the group at the approval (design decision 12). It stores only the names of the gates in `For`.
+- Conflict: none in this change. A follow-up for the context owners is in the report of this change to the PM.
 
 Security change: each pull request of this change needs the Opus security review (rev2) on its exact head before it is queued.
 
