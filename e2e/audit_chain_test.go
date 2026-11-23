@@ -73,7 +73,8 @@ func TestAuditChain(t *testing.T) {
 			// checkAuditChainTokenRefused expects the fresh step of an access
 			// token. The server refuses a sign-in in maintenance mode, so the
 			// setting goes on before the first restart.
-			env.EnableFreshAuth(ctx, t)
+			restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+			defer restoreFreshAuth()
 
 			if got := readAuditChain(ctx, t, env); got.State != "on" || got.Setting != "on" || got.Pending {
 				t.Fatalf("audit chain of a new installation = %+v, want on with no waiting change", got)

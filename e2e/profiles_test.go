@@ -194,7 +194,8 @@ func profileScenario(t *testing.T, env *e2e.Env, tool string) {
 func profileReads(t *testing.T, env *e2e.Env, one, tool string) {
 	t.Helper()
 
-	env.EnableFreshAuth(t.Context(), t)
+	restoreFreshAuth := env.EnableFreshAuth(t.Context(), t)
+	defer restoreFreshAuth()
 
 	profileStep(t, env, profileRequest("read the profile", http.MethodGet, one, http.StatusOK).
 		checking(profileMasked(`"name":"e2e-`+tool+`"`)))

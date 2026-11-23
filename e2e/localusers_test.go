@@ -287,7 +287,8 @@ func runLocalPasswordOnStore(t *testing.T, env *e2e.Env) {
 
 	// The refusal of the reset with a token needs freshAuthEnabled on. With
 	// the default off, the token resets.
-	c.env.EnableFreshAuth(t.Context(), t)
+	restoreFreshAuth := c.env.EnableFreshAuth(t.Context(), t)
+	defer restoreFreshAuth()
 
 	c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/reset",
 		`{"principal":"`+user.PrincipalID+`","reason":"e2e"}`, asAdmin()).

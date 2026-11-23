@@ -2016,7 +2016,8 @@ func checkPulumiReveal(ctx context.Context, tb testing.TB, env *e2e.Env, rc reve
 
 	// An access token never gives the fresh authentication that a reveal needs,
 	// while freshAuthEnabled is on. With the default off, the token reveals.
-	env.EnableFreshAuth(ctx, tb)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, tb)
+	defer restoreFreshAuth()
 
 	tokenStatus, tokenBody, tokenErr := env.APIStatus(ctx, http.MethodPost, base+"/state/latest/reveal", body)
 	if tokenErr != nil {
@@ -7469,7 +7470,8 @@ func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path 
 func checkTFERevealTokenRefused(ctx context.Context, t *testing.T, env *e2e.Env, base, path string) {
 	t.Helper()
 
-	env.EnableFreshAuth(ctx, t)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	refused, err := env.TFEStatusHeaders(
 		ctx, env.TokenA(), http.MethodPost, base+"/actions/reveal", revealRequestBody(t, path),

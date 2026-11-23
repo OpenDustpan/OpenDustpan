@@ -165,7 +165,8 @@ type patchCall struct {
 func issuerSettings(t *testing.T, env *e2e.Env, token string, st *issuerState) {
 	t.Helper()
 
-	env.EnableFreshAuth(t.Context(), t)
+	restoreFreshAuth := env.EnableFreshAuth(t.Context(), t)
+	defer restoreFreshAuth()
 
 	remember := func(body string) error {
 		var got struct {

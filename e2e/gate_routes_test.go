@@ -71,7 +71,8 @@ func runGateRoutesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	// The steps expect the fresh step of a gate write with an access token,
 	// so freshAuthEnabled goes on. With the default off, the token writes.
-	env.EnableFreshAuth(ctx, t)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	gateRoutesCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces", `{"name":"` + gateRoutesNamespace + `"}`, http.StatusCreated,

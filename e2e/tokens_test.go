@@ -132,7 +132,8 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 func checkTokenNeedsFreshAuth(ctx context.Context, t *testing.T, env *e2e.Env, deploy e2ePrincipal) {
 	t.Helper()
 
-	env.EnableFreshAuth(ctx, t)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	_, before, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/tokens", "")
 	if err != nil {

@@ -62,7 +62,8 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 
 	// The steps expect the fresh step of a change with an access token, so
 	// freshAuthEnabled goes on. With the default off, the token makes it.
-	env.EnableFreshAuth(ctx, t)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	const principals = "/api/server/namespaces/teamns/principals"
 

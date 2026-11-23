@@ -397,7 +397,8 @@ func checkPulumiWhoami(ctx context.Context, t *testing.T, env *e2e.Env, token st
 func checkTokenFreshness(t *testing.T, b browser) {
 	t.Helper()
 
-	b.env.EnableFreshAuth(t.Context(), t)
+	restoreFreshAuth := b.env.EnableFreshAuth(t.Context(), t)
+	defer restoreFreshAuth()
 
 	clock := b.env.Clock(t)
 	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)

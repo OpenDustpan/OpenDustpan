@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -389,12 +388,15 @@ const freshAuthSettingsPath = "/api/dustpan/v1/settings"
 // A step that expects 403 mfa.fresh-step-required for an access token calls
 // EnableFreshAuth first, before it reads a revision of the settings. An env
 // from NewEnvWithSignIn makes the change with a console session of a site
-// administrator, and sets the value back when the test ends: the change to
-// off needs a fresh step while the setting is on. An env with no sign-in makes
-// the change with the administrator token, because a change to on needs no
-// step. Its value stays until the env stops with its test, because no session
-// of that env can give the fresh step of the change back to off.
-func (e *Env) EnableFreshAuth(ctx context.Context, tb testing.TB) {
+// administrator. The returned function sets the value back with a console
+// session: the change to off needs a fresh step while the setting is on. The
+// step that calls EnableFreshAuth calls the returned function before it ends,
+// so that no settings request runs after a later step stops the database. An
+// env with no sign-in makes the change with the administrator token, because
+// a change to on needs no step. Its returned function does nothing, and the
+// value stays until the env stops with its test, because no session of that
+// env can give the fresh step of the change back to off.
+func (e *Env) EnableFreshAuth(ctx context.Context, tb testing.TB) func() {
 	tb.Helper()
 
 	if e.signIn != nil {
@@ -407,31 +409,16 @@ func (e *Env) EnableFreshAuth(ctx context.Context, tb testing.TB) {
 	e.patchFreshAuth(ctx, tb, tag, true)
 
 	if before || e.signIn == nil {
-		return
+		return func() {}
 	}
 
-	tb.Cleanup(func() {
-		restoreCtx := context.WithoutCancel(ctx)
-		deadline := time.Now().Add(freshAuthRestoreLimit)
+	return func() {
+		tb.Helper()
 
-		read, ok := retryFreshAuth(restoreCtx, tb, deadline, func() freshAuthAnswer {
-			return e.getFreshAuth(restoreCtx, tb)
-		})
-		if !ok {
-			return
-		}
-
-		_, tag := decodeFreshAuth(tb, read)
-
-		retryFreshAuth(restoreCtx, tb, deadline, func() freshAuthAnswer {
-			return e.sendFreshAuth(restoreCtx, tb, tag, false)
-		})
-	})
+		_, tag := e.readFreshAuth(ctx, tb)
+		e.patchFreshAuth(ctx, tb, tag, false)
+	}
 }
-
-// freshAuthRestoreLimit is the longest time that the cleanup of
-// EnableFreshAuth tries again while the database does not answer.
-const freshAuthRestoreLimit = 30 * time.Second
 
 // freshAuthAnswer is one answer of the settings resource. what names the
 // request in a failure message.
@@ -440,70 +427,6 @@ type freshAuthAnswer struct {
 	status int
 	header http.Header
 	body   string
-}
-
-// unavailableWait returns the wait of the Retry-After header when the answer
-// is 503 with the code namespace.unavailable. It returns false for each other
-// answer.
-func (a freshAuthAnswer) unavailableWait() (time.Duration, bool) {
-	if a.status != http.StatusServiceUnavailable {
-		return 0, false
-	}
-
-	var doc struct {
-		ErrorCode string `json:"errorCode"`
-	}
-
-	if err := json.Unmarshal([]byte(a.body), &doc); err != nil || doc.ErrorCode != "namespace.unavailable" {
-		return 0, false
-	}
-
-	seconds, err := strconv.Atoi(a.header.Get("Retry-After"))
-	if err != nil || seconds < 0 {
-		return 0, false
-	}
-
-	return time.Duration(seconds) * time.Second, true
-}
-
-// retryFreshAuth sends a request with send until the answer is 200. While the
-// answer is 503 namespace.unavailable, it waits until the Retry-After time and
-// sends again. It stops the test on each other answer. When the next try
-// cannot start before deadline, it marks the test as failed with tb.Errorf and
-// returns false.
-func retryFreshAuth(
-	ctx context.Context, tb testing.TB, deadline time.Time, send func() freshAuthAnswer,
-) (freshAuthAnswer, bool) {
-	tb.Helper()
-
-	for {
-		answer := send()
-		if answer.status == http.StatusOK {
-			return answer, true
-		}
-
-		wait, ok := answer.unavailableWait()
-		if !ok {
-			tb.Fatalf("%s = %d: %s", answer.what, answer.status, answer.body)
-		}
-
-		if time.Now().Add(wait).After(deadline) {
-			tb.Errorf("%s = %d for %s, stop: %s", answer.what, answer.status, freshAuthRestoreLimit, answer.body)
-
-			return answer, false
-		}
-
-		timer := time.NewTimer(wait)
-
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			tb.Errorf("%s: wait for the Retry-After time: %v", answer.what, ctx.Err())
-
-			return answer, false
-		case <-timer.C:
-		}
-	}
 }
 
 // freshAuthItem is the part of one setting of the settings resource that

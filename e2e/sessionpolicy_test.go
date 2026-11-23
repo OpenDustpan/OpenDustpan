@@ -120,7 +120,8 @@ func checkSessionPolicyChange(ctx context.Context, t *testing.T, env *e2e.Env) {
 func checkSessionPolicyRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	env.EnableFreshAuth(ctx, t)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	steps := []struct {
 		subject, role string

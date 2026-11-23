@@ -52,7 +52,8 @@ func restoreAccessScenario(t *testing.T, store e2e.Store) {
 
 	// The refusal of an access token below needs freshAuthEnabled on. It goes
 	// on before the backup, so that a restore keeps it on.
-	env.EnableFreshAuth(ctx, t)
+	restoreFreshAuth := env.EnableFreshAuth(ctx, t)
+	defer restoreFreshAuth()
 
 	operator := makeOperatorToken(ctx, t, env, "operator")
 	victim := makeVictimToken(ctx, t, env)
