@@ -10,9 +10,9 @@ An operator runs a restore on one installation and watches apply. The swap can w
 
 ## Evidence
 
-- The swap lock timeout is 100 ms. Proof: pkg/store/postgres/maintenance_revocations.go:239:	swapLockTimeout      = 100 * time.Millisecond
-- A swap busy error helper exists. Proof: pkg/store/postgres/maintenance_revocations.go:230:func errSwapLockBusy(ctx context.Context) error {
-- The postgres StateAt maps its read errors through readConflict. Proof: pkg/store/postgres/state_at.go:25:		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
+- The swap lock timeout is 100 ms. Proof: internal/store/postgres/maintenance_revocations.go:239:	swapLockTimeout      = 100 * time.Millisecond
+- A swap busy error helper exists. Proof: internal/store/postgres/maintenance_revocations.go:230:func errSwapLockBusy(ctx context.Context) error {
+- The postgres StateAt maps its read errors through readConflict. Proof: internal/store/postgres/state_at.go:25:		return stack.StateAt{}, fmt.Errorf("begin read transaction: %w", readConflict(err))
 - No non-test code names checkSwapDoesNotQueueReads, so the bound lives in a test file. Proof: rg -n -F --glob '!*_test.go' 'checkSwapDoesNotQueueReads' pkg internal cmd matches 0
 
 ## Fix boundary
@@ -30,10 +30,10 @@ Out of scope:
 
 ## Check
 
-- Add a test in NEW file pkg/store/postgres/swap_wait_test.go that the swap logs one warning after 500 ms and none before 500 ms. Check: `go test ./pkg/store/postgres -run TestSwapWaitLogsOnce -count=1` fails on main
-- Set the swap non-queue bound to 500 ms in the test that calls checkSwapDoesNotQueueReads, in NEW file pkg/store/postgres/swap_bound_test.go. Check: `go test ./pkg/store/postgres -run TestSwapNonQueueBound -count=1` fails on main
-- Add a test in NEW file pkg/store/postgres/inventory_query_labels_test.go of QueryUnits labels (pkg/store/postgres/inventory_query.go, func Store.QueryUnits) in one statement with empty and ordered labels. Check: `go test ./pkg/store/postgres -run TestQueryUnitsLabelsOneStatement -count=1` fails on main
-- Add a test in NEW file pkg/store/postgres/state_at_conflict_test.go that StateAt (pkg/store/postgres/state_at.go:20) and WorkspaceStateAt begin and read conflicts map to ErrUnavailable. Check: `go test ./pkg/store/postgres -run TestStateAtConflictMapsUnavailable -count=1` fails on main
+- Add a test in NEW file internal/store/postgres/swap_wait_test.go that the swap logs one warning after 500 ms and none before 500 ms. Check: `go test ./internal/store/postgres -run TestSwapWaitLogsOnce -count=1` fails on main
+- Set the swap non-queue bound to 500 ms in the test that calls checkSwapDoesNotQueueReads, in NEW file internal/store/postgres/swap_bound_test.go. Check: `go test ./internal/store/postgres -run TestSwapNonQueueBound -count=1` fails on main
+- Add a test in NEW file internal/store/postgres/inventory_query_labels_test.go of QueryUnits labels (internal/store/postgres/inventory_query.go, func Store.QueryUnits) in one statement with empty and ordered labels. Check: `go test ./internal/store/postgres -run TestQueryUnitsLabelsOneStatement -count=1` fails on main
+- Add a test in NEW file internal/store/postgres/state_at_conflict_test.go that StateAt (internal/store/postgres/state_at.go:20) and WorkspaceStateAt begin and read conflicts map to ErrUnavailable. Check: `go test ./internal/store/postgres -run TestStateAtConflictMapsUnavailable -count=1` fails on main
 - Implement the four changes and add the swap wait to the high-availability docs page. The change adds no route. The existing restore routes keep their access token authorization. Check: `make check` with zero findings
 
 Depends on:
@@ -45,10 +45,10 @@ Depends on:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The swap lock timeout is 100 ms. (`pkg/store/postgres/maintenance_revocations.go:239`)
-- The postgres store has a readConflict function that maps read conflicts. (`pkg/store/postgres/postgres.go:1323 (func readConflict)`)
-- The postgres store implements the unit page query. (`pkg/store/postgres/inventory_query.go:51 (func Store.QueryUnits)`)
-- StateAt begins a snapshot read transaction. (`pkg/store/postgres/state_at.go:20 (func Store.StateAt)`)
+- The swap lock timeout is 100 ms. (`internal/store/postgres/maintenance_revocations.go:239`)
+- The postgres store has a readConflict function that maps read conflicts. (`internal/store/postgres/postgres.go:1323 (func readConflict)`)
+- The postgres store implements the unit page query. (`internal/store/postgres/inventory_query.go:51 (func Store.QueryUnits)`)
+- StateAt begins a snapshot read transaction. (`internal/store/postgres/state_at.go:20 (func Store.StateAt)`)
 
 ## ADR check
 

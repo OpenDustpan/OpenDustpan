@@ -4,7 +4,7 @@ The pack shows DurableRecorder (pkg/job/recorder.go:56) and newDurableRecorder (
 
 ## Decisions
 
-1. **One transaction.** Each end of a job as canceled writes the job state and the durable record in the same transaction. This is the same rule that the state write follows with startDurableOperation (pkg/store/postgres/state_close.go:91).
+1. **One transaction.** Each end of a job as canceled writes the job state and the durable record in the same transaction. This is the same rule that the state write follows with startDurableOperation (internal/store/postgres/state_close.go:91).
 
 2. **Running jobs go to canceling.** A cancel of a running job follows the state machine (pkg/job/state.go: Running with EventCancel gives Canceling) and the durable store contract (a cancel of a running operation only records the request). The executor ends both records later, in one transaction.
 

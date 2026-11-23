@@ -103,12 +103,12 @@ Each fact names its file, line and function on main. The change specifies only t
 Each claim has its proof.
 
 - No setting key for a namespace list. Proof: `rg -n 'ipAllowlist\.' pkg internal --glob '*.go' --glob '!*_test.go'` prints only `pkg/ipallow/settings.go:13` and `pkg/ipallow/settings.go:16`.
-- The namespace list lives in the column `namespaces.ip_allowlist` (`pkg/store/sqlite/migrations/0168_baseline.sql:23`, `pkg/store/postgres/migrations/0168_baseline.sql:844`), not in the settings table (`pkg/store/sqlite/migrations/0168_baseline.sql:1432`).
+- The namespace list lives in the column `namespaces.ip_allowlist` (`internal/store/sqlite/migrations/0168_baseline.sql:23`, `internal/store/postgres/migrations/0168_baseline.sql:844`), not in the settings table (`internal/store/sqlite/migrations/0168_baseline.sql:1432`).
 - No view of the settings resource. Proof: `rg -n 'settings/(session-policy|token-policy|ip-allowlist)' pkg internal --glob '*.go' --glob '!*_test.go'` prints nothing (exit 1). Only a test table names the planned paths of the other two policies (`pkg/dustpan/apidesc_test.go:605`).
 - The checker holds a namespace slot, but no production call fills it. Proof: the four calls of `newAllowChecker` outside tests pass `nil` for the namespace list (`pkg/dustpan/ipallow.go:178,200,221,224`). So "deny when any list denies" holds today across the checker (installation) and the authorizer decorator (namespace), not inside one checker.
 - Two switches. The installation list follows the setting `ipAllowlist.enabled` (`pkg/dustpan/ipallow.go:169`). The namespace list follows the option `--ip-allowlists` (`pkg/dustpan/area_ipallow.go:31`). ADR 55 decision 8 names one feature switch. Owner decision 9 makes the setting that switch (task 2.1).
 - No test sends a request with the refresh cookie only. Proof: `rg -n 'RefreshCookie' pkg/dustpan --glob '*_test.go'` prints nothing.
-- The settings value limit is below the list limit. A string value holds at most 1024 bytes (`pkg/setting/setting.go:85`, `pkg/store/sqlite/migrations/0168_baseline.sql:1435`). A list of 64 IPv6 entries in the longest form is 64 x 43 bytes plus 63 commas, about 2800 bytes. Computed, not run. Owner decision 11 sets 4096 bytes (task 2.3).
+- The settings value limit is below the list limit. A string value holds at most 1024 bytes (`pkg/setting/setting.go:85`, `internal/store/sqlite/migrations/0168_baseline.sql:1435`). A list of 64 IPv6 entries in the longest form is 64 x 43 bytes plus 63 commas, about 2800 bytes. Computed, not run. Owner decision 11 sets 4096 bytes (task 2.3).
 
 ## ADR check
 

@@ -42,11 +42,14 @@ type planCommit struct {
 }
 
 // fakePlans is a job.PlanRecorder in memory. It keeps what the handler passed,
-// and returns the error that a case sets.
+// and returns the error that a case sets. It applies the commit rule of the
+// recorder: the same parts again changes nothing, and other parts after a
+// commit are a conflict and leave the stored parts.
 type fakePlans struct {
 	mu        sync.Mutex
 	puts      []planPut
 	commits   []planCommit
+	stored    []job.PlanCommitPart
 	putErr    error
 	commitErr error
 }
@@ -79,7 +82,28 @@ func (f *fakePlans) CommitPlan(_ context.Context, c job.PhaseClaim, parts []job.
 
 	f.commits = append(f.commits, planCommit{claim: c, parts: parts})
 
-	return job.PlanRef{}, f.commitErr
+	if f.commitErr != nil {
+		return job.PlanRef{}, f.commitErr
+	}
+
+	if f.stored != nil && !slices.Equal(f.stored, parts) {
+		return job.PlanRef{}, fmt.Errorf("%w: the commit names other parts", job.ErrConflict)
+	}
+
+	f.stored = slices.Clone(parts)
+
+	// The handler reads no field of the reference.
+	var ref job.PlanRef
+
+	return ref, nil
+}
+
+// storedParts returns the parts of the plan that the last commit stored.
+func (f *fakePlans) storedParts() []job.PlanCommitPart {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.stored)
 }
 
 // touched returns the number of calls the recorder got.
@@ -221,7 +245,7 @@ func newPlanEnv(t *testing.T, b backend, phase int, stored *job.PlanRef) *planEn
 	t.Helper()
 
 	jobs := &planJobs{sessionJobs: newSessionJobs(), plan: stored}
-	plans := &fakePlans{mu: sync.Mutex{}, puts: nil, commits: nil, putErr: nil, commitErr: nil}
+	plans := &fakePlans{mu: sync.Mutex{}, puts: nil, commits: nil, putErr: nil, commitErr: nil, stored: nil}
 	reads := &fakeReads{
 		mu: sync.Mutex{}, reads: nil, err: nil,
 		content: map[job.OutputKind]string{job.OutputPlanDisplay: planDisplayText, job.OutputPlanApply: planApplyText},

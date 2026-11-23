@@ -62,11 +62,14 @@ type NewPlan struct {
 }
 
 // ChunkReserve is one chunk of a log, as the store records it before the
-// blob exists: the number, the SHA-256 and the size of its plaintext.
+// blob exists: the number, the SHA-256 and the size of its plaintext. Caps are
+// the caps of the log that the reserve checks in its transaction; nil sets no
+// cap (see LogCaps.PlanChunk).
 type ChunkReserve struct {
 	Seq    int
 	SHA256 string
 	Size   int64
+	Caps   *LogCaps
 }
 
 // ChunkRow is the stored record of one chunk of a log version. Confirmed is
@@ -361,7 +364,12 @@ func ValidHash(h string) bool {
 //   - a chunk with a stored row and the same hash is no change (Duplicate when
 //     it is confirmed), and another hash is ErrConflict,
 //   - a chunk with no row must be the next one (LogRef.Chunks) and below
-//     MaxLogChunks, else ErrInvalid.
+//     MaxLogChunks, else ErrInvalid,
+//   - with caps (LogCaps.PlanChunk), a new chunk must stay within the caps of
+//     its step and of its phase, else ErrInvalid. A repeated chunk counts no
+//     second time.
+//
+// PlanChunk sets no cap. LogCaps.PlanChunk is the same call with the caps.
 func PlanChunk(
 	j *Job, k StepKey, c ChunkReserve, newLog *LogRef,
 	lookup func(version string, seq int) (ChunkRow, bool, error),
@@ -398,12 +406,18 @@ func (c ChunkReserve) valid() bool {
 func planNextChunk(log *LogRef, step string, c *ChunkReserve, row ChunkRow, ok bool) (ChunkPlan, error) {
 	switch {
 	case ok && row.SHA256 != c.SHA256:
-		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q has another hash", ErrConflict, c.Seq, step)
+		return ChunkPlan{}, &ChunkError{
+			Rule: ChunkHashMismatch, Next: 0,
+			err: fmt.Errorf("%w: chunk %d of step %q has another hash", ErrConflict, c.Seq, step),
+		}
 	case ok:
 		return ChunkPlan{Version: log.ID, CreateLog: false, Insert: false, Duplicate: row.Confirmed}, nil
 	case c.Seq != log.Chunks:
-		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q is not the next one, which is %d", ErrInvalid, c.Seq,
-			step, log.Chunks)
+		return ChunkPlan{}, &ChunkError{
+			Rule: ChunkOutOfOrder, Next: log.Chunks,
+			err: fmt.Errorf("%w: chunk %d of step %q is not the next one, which is %d", ErrInvalid, c.Seq,
+				step, log.Chunks),
+		}
 	default:
 		return ChunkPlan{Version: log.ID, CreateLog: false, Insert: true, Duplicate: false}, nil
 	}
@@ -436,7 +450,10 @@ func openLogOf(j *Job, k StepKey) (*LogRef, error) {
 func planFirstChunk(step string, seq int, newLog *LogRef) (ChunkPlan, error) {
 	switch {
 	case seq != 0:
-		return ChunkPlan{}, fmt.Errorf("%w: chunk %d of step %q comes before chunk 0", ErrInvalid, seq, step)
+		return ChunkPlan{}, &ChunkError{
+			Rule: ChunkOutOfOrder, Next: 0,
+			err: fmt.Errorf("%w: chunk %d of step %q comes before chunk 0", ErrInvalid, seq, step),
+		}
 	case newLog == nil || newLog.ID == "" || newLog.Version != 1 || newLog.Chunks != 0 || !newLog.ClosedAt.IsZero():
 		return ChunkPlan{}, fmt.Errorf("%w: chunk 0 of step %q needs a new open log version", ErrInvalid, step)
 	default:

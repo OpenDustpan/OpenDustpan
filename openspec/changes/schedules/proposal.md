@@ -24,7 +24,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Main stores durable operations in durable_operations and has a durable package with a schedule test. Proof: pkg/backup/backup.go:51 TableDurableOperations; pkg/durable/durabletest/durabletest_test.go:35 TestMemSchedules
-- Main lists durable operations on PostgreSQL. Proof: pkg/store/postgres/durable.go:44 (func Store.DurableOperations)
+- Main lists durable operations on PostgreSQL. Proof: internal/store/postgres/durable.go:44 (func Store.DurableOperations)
 - Main has an instance list route and an HA guide. Proof: ANY /api/server/instances in the route table; docs/guides/high-availability.md
 
 ## What Changes
@@ -56,7 +56,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The schedule suite covers the claim. (`pkg/durable/durabletest/durabletest_test.go:35 (func TestMemSchedules)`)
-- The PostgreSQL store lists durable operations. (`pkg/store/postgres/durable.go:44 (func Store.DurableOperations)`)
+- The PostgreSQL store lists durable operations. (`internal/store/postgres/durable.go:44 (func Store.DurableOperations)`)
 - A restore keeps durable operations. (`pkg/store/storetest/durable_restore.go:20 (func testRestoreKeepsDurableOperations)`)
 
 ## ADR check

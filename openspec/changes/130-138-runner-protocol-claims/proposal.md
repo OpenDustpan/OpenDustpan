@@ -62,7 +62,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Lease renew is checked by holder on main. (`pkg/audit/audittest/feed.go:391 (func testLeaseRenewByHolder)`)
 - Server start steps exist on main. (`pkg/dustpan/start.go:66 (func Server.startSteps)`)
 - Source filter option exists on main. (`pkg/dustpan/sourcefilter.go:15 (func WithSourceFilters)`)
-- Postgres source filters read exists on main. (`pkg/store/postgres/sourcefilter.go:21 (func Store.SourceFilters)`)
+- Postgres source filters read exists on main. (`internal/store/postgres/sourcefilter.go:21 (func Store.SourceFilters)`)
 
 ## ADR check
 

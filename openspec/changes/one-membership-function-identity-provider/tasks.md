@@ -14,7 +14,7 @@
 
 - [ ] 2.1 Implement the one membership function in NEW file pkg/principal/idpmember.go with atomic PATCH and per-operation Bulk status. Check: `go test ./pkg/principal/... -count=1` passes.
 - [ ] 2.2 Wire, in NEW file pkg/principal/idpalert.go, the audit plus WARN alerts and the 168-hour token expiry check with injected logger and clock. Check: `go test ./internal/... -run Alert -count=1` passes.
-- [ ] 2.3 Add the new store port method in NEW file pkg/principal/idpport.go. Add its conformance suite in NEW file pkg/store/storetest/idpmember_conformance.go. Add its adapter for each dialect in NEW file pkg/store/sqlite/idpmember.go and in NEW file pkg/store/postgres/idpmember.go. Check: `go test -timeout 60m ./pkg/principal/... ./pkg/store/... -run Conformance -count=1` passes on SQLite and PostgreSQL.
+- [ ] 2.3 Add the new store port method in NEW file pkg/principal/idpport.go. Add its conformance suite in NEW file pkg/store/storetest/idpmember_conformance.go. Add its adapter for each dialect in NEW file internal/store/sqlite/idpmember.go and in NEW file internal/store/postgres/idpmember.go. Check: `go test -timeout 60m ./pkg/principal/... ./pkg/store/... -run Conformance -count=1` passes on SQLite and PostgreSQL.
 - [ ] 2.4 Add the new actions to the sensitive action list in NEW file pkg/principal/idpactions.go. Check: `rg -n server:manage-sign-in` lists them.
 
 ## 3. Side effects (computed from main)

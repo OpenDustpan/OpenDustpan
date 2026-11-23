@@ -28,7 +28,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above (each checked on main):
 
-- The three store ports exist with both SQL adapters. Proof: pkg/notify/ports.go:36 (Outbox), pkg/notify/ports.go:136 (Subscriptions), pkg/notify/ports.go:354 (Deliveries), pkg/store/sqlite/notifications.go:172 (Append), pkg/store/sqlite/notifications.go:841 (Enqueue), pkg/store/sqlite/notifications.go:1042 (Claim), pkg/store/sqlite/notifications.go:1143 (Record).
+- The three store ports exist with both SQL adapters. Proof: pkg/notify/ports.go:36 (Outbox), pkg/notify/ports.go:136 (Subscriptions), pkg/notify/ports.go:354 (Deliveries), internal/store/sqlite/notifications.go:172 (Append), internal/store/sqlite/notifications.go:841 (Enqueue), internal/store/sqlite/notifications.go:1042 (Claim), internal/store/sqlite/notifications.go:1143 (Record).
 - The history and redeliver routes exist. Proof: internal/api/notifications/routes.go:92 and internal/api/notifications/routes.go:94.
 - The state model and the retry rule exist. Proof: pkg/notify/ports.go:216-226 (pending, delivered, abandoned, skipped) and pkg/notify/route.go:864-879 (the retry constants and RetryWait).
 - The routing and access functions have no production caller. Proof: `rg -n "notify\.Route\(|notify\.BeforeAttempt\(|notify\.RetryAt\(" --glob '!*_test.go' --glob '!pkg/notify/**'` prints nothing.
@@ -50,7 +50,7 @@ Out of scope, each with its proof on main:
 - The notification model, the sink contract, the stores, the history route and the redeliver route. They exist (see Evidence).
 - Personal notices: the Recipients of a notification, the contacts of a person, quiet hours and the email sender. Proof: `rg -n "ContactsOf" --glob '!*_test.go' --glob '!pkg/notify/**' .` prints nothing, and no email sender exists in pkg/notify. The dispatcher makes deliveries for subscriptions only and ignores Recipients. A delivery that has a contact is recorded as skipped.
 - Routes for sinks and subscriptions of the server scope. Proof: `rg -n "server" internal/api/notifications/routes.go` prints no route path of that scope. The dispatcher routes the server scope, so the removal alert is tested at the service level with a subscription from a store call.
-- The retention purge of notifications and of the delivery history. Proof: `rg -n -i "purge" pkg/notify pkg/store/sqlite/notifications.go` finds no purge of notifications.
+- The retention purge of notifications and of the delivery history. Proof: `rg -n -i "purge" pkg/notify internal/store/sqlite/notifications.go` finds no purge of notifications.
 - Chat action buttons. The dispatcher sends no actions, as the test route does.
 - Console views and the language of the recipient.
 

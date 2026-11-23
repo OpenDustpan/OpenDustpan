@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +38,16 @@ type sessionJobs struct {
 	logs    map[string]map[int][]byte
 	ended   map[string]int
 	failure map[string]error
+	// seed holds log counters above the bytes that the case sent, so a case of
+	// a cap does not write 256 MiB. The reserve adds them to the stored chunks.
+	seed map[string]logSeed
+}
+
+// logSeed is the log counter of a step that a cap case sets without writing
+// the bytes.
+type logSeed struct {
+	chunks int
+	bytes  int64
 }
 
 var _ job.CheckedRecorder = (*sessionJobs)(nil)
@@ -43,7 +55,7 @@ var _ job.CheckedRecorder = (*sessionJobs)(nil)
 func newSessionJobs() *sessionJobs {
 	return &sessionJobs{
 		mu: sync.Mutex{}, calls: nil, logs: map[string]map[int][]byte{}, ended: map[string]int{},
-		failure: map[string]error{},
+		failure: map[string]error{}, seed: map[string]logSeed{},
 	}
 }
 
@@ -108,32 +120,24 @@ func (f *sessionJobs) EndStepChecked(
 	return f.EndStep(ctx, c, r)
 }
 
-func (f *sessionJobs) AppendLog(_ context.Context, _ job.PhaseClaim, step string, seq int, chunk io.Reader) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (f *sessionJobs) AppendLog(_ context.Context, c job.PhaseClaim, step string, seq int, chunk io.Reader) error {
+	return f.appendChunk(c, &fakeChunk{step: step, seq: seq, body: chunk, data: nil, caps: nil})
+}
 
-	f.calls = append(f.calls, fmt.Sprintf("log:%s:%d", step, seq))
+// AppendLogCapped checks the caps that the handler gives, with the shared rule
+// of the store adapters (job.LogCaps.PlanChunk).
+func (f *sessionJobs) AppendLogCapped(_ context.Context, c job.PhaseClaim, ch job.CappedChunk) error {
+	return f.appendChunk(c, &fakeChunk{step: ch.Step, seq: ch.Seq, body: ch.Body, data: nil, caps: &ch.Caps})
+}
 
-	if err := f.failure["log"]; err != nil {
-		return err
-	}
-
-	data, err := io.ReadAll(chunk)
-	if err != nil {
-		return fmt.Errorf("read chunk: %w", err)
-	}
-
-	if f.logs[step] == nil {
-		f.logs[step] = map[int][]byte{}
-	}
-
-	if old, ok := f.logs[step][seq]; ok && !bytes.Equal(old, data) {
-		return job.ErrConflict
-	}
-
-	f.logs[step][seq] = data
-
-	return nil
+// fakeChunk is one chunk that the fake reserves: its body, the bytes read from
+// it, and the caps of the call or nil.
+type fakeChunk struct {
+	step string
+	seq  int
+	body io.Reader
+	data []byte
+	caps *job.LogCaps
 }
 
 func (*sessionJobs) PutPlan(context.Context, job.PhaseClaim, []job.PlanUpload) (job.PlanRef, error) {
@@ -202,6 +206,151 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	}, nil
 }
 
+// appendChunk records the call, reads the body of ch and reserves it.
+func (f *sessionJobs) appendChunk(c job.PhaseClaim, ch *fakeChunk) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls = append(f.calls, fmt.Sprintf("log:%s:%d", ch.step, ch.seq))
+
+	if err := f.failure["log"]; err != nil {
+		return err
+	}
+
+	// The fake checks the name and the number as the recorder does.
+	if err := job.CheckChunkKey(ch.step, ch.seq); err != nil {
+		return err
+	}
+
+	data, err := io.ReadAll(ch.body)
+	if err != nil {
+		return fmt.Errorf("read chunk: %w", err)
+	}
+
+	ch.data = data
+
+	return f.reserveLog(c, ch)
+}
+
+// reserveLog decides the chunk with the shared rule of the store adapters, so
+// a case of a cap sees the rule that the reserve runs in its transaction.
+func (f *sessionJobs) reserveLog(c job.PhaseClaim, ch *fakeChunk) error {
+	step, seq, data := ch.step, ch.seq, ch.data
+	j := f.logJob(c)
+	sum := sha256.Sum256(data)
+
+	reserve := job.ChunkReserve{Seq: seq, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data)), Caps: ch.caps}
+	newLog := testLogRef("jlv-test", 0, 0)
+
+	lookup := func(_ string, at int) (job.ChunkRow, bool, error) {
+		stored, ok := f.logs[step][at]
+		if !ok {
+			return job.ChunkRow{SHA256: "", Size: 0, Confirmed: false, BlobKey: ""}, false, nil
+		}
+
+		hash := sha256.Sum256(stored)
+
+		return job.ChunkRow{
+			SHA256: hex.EncodeToString(hash[:]), Size: int64(len(stored)), Confirmed: true, BlobKey: "",
+		}, true, nil
+	}
+
+	plan, err := reserve.Caps.PlanChunk(&j, job.StepKey{Phase: c.Phase, Token: c.Claim.Token, Name: step},
+		reserve, newLog, lookup)
+	if err != nil {
+		return err
+	}
+
+	if plan.Duplicate {
+		return nil
+	}
+
+	if f.logs[step] == nil {
+		f.logs[step] = map[int][]byte{}
+	}
+
+	f.logs[step][seq] = data
+
+	return nil
+}
+
+// logJob returns the job that the reserve of a chunk reads: the phase of the
+// claim with the steps of the fake, the steps that a case seeded only, and the
+// counters that the case seeded.
+func (f *sessionJobs) logJob(c job.PhaseClaim) job.Job {
+	phases := make([]job.Phase, c.Phase+1)
+	for i := range phases {
+		phases[i] = job.Phase{
+			Kind: job.PhasePlan, Operation: "", Claims: 0, Executor: "", Steps: nil, StateVersion: "",
+			Plan: nil, Gates: nil, Approvals: nil, StartedAt: time.Time{}, FinishedAt: time.Time{},
+		}
+	}
+
+	names := []string{"init", "plan"}
+	for _, name := range slices.Sorted(maps.Keys(f.seed)) {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+
+	steps := make([]job.StepRecord, 0, len(names))
+	for _, name := range names {
+		steps = append(steps, job.StepRecord{
+			Name: name, Token: c.Claim.Token, ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{},
+			Log: f.logRef(name),
+		})
+	}
+
+	phases[c.Phase].Steps = steps
+
+	// The reserve reads the phases only; the spec stays empty.
+	var spec job.Spec
+
+	return job.Job{
+		ID: c.Job, NamespaceID: "", Spec: spec, State: "", Wait: "", Reason: "", Phases: phases, Current: 0,
+		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil,
+		Closed: nil, Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
+		UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
+	}
+}
+
+// logRef returns the log of a step with the chunks that the case stored and
+// the counters that it seeded, or nil for a step with no log.
+func (f *sessionJobs) logRef(step string) *job.LogRef {
+	chunks, size := f.seed[step].chunks, f.seed[step].bytes
+	for _, data := range f.logs[step] {
+		chunks++
+		size += int64(len(data))
+	}
+
+	if chunks == 0 {
+		return nil
+	}
+
+	return testLogRef("jlv-stored", chunks, size)
+}
+
+// seedLog sets the log counter of the step that a cap case needs.
+func (f *sessionJobs) seedLog(step string, chunks int, size int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.seed[step] = logSeed{chunks: chunks, bytes: size}
+}
+
+// initChunks returns the chunks that the fake stored for the step init.
+func (f *sessionJobs) initChunks() map[int]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[int]string, len(f.logs["init"]))
+	for seq, data := range f.logs["init"] {
+		out[seq] = string(data)
+	}
+
+	return out
+}
+
 // failWith makes the method return err.
 func (f *sessionJobs) failWith(method string, err error) {
 	f.mu.Lock()
@@ -216,6 +365,15 @@ func (f *sessionJobs) called() []string {
 	defer f.mu.Unlock()
 
 	return append([]string(nil), f.calls...)
+}
+
+// testLogRef returns an open log version with the ID id and the counters
+// chunks and size.
+func testLogRef(id string, chunks int, size int64) *job.LogRef {
+	return &job.LogRef{
+		ID: id, ItemKey: "", Version: 1, Chunks: chunks, SHA256: "", Size: size, CreatedAt: time.Time{},
+		ClosedAt: time.Time{}, ExpiresAt: time.Time{}, RedactedAt: time.Time{}, ReplacedBy: "", Matches: 0,
+	}
 }
 
 func testStep(name string, phase job.PhaseKind, changes bool) job.Step {
