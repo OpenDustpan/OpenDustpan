@@ -59,6 +59,10 @@ func TestStateWriteJobClaim(t *testing.T) {
 			op: gate.OperationLock, planLock: true, denyGate: true, want: "gate",
 		},
 		{
+			name: "deny gate: a Pulumi update cancel with the plan lock is refused", subject: "runner-plan",
+			unit: "web", op: gate.OperationUnlock, planLock: true, denyGate: true, want: "gate",
+		},
+		{
 			name: "deny gate: the job model refuses first and runs no gate", subject: "runner-plan",
 			unit: "other", op: gate.OperationApply, planLock: false, denyGate: true, want: "model",
 		},
