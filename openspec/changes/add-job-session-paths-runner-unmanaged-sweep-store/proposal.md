@@ -6,7 +6,7 @@ Issue: #1028.
 
 ## Why
 
-**Persona: embedder.** An embedder builds a server with sweep persistence. The embedder needs a tested store that isolates namespaces by fence and refuses a pool that may not run sweeps, so the later claimer work has a safe base.
+**Persona: embedder.** An embedder builds a server with sweep persistence. The embedder needs a tested store that isolates namespaces by fence and refuses a pool that may not run sweeps (a pool of another namespace or a pool for jobs), so the later claimer work has a safe base.
 
 The user path this change must make work:
 
@@ -19,7 +19,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | A write carries a stale fence. | The store returns namespace.ErrFenced and changes nothing. Read the namespace again and retry with the live fence. | `GET /api/dustpan/v1/namespaces/{namespace}` |
-| A target names a pool that is not an operator pool with the sweep purpose. | The store refuses the write with a pool-purpose error. Name an operator pool with the sweep purpose. | `GET /api/dustpan/v1/namespaces/{namespace}` |
+| A target names a pool that does not have the sweep purpose, or a pool of another namespace. | The store refuses the write with a pool-purpose error. Name a pool of the namespace of the target that has the sweep purpose. | `GET /api/dustpan/v1/namespaces/{namespace}` |
 
 Evidence for the claims above:
 
@@ -33,7 +33,7 @@ Evidence for the claims above:
 - An in-memory reference adapter and a conformance suite of the sweep store, written first and run on all three adapters.
 - SQLite and PostgreSQL adapters with baseline migration edits and sqlc queries.
 - A fence check in the same transaction as each write.
-- A pool check in the store: the pool is an operator pool with the sweep purpose, stored by its stable ID. A namespace pool is refused.
+- A pool check in the store. The pool has the sweep purpose and belongs to the namespace of the target. The store keeps its stable ID. The store refuses a pool for jobs and a pool of another namespace. No installation pool exists.
 - The sweep tables are normal tables of the table list, so a backup includes them.
 
 Out of scope:
@@ -64,12 +64,13 @@ Each fact names its file, line and function on main. The change specifies only t
 - namespace.ErrFenced is the sentinel of a stale fence. (the namespace package, line 38)
 - namespace.Fence is the type that a write carries. (the namespace package, line 178)
 - The PostgreSQL test URL variable is defined. (the servertest package, line 51)
+- A runner pool belongs to one namespace, and its purpose is `jobs` or `sweeps` and never changes. (`pkg/runner/runner.go:358 (func Pool.Validate)`, `pkg/runner/runner.go:385 (func CheckUpdate)`)
 
 ## Owner decisions that apply
 
-The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
+The project owner decided this on 23 Nov 2026. It binds this change. This section quotes it.
 
-- **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+- **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access (ADR 164 decisions 1 and 5, ADR 343 decision 3). The server has no installation sweep pool. The 13 Nov 2026 answer and its line "a sweep never runs on user runners" no longer hold.
 
 ## ADR check
 
@@ -87,11 +88,11 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 164: Cloud sweeps on the team's runner, with the runner's read-only identity** (not owner-tagged).
 
 - Decisions that apply: 5 (changed), 18 (current).
-- Changed by: ADR 166 changes decisions 14, 15 and 19; ADR 210 changes; ADR 343 changes decision 5; ADR 343 extends decision 9. Chain to the end: ADR 166, ADR 210, ADR 343, ADR 286, ADR 247.
+- Changed by: ADR 166 changes decisions 14, 15 and 19; ADR 210 changes; ADR 343 changes decision 5; ADR 343 extends decision 9; ADR 396 changes decision 5. Chain to the end: ADR 166, ADR 210, ADR 343, ADR 286, ADR 247, ADR 396.
 - Current rule: this ADR, with ADR 166, 210, 343.
 - Quote: "`unmanaged.ScanStore` holds targets and sweeps: `CreateTarget`, `UpdateTarget`, `DeleteTarget`, `Targets`, `StartScan`, `AdvanceScan`, `Scan` and `Scans`. Each write carries the fence."
 - Quote: "A sweep target must name a pool of the purpose `sweeps`, and a job must name a pool of the purpose `jobs`."
-- Effect: ScanStore checks the fence and the pool. By the owner decision, the pool is an operator pool.
+- Effect: ScanStore checks the fence and the pool. By the owner decision of 23 Nov 2026, the pool is a pool of the team that has the sweep purpose. ADR 396 changes decision 5 in this way.
 - Conflict: none.
 
 **ADR 165: Unmanaged-resource findings and the actions on them** (not owner-tagged).
@@ -115,11 +116,20 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 343: Runner work: tool imports, sweeps and the runner repository** (owner-tagged (all decisions)).
 
 - Decisions that apply: 3 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 396 extends decision 3. Chain to the end: ADR 396.
+- Current rule: this ADR, with ADR 396.
 - Quote: "Sweeps run on a runner (owner, 2026-11-07). ADR 164 decision 1 stays."
 - Effect: The store keeps data only and adds no cloud adapter to the server.
 - Conflict: none.
+
+**ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors** (owner-tagged (records decisions of the project owner)).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "A sweep runs on a runner pool of the team that has the sweep purpose. The host identity of the pool has no write access."
+- Effect: The store accepts a pool of the namespace of the target that has the sweep purpose. It has no installation pool.
+- Conflict: none. This ADR replaces the 13 Nov 2026 answer P14.
 
 ## Open questions
 
@@ -128,7 +138,7 @@ none
 Questions considered and answered:
 
 - Must each store write carry a fence? Yes. ADR 164 decision 18 and ADR 165 decision 13.
-- Which pool may a sweep target name? Owner decision, 13 Nov 2026 (queue P14): only an operator pool with the sweep purpose. A namespace pool with the sweep purpose is refused.
+- Which pool may a sweep target name? Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14): a pool of the team that has the sweep purpose. The store refuses a pool for jobs and a pool of another namespace.
 - Which backup class do the sweep tables have? Normal tables, not projection tables (ADR 166 decision 5), because a state check cannot compute them again.
 - Which sweeps end the busy check? ADR 164 decision 15: succeeded, failed, canceled and expired end it.
 - Who starts the durable operation of a sweep? ADR 164 decision 3: the service that stores the sweep. The claimer part adds it.
