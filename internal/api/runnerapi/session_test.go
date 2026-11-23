@@ -982,7 +982,23 @@ func requestChecks() []requestCheck {
 		{"finish with an unknown field", func(l *launcher) lcall {
 			return l.post(protocol.PathSessionFinish, map[string]any{"ok": true})
 		}, protocol.ErrorInvalid},
+		{"finish with a JSON body above the body cap", func(l *launcher) lcall {
+			return overBodyCap(l.post(protocol.PathSessionFinish, protocol.Finish{Succeeded: true, Message: ""}))
+		}, protocol.ErrorInvalid},
+		{"step end with a JSON body above the body cap", func(l *launcher) lcall {
+			return overBodyCap(l.post(stepPath(protocol.PathSessionStepEnd, "init"), protocol.StepEnd{
+				ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{}, LogChunks: 0, LogSHA256: "",
+			}))
+		}, protocol.ErrorInvalid},
 	}
+}
+
+// overBodyCap pads the JSON body of c with spaces to one byte above
+// protocol.MaxBody. The body stays valid JSON, so only the body cap refuses it.
+func overBodyCap(c lcall) lcall {
+	c.body = append(c.body, bytes.Repeat([]byte(" "), protocol.MaxBody+1-len(c.body))...)
+
+	return c
 }
 
 // TestSessionRequestsAreChecked proves the checks of the handler on a request

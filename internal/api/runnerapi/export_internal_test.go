@@ -1,8 +1,8 @@
 package runnerapi
 
 import (
-	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -33,11 +33,11 @@ func JobPhaseOf(ctx context.Context, h *Handler, sess runner.Session) error {
 }
 
 // LogPut is a log chunk request: the path values Step and Seq, the hash that
-// the proof signed and the body.
+// the proof signed and the reader of the body.
 type LogPut struct {
 	Step, Seq string
 	Signed    []byte
-	Body      []byte
+	Body      io.Reader
 }
 
 // PutLog calls the handler of a log chunk on h, for the session sess, with the
@@ -48,7 +48,7 @@ func PutLog(ctx context.Context, h *Handler, sess runner.Session, p LogPut) (int
 
 	c.session, c.contentSHA256 = sess, p.Signed
 
-	r := httptest.NewRequestWithContext(ctx, http.MethodPut, "/", bytes.NewReader(p.Body))
+	r := httptest.NewRequestWithContext(ctx, http.MethodPut, "/", p.Body)
 	r.SetPathValue("step", p.Step)
 	r.SetPathValue("seq", p.Seq)
 

@@ -225,6 +225,7 @@ the next entry.
 | `cap-chunk-number` | the number of the chunk is at the cap of 20,000 chunks of a step | `invalid` |
 | `cap-step` | the chunk passes the cap of 256 MiB of a step | `invalid` |
 | `cap-phase` | the chunk passes the cap of 100,000 chunks or 1 GiB of a phase | `invalid` |
+| `body-unreadable` | the server cannot read the body of the chunk | `invalid` |
 | `chunk-too-large` | the chunk has more than 1 MiB | `invalid` |
 | `hash-header` | the signed `Dustpan-Content-SHA256` is not a SHA-256 | `invalid` |
 | `hash-body` | the body has another SHA-256 than the signed `Dustpan-Content-SHA256` | `bad-proof` |

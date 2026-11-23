@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
@@ -252,6 +254,7 @@ func logRefusalReasons() []string {
 	return []string{
 		"cap-chunk-number", "cap-step", "cap-phase", "chunk-too-large", "hash-header", "hash-mismatch",
 		"out-of-order", "step-invalid", "name-or-number-invalid", "hash-body", "unknown",
+		"body-unreadable",
 	}
 }
 
@@ -398,6 +401,23 @@ func uploadLog(step, seq string, body []byte) logSender {
 // that the proof signed. The proof check refuses a header that is not a
 // SHA-256 first, so only this call reaches the check of the handler.
 func putLogSigned(signed []byte) logSender {
+	return putLogBody(signed, strings.NewReader(refusedChunk))
+}
+
+// errInjectedBodyRead is the error of a chunk body that cannot be read.
+var errInjectedBodyRead = errors.New("injected body read failure")
+
+// putLogUnreadable calls the handler of the chunk alone, with a body that
+// fails after the first bytes of the chunk, and a signed hash of the chunk.
+func putLogUnreadable() logSender {
+	signed := sha256.Sum256([]byte(refusedChunk))
+
+	return putLogBody(signed[:], io.MultiReader(strings.NewReader(refusedChunk), iotest.ErrReader(errInjectedBodyRead)))
+}
+
+// putLogBody calls the handler of the chunk alone, with signed as the hash
+// that the proof signed and body as the body.
+func putLogBody(signed []byte, body io.Reader) logSender {
 	return func(t *testing.T, s *sessionEnv, _ *launcher) (int, []byte) {
 		t.Helper()
 
@@ -407,7 +427,7 @@ func putLogSigned(signed []byte) logSender {
 		}
 
 		return runnerapi.PutLog(t.Context(), s.handler, sess, runnerapi.LogPut{
-			Step: "init", Seq: "0", Signed: signed, Body: []byte(refusedChunk),
+			Step: "init", Seq: "0", Signed: signed, Body: body,
 		})
 	}
 }
@@ -509,6 +529,12 @@ func logRefusalCases() []logRefusalCase {
 			prepare: none, send: putLogSigned(otherHash[:]), recorder: false,
 			status: http.StatusUnauthorized, code: protocol.ErrorBadProof,
 			message: runner.ErrBadProof.Error(), reason: "hash-body",
+		},
+		{
+			name: "a body that cannot be read", guard: "putLog, the read of the body",
+			prepare: none, send: putLogUnreadable(), recorder: false,
+			status: http.StatusBadRequest, code: protocol.ErrorInvalid,
+			message: runner.ErrInvalid.Error(), reason: "body-unreadable",
 		},
 		{
 			name: "a cap that the handler does not know", guard: "logRefusalOf, the unknown cap",

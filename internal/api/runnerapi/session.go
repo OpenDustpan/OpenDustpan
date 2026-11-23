@@ -656,7 +656,13 @@ func readLogChunk(r *http.Request, c *call) (logChunk, error) {
 
 	data, err := io.ReadAll(io.LimitReader(r.Body, job.MaxLogChunk+1))
 	if err != nil {
-		return chunk, fmt.Errorf("%w: the body is not readable", runner.ErrInvalid)
+		// The answer stays 400 invalid of the sentinel, and the refusal gets an
+		// audit entry.
+		return chunk, &logRefusalError{
+			reason: logRefusedBodyUnreadable, step: name,
+			cause:  fmt.Errorf("%w: the body is not readable", runner.ErrInvalid),
+			status: 0, body: protocol.Error{Code: "", Message: "", Supported: ""},
+		}
 	}
 
 	if len(data) > job.MaxLogChunk {
@@ -693,6 +699,7 @@ const (
 	logRefusedCapChunkNumber = "cap-chunk-number"
 	logRefusedCapStep        = "cap-step"
 	logRefusedCapPhase       = "cap-phase"
+	logRefusedBodyUnreadable = "body-unreadable"
 	logRefusedChunkTooLarge  = "chunk-too-large"
 	logRefusedHashHeader     = "hash-header"
 	logRefusedHashMismatch   = "hash-mismatch"

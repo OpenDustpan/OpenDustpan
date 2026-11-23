@@ -172,6 +172,57 @@ func TestStoreLogChunkStopsAtEachError(t *testing.T) {
 	}
 }
 
+// TestStoreLogChunkStopsAtTheReserveError proves the error return of
+// storeLogChunk after the reserve: a reserve that fails returns its error, and
+// the recorder writes no chunk. Chunk 1 needs no new log version, so the
+// reserve is the first store call and the clock is not read before it. A
+// chunk write reads the clock. With the error return removed, writeChunk runs
+// with the empty plan of the failed reserve and returns another error.
+func TestStoreLogChunkStopsAtTheReserveError(t *testing.T) {
+	t.Parallel()
+
+	unit, err := identity.UnitObject("opentofu", "acme", "network")
+	if err != nil {
+		t.Fatalf("unit: %v", err)
+	}
+
+	var j Job
+
+	j.ID = "job-1"
+	j.Spec.Unit = unit
+	j.Phases = make([]Phase, 1)
+	j.Phases[0].Steps = []StepRecord{{
+		Name: "init", Token: 0, ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{}, Log: nil,
+	}}
+
+	jobs := &chunkJobs{Store: nil, job: j, err: nil, reads: 0}
+	store := &chunkReserves{RecordStore: nil, reserves: 0}
+	clockReads := 0
+	r := &DurableRecorder{
+		store: store, jobs: jobs, blobs: nil, sealer: nil, namespaces: nil,
+		retention: history.RetentionSettings{Plan: 0, JobLog: 0},
+		now: func() time.Time {
+			clockReads++
+
+			return time.Now()
+		},
+		log: slog.New(slog.DiscardHandler),
+	}
+
+	var c PhaseClaim
+
+	c.Job, c.Fence.Namespace = "job-1", "acme"
+
+	err = r.AppendLog(t.Context(), c, "init", 1, strings.NewReader("x"))
+	if !errors.Is(err, errInjectedReserve) {
+		t.Fatalf("AppendLog = %v, want %v", err, errInjectedReserve)
+	}
+
+	if store.reserves != 1 || clockReads != 0 {
+		t.Fatalf("reserves = %d, clock reads = %d; want 1 and 0 (no chunk write)", store.reserves, clockReads)
+	}
+}
+
 // TestDeletePartsLogsAFailedDelete proves that the recorder logs a warning for
 // each plan part that it did not store and could not delete, and logs nothing
 // for a delete that succeeds. The logger is injected through the recorder.
