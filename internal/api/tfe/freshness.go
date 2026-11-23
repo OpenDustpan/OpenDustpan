@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -17,6 +18,13 @@ import (
 // meets it.
 type SessionPolicy interface {
 	Policy(ctx context.Context) (session.Policy, error)
+}
+
+// SetFreshPolicy sets the policy that tells whether the installation requires
+// a fresh step. Call it before the handler serves a request. A nil policy
+// requires the step.
+func (h *Handler) SetFreshPolicy(p freshstep.Policy) {
+	h.freshPolicy = p
 }
 
 // errFreshStepRequired reports a request with no console session, for example
@@ -33,6 +41,13 @@ var errReauthenticate = errors.New("the sign-in of this console session is too o
 // returns the path that starts a new sign-in. Any other error fails closed.
 func (h *Handler) checkFresh(r *http.Request) (string, error) {
 	ctx := r.Context()
+
+	// Defense in depth: the setting is read here, at the point of use. This
+	// check does not rely on the service or the store to ask for a fresh step.
+	// A nil policy requires the step.
+	if !freshstep.IsRequired(ctx, h.freshPolicy) {
+		return "", nil
+	}
 
 	in, ok := sessionauth.SignInFrom(ctx)
 	if !ok || !sessionauth.FromSession(ctx) {

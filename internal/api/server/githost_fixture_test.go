@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -197,6 +198,9 @@ type hostEnv struct {
 	stepSeconds *atomic.Int64
 	mu          sync.Mutex
 	refused     []string
+	// freshOn is the value of the setting freshAuthEnabled that the handler
+	// reads. It is true until a test turns it off.
+	freshOn *atomic.Bool
 }
 
 // refusals returns the reasons that the service counted, in order.
@@ -302,6 +306,7 @@ func newHostEnvWrapped(
 		stepSeconds:   newStep(),
 		mu:            sync.Mutex{},
 		refused:       nil,
+		freshOn:       nil,
 	}
 	opener := &hostOpener{mu: sync.Mutex{}, opened: 0, checkErr: nil, openErr: nil}
 
@@ -344,7 +349,7 @@ func newHostEnvWrapped(
 	}
 
 	built := buildHostEnv(t, hostParts{st: st, nss: nss, svc: svc, mw: mw, opener: opener}, authz)
-	env.handler, env.opener = built.handler, built.opener
+	env.handler, env.opener, env.freshOn = built.handler, built.opener, built.freshOn
 
 	return env
 }
@@ -380,6 +385,9 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 	// A write of the registration or of an installation needs a console
 	// session with a recent sign-in: an access token never gives one.
 	signIn, sessions := signInOf(t, st)
+
+	freshOn := &atomic.Bool{}
+	freshOn.Store(true)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
 		FirstAdministrator: nil,
@@ -424,7 +432,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 		DenialLimiter:      nil,
 		Instances:          nil,
 		StoreChecks:        nil,
-	})
+	}, apiserver.WithFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return freshOn.Load() })))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -433,7 +441,7 @@ func buildHostEnv(t *testing.T, parts hostParts, authz identity.Authorizer) *hos
 
 	return &hostEnv{
 		handler: handler, store: st, opener: opener, refuseAddress: nil, stepSeconds: nil, mu: sync.Mutex{},
-		refused: nil,
+		refused: nil, freshOn: freshOn,
 	}
 }
 

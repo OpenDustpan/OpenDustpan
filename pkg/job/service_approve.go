@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -75,21 +76,17 @@ func (s *service) Approve(
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: mfaOf(&j, v)})
+	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: ap.Auth})
 }
 
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
 // binding of the caller, and stays as the binding to record.
 func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Gate, ap *Approval) error {
-	// Defense in depth: the HTTP handler refuses a destroy without session
-	// proof too. This check stays so that another caller cannot skip it.
 	if j.Spec.Operation == OperationDestroy {
-		fresh, err := newDestroyFresh(a, ap.At)
+		err := s.checkDestroyAuth(ctx, a, ap)
 		if err != nil {
 			return err
 		}
-
-		ap.Auth, ap.AuthAt = fresh.auth, fresh.at
 	}
 
 	err := s.checkApprover(ctx, j, a, gates, ap)
@@ -105,14 +102,29 @@ func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Ga
 	return nil
 }
 
-// mfaOf returns the authentication kind that the audit entry records, which
-// is "mfa" for the approval of a destroy, else empty.
-func mfaOf(j *Job, v Verdict) ConfirmAuth {
-	if v == VerdictApprove && j.Spec.Operation == OperationDestroy {
-		return ConfirmAuthMFA
+// checkDestroyAuth checks the fresh step of the approval of a destroy, and sets
+// ap.Auth and ap.AuthAt to what the audit entry records. With the setting
+// freshAuthEnabled off, the approval needs no step and records the
+// authentication none. checkApprover still refuses an agent then.
+//
+// Defense in depth: the HTTP handler and the job store check the proof of a
+// destroy too, with the same policy. This check stays so that another caller
+// cannot skip it. It does not rely on them.
+func (s *service) checkDestroyAuth(ctx context.Context, a Actor, ap *Approval) error {
+	if !freshstep.IsRequired(ctx, s.fresh) {
+		ap.Auth, ap.AuthAt = ConfirmAuthNone, time.Time{}
+
+		return nil
 	}
 
-	return ""
+	fresh, err := newDestroyFresh(a, ap.At)
+	if err != nil {
+		return err
+	}
+
+	ap.Auth, ap.AuthAt = fresh.auth, fresh.at
+
+	return nil
 }
 
 // checkVerdict is the boundary check: an allowlist of the two verdicts and

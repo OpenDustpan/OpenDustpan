@@ -74,7 +74,8 @@ func settingDeclarations(cfg *settings) []setting.Declaration {
 	out = append(out, cfg.settingsConfig.declarations...)
 	out = append(out, allowlist...)
 
-	out = append(out, decisionRecordRetentionDeclaration(), drainPeriodDeclaration(cfg.drainPeriod))
+	out = append(out, decisionRecordRetentionDeclaration(), drainPeriodDeclaration(cfg.drainPeriod),
+		setting.FreshAuthEnabledDeclaration())
 
 	return out
 }

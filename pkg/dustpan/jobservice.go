@@ -64,6 +64,12 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 
 	approvers := jobApprovers(cfg)
 
+	// The store reads the same setting as the service and the handler. A store
+	// with no such setter keeps its default and requires the step.
+	if s, ok := cfg.jobStore.(freshPolicySetter); ok {
+		s.SetFreshPolicy(freshPolicyOf(cfg))
+	}
+
 	starter, svcErr := job.NewService(job.ServiceConfig{
 		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: newJobPlanner(cfg),
 		Executors: []job.Executor{executor}, Decider: decider,
@@ -77,6 +83,8 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		// No adapter of job.ArtifactStore exists yet, so the service refuses a
 		// redaction of a log.
 		Artifacts: nil,
+		// The same setting decides in the handler, the service and the store.
+		FreshPolicy: freshPolicyOf(cfg),
 	})
 	if svcErr != nil {
 		return nil, fmt.Errorf("job service: %w", svcErr)

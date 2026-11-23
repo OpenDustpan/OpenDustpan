@@ -59,9 +59,15 @@ const (
 	// of the person, asked with a maximum age, where MFA does not cover the
 	// person. Its time is the authentication time that the provider gives.
 	ConfirmAuthSSO ConfirmAuth = "sso"
+	// ConfirmAuthNone is the record of an approval of a destroy that needed no
+	// fresh step, because the installation setting freshAuthEnabled is off. It
+	// is not a fresh authentication: Valid is false for it, so a confirmation
+	// gate never accepts it and still needs a real step.
+	ConfirmAuthNone ConfirmAuth = "none"
 )
 
-// Valid reports whether c is one of the fresh authentications.
+// Valid reports whether c is one of the fresh authentications. ConfirmAuthNone
+// is not one of them.
 func (c ConfirmAuth) Valid() bool {
 	return c == ConfirmAuthMFA || c == ConfirmAuthSSO
 }

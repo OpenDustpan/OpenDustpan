@@ -285,7 +285,7 @@ func (d Declaration) checkKind(value string) error {
 	case KindString:
 		return nil
 	case KindBool:
-		if value != "true" && value != "false" {
+		if value != "true" && value != valueFalse {
 			return keyError(ErrInvalidValue, d.Key, "the value is not true or false")
 		}
 

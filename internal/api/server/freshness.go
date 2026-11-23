@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -76,6 +77,17 @@ const freshStepRequiredCode = sessionauth.FreshStepRequiredCode
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
 
+// freshRequiredKey carries the answer function of the fresh step policy.
+type freshRequiredKey struct{}
+
+// withFreshness returns ctx with the freshness check and the fresh step
+// policy of h. A handler that asks for a step calls it before requireFresh.
+func (h *Handler) withFreshness(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, freshnessKey{}, h.checkTokenFreshness)
+
+	return context.WithValue(ctx, freshRequiredKey{}, h.freshRequired)
+}
+
 // freshWindow is the token freshness window that a check may compare: 0,
 // or a whole count of seconds from session.MinTokenFreshness to
 // session.MaxTokenFreshness. newFreshWindow is the only constructor, so no
@@ -108,8 +120,19 @@ func (w freshWindow) duration() time.Duration { return time.Duration(w) }
 // requireFresh runs the freshness check of a change on a request with a
 // console session. A request with no session, for example one with an
 // access token, returns errFreshStepRequired. A request with a session and
-// no check in its context returns errNoFreshnessCheck.
+// no check in its context returns errNoFreshnessCheck. With the setting
+// freshAuthEnabled off, it asks for no step and returns nil.
 func requireFresh(r *http.Request) error {
+	// Defense in depth: each handler that asks for a step asks the policy
+	// through this function, and the services and the store hold the same
+	// policy. This guard does not rely on the route table, the services or the
+	// store. A request context with no policy requires the step (fail closed).
+	ctx := r.Context()
+
+	if required, ok := ctx.Value(freshRequiredKey{}).(func(context.Context) bool); ok && !required(ctx) {
+		return nil
+	}
+
 	if _, ok := sessionFromRequest(r); !ok {
 		return errFreshStepRequired
 	}
@@ -177,7 +200,29 @@ func (h *Handler) freshnessWindow(ctx context.Context) freshWindow {
 // errFreshStepRequired. A sign-in after now is too old. A window of 0 asks
 // at each step, so no sign-in passes. With no session policy
 // service, the window is session.DefaultTokenFreshness.
+//
+// With the setting freshAuthEnabled off, it returns nil: nothing is asked.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
+	// Defense in depth: requireFresh asks the policy too. This guard stays, so
+	// that a caller of this check, for example a service through the context,
+	// cannot skip the setting. It does not rely on the services or the store.
+	if !h.freshRequired(r.Context()) {
+		return nil
+	}
+
+	return h.checkSignInFreshness(r)
+}
+
+// freshRequired reports whether the installation requires a fresh step. A
+// handler with no policy requires it (fail closed).
+func (h *Handler) freshRequired(ctx context.Context) bool {
+	return freshstep.IsRequired(ctx, h.freshPolicy)
+}
+
+// checkSignInFreshness runs the sign-in age check of checkTokenFreshness with
+// no policy. It is the proof of a person, and the setting does not turn it
+// off. A caller that uses it for a step asks the policy first.
+func (h *Handler) checkSignInFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
 	if !ok {
 		return errFreshStepRequired
@@ -220,7 +265,7 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 // object, best effort.
 func (h *Handler) fresh(action identity.Action, serve RouteHandler) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		ctx := context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness)
+		ctx := h.withFreshness(r.Context())
 
 		r = r.WithContext(ctx)
 

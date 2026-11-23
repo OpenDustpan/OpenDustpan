@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -169,12 +170,24 @@ type Service struct {
 	ownURLs    []*url.URL
 	checkURL   func(raw string) error
 	now        func() time.Time
+	// freshPolicy says if a write needs a fresh authentication. Nil requires
+	// one.
+	freshPolicy freshstep.Policy
+}
+
+// Option changes a Service that NewService makes.
+type Option func(*Service)
+
+// WithFreshPolicy sets the policy that says if a write needs a fresh
+// authentication. With no policy, or a nil policy, a write needs one.
+func WithFreshPolicy(p freshstep.Policy) Option {
+	return func(s *Service) { s.freshPolicy = p }
 }
 
 // NewService returns a Service. It returns trustrule.ErrMissingDependency
 // when a required port is missing, and trustrule.ErrInvalid for an
 // installation URL that does not parse as an absolute URL.
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: trust rule store", trustrule.ErrMissingDependency)
@@ -186,19 +199,9 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: authorizer", trustrule.ErrMissingDependency)
 	}
 
-	own := make([]*url.URL, 0, len(cfg.InstallationURLs))
-
-	for _, raw := range cfg.InstallationURLs {
-		if raw == "" {
-			continue
-		}
-
-		u, err := url.Parse(raw)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return nil, fmt.Errorf("%w: the installation URL %q is not an absolute URL", trustrule.ErrInvalid, raw)
-		}
-
-		own = append(own, u)
+	own, err := parseInstallationURLs(cfg.InstallationURLs)
+	if err != nil {
+		return nil, err
 	}
 
 	now := cfg.Now
@@ -211,11 +214,40 @@ func NewService(cfg Config) (*Service, error) {
 		checkURL = func(raw string) error { return egress.CheckURL(raw, egress.HTTPSOnly) }
 	}
 
-	return &Service{
+	s := &Service{
 		store: cfg.Store, bundles: cfg.Bundles, sessions: cfg.Sessions, namespaces: cfg.Namespaces,
 		principals: cfg.Principals, authz: cfg.Authorizer,
 		reach: cfg.Reach, ownIssuer: cfg.OwnIssuer, ownURLs: own, checkURL: checkURL, now: now,
-	}, nil
+		freshPolicy: nil,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s, nil
+}
+
+// parseInstallationURLs parses the base URLs of the installation. It skips an
+// empty value, and returns trustrule.ErrInvalid for a value that is not an
+// absolute URL.
+func parseInstallationURLs(raws []string) ([]*url.URL, error) {
+	own := make([]*url.URL, 0, len(raws))
+
+	for _, raw := range raws {
+		if raw == "" {
+			continue
+		}
+
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("%w: the installation URL %q is not an absolute URL", trustrule.ErrInvalid, raw)
+		}
+
+		own = append(own, u)
+	}
+
+	return own, nil
 }
 
 // Input names the fields of a new rule. The service sorts the conditions by
@@ -586,8 +618,13 @@ func (s *Service) bundleEntry(e audit.Entry, ns namespace.Name, id trustrule.Bun
 //
 // Defense in depth: the handler wraps the routes in a session check too, and
 // the service repeats it, so a new caller of the service cannot skip the
-// check when the handler changes.
+// check when the handler changes. It asks for no step when the policy does not
+// require one. This guard does not rely on the handler or on the store.
 func (s *Service) requireFresh(ctx context.Context) error {
+	if !freshstep.IsRequired(ctx, s.freshPolicy) {
+		return nil
+	}
+
 	in, ok := sessionauth.SignInFrom(ctx)
 	if !ok || !sessionauth.FromSession(ctx) {
 		return ErrFreshRequired

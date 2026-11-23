@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -111,8 +113,10 @@ func classifyApproval(err error) (problem.Problem, bool) {
 // destroy. The handler also refuses a destroy without session proof.
 //
 // This handler does not set Actor.ConfirmAuth or Actor.AuthAt: no part of this
-// API knows the MFA step of the session yet. So the approval of a destroy fails
-// closed until the server sets them from the sign-in.
+// API knows the MFA step of the session yet. So with the setting
+// freshAuthEnabled on, the approval of a destroy fails closed until the server
+// sets them from the sign-in. With the setting off, no step is needed, and the
+// service records the approval with the authentication none.
 func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	if h.refuseDamaged(r.Context(), w, t) {
 		return
@@ -150,21 +154,10 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	// Defense in depth: the service checks the proof and the credential too.
-	// This handler has no session MFA proof yet. Refuse a destroy here even
-	// when an implementation of the service would allow it.
-	if verdict == job.VerdictApprove && t.job.Spec.Operation == job.OperationDestroy {
-		freshErr := job.ErrAuthStale
-		switch {
-		case t.job.State.Terminal():
-			freshErr = job.ErrFinished
-		case t.job.State != job.StateAwaitingApproval:
-			freshErr = job.ErrTransition
-		default:
-		}
-
-		h.recordApprovalRefusal(r, p, t, freshErr)
-		h.writeError(ctx, w, freshErr)
+	err = h.checkDestroyFresh(ctx, p, t, verdict)
+	if err != nil {
+		h.recordApprovalRefusal(r, p, t, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -190,6 +183,39 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 
 	setETag(w, &j)
 	h.answerStartedJob(ctx, w, http.StatusCreated, &j)
+}
+
+// checkDestroyFresh returns the refusal of the approval of a destroy that the
+// handler gives itself, or nil. It never refuses another verdict or another
+// operation.
+//
+// Defense in depth: the service and the job store check the proof and the
+// credential too, with the same policy. This handler has no session MFA proof
+// yet. With the setting freshAuthEnabled on, it refuses a destroy even when an
+// implementation of the service would allow it. With the setting off, an agent
+// principal still gets no approval of a destroy. This check does not rely on
+// the service or on the store.
+func (h *Handler) checkDestroyFresh(ctx context.Context, p identity.Principal, t *target, v job.Verdict) error {
+	if v != job.VerdictApprove || t.job.Spec.Operation != job.OperationDestroy {
+		return nil
+	}
+
+	if !freshstep.IsRequired(ctx, h.fresh) {
+		if p.Kind == identity.KindAgent {
+			return job.ErrAgentDenied
+		}
+
+		return nil
+	}
+
+	switch {
+	case t.job.State.Terminal():
+		return job.ErrFinished
+	case t.job.State != job.StateAwaitingApproval:
+		return job.ErrTransition
+	default:
+		return job.ErrAuthStale
+	}
 }
 
 // The refusal names the sign-in path and the ways to enroll a first factor.

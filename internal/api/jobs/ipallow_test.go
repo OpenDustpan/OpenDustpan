@@ -74,6 +74,7 @@ func newRefusalHandler(
 		Audit: records, OnAuditFailure: nil, DenialLimiter: limiter,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler),
 		Logs: nil, Cursors: nil, Approvers: gate.ApproverPolicy{Production: false, IsDev: nil},
+		FreshPolicy: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

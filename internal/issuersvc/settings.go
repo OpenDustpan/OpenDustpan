@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -119,7 +120,7 @@ func (s *Service) Patch(
 		return profile.IssuerSettings{}, err
 	}
 
-	if freshErr := checkFresh(&old, &next, req.Fresh); freshErr != nil {
+	if freshErr := s.checkFresh(ctx, &old, &next, req.Fresh); freshErr != nil {
 		return profile.IssuerSettings{}, freshErr
 	}
 
@@ -137,8 +138,17 @@ func (s *Service) Patch(
 }
 
 // checkFresh refuses a change that reduces security when the caller has no
-// fresh authentication.
-func checkFresh(old, next *profile.IssuerSettings, fresh func() error) error {
+// fresh authentication. It asks for no step when the policy does not require
+// one.
+//
+// Defense in depth: the handler asks the same policy too. This check stays so
+// that a new caller of the service cannot skip it, and it does not rely on the
+// handler or on the store.
+func (s *Service) checkFresh(ctx context.Context, old, next *profile.IssuerSettings, fresh func() error) error {
+	if !freshstep.IsRequired(ctx, s.freshPolicy) {
+		return nil
+	}
+
 	if !profile.NeedsFreshStep(*old, *next) {
 		return nil
 	}

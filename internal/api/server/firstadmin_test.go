@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/firstadmin"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -301,7 +302,7 @@ func newFAFixture(t *testing.T) faFixture {
 		StoreChecks:        nil,
 		Reach:              reach,
 		FirstAdministrator: spy,
-	})
+	}, apiserver.WithFreshPolicy(freshstep.PolicyFunc(func(context.Context) bool { return false })))
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -1017,6 +1018,41 @@ func TestRedeemIgnoresFreshAuthEnabled(t *testing.T) {
 	for _, banned := range []string{"freshAuthEnabled", "h.settings", "FreshAuthEnabled"} {
 		if bytes.Contains(source, []byte(banned)) {
 			t.Fatalf("firstadmin.go names %q: the redeem must not ask the setting", banned)
+		}
+	}
+}
+
+// TestStepsThatStayAreNotGated: the handler of this fixture runs with the
+// setting freshAuthEnabled off. The first-administrator code asks for its step
+// as before: a stale sign-in is refused with mfa.fresh-step-required, and a
+// recent sign-in passes. The source of the route asks neither the policy nor
+// a gated freshness check, so a later owner decision moves the route
+// deliberately. The other steps that stay (the factor change and reset, the
+// enrollment code and the break-glass proof) are not in this package: their
+// tests are in the packages that hold them.
+func TestStepsThatStayAreNotGated(t *testing.T) {
+	t.Parallel()
+
+	f := newFAFixture(t)
+	code := f.offer(t)
+
+	stale := f.send(t, http.MethodPost, faRedeemPath, faCodeBody(code), asSession("alice").signedInAgo(48*time.Hour))
+	faWant(t, "stale sign-in with the setting off", stale, http.StatusForbidden, "mfa.fresh-step-required")
+
+	token := f.send(t, http.MethodPost, faRedeemPath, faCodeBody(code), asToken("boot"))
+	faWant(t, "access token with the setting off", token, http.StatusForbidden, "mfa.fresh-step-required")
+
+	fresh := f.send(t, http.MethodPost, faRedeemPath, faCodeBody(code), asSession("alice"))
+	faWant(t, "fresh sign-in with the setting off", fresh, http.StatusOK, "")
+
+	source, err := packageSources.ReadFile("firstadmin.go")
+	if err != nil {
+		t.Fatalf("read the source of the route: %v", err)
+	}
+
+	for _, banned := range []string{"requireFresh(", "checkTokenFreshness", "freshRequired", "freshPolicy", "withFreshness"} {
+		if bytes.Contains(source, []byte(banned)) {
+			t.Fatalf("firstadmin.go names %q: the redeem keeps its own step and does not take the policy", banned)
 		}
 	}
 }

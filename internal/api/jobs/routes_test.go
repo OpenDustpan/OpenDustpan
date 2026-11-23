@@ -369,6 +369,7 @@ func newLoggedWorkerHandler(
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         logger,
+		FreshPolicy:    nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -911,6 +912,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 		DenialLimiter:  nil,
 		Sessions:       nil,
 		Logger:         nil,
+		FreshPolicy:    nil,
 	})
 	if !errors.Is(err, jobsapi.ErrMissingDependency) {
 		t.Fatalf("NewHandler with no dependency = %v, want ErrMissingDependency", err)

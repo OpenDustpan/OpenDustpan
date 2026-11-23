@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -163,6 +164,10 @@ type ServiceConfig struct {
 	// has no such store, so RedactLog returns ErrUnsupported and changes
 	// nothing.
 	Artifacts ArtifactStore
+	// FreshPolicy tells whether the approval of a destroy needs a fresh MFA
+	// step. Nil means that it needs one (fail closed). The server gives the
+	// same value to the HTTP handler and to the job store.
+	FreshPolicy freshstep.Policy
 }
 
 // service is the Service of this package. It starts, reads, cancels,
@@ -185,6 +190,7 @@ type service struct {
 	groups     GroupReader
 	maxPlanAge time.Duration
 	artifacts  ArtifactStore
+	fresh      freshstep.Policy
 }
 
 // Starter is a Service that tells a retry from a first start. The REST API
@@ -230,6 +236,7 @@ func NewService(cfg ServiceConfig) (Starter, error) { //nolint:ireturn // The po
 		groups:     cfg.Groups,
 		maxPlanAge: DefaultMaxPlanAge,
 		artifacts:  cfg.Artifacts,
+		fresh:      cfg.FreshPolicy,
 	}
 
 	if cfg.Approvers != nil {

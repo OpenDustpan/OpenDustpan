@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/forge"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
@@ -48,6 +49,8 @@ type serverHandlerInputs struct {
 	stateWrite stategate.Effective
 	// cursors seals the cursor of each page of the namespace list.
 	cursors secret.Wrapper
+	// fresh decides whether a change asks for a fresh authentication.
+	fresh freshstep.Policy
 
 	// backups is the backup service and restores the restore service, both
 	// nil when no backup target is configured. checks is the store check
@@ -142,7 +145,7 @@ func newServerHandler(in *serverHandlerInputs) (http.Handler, error) {
 		InstallationKind:   in.installationKind, StateWriteGates: in.stateWrite,
 		Instances: in.instances, StoreChecks: in.checks, Cursors: in.cursors,
 		ProxyRules: in.proxyRules,
-	})
+	}, serverapi.WithFreshPolicy(in.fresh))
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}

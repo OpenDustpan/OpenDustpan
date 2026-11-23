@@ -1565,6 +1565,7 @@ func newProfileAPIs(
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		sessions: cfg.sessionCookies, policies: policies, idempotency: idem,
 		denialLimiter: cfg.denialLimiter, onFailure: onFailure, logger: cfg.logger, now: cfg.now,
+		fresh: freshPolicyOf(cfg),
 	})
 	if err != nil {
 		return profileAPIs{}, err
@@ -1830,6 +1831,8 @@ func newTFEHandler(
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
 	}
+
+	handler.SetFreshPolicy(freshPolicyOf(cfg))
 
 	return handler, nil
 }
@@ -2825,6 +2828,8 @@ func newPulumiHandler(
 		return nil, fmt.Errorf("api: %w", err)
 	}
 
+	handler.SetFreshPolicy(freshPolicyOf(cfg))
+
 	return handler, nil
 }
 
@@ -3160,7 +3165,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
-		cursors: cfg.secretWrapper,
+		cursors: cfg.secretWrapper, fresh: freshPolicyOf(cfg),
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
 		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost.service,
@@ -3567,7 +3572,7 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		Makers: makers,
 		Store:  store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
-	})
+	}, accesstoken.WithFreshPolicy(freshPolicyOf(cfg)))
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
 	}

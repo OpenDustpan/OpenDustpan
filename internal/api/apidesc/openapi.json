@@ -207,6 +207,9 @@
             "format": "int64",
             "type": "integer"
           },
+          "enforced": {
+            "type": "boolean"
+          },
           "freshAuthSeconds": {
             "format": "int64",
             "type": [
@@ -222,6 +225,7 @@
         "required": [
           "approvers",
           "count",
+          "enforced",
           "freshAuthSeconds"
         ],
         "type": "object"
@@ -237,6 +241,9 @@
           "count": {
             "format": "int64",
             "type": "integer"
+          },
+          "enforced": {
+            "type": "boolean"
           },
           "freshAuthSeconds": {
             "format": "int64",
@@ -264,6 +271,7 @@
           "approvers",
           "authorMayApprove",
           "count",
+          "enforced",
           "freshAuthSeconds",
           "timeoutSeconds"
         ],

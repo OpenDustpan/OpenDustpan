@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -121,6 +122,8 @@ type auditChain struct {
 	maint          *maintenance.Service
 	restoreRunning func(ctx context.Context) (bool, error)
 	freshness      accesstoken.Freshness
+	// freshPolicy says if the freshness check runs. Nil requires the step.
+	freshPolicy freshstep.Policy
 	// durableOps starts the migration operation of an approval. The runner
 	// of every instance claims it.
 	durableOps durable.Store
@@ -227,6 +230,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
+		freshPolicy:       freshPolicyOf(cfg),
 		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
@@ -555,7 +559,20 @@ func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) 
 		return nil
 	}
 
-	if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
+	// Defense in depth: the handler asks the same policy too. This guard stays
+	// so that a new caller of the chain cannot skip it, and it does not rely
+	// on the handler or on the store. A nil policy requires the step.
+	policy := c.freshPolicy
+	if policy == nil {
+		policy = freshstep.PolicyFunc(nil)
+	}
+
+	guard, err := freshstep.NewGuard(policy, c.freshness.RequireFresh)
+	if err != nil {
+		return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
+	}
+
+	if err = guard.Require(ctx, caller.Subject); err != nil {
 		return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -59,6 +60,18 @@ type Service struct {
 	evaluator  Evaluator
 	now        func() time.Time
 	logger     *slog.Logger
+	// freshPolicy says if a reveal needs a fresh authentication. Nil requires
+	// one.
+	freshPolicy freshstep.Policy
+}
+
+// Option changes a Service that NewService makes.
+type Option func(*Service)
+
+// WithFreshPolicy sets the policy that says if a reveal needs a fresh
+// authentication. With no policy, or a nil policy, a reveal needs one.
+func WithFreshPolicy(p freshstep.Policy) Option {
+	return func(s *Service) { s.freshPolicy = p }
 }
 
 // Actor is the caller of a use case. By is the template of the audit entry:
@@ -131,7 +144,7 @@ type View struct {
 
 // NewService returns a Service. It returns ErrMissingDependency when a port
 // is missing. A nil Now uses time.Now.
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	if cfg.Store == nil || cfg.Namespaces == nil || cfg.Sealer == nil || cfg.Audit == nil || cfg.Authorizer == nil ||
 		cfg.Sessions == nil || cfg.Evaluator == nil {
 		return nil, fmt.Errorf(
@@ -150,10 +163,16 @@ func NewService(cfg Config) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Service{
+	s := &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, audit: cfg.Audit, authz: cfg.Authorizer,
-		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now, logger: logger,
-	}, nil
+		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now, logger: logger, freshPolicy: nil,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s, nil
 }
 
 // Create makes the profile with revision 1. A document with a routing
@@ -517,8 +536,17 @@ func (s *Service) authorizeReveal(ctx context.Context, a *Actor, t Target, o Rea
 
 // requireFresh runs the check of a fresh authentication of a reveal. A refusal
 // writes the audit entry of a failed reveal, and fails closed with the error
-// of the check.
+// of the check. It asks for no step, and writes no entry, when the policy does
+// not require a step.
+//
+// Defense in depth: the handler asks the same policy too. This check stays so
+// that a new caller of the service cannot skip it, and it does not rely on the
+// handler or on the store.
 func (s *Service) requireFresh(ctx context.Context, a *Actor, t Target, o ReadOptions) error {
+	if !freshstep.IsRequired(ctx, s.freshPolicy) {
+		return nil
+	}
+
 	err := ErrFreshRequired
 	if o.Fresh != nil {
 		if err = o.Fresh(); err == nil {

@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -105,19 +106,32 @@ type Service struct {
 	store      Store
 	principals PrincipalReader
 	freshness  Freshness
-	authz      identity.Authorizer
-	reach      access.ReachConfig
-	makers     MakerChecker
-	tempAdmins tempadmin.Reader
-	logger     *slog.Logger
-	now        func() time.Time
-	newID      func(prefix string) string
+	freshGuard freshstep.Guard
+	// freshPolicy says if the freshness port runs.
+	freshPolicy freshstep.Policy
+	authz       identity.Authorizer
+	reach       access.ReachConfig
+	makers      MakerChecker
+	tempAdmins  tempadmin.Reader
+	logger      *slog.Logger
+	now         func() time.Time
+	newID       func(prefix string) string
 }
 
 var _ identity.Authenticator = (*Service)(nil)
 
+// Option changes a Service that NewService makes.
+type Option func(*Service)
+
+// WithFreshPolicy sets the policy that says if the Freshness port runs. With
+// no policy, or a nil policy, the port always runs. A Service with no
+// Freshness port asks for no step, whatever the policy says.
+func WithFreshPolicy(p freshstep.Policy) Option {
+	return func(s *Service) { s.freshPolicy = p }
+}
+
 // NewService returns a Service. Store and Principals are required.
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, opts ...Option) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: access token store", ErrMissingDependency)
@@ -140,18 +154,55 @@ func NewService(cfg Config) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Service{
-		store:      cfg.Store,
-		principals: cfg.Principals,
-		freshness:  cfg.Freshness,
-		authz:      cfg.Authorizer,
-		reach:      cfg.Reach,
-		makers:     cfg.Makers,
-		tempAdmins: cfg.TempAdmins,
-		logger:     logger,
-		now:        now,
-		newID:      newID,
-	}, nil
+	s := &Service{
+		store:       cfg.Store,
+		principals:  cfg.Principals,
+		freshness:   nil,
+		freshGuard:  freshstep.Guard{},
+		freshPolicy: nil,
+		authz:       cfg.Authorizer,
+		reach:       cfg.Reach,
+		makers:      cfg.Makers,
+		tempAdmins:  cfg.TempAdmins,
+		logger:      logger,
+		now:         now,
+		newID:       newID,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	s.freshness = cfg.Freshness
+
+	guard, err := newFreshGuard(cfg.Freshness, s.freshPolicy)
+	if err != nil {
+		return nil, err
+	}
+
+	s.freshGuard = guard
+
+	return s, nil
+}
+
+// newFreshGuard holds the port f behind a guard of the policy p. A nil port
+// gives the zero guard, which a Service never calls. A nil policy requires the
+// step, as before the setting existed.
+func newFreshGuard(f Freshness, p freshstep.Policy) (freshstep.Guard, error) {
+	if f == nil {
+		return freshstep.Guard{}, nil
+	}
+
+	if p == nil {
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	guard, err := freshstep.NewGuard(p, f.RequireFresh)
+	if err != nil {
+		return freshstep.Guard{}, fmt.Errorf("%w: freshness guard: %w", ErrMissingDependency, err)
+	}
+
+	return guard, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -869,13 +920,18 @@ func (s *Service) expiry(ctx context.Context, at, want time.Time) (time.Time, er
 	return expiry(p, at, want)
 }
 
-// requireFresh runs the MFA freshness check when one is wired.
+// requireFresh runs the MFA freshness check when one is wired and the policy
+// requires a step.
+//
+// Defense in depth: the handler and the store ask the same policy too. This
+// guard stays so that a new caller of the service cannot skip the check, and
+// it does not rely on the handler or on the store.
 func (s *Service) requireFresh(ctx context.Context, subject string) error {
 	if s.freshness == nil {
 		return nil
 	}
 
-	if err := s.freshness.RequireFresh(ctx, subject); err != nil {
+	if err := s.freshGuard.Require(ctx, subject); err != nil {
 		return fmt.Errorf("mfa freshness: %w", err)
 	}
 
