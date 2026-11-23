@@ -39,11 +39,14 @@ first version of that gate:
   one place of one gate, also when that person is a member of the groups of two
   gates. In the example above, the job needs 3 people: 2 members of `platform`
   and 1 other person. The order of the approvals does not change the result.
-- A default that names users or unit owners, that sets `freshAuthSeconds`, or
-  that holds an `unless` body still makes the start of the job fail, also when it
-  is the second requirement. The job approval does not enforce these yet. The
-  start answers 503 with the code `gate.unavailable`, and the message names the
-  requirement to change.
+- A default that names users or unit owners, or that sets `freshAuthSeconds`,
+  still makes the start of the job fail, also when it is the second requirement.
+  The job approval does not enforce these yet. The start answers 503 with the
+  code `gate.unavailable`, and the message names the requirement to change.
+- A job has no `unless`. A default that holds an `unless` body makes the start of
+  the job fail, also when it is the second requirement. The start answers 503
+  with the code `gate.unavailable`. To start the job, remove the `unless` body
+  from the default.
 
 ## A plan whose state changed
 

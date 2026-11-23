@@ -32,6 +32,7 @@ func reconcileCases() []suiteCase {
 		{"the reconcile dispatches a queued job when the unit is free again", testReconcileUnitBusy},
 		{"the reconcile moves a queued job with a closed gate to awaiting-approval", testReconcileGate},
 		{"the reconcile dispatches a queued job whose gate has its approval", testReconcileApprovedGate},
+		{"the reconcile dispatches a job whose approver left the gate's group after approving", testReconcileApproverLeft},
 		{
 			"the reconcile keeps a job with two gates and two people waiting",
 			func(t *testing.T, h Harness) {
@@ -303,6 +304,36 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 	// does not send the job to approval again.
 	if res := runReconcile(t, h, 0); res.Dispatched != 1 || res.Gated != 0 {
 		t.Fatalf("reconcile of a queued job with an approved gate = %+v; want one dispatch", res)
+	}
+
+	assertState(t, h, queued.ID, job.StateDispatched)
+}
+
+// testReconcileApproverLeft proves that an approval is final: the gate names
+// the group platform, bo is a member of it and approves, and bo then leaves the
+// group. The job store reads no membership. GatesStatus counts the stored
+// approvals by subject and gate name, with the approver policy only, so the
+// reconcile dispatches the job and does not recheck the group.
+//
+// The harness has no group directory, so this case cannot remove the member
+// from the group. It shows that the dispatch path reads no membership at all.
+func testReconcileApproverLeft(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := newJob(f.unit, job.OperationRefresh, "")
+	j.Phases[0].Gates = []job.Gate{{
+		Type: job.GateApproval, Name: "", Approvals: 1, Groups: []string{"platform"}, GroupIDs: []string{"grp-a"},
+		AllowSelf: false, Timeout: 0, BindPlan: false,
+	}}
+	j.Phases[0].Approvals = []job.Approval{{
+		Gate: job.GateApproval, For: []string{""}, Subject: "bo", Agent: "", Verdict: job.VerdictApprove,
+		Comment: "", Plan: nil, At: time.Now().UTC(), Auth: "", AuthAt: time.Time{},
+	}}
+	queued := create(t, h, f, j, nil)
+
+	if res := runReconcile(t, h, 0); res.Dispatched != 1 || res.Gated != 0 {
+		t.Fatalf("reconcile after the approver left the group = %+v; want one dispatch", res)
 	}
 
 	assertState(t, h, queued.ID, job.StateDispatched)
