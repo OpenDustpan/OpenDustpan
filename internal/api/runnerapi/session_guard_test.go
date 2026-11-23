@@ -274,15 +274,25 @@ func newSweepEnv(t *testing.T, b backend) *sessionEnv {
 		o.mutate = func(cfg *runnerapi.Config) { cfg.Sweeps = fakeSweeps{ops: s.operations} }
 	})
 
-	pool := e.createSweepPool()
+	status, body := e.admin("/api/dustpan/v1/namespaces/acme/runner-pools",
+		map[string]any{"name": "scan", "purpose": "sweeps"})
+	if status != http.StatusCreated {
+		t.Fatalf("create pool = %d %s, want 201", status, body)
+	}
+
+	var pool struct {
+		ID string `json:"id"`
+	}
+
+	decode(t, body, &pool)
 
 	r := e.newRunner("scanner-1")
-	if status, body := r.join(pool, e.joinToken(pool)); status != http.StatusOK {
+	if status, body = r.join(pool.ID, e.joinToken(pool.ID)); status != http.StatusOK {
 		t.Fatalf("join = %d %s, want 200", status, body)
 	}
 
 	_, _, err := e.store.operations.Start(t.Context(), durable.StartRequest{
-		Key: "sweep-1", Kind: runner.SweepKind(pool), Version: 0, Input: nil,
+		Key: "sweep-1", Kind: runner.SweepKind(pool.ID), Version: 0, Input: nil,
 	})
 	if err != nil {
 		t.Fatalf("start sweep: %v", err)
@@ -293,7 +303,7 @@ func newSweepEnv(t *testing.T, b backend) *sessionEnv {
 		t.Fatalf("poll = %+v, want the sweep", work)
 	}
 
-	return &sessionEnv{env: e, jobs: jobs, claimer: claimer, logs: logs, pool: pool, runner: r, work: work}
+	return &sessionEnv{env: e, jobs: jobs, claimer: claimer, logs: logs, pool: pool.ID, runner: r, work: work}
 }
 
 // TestSweepSessionHasNoSteps proves the check of the sweep claim: a session of

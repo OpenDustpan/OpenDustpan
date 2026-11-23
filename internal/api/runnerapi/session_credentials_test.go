@@ -229,14 +229,24 @@ func newSweepTokenEnv(t *testing.T) *tokenEnv {
 		}
 	})
 
-	pool := e.createSweepPool()
+	status, body := e.admin("/api/dustpan/v1/namespaces/acme/runner-pools",
+		map[string]any{"name": "scan", "purpose": "sweeps"})
+	if status != http.StatusCreated {
+		t.Fatalf("create pool = %d %s, want 201", status, body)
+	}
+
+	var pool struct {
+		ID string `json:"id"`
+	}
+
+	decode(t, body, &pool)
 
 	r := e.newRunner("scanner-1")
-	if status, body := r.join(pool, e.joinToken(pool)); status != http.StatusOK {
+	if status, body = r.join(pool.ID, e.joinToken(pool.ID)); status != http.StatusOK {
 		t.Fatalf("join = %d %s, want 200", status, body)
 	}
 
-	start := durable.StartRequest{Key: "sweep-1", Kind: runner.SweepKind(pool), Version: 0, Input: nil}
+	start := durable.StartRequest{Key: "sweep-1", Kind: runner.SweepKind(pool.ID), Version: 0, Input: nil}
 	if _, _, err := e.store.operations.Start(t.Context(), start); err != nil {
 		t.Fatalf("start sweep: %v", err)
 	}
@@ -250,7 +260,7 @@ func newSweepTokenEnv(t *testing.T) *tokenEnv {
 	var s tokenEnv
 
 	s.sessionEnv = &sessionEnv{
-		env: e, jobs: nil, claimer: nil, logs: nil, pool: pool, runner: r, work: work,
+		env: e, jobs: nil, claimer: nil, logs: nil, pool: pool.ID, runner: r, work: work,
 	}
 	s.audit, s.tokens = written, tokens
 

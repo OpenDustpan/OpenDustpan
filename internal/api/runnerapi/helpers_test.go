@@ -554,29 +554,6 @@ func (e *env) createPool() string {
 	return pool.ID
 }
 
-// createSweepPool makes the pool scan for sweeps through the store and returns
-// its ID. The test needs a pool with the sweep purpose, and the store makes it
-// with no detour through the pool admin API. That API does not refuse the sweep
-// purpose.
-func (e *env) createSweepPool() string {
-	e.t.Helper()
-
-	now := e.clock.now()
-
-	// The other fields keep their zero value, so the pool takes the defaults.
-	var pool runner.Pool
-
-	pool.Namespace, pool.Name, pool.Purpose = "acme", "scan", runner.PurposeSweeps
-	pool.CreatedAt, pool.UpdatedAt = now, now
-
-	p, err := e.store.runners.CreatePool(e.t.Context(), pool, e.fence, nil)
-	if err != nil {
-		e.t.Fatalf("create the sweep pool: %v", err)
-	}
-
-	return p.ID
-}
-
 // joinToken makes a join token of the pool and returns its secret.
 func (e *env) joinToken(pool string) string {
 	e.t.Helper()
