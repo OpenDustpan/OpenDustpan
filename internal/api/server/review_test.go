@@ -103,8 +103,8 @@ func TestReviewScopesAndActions(t *testing.T) {
 
 	// The bootstrap admin token holds every action with no grant. An account
 	// administrator and a namespace admin can both change who has access.
-	// The installation grant of the agent reaper reaches the namespace: its
-	// role holds an action inside it.
+	// The role of the agent reaper holds an action inside a namespace. Its
+	// grant on @server does not reach the namespace; the namespace grant does.
 	want := []string{
 		"bootstrap admin token admin @server <@server grant=true",
 		"principal:prn-alice admin acme < grant=true",
