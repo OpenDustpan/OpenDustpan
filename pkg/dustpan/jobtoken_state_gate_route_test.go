@@ -230,6 +230,10 @@ func setupJobTokenStateGate(t *testing.T) gateEnv {
 	env := gateEnv{f: f, jobs: jobStore, tokens: tokenStore, token: tokens.jobToken, wsID: "", now: now}
 	env.wsID = env.workspaceID(t, "web")
 
+	// job-1 runs its plan phase. A job with no phase at its current index
+	// gives no claim, so the job token of such a job writes nothing.
+	env.setPhase(t, "job-1", 0)
+
 	for _, change := range []struct{ path, body string }{
 		{
 			path: "/api/dustpan/v1/namespaces/acme/override-switches",
@@ -291,12 +295,20 @@ type gateDocData struct {
 func (e gateEnv) setApplyPhase(t *testing.T, id job.ID) {
 	t.Helper()
 
+	e.setPhase(t, id, 1)
+}
+
+// setPhase gives the job id the phases plan and apply, with the current phase
+// at index current.
+func (e gateEnv) setPhase(t *testing.T, id job.ID, current int) {
+	t.Helper()
+
 	e.jobs.update(t, id, func(j *job.Job) {
 		var plan, apply job.Phase
 		plan.Kind = job.PhasePlan
 		apply.Kind = job.PhaseApply
 		j.Phases = []job.Phase{plan, apply}
-		j.Current = 1
+		j.Current = current
 	})
 }
 
@@ -713,8 +725,8 @@ func checkGateAnswer(t *testing.T, status int, body string, want int) {
 	}
 }
 
-// TestJobTokenStateGatePlanOnly proves that the job token of a job with no
-// phase, which never passes change.apply, takes the lock of its plan and is
+// TestJobTokenStateGatePlanOnly proves that the job token of a job in its plan
+// phase, which did not pass change.apply, takes the lock of its plan and is
 // refused by the guard on each write past that lock.
 func TestJobTokenStateGatePlanOnly(t *testing.T) {
 	t.Parallel()

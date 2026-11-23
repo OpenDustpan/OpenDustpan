@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // claimGuardJobStore is a job store that knows one job. Only Get is answered.
@@ -32,8 +36,9 @@ func (s *claimGuardJobStore) Get(_ context.Context, id job.ID) (job.Job, error) 
 }
 
 // newClaimGuard returns the state.write gate service that the server builds,
-// over a real store, with a job store that holds j.
-func newClaimGuard(t *testing.T, j *job.Job) *gateService {
+// over a real store, with the job store jobs. A nil jobs builds a server with
+// no job store.
+func newClaimGuard(t *testing.T, jobs job.Store) *gateService {
 	t.Helper()
 
 	ctx := t.Context()
@@ -54,14 +59,19 @@ func newClaimGuard(t *testing.T, j *job.Job) *gateService {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	if _, err = nss.Create(ctx, "acme"); err != nil {
+	ns, err := nss.Create(ctx, "acme")
+	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
+
+	// A write that the job model allows meets the gates, and the gates read
+	// the facts of a unit that exists.
+	createClaimGuardWorkspace(t, st, ns.Fence(), "web")
 
 	cfg := new(settings)
 	cfg.namespaceStore, cfg.inventoryReader, cfg.now = st, st, time.Now
 	cfg.installationKind = installation.KindProduction
-	cfg.jobStore = &claimGuardJobStore{Store: nil, j: *j}
+	cfg.jobStore = jobs
 
 	gates, err := newStateWriteGates(cfg, nss)
 	if err != nil || gates.svc == nil {
@@ -69,6 +79,65 @@ func newClaimGuard(t *testing.T, j *job.Job) *gateService {
 	}
 
 	return gates.svc
+}
+
+// createClaimGuardWorkspace creates the workspace name in the namespace acme.
+func createClaimGuardWorkspace(t *testing.T, st *sqlite.Store, fence namespace.Fence, name workspace.Name) {
+	t.Helper()
+
+	w := workspace.Workspace{
+		NamespaceID:  "",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+		Lock:         workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		LastRelease:  workspace.NoRelease(),
+		ID:           workspace.ID("ws-claim-" + string(name)),
+		Ref:          workspace.Ref{Namespace: "acme", Name: name},
+		Overrides:    namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:     1,
+		Origin:       identity.StateOrigin{Job: "", Commit: ""},
+		InCollection: false,
+	}
+
+	if err := st.CreateWorkspace(t.Context(), w, fence); err != nil {
+		t.Fatalf("create workspace %s: %v", name, err)
+	}
+}
+
+// TestStateWriteGatesNoJobStoreAudited proves that the real subject source of
+// a server with no job store refuses a job-token write, and that the refusal
+// gets its audit entry through the admission of the adapters.
+func TestStateWriteGatesNoJobStoreAudited(t *testing.T) {
+	t.Parallel()
+
+	web, err := identity.UnitObject("opentofu", "acme", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	admitter, err := stategate.New(newClaimGuard(t, nil), nil)
+	if err != nil {
+		t.Fatalf("stategate.New: %v", err)
+	}
+
+	p := gatePrincipal("job-token-1", "", identity.CredentialJobToken)
+	p.JobID = "job-1"
+
+	var reasons []string
+
+	out := admitter.Admit(t.Context(), stategate.Write{
+		Principal: p, Unit: web, Operation: gate.OperationLock, Action: identity.ActionUnitWrite,
+		Source: gate.SourceCLI, State: nil, StateErr: nil,
+	}, func(_ context.Context, reason string) { reasons = append(reasons, reason) })
+
+	if out.Allowed || out.Refusal == nil || out.Code != errcode.GateDenied ||
+		!errors.Is(out.Refusal, identity.ErrDenied) {
+		t.Fatalf("Admit() = %+v, want a refusal with %s", out, errcode.GateDenied)
+	}
+
+	if len(reasons) != 1 || !strings.Contains(reasons[0], errcode.GateDenied) {
+		t.Fatalf("audit reasons = %q, want one entry that names %s", reasons, errcode.GateDenied)
+	}
 }
 
 // TestStateWriteGatesSeeTheJobClaim proves that the gate service that the
@@ -120,7 +189,7 @@ func TestStateWriteGatesSeeTheJobClaim(t *testing.T) {
 			j := testPlanJob("job-1", tt.current)
 			j.Spec.Unit = web
 
-			svc := newClaimGuard(t, &j)
+			svc := newClaimGuard(t, &claimGuardJobStore{Store: nil, j: j})
 
 			p := gatePrincipal("job-token-1", "", identity.CredentialJobToken)
 			p.JobID = "job-1"

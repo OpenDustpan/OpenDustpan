@@ -1,0 +1,189 @@
+package gate_test
+
+import (
+	"errors"
+	"slices"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/identity"
+)
+
+// TestStateWriteJobClaim checks each rule of a state.write with a job token:
+// the job model refuses first with identity.ErrDenied and writes no record,
+// and a write that it allows meets the gates and writes a decision record.
+func TestStateWriteJobClaim(t *testing.T) {
+	t.Parallel()
+
+	// want is "model" for a refusal of the job model, "gate" for a refusal
+	// of the deny gate, and "allow" for an allowed write.
+	tests := []struct {
+		name     string
+		subject  string
+		unit     string
+		op       gate.OperationKind
+		planLock bool
+		denyGate bool
+		want     string
+	}{
+		{
+			name: "out-of-phase: a plan phase writes no state", subject: "runner-plan", unit: "web",
+			op: gate.OperationApply, planLock: false, denyGate: false, want: "model",
+		},
+		{
+			name: "cross-unit: a unit outside the job is refused", subject: "runner-apply", unit: "other",
+			op: gate.OperationApply, planLock: false, denyGate: false, want: "model",
+		},
+		{
+			name: "cross-unit: the plan lock of a unit outside the job is refused", subject: "runner-plan",
+			unit: "other", op: gate.OperationLock, planLock: true, denyGate: false, want: "model",
+		},
+		{
+			name: "plan-lock: a plan phase takes the lock of its plan", subject: "runner-plan", unit: "web",
+			op: gate.OperationLock, planLock: true, denyGate: false, want: "allow",
+		},
+		{
+			name: "no-phase: a job token with no job claim is refused", subject: "runner", unit: "web",
+			op: gate.OperationLock, planLock: true, denyGate: false, want: "model",
+		},
+		{
+			name: "canceled job: a claim that does not resolve is refused", subject: "runner-canceled",
+			unit: "web", op: gate.OperationApply, planLock: false, denyGate: false, want: "model",
+		},
+		{
+			name: "deny gate: an allowed apply write is refused", subject: "runner-apply", unit: "web",
+			op: gate.OperationApply, planLock: false, denyGate: true, want: "gate",
+		},
+		{
+			name: "deny gate: the plan lock is refused", subject: "runner-plan", unit: "web",
+			op: gate.OperationLock, planLock: true, denyGate: true, want: "gate",
+		},
+		{
+			name: "deny gate: the job model refuses first and runs no gate", subject: "runner-plan",
+			unit: "other", op: gate.OperationApply, planLock: false, denyGate: true, want: "model",
+		},
+		{
+			name: "no gate match: an allowed apply write is allowed", subject: "runner-apply", unit: "web",
+			op: gate.OperationApply, planLock: false, denyGate: false, want: "allow",
+		},
+		{
+			name: "unlocked-write: a plan phase is refused", subject: "runner-plan", unit: "web",
+			op: gate.OperationUnlockedWrite, planLock: false, denyGate: false, want: "model",
+		},
+		{
+			name: "unlocked-write: a phase that passed apply meets the deny gate", subject: "runner-apply",
+			unit: "web", op: gate.OperationUnlockedWrite, planLock: false, denyGate: true, want: "gate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+			if tt.denyGate {
+				e.putGate(t, newSWGate(atUnit, "deny-jobs", "", gate.OutcomeDeny, "No job writes this unit."))
+			}
+
+			w := swWrite(t, tt.subject, tt.unit, tt.op)
+			w.PlanLock = tt.planLock
+
+			d, err := e.svc.GuardStateWrite(t.Context(), w)
+
+			switch tt.want {
+			case "model":
+				checkJobModelRefusal(t, e, err)
+			case "gate":
+				checkJobGateRefusal(t, e, err, tt.subject, "deny-jobs")
+			default:
+				checkJobGateAllow(t, e, d, err, tt.subject)
+			}
+		})
+	}
+}
+
+// checkJobModelRefusal fails t unless the job model refused the write with
+// identity.ErrDenied before any gate, so that no record exists.
+func checkJobModelRefusal(t *testing.T, e swEnv, err error) {
+	t.Helper()
+
+	if !errors.Is(err, identity.ErrDenied) || errors.Is(err, gate.ErrDenied) {
+		t.Fatalf("GuardStateWrite() = %v, want identity.ErrDenied from the job model", err)
+	}
+
+	if recs := e.records(t); len(recs) != 0 {
+		t.Fatalf("records = %d, want none: the job model refused before the gates", len(recs))
+	}
+}
+
+// checkJobGateRefusal fails t unless the deny gate id refused the write of
+// subject, with the one decision record that names the gate.
+func checkJobGateRefusal(t *testing.T, e swEnv, err error, subject string, id gate.ID) {
+	t.Helper()
+
+	refusal, ok := errors.AsType[*gate.RefusalError](err)
+	if !ok || !errors.Is(err, gate.ErrDenied) || refusal.Record == "" {
+		t.Fatalf("GuardStateWrite() = %v, want a deny gate refusal with a record", err)
+	}
+
+	recs := e.records(t)
+	if len(recs) != 1 || recs[0].ID != refusal.Record || recs[0].Result != gate.ResultDeny ||
+		recs[0].Subject != subject {
+		t.Fatalf("records = %+v, want the one deny record %s of %s", recs, refusal.Record, subject)
+	}
+
+	if !recordNamesMatchedGate(recs[0], id) {
+		t.Fatalf("record %+v does not name the matched gate %s", recs[0], id)
+	}
+}
+
+// checkJobGateAllow fails t unless the gates allowed the write of subject with
+// the one decision record d names.
+func checkJobGateAllow(t *testing.T, e swEnv, d gate.Decision, err error, subject string) {
+	t.Helper()
+
+	if err != nil || d.Result != gate.ResultAllow || d.Record == "" {
+		t.Fatalf("GuardStateWrite() = %+v, %v, want allow with a record", d, err)
+	}
+
+	if recs := e.records(t); len(recs) != 1 || recs[0].ID != d.Record || recs[0].Subject != subject {
+		t.Fatalf("records = %+v, want the one allow record %s of %s", recs, d.Record, subject)
+	}
+}
+
+// recordNamesMatchedGate reports whether a unit result of rec holds the gate
+// id as matched.
+func recordNamesMatchedGate(rec gate.Record, id gate.ID) bool {
+	return slices.ContainsFunc(rec.Units, func(u gate.UnitResult) bool {
+		return slices.ContainsFunc(u.Gates, func(p gate.PolicyResult) bool { return p.Policy.ID == id && p.Matched })
+	})
+}
+
+// TestStateWriteJobClaimSetsNoBreakGlass checks that a job token cannot pass
+// a gate with a break-glass pass: Evaluate refuses the change before any gate.
+func TestStateWriteJobClaimSetsNoBreakGlass(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+	unit := swUnit(t, "web")
+
+	subject, err := swSubjects{}.Subject(t.Context(), principal("runner-apply", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := e.svc.Evaluate(t.Context(), gate.Change{
+		Point: gate.PointStateWrite, Namespace: unit.Namespace(),
+		Ref:     gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""},
+		Subject: subject, Source: gate.SourceCLI, Author: subject.ID, Operation: gate.OperationApply,
+		Units: []identity.Object{unit}, Holders: nil, PlanLock: false, BreakGlass: "audit-1", Fence: e.fence,
+		State: nil,
+	})
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("Evaluate() = %+v, %v, want identity.ErrDenied for a break-glass of a job token", d, err)
+	}
+
+	if recs := e.records(t); len(recs) != 0 {
+		t.Fatalf("records = %d, want none", len(recs))
+	}
+}

@@ -65,7 +65,6 @@ func (s jobClaimSubjects) claim(ctx context.Context, id string) (*gate.JobClaim,
 	if s.jobs == nil {
 		return nil, fmt.Errorf("%w: the server has no job store to read the job token", identity.ErrDenied)
 	}
-
 	// Defense in depth: the job token service gives each job token principal the
 	// job ID of its token, and the job store finds no job with an empty ID. This
 	// check stays so that a principal with no job ID never reaches the store. It
@@ -87,7 +86,7 @@ func (s jobClaimSubjects) claim(ctx context.Context, id string) (*gate.JobClaim,
 		return nil, fmt.Errorf("%w: job %q is %s and takes no state write", identity.ErrDenied, id, j.State)
 	}
 
-	if j.Current < 0 || j.Current > len(j.Phases) {
+	if j.Current < 0 || j.Current >= len(j.Phases) {
 		return nil, fmt.Errorf("%w: job %q has no phase at index %d", identity.ErrDenied, id, j.Current)
 	}
 
@@ -100,14 +99,9 @@ func (s jobClaimSubjects) claim(ctx context.Context, id string) (*gate.JobClaim,
 		}
 	}
 
-	var phase string
-	if j.Current < len(j.Phases) {
-		phase = string(j.Phases[j.Current].Kind)
-	}
-
 	return &gate.JobClaim{
 		Job:         string(j.ID),
-		Phase:       phase,
+		Phase:       string(j.Phases[j.Current].Kind),
 		PassedApply: passedApply,
 		Units:       []identity.Object{j.Spec.Unit},
 	}, nil

@@ -159,7 +159,13 @@ writes. The first is the lock or lease of the plan of a phase that did not pass
 the apply decision. The second is a write to a unit of its own job by a phase
 that passed the apply decision. The access limits still hold for a job token.
 Each other write with a job token is denied, also a write to a unit that the
-job does not hold.
+job does not hold. Such a denial runs no gate and writes no decision record.
+
+A write with a job token that one of these two rules allows then meets the
+gates of `state.write`, as the write of a person does. The server writes a
+decision record for it, and a gate in `enforce` mode with the outcome `deny`
+refuses it, also the lock of the plan. A job token cannot use a break-glass
+pass.
 
 The server cannot evaluate a gate for a job yet. So an enforced gate at
 `state.write` refuses the start of a job on its unit, and it also refuses each
@@ -378,8 +384,19 @@ with the action of the write and the unit (see the [audit log](audit-log.md)).
 
 ### A job token refusal
 
-A job token write that the rules above deny answers `403` with the code
-`gate.denied`. The text is the same for each job token denial:
+Some job token writes are refused before the gates, by the authorization
+rule of the job token:
+
+- A write to a unit other than the unit of the job answers `403` with the
+  text `job token is for one unit only` on the OpenTofu HTTP backend, and
+  `403` with the code `access.denied` on the TFE-compatible API.
+- A write with the token of a job that ended answers `403` with the text
+  `permission denied` on the OpenTofu HTTP backend, and `404` with the code
+  `workspace.not-found` on the TFE-compatible API.
+
+A job token write that the job rules of the state write guard deny answers
+`403` with the code `gate.denied`. The text is the same for each of these
+denials:
 
 ```text
 The credential of the caller may not make this write.
@@ -389,6 +406,9 @@ The text does not name the unit or the phase. The refusal has no ID of a
 decision record. The server log line `state write refused` gives the unit and
 the code. The audit log has a `denied` entry for the write (see the
 [audit log](audit-log.md)).
+
+A job token write that a gate denies answers like the write of a person: the
+message of the gate, the code `gate.denied` and the ID of the decision record.
 
 The tool-neutral inventory API answers `{"code": <status>, "message": "..."}`
 with the same message text. It answers 403 for a deny or an access limit, 409 for

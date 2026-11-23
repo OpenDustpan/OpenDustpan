@@ -106,7 +106,13 @@ func TestJobClaimSubjectsDenied(t *testing.T) {
 	canceled.State = job.StateCanceled
 
 	beforeStart := testPlanJob("job-before", -1)
+	atEnd := testPlanJob("job-at-end", 2)
 	pastEnd := testPlanJob("job-past", 3)
+
+	// The reader holds a running job under an empty and a blank ID, so only
+	// the check of the job ID refuses these principals.
+	emptyID := testPlanJob("", 1)
+	blankID := testPlanJob("  ", 1)
 
 	tests := []struct {
 		name  string
@@ -118,6 +124,7 @@ func TestJobClaimSubjectsDenied(t *testing.T) {
 		{name: "a terminal job is denied", jobID: "job-done"},
 		{name: "a canceled job is denied", jobID: "job-canceled"},
 		{name: "a phase index before the first phase is denied", jobID: "job-before"},
+		{name: "a phase index equal to the number of phases is denied", jobID: "job-at-end"},
 		{name: "a phase index past the last phase is denied", jobID: "job-past"},
 	}
 
@@ -128,7 +135,8 @@ func TestJobClaimSubjectsDenied(t *testing.T) {
 			// Each subtest has its own reader, so the check after the call reads
 			// only what this subtest wrote.
 			reader := fakeJobReader{jobs: map[job.ID]job.Job{
-				"job-done": terminal, "job-canceled": canceled, "job-before": beforeStart, "job-past": pastEnd,
+				"job-done": terminal, "job-canceled": canceled, "job-before": beforeStart, "job-at-end": atEnd,
+				"job-past": pastEnd, "": emptyID, "  ": blankID,
 			}}
 			src := newJobClaimSubjects(reader, fakeInnerSubjects{})
 
@@ -221,6 +229,35 @@ func TestJobClaimSubjectsNoJobStoreDenies(t *testing.T) {
 	_, err := src.Subject(t.Context(), claimTestPrincipal("token-4", "job-plan"))
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("Subject error = %v, want identity.ErrDenied", err)
+	}
+}
+
+// failingInnerSubjects gives the subject of a job token together with an
+// error, so that only the check of the inner error refuses the principal.
+type failingInnerSubjects struct{}
+
+func (failingInnerSubjects) Subject(_ context.Context, p identity.Principal) (gate.Subject, error) {
+	var s gate.Subject
+
+	s.ID = p.Subject
+	s.Credential = gate.CredentialJobToken
+
+	return s, errDiskGone
+}
+
+func TestJobClaimSubjectsInnerErrorIsReturned(t *testing.T) {
+	t.Parallel()
+
+	reader := fakeJobReader{jobs: map[job.ID]job.Job{"job-plan": testPlanJob("job-plan", 1)}}
+	src := newJobClaimSubjects(reader, failingInnerSubjects{})
+
+	got, err := src.Subject(t.Context(), claimTestPrincipal("token-6", "job-plan"))
+	if !errors.Is(err, errDiskGone) {
+		t.Fatalf("Subject error = %v, want the error of the inner source", err)
+	}
+
+	if got.Job != nil || got.Credential != "" {
+		t.Fatalf("Subject = %+v, want the zero subject with the inner error", got)
 	}
 }
 

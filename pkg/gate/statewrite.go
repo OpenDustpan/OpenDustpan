@@ -13,7 +13,6 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // stateWriteSchema returns the version of the fact schema of state.write.
@@ -59,10 +58,13 @@ type StateWrite struct {
 // *RefusalError, and any other error also refuses the write: the guard fails
 // closed.
 //
-// A job token skips the gates only as far as Evaluate allows: a write by a
-// phase that passed change.apply to a unit of its own job, or the lock or
-// the update lease of the plan in any other phase. Each other write with a
-// job token fails with identity.ErrDenied. The access limits hold for it.
+// A write with a job token meets the job model first: a phase that passed
+// change.apply writes a unit of its own job, and any other phase writes only
+// the lock or the update lease of its plan. Each other write with a job token
+// fails with identity.ErrDenied, runs no gate and writes no decision record.
+// A write that the job model allows then meets the gates of state.write and
+// writes a decision record, as the write of a person does, so a deny gate
+// refuses it. The access limits hold for a job token too.
 func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, error) {
 	ctx = withFactMemo(ctx)
 
@@ -79,28 +81,8 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 		}
 	}
 
-	if subject.Credential == CredentialJobToken {
-		// The job model decides a write with a job token. The write needs no
-		// fence, because it writes no decision record.
-		return s.Evaluate(ctx, Change{
-			Point:     PointStateWrite,
-			Namespace: w.Unit.Namespace(),
-			Ref:       ChangeRef{Kind: ChangeStateWrite, ID: ""},
-			Subject:   subject,
-			Source:    w.Source,
-			Author:    subject.ID,
-			Operation: w.Operation,
-			Units: []identity.Object{
-				w.Unit,
-			},
-			Holders:    nil,
-			PlanLock:   w.PlanLock,
-			BreakGlass: "",
-			Fence:      namespace.Fence{Namespace: w.Unit.Namespace(), FailoverVersion: 0},
-			State:      nil,
-		})
-	}
-
+	// The fence is read for each credential: a write with a job token that the
+	// job model allows writes a decision record too.
 	fence, err := s.fences.Fence(ctx, w.Unit.Namespace())
 	if err != nil {
 		return Decision{}, fmt.Errorf("state.write: fence: %w", err)

@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -56,23 +58,15 @@ func (j jobClaims) Subject(_ context.Context, p identity.Principal) (gate.Subjec
 	}, nil
 }
 
-// emptyStore is a gate store that holds no gate, no limit and no rule. Only
-// Snapshot is answered: the access limits read it, and it returns no limit.
-type emptyStore struct {
-	gate.Store
-}
-
-// Snapshot implements gate.Store with no object.
-func (emptyStore) Snapshot(context.Context, []gate.Scope) (gate.Config, error) {
-	var cfg gate.Config
-
-	return cfg, nil
-}
-
-// idleEngine is a gate engine that no job-token write reaches: a job token is
-// decided by the job model, not by the policies.
+// idleEngine is a gate engine that evaluates nothing: the store holds no gate,
+// so the service asks the engine only for its version.
 type idleEngine struct {
 	gate.Engine
+}
+
+// Version implements gate.Engine.
+func (idleEngine) Version() string {
+	return "idle/1"
 }
 
 // unitStub knows each unit, with no collection and no label.
@@ -85,12 +79,17 @@ func (unitStub) Unit(context.Context, identity.Object) (gate.UnitInfo, error) {
 	return info, nil
 }
 
-// fenceStub gives the fence of the namespace of a unit.
-type fenceStub struct{}
+// namespaceFences gives the fence of a namespace from the namespace service.
+type namespaceFences struct{ nss *namespace.Service }
 
 // Fence implements gate.FenceSource.
-func (fenceStub) Fence(_ context.Context, ns namespace.Name) (namespace.Fence, error) {
-	return namespace.Fence{Namespace: ns, FailoverVersion: 0}, nil
+func (f namespaceFences) Fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {
+	n, err := f.nss.Get(ctx, ns)
+	if err != nil {
+		return namespace.Fence{}, err
+	}
+
+	return n.Fence(), nil
 }
 
 // kindStub is a production installation.
@@ -102,18 +101,38 @@ func (kindStub) ReadKind(context.Context) (string, error) {
 }
 
 // newJobGate returns the real gate service with the subjects of a job token.
-// The stores are empty: a job-token write is decided by the job model, and the
-// access limits of the unit hold no limit.
+// The store is a real store with the namespace acme, and it holds no gate and
+// no limit, so the job model decides each job-token write.
 func newJobGate(t *testing.T, subjects gate.SubjectSource) *gate.Service {
 	t.Helper()
 
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	if _, err = nss.Create(t.Context(), "acme"); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store:      emptyStore{Store: nil},
+		Store:      st,
 		Engine:     idleEngine{Engine: nil},
 		Producers:  nil,
 		Units:      unitStub{},
 		Subjects:   subjects,
-		Fences:     fenceStub{},
+		Fences:     namespaceFences{nss: nss},
 		KindReader: kindStub{},
 		IsDev:      func(string) bool { return false },
 		BreakGlass: nil,
