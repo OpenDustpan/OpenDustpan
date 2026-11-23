@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Issue: #3257.
@@ -53,6 +53,7 @@ Out of scope:
 New:
 
 - pkg/freshstep/freshstep.go, pkg/freshstep/freshstep_test.go, pkg/freshstep/leak_test.go: `Policy`, `Guard`, `NewGuard`.
+- pkg/job/freshstep_policy_test.go, internal/api/server/freshstep_policy_test.go, internal/store/jobstore/events_freshstep_test.go, pkg/profile/profiletest/freshstep_policy_test.go: the table of each layer with the setting off and on.
 
 Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on current main):
 
