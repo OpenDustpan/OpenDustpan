@@ -1,14 +1,14 @@
 ## Context
 
-The guard must make the loss of the last working path impossible under concurrent writes. The setup must make an install with fewer than two accounts impossible to finish.
+The guard must make the loss of the last working path impossible under concurrent writes. The first-setup gate is not part of this change: no setup-finish flow exists on main, and the change keep-two-break-glass-at-setup owns it.
 
 ## Decisions
 
-1. **One count function.** One function in pkg/principal counts working accounts with the four properties and the passkey or hardware key. The guard, the setup and the restore check call it. It reads the final rows of the transaction.
+1. **One count function.** One function in pkg/principal counts working accounts with the four properties and the passkey or hardware key. The guard and the restore check call it. It reads the final rows of the transaction.
 2. **Two rules by change kind.** Disable, delete and sweep use the rule that one enabled account must stay. Every other lowering change uses the floor of two. A change that does not lower the count, or raises it, is never refused (Owner decision, 13 Nov 2026 (queue P19)).
-3. **Row lock and busy answer.** The guard locks the break-glass rows in one fixed order, the same for restore and setup finish. A lock timeout, setting breakGlassLockSeconds with default 5 shown in the settings resource, returns break-glass.busy as 409 and writes nothing. A sign-in takes no guard lock.
+3. **Row lock and busy answer.** The guard locks the break-glass rows in one fixed order, the same for restore. A lock timeout returns break-glass.busy as 409 and writes nothing. A sign-in takes no guard lock. The timeout is the installation setting breakGlassLockSeconds (whole seconds, default 5), declared in NEW file pkg/principal/breakglass_setting.go like `pkg/session/breakglass.go`. internal/cli/settings_api.go joins it into the declarations, and the settings resource in internal/api/server/settings.go shows its effective value and its source.
 4. **Restore check and swap.** The restore counts the staged data per scope before the swap. The swap then takes the same locks and counts again on the staged rows in its own transaction. If the count fails there, or the swap fails half way, the transaction rolls back and the live data stays. The restore of access tables follows the setting of the other change and never skips this count.
-5. **Atomic rotation.** Rotation inserts the new credential and ends the old one in one transaction. A failed insert rolls back. A second parallel rotation of the same account waits for the lock and then sees the new credential. An id that is not a break-glass account gives 404.
+5. **Atomic rotation.** Rotation is one transaction, in one new port method of the passkey port, not a call of AddPasskey and then RemovePasskey (internal/mfasvc/service.go:553 RemovePasskey is its own transaction, and a process stop between the two calls leaves the account with the old or both credentials but never an ended old one before a new one). The method is `RotatePasskey(ctx, personID, oldID string, next Passkey, e audit.Entry) error` on PasskeyStore in pkg/mfa/mfa.go. It locks the row of the person, inserts the new passkey, ends the old one and appends e in one transaction. The adapters are internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go. The service method RotatePasskey in internal/mfasvc/service.go calls it. A failed insert rolls back and the old credential stays. A second parallel rotation of the same account waits for the row lock and then sees the new credential. An id that is not a break-glass account gives 404. The conformance cases of the method (pkg/mfa/mfatest/passkeys.go) are written before any adapter implements it.
 6. **Fresh authentication.** Rotation, add and each guarded change need a fresh authentication in the one window.
 7. **Disable side effects.** Each disable writes an audit entry and notifies the other administrators. Re-enable runs the same checks as an add. Disable works in maintenance mode.
 
@@ -20,8 +20,7 @@ An unexported type breakGlassSet in pkg/principal. Only its constructor loads th
 
 - Two parallel disables read the same count. The row lock removes the race.
 - A restore of an old backup drops accounts. The restore check runs before the swap and again in the swap transaction.
-- A deadlock with restore or setup finish. One lock order removes it.
-- Other e2e steps fail at first setup. The shared fixture makes two accounts.
+- A deadlock with the restore swap. One lock order removes it.
 - An account expires by time and the count falls with no write. The list route computes the count at read time.
 
 ## Layers (defense in depth)
@@ -30,7 +29,7 @@ An unexported type breakGlassSet in pkg/principal. Only its constructor loads th
 | --- | --- | --- |
 | service | The service builds the set in the write transaction and returns the sentinel by change kind. | Disable the last two accounts in parallel. One request fails with 409. |
 | store adapter | The store checks the count and the fence in the same SQL transaction with row locks. | Call the store directly to delete the last enabled account. The store refuses. |
-| HTTP handler | The handler declares the action, requires a fresh authentication and maps each sentinel to 409. | Send a disable with a stale fresh step. The handler answers 403 before the service runs. |
+| HTTP handler | The handler declares the action, requires a fresh authentication and maps each sentinel to 409. | Send a disable with a stale fresh step to the break-glass route. The handler answers 403 before the service runs. The fresh step lives in the HTTP layer, so the test is in internal/api/server. |
 
 ## Diagrams
 
@@ -112,4 +111,3 @@ flowchart LR
 | Take the row locks on the break-glass set | The lock wait passes breakGlassLockSeconds. | The caller retries the same request. The request is safe to repeat. | No change is written and the live data is the same. |
 | Rotate: insert the new credential and end the old one | The insert fails or the process stops before commit. | The caller sends the rotation again. | The transaction rolls back and the old credential stays active. |
 | Restore swap with a second count | The count is below two, or the swap fails half way. | The operator restores a backup with at least two working accounts. | The transaction rolls back and the live data stays. |
-| First setup finish | Two finishes run together or the process stops during finish. | The administrator calls finish again after the add routes give two accounts. | Setup stays unfinished until the count is two. No half-finished setup exists. |
