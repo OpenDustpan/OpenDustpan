@@ -266,7 +266,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 
 	// Defense in depth: validate refuses a nil audit store first; the refusal
 	// recorder checks its dependencies too, so that no log refusal goes
-	// unrecorded when a new caller skips validate.
+	// unrecorded when a new caller skips validate. No input reaches this check
+	// past validate; TestDenialsRefusesNoAuditStore covers the denials layer.
 	limiter, refusals, err := cfg.denials()
 	if err != nil {
 		return nil, err
