@@ -69,7 +69,7 @@ For each such refusal, the server SHALL write one audit entry with a reason.
 - **THEN** the server refuses the chunk
 
 #### Scenario: Audit entry for a refusal
-- **WHEN** the server refuses a chunk for any reason of the log check, the size cap or the header check
+- **WHEN** the server refuses a chunk for any reason of the log check, the size cap, the header check or a body that cannot be read
 - **THEN** the server writes one audit entry with the action `runner.log.refused` and the reason, and no chunk bytes
 
 ### Requirement: Session caps
