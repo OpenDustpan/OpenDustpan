@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -158,7 +160,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers:     nil,
 		TempAdmins: nil,
-		Store:      st, Principals: st, Freshness: nil, Authorizer: authz,
+		Store:      st, Principals: st, Freshness: delegationFreshGuard(t), Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
@@ -178,6 +180,23 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	return &delegation{st: st, authz: authz, access: svc, tokens: tokens, principals: principals}
+}
+
+// errDelegationNoFreshStep is the refusal of the guard of delegationFreshGuard.
+var errDelegationNoFreshStep = errors.New("the delegation suite gives no fresh step")
+
+// delegationFreshGuard returns the fresh step guard of the setting
+// freshAuthEnabled off: it asks for no step.
+func delegationFreshGuard(t *testing.T) freshstep.Guard {
+	t.Helper()
+
+	g, err := freshstep.NewGuard(freshstep.PolicyFunc(func(context.Context) bool { return false }),
+		func(context.Context, string) error { return errDelegationNoFreshStep })
+	if err != nil {
+		t.Fatalf("fresh step guard: %v", err)
+	}
+
+	return g
 }
 
 // bootstrap is the bootstrap admin token: it holds every action.
