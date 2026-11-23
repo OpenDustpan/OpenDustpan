@@ -5,6 +5,8 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -19,6 +21,9 @@ const (
 	guidePage    = "docs/guides/private-registry.md"
 	guideHeading = "## Publish a module"
 )
+
+// errGuideModuleMissing means that the answer of a guide command does not name the module.
+var errGuideModuleMissing = errors.New("the answer does not name the module vpc")
 
 // guideShBlock matches one sh code block of the guide.
 var guideShBlock = regexp.MustCompile("(?s)```sh\n(.*?)```")
@@ -128,31 +133,50 @@ func sendGuideCommand(t *testing.T, env *e2e.Env, c guideCurl, upload string) st
 		body = string(moduleTarGz(t, "from the guide"))
 	}
 
-	if got := sub(c.header["Authorization"]); got != "token "+env.TokenA() {
+	headers := make(map[string]string, len(c.header))
+	for name, value := range c.header {
+		headers[name] = sub(value)
+	}
+
+	if got := headers["Authorization"]; got != "token "+env.TokenA() {
 		t.Fatalf("the authorization header of %q is not the token scheme", c.url)
 	}
 
-	resp, err := env.ServerAPIStatusKeyed(t.Context(), e2e.TypedRequest{
-		Token: env.TokenA(), Method: c.method, Path: path, ContentType: c.header["Content-Type"],
-		Body: body, IfMatch: "",
-	}, sub(c.header["Idempotency-Key"]))
-	if err != nil {
-		t.Fatalf("%s %s: %v", c.method, path, err)
+	// Send the headers of the guide as written: the credential scheme, the
+	// media type and the Idempotency-Key come from the command.
+	isUpload := strings.HasSuffix(path, "/uploads")
+	want := http.StatusOK
+
+	if isUpload {
+		want = http.StatusCreated
 	}
 
-	if !strings.HasSuffix(path, "/uploads") {
-		if resp.Status != http.StatusOK || (c.method == http.MethodGet && !strings.Contains(resp.Body, `"vpc"`)) {
-			t.Fatalf("%s %s = %d %s, want 200", c.method, path, resp.Status, resp.Body)
-		}
+	var answer string
 
+	env.APIStepWithHeaders(t.Context(), t, e2e.APIStepSpec{
+		Name:      c.method + " " + path,
+		Method:    c.method,
+		Path:      path,
+		Body:      body,
+		Want:      want,
+		UserAgent: "",
+		Scheme:    "token",
+		Check: func(got string) error {
+			answer = got
+
+			if !isUpload && c.method == http.MethodGet && !strings.Contains(got, `"vpc"`) {
+				return fmt.Errorf("answer %q: %w", got, errGuideModuleMissing)
+			}
+
+			return nil
+		},
+	}, headers)
+
+	if !isUpload {
 		return upload
 	}
 
-	if resp.Status != http.StatusCreated {
-		t.Fatalf("%s %s = %d %s, want 201", c.method, path, resp.Status, resp.Body)
-	}
-
-	return uploadToken(t, resp.Body)
+	return uploadToken(t, answer)
 }
 
 // uploadToken returns the upload token of an upload answer.
