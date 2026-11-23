@@ -323,7 +323,7 @@ func (s *Service) Create(
 		return trustrule.Rule{}, ErrSignInRequired
 	}
 
-	if err := s.requireFresh(ctx); err != nil {
+	if err := requireFresh(ctx, s.freshGuard); err != nil {
 		return trustrule.Rule{}, err
 	}
 
@@ -459,7 +459,7 @@ func (s *Service) Delete(
 		return ErrSignInRequired
 	}
 
-	if err := s.requireFresh(ctx); err != nil {
+	if err := requireFresh(ctx, s.freshGuard); err != nil {
 		return err
 	}
 
@@ -641,16 +641,18 @@ func (s *Service) bundleEntry(e audit.Entry, ns namespace.Name, id trustrule.Bun
 	return e
 }
 
-// requireFresh runs the fresh step guard for the session in ctx. The guard
-// asks for no step when its policy does not require one, and otherwise runs
-// checkFresh, which reads the sign-in from ctx and needs no subject.
+// requireFresh runs guard for the session in ctx. Each caller passes the one
+// guard of the service, so the rule writes and the bundle writes use the same
+// policy. The guard asks for no step when its policy does not require one, and
+// otherwise runs checkFresh, which reads the sign-in from ctx and needs no
+// subject.
 //
 // Defense in depth: the handler wraps the routes in a session check too, and
 // the service repeats it, so a new caller of the service cannot skip the
 // check when the handler changes. This guard does not rely on the handler or
 // on the store.
-func (s *Service) requireFresh(ctx context.Context) error {
-	return s.freshGuard.Require(ctx, "")
+func requireFresh(ctx context.Context, guard freshstep.Guard) error {
+	return guard.Require(ctx, "")
 }
 
 // checkFresh is the check of the fresh step guard. It returns nil when the
