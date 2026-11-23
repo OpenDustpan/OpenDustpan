@@ -8,7 +8,7 @@ Sweep work flows from durable operations through the runner protocol to the blob
 2. **Bounded streamed report.** The upload streams to the blob store under a staging key with the data key of the namespace. It checks line, record, tag, scope and byte caps, the header format and version, each record, and the header scope subset. A scope with complete false closes no finding. A cut stream, a cap breach or a second upload drops the staged blob.
 3. **Atomic guards.** One staged key for each session makes a second upload lose. Finish runs in one store transaction that checks the claim and the report state, so a double finish answers the stored result.
 4. **Idempotent finish.** Finish closes the session once. A finish with a lost claim answers 409.
-5. **Installation pool only.** The pool service checks that a pool with the sweep purpose has no namespace, at create and at update, and refuses a purpose change while operations of the old purpose are queued or claimed (Owner decision, 13 Nov 2026 (queue P14)).
+5. **Team pool with the sweep purpose.** The pool routes accept the sweep purpose on a namespace pool with the same rules as for the jobs purpose (Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)). The server has no installation pool. The purpose of a pool never changes (ADR 130 decision 3), so no guard for a purpose change exists. The host identity of a sweep pool has no write access (ADR 164 decisions 1 and 5).
 
 ## Structure
 
@@ -26,7 +26,7 @@ Unexported sweepClaimer struct, built only by NewSweepClaimer with the store, po
 | session auth | The handler checks the session proof, claim ownership and open session before it accepts a chunk or finish. | Send report chunks with a runner key proof and no session proof; the server answers bad-proof. |
 | purpose check | The claim transaction checks that the pool purpose matches the operation kind. | Poll a jobs pool for sweep work and a sweeps pool for job work; both get 204. |
 | report bound | The stream counts bytes, records, tags, line length and scopes and refuses over a cap. | Upload a line above 64 KiB, and a scope outside the target; the server stops the stream and fails the sweep. |
-| pool service | The service refuses a namespace pool with the sweep purpose before it stores the pool. | Create and update a namespace pool with the sweep purpose; each answers 422 and stores nothing. |
+| pool purpose | The pool routes accept only the purposes jobs and sweeps, and refuse any change of the purpose. | Create a pool with an unknown purpose and update a pool with another purpose; each is refused and changes nothing. |
 
 ## Diagrams
 
@@ -75,7 +75,7 @@ flowchart LR
  subgraph Server[Server]
  H[Runner protocol handler]
  C[Sweep claimer]
- P[Pool service]
+ P[Pool routes]
  end
  subgraph Store[Stores]
  D[Durable operations]
@@ -111,11 +111,11 @@ flowchart LR
 | Server to blob store | I | Tags in the report show names in plain text at rest. | boundary check | The handler reads the namespace from the claim, not from the request. | Send a foreign namespace in the body; the server ignores it. |
 | Server to blob store | I | Tags in the report show names in plain text at rest. | fail closed | A key lookup error fails the upload. | Fail the data key read; the upload ends failed with no blob. |
 | Server to blob store | I | Tags in the report show names in plain text at rest. | authorize at point of use | The blob write checks that the session claim belongs to the namespace of the key. | Use a session of another namespace to write the staged key; the server refuses. |
-| Pool service | E | A namespace pool gets the sweep purpose and sweep hosts hold job credentials. | boundary check | The pool service refuses a namespace pool with the sweep purpose at create and update. | Create and update a namespace pool with the sweep purpose; each answers 422. |
-| Pool service | E | A namespace pool gets the sweep purpose and sweep hosts hold job credentials. | fail closed | The claimer reads the purpose in the claim transaction and gives no work on a mismatch. | Poll a jobs pool for sweep work; the server answers 204. |
-| Pool service | E | A namespace pool gets the sweep purpose and sweep hosts hold job credentials. | authorize at point of use | The service checks the grant of the caller for the pool object. | Call create with no grant; the server answers 403. |
-| Pool service | E | A namespace pool gets the sweep purpose and sweep hosts hold job credentials. | limit | A purpose change is refused while operations of the old purpose wait. | Change the purpose with a queued operation; the server answers 422. |
-| Pool service | E | A namespace pool gets the sweep purpose and sweep hosts hold job credentials. | encode or contain | The purpose is parsed to a closed set of values and the store takes it only through placeholders. | Send a purpose value outside the set; the server answers 422 and stores nothing. |
+| Pool routes | E | A pool gets a purpose that its host identity does not fit, so a sweep runs with write access. | boundary check | The pool routes accept only the closed set of purposes jobs and sweeps. | Create a pool with the purpose scan; the server answers 400 with "purpose: use jobs or sweeps." and stores nothing. |
+| Pool routes | E | A pool gets a purpose that its host identity does not fit, so a sweep runs with write access. | fail closed | The claimer reads the purpose in the claim transaction and gives no work on a mismatch. | Poll a jobs pool for sweep work; the server answers 204. |
+| Pool routes | E | A pool gets a purpose that its host identity does not fit, so a sweep runs with write access. | authorize at point of use | The routes check the grant of the caller for the pool object. | Call create with no grant; the server answers 403. |
+| Pool routes | E | A pool gets a purpose that its host identity does not fit, so a sweep runs with write access. | limit | The purpose of a pool never changes, so a pool keeps one host identity role for its life. | Update a pool with another purpose; the server answers 409 and keeps the purpose. |
+| Pool routes | E | A pool gets a purpose that its host identity does not fit, so a sweep runs with write access. | encode or contain | The purpose is parsed to a closed set of values and the store takes it only through placeholders. | Send a purpose value outside the set; the server answers 400 and stores nothing. |
 | Runner host to server | R | A runner denies that it sent a report or finish. | authorize at point of use | The server records the finish with the claim and session identity in the sweep record. | Finish a sweep; the sweep record names the claim and the session. |
 | Runner host to server | R | A runner denies that it sent a report or finish. | boundary check | The handler takes the identity from the proof, not from the body. | Send a false identity in the body; the record names the proof identity. |
 | Runner host to server | R | A runner denies that it sent a report or finish. | fail closed | A request with no valid proof writes no record of success. | Finish with a bad proof; the sweep record is unchanged. |
