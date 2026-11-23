@@ -24,7 +24,7 @@ After this change:
 sequenceDiagram
 participant CLI as OpenTofu CLI
 participant TFE as internal/api/tfe Handler
-participant Store as pkg/store/postgres Store
+participant Store as internal/store/postgres Store
 CLI->>TFE: POST state version or lock request
 TFE->>Store: begin fenced transaction
 Store->>Store: check fence and write rows
@@ -37,7 +37,7 @@ Modules that the change touches, and their imports on main:
 ```mermaid
 flowchart LR
 P1[internal/api/tfe]
-P2[pkg/store/postgres]
+P2[internal/store/postgres]
 ```
 
 States on main in the touched packages:
