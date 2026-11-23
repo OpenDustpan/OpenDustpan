@@ -6,6 +6,8 @@ Changed by:
 
 - ADR 382 extends decision 3: a repeated domain refusal writes its audit
   entry through the shared denial limiter, with the count of the refusals.
+- ADR 396 extends decision 5: a refusal that the CLI makes before it sends a request
+  has no audit entry. The server audits each call that reaches it.
 
 ## Context
 

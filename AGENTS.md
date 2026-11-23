@@ -197,7 +197,7 @@ The steps below are the minimum. They are not complete. The examples in each ste
    - Network: check the resolved IP address when the connection opens.
 3. Limit the effect. Examples: the smallest permission, a size limit, a timeout, a sandbox for untrusted work.
 4. Check authorization at the point of use, for the object.
-5. Fail closed. On an error or an unknown value, deny. Write the denial to the audit log.
+5. Fail closed. On an error or an unknown value, deny. Write the denial to the audit log. A refusal that the CLI makes before it sends any request is a usage error and has no audit entry. The server audits each call that reaches it (owner, 2026-11-23).
 
 Treat everything from outside the process as untrusted. Examples: HTTP requests, tool state files, webhooks, Git host data, runner output, configuration, environment variables, restored backups, and database rows from another version.
 
