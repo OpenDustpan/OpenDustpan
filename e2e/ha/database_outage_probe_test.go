@@ -139,6 +139,103 @@ func TestDatabaseOutageProbeRestore(t *testing.T) {
 	}
 }
 
+// probePartFake answers the state version write with writeStatus and the lock
+// request with lockStatus, each with Retry-After 5.
+type probePartFake struct {
+	writeStatus int
+	lockStatus  int
+}
+
+func (i probePartFake) Name() string {
+	return "i0"
+}
+
+func (i probePartFake) Send(_ context.Context, req ha.InstanceRequest) (ha.InstanceResponse, error) {
+	status := i.writeStatus
+	if strings.HasSuffix(req.Path, "/actions/lock") {
+		status = i.lockStatus
+	}
+
+	return ha.InstanceResponse{Status: status, Header: http.Header{"Retry-After": {"5"}}, Body: ""}, nil
+}
+
+// TestDatabaseOutageProbeCapabilities proves that the capability probe names
+// the missing server part when a write or a lock during the stop does not
+// answer 503, and accepts a server that has both parts.
+func TestDatabaseOutageProbeCapabilities(t *testing.T) {
+	t.Parallel()
+
+	matrix := []ha.CLIVersion{{Tool: "pulumi", Version: "3.262.0"}}
+	write := ha.InstanceRequest{
+		Method: http.MethodPost, Path: "/api/v2/workspaces/ws-outage/state-versions", Header: nil, Body: "",
+	}
+	lock := ha.InstanceRequest{
+		Method: http.MethodPost, Path: "/api/v2/workspaces/ws-outage/actions/lock", Header: nil, Body: "",
+	}
+
+	tests := []struct {
+		name        string
+		writeStatus int
+		lockStatus  int
+		want        string
+	}{
+		{
+			name: "both parts", writeStatus: http.StatusServiceUnavailable,
+			lockStatus: http.StatusServiceUnavailable, want: "",
+		},
+		{
+			name: "no 503 shape", writeStatus: http.StatusInternalServerError,
+			lockStatus: http.StatusServiceUnavailable,
+			want:       "missing part database-outage-503-shape",
+		},
+		{
+			name: "no atomic state locks", writeStatus: http.StatusServiceUnavailable,
+			lockStatus: http.StatusInternalServerError,
+			want:       "missing part database-outage-atomic-state-locks",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			proxy := &probeProxyFake{stops: 0, starts: 0}
+			instance := probePartFake{writeStatus: tt.writeStatus, lockStatus: tt.lockStatus}
+
+			probe, err := ha.NewDatabaseOutageProbe(proxy, []ha.Instance{instance}, matrix)
+			if err != nil {
+				t.Fatalf("NewDatabaseOutageProbe: %v", err)
+			}
+
+			err = probe.ProbeCapabilities(t.Context(), t, write, lock, "5")
+
+			if proxy.stops != 1 {
+				t.Errorf("ProbeCapabilities stopped the database %d times, want 1", proxy.stops)
+			}
+
+			checkPartError(t, err, tt.want)
+		})
+	}
+}
+
+// checkPartError checks that err is nil when want is empty, and that it
+// contains want otherwise.
+func checkPartError(t *testing.T, err error, want string) {
+	t.Helper()
+
+	if want == "" {
+		if err != nil {
+			t.Errorf("ProbeCapabilities: %v", err)
+		}
+
+		return
+	}
+
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("ProbeCapabilities error is %v, want it to contain %q", err, want)
+	}
+}
+
 // TestNewDatabaseOutageProbe proves that the fixture refuses an empty CLI
 // matrix and accepts a real one.
 func TestNewDatabaseOutageProbe(t *testing.T) {

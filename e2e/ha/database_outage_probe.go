@@ -27,7 +27,25 @@ var (
 	errBadShortWindow = errors.New("short outage window is above half the smallest retry window")
 	errNotUnavailable = errors.New("write did not answer 503")
 	errRetryAfter     = errors.New("write answered with the wrong Retry-After")
+	errMissingPart    = errors.New("the server does not have a part that the outage probe needs")
 )
+
+// The server parts that the outage probe needs. The probe fails, and does not
+// skip, when one is missing, and the failure names the part.
+const (
+	// Part503Shape answers each write with 503 and Retry-After while the
+	// database is down.
+	Part503Shape = "database-outage-503-shape"
+	// PartAtomicStateLocks refuses a workspace lock with 503 while the
+	// database is down, so that no lock stays without its state write.
+	PartAtomicStateLocks = "database-outage-atomic-state-locks"
+)
+
+// MissingPart returns the error of a capability probe that names the missing
+// server part.
+func MissingPart(part string, err error) error {
+	return fmt.Errorf("%w: missing part %s: %w", errMissingPart, part, err)
+}
 
 // DatabaseProxy stops and starts the database that the instances use.
 type DatabaseProxy interface {
@@ -123,6 +141,43 @@ func (p *DatabaseOutageProbe) Stop(
 	if err := p.CheckWrites(ctx, write, retryAfter); err != nil {
 		tb.Fatalf("check that the database stopped: %v", err)
 	}
+}
+
+// ProbeCapabilities stops the database and checks the server parts that the
+// probe needs: write must answer 503 with retryAfter on every instance
+// (Part503Shape), and lock must answer the same (PartAtomicStateLocks). A
+// wrong answer gives an error that names the missing part. The caller
+// restores the database with Restore, also when the probe fails.
+func (p *DatabaseOutageProbe) ProbeCapabilities(
+	ctx context.Context, tb testing.TB, write, lock InstanceRequest, retryAfter string,
+) error {
+	tb.Helper()
+
+	p.proxy.Stop(tb)
+
+	ctx, cancel := context.WithTimeout(ctx, p.wait)
+	defer cancel()
+
+	checks := []struct {
+		part string
+		req  InstanceRequest
+	}{
+		{part: Part503Shape, req: write},
+		{part: PartAtomicStateLocks, req: lock},
+	}
+
+	for _, check := range checks {
+		err := p.CheckWrites(ctx, check.req, retryAfter)
+		if errors.Is(err, errNotUnavailable) || errors.Is(err, errRetryAfter) {
+			return MissingPart(check.part, err)
+		}
+
+		if err != nil {
+			return fmt.Errorf("probe part %s: %w", check.part, err)
+		}
+	}
+
+	return nil
 }
 
 // Restore starts the database again and waits until every instance answers

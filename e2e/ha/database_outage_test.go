@@ -5,6 +5,7 @@ package ha_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -33,6 +34,8 @@ const (
 	outageSecretKey    = "outageSecret"
 	outageSecretValue  = "outage-secret-value" // trufflehog:ignore fake value of a test config secret
 )
+
+var errOutageLockStays = errors.New("the workspace stays locked after a lock during the outage")
 
 // outageSetup holds the real installation that the probe drives.
 type outageSetup struct {
@@ -369,7 +372,29 @@ func outageVersions(ctx context.Context, t *testing.T, env *e2e.Env, workspace s
 	return len(doc.Data)
 }
 
+// outageLockRequest locks the workspace with id through the proxy with an
+// access token.
+func outageLockRequest(env *e2e.Env, id string) ha.InstanceRequest {
+	return ha.InstanceRequest{
+		Method: http.MethodPost,
+		Path:   "/api/v2/workspaces/" + id + "/actions/lock",
+		Header: http.Header{
+			"Authorization": {"Bearer " + env.TokenA()},
+			"Content-Type":  {"application/vnd.api+json"},
+		},
+		Body: `{"reason":"database outage probe"}`,
+	}
+}
+
 func checkOutageUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, workspace string) {
+	t.Helper()
+
+	if outageLocked(ctx, t, env, workspace) {
+		t.Errorf("workspace %s stays locked after the outage", workspace)
+	}
+}
+
+func outageLocked(ctx context.Context, t *testing.T, env *e2e.Env, workspace string) bool {
 	t.Helper()
 
 	id := env.WorkspaceIDByName(ctx, t, workspace)
@@ -387,9 +412,7 @@ func checkOutageUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, worksp
 		t.Fatalf("decode workspace %s: %v (%s)", workspace, err, body)
 	}
 
-	if doc.Data.Attributes.Locked {
-		t.Errorf("workspace %s stays locked after the outage", workspace)
-	}
+	return doc.Data.Attributes.Locked
 }
 
 func checkOutageRun(t *testing.T, what string, run *outageRun) {
@@ -447,7 +470,23 @@ func cancelOutageUpdate(ctx context.Context, t *testing.T, s *outageSetup, proje
 	project.pulumi.run(ctx, t, "cancel", "--yes", "--stack", project.stack)
 }
 
-func recordOutageRetries(t *testing.T, s *outageSetup, step string, report *ha.RetryReport, writesAt time.Time) {
+// outageWritesAt returns the earliest time of the first state write of the
+// CLI that touched marker: the marker time plus the wait of its resource. A
+// refused write before it, such as pulumi cancel, is not a retry of the run.
+func outageWritesAt(t *testing.T, marker string) time.Time {
+	t.Helper()
+
+	info, err := os.Stat(marker)
+	if err != nil {
+		t.Fatalf("read the time of %s: %v", marker, err)
+	}
+
+	return info.ModTime().Add(outageWork * time.Second)
+}
+
+func recordOutageRetries(
+	t *testing.T, s *outageSetup, step string, report *ha.RetryReport, writesAt map[string]time.Time,
+) {
 	t.Helper()
 
 	entries := s.env.Recorder.Entries()
@@ -456,7 +495,7 @@ func recordOutageRetries(t *testing.T, s *outageSetup, step string, report *ha.R
 		entry := &entries[i]
 
 		if entry.Step != step || entry.Status != http.StatusServiceUnavailable ||
-			entry.Method == http.MethodGet || entry.At.Before(writesAt) {
+			entry.Method == http.MethodGet {
 			continue
 		}
 
@@ -473,7 +512,7 @@ func recordOutageRetries(t *testing.T, s *outageSetup, step string, report *ha.R
 		}
 
 		version, found := s.reportKey[name]
-		if !found {
+		if !found || entry.At.Before(writesAt[name]) {
 			continue
 		}
 
@@ -524,10 +563,13 @@ func checkOutageNoRestart(t *testing.T, cluster *e2e.HACluster, before [][]strin
 	}
 }
 
-// checkOutageStop stops the database, checks that a write cannot reach it and
-// restores it, before any CLI run. A proxy that cannot stop the database ends
-// the step with no CLI run.
-func checkOutageStop(ctx context.Context, t *testing.T, s *outageSetup, write ha.InstanceRequest) {
+// checkOutageStop stops the database, probes the server parts that the test
+// needs and restores the database, before any CLI run. A proxy that cannot
+// stop the database, or a missing part, fails the test with no CLI run. The
+// failure names the missing part.
+func checkOutageStop(
+	ctx context.Context, t *testing.T, s *outageSetup, project outageProject, write ha.InstanceRequest,
+) {
 	t.Helper()
 
 	restored := false
@@ -538,9 +580,18 @@ func checkOutageStop(ctx context.Context, t *testing.T, s *outageSetup, write ha
 		}
 	})
 
-	s.probe.Stop(ctx, t, write, outageRetryAfter)
+	lock := outageLockRequest(s.env, s.env.WorkspaceIDByName(ctx, t, project.workspace))
+	if err := s.probe.ProbeCapabilities(ctx, t, write, lock, outageRetryAfter); err != nil {
+		t.Fatalf("probe the server parts: %v", err)
+	}
+
 	s.probe.Restore(ctx, t)
 	restored = true
+
+	if outageLocked(ctx, t, s.env, project.workspace) {
+		t.Fatalf("probe the server parts: %v", ha.MissingPart(ha.PartAtomicStateLocks,
+			fmt.Errorf("workspace %s: %w", project.workspace, errOutageLockStays)))
+	}
 }
 
 func runLongOutage(t *testing.T, s *outageSetup) *ha.RetryReport {
@@ -555,12 +606,15 @@ func runLongOutage(t *testing.T, s *outageSetup) *ha.RetryReport {
 	s.env.Recorder.SetStep("long database outage")
 
 	write := outageWriteRequest(s.env)
-	checkOutageStop(ctx, t, s, write)
+	checkOutageStop(ctx, t, s, project, write)
 
 	runs := project.startBoth(ctx, t)
 	waitOutageMarkers(ctx, t, project.pulumiMarker, project.tofuMarker)
 
-	writesAt := time.Now().Add(outageWork * time.Second)
+	writesAt := map[string]time.Time{
+		e2e.ToolPulumi: outageWritesAt(t, project.pulumiMarker),
+		e2e.ToolTofu:   outageWritesAt(t, project.tofuMarker),
+	}
 	restored := false
 
 	t.Cleanup(func() {
@@ -658,7 +712,7 @@ func TestDatabaseOutageShortOutage(t *testing.T) {
 	s.env.Recorder.SetStep("short database outage")
 
 	write := outageWriteRequest(s.env)
-	checkOutageStop(ctx, t, s, write)
+	checkOutageStop(ctx, t, s, project, write)
 
 	runs := project.startBoth(ctx, t)
 	waitOutageMarkers(ctx, t, project.pulumiMarker, project.tofuMarker)
@@ -703,8 +757,9 @@ func TestDatabaseOutageShortOutage(t *testing.T) {
 		}
 	}
 
-	if got := outageVersions(ctx, t, s.env, project.workspace); got <= before {
-		t.Errorf("%d state versions after the short outage, want above %d", got, before)
+	if got, want := outageVersions(ctx, t, s.env, project.workspace), before+1; got != want {
+		t.Errorf("%d state versions after the short outage, want %d (%d before the apply, plus 1)",
+			got, want, before)
 	}
 
 	checkOutageNoChanges(ctx, t, s, project)

@@ -48,8 +48,11 @@ Run the two outage tests with PostgreSQL and at least two instances. Set
 `DUSTPAN_TEST_POSTGRES_URL` to the URL of your PostgreSQL database:
 
 ```sh
-E2E_INSTANCES=2 go test -tags e2e -run TestDatabaseOutage ./e2e/ha/
+DUSTPAN_TEST_POSTGRES_URL=postgres://localhost:5432/dustpan_e2e E2E_INSTANCES=2 \
+  go test -tags e2e -run TestDatabaseOutage ./e2e/ha/
 ```
+
+The run downloads the Pulumi and OpenTofu CLIs of the suite matrix.
 
 The probe runs on Linux only. It skips when `E2E_INSTANCES` is below 2, and
 when `DUSTPAN_TEST_POSTGRES_URL` has no value.
