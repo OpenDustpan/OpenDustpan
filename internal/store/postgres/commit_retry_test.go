@@ -1,10 +1,13 @@
 package postgres_test
 
 import (
+	"errors"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/internal/store/postgres"
+	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 func TestRetryWithSameIdentityMakesNoDuplicate(t *testing.T) {
@@ -26,20 +29,27 @@ func TestRetryWithSameIdentityMakesNoDuplicate(t *testing.T) {
 		t.Fatalf("CreateStateVersion: %v", createErr)
 	}
 
-	commit := postgres.NewStateCommitRetryForTest(s, fence)
-	if finErr := commit.FinalizeStateVersion(ctx, sv); finErr != nil {
+	if finErr := s.FinalizeStateVersion(ctx, sv, fence); finErr != nil {
 		t.Fatalf("FinalizeStateVersion: %v", finErr)
 	}
-	if retryErr := commit.FinalizeStateVersion(ctx, sv); retryErr != nil {
+	if retryErr := s.FinalizeStateVersion(ctx, sv, fence); retryErr != nil {
 		t.Fatalf("retry FinalizeStateVersion: %v", retryErr)
+	}
+
+	// A hostile finalize names the committed version ID with other content.
+	hostile := sv
+	hostile.Content = blob.Key("states/hostile")
+	hostile.MD5 = [16]byte{9, 9, 9}
+	if hostileErr := s.FinalizeStateVersion(ctx, hostile, fence); !errors.Is(hostileErr, workspace.ErrUploadDenied) {
+		t.Fatalf("hostile FinalizeStateVersion = %v, want ErrUploadDenied", hostileErr)
 	}
 
 	cur, err := s.CurrentStateVersion(ctx, ws.ID)
 	if err != nil {
 		t.Fatalf("CurrentStateVersion: %v", err)
 	}
-	if cur.ID != sv.ID {
-		t.Fatalf("current state version = %s, want %s", cur.ID, sv.ID)
+	if cur.ID != sv.ID || cur.Content != sv.Content || cur.MD5 != sv.MD5 {
+		t.Fatalf("current state version = %s (%s), want %s (%s)", cur.ID, cur.Content, sv.ID, sv.Content)
 	}
 
 	var count int

@@ -192,7 +192,7 @@ func (s *Store) ReleaseUnfenced(
 			return switchErr
 		}
 
-		return saveWorkspaceRow(ctx, unitStateTx{q: q, logger: s.logger, retryFinalize: false}, w)
+		return saveWorkspaceRow(ctx, unitStateTx{q: q, logger: s.logger}, w)
 	})
 }
 
@@ -202,7 +202,7 @@ func (s *Store) SaveReleased(
 	ctx context.Context, w workspace.Workspace, fence namespace.Fence, e audit.Entry,
 ) error {
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		return saveWorkspaceRow(ctx, unitStateTx{q: q, logger: s.logger, retryFinalize: false}, w)
+		return saveWorkspaceRow(ctx, unitStateTx{q: q, logger: s.logger}, w)
 	})
 }
 
@@ -210,7 +210,7 @@ func (s *Store) SaveReleased(
 // revision. The inventory entry moves with the write in the same transaction.
 func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return saveWorkspaceRow(ctx, unitStateTx{q: q, logger: s.logger, retryFinalize: false}, w)
+		return saveWorkspaceRow(ctx, unitStateTx{q: q, logger: s.logger}, w)
 	})
 }
 
@@ -719,7 +719,7 @@ func (s *Store) FenceAndUnlock(
 	}
 
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		return fenceAndUnlockInTx(ctx, unitStateTx{q: q, logger: s.logger, retryFinalize: false}, w, row, expect)
+		return fenceAndUnlockInTx(ctx, unitStateTx{q: q, logger: s.logger}, w, row, expect)
 	})
 }
 
@@ -881,8 +881,8 @@ func finalizeFenceRow(ctx context.Context, q *db.Queries, row codec.StateVersion
 }
 
 // finalizeInTx runs the finalize checks and writes in one transaction, holding
-// the workspace row FOR UPDATE throughout. When the transaction allows a
-// repeated finalize, an already committed version reports success and writes
+// the workspace row FOR UPDATE throughout. A repeated finalize of a version
+// that already committed with the same identity reports success and writes
 // nothing.
 func finalizeInTx(
 	ctx context.Context, tx unitStateTx, sv workspace.StateVersion, row codec.StateVersionRow,
@@ -950,6 +950,11 @@ func checkFinalizeGuards(
 
 // checkFinalizePendingOrDone reports done when a finalize that already
 // committed repeats, and ErrUploadDenied unless the stored version is pending.
+//
+// Defense in depth: the workspace service detects a retry of the same upload
+// too, before it calls the store; this check stays so that a retry that
+// reaches the store by another path commits no duplicate, and it does not
+// rely on the service check.
 func checkFinalizePendingOrDone(
 	ctx context.Context, tx unitStateTx, row codec.StateVersionRow, wrow db.Workspace,
 ) (bool, error) {
@@ -958,7 +963,7 @@ func checkFinalizePendingOrDone(
 		return false, nil
 	}
 
-	if !tx.retryFinalize || !errors.Is(pendingErr, workspace.ErrUploadDenied) {
+	if !errors.Is(pendingErr, workspace.ErrUploadDenied) {
 		return false, pendingErr
 	}
 

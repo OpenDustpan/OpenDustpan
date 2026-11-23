@@ -41,6 +41,50 @@ func TestUnlockRollsBackOnOutage(t *testing.T) {
 	}
 }
 
+func TestUnlockRetryWithSameLockIdentityReleases(t *testing.T) {
+	t.Parallel()
+
+	base := outageBase(t)
+	schemaURL := pgtest.MigratedURL(t, base)
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(s.Close)
+
+	ctx := t.Context()
+	ws, fence := seedLockedWorkspace(t, s)
+	release := withTestRelease(ws, time.UnixMilli(1_700_000_200_000).UTC())
+
+	breakWorkspaceWrite(t, s, "break_unlock_retry")
+
+	err = s.SaveWorkspace(ctx, release, fence)
+	if !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("SaveWorkspace release = %v, want namespace.ErrUnavailable", err)
+	}
+
+	// The database comes back: the outage trigger goes away.
+	const restore = `DROP TRIGGER break_unlock_retry ON workspaces`
+	if _, dropErr := postgres.Pool(s).Exec(ctx, restore); dropErr != nil {
+		t.Fatalf("drop outage trigger: %v", dropErr)
+	}
+
+	if retryErr := s.SaveWorkspace(ctx, release, fence); retryErr != nil {
+		t.Fatalf("retry SaveWorkspace release: %v", retryErr)
+	}
+
+	got, err := s.GetWorkspaceByID(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("GetWorkspaceByID: %v", err)
+	}
+	if got.Lock.Locked() {
+		t.Fatalf("lock = %+v, want unlocked", got.Lock)
+	}
+	if got.LastRelease.LockID != ws.Lock.ID || got.LastRelease.Holder != ws.Lock.Holder {
+		t.Fatalf("last release = %+v, want %s held by %s", got.LastRelease, ws.Lock.ID, ws.Lock.Holder)
+	}
+}
+
 func TestUnlock(t *testing.T) {
 	t.Parallel()
 

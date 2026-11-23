@@ -62,12 +62,10 @@ type unitStateWrite struct {
 }
 
 // unitStateTx carries the queries and the logger of a write of unit_state
-// through the helpers of the state write. retryFinalize lets a finalize report
-// success when the version already committed, for a retry after a lost reply.
+// through the helpers of the state write.
 type unitStateTx struct {
-	q             *db.Queries
-	logger        *slog.Logger
-	retryFinalize bool
+	q      *db.Queries
+	logger *slog.Logger
 }
 
 // publishUnitState records the write of w in unit_state. It is the only writer

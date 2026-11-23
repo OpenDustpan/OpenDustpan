@@ -62,6 +62,54 @@ func TestStateCommitRollsBackOnOutage(t *testing.T) {
 	}
 }
 
+func TestStateCommitOutageKeepsPriorState(t *testing.T) {
+	t.Parallel()
+
+	base := outageBase(t)
+	schemaURL := pgtest.MigratedURL(t, base)
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(s.Close)
+
+	ctx := t.Context()
+	ws, fence := seedStateCommitWorkspace(t, s)
+
+	prior := pendingStateVersion(ws)
+	if createErr := s.CreateStateVersion(ctx, prior, fence, 10); createErr != nil {
+		t.Fatalf("CreateStateVersion prior: %v", createErr)
+	}
+	if finErr := s.FinalizeStateVersion(ctx, prior, fence); finErr != nil {
+		t.Fatalf("FinalizeStateVersion prior: %v", finErr)
+	}
+
+	next := pendingStateVersion(ws)
+	next.Serial = prior.Serial + 1
+	next.Content = blob.Key("states/next")
+	next.MD5 = [16]byte{4, 5, 6}
+	if createErr := s.CreateStateVersion(ctx, next, fence, 10); createErr != nil {
+		t.Fatalf("CreateStateVersion next: %v", createErr)
+	}
+
+	breakStateCommit(t, s)
+
+	err = s.FinalizeStateVersion(ctx, next, fence)
+	if !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("FinalizeStateVersion next = %v, want namespace.ErrUnavailable", err)
+	}
+
+	// The next plan reads the current state version: it must be the prior one.
+	cur, curErr := s.CurrentStateVersion(ctx, ws.ID)
+	if curErr != nil {
+		t.Fatalf("CurrentStateVersion: %v", curErr)
+	}
+	if cur.ID != prior.ID || cur.Serial != prior.Serial || cur.Content != prior.Content {
+		t.Fatalf("current state version = %s serial %d (%s), want %s serial %d (%s)",
+			cur.ID, cur.Serial, cur.Content, prior.ID, prior.Serial, prior.Content)
+	}
+}
+
 func TestStateCommit(t *testing.T) {
 	t.Parallel()
 

@@ -13,10 +13,6 @@ import (
 type stateCommit struct {
 	store *Store
 	fence namespace.Fence
-	// retryFinalize lets a repeated finalize report the result that already
-	// committed. Without it, a finalize of a version that is not pending is
-	// refused as before.
-	retryFinalize bool
 }
 
 // newStateCommit builds the unexported transaction guard for state version
@@ -24,7 +20,7 @@ type stateCommit struct {
 // transaction. Lock writes do not use it: they go through SaveWorkspace in
 // one fenced transaction.
 func newStateCommit(store *Store, fence namespace.Fence) stateCommit {
-	return stateCommit{store: store, fence: fence, retryFinalize: false}
+	return stateCommit{store: store, fence: fence}
 }
 
 func (c stateCommit) FinalizeStateVersion(ctx context.Context, sv workspace.StateVersion) error {
@@ -35,12 +31,6 @@ func (c stateCommit) FinalizeStateVersionExpecting(
 	ctx context.Context, sv workspace.StateVersion, expect workspace.StateVersionID,
 ) error {
 	return c.commitFinalize(ctx, sv, &expect)
-}
-
-// withRetry returns the guard with the idempotent retry of a finalize.
-func (c stateCommit) withRetry() stateCommit {
-	c.retryFinalize = true
-	return c
 }
 
 // commitFinalize finalizes sv in one fenced transaction, with the expected
@@ -54,12 +44,6 @@ func (c stateCommit) commitFinalize(
 	}
 
 	return c.store.inFencedTx(ctx, c.fence, func(q *db.Queries) error {
-		return finalizeInTx(
-			ctx,
-			unitStateTx{q: q, logger: c.store.logger, retryFinalize: c.retryFinalize},
-			sv,
-			row,
-			expect,
-		)
+		return finalizeInTx(ctx, unitStateTx{q: q, logger: c.store.logger}, sv, row, expect)
 	})
 }
