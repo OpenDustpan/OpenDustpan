@@ -30,13 +30,13 @@ Evidence for the claims above:
 ## What Changes
 
 - NEW: one built-in service principal for each housekeeping purpose, made at the install, with the source `builtin`.
-- NEW: the install step writes the grants of the housekeeping principals that act on the installation as stored grants on `@server`, with the install as the creator and the install time. A role for each purpose holds only the actions that the purpose needs. The role name and the exact actions of each purpose are in the table "Roles of the housekeeping principals" of the design document, and the constants, descriptions and action lists are NEW in `pkg/access/roles.go`.
+- NEW: the grants of the housekeeping principals that act on the installation are stored grants on `@server`. The follow-up change `housekeeping-install-grants-audit` owns their install time, their creator and their audit entry: its install step writes them, with the server as the creator and one audit entry for each grant. This part defines the roles and the principals. A role for each purpose holds only the actions that the purpose needs. The role name and the exact actions of each purpose are in the table "Roles of the housekeeping principals" of the design document, and the constants, descriptions and action lists are NEW in `pkg/access/roles.go`.
 - NEW: each namespace creation writes one stored grant on the new namespace for each of the five roles that act inside namespaces (`housekeeping-agent-run-reaper`, `housekeeping-history-retention`, `housekeeping-issuer-rotation`, `housekeeping-job-reconcile`, `housekeeping-saved-view-cleanup`), in the same transaction as the namespace, with the server as the creator and the creation time (owner, 2026-11-22). Each grant has its own audit entry in the chain of the new namespace.
 - NEW: the purpose `agent-reaper` holds two roles, so that no role granted on `@server` holds a namespace action (owner, 2026-11-23, "Split the role"): the installation role `housekeeping-agent-reveal-sweep` holds only `server:sweep-agent-reveals` and is granted on `@server` at the install, and the namespace role `housekeeping-agent-run-reaper` holds only `namespace:manage-agent-runs` and is granted on each namespace at its creation. A revoke of the namespace grant then denies the action on that namespace.
 - NEW: seven actions. Six narrow actions of the operator family, one for each sweep that has no action on main: `server:sweep-artifacts`, `server:sweep-blobs`, `server:sweep-checkpoints`, `server:prune-name-locks`, `server:expire-temporary-administrators` and `server:sweep-agent-reveals`. One action `job:reconcile`, which the job service checks for the continuation of a job (owner, 2026-11-22). They go in `pkg/identity/identity.go` and in the `families` map of `pkg/access/access.go`.
 - NEW: the classification of `unit:redact` and `namespace:manage-agent-runs` in the `families` map as `FamilyData`. Both are in `pkg/identity/identity.go` and not in the map on main.
 - NEW: the `source` filter of `GET /api/server/principals` and the `builtin` source. The other routes exist on main.
-- NEW: a portable restore clears the seeded principals and grants of the new baseline before it loads the backup, so the restored installation has the rows of the backup.
+- NEW: a portable restore clears the seeded principals (and any grants of the live installation) of the new baseline before it loads the backup, so the restored installation has the rows of the backup.
 - Test side only: a test that the revoke of the namespace grant of `housekeeping-agent-run-reaper` denies `namespace:manage-agent-runs` on that namespace, a guard test that no role granted on `@server` holds a namespace action, a correction of the comment in `internal/api/server/review_test.go`, and the shared suites of principals, namespace principals and access expect the seeded rows in their totals, page orders and review counts, and the five grants of each created namespace.
 - Update `GLOSSARY.md`: add "Housekeeping principal".
 
@@ -111,7 +111,7 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 - Changed by: ADR 325 changes decisions 1, 5 and 6; ADR 326 extends decision 1; ADR 362 changes decision 5. Chain to the end: ADR 325, ADR 326, ADR 362, ADR 363.
 - Current rule: this ADR, with ADR 325, 326, 362.
 - Quote: "Until the first tag, a pull request changes the schema by an edit of the baseline of each dialect, in place."
-- Effect: The install grants and the `builtin` source are baseline edits. No migration code.
+- Effect: The `builtin` source and the principal rows are baseline edits. The install grants are written by the install step of `housekeeping-install-grants-audit`. No migration code.
 - Conflict: none.
 
 ## Open questions
@@ -126,7 +126,7 @@ Questions considered and answered:
 - Which purposes get a principal? The eleven purposes of the design document ("Purposes on main"). Task 0.1 checked the list on main on 17 November 2026.
 - What happens to the seeded rows on a restore? The stage deletes them before it loads the backup, as it does for the installation row and the two policy rows; the backup holds its own rows. The existing step in `internal/store/sqlite/backup_stage_portable.go` and `internal/store/postgres/backup_stage_portable.go` is the precedent. Design decision 5.
 - Does a housekeeping principal belong to a namespace? No. It is a principal of the installation. Its grants name the objects that its purpose touches.
-- Who is the creator of the install grants? The install, recorded as the creator with the install time, as ADR 338 decision 1 did for the namespace grant. The creator of a namespace grant is the server, and the audit entry of the grant names the person who created the namespace.
+- Who is the creator of the install grants, and when are they written? The follow-up change `housekeeping-install-grants-audit` owns this: its install step writes them with the server as the creator, the install time and one audit entry for each grant, as ADR 338 decision 1 did for the namespace grant. The creator of a namespace grant is the server, and the audit entry of the grant names the person who created the namespace.
 - What about the existing namespaces? No installation exists, so no migration (ADR 322).
 - Are `unit:redact` and `namespace:manage-agent-runs` classified? No, on main (`rg` check in "What main already does"). Task 2.1 classifies them as `FamilyData`, which Q1 no longer puts in doubt: the roles hold them through grants on namespaces.
 

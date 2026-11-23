@@ -2,11 +2,11 @@
 
 ### Requirement: One principal for each housekeeping purpose
 
-The server SHALL make one built-in service principal for each housekeeping purpose at the install, and SHALL write its grants as stored grants with the install as the creator and the install time.
+The server SHALL make one built-in service principal for each housekeeping purpose at the install. The stored grants of these principals, their creator, their install time and their audit entries are the requirement "The install records its grants" of the change `housekeeping-install-grants-audit`.
 
 #### Scenario: Listed after the install
 - **WHEN** an operator lists the principals of a new installation
-- **THEN** each housekeeping purpose has one principal of kind `service` and source `builtin`, and each has stored grants with a creator and a time
+- **THEN** each housekeeping purpose has one principal of kind `service` and source `builtin`, and each has its stored grants
 
 ### Requirement: Each namespace gets the grants of the housekeeping principals that act inside it
 
