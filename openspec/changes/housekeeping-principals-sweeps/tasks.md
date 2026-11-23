@@ -11,7 +11,7 @@ Order: part 1 (`housekeeping-principals-install`) is on main first. It makes the
 - [ ] 1.1 SECURITY. Each sweep is attributed. Test file: NEW `pkg/job/housekeeping_attribution_test.go`. Check: NEW test `TestEachSweepIsAttributed` fails on main.
 - [ ] 1.2 SECURITY. A revoke stops only its sweep. Test file: NEW `pkg/job/housekeeping_revoke_test.go`. Check: NEW test `TestRevokeStopsOnlyItsSweep` fails on main.
 
-- [ ] 1.3 SECURITY. The reconcile holds no start action, and the namespace purposes work with the reach setting `false`. Test files: NEW `pkg/job/housekeeping_reconcile_test.go` (`TestReconcileHoldsNoStartAction`) and NEW `pkg/job/housekeeping_reach_test.go` (`TestNamespacePurposesWorkWithoutInstallationReach`). Check: both fail on main.
+- [ ] 1.3 SECURITY. The reconcile holds no start action, and the namespace purposes work through their stored grants on the namespace. The test runs in the current mode (the setting `access.installationGrantsReachNamespaces` does not exist on main); the run with the setting `false` is a task of the change `installation-grants-reach-namespaces-setting`. Test files: NEW `pkg/job/housekeeping_reconcile_test.go` (`TestReconcileHoldsNoStartAction`) and NEW `pkg/job/housekeeping_reach_test.go` (`TestNamespacePurposesWorkWithoutInstallationReach`). Check: both fail on main.
 
 ## 2. Build
 

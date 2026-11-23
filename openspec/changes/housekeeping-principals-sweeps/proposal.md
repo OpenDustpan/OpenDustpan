@@ -96,7 +96,7 @@ Questions considered and answered:
 
 - Does the reconcile of jobs hold the start actions of the jobs it continues? No. The job service checks a NEW action `job:reconcile` (owner, 2026-11-22, option B). Option A (hold the five start and cancel actions) was not chosen, because a leaked credential of the principal could start a destroy. Part 1 makes the action and the role. Design decision 4.
 - Which actions do the sweeps without an action on main hold? The six NEW narrow actions of part 1 (owner, 2026-11-22, option A). Design decision 5.
-- How do the five per-namespace purposes reach a namespace? Through a grant on each namespace, which part 1 writes at the namespace creation (owner, 2026-11-22, option C). These purposes do not depend on `access.installationGrantsReachNamespaces`. Design decision 6.
+- How do the five per-namespace purposes reach a namespace? Through a grant on each namespace, which part 1 writes at the namespace creation (owner, 2026-11-22, option C). These purposes do not depend on `access.installationGrantsReachNamespaces` (a setting that the change `installation-grants-reach-namespaces-setting` adds). Design decision 6.
 - Which purposes are in this part? The eight of the design document ("Callers on main") that touch no file of the access token, identity or sign-in packages. Part 3 has the other three.
 - Is `@server` removed? No. It stays as the object of a grant on the installation. A run never acts as `@server`.
 
