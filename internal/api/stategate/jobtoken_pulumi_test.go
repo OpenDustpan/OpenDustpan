@@ -211,9 +211,11 @@ func checkJobAllowed(t *testing.T, guard stategate.Guard, w stategate.Write, err
 	}
 }
 
-// TestPulumiJobTokenStateWrites sends the Pulumi writes of a plan-only job
-// token through the state.write gate. The update create and the update start
-// that save state are refused. A token of another unit and a route unit other
+// TestPulumiJobTokenStateWrites sends the operations of the Pulumi routes that
+// call the state.write guard (import, restore, cancel, delete and rename)
+// through the gate and the admission, with the claim of a plan-only job token.
+// It calls the guard directly: the route-level cases are in the server tests.
+// Each operation is refused. A token of another unit and a route unit other
 // than the job's unit are refused, also for the plan lock. The plan lock of its
 // own unit and a job past change.apply stay allowed, so that a refusal is not
 // a broken fixture.
@@ -228,17 +230,14 @@ func TestPulumiJobTokenStateWrites(t *testing.T) {
 	applied := gate.JobClaim{Job: jobID, Phase: "apply", PassedApply: true, Units: []identity.Object{web}}
 
 	runJobCases(t, []jobCase{
-		{
-			name: "update create that saves state", job: plan, unit: web,
-			op: gate.OperationApply, refused: true,
-		},
-		{
-			name: "update start that saves state", job: plan, unit: web,
-			op: gate.OperationApply, refused: true,
-		},
+		{name: "import in the plan phase", job: plan, unit: web, op: gate.OperationStateImport, refused: true},
+		{name: "restore in the plan phase", job: plan, unit: web, op: gate.OperationRollback, refused: true},
+		{name: "cancel in the plan phase", job: plan, unit: web, op: gate.OperationUnlock, refused: true},
+		{name: "delete in the plan phase", job: plan, unit: web, op: gate.OperationDelete, refused: true},
+		{name: "rename in the plan phase", job: plan, unit: web, op: gate.OperationRename, refused: true},
 		{
 			name: "token of another unit on this unit", job: planOfAPI, unit: web,
-			op: gate.OperationApply, refused: true,
+			op: gate.OperationStateImport, refused: true,
 		},
 		{
 			name: "route unit other than the job unit, plan lock", job: plan, unit: api,
@@ -249,8 +248,8 @@ func TestPulumiJobTokenStateWrites(t *testing.T) {
 			op: gate.OperationLock, refused: false,
 		},
 		{
-			name: "control: state write after change.apply", job: applied, unit: web,
-			op: gate.OperationApply, refused: false,
+			name: "control: import operation after change.apply", job: applied, unit: web,
+			op: gate.OperationStateImport, refused: false,
 		},
 	})
 }

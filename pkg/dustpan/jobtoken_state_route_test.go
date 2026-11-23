@@ -211,7 +211,7 @@ func seedJobTokenState(
 		method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/collections", body: `{"name":"default"}`,
 	}, http.StatusCreated)
 
-	idColl := placementCollectionID(t, f, "acme", "default")
+	idColl := placementCollectionID(t, f)
 	mustDo(t, f, call{
 		method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/placement-rules",
 		body: `{"tool":"opentofu","project":"*","stack":"*","collectionID":"` + idColl + `"}`,

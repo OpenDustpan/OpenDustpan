@@ -66,6 +66,10 @@ func (s jobClaimSubjects) claim(ctx context.Context, id string) (*gate.JobClaim,
 		return nil, fmt.Errorf("%w: the server has no job store to read the job token", identity.ErrDenied)
 	}
 
+	// Defense in depth: the job token service gives each job token principal the
+	// job ID of its token, and the job store finds no job with an empty ID. This
+	// check stays so that a principal with no job ID never reaches the store. It
+	// does not rely on the token service or on the store.
 	if strings.TrimSpace(id) == "" {
 		return nil, fmt.Errorf("%w: the job token names no job", identity.ErrDenied)
 	}

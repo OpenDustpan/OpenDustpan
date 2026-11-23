@@ -105,7 +105,7 @@ func seedTofuPlacement(t *testing.T, f fixture) {
 
 	mustDo(t, f, call{method: http.MethodPost, path: base + "/collections", body: `{"name":"default"}`},
 		http.StatusCreated)
-	id := placementCollectionID(t, f, "acme", "default")
+	id := placementCollectionID(t, f)
 	mustDo(t, f, call{
 		method: http.MethodPost, path: base + "/placement-rules",
 		body: `{"tool":"opentofu","project":"*","stack":"*","collectionID":"` + id + `"}`,

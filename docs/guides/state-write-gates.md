@@ -157,9 +157,9 @@ TFE-compatible API. They keep their earlier behavior. The
 A write with the token of a job is refused with `403`, unless it is one of two
 writes. The first is the lock or lease of the plan of a phase that did not pass
 the apply decision. The second is a write to a unit of its own job by a phase
-that passed the apply decision. The gates are not checked for either write. The
-access limits still hold for a job token. Each other write with a job token is
-denied, also a write to a unit that the job does not hold.
+that passed the apply decision. The access limits still hold for a job token.
+Each other write with a job token is denied, also a write to a unit that the
+job does not hold.
 
 The server cannot evaluate a gate for a job yet. So an enforced gate at
 `state.write` refuses the start of a job on its unit, and it also refuses each

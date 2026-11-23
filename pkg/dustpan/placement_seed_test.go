@@ -13,9 +13,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-func placementCollectionID(t *testing.T, f fixture, ns, name string) string {
+// placementCollectionID returns the ID of the collection default in the
+// namespace acme.
+func placementCollectionID(t *testing.T, f fixture) string {
 	t.Helper()
-	path := "/api/dustpan/v1/namespaces/" + ns + "/collections/" + name
+	path := "/api/dustpan/v1/namespaces/acme/collections/default"
 	status, body := f.do(t, http.MethodGet, path, adminToken, "")
 	var target struct {
 		ID string `json:"id"`

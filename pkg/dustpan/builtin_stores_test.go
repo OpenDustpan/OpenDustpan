@@ -139,7 +139,7 @@ func runStackUpdateAndStateWrite(t *testing.T, f fixture) {
 		method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/collections", body: `{"name":"default"}`,
 	}, http.StatusCreated)
 
-	id := placementCollectionID(t, f, "acme", "default")
+	id := placementCollectionID(t, f)
 	for _, tool := range []string{"pulumi", "opentofu"} {
 		mustDo(t, f, call{
 			method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/placement-rules",
