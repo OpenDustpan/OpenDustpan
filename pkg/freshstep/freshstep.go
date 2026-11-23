@@ -1,5 +1,5 @@
 // Package freshstep decides whether a fresh authentication is required. The
-// installation setting freshAuthEnabled turns the requirement on and off (ADR 385).
+// installation setting freshAuthEnabled turns the requirement on and off.
 package freshstep
 
 import (
