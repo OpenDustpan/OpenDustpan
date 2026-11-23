@@ -103,11 +103,48 @@ func TestCreateNamespaceHousekeepingGrantsOfBootstrapAdmin(t *testing.T) {
 	}
 }
 
+// revokers returns the callers that revoke a housekeeping grant in the
+// revoke tests: the bootstrap administrator, and a site administrator
+// through a stored grant.
+func revokers() []struct {
+	caller func(t *testing.T, f *fixture) identity.Principal
+	name   string
+} {
+	return []struct {
+		caller func(t *testing.T, f *fixture) identity.Principal
+		name   string
+	}{
+		{name: "bootstrap administrator", caller: func(*testing.T, *fixture) identity.Principal { return admin() }},
+		{name: "stored site administrator", caller: func(t *testing.T, f *fixture) identity.Principal {
+			t.Helper()
+
+			site := f.person(t, "site")
+			f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-site"}, access.RoleSiteAdministrator,
+				identity.ServerObject())
+
+			return site
+		}},
+	}
+}
+
 func TestCreateNamespaceHousekeepingGrantStaysRevoked(t *testing.T) {
 	t.Parallel()
 
+	for _, tc := range revokers() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			testHousekeepingGrantStaysRevoked(t, tc.caller)
+		})
+	}
+}
+
+func testHousekeepingGrantStaysRevoked(t *testing.T, callerOf func(t *testing.T, f *fixture) identity.Principal) {
+	t.Helper()
+
 	f := newFixture(t)
 	account := f.person(t, "account")
+	caller := callerOf(t, f)
 
 	if _, err := f.svc.CreateNamespace(t.Context(), testEntry(), account, housekeepingNamespace("gamma")); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -118,7 +155,7 @@ func TestCreateNamespaceHousekeepingGrantStaysRevoked(t *testing.T) {
 		t.Fatal("no grant of the role housekeeping-job-reconcile on gamma")
 	}
 
-	_, err := f.svc.Revoke(t.Context(), testEntry(), admin(), identity.NamespaceObject("gamma"), revoked.ID)
+	_, err := f.svc.Revoke(t.Context(), testEntry(), caller, identity.NamespaceObject("gamma"), revoked.ID)
 	if err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
@@ -146,8 +183,23 @@ func TestCreateNamespaceHousekeepingGrantStaysRevoked(t *testing.T) {
 func TestRevokedNamespaceGrantDeniesManageAgentRuns(t *testing.T) {
 	t.Parallel()
 
+	for _, tc := range revokers() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRevokeDeniesManageAgentRuns(t, tc.caller)
+		})
+	}
+}
+
+func checkRevokeDeniesManageAgentRuns(
+	t *testing.T, callerOf func(t *testing.T, f *fixture) identity.Principal,
+) {
+	t.Helper()
+
 	f := newFixture(t)
 	account := f.person(t, "account")
+	revoker := callerOf(t, f)
 
 	if _, err := f.svc.CreateNamespace(t.Context(), testEntry(), account, housekeepingNamespace("gamma")); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -167,7 +219,7 @@ func TestRevokedNamespaceGrantDeniesManageAgentRuns(t *testing.T) {
 		t.Fatalf("no grant of the role %s on gamma", access.RoleHousekeepingAgentRunReaper)
 	}
 
-	if _, err := f.svc.Revoke(t.Context(), testEntry(), admin(), gamma, revoked.ID); err != nil {
+	if _, err := f.svc.Revoke(t.Context(), testEntry(), revoker, gamma, revoked.ID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 

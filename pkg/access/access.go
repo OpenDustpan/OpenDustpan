@@ -567,16 +567,19 @@ type GrantStore interface {
 	// alone. It returns namespace.ErrAlreadyExists when the name is taken, and
 	// ErrInvalid when a grant has no ID. The entry e stays in the scope
 	// audit.ServerScope. The store builds the entry of each grant from e, with
-	// the object GrantRef of the grant, the time of the grant and the reason
-	// NamespaceGrantsReason, and appends
+	// the object GrantRef of the grant and the time of the grant. The entry of
+	// a grant whose holder is a housekeeping principal (HousekeepingSubject)
+	// has the reason NamespaceGrantsReason, and the entry of any other grant
+	// keeps the reason of e. The store appends
 	// it in the chain of the new namespace, in the order of grants, so the
 	// chain starts with the grants. A grant that fails to insert leaves no
 	// namespace row.
 	CreateNamespaceWithGrants(ctx context.Context, ns namespace.Namespace, grants []Grant, e audit.Entry) error
 }
 
-// NamespaceGrantsReason is the reason of the audit entry of each grant that
-// GrantStore.CreateNamespaceWithGrants writes with a new namespace.
+// NamespaceGrantsReason is the reason of the audit entry of each grant of a
+// housekeeping principal that GrantStore.CreateNamespaceWithGrants writes
+// with a new namespace.
 const NamespaceGrantsReason = "housekeeping grants of namespace creation"
 
 // GrantLookups reads the current grants that a change of who holds them

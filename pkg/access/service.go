@@ -422,8 +422,10 @@ func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
 // A grant on another object answers ErrNotFound, so a caller cannot revoke
 // through an object that it manages a grant that it does not manage. caller
 // must hold every action that the grant gives on its object (ErrEscalation),
-// as it must to make the grant. The caller has already authorized the
-// manage-access action of obj.
+// as it must to make the grant. One exception: a caller that holds
+// server:manage-access on the installation may revoke a grant of a
+// housekeeping principal (HousekeepingRevokeReason). The caller has already
+// authorized the manage-access action of obj.
 func (s *Service) Revoke(
 	ctx context.Context, e audit.Entry, caller identity.Principal, obj identity.Object, id string,
 ) (Grant, error) {
@@ -1042,7 +1044,10 @@ func (s *Service) checkMoveGrant(ctx context.Context, caller identity.Principal,
 // entry e. It holds the checks that Revoke and RevokeByID share: the caller
 // holds every action the grant gives, and the entry goes in the scope of
 // the grant. The store runs the check of the caller's actions in the
-// transaction of the revoke.
+// transaction of the revoke. For a grant of a housekeeping principal, a
+// caller that holds server:manage-access on the installation does not need
+// the actions of the grant, and the entry has the reason
+// HousekeepingRevokeReason.
 func (s *Service) revokeStored(
 	ctx context.Context, e audit.Entry, caller identity.Principal, g Grant, id string,
 ) (Grant, error) {
@@ -1060,6 +1065,19 @@ func (s *Service) revokeStored(
 	// transaction of the revoke, so a revoke, a membership change or a role
 	// update that commits first is visible to the check.
 	check := s.revokeCheck(caller, g, chain)
+
+	// The housekeeping revoke rule: a holder of server:manage-access on the
+	// installation may revoke a grant of a housekeeping principal with no
+	// test of the actions of the grant. The entry records the rule.
+	rule, err := s.housekeepingRevoke(ctx, caller, g)
+	if err != nil {
+		return Grant{}, err
+	}
+
+	if rule {
+		e.Reason = HousekeepingRevokeReason
+		check = s.housekeepingRevokeCheck(caller, g, chain)
+	}
 
 	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g)), check); err != nil {
 		return Grant{}, revokeReadError(err)

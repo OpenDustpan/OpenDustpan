@@ -26,6 +26,7 @@ func housekeepingCases() []struct {
 		{name: "a grant that fails to insert leaves no namespace", test: testNamespaceHousekeepingGrantFails},
 		{name: "a taken namespace is not given the housekeeping grants again", test: testNamespaceHousekeepingTaken},
 		{name: "a grant with no ID is ErrInvalid", test: testNamespaceHousekeepingNoID},
+		{name: "only a housekeeping grant gets the housekeeping reason", test: testNamespaceHousekeepingReason},
 	}
 }
 
@@ -119,10 +120,16 @@ func wantNamespaceEntries(
 }
 
 // checkGrantEntry checks that entries hold exactly one entry of the grant w,
-// with the action of e, the kind change, the reason
-// access.NamespaceGrantsReason and a time not before the grant.
+// with the action of e, the kind change and a time not before the grant. The
+// reason is access.NamespaceGrantsReason when a housekeeping principal holds
+// w, and the reason of e for any other holder.
 func checkGrantEntry(t *testing.T, entries []audit.Entry, e audit.Entry, w *access.Grant) {
 	t.Helper()
+
+	reason := e.Reason
+	if access.HousekeepingSubject(w.Subject) {
+		reason = access.NamespaceGrantsReason
+	}
 
 	found := 0
 
@@ -140,8 +147,8 @@ func checkGrantEntry(t *testing.T, entries []audit.Entry, e audit.Entry, w *acce
 			t.Fatalf("entry of grant %q = %+v, want the action %q from %v", w.ID, got, e.Action, w.CreatedAt)
 		}
 
-		if got.Reason != access.NamespaceGrantsReason {
-			t.Fatalf("entry of grant %q reason = %q, want %q", w.ID, got.Reason, access.NamespaceGrantsReason)
+		if got.Reason != reason {
+			t.Fatalf("entry of grant %q reason = %q, want %q", w.ID, got.Reason, reason)
 		}
 	}
 
@@ -261,6 +268,56 @@ func testNamespaceHousekeepingTaken(t *testing.T, s access.Store) {
 	}
 
 	wantHousekeepingGrants(t, s, ns, grants)
+}
+
+// testNamespaceHousekeepingReason checks that the store sets
+// access.NamespaceGrantsReason only on the entry of a grant that a
+// housekeeping principal holds. The entry of the creator grant keeps the
+// reason of e.
+func testNamespaceHousekeepingReason(t *testing.T, s access.Store) {
+	t.Helper()
+
+	log, ok := s.(audit.Store)
+	if !ok {
+		t.Skip("the store has no audit log")
+	}
+
+	ns := newNamespace("acme")
+	creator := newGrant(
+		"grt-creator", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"),
+	)
+	housekeeping := housekeepingNamespaceGrants(ns)
+
+	e := entry()
+	e.Object = access.GrantRef(creator)
+	e.Reason = "namespace made by a person"
+
+	all := append([]access.Grant{creator}, housekeeping...)
+
+	if err := s.CreateNamespaceWithGrants(t.Context(), ns, all, e); err != nil {
+		t.Fatalf("create namespace with grants: %v", err)
+	}
+
+	listing, err := log.List(t.Context(), ns.Name, audit.Page{Size: audit.MaxPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list audit of %q: %v", ns.Name, err)
+	}
+
+	want := map[string]string{access.GrantRef(creator): e.Reason}
+	for i := range housekeeping {
+		want[access.GrantRef(housekeeping[i])] = access.NamespaceGrantsReason
+	}
+
+	if len(listing.Entries) != len(want) {
+		t.Fatalf("entries of %q = %d, want %d", ns.Name, len(listing.Entries), len(want))
+	}
+
+	for i := range listing.Entries {
+		got := &listing.Entries[i]
+		if reason, found := want[got.Object]; !found || got.Reason != reason {
+			t.Fatalf("entry of %q reason = %q, want %q", got.Object, got.Reason, reason)
+		}
+	}
 }
 
 func testNamespaceHousekeepingNoID(t *testing.T, s access.Store) {
