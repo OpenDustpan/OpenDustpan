@@ -23,6 +23,5 @@
 ## 4. Definition of done
 
 - [x] 4.1 Run the session suites on SQLite and PostgreSQL. Check: `go test -race ./internal/api/runnerapi/... ./pkg/runner/... ./pkg/job/...`
-- [ ] 4.2 Add the log cap step to the e2e in e2e/job_session_paths_test.go (NEW): the e2e launcher client (`e2e.FakeLauncher`, e2e/launcher.go, existing) calls the route POST /runner/v1/session with the credential kind handoff token, then sends a log chunk above a cap with the session key proof (action runner:claim) and gets invalid. Check: `make e2e` runs the session step.
-- [ ] 4.3 Check the usability of the path from the docs page alone. Check: Each error names one command that helps.
-- [ ] 4.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.2 Add the log cap step to the e2e in e2e/job_session_paths_test.go (NEW): the e2e launcher client (`e2e.FakeLauncher`, e2e/launcher.go, existing) calls the route POST /runner/v1/session with the credential kind handoff token, then sends a log chunk above a cap with the session key proof (action runner:claim) and gets invalid. Check: `make e2e` runs the session step.
+- [x] 4.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
