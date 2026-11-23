@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #3931.
@@ -76,7 +76,7 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
 1. What is the expiry time of a committed workspace lock before fenced takeover?
    - Options: 30 s lock expiry with takeover after expiry; 60 s lock expiry with takeover after expiry; No expiry with manual release only.
    - Provisional decision (PM, rule 88): No expiry with manual release only. The lock stays held until `tofu unlock` or force-unlock releases it.
-   - Reason: Main has no lock expiry and no lock refresh path (`pkg/workspace/workspace.go:284`, `internal/api/tfe/locks.go:148-159`), and the OpenTofu CLI sends no heartbeat. A 30 s takeover would evict a live apply that runs longer than 30 s. Lock refresh is out of scope. Failover readiness keeps the lock of an OpenTofu workspace as it is. Benchmark: the TFE-compatible API holds a workspace lock until an explicit unlock or force-unlock; Google and AWS use expiry only with a heartbeat.
+   - Reason: Main has no lock expiry and no lock refresh path (the workspace port lock fields and `internal/api/tfe/locks.go:148-159`), and the OpenTofu CLI sends no heartbeat. A 30 s takeover would evict a live apply that runs longer than 30 s. Lock refresh is out of scope. Failover readiness keeps the lock of an OpenTofu workspace as it is. Benchmark: the TFE-compatible API holds a workspace lock until an explicit unlock or force-unlock; Google and AWS use expiry only with a heartbeat.
    - Persona impact: After the loss of a holder instance the Developer runs force-unlock once. The lock does not evict a live apply. Escape hatch: the existing force-unlock route.
 2. How is the fence token formed and checked for state version and lock commits?
    - Options: Failover version plus lock identity checked in the same transaction; Separate fencing token column checked in the same transaction.
