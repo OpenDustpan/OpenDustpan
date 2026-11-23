@@ -15,6 +15,8 @@
 
 - [ ] 2.3 In pkg/gate/service.go, after `jobTokenWrite` allows, call `evaluateStateWrite` with the change (no break-glass key for a job token). In pkg/gate/statewrite.go, make `GuardStateWrite` read the fence and pass the state for a job token, and update the doc comment. Change the test `TestJobTokenWritesOnlyWhatTheJobModelAllows` in pkg/gate/statewrite_test.go: a deny gate now refuses an allowed job-token write with a record, and a job-model refusal writes no record. Check: go test ./pkg/gate/... -count=1
 
+- [ ] 2.4 In internal/api/stategate/stategate.go (the `state write refused` log line, line 492), add the job ID and the phase name of the job claim as two more log fields. A write by a person logs both fields empty. Both values come from the server (the job record), and the line stays one line. Add a table test of the log line for a job token and for a person. Check: go test ./internal/api/stategate/...
+
 ## 3. Side effects (computed from main)
 
 - [x] 3.1 Not applicable: the change adds no route and no field, so `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves the golden file and the clients unchanged.
@@ -22,5 +24,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add an e2e step in the NEW file e2e/job_token_state_write_test.go for a runner plan then apply on both tools, using the job token credential on the routes that call the guard on main. The job token comes from add-job-session-paths-runner-token-issuer, which is on main. Check: make e2e.
-- [ ] 4.2 Document the refusal and the plan lock on the state.write docs page under docs/guides/. Check: make docs-lint
+- [ ] 4.2 Document the refusal and the plan lock on the state.write docs page under docs/guides/. At docs/guides/state-write-gates.md line 374, the `state write refused` line also has the job ID and the phase name. Check: make docs-lint
 - [ ] 4.3 Wiring, route actions, docs page and usability check done. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).
