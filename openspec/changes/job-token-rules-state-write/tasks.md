@@ -10,8 +10,8 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the new file pkg/dustpan/jobclaim.go with `jobClaimSubjects`: it wraps the inner `gate.SubjectSource` and, for `gate.CredentialJobToken`, reads the job with `job.Store.Get` by `Principal.JobID` and sets `Subject.Job` (JobClaim is at pkg/gate/service.go:23). Check: go test ./pkg/dustpan/... ./pkg/gate/... -count=1
-- [ ] 2.2 In pkg/dustpan/stateguard.go, where `gate.NewService` gets `Subjects: principalSubjects{...}` (line 128), wrap it with `newJobClaimSubjects` using the job store. `GuardStateWrite` at pkg/gate/statewrite.go:66 then sees the claim on each route that calls it on main. Check: go test ./internal/api/... ./pkg/dustpan/... -count=1
+- [x] 2.1 Add the new file pkg/dustpan/jobclaim.go with `jobClaimSubjects`: it wraps the inner `gate.SubjectSource` and, for `gate.CredentialJobToken`, reads the job with `job.Store.Get` by `Principal.JobID` and sets `Subject.Job` (JobClaim is at pkg/gate/service.go:23). Check: go test ./pkg/dustpan/... ./pkg/gate/... -count=1
+- [x] 2.2 In pkg/dustpan/stateguard.go, where `gate.NewService` gets `Subjects: principalSubjects{...}` (line 128), wrap it with `newJobClaimSubjects` using the job store. `GuardStateWrite` at pkg/gate/statewrite.go:66 then sees the claim on each route that calls it on main. Check: go test ./internal/api/... ./pkg/dustpan/... -count=1
 
 - [x] 2.3 In pkg/gate/service.go, after `jobTokenWrite` allows, call `evaluateStateWrite` with the change (no break-glass key for a job token). In pkg/gate/statewrite.go, make `GuardStateWrite` read the fence and pass the state for a job token, and update the doc comment. Change the test `TestJobTokenWritesOnlyWhatTheJobModelAllows` in pkg/gate/statewrite_test.go: a deny gate now refuses an allowed job-token write with a record, and a job-model refusal writes no record. Check: go test ./pkg/gate/... -count=1
 
