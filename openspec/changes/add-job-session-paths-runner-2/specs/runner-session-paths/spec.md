@@ -58,6 +58,10 @@ For each such refusal, the server SHALL write one audit entry with a reason.
 - **WHEN** the body hash differs from Dustpan-Content-SHA256
 - **THEN** the server refuses the chunk and the sequence does not move
 
+#### Scenario: Wrong body hash is audited
+- **WHEN** the body hash differs from the signed Dustpan-Content-SHA256
+- **THEN** the server answers 401 `bad-proof` and writes one audit entry with the action `runner.log.refused` and the reason `hash-body`
+
 #### Scenario: Out of order
 - **WHEN** the launcher sends a sequence number that skips one
 - **THEN** the server refuses the chunk
