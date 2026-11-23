@@ -6,7 +6,7 @@ The session surface for job phases. Sweep report and finish stay in other parts.
 
 1. **One checked session claim.** An unexported sessionClaim is made only by newSessionClaim, which checks the proof, the live claim and the job purpose of the pool.
 2. **Fence on each write.** Each write checks the claim again in its own transaction.
-3. **Chunk bytes keyed by claim and sequence.** The blob key holds the claim and the sequence, so a lost-claim launcher cannot overwrite a counted chunk of a new claim. The counter moves after the bytes.
+3. **Chunk bytes keyed by attempt and sequence.** The blob key holds the job, the log version, the chunk number and the attempt ID, so a launcher of another attempt cannot overwrite a counted chunk. The counter moves after the bytes.
 4. **Plan commit as ADR 131 decides.** Main keeps this rule and the change does not alter it: a commit with the same parts and hashes under the same claim answers 204 and changes nothing. A commit with other parts after a commit answers `conflict`.
 5. **Phase caps in the chunk transaction.** The reserve step of a log chunk checks the chunk count and the byte count of the step and of the phase, with the limits of pkg/runner/protocol/protocol.go:156-162. A breach answers invalid and keeps no bytes.
 
@@ -147,7 +147,7 @@ flowchart LR
 | Team host to server | T | A chunk body changes in transit or a part passes its cap. | authorize at point of use | The write checks the claim in its transaction. | TestSessionHostileTakeoverDuringLogWrite |
 | Team host to server | T | A chunk body changes in transit or a part passes its cap. | fail closed | A hash mismatch keeps no bytes. | TestLogRefusalKeepsItsMessage |
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | boundary check | The pool purpose is read from the pool, not from the request. | TestSessionHostileNamespaceSweepPool |
-| Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | encode or contain | The blob key holds the claim. | TestChunkBlobKey |
+| Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | encode or contain | The blob key holds the job, the log version, the chunk number and the attempt ID, and no claim. A stored key that is hostile is refused. | TestChunkBlobKey |
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | limit | The session holds a bounded lease. | TestSessionRenewIsRefusedAfterTheCancelBound |
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | authorize at point of use | newSessionClaim checks the live claim and purpose. | TestSessionHostileTakeoverDuringLogWrite |
 | Server to storage | E | A launcher of a lost claim or a sweep pool writes data. | fail closed | A lost claim answers claim-lost and stores nothing. | TestStepWriteWithALostClaim |
