@@ -204,7 +204,7 @@ func TestStoreLogChunkStopsAtTheReserveError(t *testing.T) {
 		now: func() time.Time {
 			clockReads++
 
-			return time.Now()
+			return time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
 		},
 		log: slog.New(slog.DiscardHandler),
 	}
