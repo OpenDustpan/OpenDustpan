@@ -29,13 +29,10 @@ func TestLockAcquireRollsBackOnOutage(t *testing.T) {
 
 	breakWorkspaceWrite(t, s, "break_lock_acquire")
 
-	commit := postgres.NewStateCommitForTest(s, fence)
-	lock := workspace.Lock{
-		LockedAt: time.UnixMilli(1_700_000_100_000).UTC(), ID: "lock-1", Holder: "alice", Reason: "reason",
-	}
-	_, err = commit.AcquireLock(ctx, ws.ID, lock)
+	locked := withTestLock(ws, time.UnixMilli(1_700_000_100_000).UTC())
+	err = s.SaveWorkspace(ctx, locked, fence)
 	if !errors.Is(err, namespace.ErrUnavailable) {
-		t.Fatalf("AcquireLock = %v, want namespace.ErrUnavailable", err)
+		t.Fatalf("SaveWorkspace lock = %v, want namespace.ErrUnavailable", err)
 	}
 
 	got, getErr := s.GetWorkspaceByID(ctx, ws.ID)
@@ -62,15 +59,27 @@ func TestLockAcquire(t *testing.T) {
 	ws, fence := seedLockWorkspace(t, s)
 	at := time.UnixMilli(1_700_000_100_000).UTC()
 
-	commit := postgres.NewStateCommitForTest(s, fence)
-	lock := workspace.Lock{LockedAt: at, ID: "lock-1", Holder: "alice", Reason: "reason"}
-	got, err := commit.AcquireLock(ctx, ws.ID, lock)
+	if saveErr := s.SaveWorkspace(ctx, withTestLock(ws, at), fence); saveErr != nil {
+		t.Fatalf("SaveWorkspace lock: %v", saveErr)
+	}
+
+	got, err := s.GetWorkspaceByID(ctx, ws.ID)
 	if err != nil {
-		t.Fatalf("AcquireLock: %v", err)
+		t.Fatalf("GetWorkspaceByID: %v", err)
 	}
 	if !got.Lock.Locked() || got.Lock.Holder != "alice" || got.Lock.ID != "lock-1" {
 		t.Fatalf("lock = %+v, want alice/lock-1", got.Lock)
 	}
+}
+
+// withTestLock returns ws one revision on, locked by alice under lock-1 at at.
+func withTestLock(ws workspace.Workspace, at time.Time) workspace.Workspace {
+	locked := ws
+	locked.Lock = workspace.Lock{LockedAt: at, ID: "lock-1", Holder: "alice", Reason: "reason"}
+	locked.Revision++
+	locked.UpdatedAt = at
+
+	return locked
 }
 
 func seedLockWorkspace(t *testing.T, s *postgres.Store) (workspace.Workspace, namespace.Fence) {

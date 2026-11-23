@@ -31,8 +31,8 @@ type StateCommitForTest struct {
 	commit stateCommit
 }
 
-// NewStateCommitForTest returns the guard that commits state and lock writes
-// of s under fence.
+// NewStateCommitForTest returns the guard that commits state versions of s
+// under fence.
 func NewStateCommitForTest(s *Store, fence namespace.Fence) StateCommitForTest {
 	return StateCommitForTest{commit: newStateCommit(s, fence)}
 }
@@ -48,20 +48,6 @@ func (c StateCommitForTest) FinalizeStateVersion(
 	ctx context.Context, sv workspace.StateVersion,
 ) error {
 	return c.commit.FinalizeStateVersion(ctx, sv)
-}
-
-// AcquireLock takes the lock of id with the guard.
-func (c StateCommitForTest) AcquireLock(
-	ctx context.Context, id workspace.ID, lock workspace.Lock,
-) (workspace.Workspace, error) {
-	return c.commit.AcquireLock(ctx, id, lock)
-}
-
-// ReleaseLock releases the lock of id with the guard.
-func (c StateCommitForTest) ReleaseLock(
-	ctx context.Context, id workspace.ID, holder, lockID string, at time.Time,
-) (workspace.Workspace, error) {
-	return c.commit.ReleaseLock(ctx, id, holder, lockID, at)
 }
 
 // CheckSettingFence runs the comparison of the fence and the namespace that

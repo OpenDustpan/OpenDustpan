@@ -27,10 +27,9 @@ func TestUnlockRollsBackOnOutage(t *testing.T) {
 
 	breakWorkspaceWrite(t, s, "break_unlock")
 
-	commit := postgres.NewStateCommitForTest(s, fence)
-	_, err = commit.ReleaseLock(ctx, ws.ID, "alice", "lock-1", time.UnixMilli(1_700_000_200_000).UTC())
+	err = s.SaveWorkspace(ctx, withTestRelease(ws, time.UnixMilli(1_700_000_200_000).UTC()), fence)
 	if !errors.Is(err, namespace.ErrUnavailable) {
-		t.Fatalf("ReleaseLock = %v, want namespace.ErrUnavailable", err)
+		t.Fatalf("SaveWorkspace release = %v, want namespace.ErrUnavailable", err)
 	}
 
 	got, getErr := s.GetWorkspaceByID(ctx, ws.ID)
@@ -57,13 +56,19 @@ func TestUnlock(t *testing.T) {
 	ws, fence := seedLockedWorkspace(t, s)
 	at := time.UnixMilli(1_700_000_200_000).UTC()
 
-	commit := postgres.NewStateCommitForTest(s, fence)
-	got, err := commit.ReleaseLock(ctx, ws.ID, "alice", "lock-1", at)
+	if saveErr := s.SaveWorkspace(ctx, withTestRelease(ws, at), fence); saveErr != nil {
+		t.Fatalf("SaveWorkspace release: %v", saveErr)
+	}
+
+	got, err := s.GetWorkspaceByID(ctx, ws.ID)
 	if err != nil {
-		t.Fatalf("ReleaseLock: %v", err)
+		t.Fatalf("GetWorkspaceByID: %v", err)
 	}
 	if got.Lock.Locked() {
 		t.Fatalf("lock = %+v, want unlocked", got.Lock)
+	}
+	if got.LastRelease.LockID != "lock-1" || got.LastRelease.By != "alice" {
+		t.Fatalf("last release = %+v, want lock-1 by alice", got.LastRelease)
 	}
 }
 
@@ -71,15 +76,24 @@ func seedLockedWorkspace(t *testing.T, s *postgres.Store) (workspace.Workspace, 
 	t.Helper()
 
 	ws, fence := seedLockWorkspace(t, s)
-	locked := ws
-	locked.Lock = workspace.Lock{
-		LockedAt: time.UnixMilli(1_700_000_050_000).UTC(), ID: "lock-1", Holder: "alice", Reason: "reason",
-	}
-	locked.Revision++
-	locked.UpdatedAt = locked.Lock.LockedAt
+	locked := withTestLock(ws, time.UnixMilli(1_700_000_050_000).UTC())
 	if err := s.SaveWorkspace(t.Context(), locked, fence); err != nil {
 		t.Fatalf("lock workspace: %v", err)
 	}
 
 	return locked, fence
+}
+
+// withTestRelease returns ws one revision on, with the lock of alice released
+// by alice at at.
+func withTestRelease(ws workspace.Workspace, at time.Time) workspace.Workspace {
+	released := ws
+	released.LastRelease = workspace.Release{
+		At: at, LockID: ws.Lock.ID, Holder: ws.Lock.Holder, By: "alice", Kind: workspace.ReleaseNormal,
+	}
+	released.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+	released.Revision++
+	released.UpdatedAt = at
+
+	return released
 }
