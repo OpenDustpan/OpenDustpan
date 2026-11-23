@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -65,7 +66,7 @@ func caller() audit.Entry {
 	}
 }
 
-func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
+func newFixture(t *testing.T, fresh *freshstep.Guard) fixture {
 	t.Helper()
 
 	return newFixtureAt(t, fresh, time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC))
@@ -79,7 +80,7 @@ func sweepStart() time.Time {
 }
 
 // newFixtureAt returns a fixture whose clock starts at start.
-func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fixture {
+func newFixtureAt(t *testing.T, fresh *freshstep.Guard, start time.Time) fixture {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
@@ -806,10 +807,22 @@ var errStale = errors.New("mfa step too old")
 
 func (staleMFA) RequireFresh(context.Context, string) error { return errStale }
 
+// freshGuard returns a guard of the policy p with the check of staleMFA.
+func freshGuard(t *testing.T, p freshstep.Policy) *freshstep.Guard {
+	t.Helper()
+
+	g, err := freshstep.NewGuard(p, staleMFA{}.RequireFresh)
+	if err != nil {
+		t.Fatalf("fresh guard: %v", err)
+	}
+
+	return &g
+}
+
 func TestFreshnessHook(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t, staleMFA{})
+	f := newFixture(t, freshGuard(t, freshstep.PolicyFunc(nil)))
 
 	_, _, err := f.createIn(t.Context(),
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})

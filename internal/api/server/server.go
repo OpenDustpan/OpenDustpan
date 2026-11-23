@@ -275,11 +275,11 @@ type Handler struct {
 	storeChecks   *storecheck.Service
 	cursors       secret.Wrapper
 	proxyRules    *jobproxysvc.Service
-	// freshPolicy says if a change needs a fresh authentication. Nil
-	// requires the step (fail closed).
-	freshPolicy freshstep.Policy
-	mux         *patternMux
-	routes      []Route
+	// freshGuard says if a change needs a fresh authentication. Without a
+	// SetFreshPolicy call it requires the step (fail closed).
+	freshGuard freshstep.Guard
+	mux        *patternMux
+	routes     []Route
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
@@ -361,10 +361,10 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		gitHost:   cfg.GitHost,
 		idem:      cfg.Idempotency,
 		instances: cfg.Instances, storeChecks: cfg.StoreChecks, cursors: cfg.Cursors,
-		proxyRules:  cfg.ProxyRules,
-		freshPolicy: nil,
-		mux:         newPatternMux(),
-		routes:      nil,
+		proxyRules: cfg.ProxyRules,
+		freshGuard: newFreshGuard(freshstep.PolicyFunc(nil)),
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	if h.now == nil {

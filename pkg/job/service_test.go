@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -487,7 +488,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Now:       func() time.Time { return r.now },
 		NewID:     func() job.ID { return job.ID("job-fixed") },
 		Log:       slog.New(slog.DiscardHandler),
-		Approvers: nil, MaxPlanAge: 0, Groups: nil, Artifacts: nil, FreshPolicy: nil,
+		Approvers: nil, MaxPlanAge: 0, Groups: nil, Artifacts: nil, FreshGuard: freshstep.Guard{},
 	}
 
 	for _, o := range opts {
@@ -1485,20 +1486,20 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			Executors: []job.Executor{
 				svcExecutor{kind: job.ExecutorRunner, err: nil},
 			},
-			Decider:     r.decider,
-			Authorizer:  r.authz,
-			Gates:       r.gates,
-			Fences:      svcFences{err: nil},
-			Freezes:     nil,
-			Switches:    nil,
-			Now:         nil,
-			NewID:       nil,
-			Log:         slog.New(slog.DiscardHandler),
-			Approvers:   nil,
-			MaxPlanAge:  0,
-			Groups:      nil,
-			Artifacts:   nil,
-			FreshPolicy: nil,
+			Decider:    r.decider,
+			Authorizer: r.authz,
+			Gates:      r.gates,
+			Fences:     svcFences{err: nil},
+			Freezes:    nil,
+			Switches:   nil,
+			Now:        nil,
+			NewID:      nil,
+			Log:        slog.New(slog.DiscardHandler),
+			Approvers:  nil,
+			MaxPlanAge: 0,
+			Groups:     nil,
+			Artifacts:  nil,
+			FreshGuard: freshstep.Guard{},
 		}
 	}
 

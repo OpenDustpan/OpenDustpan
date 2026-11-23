@@ -164,10 +164,29 @@ type ServiceConfig struct {
 	// has no such store, so RedactLog returns ErrUnsupported and changes
 	// nothing.
 	Artifacts ArtifactStore
-	// FreshPolicy tells whether the approval of a destroy needs a fresh MFA
-	// step. Nil means that it needs one (fail closed). The server gives the
-	// same value to the HTTP handler and to the job store.
-	FreshPolicy freshstep.Policy
+	// FreshGuard tells whether the approval of a destroy needs a fresh MFA
+	// step. Make it with NewFreshGuard. The zero value requires the step (fail
+	// closed), so a missing field fails closed. The server builds it from the
+	// same policy that it gives to the HTTP handler and to the job store.
+	FreshGuard freshstep.Guard
+}
+
+// NewFreshGuard returns the Guard of a destroy approval over the policy p.
+// When p requires a step, the check of the guard returns ErrAuthStale. A nil p
+// gives a guard that always requires the step (fail closed).
+func NewFreshGuard(p freshstep.Policy) (freshstep.Guard, error) {
+	if p == nil {
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	g, err := freshstep.NewGuard(p, func(context.Context, string) error {
+		return fmt.Errorf("%w: the approval of a destroy needs a fresh step", ErrAuthStale)
+	})
+	if err != nil {
+		return freshstep.Guard{}, fmt.Errorf("job: fresh guard: %w", err)
+	}
+
+	return g, nil
 }
 
 // service is the Service of this package. It starts, reads, cancels,
@@ -190,7 +209,7 @@ type service struct {
 	groups     GroupReader
 	maxPlanAge time.Duration
 	artifacts  ArtifactStore
-	fresh      freshstep.Policy
+	fresh      freshstep.Guard
 }
 
 // Starter is a Service that tells a retry from a first start. The REST API
@@ -236,7 +255,7 @@ func NewService(cfg ServiceConfig) (Starter, error) { //nolint:ireturn // The po
 		groups:     cfg.Groups,
 		maxPlanAge: DefaultMaxPlanAge,
 		artifacts:  cfg.Artifacts,
-		fresh:      cfg.FreshPolicy,
+		fresh:      cfg.FreshGuard,
 	}
 
 	if cfg.Approvers != nil {

@@ -172,11 +172,12 @@ type Handler struct {
 	// audit entry of each refusal.
 	admit  *stategate.Admitter
 	placer *Placer
-	// freshPolicy says if a change needs a fresh authentication. Nil
-	// requires the step (fail closed).
-	freshPolicy freshstep.Policy
-	mux         *patternMux
-	routes      []Route
+	// freshGuard asks for a fresh authentication when the policy requires
+	// one. NewHandler sets a guard that always requires the step (fail
+	// closed); SetFreshPolicy replaces it.
+	freshGuard freshstep.Guard
+	mux        *patternMux
+	routes     []Route
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
 	// means the server hides the delta capability.
 	deltaCutoff int
@@ -249,7 +250,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		guard:          recorder.WithLimiter(cfg.DenialLimiter).WithSurface("pulumi"),
 		admit:          admit,
 		placer:         cfg.Placer,
-		freshPolicy:    nil,
+		freshGuard:     freshstep.Guard{},
 		mux:            newPatternMux(),
 		routes:         nil,
 		deltaCutoff:    cfg.CheckpointDeltaCutoff,
@@ -257,6 +258,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,
 	}
+
+	// A handler with no SetFreshPolicy call requires the fresh step.
+	h.SetFreshPolicy(nil)
 
 	if h.gate == nil {
 		h.gate = bodygate.New(cfg.MaxBodyBytesInFlight)

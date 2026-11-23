@@ -24,7 +24,24 @@ type SessionPolicy interface {
 // a fresh step. Call it before the handler serves a request. A nil policy
 // requires the step.
 func (h *Handler) SetFreshPolicy(p freshstep.Policy) {
-	h.freshPolicy = p
+	h.freshGuard = newFreshGuard(p, h.freshCheck)
+}
+
+// newFreshGuard returns the guard of p and check. A nil policy gives a policy
+// that always requires the step (fail closed).
+func newFreshGuard(p freshstep.Policy, check func(ctx context.Context, subject string) error) freshstep.Guard {
+	if p == nil {
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	g, err := freshstep.NewGuard(p, check)
+	if err != nil {
+		// NewGuard fails only on a nil policy or a nil check. The zero Guard
+		// refuses each request (fail closed).
+		return freshstep.Guard{}
+	}
+
+	return g
 }
 
 // errFreshStepRequired reports a request with no console session, for example
@@ -54,16 +71,27 @@ type freshRefusalResponse struct {
 func (h *Handler) checkFresh(r *http.Request) (string, error) {
 	ctx := r.Context()
 
-	// Defense in depth: the setting is read here, at the point of use. This
-	// check does not rely on the service or the store to ask for a fresh step.
-	// A nil policy requires the step.
-	if !freshstep.IsRequired(ctx, h.freshPolicy) {
-		return "", nil
+	// Defense in depth: the guard reads the setting here, at the point of use.
+	// This check does not rely on the service or the store to ask for a fresh
+	// step. A nil policy requires the step.
+	err := h.freshGuard.Require(ctx, "")
+	if !errors.Is(err, errReauthenticate) {
+		return "", err
 	}
 
+	in, _ := sessionauth.SignInFrom(ctx)
+
+	return sessionauth.SignInStartPrefix + url.PathEscape(in.Provider) + "?fresh=1", err
+}
+
+// freshCheck is the check of the fresh guard. It returns nil when the request
+// has a console session that signed in within the token freshness window. A
+// request with an access token gets errFreshStepRequired, and an old sign-in
+// gets errReauthenticate. Any other error fails closed.
+func (h *Handler) freshCheck(ctx context.Context, _ string) error {
 	in, ok := sessionauth.SignInFrom(ctx)
 	if !ok || !sessionauth.FromSession(ctx) {
-		return "", errFreshStepRequired
+		return errFreshStepRequired
 	}
 
 	window := session.DefaultTokenFreshness
@@ -71,7 +99,7 @@ func (h *Handler) checkFresh(r *http.Request) (string, error) {
 	if h.sessionPolicy != nil {
 		policy, err := h.sessionPolicy.Policy(ctx)
 		if err != nil {
-			return "", err
+			return err
 		}
 
 		window = policy.TokenFreshness
@@ -79,10 +107,10 @@ func (h *Handler) checkFresh(r *http.Request) (string, error) {
 
 	// A sign-in after now has a negative age and is refused like an old one.
 	if sessionauth.Fresh(h.sessions.Now(), in.At, window) {
-		return "", nil
+		return nil
 	}
 
-	return sessionauth.SignInStartPrefix + url.PathEscape(in.Provider) + "?fresh=1", errReauthenticate
+	return errReauthenticate
 }
 
 // freshReveal wraps a route that needs a fresh authentication: an access token

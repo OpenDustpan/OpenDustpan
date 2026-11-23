@@ -112,11 +112,12 @@ type Handler struct {
 	sessions   *sessionauth.Checker
 	guard      *refusal.Recorder
 	logger     *slog.Logger
-	// fresh says if the approval of a destroy needs a fresh authentication.
-	// Nil requires the step (fail closed).
-	fresh  freshstep.Policy
-	mux    *patternMux
-	routes []Route
+	// freshGuard says if the approval of a destroy needs a fresh
+	// authentication. A nil Config.FreshPolicy gives a guard that always
+	// requires the step (fail closed).
+	freshGuard freshstep.Guard
+	mux        *patternMux
+	routes     []Route
 }
 
 // NewHandler returns a Handler. Every Config field except Sessions is
@@ -159,7 +160,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions:   cfg.Sessions,
 		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("jobs"),
 		logger:     cfg.Logger,
-		fresh:      cfg.FreshPolicy,
+		freshGuard: newDestroyFreshGuard(cfg.FreshPolicy),
 		mux:        newPatternMux(),
 		routes:     nil,
 	}

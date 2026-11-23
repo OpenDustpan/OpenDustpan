@@ -14,7 +14,6 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/metrics"
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -121,7 +120,7 @@ type auditChain struct {
 	// MFA does not exist yet.
 	maint          *maintenance.Service
 	restoreRunning func(ctx context.Context) (bool, error)
-	freshness      accesstoken.Freshness
+	freshness      freshnessCheck
 	// freshPolicy says if the freshness check runs. Nil requires the step.
 	freshPolicy freshstep.Policy
 	// durableOps starts the migration operation of an approval. The runner
@@ -178,6 +177,13 @@ type chainApprovalStore interface {
 	ApproveChainChange(
 		ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
 	) (durable.Operation, error)
+}
+
+// freshnessCheck asks for a recent MFA step of subject before the approval of
+// a change of the chain. It returns an error when the step is missing or too
+// old. The chain calls it only through a freshstep.Guard.
+type freshnessCheck interface {
+	RequireFresh(ctx context.Context, subject string) error
 }
 
 // principalReader answers the principal with a subject. It returns

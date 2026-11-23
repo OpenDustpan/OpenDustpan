@@ -170,18 +170,46 @@ type Service struct {
 	ownURLs    []*url.URL
 	checkURL   func(raw string) error
 	now        func() time.Time
-	// freshPolicy says if a write needs a fresh authentication. Nil requires
-	// one.
+	// freshGuard says if a write needs a fresh authentication, and runs
+	// checkFresh when it does.
+	freshGuard freshstep.Guard
+}
+
+// options holds the values that the options of NewService set.
+type options struct {
 	freshPolicy freshstep.Policy
 }
 
 // Option changes a Service that NewService makes.
-type Option func(*Service)
+type Option func(*options)
 
 // WithFreshPolicy sets the policy that says if a write needs a fresh
 // authentication. With no policy, or a nil policy, a write needs one.
 func WithFreshPolicy(p freshstep.Policy) Option {
-	return func(s *Service) { s.freshPolicy = p }
+	return func(o *options) { o.freshPolicy = p }
+}
+
+// newFreshGuard runs opts and returns the fresh step guard of their policy
+// with the check check. A nil policy requires a step (fail closed).
+func newFreshGuard(
+	opts []Option, check func(ctx context.Context, subject string) error,
+) (freshstep.Guard, error) {
+	o := options{freshPolicy: nil}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	policy := o.freshPolicy
+	if policy == nil {
+		policy = freshstep.PolicyFunc(nil)
+	}
+
+	guard, err := freshstep.NewGuard(policy, check)
+	if err != nil {
+		return freshstep.Guard{}, fmt.Errorf("%w: fresh step guard: %w", trustrule.ErrMissingDependency, err)
+	}
+
+	return guard, nil
 }
 
 // NewService returns a Service. It returns trustrule.ErrMissingDependency
@@ -218,12 +246,15 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 		store: cfg.Store, bundles: cfg.Bundles, sessions: cfg.Sessions, namespaces: cfg.Namespaces,
 		principals: cfg.Principals, authz: cfg.Authorizer,
 		reach: cfg.Reach, ownIssuer: cfg.OwnIssuer, ownURLs: own, checkURL: checkURL, now: now,
-		freshPolicy: nil,
+		freshGuard: freshstep.Guard{},
 	}
 
-	for _, opt := range opts {
-		opt(s)
+	guard, err := newFreshGuard(opts, s.checkFresh)
+	if err != nil {
+		return nil, err
 	}
+
+	s.freshGuard = guard
 
 	return s, nil
 }
@@ -610,21 +641,25 @@ func (s *Service) bundleEntry(e audit.Entry, ns namespace.Name, id trustrule.Bun
 	return e
 }
 
-// requireFresh returns nil when the request carries a fresh authentication
-// inside the freshness window: a console session that signed in recently
-// enough. A request with no console session, for example one with an access
-// token only, gives ErrFreshRequired, and a session with an old sign-in
-// gives ErrStaleToken. Any other error fails closed.
+// requireFresh runs the fresh step guard for the session in ctx. The guard
+// asks for no step when its policy does not require one, and otherwise runs
+// checkFresh, which reads the sign-in from ctx and needs no subject.
 //
 // Defense in depth: the handler wraps the routes in a session check too, and
 // the service repeats it, so a new caller of the service cannot skip the
-// check when the handler changes. It asks for no step when the policy does not
-// require one. This guard does not rely on the handler or on the store.
+// check when the handler changes. This guard does not rely on the handler or
+// on the store.
 func (s *Service) requireFresh(ctx context.Context) error {
-	if !freshstep.IsRequired(ctx, s.freshPolicy) {
-		return nil
-	}
+	return s.freshGuard.Require(ctx, "")
+}
 
+// checkFresh is the check of the fresh step guard. It returns nil when the
+// request carries a fresh authentication inside the freshness window: a
+// console session that signed in recently enough. A request with no console
+// session, for example one with an access token only, gives
+// ErrFreshRequired, and a session with an old sign-in gives ErrStaleToken.
+// Any other error fails closed.
+func (s *Service) checkFresh(ctx context.Context, _ string) error {
 	in, ok := sessionauth.SignInFrom(ctx)
 	if !ok || !sessionauth.FromSession(ctx) {
 		return ErrFreshRequired

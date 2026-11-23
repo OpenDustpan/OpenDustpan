@@ -70,6 +70,11 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		s.SetFreshPolicy(freshPolicyOf(cfg))
 	}
 
+	freshGuard, err := job.NewFreshGuard(freshPolicyOf(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("job service: %w", err)
+	}
+
 	starter, svcErr := job.NewService(job.ServiceConfig{
 		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: newJobPlanner(cfg),
 		Executors: []job.Executor{executor}, Decider: decider,
@@ -84,7 +89,7 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		// redaction of a log.
 		Artifacts: nil,
 		// The same setting decides in the handler, the service and the store.
-		FreshPolicy: freshPolicyOf(cfg),
+		FreshGuard: freshGuard,
 	})
 	if svcErr != nil {
 		return nil, fmt.Errorf("job service: %w", svcErr)

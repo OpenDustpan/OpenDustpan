@@ -93,14 +93,19 @@ func TestStoreWithoutPolicyRequiresTheStep(t *testing.T) {
 		return false, errSettingsDown
 	})
 	off := freshstep.PolicyFunc(func(context.Context) bool { return false })
+	on := freshstep.PolicyFunc(func(context.Context) bool { return true })
 	tests := []struct {
 		name   string
 		policy freshstep.Policy
+		set    bool // call SetFreshPolicy with policy, also when it is nil
 		want   bool
 	}{
-		{"no policy", nil, true},
-		{"unreadable setting", failing, true},
-		{"setting off", off, false},
+		{"no policy", nil, false, true},
+		{"nil policy set", nil, true, true},
+		{"nil policy func set", freshstep.PolicyFunc(nil), true, true},
+		{"unreadable setting", failing, true, true},
+		{"setting on", on, true, true},
+		{"setting off", off, true, false},
 	}
 
 	for _, tc := range tests {
@@ -108,7 +113,7 @@ func TestStoreWithoutPolicyRequiresTheStep(t *testing.T) {
 			t.Parallel()
 
 			s := jobstore.New(nil)
-			if tc.policy != nil {
+			if tc.set {
 				s.SetFreshPolicy(tc.policy)
 			}
 

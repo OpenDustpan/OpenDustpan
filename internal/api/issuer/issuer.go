@@ -82,11 +82,12 @@ type Handler struct {
 	sessions *sessionauth.Checker
 	policy   SessionPolicy
 	logger   *slog.Logger
-	// freshPolicy says if a change needs a fresh authentication. Nil
-	// requires the step (fail closed).
-	freshPolicy freshstep.Policy
-	mux         *route.Mux
-	routes      []Route
+	// freshGuard asks for a fresh authentication when the policy requires
+	// one. NewHandler sets a guard that always requires the step (fail
+	// closed); SetFreshPolicy replaces it.
+	freshGuard freshstep.Guard
+	mux        *route.Mux
+	routes     []Route
 }
 
 // NewHandler returns a Handler.
@@ -110,17 +111,20 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		issuer:      cfg.Issuer,
-		authn:       cfg.Authenticator,
-		authz:       cfg.Authorizer,
-		guard:       recorder.WithLimiter(cfg.DenialLimiter).WithSurface("issuer"),
-		sessions:    cfg.Sessions,
-		policy:      cfg.SessionPolicy,
-		logger:      cfg.Logger,
-		freshPolicy: nil,
-		mux:         route.NewMux(),
-		routes:      nil,
+		issuer:     cfg.Issuer,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		guard:      recorder.WithLimiter(cfg.DenialLimiter).WithSurface("issuer"),
+		sessions:   cfg.Sessions,
+		policy:     cfg.SessionPolicy,
+		logger:     cfg.Logger,
+		freshGuard: freshstep.Guard{},
+		mux:        route.NewMux(),
+		routes:     nil,
 	}
+
+	// A handler with no SetFreshPolicy call requires the fresh step.
+	h.SetFreshPolicy(nil)
 
 	h.routes = h.buildRoutes()
 	for _, rt := range h.routes {

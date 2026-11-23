@@ -11,14 +11,27 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
-// freshRig returns a rig whose service holds policy (nil: no policy) and whose
-// authorizer lets every subject read and approve on the unit.
+// freshRig returns a rig whose service holds the guard of policy (nil: no
+// policy) and whose authorizer lets every subject read and approve on the unit.
 func freshRig(t *testing.T, policy freshstep.Policy) *rig {
+	t.Helper()
+
+	guard, err := job.NewFreshGuard(policy)
+	if err != nil {
+		t.Fatalf("NewFreshGuard = %v, want nil", err)
+	}
+
+	return guardRig(t, guard)
+}
+
+// guardRig returns a rig whose service holds guard and whose authorizer lets
+// every subject read and approve on the unit.
+func guardRig(t *testing.T, guard freshstep.Guard) *rig {
 	t.Helper()
 
 	return newRig(t, func(cfg *job.ServiceConfig, r *rig) {
 		cfg.Approvers = openPolicy()
-		cfg.FreshPolicy = policy
+		cfg.FreshGuard = guard
 
 		for _, action := range []identity.Action{job.ActionJobRead, job.ActionJobApprove} {
 			r.authz.allow[string(action)+" "+r.unit.String()] = true
@@ -49,9 +62,9 @@ func recordedAuth(t *testing.T, r *rig) (string, bool) {
 
 // TestDestroyApprovalFollowsTheFreshPolicy is the table of the service layer.
 // The off rows pass with no step and record auth none. The on rows refuse with
-// no step, and a policy that is nil counts as on. Without the policy check in
-// checkApproval, the off rows fail (the approval is refused) or the on rows
-// fail (the approval passes).
+// no step, and a policy that is nil or a zero Guard counts as on. Without the
+// guard check in checkDestroyAuth, the off rows fail (the approval is refused)
+// or the on rows fail (the approval passes).
 func TestDestroyApprovalFollowsTheFreshPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -75,30 +88,42 @@ func TestDestroyApprovalFollowsTheFreshPolicy(t *testing.T) {
 		return a
 	}
 
+	// agent is an agent that acts for a person.
+	agent := func(*rig) job.Actor { return agentActor("carol", "dusty") }
+
 	tests := []struct {
 		name     string
 		policy   freshstep.Policy
+		zero     bool // the service holds the zero Guard, not the guard of policy
 		actor    func(r *rig) job.Actor
 		wantErr  error
 		wantAuth string
 	}{
-		{"off, token, no step", off, func(*rig) job.Actor { return tokenActor() }, nil, "none"},
-		{"off, no credential, no step", off, func(*rig) job.Actor { return actorOf("carol") }, nil, "none"},
-		{"off, session with a step", off, sessionActor, nil, "none"},
-		{"off, agent", off, func(*rig) job.Actor { return agentActor("carol", "dusty") }, job.ErrAgentDenied, ""},
-		{"on, token, no step", on, func(*rig) job.Actor { return tokenActor() }, job.ErrAuthStale, ""},
-		{"on, no step", on, func(*rig) job.Actor { return actorOf("carol") }, job.ErrAuthStale, ""},
-		{"on, agent", on, func(*rig) job.Actor { return agentActor("carol", "dusty") }, job.ErrAuthStale, ""},
-		{"on, session with a step", on, sessionActor, nil, "mfa"},
-		{"nil policy, token, no step", nil, func(*rig) job.Actor { return tokenActor() }, job.ErrAuthStale, ""},
-		{"nil policy, session with a step", nil, sessionActor, nil, "mfa"},
+		{"off, token, no step", off, false, func(*rig) job.Actor { return tokenActor() }, nil, "none"},
+		{"off, no credential, no step", off, false, func(*rig) job.Actor { return actorOf("carol") }, nil, "none"},
+		{"off, session with a step", off, false, sessionActor, nil, "none"},
+		{"off, agent", off, false, agent, job.ErrAgentDenied, ""},
+		{"on, token, no step", on, false, func(*rig) job.Actor { return tokenActor() }, job.ErrAuthStale, ""},
+		{"on, no step", on, false, func(*rig) job.Actor { return actorOf("carol") }, job.ErrAuthStale, ""},
+		{"on, agent", on, false, agent, job.ErrAuthStale, ""},
+		{"on, session with a step", on, false, sessionActor, nil, "mfa"},
+		{"nil policy, token, no step", nil, false, func(*rig) job.Actor { return tokenActor() }, job.ErrAuthStale, ""},
+		{"nil policy, session with a step", nil, false, sessionActor, nil, "mfa"},
+		{"zero guard, token, no step", nil, true, func(*rig) job.Actor { return tokenActor() }, job.ErrAuthStale, ""},
+		{"zero guard, no step", nil, true, func(*rig) job.Actor { return actorOf("carol") }, job.ErrAuthStale, ""},
+		{"zero guard, session with a step", nil, true, sessionActor, nil, "mfa"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			r := freshRig(t, tc.policy)
+			var r *rig
+			if tc.zero {
+				r = guardRig(t, freshstep.Guard{})
+			} else {
+				r = freshRig(t, tc.policy)
+			}
 			r.seed(func(j *job.Job) { j.Spec.Operation = job.OperationDestroy })
 
 			_, err := r.svc.Approve(t.Context(), tc.actor(r), approveID, job.VerdictApprove, r.binding(), "")
@@ -174,6 +199,43 @@ func TestFreshPolicyDoesNotChangeOtherApprovals(t *testing.T) {
 
 			if got, ok := recordedAuth(t, r); ok {
 				t.Errorf("audit auth = %q, want none recorded", got)
+			}
+		})
+	}
+}
+
+// TestNewFreshGuard proves that the guard refuses with ErrAuthStale when the
+// policy requires a step, also for a nil policy, and passes when it does not.
+func TestNewFreshGuard(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		policy  freshstep.Policy
+		wantErr error
+	}{
+		{"off", freshstep.PolicyFunc(func(context.Context) bool { return false }), nil},
+		{"on", freshstep.PolicyFunc(func(context.Context) bool { return true }), job.ErrAuthStale},
+		{"nil policy", nil, job.ErrAuthStale},
+		{"nil policy func", freshstep.PolicyFunc(nil), job.ErrAuthStale},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			g, err := job.NewFreshGuard(tc.policy)
+			if err != nil {
+				t.Fatalf("NewFreshGuard = %v, want nil", err)
+			}
+
+			err = g.Require(t.Context(), "carol")
+			if tc.wantErr == nil && err != nil {
+				t.Fatalf("Require = %v, want nil", err)
+			}
+
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Require = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}

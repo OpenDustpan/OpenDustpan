@@ -45,24 +45,15 @@ type PrincipalReader interface {
 	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
 }
 
-// Freshness asks for a recent MFA step before an operation that shows a
-// secret (ADR 56). Built-in MFA (ADR 46) does not exist yet, so the server
-// wires no Freshness: with MFA off, ADR 56 adds no step (decision 5).
-type Freshness interface {
-	// RequireFresh returns nil when the caller subject passed an MFA step
-	// inside the freshness window of token creation. Otherwise it returns
-	// an error that asks for a new MFA step. The session of the caller
-	// comes from ctx.
-	RequireFresh(ctx context.Context, subject string) error
-}
-
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store      Store
 	Principals PrincipalReader
-	// Freshness checks the MFA step before a create or a rotation. Nil
-	// adds no step: MFA does not exist yet (ADR 56, decision 5).
-	Freshness Freshness
+	// Freshness is the guard that asks for a fresh step before a create or
+	// a rotation. Its check returns nil when the caller passed a step inside
+	// the freshness window, and otherwise an error that asks for a new step.
+	// Nil asks for no step at this layer: the HTTP handler asks.
+	Freshness *freshstep.Guard
 	// Authorizer decides principal:manage-tokens on the service principal
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).
@@ -105,33 +96,22 @@ type Config struct {
 type Service struct {
 	store      Store
 	principals PrincipalReader
-	freshness  Freshness
-	freshGuard freshstep.Guard
-	// freshPolicy says if the freshness port runs.
-	freshPolicy freshstep.Policy
-	authz       identity.Authorizer
-	reach       access.ReachConfig
-	makers      MakerChecker
-	tempAdmins  tempadmin.Reader
-	logger      *slog.Logger
-	now         func() time.Time
-	newID       func(prefix string) string
+	// freshGuard asks for a fresh step before a create or a rotation. Nil
+	// asks for no step at this layer.
+	freshGuard *freshstep.Guard
+	authz      identity.Authorizer
+	reach      access.ReachConfig
+	makers     MakerChecker
+	tempAdmins tempadmin.Reader
+	logger     *slog.Logger
+	now        func() time.Time
+	newID      func(prefix string) string
 }
 
 var _ identity.Authenticator = (*Service)(nil)
 
-// Option changes a Service that NewService makes.
-type Option func(*Service)
-
-// WithFreshPolicy sets the policy that says if the Freshness port runs. With
-// no policy, or a nil policy, the port always runs. A Service with no
-// Freshness port asks for no step, whatever the policy says.
-func WithFreshPolicy(p freshstep.Policy) Option {
-	return func(s *Service) { s.freshPolicy = p }
-}
-
 // NewService returns a Service. Store and Principals are required.
-func NewService(cfg Config, opts ...Option) (*Service, error) {
+func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
 		return nil, fmt.Errorf("%w: access token store", ErrMissingDependency)
@@ -155,54 +135,19 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 	}
 
 	s := &Service{
-		store:       cfg.Store,
-		principals:  cfg.Principals,
-		freshness:   nil,
-		freshGuard:  freshstep.Guard{},
-		freshPolicy: nil,
-		authz:       cfg.Authorizer,
-		reach:       cfg.Reach,
-		makers:      cfg.Makers,
-		tempAdmins:  cfg.TempAdmins,
-		logger:      logger,
-		now:         now,
-		newID:       newID,
+		store:      cfg.Store,
+		principals: cfg.Principals,
+		freshGuard: cfg.Freshness,
+		authz:      cfg.Authorizer,
+		reach:      cfg.Reach,
+		makers:     cfg.Makers,
+		tempAdmins: cfg.TempAdmins,
+		logger:     logger,
+		now:        now,
+		newID:      newID,
 	}
-
-	for _, opt := range opts {
-		opt(s)
-	}
-
-	s.freshness = cfg.Freshness
-
-	guard, err := newFreshGuard(cfg.Freshness, s.freshPolicy)
-	if err != nil {
-		return nil, err
-	}
-
-	s.freshGuard = guard
 
 	return s, nil
-}
-
-// newFreshGuard holds the port f behind a guard of the policy p. A nil port
-// gives the zero guard, which a Service never calls. A nil policy requires the
-// step, as before the setting existed.
-func newFreshGuard(f Freshness, p freshstep.Policy) (freshstep.Guard, error) {
-	if f == nil {
-		return freshstep.Guard{}, nil
-	}
-
-	if p == nil {
-		p = freshstep.PolicyFunc(nil)
-	}
-
-	guard, err := freshstep.NewGuard(p, f.RequireFresh)
-	if err != nil {
-		return freshstep.Guard{}, fmt.Errorf("%w: freshness guard: %w", ErrMissingDependency, err)
-	}
-
-	return guard, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -920,14 +865,14 @@ func (s *Service) expiry(ctx context.Context, at, want time.Time) (time.Time, er
 	return expiry(p, at, want)
 }
 
-// requireFresh runs the MFA freshness check when one is wired and the policy
-// requires a step.
+// requireFresh runs the fresh step guard when one is wired. The guard asks
+// for a step only when its policy requires one.
 //
 // Defense in depth: the handler and the store ask the same policy too. This
 // guard stays so that a new caller of the service cannot skip the check, and
 // it does not rely on the handler or on the store.
 func (s *Service) requireFresh(ctx context.Context, subject string) error {
-	if s.freshness == nil {
+	if s.freshGuard == nil {
 		return nil
 	}
 

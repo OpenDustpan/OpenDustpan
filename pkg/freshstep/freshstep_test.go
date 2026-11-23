@@ -208,32 +208,45 @@ func TestGuardRequire(t *testing.T) {
 	}
 }
 
-// TestIsRequiredFailsClosed checks that a nil policy and a nil PolicyFunc
-// require a step, and that a policy that answers false does not.
-func TestIsRequiredFailsClosed(t *testing.T) {
+// TestPolicyFuncGuardFailsClosed checks that a Guard of a nil PolicyFunc, and
+// the zero Guard, run the check or refuse, and that a PolicyFunc that answers
+// false skips the check.
+func TestPolicyFuncGuardFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	var nilFunc freshstep.PolicyFunc
 
+	on := freshstep.PolicyFunc(func(context.Context) bool { return true })
+	off := freshstep.PolicyFunc(func(context.Context) bool { return false })
+
 	tests := []struct {
-		name   string
-		policy freshstep.Policy
-		want   bool
+		name    string
+		policy  freshstep.Policy
+		wantErr error
 	}{
-		{name: "nil policy", policy: nil, want: true},
-		{name: "nil func", policy: nilFunc, want: true},
-		{name: "func on", policy: freshstep.PolicyFunc(func(context.Context) bool { return true }), want: true},
-		{name: "func off", policy: freshstep.PolicyFunc(func(context.Context) bool { return false }), want: false},
+		{name: "nil func", policy: nilFunc, wantErr: errRefused},
+		{name: "func on", policy: on, wantErr: errRefused},
+		{name: "func off", policy: off, wantErr: nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := freshstep.IsRequired(t.Context(), tt.policy); got != tt.want {
-				t.Fatalf("IsRequired() = %v, want %v", got, tt.want)
+			g, err := freshstep.NewGuard(tt.policy, func(context.Context, string) error { return errRefused })
+			if err != nil {
+				t.Fatalf("NewGuard() error = %v", err)
+			}
+
+			if reqErr := g.Require(t.Context(), "subject"); !errors.Is(reqErr, tt.wantErr) {
+				t.Fatalf("Require() error = %v, want %v", reqErr, tt.wantErr)
 			}
 		})
+	}
+
+	var zero freshstep.Guard
+	if err := zero.Require(t.Context(), "subject"); !errors.Is(err, freshstep.ErrNilCheck) {
+		t.Fatalf("zero Guard Require() error = %v, want ErrNilCheck", err)
 	}
 }
 

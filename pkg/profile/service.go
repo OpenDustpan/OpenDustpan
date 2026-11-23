@@ -60,18 +60,51 @@ type Service struct {
 	evaluator  Evaluator
 	now        func() time.Time
 	logger     *slog.Logger
-	// freshPolicy says if a reveal needs a fresh authentication. Nil requires
-	// one.
+	// freshGuard says if a reveal needs a fresh authentication. Its check
+	// returns ErrFreshRequired, so a refusal of the guard means that the
+	// reveal needs the check of the caller.
+	freshGuard freshstep.Guard
+}
+
+// options holds the values that the options of NewService set.
+type options struct {
 	freshPolicy freshstep.Policy
 }
 
 // Option changes a Service that NewService makes.
-type Option func(*Service)
+type Option func(*options)
 
 // WithFreshPolicy sets the policy that says if a reveal needs a fresh
 // authentication. With no policy, or a nil policy, a reveal needs one.
 func WithFreshPolicy(p freshstep.Policy) Option {
-	return func(s *Service) { s.freshPolicy = p }
+	return func(o *options) { o.freshPolicy = p }
+}
+
+// refuseFresh is the check of the fresh step guard. The check of the caller
+// needs the options of the read, so the guard only says that a step is needed.
+func refuseFresh(context.Context, string) error {
+	return ErrFreshRequired
+}
+
+// newFreshGuard runs opts and returns the fresh step guard of their policy.
+// A nil policy requires a step (fail closed).
+func newFreshGuard(opts []Option) (freshstep.Guard, error) {
+	o := options{freshPolicy: nil}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	policy := o.freshPolicy
+	if policy == nil {
+		policy = freshstep.PolicyFunc(nil)
+	}
+
+	guard, err := freshstep.NewGuard(policy, refuseFresh)
+	if err != nil {
+		return freshstep.Guard{}, fmt.Errorf("%w: fresh step guard: %w", ErrMissingDependency, err)
+	}
+
+	return guard, nil
 }
 
 // Actor is the caller of a use case. By is the template of the audit entry:
@@ -163,13 +196,14 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	s := &Service{
-		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, audit: cfg.Audit, authz: cfg.Authorizer,
-		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now, logger: logger, freshPolicy: nil,
+	guard, err := newFreshGuard(opts)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, opt := range opts {
-		opt(s)
+	s := &Service{
+		store: cfg.Store, namespaces: cfg.Namespaces, sealer: cfg.Sealer, audit: cfg.Audit, authz: cfg.Authorizer,
+		sessions: cfg.Sessions, evaluator: cfg.Evaluator, now: now, logger: logger, freshGuard: guard,
 	}
 
 	return s, nil
@@ -536,14 +570,14 @@ func (s *Service) authorizeReveal(ctx context.Context, a *Actor, t Target, o Rea
 
 // requireFresh runs the check of a fresh authentication of a reveal. A refusal
 // writes the audit entry of a failed reveal, and fails closed with the error
-// of the check. It asks for no step, and writes no entry, when the policy does
-// not require a step.
+// of the check. It asks for no step, and writes no entry, when the fresh step
+// guard does not require a step.
 //
 // Defense in depth: the handler asks the same policy too. This check stays so
 // that a new caller of the service cannot skip it, and it does not rely on the
 // handler or on the store.
 func (s *Service) requireFresh(ctx context.Context, a *Actor, t Target, o ReadOptions) error {
-	if !freshstep.IsRequired(ctx, s.freshPolicy) {
+	if s.freshGuard.Require(ctx, a.By.Subject) == nil {
 		return nil
 	}
 

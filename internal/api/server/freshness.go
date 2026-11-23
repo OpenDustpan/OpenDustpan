@@ -77,15 +77,15 @@ const freshStepRequiredCode = sessionauth.FreshStepRequiredCode
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
 
-// freshRequiredKey carries the answer function of the fresh step policy.
-type freshRequiredKey struct{}
+// freshGuardKey carries the fresh step guard of the handler.
+type freshGuardKey struct{}
 
 // withFreshness returns ctx with the freshness check and the fresh step
-// policy of h. A handler that asks for a step calls it before requireFresh.
+// guard of h. A handler that asks for a step calls it before requireFresh.
 func (h *Handler) withFreshness(ctx context.Context) context.Context {
 	ctx = context.WithValue(ctx, freshnessKey{}, h.checkTokenFreshness)
 
-	return context.WithValue(ctx, freshRequiredKey{}, h.freshRequired)
+	return context.WithValue(ctx, freshGuardKey{}, h.freshGuard)
 }
 
 // freshWindow is the token freshness window that a check may compare: 0,
@@ -123,13 +123,13 @@ func (w freshWindow) duration() time.Duration { return time.Duration(w) }
 // no check in its context returns errNoFreshnessCheck. With the setting
 // freshAuthEnabled off, it asks for no step and returns nil.
 func requireFresh(r *http.Request) error {
-	// Defense in depth: each handler that asks for a step asks the policy
+	// Defense in depth: each handler that asks for a step asks the guard
 	// through this function, and the services and the store hold the same
 	// policy. This guard does not rely on the route table, the services or the
-	// store. A request context with no policy requires the step (fail closed).
+	// store. A request context with no guard requires the step (fail closed).
 	ctx := r.Context()
 
-	if required, ok := ctx.Value(freshRequiredKey{}).(func(context.Context) bool); ok && !required(ctx) {
+	if guard, ok := ctx.Value(freshGuardKey{}).(freshstep.Guard); ok && guard.Require(ctx, "") == nil {
 		return nil
 	}
 
@@ -203,7 +203,7 @@ func (h *Handler) freshnessWindow(ctx context.Context) freshWindow {
 //
 // With the setting freshAuthEnabled off, it returns nil: nothing is asked.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
-	// Defense in depth: requireFresh asks the policy too. This guard stays, so
+	// Defense in depth: requireFresh asks the guard too. This guard stays, so
 	// that a caller of this check, for example a service through the context,
 	// cannot skip the setting. It does not rely on the services or the store.
 	if !h.freshRequired(r.Context()) {
@@ -217,13 +217,35 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 // authentication. The server sets it once, before the handler serves a
 // request. With no policy, each change needs the step.
 func (h *Handler) SetFreshPolicy(p freshstep.Policy) {
-	h.freshPolicy = p
+	if p == nil {
+		// NewGuard refuses a nil policy. The nil PolicyFunc is a policy
+		// that always requires the step, so a nil policy fails closed.
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	h.freshGuard = newFreshGuard(p)
+}
+
+// newFreshGuard returns the fresh step guard of p. Its check returns
+// errFreshStepRequired, so Require returns nil only when p asks for no step.
+// Each site that gets a refusal runs its own check of the request.
+func newFreshGuard(p freshstep.Policy) freshstep.Guard {
+	guard, err := freshstep.NewGuard(p, func(context.Context, string) error { return errFreshStepRequired })
+	if err != nil {
+		// NewGuard refuses only a nil policy or a nil check, and both are
+		// set here. The zero Guard runs its check and refuses, so this also
+		// fails closed.
+		return freshstep.Guard{}
+	}
+
+	return guard
 }
 
 // freshRequired reports whether the installation requires a fresh step. A
-// handler with no policy requires it (fail closed).
+// handler with no policy, or a guard that cannot answer, requires it (fail
+// closed).
 func (h *Handler) freshRequired(ctx context.Context) bool {
-	return freshstep.IsRequired(ctx, h.freshPolicy)
+	return h.freshGuard.Require(ctx, "") != nil
 }
 
 // checkSignInFreshness runs the sign-in age check of checkTokenFreshness with

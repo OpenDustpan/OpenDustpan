@@ -9,7 +9,6 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -109,9 +108,12 @@ func (s *service) checkApproval(ctx context.Context, j *Job, a Actor, gates []Ga
 //
 // Defense in depth: the HTTP handler and the job store check the proof of a
 // destroy too, with the same policy. This check stays so that another caller
-// cannot skip it. It does not rely on them.
+// cannot skip it. It does not rely on them. A zero guard requires the step, so
+// a service without a guard fails closed.
 func (s *service) checkDestroyAuth(ctx context.Context, a Actor, ap *Approval) error {
-	if !freshstep.IsRequired(ctx, s.fresh) {
+	// The guard returns nil only when the policy requires no step. Any error
+	// from it means that the step is required: the session proof below decides.
+	if err := s.fresh.Require(ctx, a.Principal.Subject); err == nil {
 		ap.Auth, ap.AuthAt = ConfirmAuthNone, time.Time{}
 
 		return nil

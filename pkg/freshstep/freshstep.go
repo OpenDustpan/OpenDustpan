@@ -33,16 +33,6 @@ func (f PolicyFunc) Required(ctx context.Context) bool {
 	return f(ctx)
 }
 
-// IsRequired reports whether p requires a fresh step. A nil policy requires
-// one (fail closed), so a component that got no policy asks as it did before.
-func IsRequired(ctx context.Context, p Policy) bool {
-	if p == nil {
-		return true
-	}
-
-	return p.Required(ctx)
-}
-
 // readFunc reads the setting freshAuthEnabled.
 type readFunc func(ctx context.Context) (bool, error)
 

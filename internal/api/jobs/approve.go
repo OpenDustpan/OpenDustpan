@@ -200,7 +200,9 @@ func (h *Handler) checkDestroyFresh(ctx context.Context, p identity.Principal, t
 		return nil
 	}
 
-	if !freshstep.IsRequired(ctx, h.fresh) {
+	// The guard reads the setting here, at the point of use. Its check always
+	// refuses, so a nil result means that the policy requires no step.
+	if h.freshGuard.Require(ctx, p.Subject) == nil {
 		if p.Kind == identity.KindAgent {
 			return job.ErrAgentDenied
 		}
@@ -216,6 +218,25 @@ func (h *Handler) checkDestroyFresh(ctx context.Context, p identity.Principal, t
 	default:
 		return job.ErrAuthStale
 	}
+}
+
+// newDestroyFreshGuard returns the guard of the approval of a destroy. Its
+// check returns job.ErrAuthStale, because this handler has no session MFA
+// proof yet. A nil policy gives a policy that always requires the step (fail
+// closed).
+func newDestroyFreshGuard(p freshstep.Policy) freshstep.Guard {
+	if p == nil {
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	g, err := freshstep.NewGuard(p, func(context.Context, string) error { return job.ErrAuthStale })
+	if err != nil {
+		// NewGuard fails only on a nil policy or a nil check. The zero Guard
+		// refuses each request (fail closed).
+		return freshstep.Guard{}
+	}
+
+	return g
 }
 
 // The refusal names the sign-in path and the ways to enroll a first factor.

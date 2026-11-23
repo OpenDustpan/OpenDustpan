@@ -38,9 +38,9 @@ const createAttempts = 2
 // Store serves job.Store and job.FreezeStore from one Runner.
 type Store struct {
 	run Runner
-	// fresh says if the approval of a destroy needs a fresh step. Nil
-	// requires the step (fail closed).
-	fresh freshstep.Policy
+	// fresh says if the approval of a destroy needs a fresh step. The zero
+	// Guard requires the step (fail closed).
+	fresh freshstep.Guard
 }
 
 var (
@@ -49,23 +49,39 @@ var (
 	_ job.FinalVersionReader = (*Store)(nil)
 )
 
-// New returns the job stores over run.
+// New returns the job stores over run. Its guard is the zero Guard, so each
+// approval of a destroy needs the step until SetFreshPolicy runs.
 func New(run Runner) *Store {
-	return &Store{run: run, fresh: nil}
+	return &Store{run: run, fresh: freshstep.Guard{}}
 }
 
 // SetFreshPolicy sets the policy that says if the approval of a destroy needs
 // a fresh step. The server sets it once, before the store serves a request.
 // With no policy, each approval of a destroy needs the step.
 func (s *Store) SetFreshPolicy(p freshstep.Policy) {
-	s.fresh = p
+	if p == nil {
+		p = freshstep.PolicyFunc(nil)
+	}
+
+	g, err := freshstep.NewGuard(p, func(context.Context, string) error {
+		return job.ErrAuthStale
+	})
+	if err != nil {
+		// NewGuard fails only on a nil policy or a nil check, and neither is
+		// nil here. Keep the zero Guard, which requires the step (fail closed).
+		s.fresh = freshstep.Guard{}
+
+		return
+	}
+
+	s.fresh = g
 }
 
 // FreshStepRequired reports whether the approval of a destroy needs a fresh
 // step. It is true with no policy, and when the policy cannot read the
-// setting.
+// setting. Any error from the guard means that the step is required.
 func (s *Store) FreshStepRequired(ctx context.Context) bool {
-	return freshstep.IsRequired(ctx, s.fresh)
+	return s.fresh.Require(ctx, "") != nil
 }
 
 // Create implements job.Store.
