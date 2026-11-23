@@ -1626,13 +1626,26 @@ func restoreModel() costModel {
 			breakGlassFloorTrips + breakGlassPasswordTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + sharingRuleTrips + trustBundleTrips +
 			updateLeaseExpireTrips + swappedSettingTrips + settingChangeEntryTrips - eventReceiptTrips - profileOpenSessionTrips +
-			firstAdministratorTrips + claimTableTrips,
+			firstAdministratorTrips + claimTableTrips + housekeepingSeedTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// housekeepingSeedTrips is the change in the fixed part for the housekeeping
+// principals and their grants. The baseline seeds them, so the staged schema
+// holds them before the load: the stage clears the staged grants and the
+// staged principals with one statement each. The admin of this test is a
+// static token, so before the seed the backup held no row of either table and
+// the load wrote no batch for them. The backup now holds the seeded rows (one
+// principal for each purpose, one grant on the installation for each purpose
+// that acts on it and one grant on acme for each purpose that acts inside a
+// namespace), fewer rows than one batch, so the load writes one batch
+// transaction for each of the 2 tables: begin, the bounds, the search path,
+// the insert and the commit. The count does not grow with the units.
+const housekeepingSeedTrips = 2 + 2*5
 
 // swappedSettingTrips is the number of round trips of the read of the restore
 // access setting row in the swap transaction: one SELECT after the swap and
