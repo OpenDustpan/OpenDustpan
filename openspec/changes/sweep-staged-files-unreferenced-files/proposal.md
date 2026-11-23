@@ -75,9 +75,9 @@ Each fact names its file, line and function on main. The change specifies only t
 
 ## Owner decisions that apply
 
-The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
+The project owner decided this on 23 Nov 2026. The decision binds this change. The quote is as written.
 
-- **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+- **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**. The owner said: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the team. The pool has the sweep purpose. The host identity of the pool has no write access. ADR 164 decisions 1 and 5 and ADR 343 decisions 3 to 5 say so. The server has no installation sweep pool. The pool management API accepts the sweep purpose on a pool of a namespace. It applies the same rules as for any other purpose. This change names no pool: the sweep is a server task of the installation, in the worker component.
 
 ## ADR check
 
@@ -112,6 +112,15 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Text and code say that a publish moves a staged file.
 - Conflict: none.
 
+**ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors** (owner-tagged: decision 1).
+
+- Decisions that apply: 1 (current).
+- Changed by: none. ADR 396 changes ADR 164 decision 5 and extends ADR 343 decision 3.
+- Current rule: this ADR.
+- Quote: "A sweep runs on a runner pool of the team that has the sweep purpose." and "The pool management API accepts the sweep purpose on a pool of a namespace. It applies the same rules as for any other purpose."
+- Effect: None for the design. The change names no pool.
+- Conflict: none.
+
 ## Open questions
 
 none
@@ -119,7 +128,7 @@ none
 Questions considered and answered:
 
 - How does the sweep run across namespaces without a later upload? ADR 72 decisions 1 and 3: a schedule row with next_run_at and a claimed durable run. A missed tick runs once.
-- Where does the sweep run, and does it need a runner pool? Owner decision, 13 Nov 2026 (queue P14): a sweep purpose is allowed only on an installation pool, never on a namespace pool. This change uses no runner pool: the sweep is a server task of the installation, in the worker component.
+- Where does the sweep run, and does it need a runner pool? Owner decision, 23 Nov 2026 (ADR 396): a sweep of a team runs on a runner pool of the team. This change names no pool and uses no runner pool. The sweep is a server task of the installation, in the worker component.
 - Is the staged age 24 hours fixed or a setting? Fixed 24 hours in code, as the issue states. No setting is added.
 - Does the sweep need a schema migration? ADR 322 decision 1: edit the baseline in place. No numbered migration.
 - Do the mark tables survive a restore? ADR 72 decision 5: they are control tables outside the restore swap, so an old mark never returns.

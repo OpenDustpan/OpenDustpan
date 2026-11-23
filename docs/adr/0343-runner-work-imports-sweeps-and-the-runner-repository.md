@@ -10,6 +10,10 @@ Changes:
 - Extends ADR 164 decision 9: converters run on a pool that has the sweep purpose.
 - Extends ADR 282 decision 4: the runner repository is an exception for the runner only.
 
+Changed by:
+
+- ADR 396 extends decision 3: sweeps run on a runner of the team. No installation sweep pool exists.
+
 ## Context
 
 ADR 241 decision 2 says that an import runs in the server. Decision 3 lets a workstation read a source with the CLI of the tool and upload each version. ADR 241 rejects a job on a runner. Its reason: a source that is an HTTP API or an object store needs no CLI.

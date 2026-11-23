@@ -32,9 +32,7 @@ If the pool of the claim has the sweep purpose, then the server SHALL refuse a j
 - **WHEN** a runner of a pool with the sweep purpose asks for a job session
 - **THEN** the server refuses the session and opens none
 
-#### Scenario: Namespace sweep pool
-- **WHEN** a namespace pool is set to the sweep purpose
-- **THEN** the server refuses the setting
+A namespace pool with the sweep purpose is accepted by design (ADR 396 decision 1); this change adds no refusal.
 
 ### Requirement: Cancel on renew
 
@@ -56,13 +54,23 @@ While the claim is live, the server SHALL accept step begin, log chunks and step
 
 If a log chunk breaks the size cap, the sequence rule or the hash check, then the server SHALL refuse it and keep no bytes from it.
 
+For each such refusal, the server SHALL write one audit entry with a reason.
+
 #### Scenario: Wrong hash
 - **WHEN** the body hash differs from Dustpan-Content-SHA256
 - **THEN** the server refuses the chunk and the sequence does not move
 
+#### Scenario: Wrong body hash is audited
+- **WHEN** the body hash differs from the signed Dustpan-Content-SHA256
+- **THEN** the server answers 401 `bad-proof` and writes one audit entry with the action `runner.log.refused` and the reason `hash-body`
+
 #### Scenario: Out of order
 - **WHEN** the launcher sends a sequence number that skips one
 - **THEN** the server refuses the chunk
+
+#### Scenario: Audit entry for a refusal
+- **WHEN** the server refuses a chunk for any reason of the log check, the size cap, the header check or a body that cannot be read
+- **THEN** the server writes one audit entry with the action `runner.log.refused` and the reason, and no chunk bytes
 
 ### Requirement: Session caps
 

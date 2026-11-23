@@ -4,11 +4,11 @@ version: 5
 
 ## Why
 
-**Persona: runner operator.** Runner operator runs cloud sweeps on runners of the installation. The operator needs a sweep poll to claim only sweep work, a report upload to stay bounded and encrypted, and pool setup to refuse a namespace pool with the sweep purpose at once.
+**Persona: runner operator.** Runner operator runs cloud sweeps on the runners of the team. The operator needs three things. A sweep poll claims only sweep work. A report upload stays bounded and encrypted. The pool API accepts a team pool with the sweep purpose.
 
 The user path this change must make work:
 
-1. **API.** Create an operator pool with the sweep purpose, join a runner, and poll for sweep work under /runner/v1.
+1. **API.** Create a pool of the namespace with the sweep purpose, join a runner, and poll for sweep work under /runner/v1.
 2. **API.** Open a job session for the sweep claim, upload the sweep report, then call finish under /runner/v1.
 3. **Docs page.** Read the sweep entries in docs/reference/runner-api.md.
 4. **E2e.** Drive a real runner poll, report upload and finish against the TLS server.
@@ -17,7 +17,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A caller creates or updates a namespace pool with the sweep purpose. | 422 {"code": "runner.invalid", "message": "only an installation pool can have the sweep purpose"}; no pool is stored. | Create the pool again with purpose `jobs` through the runner pool routes of the namespace. |
+| A caller changes the purpose of a pool. | 409 with the immutable error of the pool routes. The purpose stays. | Create a new pool with the other purpose through the runner pool routes of the namespace. |
 | The report is above the bound, or a line is above 64 KiB. | 413 with a body of the runner protocol error shape; the sweep ends failed and the staged report is dropped. | Upload a smaller report to the new route `POST /runner/v1/session/sweep/report`. |
 | The launcher calls finish with no stored report. | 400 {"code": "invalid", "message": "no complete sweep report"}; the sweep ends failed. | Upload the report to the new route `POST /runner/v1/session/sweep/report`, then call the new route `POST /runner/v1/session/sweep/finish`. |
 
@@ -30,8 +30,9 @@ Evidence for the claims above:
 - Add the sweep claimer on durable operations of kind runner.SweepKind(pool), chosen by the stored purpose of the pool.
 - Add two new routes under /runner/v1: `POST /runner/v1/session/sweep/report` and `POST /runner/v1/session/sweep/finish`. They stream a bounded report and close the sweep. The launcher opens its session on the existing session route under /runner/v1 with the handoff of the sweep claim.
 - The existing poll route under /runner/v1 calls the sweep claimer for a pool with the sweep purpose.
-- The pool service refuses a namespace pool with the sweep purpose at create and at update, and accepts it only for an installation pool.
-- The pool service refuses a purpose change of a pool that has queued or claimed operations of the old purpose.
+- The pool routes accept the sweep purpose on a namespace pool at create, with the same rules as for the jobs purpose. The change adds no refusal of the sweep purpose and no installation pool. The host identity of a sweep pool stays read-only.
+- The purpose of a pool never changes on main, so the change adds no purpose-change guard.
+- Wire the sweep claimer into the handler in pkg/dustpan/runners.go, where `Sweeps` is nil today.
 - Add the sweep entries to docs/reference/runner-api.md.
 
 Out of scope:
@@ -51,7 +52,7 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- The runner operator learns the purpose refusal at pool create, and the error names the allowed purpose for a namespace pool.
+- The runner operator creates a sweep pool through the same routes as a jobs pool, and the pool list shows its purpose.
 - A failed report drops its staged blob, so a retry starts clean with no manual cleanup.
 
 ## What main already does
@@ -61,12 +62,15 @@ Each fact names its file, line and function on main. The change specifies only t
 - runner.SweepKind(pool) already names the durable operation kind of a sweep pool. (`pkg/runner/runner.go:152 (func SweepKind)`)
 - A test shows a release goes through the claimer in the runner protocol adapter. (`internal/api/runnerapi/protocol_review_test.go:22 (func TestReleaseGoesThroughTheClaimer)`)
 - The error code runner.invalid exists for a bad pool setting. (`internal/errcode/catalog_runner.go:10 (runner.invalid)`)
+- The poll already calls a sweep claimer for a pool with the sweep purpose, and the handler config field `Sweeps` is nil in the server wiring. (`internal/api/runnerapi/protocol.go:536 (func claimSweep)`, `pkg/dustpan/runners.go:205`)
+- The port runner.SweepClaimer exists, and no adapter implements it. (`pkg/runner/store.go:251 (type SweepClaimer)`)
+- Pool.Validate accepts the purposes jobs and sweeps, and CheckUpdate refuses a purpose change with ErrImmutable. The pool routes refuse no purpose. (`pkg/runner/runner.go:358 (func Pool.Validate)`, `pkg/runner/runner.go:385 (func CheckUpdate)`)
 
 ## Owner decisions that apply
 
-The project owner approved these decisions on 13 Nov 2026 ("these are all approved as written"). They bind this change. Each is quoted as written.
+The project owner decided this on 23 Nov 2026. It binds this change. This section quotes it.
 
-- **Owner decision, 13 Nov 2026 (queue P14)**, Batch 12: #940 sweep runners: "a pool may have the sweep purpose only when it is an operator (installation) pool, never a namespace pool. Reason: keeps both owner lines, 47.3 "a sweep never runs on user runners" and ADR 343 d3-d5 (owner); fail closed (a namespace pool with the sweep purpose is refused)."
+- **Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)**: "Sweeps must run on the user's own runners as we most recently re-designed it." A sweep runs on a runner pool of the team (a namespace pool) that has the sweep purpose. The host identity of the pool has no write access (ADR 164 decisions 1 and 5, ADR 343 decision 3). The server has no installation sweep pool. The pool API accepts the sweep purpose on a namespace pool with the same rules as for any other purpose. The 13 Nov 2026 answer and its line "a sweep never runs on user runners" no longer hold.
 
 ## ADR check
 
@@ -85,7 +89,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 164: Cloud sweeps on the team's runner, with the runner's read-only identity** (not owner-tagged).
 
 - Decisions that apply: 3 (current), 5 (changed), 11 (current), 12 (current), 13 (current).
-- Changed by: ADR 166 changes decisions 14, 15 and 19; ADR 210 changes; ADR 343 changes decision 5; ADR 343 extends decision 9. Chain to the end: ADR 166, ADR 210, ADR 343, ADR 286, ADR 247.
+- Changed by: ADR 166 changes decisions 14, 15 and 19; ADR 210 changes; ADR 343 changes decision 5; ADR 343 extends decision 9; ADR 396 changes decision 5. Chain to the end: ADR 166, ADR 210, ADR 343, ADR 286, ADR 247, ADR 396.
 - Current rule: this ADR, with ADR 166, 210, 343.
 - Quote: "The durable operation. The start of a sweep starts one durable operation of the kind `unmanaged.sweep.<pool ID>`, with the start key `<sweep ID>`, in the transaction that stores the sweep."
 - Quote: "A sweep pool runs only sweeps. A runner pool gets a **purpose**: `jobs` or `sweeps`. A sweep target must name a pool of the purpose `sweeps`, and a job must name a pool of the purpose `jobs`."
@@ -96,10 +100,10 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 343: Runner work: tool imports, sweeps and the runner repository** (owner-tagged (all decisions)).
 
 - Decisions that apply: 3 (current), 6 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 396 extends decision 3. Chain to the end: ADR 396.
+- Current rule: this ADR, with ADR 396.
 - Quote: "Sweeps run on a runner (owner, 2026-11-07). ADR 164 decision 1 stays."
-- Effect: Sweeps stay on runners. Only an installation pool can have the sweep purpose (Owner decision, 13 Nov 2026 (queue P14)).
+- Effect: Sweeps stay on runners. A pool of the team can have the sweep purpose (Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14)).
 - Conflict: none.
 
 **ADR 210: The tool-neutral API: one prefix, resource paths, action names, versions and a style guide** (not owner-tagged).
@@ -111,13 +115,23 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: The sweep session routes stay under /runner/v1.
 - Conflict: none.
 
+**ADR 396: Sweeps run on the team's own runners, and the CLI does not audit its own usage errors** (owner-tagged (records decisions of the project owner)).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The pool management API accepts the sweep purpose on a pool of a namespace. It applies the same rules as for any other purpose."
+- Effect: The pool routes accept the sweep purpose on a namespace pool. The change adds no refusal. The server has no installation sweep pool.
+- Conflict: none. This ADR replaces the 13 Nov 2026 answer P14.
+
 ## Open questions
 
 none
 
 Questions considered and answered:
 
-- Which pools may have the sweep purpose? Owner decision, 13 Nov 2026 (queue P14): only an operator (installation) pool. The pool service refuses a namespace pool with the sweep purpose at create and update.
+- Which pools may have the sweep purpose? Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14): a pool of the team. The pool routes accept the sweep purpose on a namespace pool with the same rules as any other purpose. No installation pool exists.
+- Does the change need a purpose-change guard? No. ADR 130 decision 3 (owner) says the purpose of a pool never changes, and `runner.CheckUpdate` refuses a change on main.
 - How do converters fit the purpose rule? ADR 343 extends ADR 164 decision 9: converters run on a pool with the sweep purpose. Claim is by operation kind, so no new claim path.
 - Who drops a staged blob after a server crash? Staged report blobs use a staging key. The existing orphan cleanup (ADR 151 decision 22) deletes a blob with no record, so a crash leaves no kept partial blob.
 - What bound applies to the report? ADR 131 decision 14 and ADR 164 decision 11: 1 GiB, 5,000,000 records, 64 KiB a line, 50 tags, 1,000 scopes, and the session caps.

@@ -28,32 +28,32 @@ While a write runs, the server SHALL read the fence and change the rows in one t
 - **WHEN** a write fails after the fence check
 - **THEN** the transaction rolls back and no row changes
 
-### Requirement: Operator sweep pool
+### Requirement: Team sweep pool
 
-If a sweep target names a pool that is not an operator pool with the sweep purpose, then the server SHALL refuse the write.
+If a sweep target names a pool without the sweep purpose or a pool of another namespace, then the server SHALL refuse the write.
 
 #### Scenario: Jobs pool
 - **WHEN** a target names a pool with the jobs purpose
 - **THEN** the store refuses the write with a pool-purpose error
 
-#### Scenario: Namespace sweep pool
-- **WHEN** a target names a namespace pool with the sweep purpose
-- **THEN** the store refuses the write with a pool-purpose error
+#### Scenario: Sweep pool of another namespace
+- **WHEN** a target names a pool with the sweep purpose that belongs to another namespace
+- **THEN** the store refuses the write with the same error as for an unknown pool
 
-#### Scenario: Operator sweep pool accepted
-- **WHEN** a target names an operator pool with the sweep purpose
+#### Scenario: Sweep pool of the team accepted
+- **WHEN** a target names a pool with the sweep purpose that belongs to the namespace of the target
 - **THEN** the store accepts the write
 
 ### Requirement: Pool checked at start
 
-If the pool of a target is deleted or is no longer an operator pool with the sweep purpose, then the server SHALL refuse the start of a sweep.
+If the pool of a target is deleted, then the server SHALL refuse the start of a sweep.
 
 #### Scenario: Deleted pool
 - **WHEN** a sweep starts on a target whose pool is deleted
 - **THEN** the store refuses the start and creates no sweep
 
 #### Scenario: Changed purpose
-- **WHEN** a sweep starts on a target whose pool now has the jobs purpose
+- **WHEN** a sweep starts on a target whose stored pool ID names a pool without the sweep purpose, for example after a restore
 - **THEN** the store refuses the start with a pool-purpose error
 
 ### Requirement: Finding bounds

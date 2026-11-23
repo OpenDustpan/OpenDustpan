@@ -7,6 +7,8 @@ The gate subject of a job token has no job, so the gate service refuses each job
 1. **Resolve JobClaim in the subject source.** `Service.GuardStateWrite` asks the `gate.SubjectSource` for the subject of the principal on each write. A new subject source in pkg/dustpan wraps the principal subject source and, for a job-token principal, reads the job by `Principal.JobID` and sets `Subject.Job`. No field is added to `gate.StateWrite`, and no adapter builds a claim. A job that does not resolve, a job in a terminal state, or a principal with an empty job ID gives an error that wraps identity.ErrDenied.
 2. **Run the gates after the job model allows (ADR 395).** In `Evaluate`, `jobTokenWrite` stays first. When it allows, the call goes on to `evaluateStateWrite` with the fence and the state of the write, so a `deny` gate refuses the write and a decision record is written. `GuardStateWrite` reads the fence for a job token too, in place of the fixed zero-version fence. A job token sets no break-glass pass.
 
+3. **Carry the claim on the refusal.** `gate.RefusalError` gets the field `Job *JobClaim`, which `GuardStateWrite` sets from the subject it already read. The log line of the adapter reads it. This makes no second read of the job record. No field is added to `gate.StateWrite` or to the `Guard` port.
+
 ## Structure
 
 Unexported type jobClaimSubjects in the new file pkg/dustpan/jobclaim.go, made only by newJobClaimSubjects, which takes the job reader and the inner subject source; call sites cannot write a JobClaim literal. The state-guard builder in pkg/dustpan/stateguard.go uses it in place of principalSubjects.

@@ -1,5 +1,5 @@
 ---
-version: 8
+version: 11
 ---
 
 Issue: #1254.
@@ -34,6 +34,7 @@ Evidence for the claims above:
 
 - Add a gate subject source in `pkg/dustpan` (NEW `jobClaimSubjects`) that wraps `principalSubjects`. For a job-token principal it reads the job by `Principal.JobID` from the job store on each call and sets `Subject.Job` (job, phase, PassedApply, units). `GuardStateWrite` already asks the subject source on each write, so the claim is fresh on each route that calls the guard on main.
 - After the job model allows a write, run the gates of state.write for the job token as for a person: read the fence of the namespace, write the decision record, refuse on `deny`. A job token has no break-glass pass (ADR 395).
+- Add the field `Job *JobClaim` to `gate.RefusalError` in pkg/gate/gate.go. `GuardStateWrite` in pkg/gate/statewrite.go sets it on a refusal, so that the `state write refused` log line of internal/api/stategate names the job ID and the phase. This adds no field to `gate.StateWrite`.
 - Refuse with identity.ErrDenied any other write of a phase that did not pass change.apply, any write for a unit outside its job, and any write whose claim does not resolve.
 
 Out of scope:
