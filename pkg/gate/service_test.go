@@ -122,22 +122,10 @@ func jobWrite(t *testing.T, unit string, passedApply, planLock bool) gate.Change
 func TestEvaluateJobTokenAtStateWrite(t *testing.T) {
 	t.Parallel()
 
+	// The stub store of newService reads no gate, so each refusal here comes
+	// from the job model before any gate. A write that the job model allows
+	// meets the gates: TestStateWriteJobClaim checks it over a real store.
 	svc := newService(t)
-
-	allowed := []struct {
-		name   string
-		change gate.Change
-	}{
-		{"a phase that passed change.apply writes its unit", jobWrite(t, "net", true, false)},
-		{"the plan lock of a unit of the job", jobWrite(t, "net", false, true)},
-	}
-
-	for _, tc := range allowed {
-		d, err := svc.Evaluate(t.Context(), tc.change)
-		if err != nil || d.Result != gate.ResultAllow || d.Record != "" {
-			t.Fatalf("%s: Evaluate() = %+v, %v, want allow with no record", tc.name, d, err)
-		}
-	}
 
 	noClaim := jobWrite(t, "net", true, false)
 	noClaim.Subject.Job = nil

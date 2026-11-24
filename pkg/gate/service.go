@@ -294,7 +294,21 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 	}
 
 	if point == PointStateWrite && c.Subject.Credential == CredentialJobToken {
-		return jobTokenWrite(c)
+		// The job model decides first. A write that it refuses runs no gate and
+		// writes no record. A write that it allows meets the gates of
+		// state.write as the write of a person does.
+		if denied := jobTokenWrite(c); denied != nil {
+			return Decision{}, denied
+		}
+
+		// A job token has no break-glass pass. Defense in depth: GuardStateWrite
+		// always passes an empty pass; this check stays so that a new caller of
+		// Evaluate cannot give a job token a pass.
+		if c.BreakGlass != "" {
+			return Decision{}, fmt.Errorf("%w: a job token sets no break-glass pass", identity.ErrDenied)
+		}
+
+		return s.evaluateStateWrite(ctx, c, policy)
 	}
 
 	if point == PointStateWrite {
@@ -304,28 +318,31 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 	return Decision{}, errNotImplemented
 }
 
-// jobTokenWrite decides a write at state.write with a job token.
-func jobTokenWrite(c Change) (Decision, error) {
+// jobTokenWrite applies the job model to a write at state.write with a job
+// token. It returns nil when the job model allows the write, and an error
+// that wraps identity.ErrDenied when it refuses it. The gates decide an
+// allowed write after it.
+func jobTokenWrite(c Change) error {
 	job := c.Subject.Job
 	if job == nil {
-		return Decision{}, fmt.Errorf("%w: a job token with no job writes no state", identity.ErrDenied)
+		return fmt.Errorf("%w: a job token with no job writes no state", identity.ErrDenied)
 	}
 
 	for i := range c.Units {
 		unit := c.Units[i].String()
 		if !slices.ContainsFunc(job.Units, func(j identity.Object) bool { return j.String() == unit }) {
-			return Decision{}, fmt.Errorf("%w: job %s does not hold the unit %q", identity.ErrDenied, job.Job, unit)
+			return fmt.Errorf("%w: job %s does not hold the unit %q", identity.ErrDenied, job.Job, unit)
 		}
 	}
 
 	if !job.PassedApply && !c.PlanLock {
-		return Decision{}, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: phase %s of job %s did not pass change.apply, and writes only the lock of its plan",
 			identity.ErrDenied, job.Phase, job.Job,
 		)
 	}
 
-	return Decision{Record: "", Result: ResultAllow, Requirements: nil, Warnings: nil, AutoApply: false}, nil
+	return nil
 }
 
 // CheckAccess evaluates the access limits of each scope of the chain of the

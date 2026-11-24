@@ -28,9 +28,10 @@ func GatesProgress(
 
 	var approvalGates []Gate
 
-	for _, g := range gates {
+	for i := range gates {
+		g := &gates[i]
 		if typeOf(g.Type) != GateConfirmation {
-			approvalGates = append(approvalGates, g)
+			approvalGates = append(approvalGates, *g)
 
 			continue
 		}

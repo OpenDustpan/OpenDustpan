@@ -149,6 +149,7 @@
           "g-finance"
         ],
         "users": [],
+        "userIds": null,
         "unitOwners": false
       },
       "count": 2,
@@ -178,6 +179,7 @@
         "users": [
           "carol"
         ],
+        "userIds": null,
         "unitOwners": true
       },
       "count": 1,

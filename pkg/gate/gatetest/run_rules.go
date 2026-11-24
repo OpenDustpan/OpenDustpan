@@ -426,6 +426,7 @@ func casePathSetReadDelete(t *testing.T, e *env) {
 	d := gate.ApprovalDefault{
 		Scope: e.fx.acme, Version: 0, Count: 1, FreshAuth: gate.NoFreshAuth(), Approvers: gate.Approvers{
 			Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false,
+			UserIDs: nil,
 		},
 		Unless: "", Reads: reads,
 	}
@@ -546,6 +547,7 @@ func caseDefaultRoundTrip(t *testing.T, e *env) {
 		GroupIDs:   nil,
 		Users:      []string{"alice"},
 		UnitOwners: true,
+		UserIDs:    nil,
 	}
 
 	for _, scope := range []gate.Scope{e.fx.acme, e.fx.prod, e.fx.webProd} {
@@ -605,6 +607,7 @@ func caseDefaultResolves(t *testing.T, e *env) {
 	d := gate.ApprovalDefault{
 		Scope: e.fx.prod, Version: 0, Count: 1, FreshAuth: gate.NoFreshAuth(), Approvers: gate.Approvers{
 			Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false,
+			UserIDs: nil,
 		},
 		Unless: "", Reads: []gate.ID{"network"},
 	}
@@ -630,11 +633,17 @@ func caseRuleFieldsValid(t *testing.T, e *env) {
 		{
 			"no approver",
 			func(r *gate.ApprovalRule) {
-				r.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
+				r.Approvers = gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil}
 			},
 		},
 		{"empty approver name", func(r *gate.ApprovalRule) {
-			r.Approvers = gate.Approvers{Groups: []string{""}, GroupIDs: nil, Users: nil, UnitOwners: false}
+			r.Approvers = gate.Approvers{
+				Groups:     []string{""},
+				GroupIDs:   nil,
+				Users:      nil,
+				UnitOwners: false,
+				UserIDs:    nil,
+			}
 		}},
 		{"window below 60", func(r *gate.ApprovalRule) { r.FreshAuth = gate.FreshAuth{Set: true, Seconds: 59} }},
 		{"window above 900", func(r *gate.ApprovalRule) { r.FreshAuth = gate.FreshAuth{Set: true, Seconds: 901} }},

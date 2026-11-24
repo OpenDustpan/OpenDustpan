@@ -76,16 +76,28 @@ func record(t *testing.T, ns namespace.Name, change gate.ChangeRef, at time.Time
 			},
 			Result: gate.ResultAwaitingApproval,
 		}},
-		Requirements: []gate.Requirement{{
-			Name: gate.RuleRequirement("dba-review"), Version: 2,
-			Approvers: gate.Approvers{Groups: []string{"dba"}, GroupIDs: nil, Users: nil, UnitOwners: true}, Count: 2,
-			AuthorMayApprove: false, FreshAuth: gate.FreshAuth{Set: true, Seconds: 300}, TimeoutSeconds: 3600,
-			Signatures: []gate.Signature{{
-				Subject: "bob", At: at,
-				CarriedFrom: &gate.CarriedFrom{Revision: 1, Digest: "abc", At: at.Add(-time.Hour), Scope: scope},
-			}},
-			Evaluate: false,
-		}},
+		Requirements: []gate.Requirement{
+			{
+				Name:    gate.RuleRequirement("dba-review"),
+				Version: 2,
+				Approvers: gate.Approvers{
+					Groups:     []string{"dba"},
+					GroupIDs:   nil,
+					Users:      nil,
+					UnitOwners: true,
+					UserIDs:    nil,
+				},
+				Count:            2,
+				AuthorMayApprove: false,
+				FreshAuth:        gate.FreshAuth{Set: true, Seconds: 300},
+				TimeoutSeconds:   3600,
+				Signatures: []gate.Signature{{
+					Subject: "bob", At: at,
+					CarriedFrom: &gate.CarriedFrom{Revision: 1, Digest: "abc", At: at.Add(-time.Hour), Scope: scope},
+				}},
+				Evaluate: false,
+			},
+		},
 		Warnings: []string{"budget at 82 percent"}, AutoApply: false,
 		Controls:   []gate.FixedControl{{Kind: gate.ControlFreeze, Passed: true, Detail: "freeze-1"}},
 		BreakGlass: "audit-9", Result: gate.ResultAwaitingApproval, Action: "", Count: 1, LastAt: at,
