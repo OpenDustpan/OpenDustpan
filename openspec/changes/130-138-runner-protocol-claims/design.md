@@ -1,126 +1,79 @@
 ## Context
 
-Runner claims are leases on durable operations for jobs and sweeps. Poll returns work, heartbeat renews the lease every 60 s, and upload streams the sweep report under the claim.
+Main has the server side of the runner protocol: poll, heartbeat and claim renew, with the short protocol codes and the lease of the pool. It has no runner-side loop that uses them. This change adds that loop and its docs page. It adds no route, no error code and no lease value.
 
 ## Decisions
 
-1. **Lease as a type, not as fields.** Put claim state in an unexported `claimLease` type with constructor `newClaimLease(holder, fence, expiry)` that rejects an empty holder, a stale fence, or a non-positive expiry. Handlers hold no separate expiry field. Expiry moves only through `HeartbeatClaim`. This makes a claim without a holder or without a fence impossible. Staged report bytes are written encrypted with the data key of the namespace and deleted on expiry without completion, so a large upload cannot fill the store.
+1. **Reuse the routes of main.** The loop calls `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`. The earlier draft added `POST /runner/v1/claims` and `POST /runner/v1/claims/heartbeat`. They repeat poll and renew, so the change drops them. One code path serves each action.
+2. **The lease is the lease of the pool.** The server sets each claim to `pool.EffectiveLease()` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews every `runner.RenewEvery(lease)` and takes the lease from the join answer (`JoinResponse.Lease`) or the claim. The change has no fixed lease and no constant. This keeps the default visible in the API (the pool shows its effective lease).
+3. **Short protocol codes.** `/runner/v1` keeps `bad-proof` 401, `retired` 403, `rate-limited` 429, `not-found` 404 and `claim-lost` 409. The loop maps each code to the action of the table in ADR 131 decision 12. There is no second error shape.
+4. **A runner of another pool gets no work of this pool.** The claim query uses the pool of the runner. The test polls with a runner of pool B while work waits in pool A and gets 204.
+5. **No upload here.** The report upload and the end of a claim by report are not in this change. The change `130-138-runner-staged-report-port` owns them.
+
+## ADR check
+
+- ADR 131 decision 5 (owner): "A poll waits for work for at most 50 seconds (`protocol.MaxPollWait`), below the idle timeout of common proxies."
+- ADR 131 decision 7: "The holder renews after a third of the lease of the pool (ADR 130 decision 7)."
+- ADR 131 decision 8: "A runner sends a heartbeat every 15 seconds, also while it polls."
+- ADR 131 decision 12: "Each answer with a status of 400 or more has the body `{"code": "...", "message": "..."}` (`protocol.Error`)."
+- No-magic rule of `CLAUDE.md`: "Each default shows its effective value in the API." The pool lease default of 90 s shows in the pool.
 
 ## Structure
 
-Unexported type `claimLease` with constructor `newClaimLease`; no public fields for holder, fence, or expiry.
+Package `pkg/runner/client` (NEW) with an unexported `loop` type and the constructor `New(cfg)`. The constructor rejects an empty runner key, a lease below `runner.MinLease` and a base URL that is not http or https. No field holds an expiry that the server did not send. The command `opendustpan runner poll` calls `New` and `Run`.
 
 ## Risks
 
-- Lost heartbeat strands work until expiry.
-- Large upload fills the blob store.
+- Lost heartbeat strands work until expiry. The pool lease bounds it.
+- A runner that polls too often gets `rate-limited`. The loop waits for `Retry-After`.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| authorize at point of use | Handler checks runner key, pool membership, purpose, and retirement before `ClaimWork`. | Poll with a retired runner key gets `runner.retired` and no work. |
-| fail closed | Store checks the fence in the same transaction for claim, heartbeat, upload, complete, and fail. | Heartbeat with a moved fence gets a fence error and keeps the old holder. |
-| claim lease constructor | `newClaimLease` rejects an empty holder, a stale fence and a non-positive expiry. | `TestNewClaimLeaseRejectsHostileInput` calls `newClaimLease` with each bad input. |
+| authorize at point of use | Server checks the runner proof, the pool and retirement on each poll and renew (main). | Poll with a retired runner gets `retired` and no work. |
+| fail closed | The loop stops its work on `claim-lost`, `retired` and `bad-proof`. | Renew answer `claim-lost` stops the step at once. |
+| constructor | `New` rejects an empty key, a short lease and a bad URL. | `TestNewRejectsHostileConfig` calls `New` with each bad input. |
 
 ## Diagrams
 
-After this change:
-
 ```mermaid
 sequenceDiagram
-participant Runner_NEW as Runner NEW
-participant P as pkg/runner/protocol
-participant R as pkg/runner
-Runner_NEW->>P: POST /runner/v1/claims poll
-P->>R: NEW method ClaimWork
-R-->>P: assignment or empty answer
-Runner_NEW->>P: POST /runner/v1/claims heartbeat
-P->>R: NEW method HeartbeatClaim
-R-->>P: renewed expiry 60 s
-Runner_NEW->>P: POST /runner/v1 upload chunk
-P->>R: NEW method UploadChunk
-```
-
-States and transitions after this change:
-
-```mermaid
-stateDiagram-v2
-queued --> claimed: ClaimWork
-claimed --> claimed: HeartbeatClaim
-claimed --> queued: expiry 60 s
-claimed --> done: complete
-claimed --> failed: fail
+participant L as runner loop NEW
+participant A as /runner/v1
+L->>A: POST poll
+A-->>L: work or 204 after 50 s
+L->>A: POST claims/{operation}/renew every third of the lease
+L->>A: POST heartbeat every 15 s
+A-->>L: claim-lost stops the work
 ```
 
 ## Quality attributes
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| latency | 250 | ms p95 | per poll request on same installation |
-| latency | 150 | ms p95 | per heartbeat request |
-| rate limits | 8 | requests per minute | per runner heartbeat and poll |
+| renew margin | 3 | renewals per lease | per claim |
+| heartbeat | 15 | s | per runner |
 
 ## Threat model
 
-Data flow and trust boundaries:
-
-```mermaid
-flowchart LR
-subgraph untrusted[Runner network]
-R[Runner NEW]
-end
-subgraph trusted[Server]
-P[pkg/runner/protocol]
-S[pkg/runner]
-B[blob store]
-end
-R-->|runner key, poll, heartbeat, chunks|P
-P-->S
-P-->B
-```
-
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| Runner network to server | S | Spoofed runner claims work or renews another holder lease. | boundary check | Allowlist runner key, pool id, claim id, chunk size; reject unknown fields. | Send poll with extra privilege field; server ignores it and returns only assignment or empty answer. |
-| Runner network to server | S | Spoofed runner claims work or renews another holder lease. | encode or contain | Parameterized store queries; sealed runner keys; no key echo in errors or logs. | Send key with SQL text; server treats it as opaque and answers `runner.invalid`. |
-| Runner network to server | S | Spoofed runner claims work or renews another holder lease. | limit | 60 s lease, 1 GiB and 64 KiB upload caps, per-runner poll rate cap. | Stream 2 GiB; server stops at the cap with `runner.limit`. |
-| Runner network to server | S | Spoofed runner claims work or renews another holder lease. | authorize at point of use | Check pool membership and claim holdership at each poll, heartbeat, and chunk. | Upload under another holder claim gets `runner.not-found`. |
-| Runner network to server | S | Spoofed runner claims work or renews another holder lease. | fail closed | Deny on bad key, stale fence, or oversize chunk; write audit entry. | Heartbeat with moved fence fails closed and keeps stored holder. |
-| Runner network to server | T | Tampered report bytes or replayed chunks corrupt the staged report. | boundary check | Check claim id, offset, and holdership on each chunk; reject replayed bytes. | Replay an old chunk with a stale offset; server rejects it. |
-| Runner network to server | T | Tampered report bytes or replayed chunks corrupt the staged report. | encode or contain | Store upload as opaque bytes encrypted with the namespace data key. | Upload report with script text; server stores it without execution. |
-| Runner network to server | T | Tampered report bytes or replayed chunks corrupt the staged report. | limit | Cap report size, records, tags, and poll rate per runner. | Flood polls from many keys; server rate-limits and keeps p95 poll latency. |
-| Runner network to server | T | Tampered report bytes or replayed chunks corrupt the staged report. | authorize at point of use | Check runner key and pool purpose before serving sweep versus job work. | Job runner polls sweep work of another pool and gets an empty answer. |
-| Runner network to server | T | Tampered report bytes or replayed chunks corrupt the staged report. | fail closed | Fail closed on expiry and delete staged bytes; audit poll, heartbeat, and upload. | Holder keeps writing after expiry; server denies and deletes staged bytes. |
-| Runner network to server | R | Runner repudiates its poll or heartbeat history. | boundary check | Require signed runner key on each request; short 60 s lease bounds replay. | Replay a past heartbeat; server denies with `runner.not-found`. |
-| Runner network to server | R | Runner repudiates its poll or heartbeat history. | encode or contain | Append-only audit entries for poll, heartbeat, and upload outcomes. | Deny a heartbeat and check that the audit entry names the claim and holder. |
-| Runner network to server | R | Runner repudiates its poll or heartbeat history. | limit | Bound log and audit growth per claim. | Send many heartbeats; server caps at 8 per minute with `runner.limit`. |
-| Runner network to server | R | Runner repudiates its poll or heartbeat history. | authorize at point of use | Authorize each heartbeat against the current holder, not the requester name. | Past holder heartbeats after rotation and gets `runner.not-found`. |
-| Runner network to server | R | Runner repudiates its poll or heartbeat history. | fail closed | Deny on unknown claim id without leaking holder identity. | Guess a claim id; server answers `runner.not-found` with no holder detail. |
-| Runner network to server | D | Many runners flood polls or uploads and deny service to other pools. | boundary check | Allowlist poll parameters and enforce 50 s long-poll timeout. | Hold many polls open; server times out at 50 s and frees handlers. |
-| Runner network to server | D | Many runners flood polls or uploads and deny service to other pools. | encode or contain | Stream upload directly to the blob store without buffering whole reports. | Upload 1 GiB; server memory stays flat. |
-| Runner network to server | D | Many runners flood polls or uploads and deny service to other pools. | limit | Enforce per-runner poll and heartbeat rate caps plus global queue bound. | Flood polls; server rate-limits with `runner.limit`. |
-| Runner network to server | D | Many runners flood polls or uploads and deny service to other pools. | authorize at point of use | Serve polls only to members of the pool with a valid runner key. | Poll with a key of another pool and get `runner.invalid`. |
-| Runner network to server | D | Many runners flood polls or uploads and deny service to other pools. | fail closed | Fail closed on overload and return empty answer with retry delay. | Overload the poll path; server returns retry delay instead of hanging. |
+| Runner to server | S | A spoofed runner claims work. | authorize at point of use | The server checks the proof and the pool on each request (main). | A runner of another pool polls and gets 204. |
+| Runner to server | R | A replayed poll. | boundary check | The nonce of a poll is single-use (`NoncePaths`, main). | Replay a poll proof; the server answers `bad-proof`. |
+| Runner to server | D | Many polls. | limit | The server answers `rate-limited` with `Retry-After`; the loop waits. | A loop that gets 429 waits for the delay. |
+| Server to runner | T | A hostile answer body. | fail closed | The loop decodes the answer with a size limit and stops on an unknown code. | A 200 body above the limit stops the loop. |
 
 ## Contracts
 
-**Claim**
-
-- Invariant: One holder holds one claim at one time.
-- Invariant: Each claim write carries the fence of the namespace.
-- Invariant: Expiry returns the work to queued without loss of the durable operation.
-- Invariant: Staged report bytes are encrypted with the data key of the namespace and deleted when the lease expires without completion.
-- `ClaimWork`: pre: Runner key is valid for the pool.; Runner is not retired.. Post: Claim has one holder and one expiry time 60 s after poll.; Durable operation state is claimed..
-- `HeartbeatClaim`: pre: Caller holds the claim.; Fence version equals the stored fence version.. Post: Expiry time moves 60 s forward from heartbeat.; Heartbeat by a past holder fails closed..
-- `UploadChunk`: pre: Caller holds the claim.; Total size stays within 1 GiB and line stays within 64 KiB.. Post: Chunk appends to the staged report of the claim.; Size counters increase by chunk length..
-- `CompleteClaim`: pre: Caller holds the claim.. Post: Claim reaches done and staged report is kept.; Work does not return to queued..
-- `FailClaim`: pre: Caller holds the claim.. Post: Claim reaches failed and staged bytes are deleted or kept per failure kind..
+- Invariant: One holder holds one claim at one time (main).
+- `Run`: pre: the key is valid for the pool. Post: the loop returns when the context ends, the runner retires or the key expires.
+- Renew: after `runner.RenewEvery(lease)`; on `claim-lost` the loop stops the work.
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Poll and claim | Instance stops after poll and before store commit. | Runner polls again; store commit is atomic so work stays queued or claimed once. | queued or claimed by one holder |
-| Heartbeat renew | Heartbeat lost; lease reaches 60 s expiry. | Holder stops work and re-polls; another runner can claim the work after expiry. | queued |
-| Report upload | Upload stops mid-stream. | Holder resumes upload under the same claim from the returned byte offset while the lease holds; repeated chunks are idempotent by offset. | claimed with partial staged report |
+| Poll | Network error or 5xx. | Backoff from 1 s to 30 s with jitter (ADR 131 decision 12). | queued |
+| Renew | One renew lost. | The next renew comes within the lease (three per lease). | claimed |
+| Renew | `claim-lost`. | None. The loop stops the work. | queued or claimed by another runner |

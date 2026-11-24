@@ -36,10 +36,15 @@ func (u swUnits) Unit(_ context.Context, unit identity.Object) (gate.UnitInfo, e
 
 // swSubjects gives the Subject of a principal by its subject: "alice" is a
 // person with an access token, "ci" a service with a trust token, "runner"
-// a service with a job token, and "glass" a break-glass account.
+// a service with a job token, and "glass" a break-glass account. The job of
+// "runner-canceled" is canceled, so its claim does not resolve.
 type swSubjects struct{}
 
 func (swSubjects) Subject(_ context.Context, p identity.Principal) (gate.Subject, error) {
+	if p.Subject == "runner-canceled" {
+		return gate.Subject{}, fmt.Errorf("%w: job 42 is canceled", identity.ErrDenied)
+	}
+
 	s := gate.Subject{
 		ID: p.Subject, Groups: nil, Kind: gate.PrincipalPerson, Credential: gate.CredentialAccessToken,
 		AuthAt: time.Now(), BreakGlassAccount: false, Job: nil,
@@ -891,14 +896,16 @@ func TestLimitRefusalsShareOneRecord(t *testing.T) {
 func TestJobTokenWritesOnlyWhatTheJobModelAllows(t *testing.T) {
 	t.Parallel()
 
+	// modelDenied is true when the job model refuses the write. Each other
+	// write is allowed by the job model and then refused by the deny gate.
 	tests := []struct {
-		name     string
-		subject  string
-		planLock bool
-		denied   bool
+		name        string
+		subject     string
+		planLock    bool
+		modelDenied bool
 	}{
-		{"a phase that passed apply writes a unit of its job", "runner-apply", false, false},
-		{"a plan phase takes the lock of its plan", "runner-plan", true, false},
+		{"a phase that passed apply meets the deny gate", "runner-apply", false, false},
+		{"a plan lock meets the deny gate", "runner-plan", true, false},
 		{"a plan phase writes no other state", "runner-plan", false, true},
 		{"a job token with no job is denied", "runner", false, true},
 		{"a job token with no job is denied for a plan lock", "runner", true, true},
@@ -915,19 +922,15 @@ func TestJobTokenWritesOnlyWhatTheJobModelAllows(t *testing.T) {
 			w := swWrite(t, tt.subject, "web", gate.OperationLock)
 			w.PlanLock = tt.planLock
 
-			d, err := e.svc.GuardStateWrite(t.Context(), w)
+			_, err := e.svc.GuardStateWrite(t.Context(), w)
 
-			if tt.denied {
-				if !errors.Is(err, identity.ErrDenied) {
-					t.Fatalf("GuardStateWrite() = %+v, %v, want identity.ErrDenied", d, err)
-				}
-			} else if err != nil || d.Result != gate.ResultAllow || d.Record != "" {
-				t.Fatalf("GuardStateWrite() = %+v, %v, want allow with no record: the job model decided", d, err)
+			if tt.modelDenied {
+				checkJobModelRefusal(t, e, err)
+
+				return
 			}
 
-			if recs := e.records(t); len(recs) != 0 {
-				t.Fatalf("records = %d, want none for a job token", len(recs))
-			}
+			checkJobGateRefusal(t, e, err, tt.subject, "deny-all")
 		})
 	}
 }

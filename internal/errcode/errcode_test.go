@@ -17,7 +17,9 @@ var errOther = errors.New("other")
 // limitedRefusal is the error of the limited authorizer: a gate refusal that
 // identity.ErrDenied wraps.
 func limitedRefusal(sentinel error) error {
-	return fmt.Errorf("%w: %w", identity.ErrDenied, &gate.RefusalError{Err: sentinel, Record: "", Messages: nil})
+	return fmt.Errorf("%w: %w", identity.ErrDenied, &gate.RefusalError{
+		Err: sentinel, Record: "", Messages: nil, Job: nil,
+	})
 }
 
 // TestForbiddenOrder pins the order of the causes. Every session error and the

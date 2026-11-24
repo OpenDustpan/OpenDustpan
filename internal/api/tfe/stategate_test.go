@@ -199,7 +199,7 @@ type guardRefusal struct {
 
 func guardRefusals() []guardRefusal {
 	refusal := func(err error, record, message string) *gate.RefusalError {
-		return &gate.RefusalError{Err: err, Record: gate.RecordID(record), Messages: []string{message}}
+		return &gate.RefusalError{Err: err, Record: gate.RecordID(record), Messages: []string{message}, Job: nil}
 	}
 
 	return []guardRefusal{
@@ -294,6 +294,7 @@ func TestUnknownResultRefusesAndRecords(t *testing.T) {
 						Err:      gate.ErrUnavailable,
 						Record:   "gdr-eeeeeeeeeeeeeeeeeeee",
 						Messages: nil,
+						Job:      nil,
 					},
 				})
 
@@ -481,6 +482,7 @@ func storeFaultCases() []storeFaultCase {
 			Err:      fmt.Errorf("%w: write the decision record: %w", gate.ErrUnavailable, cause),
 			Record:   "gdr-1",
 			Messages: []string{"The decision record could not be written, so the write is refused."},
+			Job:      nil,
 		}
 	}
 
@@ -701,7 +703,7 @@ func TestLimitBlockedCallerSeesTheHolderOfAHeldLock(t *testing.T) {
 	t.Parallel()
 
 	limited := &gate.RefusalError{
-		Err: gate.ErrLimited, Record: "gdr-bbbbbbbbbbbbbbbbbbbb", Messages: []string{"A limit."},
+		Err: gate.ErrLimited, Record: "gdr-bbbbbbbbbbbbbbbbbbbb", Messages: []string{"A limit."}, Job: nil,
 	}
 	guard := newFakeGuard(limited)
 	ws := newFlipWorkspaces(always)
@@ -779,6 +781,7 @@ func TestLockRetryRefusedByTheGuardTakesNoLock(t *testing.T) {
 		Err:      gate.ErrDenied,
 		Record:   "gdr-aaaaaaaaaaaaaaaaaaaa",
 		Messages: []string{"No locks."},
+		Job:      nil,
 	}
 	guard := &passThenRefuse{mu: sync.Mutex{}, seen: 0, after: denied}
 	ws := newFlipWorkspaces(never, workspace.ErrConcurrentModification)

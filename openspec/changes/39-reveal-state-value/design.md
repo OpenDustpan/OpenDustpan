@@ -4,12 +4,14 @@ Single-path reveal over the separate stack and workspace models. Main serves the
 
 ## Decisions
 
-1. **Keep the Pulumi route, add tool-neutral single-path reveal.** Keep the Pulumi reveal route unchanged. Add the NEW tool-neutral reveal. Reveal takes unit reference, version and exactly one value path and writes one reveal entry before the first byte. Statuses: 403 missing grant, 404 unknown version, 400 bad, non-secret or cross-version path, 422 Pulumi other provider, 410 shredded or redacted.
-2. **Fail closed with defined failures.** An open or decrypt failure after the audit write answers 500 with no bytes; a timeout at 30 seconds answers 504 with no bytes. A retry writes a second entry. An audit write failure answers 500 with no bytes, for each tool. Each refusal writes one audit entry. A shredded item answers 410 before any blob read.
+1. **Keep the Pulumi route, add tool-neutral single-path reveal.** Keep the Pulumi reveal route unchanged. Add the NEW tool-neutral reveal. Reveal takes unit reference, an optional version and exactly one value path and writes one reveal entry before the first byte. The `version` field is optional. When the caller omits it, the server uses the current version, and the API shows that default (the answer names the version that it used). One version-length guard for each tool rejects a `version` that is too long for that tool's own version form, with 400, before any read. Statuses: 403 missing grant, 404 unknown version, 400 bad, non-secret or cross-version path, 422 Pulumi other provider, 410 shredded or redacted.
+2. **Fail closed with defined failures.** The audit entry is written before the open and the decrypt, and the entry stays when the open or the decrypt fails: it then holds the failure outcome, not a second entry. An open or decrypt failure after the audit write answers 500 with no bytes; a timeout at 30 seconds answers 504 with no bytes. A retry writes a second entry. An audit write failure answers 500 with no bytes, for each tool. Each refused reveal writes one audit entry, the 404 for an unknown version included. A shredded item answers 410 before any blob read.
 
 ## Structure
 
 The existing reveal path in `pkg/stack/reveal.go` and `pkg/workspace/reveal.go` stays the one reveal path. The NEW files `reveal_path.go` in each package bind the unit and the version and call it for exactly one path.
+
+The error mapping lives in `internal/api/state/errors.go`: `secret.ErrShredded` maps to 410, and the Pulumi other-provider error and its OpenTofu workspace equivalent map to 422. The new error codes (`state.value-shredded` and the code of an invalid body) are added to `internal/errcode/catalog_state.go` and to the golden file `internal/errcode/testdata/catalog/state.txt`. The new guide `docs/guides/revealing-state-values.md` is listed in `docs/commands-pending-pages.txt`.
 
 ## Risks
 
@@ -82,7 +84,7 @@ H-->A
 
 **tool-neutral reveal**
 
-- Endpoint: `POST /api/dustpan/v1/units/{ref}/state/reveal` with the body `{"version": <state version>, "path": "<one JSON Pointer>"}`. It answers `{"path": "<the pointer>", "value": <the plain value>}`. Errors: 400 `state.bad-path`, 403 `unit.forbidden`, 404, 410, 422, 500, 504.
+- Endpoint: `POST /api/dustpan/v1/units/{ref}/state/reveal` with the body `{"version": <state version, optional>, "path": "<one JSON Pointer>"}`. When `version` is absent, the server uses the current version. It answers `{"version": <the version used>, "path": "<the pointer>", "value": <the plain value>}`. Errors: 400 `state.bad-path`, 403 `unit.forbidden`, 404, 410 `state.value-shredded`, 422, 500, 504.
 
 - Invariant: reveal returns one value path with one reveal entry
 - `Reveal`: pre: caller holds unit:read-secrets on the unit and names one value path. Post: one plain value returned and one reveal entry written before first byte.

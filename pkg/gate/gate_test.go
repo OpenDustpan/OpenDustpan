@@ -135,7 +135,7 @@ func TestCode(t *testing.T) {
 		{gate.ErrLimitMembership, "gate.limit-membership"},
 		{gate.ErrUnavailable, "gate.unavailable"},
 		{fmt.Errorf("save: %w", gate.ErrFinal), "gate.final"},
-		{&gate.RefusalError{Err: gate.ErrDenied, Record: "gdr-x", Messages: nil}, "gate.denied"},
+		{&gate.RefusalError{Err: gate.ErrDenied, Record: "gdr-x", Messages: nil, Job: nil}, "gate.denied"},
 		{&gate.CheckError{Diagnostics: nil}, "gate.invalid"},
 	}
 
@@ -163,6 +163,7 @@ func TestRefusal(t *testing.T) {
 		Err:      gate.ErrDenied,
 		Record:   "gdr-abcdefghij0123456789",
 		Messages: []string{"no destroy in prod"},
+		Job:      nil,
 	}
 
 	if !errors.Is(err, gate.ErrDenied) {
