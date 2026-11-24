@@ -21,7 +21,7 @@ Unexported freeze gate type with constructor NewFreezeGate that loads the active
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | API authorization and input check | Route requires the namespace freeze manage action on the namespace for create and end, and the namespace read action on the namespace for list. Reason longer than 500 characters or empty is refused with 400. | Call create, end, and list with a principal that holds no grant and check that each route answers 403 and changes nothing. Send a reason of 501 characters and an empty reason and check that create answers 400. |
-| Service guard | Job start and dispatch service checks the active freeze under lock in the same transaction as dispatch and refuses start, cancel, and phase dispatch while a freeze is active unless the caller holds namespace break-freeze on the namespace with a reason of 1 to 500 characters in the break_freeze_reason field. | Start and cancel a job during an active freeze with and without break-freeze, and create a freeze between check and dispatch, and check that only the break-freeze caller starts. |
+| Service guard | Job start and dispatch service checks the active freeze under lock in the same transaction as dispatch and refuses start, cancel, and phase dispatch while a freeze is active unless the caller holds namespace break-freeze on the namespace with a reason of 1 to 500 characters in the breakFreezeReason field. | Start and cancel a job during an active freeze with and without break-freeze, and create a freeze between check and dispatch, and check that only the break-freeze caller starts. |
 
 ## Diagrams
 
