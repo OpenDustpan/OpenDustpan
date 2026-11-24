@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -838,6 +839,85 @@ func TestDatabaseOutageShortOutage(t *testing.T) {
 	}
 }
 
+// watchOutageReady polls GET /health/ready on each instance at the same time,
+// from returned on. The returned function waits for the polls and gives, for
+// each instance, the time from returned to its first 200, or -1 when the
+// instance did not answer 200 in outageReadyTimeout.
+func watchOutageReady(ctx context.Context, s *outageSetup, returned time.Time) func() []time.Duration {
+	ctx, cancel := context.WithTimeout(ctx, outageReadyTimeout)
+	instances := s.probe.Instances()
+	after := make([]time.Duration, len(instances))
+
+	var wg sync.WaitGroup
+
+	for i, instance := range instances {
+		after[i] = -1
+
+		wg.Go(func() {
+			for {
+				resp, err := instance.Send(ctx, ha.InstanceRequest{
+					Method: http.MethodGet,
+					Path:   "/health/ready",
+					Header: nil,
+					Body:   "",
+				})
+				if err == nil && resp.Status == http.StatusOK {
+					after[i] = s.clock.Now().Sub(returned)
+
+					return
+				}
+
+				select {
+				case <-ctx.Done():
+					return
+				case <-s.clock.After(outagePoll):
+				}
+			}
+		})
+	}
+
+	return func() []time.Duration {
+		wg.Wait()
+		cancel()
+
+		return after
+	}
+}
+
+// logOutageRecovery logs, for each instance, the seconds from the database
+// return to the first 200 on GET /health/ready and to the first proxied
+// request of step that the instance answered with a status other than 503.
+func logOutageRecovery(t *testing.T, s *outageSetup, step string, returned time.Time, readyAfter []time.Duration) {
+	t.Helper()
+
+	entries := s.env.Recorder.Entries()
+
+	for i, instance := range s.probe.Instances() {
+		ready := "no 200 in " + outageReadyTimeout.String()
+		if readyAfter[i] >= 0 {
+			ready = fmt.Sprintf("%.1f s", readyAfter[i].Seconds())
+		}
+
+		proxied := "no proxied request after the database return"
+
+		for j := range entries {
+			entry := &entries[j]
+			if entry.Step != step || entry.Backend != instance.Name() || entry.At.Before(returned) ||
+				entry.Status == http.StatusServiceUnavailable {
+				continue
+			}
+
+			proxied = fmt.Sprintf("%.1f s (%s %s %d)",
+				entry.At.Sub(returned).Seconds(), entry.Method, entry.Path, entry.Status)
+
+			break
+		}
+
+		t.Logf("%s: instance %s: first GET /health/ready 200 after the database return: %s; "+
+			"first proxied request that is not a 503: %s", step, instance.Name(), ready, proxied)
+	}
+}
+
 func runShortOutageRound(
 	t *testing.T, s *outageSetup, round *outageRound, window time.Duration, report *ha.RetryReport,
 ) {
@@ -848,7 +928,8 @@ func runShortOutageRound(
 	before := outageVersions(ctx, t, s.env, project.workspace)
 
 	t.Logf("short outage with pulumi %s and tofu %s", round.pulumi.Version, round.tofu.Version)
-	s.env.Recorder.SetStep(fmt.Sprintf("short database outage %d", round.index))
+	step := fmt.Sprintf("short database outage %d", round.index)
+	s.env.Recorder.SetStep(step)
 
 	write := outageWriteRequest(s.env)
 	checkOutageStop(ctx, t, s, project, write)
@@ -878,6 +959,9 @@ func runShortOutageRound(
 	case <-s.clock.After(window):
 	}
 
+	returned := s.clock.Now()
+	readyAfter := watchOutageReady(ctx, s, returned)
+
 	s.probe.Restore(ctx, t)
 	restored = true
 
@@ -885,6 +969,8 @@ func runShortOutageRound(
 
 	<-runs.up.done
 	<-runs.apply.done
+
+	logOutageRecovery(t, s, step, returned, readyAfter())
 
 	for what, run := range map[string]*outageRun{"pulumi up": runs.up, "tofu apply": runs.apply} {
 		if run.err != nil {
