@@ -39,8 +39,9 @@ func TestJobRunnerWriteIsReadCommitted(t *testing.T) {
 
 	t.Cleanup(s.Close)
 
+	at := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
 	ns := namespace.Namespace{
-		ID: namespace.NewID(), CreatedAt: time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC), Name: "acme", PrimaryInstallation: "eu-west",
+		ID: namespace.NewID(), CreatedAt: at, Name: "acme", PrimaryInstallation: "eu-west",
 		FailoverVersion: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	if createErr := s.CreateNamespace(t.Context(), ns); createErr != nil {
