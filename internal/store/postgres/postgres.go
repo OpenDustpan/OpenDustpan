@@ -1515,7 +1515,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	starter := guardedPool{pool: s.pool, rt: roundTrip{deadline: migrationDeadline, watch: s.guard, readOnlyTx: false}}
 
-	err = pgx.BeginFunc(ctx, starter, func(tx pgx.Tx) error {
+	// The migration lock comes before the rows that migrateTx reads. Under READ
+	// COMMITTED an instance that waited for the lock sees the migrations of the
+	// instance before it, whatever the default of the server is.
+	err = pgx.BeginTxFunc(ctx, starter, writeTxOptions(), func(tx pgx.Tx) error {
 		if boundErr := setLocalBounds(ctx, tx, migrationBound()); boundErr != nil {
 			return boundErr
 		}
