@@ -10,6 +10,17 @@ Built-in MFA for local and LDAP sign-in, no step for SSO, fresh-step checks for 
 4. **The sign-in counts apart from the step-up.** The sign-in counts wrong factors with `PendingStore.FailPending` only. It uses the step-up TOTP port only for the single-use rule of the time step, through a new method that touches no step-up counter, so a step-up lockout never blocks a sign-in. The new method gets conformance tests before any adapter implements it.
 5. **This change ships the stores.** The SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore` land here, with the conformance suites first. The routes that enroll a TOTP factor and issue recovery codes belong to app-level-second-factor-totp, which depends on this change. The e2e step uses a registered passkey as the second factor, because the passkey routes exist on main.
 6. **SSO is not changed.** The refusal for a password next to an identity provider stays as on main. Built-in MFA adds no step for SSO.
+7. **The policy is two installation settings.** `mfa.Policy` (`pkg/mfa/mfa.go:343`) has no store on main, and no code reads it. This change stores the field Enabled as `mfa.enabled` and the field RequireForAll as `mfa.requireForAll`, with the settings resource of `pkg/setting`. Both are off by default. Require MFA is on when both are `true`. The sign-in and the freshness checks read them through the port `mfa.PolicySource`. A change from on to off needs a fresh step, as for `freshAuthEnabled`. The other fields of `mfa.Policy` stay at their defaults and are not stored here.
+
+## Interaction with the fresh step
+
+The change fresh-auth-enabled-setting makes the fresh step opt-in with the installation setting `freshAuthEnabled` (ADR 385 decisions 1 to 3). This change keeps the rule that ADR 385 sets. The two settings answer two different questions:
+
+- `freshAuthEnabled` decides whether the server asks for a fresh step at all. With it off, token creation and secret reveal ask for no step, and `mfa.enabled` does not change that.
+- `mfa.enabled` decides which factor satisfies a step that the server asks for. With `freshAuthEnabled` on and `mfa.enabled` on, only a step from POST /api/dustpan/v1/sign-in/second-factor inside the window satisfies the step for local and LDAP sign-in. A sign-in with a password only does not. With `mfa.enabled` off, the step stays as on main (the age of the sign-in).
+- The turn of either setting from on to off needs a fresh step.
+
+The requirement `fresh-step` of this change applies when both settings are on.
 
 ## Structure
 

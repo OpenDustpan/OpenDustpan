@@ -18,7 +18,7 @@ When a person signs in through an SSO provider, the server SHALL issue the sessi
 
 ### Requirement: fresh-step
 
-While built-in MFA is on, when the last MFA step is older than the window, the server SHALL refuse token creation with error code mfa.fresh-step-required.
+While built-in MFA is on and the fresh step is on (`freshAuthEnabled`), when the last MFA step is older than the window, the server SHALL refuse token creation with error code mfa.fresh-step-required.
 
 #### Scenario: Stale step
 - **WHEN** the step is older than the window
