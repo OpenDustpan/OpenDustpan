@@ -6,6 +6,7 @@ Job start and other mutating job actions must stop while a namespace freeze is a
 
 1. **Freeze as namespace record keyed by stable ID.** Freeze is stored per namespace ID with creator subject ID, reason of 1 to 500 characters, start time, and end record. Job start and dispatch read the active freeze with SELECT FOR UPDATE on PostgreSQL and an equivalent locked read in the same transaction as dispatch on SQLite, so a freeze made between check and dispatch still stops the start on both stores.
 2. **Single active freeze per namespace.** Only one active freeze exists per namespace, enforced by a unique partial index on namespace ID where ends_at_ms is 0 (an open freeze) in the baseline of each dialect. A second create is refused with 409, and an end with no active freeze is refused with 404.
+3. **Two action families.** `namespace:manage-freezes` is FamilyData: a grant on a namespace gives it, and the built-in `admin` role holds it through FamilyData (no other built-in namespace role manages jobs or gates, so no other role gets it). `namespace:break-freeze` is FamilyOperator (the families differ, as the decision of the job-gates ADR requires). Consequence: `givenOn` gives a non-data action only through a grant on the installation, so a break-glass start needs a grant on @server; the authorizer still checks the action on the namespace of the job. A namespace grant of a role with break-freeze does not give it. This is the stricter reading and fails closed. A namespace-scoped break-glass would need a new family and an ADR: out of scope. `RoleInstallationOperator` and `RoleSiteAdministrator` take FamilyOperator by family, so the operator role excludes break-freeze (as `siteOnlyActions` does for the administration family): no principal holds it by default, and a person grants the new installation-scoped built-in role `freeze-breaker`, which holds break-freeze only.
 
 ## Structure
 
@@ -21,7 +22,7 @@ Unexported freeze gate type with constructor NewFreezeGate that loads the active
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | API authorization and input check | Route requires the namespace freeze manage action on the namespace for create and end, and the namespace read action on the namespace for list. Reason longer than 500 characters or empty is refused with 400. | Call create, end, and list with a principal that holds no grant and check that each route answers 403 and changes nothing. Send a reason of 501 characters and an empty reason and check that create answers 400. |
-| Service guard | Job start and dispatch service checks the active freeze under lock in the same transaction as dispatch and refuses start, cancel, and phase dispatch while a freeze is active unless the caller holds namespace break-freeze on the namespace with a reason of 1 to 500 characters in the break_freeze_reason field. | Start and cancel a job during an active freeze with and without break-freeze, and create a freeze between check and dispatch, and check that only the break-freeze caller starts. |
+| Service guard | Job start and dispatch service checks the active freeze under lock in the same transaction as dispatch and refuses start, cancel, and phase dispatch while a freeze is active unless the caller holds namespace break-freeze on the namespace with a reason of 1 to 500 characters in the breakFreezeReason field. | Start and cancel a job during an active freeze with and without break-freeze, and create a freeze between check and dispatch, and check that only the break-freeze caller starts. |
 
 ## Diagrams
 
@@ -33,7 +34,7 @@ admin->>server: POST freezes with reason
 server->>store: store active freeze
 starter->>server: POST jobs
 server->>store: lock freeze row and dispatch
-server-->>starter: 403 or job
+server-->>starter: 409 job.frozen or job
 ```
 
 Modules that the change touches, and their imports on main:
@@ -82,7 +83,7 @@ end
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | authorize at point of use | Route checks freeze manage, break-freeze, and read actions at the point of use | Replay create, end, break-glass start, and list as a caller with no grant and check 403 with no state change |
+| client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | authorize at point of use | Route checks freeze manage, break-freeze, and read actions at the point of use | Replay create, end, and list as a caller with no grant and check 403 with no state change, and replay a start without break-freeze during a freeze and check 409 with code job.frozen and no state change |
 | client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | boundary check | Reason length 1 to 500 checked at the boundary; overlong or empty input refused with 400 | Send 501-character and empty reasons to create and break-glass start and check 400 with no write |
 | client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | encode or contain | Reason is stored as text and returned as JSON text with encoding at render, never run | Store HTML and script text in a reason and check the list read returns it encoded with no execution |
 | client to API | S | A caller without the freeze action creates or ends a freeze, or starts a job during a freeze | limit | Reason capped at 500 characters and list capped by page limit | Send a 1 MB reason and a list with a large limit and check 400 and capped pages |
@@ -91,7 +92,7 @@ end
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | authorize at point of use | Freeze read and job dispatch run in one transaction with a locked read so a freeze made between check and dispatch still refuses start | Insert a freeze between the guard read and dispatch in a test double and check that start is refused |
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | encode or contain | Freeze rows bound to namespace ID by placeholder query; no string-built SQL | Send a namespace ID with SQL text and check it matches no row and changes nothing |
 | server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | limit | Single active freeze per namespace ID enforced by a unique partial index with bounded retry on conflict | Insert two concurrent creates and check that one gets 409 and only one active row remains |
-| server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | fail closed | Race loser fails closed with 409 and dispatch loser fails closed with 403 | Race two creates and race a start with a concurrent freeze and check one 409, one 403, and a single active freeze |
+| server to store | T | A freeze write races a job start or a second freeze write and leaves two active freezes or a missed guard | fail closed | Race loser fails closed with 409 and dispatch loser fails closed with 409 and code job.frozen | Race two creates and race a start with a concurrent freeze and check one 409 for the second create, one 409 with code job.frozen for the start, and a single active freeze |
 
 ## Contract
 
