@@ -6,7 +6,7 @@ When require MFA is on, the server SHALL create a pending sign-in and no session
 
 #### Scenario: Password only
 - **WHEN** require MFA is on and a person gives a correct password
-- **THEN** the server creates a pending sign-in and issues no session
+- **THEN** the server answers 202, sets the pending cookie, creates a pending sign-in and issues no session
 
 ### Requirement: sso-no-added-step
 
@@ -35,3 +35,46 @@ When a person gives a second factor for a pending sign-in, the server SHALL acce
 #### Scenario: Replayed code
 - **WHEN** a person gives a TOTP code that the server already accepted
 - **THEN** the server refuses it and issues no session
+
+### Requirement: second-factor-route
+
+The server SHALL take the second factor of a pending sign-in on one route, POST /api/dustpan/v1/sign-in/second-factor, with the pending cookie of the browser. The body is JSON with a field `method` and no other field than the one that the method names. The server SHALL answer 204 with the session cookie for a valid factor, and 401 with one text for every other case.
+
+- `method` `totp`: the field `code` holds 6 digits.
+- `method` `recovery-code`: the field `code` holds one recovery code.
+- `method` `passkey-options`: no other field. The answer is 200 with the request options of an assertion ceremony that is bound to the pending sign-in.
+- `method` `passkey`: the field `response` holds the response of the authenticator.
+
+The 401 answer is {"code": 401, "message": "The second factor is not valid. Run `opendustpan status` and sign in again."}. The route is public. A request with no pending cookie, an expired or void pending sign-in, an unknown method, or a field that the method does not name gets the 401 answer. Each failure spends one unit of the sign-in budget of the source address, and each refusal appends an audit entry.
+
+#### Scenario: Valid TOTP code
+- **WHEN** a person gives a valid TOTP code with a pending cookie
+- **THEN** the server answers 204 with the session cookie and deletes the pending sign-in
+
+#### Scenario: No pending cookie
+- **WHEN** a request has no pending cookie
+- **THEN** the server answers 401 and issues no session
+
+#### Scenario: Wrong factors until void
+- **WHEN** a person gives 5 wrong factors
+- **THEN** the pending sign-in is void and a valid factor then gets the 401 answer
+
+### Requirement: pending-store-adapters
+
+The SQLite and the PostgreSQL store SHALL implement `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`, and each adapter SHALL run the conformance suites of the ports. A store keeps the digest of a code or of a pending secret and the sealed TOTP secret, never a plain code or secret.
+
+#### Scenario: Digest only
+- **WHEN** a test reads each row of the three ports
+- **THEN** no row holds a plain code or a plain pending secret
+
+### Requirement: sign-in-step-use-keeps-step-up-counters
+
+The TOTP port SHALL have one method that accepts a time step for a sign-in with the single-use rule of the step-up, and the method SHALL change no step-up counter, lock or disable.
+
+#### Scenario: Step-up lockout
+- **WHEN** the step-up of a person is locked and the person gives a valid TOTP code at the sign-in
+- **THEN** the server accepts the code and issues a session
+
+#### Scenario: Wrong sign-in codes
+- **WHEN** a person gives wrong TOTP codes at the sign-in
+- **THEN** the step-up failure count of the person does not change
