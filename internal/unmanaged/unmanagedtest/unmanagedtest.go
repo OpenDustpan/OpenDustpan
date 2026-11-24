@@ -59,7 +59,7 @@ type suiteCase struct {
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	runCases(t, newHarness, slices.Concat(indexCases(), linkCases(), findingCases(), scanCases()))
+	runCases(t, newHarness, slices.Concat(indexCases(), linkCases(), findingCases(), scanCases(), sweepStoreCases()))
 }
 
 // RunSweepStore runs the cases of the findings and of the sweeps. An adapter
@@ -69,7 +69,7 @@ func Run(t *testing.T, newHarness Factory) {
 func RunSweepStore(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	runCases(t, newHarness, slices.Concat(findingCases(), scanCases()))
+	runCases(t, newHarness, slices.Concat(findingCases(), scanCases(), sweepStoreCases()))
 }
 
 // RunScanStore runs the cases of the sweeps alone. An adapter that holds the
@@ -77,7 +77,7 @@ func RunSweepStore(t *testing.T, newHarness Factory) {
 func RunScanStore(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	runCases(t, newHarness, scanCases())
+	runCases(t, newHarness, slices.Concat(scanCases(), sweepStoreCases()))
 }
 
 // runCases runs each case of cases in its own subtest.

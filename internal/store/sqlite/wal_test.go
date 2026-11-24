@@ -365,7 +365,7 @@ func TestBackupWithLargeWAL(t *testing.T) {
 		t.Fatalf("roll back read transaction: %v", rbErr)
 	}
 
-	dst := importWALBackup(ctx, t, dir, bk)
+	dst := importWALBackup(t, dir, bk)
 
 	checkRestoredRows(ctx, t, src, dst, refs)
 }
@@ -489,8 +489,10 @@ func exportWALBackup(t *testing.T, src *sqlite.Store, walSize int64) walBackup {
 
 // importWALBackup opens a fresh store, stages the portable files of bk into it
 // and applies the staged data, then returns the restored store.
-func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup) *sqlite.Store {
+func importWALBackup(t *testing.T, dir string, bk walBackup) *sqlite.Store {
 	t.Helper()
+
+	ctx := t.Context()
 
 	dstPath := filepath.Join(dir, "restored.db")
 
@@ -507,7 +509,6 @@ func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup
 		}
 	})
 
-	//nolint:contextcheck // StageAs takes the context of t.
 	opts := storetest.StageAs(t, dst)
 
 	_, err = dst.StagePortable(ctx, storetest.PortableOpener(bk.files), bk.sum, bk.descs, opts)

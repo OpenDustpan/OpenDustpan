@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Add the docs test in NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go, which runs each command of the page against the e2e test server. Check: the commands on the page run as written in that test. No route: the test runs the commands of the page against the e2e test server and calls no route of the sweep store only. `make docs-lint` passes on each edited guide.
+- [x] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Add the docs test in NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go, which runs each command of the page against the e2e test server. Check: the commands on the page run as written in that test. No route: the test runs the commands of the page against the e2e test server and calls no route of the sweep store only. `make docs-lint` passes on each edited guide.
 - [ ] 4.2 Agent pre-run (human run-through in person-steps (add-job-session-paths-runner-unmanaged-sweep-store 4.2)): Run the usability check from the docs page alone. Check: An embedder runs the suite on a new adapter from the page. Record the transcript in the pull request body.
 - [ ] 4.3 The wiring, the route and the e2e step with the real runner. Check: BLOCKED by the last part of the split (sweep claimer wiring and sweep routes). This part ships no route and no credential.
 - [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
