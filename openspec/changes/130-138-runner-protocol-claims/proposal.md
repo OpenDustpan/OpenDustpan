@@ -1,6 +1,8 @@
 ---
-version: 6
+version: 7
 ---
+
+Issue: #4056
 
 ## Why
 
@@ -35,7 +37,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Add the runner-side poll, renew and heartbeat loop. It calls only the routes that main has: `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`. The server routes, the error codes and the lease do not change.
-- The lease of a claim is the lease of its pool, `pool.EffectiveLease()` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews after `runner.RenewEvery` of that lease. The change sets no fixed lease.
+- The lease of a claim is the lease of its pool, `Pool.EffectiveLease` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews after `runner.RenewEvery` of that lease. The change sets no fixed lease.
 - Ship the NEW command `opendustpan runner poll` that runs the loop.
 - Write the runner claims docs page.
 
