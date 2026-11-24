@@ -403,11 +403,35 @@ func waitOutageMarkers(ctx context.Context, t *testing.T, clock ha.OutageClock, 
 	}
 }
 
-// outageWriteRequest writes a state version through the proxy with an access token.
-func outageWriteRequest(env *e2e.Env) ha.InstanceRequest {
+// waitOutageHealthy waits until the proxy sends requests to each instance
+// that runs, before the first proxied request of the round. A failure names
+// each instance that is not healthy.
+func waitOutageHealthy(ctx context.Context, t *testing.T, s *outageSetup, round *outageRound) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(ctx, outageReadyTimeout)
+	defer cancel()
+
+	if err := s.cluster.WaitHealthy(ctx); err != nil {
+		var unhealthy []string
+
+		for i := range s.cluster.Size() {
+			if s.cluster.Alive(i) && !s.cluster.Healthy(i) {
+				unhealthy = append(unhealthy, probeInstance{cluster: s.cluster, index: i}.Name())
+			}
+		}
+
+		t.Fatalf("round %d: instances %s are not healthy after %s: %v",
+			round.index, strings.Join(unhealthy, ", "), outageReadyTimeout, err)
+	}
+}
+
+// outageWriteRequest writes a state version of the workspace with id through
+// the proxy with an access token.
+func outageWriteRequest(env *e2e.Env, id string) ha.InstanceRequest {
 	return ha.InstanceRequest{
 		Method: http.MethodPost,
-		Path:   "/api/v2/workspaces/ws-outage/state-versions",
+		Path:   "/api/v2/workspaces/" + id + "/state-versions",
 		Header: http.Header{
 			"Authorization": {"Bearer " + env.TokenA()},
 			"Content-Type":  {"application/vnd.api+json"},
@@ -804,6 +828,7 @@ func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report
 	t.Helper()
 
 	ctx := t.Context()
+	waitOutageHealthy(ctx, t, s, round)
 	project := newOutageProject(ctx, t, s, round, fmt.Sprintf("haoutage%d", round.index))
 	before := outageVersions(ctx, t, s.env, project.workspace)
 	idsBefore := outageInstanceIDs(s.cluster)
@@ -811,7 +836,7 @@ func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report
 	t.Logf("long outage with pulumi %s and tofu %s", round.pulumi.Version, round.tofu.Version)
 	s.env.Recorder.SetStep(longOutageStep(round))
 
-	write := outageWriteRequest(s.env)
+	write := outageWriteRequest(s.env, s.env.WorkspaceIDByName(ctx, t, project.workspace))
 	checkOutageStop(ctx, t, s, project, write)
 
 	runs := project.startBoth(ctx, t)
@@ -999,6 +1024,7 @@ func runShortOutageRound(
 	t.Helper()
 
 	ctx := t.Context()
+	waitOutageHealthy(ctx, t, s, round)
 	project := newOutageProject(ctx, t, s, round, fmt.Sprintf("haquick%d", round.index))
 	before := outageVersions(ctx, t, s.env, project.workspace)
 
@@ -1006,7 +1032,7 @@ func runShortOutageRound(
 	step := fmt.Sprintf("short database outage %d", round.index)
 	s.env.Recorder.SetStep(step)
 
-	write := outageWriteRequest(s.env)
+	write := outageWriteRequest(s.env, s.env.WorkspaceIDByName(ctx, t, project.workspace))
 	checkOutageStop(ctx, t, s, project, write)
 
 	runs := project.startBoth(ctx, t)
