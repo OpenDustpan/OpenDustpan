@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 ## Why
@@ -9,36 +9,39 @@ version: 5
 The user path this change must make work:
 
 1. **Server start.** Install and join a runner to a pool, then start the runner binary against the server.
-2. **API.** Poll the NEW route `POST /runner/v1/claims` for work with the runner key; run `opendustpan status` on failure.
-3. **API.** Heartbeat the claim every 15 s to renew the 60 s lease during work.
-4. **API.** Stream the sweep report under the claim within the size bounds.
-5. **Docs page.** Read the runner claims docs page and run its poll loop as written.
+2. **API.** The runner polls the existing route `POST /runner/v1/poll` with its runner key. On failure, run `opendustpan status`.
+3. **API.** The runner renews the claim through the existing route `POST /runner/v1/claims/{operation}/renew` after a third of the pool lease, and sends the existing heartbeat `POST /runner/v1/heartbeat` every 15 s.
+4. **Docs page.** Read the runner claims docs page and run its poll loop as written.
 
-Errors the person may hit, and the one command that helps:
+Errors the person may hit, and the one command that helps. The codes are the short protocol codes of `/runner/v1` that main already returns (`pkg/runner/protocol/protocol.go:198-214`). The change adds no second error shape.
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Poll with a bad runner key fails. | Server answers 401 with the NEW error code `runner.invalid`, with no key echo in body or logs. Check key and pool, then run `opendustpan status`. | `opendustpan status` |
-| Poll with a retired runner fails. | Server answers 409 with `runner.retired` and names the retire record. Join a new runner, then run `opendustpan status`. | `opendustpan status` |
-| Upload over the bound fails. | Server answers 409 with `runner.limit` when the report exceeds 1 GiB, 5000000 records, or a line exceeds 64 KiB. Fix the report, then run `opendustpan status`. | `opendustpan status` |
+| Poll with a bad runner proof fails. | Server answers 401 with `bad-proof`, with no key echo in body or logs. Check the key, the clock and the pool, then run `opendustpan status`. | `opendustpan status` |
+| Poll with a retired runner fails. | Server answers 403 with `retired`. Join a new runner, then run `opendustpan status`. | `opendustpan status` |
+| Poll comes too often. | Server answers 429 with `rate-limited` and `Retry-After`. Wait for the delay. | `opendustpan status` |
+| Renew after the lease ended. | Server answers 409 with `claim-lost`. The runner stops the work. | `opendustpan status` |
 
 Evidence for the claims above:
 
 - Claimed-operation lease behavior exists on main. Proof: pkg/durable/runner_claimed_test.go:16
-- Runner invalid error code exists on main. Proof: internal/errcode/catalog_runner.go:8
+- Protocol error codes exist on main. Proof: pkg/runner/protocol/protocol.go:198 (const ErrorBadProof)
 - Lease renew by holder exists on main. Proof: pkg/audit/audittest/feed.go:391 (func testLeaseRenewByHolder)
+- Poll, heartbeat and claim renew routes exist on main. Proof: internal/api/runnerapi/routes.go:83 (func Handler.runnerRoutes)
+- The pool lease exists on main. Proof: pkg/runner/runner.go:269 (func Pool.EffectiveLease)
 - Runner protocol base route exists on main. Proof: route table or API description
 - Runner protocol package exists on main. Proof: pkg/runner/protocol
 
 ## What Changes
 
-- Add the NEW route `POST /runner/v1/claims` for poll with `ClaimWork` semantics.
-- Add the NEW route `POST /runner/v1/claims/heartbeat` that renews the claim lease by 60 s with fence check.
-- Add the NEW route `POST /runner/v1/uploads` for bounded report upload under the claim to the blob store encrypted with the data key of the namespace.
-- Ship the NEW commands `opendustpan runner poll` and `opendustpan runner upload` with the runner poll and heartbeat loop in the runner binary.
+- Add the runner-side poll, renew and heartbeat loop. It calls only the routes that main has: `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`. The server routes, the error codes and the lease do not change.
+- The lease of a claim is the lease of its pool, `pool.EffectiveLease()` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews after `runner.RenewEvery` of that lease. The change sets no fixed lease.
+- Ship the NEW command `opendustpan runner poll` that runs the loop.
+- Write the runner claims docs page.
 
 Out of scope:
 
+- Report upload and the end of a claim by report. The sweep claimer and the report route are the work of `add-job-session-paths-runner-sweep-claimer-wiring` and `160-165-report-intake-findings`.
 - Launcher step start and step validation
 - Source filter enforcement
 - Runner pool and join token management
@@ -53,12 +56,15 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - Runner operator must learn two new paths at once: poll and heartbeat; the docs page shows one copy-paste loop.
-- Empty poll answer can look like a fault; the answer carries an explicit retry delay.
+- Empty poll answer (204 after the wait) can look like a fault; the docs page says that 204 is normal and the loop polls again.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
+- The poll route waits at most `protocol.MaxPollWait` (50 s) and answers 204 with no work. (`pkg/runner/protocol/protocol.go:36 (const PathPoll; MaxPollWait at :146)`)
+- The claim renew route renews a claim before the session opens. (`pkg/runner/protocol/protocol.go:44 (const PathClaimRenew)`)
+- The heartbeat route exists. (`pkg/runner/protocol/protocol.go:32 (const PathHeartbeat)`)
 - Lease renew is checked by holder on main. (`pkg/audit/audittest/feed.go:391 (func testLeaseRenewByHolder)`)
 - Server start steps exist on main. (`pkg/dustpan/start.go:66 (func Server.startSteps)`)
 - Source filter option exists on main. (`pkg/dustpan/sourcefilter.go:15 (func WithSourceFilters)`)
@@ -75,9 +81,20 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 166, 210, 343.
 - Quote: "A sweep is not a job. A job belongs to one unit, and the one-change rule, the phases and the gates of ADR 100 serve changes to a unit. A sweep changes nothing and has no unit. A sweep uses the same parts as a job: the runner pools, the ru"
 - Quote: "The durable operation. The start of a sweep starts one durable operation of the kind `unmanaged.sweep.<pool ID>`, with the start key `<sweep ID>`, in the transaction that stores the sweep. A runner of the pool claims it through the runner"
-- Quote: "Upload. The runner streams the report to the server through the runner protocol, under its claim. The server writes it to the blob store as a stream (ADR 45), encrypted with the data key of the namespace, because tags can hold names and t"
-- Effect: Claim polling reuses runner pools and runner claims for sweeps and jobs. Report upload streams under the claim to the blob store encrypted with the data key of the namespace.
+- Effect: Claim polling reuses runner pools and runner claims for sweeps and jobs. The report upload is out of this change.
 - Conflict: none.
+
+**ADR 131: The runner protocol** (owner-tagged for decisions 5 and 9).
+
+- Decisions that apply: 5 (owner), 7, 8, 12 (current).
+- Changed by: ADR 139 extends decision 6. Chain to the end: ADR 139.
+- Current rule: this ADR, with ADR 139.
+- Quote: "A poll waits for work for at most 50 seconds (`protocol.MaxPollWait`), below the idle timeout of common proxies."
+- Quote: "A runner sends a heartbeat every 15 seconds, also while it polls."
+- Quote: "The holder renews after a third of the lease of the pool (ADR 130 decision 7)."
+- Quote: "Each answer with a status of 400 or more has the body `{\"code\": \"...\", \"message\": \"...\"}` (`protocol.Error`)."
+- Effect: The loop uses the 50 s poll, the 15 s heartbeat, the renew after a third of the pool lease and the short codes of decision 12. The change adds no route, no code and no lease.
+- Conflict: none. The earlier draft with a fixed 60 s lease, the `runner.*` codes and the upload route conflicted with decisions 7 and 12. This version removes them.
 
 **ADR 343: Runner work: tool imports, sweeps and the runner repository** (owner-tagged (all decisions)).
 
@@ -94,8 +111,9 @@ none
 
 Questions considered and answered:
 
-- Do claims need a lease with renew and fence? Yes. RFC 6 states claims are leases, the runner renews the lease while it works, expiry returns the work to another runner, and the claim is a write in the namespace through the fence. The change follows that rule with a 60 s renew, a 15 s heartbeat, and a 50 s long-poll timeout decided in this change.
+- Do claims need a lease with renew and fence? Yes. RFC 6 states claims are leases, the runner renews the lease while it works, expiry returns the work to another runner, and the claim is a write in the namespace through the fence. The change follows that rule with the lease of the pool, a renew after a third of it, the 15 s heartbeat and the 50 s long poll that ADR 131 decides.
 - Does polling need a push channel? No new tool. The runner opens every connection and long-polls the server per RFC 6. The change adds no push channel.
-- Where do report bounds come from? ADR 164 decisions 10 to 12 answer it: JSON Lines version 1, at most 1 GiB and 5000000 records, 64 KiB per line, streamed under the claim to the blob store encrypted with the data key of the namespace. The change enforces those bounds.
+- Does this change add routes? No. Poll, heartbeat and renew exist on main, and the lead decided (option A) that the change extends them and adds no duplicate route.
+- Where does the report upload go? Out of this change. Main has the port (`runner.SweepClaimer.Report`, `pkg/runner/store.go:247`) and the path (`protocol.PathSessionSweepReport`, `pkg/runner/protocol/protocol.go:115`). ADR 164 decision 12 says one streamed upload ends the claim. The earlier draft's resumable staged upload has no ADR. It is not part of this change.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
