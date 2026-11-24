@@ -59,7 +59,7 @@ func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
 	attempt := r.s.newAttempt(ctx)
 
-	err := pgx.BeginTxFunc(ctx, r.s.txs, jobWriteOptions(), func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, r.s.txs, writeTxOptions(), func(tx pgx.Tx) error {
 		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
 		}
@@ -82,20 +82,6 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 	}
 
 	return nil
-}
-
-// jobWriteOptions returns the options of a write transaction of the job stores.
-// The transaction pins READ COMMITTED, so a server default of REPEATABLE READ
-// does not change it. The write waits for the namespace row FOR UPDATE, and
-// under READ COMMITTED each later statement takes a new snapshot: a reserve
-// that waited sees the unconfirmed chunk rows that the reserve before it
-// committed, so the log caps of a phase hold. Under REPEATABLE READ the
-// snapshot is taken before the wait and the later reserve does not see them.
-func jobWriteOptions() pgx.TxOptions {
-	return pgx.TxOptions{
-		IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite, DeferrableMode: pgx.NotDeferrable,
-		BeginQuery: "", CommitQuery: "",
-	}
 }
 
 // Read implements jobstore.Runner.
