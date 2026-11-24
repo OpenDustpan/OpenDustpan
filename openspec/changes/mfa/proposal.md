@@ -2,6 +2,8 @@
 version: 9
 ---
 
+Issue: #4064
+
 Roadmap: `docs/roadmap.md:149` (MFA).
 
 ## Why
@@ -70,7 +72,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main has the pending sign-in: `mfa.Pending` (`pkg/mfa/mfa.go:275`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) with `CreatePending`, `FailPending` and `CompletePending` (`pkg/mfa/mfa.go:315`). This change adds no second pending type.
 - Main has the passkey sign-in ceremony: `FinishSignIn` (line 374) and the pending ID in `Binding` (line 128) in the file (read only) `internal/mfasvc/service.go`.
 - Main has no adapter for the pending sign-in, the recovery codes or the TOTP factor. `mfa.RecoveryCodeStore` (`pkg/mfa/mfa.go:245`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) and `stepup.TOTPStore` (`internal/stepup/stepup.go:680`) have no implementation in `internal/store`, and `mfatest.Run` skips each case (`pkg/mfa/mfatest/suite.go:110`).
-- Main fails a password sign-in closed with `ReasonSecondFactor` (`internal/localusersvc/signin.go:340`) and has no route that takes a second factor. The password route answers 204 with a session cookie (`internal/api/server/localusers.go:468`).
+- Main fails a password sign-in closed with `ReasonSecondFactor` (`internal/localusersvc/signin.go:340`) and has no route that takes a second factor. The password route answers 204 with a session cookie (read only) `internal/api/server/localusers.go`.
 - Main counts a TOTP failure on the step-up counter before the time step check: `BeginTOTPAttempt` (`internal/stepup/stepup.go:705`) comes before `AcceptStep` (`internal/stepup/stepup.go:728`), and the comment of `TOTP` (`internal/stepup/stepup.go:634`) says that the sign-in has its own counters.
 - Main has the single-use rule of a TOTP code: the store accepts a time step one time (`stepup.ErrUsed` at line 50, `TOTP.LastStep` at line 647, `AcceptStep` at line 728 in the file `internal/stepup/stepup.go`). This change reuses that rule through one new port method and adds no second rule.
 
