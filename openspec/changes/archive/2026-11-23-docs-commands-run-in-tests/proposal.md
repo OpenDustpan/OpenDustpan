@@ -28,7 +28,7 @@ Evidence for the claims above:
 - Extract each fenced shell command from docs/guides, docs/reference and README into a tested corpus.
 - Run each corpus command as written in a test fixture and fail the gate on an unrun or failing block.
 - Fix pages so every listed command passes as written.
-- This change builds first: each sibling new page of this milestone adds its corpus entries in the same pull request that adds the page, covering the production install page, the install-from-artifacts page, the SDK guide, the runner guide, and the key rotation docs.
+- Keep the corpus in docs/commands-checked-pages.txt and docs/commands-pending-pages.txt: a new docs page adds its entry in the same pull request that adds the page.
 
 Out of scope:
 
