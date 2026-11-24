@@ -183,7 +183,7 @@ func (s *Service) refuseLimits(ctx context.Context, lc *limitCheck) error {
 		s.log.ErrorContext(ctx, "write the access refusal record", slog.String("error", err.Error()))
 	}
 
-	return &RefusalError{Err: cause, Record: id, Messages: v.messages}
+	return &RefusalError{Err: cause, Record: id, Messages: v.messages, Job: nil}
 }
 
 // noteLimitRefusal writes the decision record of a refused call. Refusals of

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -242,6 +243,10 @@ func platformGate() job.Gate {
 	return job.Gate{
 		Type: job.GateApproval, Name: "platform", Approvals: 1, Groups: []string{"platform"},
 		GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 }
 
@@ -249,6 +254,10 @@ func dbaGate() job.Gate {
 	return job.Gate{
 		Type: job.GateApproval, Name: "dba", Approvals: 1, Groups: []string{"dba"},
 		GroupIDs: []string{"grp-b"}, AllowSelf: false, Timeout: 0, BindPlan: true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 }
 
@@ -264,6 +273,10 @@ func groupAndOpenGates(j *job.Job) {
 	open := job.Gate{
 		Type: job.GateApproval, Name: "open", Approvals: 1, Groups: nil, GroupIDs: nil,
 		AllowSelf: false, Timeout: 0, BindPlan: true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 
 	j.Phases[1].Gates = []job.Gate{platformGate(), open}

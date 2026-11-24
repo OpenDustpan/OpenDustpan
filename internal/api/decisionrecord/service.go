@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -64,7 +65,38 @@ func (s *Service) Read(ctx context.Context, scope gate.Scope, id string) (gate.R
 		return gate.Record{}, fmt.Errorf("%w: the record belongs to another scope", gate.ErrNotFound)
 	}
 
-	return rec, nil
+	return answerApprovers(rec), nil
+}
+
+// answerApprovers returns rec with an empty slice for each nil slice of the
+// approvers of its requirements. The API description says that a slice is not
+// nullable. A body stored before a field of the approvers existed, or stored
+// with that field nil, decodes the field as nil, and the answer must still
+// give []. It changes a copy of the requirements only, so the value that the
+// store gave stays as it is.
+func answerApprovers(rec gate.Record) gate.Record {
+	reqs := slices.Clone(rec.Requirements)
+
+	for i := range reqs {
+		a := &reqs[i].Approvers
+		a.Groups = emptyIfNil(a.Groups)
+		a.GroupIDs = emptyIfNil(a.GroupIDs)
+		a.Users = emptyIfNil(a.Users)
+		a.UserIDs = emptyIfNil(a.UserIDs)
+	}
+
+	rec.Requirements = reqs
+
+	return rec
+}
+
+// emptyIfNil returns an empty slice for a nil s, and s otherwise.
+func emptyIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+
+	return s
 }
 
 // readNamespace maps the scope of the path to the store namespace of its

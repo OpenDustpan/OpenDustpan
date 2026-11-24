@@ -4,11 +4,11 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add the sweep store cases to the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go (unmanagedtest.Run at :59, run by TestMem in internal/unmanaged/unmanagedtest/mem_test.go:1085 and by the SQL store tests). Check: the sweep store cases (Conformance) of unmanagedtest.Run fails on main.
-- [ ] 1.2 Write the fence cases as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Fence) of unmanagedtest.Run fails on main.
-- [ ] 1.3 Write the pool cases (a pool for jobs, a sweep pool of another namespace, a sweep pool of the team, and a pool that is deleted after the save), as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Pool) of unmanagedtest.Run fails on main.
-- [ ] 1.4 Write the busy, transition and delete cases, with concurrent starts, as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Busy) of unmanagedtest.Run, the sweep store cases (Transitions) of unmanagedtest.Run and the sweep store cases (DeleteTarget) of unmanagedtest.Run fail on main.
-- [ ] 1.5 Write the bounds, concurrency and rollback cases as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the sweep store cases (Bounds) of unmanagedtest.Run, the sweep store cases (ConcurrentFence) of unmanagedtest.Run and the sweep store cases (Rollback) of unmanagedtest.Run fail on main.
+- [ ] 1.1 Add the sweep store cases to the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go (unmanagedtest.Run at :59, run by TestMem in internal/unmanaged/unmanagedtest/mem_test.go:1127 and by the SQL store tests). Check: the NEW case list `sweepStoreCases` (next to `scanCases` at internal/unmanaged/unmanagedtest/scans.go:16) fails on main: `unmanagedtest.Run` (`unmanagedtest.Run` at internal/unmanaged/unmanagedtest/unmanagedtest.go:59) does not run it yet.
+- [ ] 1.2 Write the fence cases as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the NEW case `testSweepStoreFence` in the NEW `sweepStoreCases` (next to `scanCases` at internal/unmanaged/unmanagedtest/scans.go:16) fails on main: no store checks the sweep fence yet.
+- [ ] 1.3 Write the pool cases (a pool for jobs, a sweep pool of another namespace, a sweep pool of the team, and a pool that is deleted after the save), as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the NEW case `testSweepStorePool` in the NEW `sweepStoreCases` (next to `scanCases` at internal/unmanaged/unmanagedtest/scans.go:16) fails on main: no store checks the pool of a sweep yet.
+- [ ] 1.4 Write the busy, transition and delete cases, with concurrent starts, as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the NEW cases `testSweepStoreBusy`, `testSweepStoreTransitions` and `testSweepStoreDeleteTarget` in the NEW `sweepStoreCases` (next to `scanCases` at internal/unmanaged/unmanagedtest/scans.go:16) fail on main: no store has the sweep tables yet.
+- [ ] 1.5 Write the bounds, concurrency and rollback cases as cases of the existing suite internal/unmanaged/unmanagedtest/unmanagedtest.go. Check: the NEW cases `testSweepStoreBounds`, `testSweepStoreConcurrentFence` and `testSweepStoreRollback` in the NEW `sweepStoreCases` (next to `scanCases` at internal/unmanaged/unmanagedtest/scans.go:16) fail on main: no store has the sweep tables yet.
 
 ## 2. Build
 
@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Add the docs test in NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go, which runs each command of the page against the e2e test server. Check: the commands on the page run as written in that test. `make docs-lint` passes on each edited guide.
+- [ ] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Add the docs test in NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go, which runs each command of the page against the e2e test server. Check: the commands on the page run as written in that test. No route: the test runs the commands of the page against the e2e test server and calls no route of the sweep store only. `make docs-lint` passes on each edited guide.
 - [ ] 4.2 Agent pre-run (human run-through in person-steps (add-job-session-paths-runner-unmanaged-sweep-store 4.2)): Run the usability check from the docs page alone. Check: An embedder runs the suite on a new adapter from the page. Record the transcript in the pull request body.
 - [ ] 4.3 The wiring, the route and the e2e step with the real runner. Check: BLOCKED by the last part of the split (sweep claimer wiring and sweep routes). This part ships no route and no credential.
 - [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

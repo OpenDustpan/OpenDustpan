@@ -154,6 +154,9 @@ type Approvers struct {
 	// existed, and it counts no one.
 	GroupIDs []string `json:"groupIds"`
 	Users    []string `json:"users"`
+	// UserIDs holds the stable principal ID of each user in Users, at the
+	// same index. Users is for display only.
+	UserIDs []string `json:"userIds"`
 	// UnitOwners reads the owners of the unit from the context at the
 	// scope of the rule or at a wider scope only.
 	UnitOwners bool `json:"unitOwners"`

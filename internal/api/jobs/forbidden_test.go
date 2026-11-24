@@ -50,7 +50,7 @@ func TestForbiddenAccessLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			refusal := &gate.RefusalError{Err: tc.sentinel, Record: "", Messages: nil}
+			refusal := &gate.RefusalError{Err: tc.sentinel, Record: "", Messages: nil, Job: nil}
 			cause := errcodetest.Cause{
 				Name: tc.name, Err: fmt.Errorf("%w: %w", identity.ErrDenied, refusal), Code: tc.code,
 				Message: "forbidden", Fixed: true,

@@ -263,7 +263,11 @@ func testReconcileGate(t *testing.T, h Harness) {
 	j := newJob(f.unit, job.OperationRefresh, "")
 	j.Phases[0].Gates = []job.Gate{{
 		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
-		BindPlan: false,
+		BindPlan:   false,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}}
 	queued := create(t, h, f, j, nil)
 
@@ -281,7 +285,11 @@ func testReconcileApprovedGate(t *testing.T, h Harness) {
 	j := newJob(f.unit, job.OperationRefresh, "")
 	j.Phases[0].Gates = []job.Gate{{
 		Type: job.GateApproval, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
-		BindPlan: false,
+		BindPlan:   false,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}}
 	j.Phases[0].Approvals = []job.Approval{
 		{

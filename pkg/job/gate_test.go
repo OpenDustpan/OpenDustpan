@@ -92,12 +92,16 @@ func TestGateStatus(t *testing.T) {
 
 			g := job.Gate{
 				Type: job.GateApproval, Name: "",
-				Approvals: tt.need,
-				Groups:    nil,
-				GroupIDs:  nil,
-				AllowSelf: tt.allowSelf,
-				Timeout:   0,
-				BindPlan:  false,
+				Approvals:  tt.need,
+				Groups:     nil,
+				GroupIDs:   nil,
+				AllowSelf:  tt.allowSelf,
+				Timeout:    0,
+				BindPlan:   false,
+				Users:      nil,
+				UserIDs:    nil,
+				UnitOwners: false,
+				Scope:      gate.Scope{},
 			}
 			if got := g.Status(tt.approvals, "al", devInstallation); got != tt.want {
 				t.Fatalf("Status() = %s, want %s", got, tt.want)
@@ -191,14 +195,18 @@ func TestGatesStatus(t *testing.T) {
 	t.Parallel()
 
 	policy := job.Gate{
-		Type:      job.GateApproval,
-		Name:      "",
-		Approvals: 1,
-		Groups:    nil,
-		GroupIDs:  nil,
-		AllowSelf: false,
-		Timeout:   0,
-		BindPlan:  false,
+		Type:       job.GateApproval,
+		Name:       "",
+		Approvals:  1,
+		Groups:     nil,
+		GroupIDs:   nil,
+		AllowSelf:  false,
+		Timeout:    0,
+		BindPlan:   false,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 	both := []job.Gate{policy, job.ConfirmationGate(false)}
 	approved := withGate(confirmation("bo", 0), job.GateApproval)
@@ -243,14 +251,18 @@ func TestPhaseGates(t *testing.T) {
 	t.Parallel()
 
 	policy := job.Gate{
-		Type:      "",
-		Name:      "",
-		Approvals: 2,
-		Groups:    nil,
-		GroupIDs:  nil,
-		AllowSelf: false,
-		Timeout:   0,
-		BindPlan:  true,
+		Type:       "",
+		Name:       "",
+		Approvals:  2,
+		Groups:     nil,
+		GroupIDs:   nil,
+		AllowSelf:  false,
+		Timeout:    0,
+		BindPlan:   true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 	none := job.Decision{Allow: true, Reason: "", Gates: nil, PolicyVersion: ""}
 	gated := job.Decision{
@@ -298,7 +310,8 @@ func describeGates(phases [][]job.Gate) []string {
 	for _, gates := range phases {
 		parts := make([]string, 0, len(gates))
 
-		for _, g := range gates {
+		for i := range gates {
+			g := &gates[i]
 			p := string(g.Type)
 			if g.BindPlan {
 				p += "/bind"
@@ -865,14 +878,18 @@ func TestPolicyGatesSeveral(t *testing.T) {
 	t.Parallel()
 
 	a := job.Gate{
-		Type:      "",
-		Name:      "default/ns",
-		Approvals: 2,
-		Groups:    nil,
-		GroupIDs:  nil,
-		AllowSelf: false,
-		Timeout:   0,
-		BindPlan:  true,
+		Type:       "",
+		Name:       "default/ns",
+		Approvals:  2,
+		Groups:     nil,
+		GroupIDs:   nil,
+		AllowSelf:  false,
+		Timeout:    0,
+		BindPlan:   true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 	b := a
 	b.Name, b.Approvals = "default", 1
@@ -910,6 +927,10 @@ func TestCheckGates(t *testing.T) {
 			out = append(out, job.Gate{
 				Type: job.GateApproval, Name: n, Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
 				Timeout: 0, BindPlan: false,
+				Users:      nil,
+				UserIDs:    nil,
+				UnitOwners: false,
+				Scope:      gate.Scope{},
 			})
 		}
 
