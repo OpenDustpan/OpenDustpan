@@ -6,6 +6,10 @@ Built-in MFA for local and LDAP sign-in, no step for SSO, fresh-step checks for 
 
 1. **Service-owned MFA gate.** The sign-in service issues a session only after a valid second factor.
 2. **Cookie-bound freshness.** The fresh step lives in the sealed access cookie of the sign-in that did it.
+3. **One route for each factor.** The second factor goes to POST /api/dustpan/v1/sign-in/second-factor with a `method` field (`totp`, `recovery-code`, `passkey-options`, `passkey`), next to the password route (POST /api/dustpan/v1/sign-in/password). The password route answers 202 with the pending cookie when require MFA is on, and 204 with the session cookie as before when it is off. A passkey needs two calls on the same route: `passkey-options` returns the options, `passkey` takes the response.
+4. **The sign-in counts apart from the step-up.** The sign-in counts wrong factors with `PendingStore.FailPending` only. It uses the step-up TOTP port only for the single-use rule of the time step, through a new method that touches no step-up counter, so a step-up lockout never blocks a sign-in. The new method gets conformance tests before any adapter implements it.
+5. **This change ships the stores.** The SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore` land here, with the conformance suites first. The routes that enroll a TOTP factor and issue recovery codes belong to app-level-second-factor-totp, which depends on this change. The e2e step uses a registered passkey as the second factor, because the passkey routes exist on main.
+6. **SSO is not changed.** The refusal for a password next to an identity provider stays as on main. Built-in MFA adds no step for SSO.
 
 ## Structure
 
@@ -21,6 +25,8 @@ The pending sign-in is `mfa.Pending` (`pkg/mfa/mfa.go:275`), kept in `mfa.Pendin
 | --- | --- | --- |
 | HTTP handler | Reject malformed factor input. | Send a malformed code; it is refused. |
 | Service | Accept a TOTP code once. | Reuse a code; no session. |
+| Service | Count a wrong factor on the pending sign-in only. | Lock the step-up, then sign in with a valid code; a session issues. |
+| Store adapter | Keep digests and the sealed secret, never a plain code. | Read each row; no plain code. |
 
 ## Diagrams
 
@@ -43,7 +49,12 @@ flowchart LR
 P1[pkg/mfa]
 P2[internal/mfasvc]
 P3[pkg/mfa/mfatest]
+P4[internal/stepup]
+P5[internal/store]
 P2 --> P1
+P2 --> P4
+P5 --> P1
+P5 --> P4
 P3 --> P1
 ```
 
@@ -101,3 +112,5 @@ flowchart LR
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Second-factor check | TOTP code replayed | Use a new code. | No session issued. |
+| Second-factor check | Pending sign-in void after 5 wrong factors | Sign in again with the password. | No session issued. |
+| Second-factor check | Store error | Try again. | No session issued and an audit entry. |

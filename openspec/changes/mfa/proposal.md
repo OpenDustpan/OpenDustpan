@@ -1,6 +1,8 @@
 ---
-version: 8
+version: 9
 ---
+
+Issue: #4064
 
 Roadmap: `docs/roadmap.md:149` (MFA).
 
@@ -11,7 +13,7 @@ Roadmap: `docs/roadmap.md:149` (MFA).
 The user path this change must make work:
 
 1. **Docs page.** Turn on require MFA and enroll TOTP or a passkey.
-2. **API.** Sign in with password at POST /api/dustpan/v1/sign-in/password, then give the second factor to get a session.
+2. **API.** Sign in with password at POST /api/dustpan/v1/sign-in/password, then give the second factor at POST /api/dustpan/v1/sign-in/second-factor to get a session.
 3. **API.** Create an access token at POST /api/dustpan/v1/me/tokens, then run pulumi up and tofu apply with it.
 4. **API.** Reveal a secret value at POST /api/v2/state-versions/{id}/actions/reveal; a stale step asks for a fresh authentication first.
 
@@ -33,7 +35,10 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Require a TOTP or WebAuthn second factor for local and LDAP password sign-in when require MFA is on.
+- Require a TOTP, recovery code or passkey second factor for local and LDAP password sign-in when require MFA is on.
+- Add one route for the second factor of a pending sign-in, `POST /api/dustpan/v1/sign-in/second-factor`, with a method field.
+- Add the SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`, with their conformance suites.
+- Add one port method that accepts a TOTP time step for a sign-in and touches no step-up counter.
 - Keep SSO sign-in with no added built-in second factor.
 - Require a fresh MFA step for access token creation and secret reveal inside one window.
 
@@ -45,7 +50,7 @@ Out of scope:
 - mTLS workload sign-in
 - Collections and placement
 - Fresh-window range and no-factor refusal wording, owned by fresh-authentication-window-0-turns
-- App-level second factor details, specified in app-level-second-factor-totp
+- TOTP enrollment, recovery code issue and the other factor routes, owned by app-level-second-factor-totp, which depends on this change for the stores
 
 Depends on:
 
@@ -66,7 +71,10 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main tests the freshness hook for access tokens (`pkg/accesstoken/accesstoken_test.go:779`)
 - Main has the pending sign-in: `mfa.Pending` (`pkg/mfa/mfa.go:275`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) with `CreatePending`, `FailPending` and `CompletePending` (`pkg/mfa/mfa.go:315`). This change adds no second pending type.
 - Main has the passkey sign-in ceremony: `FinishSignIn` (line 374) and the pending ID in `Binding` (line 128) in the file (read only) `internal/mfasvc/service.go`.
-- Main has the single-use rule of a TOTP code: the store accepts a time step one time (`stepup.ErrUsed` at line 50, `TOTP.LastStep` at line 647, `AcceptStep` at line 728 in the file (read only) `internal/stepup/stepup.go`). This change reuses that rule and adds no second rule.
+- Main has no adapter for the pending sign-in, the recovery codes or the TOTP factor. `mfa.RecoveryCodeStore` (`pkg/mfa/mfa.go:245`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) and `stepup.TOTPStore` (`internal/stepup/stepup.go:680`) have no implementation in `internal/store`, and `mfatest.Run` skips each case (`pkg/mfa/mfatest/suite.go:110`).
+- Main fails a password sign-in closed with `ReasonSecondFactor` (`internal/localusersvc/signin.go:340`) and has no route that takes a second factor. The password route answers 204 with a session cookie (read only) `internal/api/server/localusers.go`.
+- Main counts a TOTP failure on the step-up counter before the time step check: `BeginTOTPAttempt` (`internal/stepup/stepup.go:705`) comes before `AcceptStep` (`internal/stepup/stepup.go:728`), and the comment of `TOTP` (`internal/stepup/stepup.go:634`) says that the sign-in has its own counters.
+- Main has the single-use rule of a TOTP code: the store accepts a time step one time (`stepup.ErrUsed` at line 50, `TOTP.LastStep` at line 647, `AcceptStep` at line 728 in the file `internal/stepup/stepup.go`). This change reuses that rule through one new port method and adds no second rule.
 
 ## ADR check
 
