@@ -1,11 +1,11 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. CI wiring
 
-- [ ] 1.1 Record the owner decision in the pull request text (NEW note, no file edit): ADR 376 decision 2 says "CI runs the S3 suite on RustFS 1.x, pinned by digest (owner, 2026-11-14)." Read the digest of the current 1.x release again and pin that digest in the staged file `.github-workflows-staging/ci.yml`. Owner approved 2026-11-21, explicitly not blocking for agents. Check: Pull request text cites ADR 376 decision 2 and lists the digest of the current RustFS 1.x release. A human moves the staged file into `.github/workflows/ci.yml` later.
-- [ ] 1.2 Record the failing baseline in the pull request text (NEW note, no file edit): show the S3 suite in pkg/blob/s3/store_test.go skips without the four variables. Check: `go test ./pkg/blob/s3/... -v` on main without variables shows --- SKIP
+- [x] 1.1 Record the owner decision in the pull request text (NEW note, no file edit): ADR 376 decision 2 says "CI runs the S3 suite on RustFS 1.x, pinned by digest (owner, 2026-11-14)." Read the digest of the current 1.x release again and pin that digest in the staged file `.github-workflows-staging/ci.yml`. Owner approved 2026-11-21, explicitly not blocking for agents. Check: Pull request text cites ADR 376 decision 2 and lists the digest of the current RustFS 1.x release. A human moves the staged file into `.github/workflows/ci.yml` later.
+- [x] 1.2 Record the failing baseline in the pull request text (NEW note, no file edit): show the S3 suite in pkg/blob/s3/store_test.go skips without the four variables. Check: `go test ./pkg/blob/s3/... -v` on main without variables shows --- SKIP
 
 ## 2. Bucket and readiness
 
@@ -19,4 +19,4 @@
 
 ## 4. Docs and checks
 
-- [ ] 4.1 Record the digest check with exact store, version and date in the pull request text for the staged file `.github-workflows-staging/ci.yml` (NEW note, no file edit); the digest is pinned in the staged file. Check: Pull request text lists the RustFS digest, its version and the check date with no support claim beyond the test. A human moves the staged file into `.github/workflows/ci.yml` later.
+- [x] 4.1 Record the digest check with exact store, version and date in the pull request text for the staged file `.github-workflows-staging/ci.yml` (NEW note, no file edit); the digest is pinned in the staged file. Check: Pull request text lists the RustFS digest, its version and the check date with no support claim beyond the test. A human moves the staged file into `.github/workflows/ci.yml` later.
