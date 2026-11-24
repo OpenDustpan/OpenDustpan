@@ -498,6 +498,50 @@ func TestPlanChunkCapsFailsClosedOnAClosedLog(t *testing.T) {
 	}
 }
 
+// TestPlanChunkCapsCountsTheReservedChunksFailsClosed proves that the count of
+// the reserved chunks of a phase fails closed: a lookup that gives an error for
+// the log of another step is an error of the reserve, and a missing lookup is
+// ErrInvalid. Both give the zero plan.
+func TestPlanChunkCapsCountsTheReservedChunksFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	errLookup := errors.New("lookup of the reserved chunk failed")
+	caps := &job.LogCaps{ChunksPerStep: 100, BytesPerStep: 100, ChunksPerPhase: 100, BytesPerPhase: 100}
+	key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
+
+	tests := []struct {
+		name   string
+		lookup func(version string, seq int) (job.ChunkRow, bool, error)
+		want   error
+	}{
+		{
+			"a lookup error on the log of another step",
+			func(string, int) (job.ChunkRow, bool, error) { return job.ChunkRow{}, false, errLookup },
+			errLookup,
+		},
+		{"no lookup", nil, job.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The step of this call has no log, and another step of the phase has one.
+			j := recordJob()
+			withSteps(openRec(token, nil), openRec(token+1, openLog(1)))(j)
+
+			got, err := caps.PlanChunk(j, key, chunkOf(0, "a"), newLogRef(), tt.lookup)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("PlanChunk = %+v, %v; want %v", got, err, tt.want)
+			}
+
+			if got != (job.ChunkPlan{Version: "", CreateLog: false, Insert: false, Duplicate: false}) {
+				t.Fatalf("PlanChunk = %+v, want the zero plan", got)
+			}
+		})
+	}
+}
+
 // TestPlanChunkNamesTheRule proves that a chunk out of order and a chunk with
 // another hash name their rule in a ChunkError, and keep their sentinel.
 func TestPlanChunkNamesTheRule(t *testing.T) {

@@ -184,8 +184,11 @@ func logTotals(
 		total.chunks += l.Chunks
 		total.bytes += l.Size
 
+		// Fail closed: with no lookup the reserved chunks cannot be counted, and
+		// the caps of the phase would open again. No store passes a nil lookup;
+		// this check stays so that a later caller cannot skip the count.
 		if lookup == nil {
-			continue
+			return logCount{}, fmt.Errorf("%w: no chunk lookup for the caps of the log", ErrInvalid)
 		}
 
 		row, ok, err := lookup(l.ID, l.Chunks)
