@@ -1256,9 +1256,25 @@ func (s *Store) inMinimumTx(ctx context.Context, fn func(q *db.Queries) error) e
 	return s.runTx(ctx, fn, func(tx pgx.Tx) error { return s.checkTxMinimum(ctx, tx) })
 }
 
-// runTx runs before, when set, and then fn in one transaction.
+// writeTxOptions returns the options of a write transaction: READ COMMITTED,
+// READ WRITE. The transaction pins the level, so a server default of REPEATABLE
+// READ does not change it. A write takes a lock first (the shared write lock,
+// the namespace row FOR UPDATE or the advisory lock of the scope @server) and
+// then reads the rows that it counts or checks. Under READ COMMITTED each later
+// statement takes a new snapshot, so a write that waited sees the rows that the
+// write before it committed. Under REPEATABLE READ the snapshot is taken before
+// the wait, and two writes can both pass a check.
+func writeTxOptions() pgx.TxOptions {
+	return pgx.TxOptions{
+		IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite, DeferrableMode: pgx.NotDeferrable,
+		BeginQuery: "", CommitQuery: "",
+	}
+}
+
+// runTx runs before, when set, and then fn in one transaction at the level of
+// writeTxOptions.
 func (s *Store) runTx(ctx context.Context, fn func(q *db.Queries) error, before func(tx pgx.Tx) error) error {
-	err := pgx.BeginFunc(ctx, s.txs, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.txs, writeTxOptions(), func(tx pgx.Tx) error {
 		if before != nil {
 			if err := before(tx); err != nil {
 				return err
