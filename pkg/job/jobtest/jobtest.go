@@ -166,6 +166,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a change dispatch in a freeze is ErrFrozen", testFrozen},
 		{"break-glass passes a freeze", testBreakGlass},
 		{"a dispatch after the freeze ends", testFreezeEnds},
+		{"a cancel in a freeze is ErrFrozen, and break-glass passes it", testCancelFrozen},
 		{"a dispatch of a unit with a manual lock is ErrLocked, plan phases too", testLocked},
 		{"a manual lock of the namespace stops the dispatch of each unit in it", testNamespaceLocked},
 		{"break-glass does not pass a manual lock", testBreakGlassNotPastLock},
@@ -194,6 +195,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
+		{"a second freeze of a namespace with an active freeze is ErrFreezeActive", testFreezeSecondCreate},
 	}, createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
 		endClaimCases(), claimBoundCases(), claimGateCases(), claimCases())
 

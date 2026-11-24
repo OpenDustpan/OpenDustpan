@@ -449,3 +449,22 @@ func testFreezes(t *testing.T, h Harness) {
 		t.Fatalf("EndFreeze of an unknown ID = %v, want ErrNotFound", err)
 	}
 }
+
+func testFreezeSecondCreate(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	first := freeze(t, h, f)
+
+	second := newFreeze(f)
+
+	err := h.Freezes.CreateFreeze(t.Context(), second, f.fence, entry(f.unit, job.ActionNamespaceManageFreezes))
+	if !errors.Is(err, job.ErrFreezeActive) {
+		t.Fatalf("second CreateFreeze = %v, want ErrFreezeActive", err)
+	}
+
+	listed, err := h.Freezes.ListFreezes(t.Context(), f.fence.Namespace, time.Now().Add(-time.Hour))
+	if err != nil || len(listed) != 1 || listed[0].ID != first.ID {
+		t.Fatalf("ListFreezes after the refused create = %v, %v; want only %s", listed, err, first.ID)
+	}
+}

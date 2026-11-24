@@ -69,7 +69,7 @@ func newRefusalHandler(
 
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces: namespaces, Jobs: newFakeJobs(runningJob(t, testJob)), Units: nil, Artifacts: nil,
-		Starter: nil, Workers: nil, Pools: nil,
+		Starter: nil, Freezes: nil, Workers: nil, Pools: nil,
 		Authenticator: tokenAuthenticator{}, Authorizer: authz,
 		Audit: records, OnAuditFailure: nil, DenialLimiter: limiter,
 		Sessions: nil, Logger: slog.New(slog.DiscardHandler),

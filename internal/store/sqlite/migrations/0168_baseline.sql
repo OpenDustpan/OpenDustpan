@@ -1927,6 +1927,9 @@ CREATE INDEX jobs_open ON jobs (namespace_id, state)
 
 CREATE INDEX job_freezes_namespace ON job_freezes (namespace_id, starts_at_ms);
 
+CREATE UNIQUE INDEX job_freezes_one_open ON job_freezes (namespace_id)
+    WHERE ends_at_ms = 0;
+
 CREATE UNIQUE INDEX saved_views_owner_name ON saved_views (namespace_id, owner, name);
 
 CREATE INDEX saved_views_owner ON saved_views (owner);

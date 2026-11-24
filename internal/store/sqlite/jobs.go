@@ -461,6 +461,12 @@ func (t *jobTx) InsertFreeze(ctx context.Context, f jobstore.FreezeRow) error {
 		CreatedBy: f.CreatedBy, EndedBy: f.EndedBy,
 	})
 	if err != nil {
+		// The insert conflicts on the ID alone, so the conflict on the index of
+		// the open freezes is the only unique violation that reaches here.
+		if isUniqueViolation(err) && strings.Contains(err.Error(), "job_freezes.namespace_id") {
+			return fmt.Errorf("%w: freeze %s", job.ErrFreezeActive, f.ID)
+		}
+
 		return fmt.Errorf("insert freeze: %w", err)
 	}
 

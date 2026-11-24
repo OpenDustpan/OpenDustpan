@@ -158,7 +158,9 @@ func (h *Handler) buildRoutes() []Route {
 	if h.starter != nil {
 		routes = append(routes, Route{
 			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil, Filters: nil,
-			Writes:         []identity.Action{identity.ActionUnitRunPlan},
+			Writes: []identity.Action{identity.ActionUnitRunPlan, identity.ActionNamespaceBreakFreeze},
+			// The service checks namespace:break-freeze only for a break-glass
+			// start, which names the freeze that it passes.
 			IdempotencyKey: true, ETag: true, ServesDamaged: false, Resolve: h.resolveNamespace, Serve: h.startJob,
 		}, Route{
 			// The service checks job:read and job:approve on the unit again, and
@@ -196,7 +198,40 @@ func (h *Handler) buildRoutes() []Route {
 		})
 	}
 
+	// Without a freeze store the server serves no freeze route.
+	if h.freezes != nil {
+		routes = append(routes, h.freezeRoutes()...)
+	}
+
 	return routes
+}
+
+// freezeRoutes returns the rows of the freeze routes. Their objects are the
+// namespace of the path, so each row names namespace actions and no unit action.
+func (h *Handler) freezeRoutes() []Route {
+	manage := []identity.Action{identity.ActionNamespaceManageFreezes}
+
+	return []Route{
+		{
+			// The wrapper checks namespace:read on the namespace.
+			Method: http.MethodGet, Path: freezesPath, Scope: ScopeAuthorized,
+			Reads: nil, Actions: nil, Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: false, ServesDamaged: false,
+			Resolve: h.resolveNamespace, Serve: h.listFreezes,
+		},
+		{
+			Method: http.MethodPost, Path: freezesPath, Scope: ScopeAuthorized,
+			Reads: nil, Actions: manage, Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: false, ServesDamaged: false,
+			Resolve: h.resolveNamespace, Serve: h.createFreeze,
+		},
+		{
+			Method: http.MethodPost, Path: currentFreezeEndPath, Scope: ScopeAuthorized,
+			Reads: nil, Actions: manage, Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: false, ServesDamaged: false,
+			Resolve: h.resolveNamespace, Serve: h.endFreeze,
+		},
+	}
 }
 
 // listFilters are the read actions that the job list checks on the unit of

@@ -181,6 +181,29 @@ func testFreezeEnds(t *testing.T, h Harness) {
 	}
 }
 
+func testCancelFrozen(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	plain := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+	fr := freeze(t, h, f)
+
+	cancel := change(&plain, job.EventCancel)
+	if _, err := h.Jobs.Apply(t.Context(), cancel, f.fence, nil); !errors.Is(err, job.ErrFrozen) {
+		t.Fatalf("cancel in a freeze = %v, want ErrFrozen", err)
+	}
+
+	assertState(t, h, plain.ID, job.StateQueued)
+
+	withGlass := newJob(f.unit, job.OperationRefresh, "")
+	withGlass.BreakGlass = &job.BreakGlass{Reason: "cancel fix", Freeze: fr.ID}
+	glass := create(t, h, f, withGlass, nil)
+
+	if got := apply(t, h, f, change(&glass, job.EventCancel)); got.State != job.StateCanceled {
+		t.Fatalf("break-glass cancel = %s, want canceled", got.State)
+	}
+}
+
 func testCancelDispatched(t *testing.T, h Harness) {
 	t.Helper()
 

@@ -70,6 +70,12 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		artifacts = reader
 	}
 
+	// A store that holds no freezes serves no freeze route.
+	var freezes job.FreezeStore
+	if f, ok := cfg.jobStore.(job.FreezeStore); ok {
+		freezes = f
+	}
+
 	handler, err := jobsapi.NewHandler(jobsapi.Config{
 		Namespaces: svc.namespaces,
 		Jobs:       cfg.jobStore,
@@ -86,6 +92,7 @@ func newJobsHandler(svc services, cfg *settings, onFailure func(), starter job.S
 		Cursors:        cfg.secretWrapper,
 		Approvers:      jobApprovers(cfg),
 		Starter:        starter,
+		Freezes:        freezes,
 		Workers:        cfg.watch,
 		Pools:          pools,
 		Authenticator:  cfg.authenticator,

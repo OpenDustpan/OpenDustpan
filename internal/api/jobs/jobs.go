@@ -58,6 +58,9 @@ type Config struct {
 	// Starter starts jobs. Nil serves the read route only: a server that lacks
 	// a port of the job service starts no job.
 	Starter job.Starter
+	// Freezes creates, ends and lists the change freezes of a namespace. Nil
+	// serves no freeze route.
+	Freezes job.FreezeStore
 	// Workers tells the start of a durable operation whether a worker runs.
 	// Nil admits every start.
 	Workers admit.Source
@@ -102,6 +105,7 @@ type Handler struct {
 	cursors    secret.Wrapper
 	approvers  gate.ApproverPolicy
 	starter    job.Starter
+	freezes    job.FreezeStore
 	workers    admit.Source
 	pools      runner.PoolReader
 	authn      identity.Authenticator
@@ -146,6 +150,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		cursors:    cfg.Cursors,
 		approvers:  cfg.Approvers,
 		starter:    cfg.Starter,
+		freezes:    cfg.Freezes,
 		workers:    cfg.Workers,
 		pools:      cfg.Pools,
 		authn:      cfg.Authenticator,
@@ -262,6 +267,8 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusTooManyRequests, errcode.JobLimit, errTooManyStreams.Error()), true
 	case errors.Is(err, errLogNotAvailable):
 		return problem.New(http.StatusNotFound, errcode.JobLogNotAvailable, errLogNotAvailable.Error()), true
+	case errors.Is(err, errNoActiveFreeze):
+		return problem.New(http.StatusNotFound, errcode.JobNotFound, errNoActiveFreeze.Error()), true
 	case errors.Is(err, errPageToken):
 		return problem.New(http.StatusBadRequest, errcode.RequestPageTokenInvalid, err.Error()), true
 	case errors.Is(err, errInvalidQuery):
@@ -312,7 +319,7 @@ func classifyJobRefusal(err error) (problem.Problem, bool) {
 		return problem.Refused(err, http.StatusConflict, errcode.JobWrongState), true
 	case errors.Is(err, job.ErrNotRequester):
 		return problem.Refused(err, http.StatusForbidden, errcode.AccessDenied), true
-	case errors.Is(err, job.ErrFrozen):
+	case errors.Is(err, job.ErrFrozen), errors.Is(err, job.ErrFreezeActive):
 		return problem.Refused(err, http.StatusConflict, errcode.JobFrozen), true
 	case errors.Is(err, job.ErrLimit):
 		return problem.Refused(err, http.StatusTooManyRequests, errcode.JobLimit), true

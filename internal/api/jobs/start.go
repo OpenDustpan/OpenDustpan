@@ -58,6 +58,10 @@ type startBody struct {
 	Pool      string           `json:"pool"`
 	Location  *locationRequest `json:"location"`
 	Reason    string           `json:"reason"`
+	// BreakFreezeReason, when it is present, asks for a break-glass start through
+	// an active freeze. The reason must not be empty. An absent field is no
+	// break-glass.
+	BreakFreezeReason *string `json:"break_freeze_reason"`
 }
 
 type unitRequest struct {
@@ -97,6 +101,13 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 	}
 
 	req, err := h.startRequest(r, t, body, key)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	req, err = withBreakGlass(req, body)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -335,6 +346,43 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 		SourceIP: clientip.String(r), UserAgent: truncate(userAgent(r), audit.MaxUserAgentLen),
 		RequestID: requestid.FromContext(r.Context()),
 	}, nil
+}
+
+// withBreakGlass sets the break-glass of req when the body holds
+// break_freeze_reason. The job service checks the action, the reason and the
+// active freeze again. A body without the field starts no break-glass.
+func withBreakGlass(req job.StartRequest, b *startBody) (job.StartRequest, error) {
+	if b.BreakFreezeReason == nil {
+		return req, nil
+	}
+
+	err := checkBreakFreezeReason(*b.BreakFreezeReason)
+	if err != nil {
+		var none job.StartRequest
+
+		return none, err
+	}
+
+	req.BreakGlass = &job.BreakGlass{Reason: *b.BreakFreezeReason, Freeze: ""}
+
+	return req, nil
+}
+
+// checkBreakFreezeReason checks the break_freeze_reason of a start: 1 to 500
+// characters, with no character that the audit log refuses. The job service
+// checks the reason again. This check stays so that an empty or hostile reason
+// is refused at the boundary, whatever the service does.
+func checkBreakFreezeReason(reason string) error {
+	if reason == "" {
+		return fmt.Errorf("%w: break_freeze_reason needs 1 to %d characters", job.ErrInvalid, audit.MaxReasonLen)
+	}
+
+	err := audit.ValidateReason(reason)
+	if err != nil {
+		return fmt.Errorf("%w: break_freeze_reason: %w", job.ErrInvalid, err)
+	}
+
+	return nil
 }
 
 // truncate cuts s to at most n bytes.
