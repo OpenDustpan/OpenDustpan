@@ -106,6 +106,22 @@ type CLIVersion struct {
 	Version string
 }
 
+// OutageClock is the clock of the outage steps: the start of a stop and the
+// waits between the steps.
+type OutageClock interface {
+	Now() time.Time
+	After(d time.Duration) <-chan time.Time
+}
+
+// RealOutageClock is the outage clock that reads the time from package time.
+type RealOutageClock struct{}
+
+// Now returns the current time.
+func (RealOutageClock) Now() time.Time { return time.Now() }
+
+// After returns a channel that receives the time after d.
+func (RealOutageClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
 // DatabaseOutageProbe stops the database in a test installation and checks
 // what every instance answers during the stop.
 type DatabaseOutageProbe struct {

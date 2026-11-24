@@ -46,6 +46,7 @@ type outageSetup struct {
 	matrix  []ha.CLIVersion
 	pulumis []e2e.Install
 	tofus   []e2e.Install
+	clock   ha.OutageClock
 }
 
 // outageRound is one pair of installed CLI versions that one outage step
@@ -190,6 +191,7 @@ func newOutageSetup(t *testing.T) *outageSetup {
 		matrix:  matrix,
 		pulumis: pulumis,
 		tofus:   tofus,
+		clock:   ha.RealOutageClock{},
 	}
 }
 
@@ -333,7 +335,7 @@ func (p outageProject) startBoth(ctx context.Context, t *testing.T) outageRuns {
 	}
 }
 
-func waitOutageMarkers(ctx context.Context, t *testing.T, paths ...string) {
+func waitOutageMarkers(ctx context.Context, t *testing.T, clock ha.OutageClock, paths ...string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(ctx, outageMarkerWait)
@@ -348,7 +350,7 @@ func waitOutageMarkers(ctx context.Context, t *testing.T, paths ...string) {
 			select {
 			case <-ctx.Done():
 				t.Fatalf("wait for %s: %v", path, ctx.Err())
-			case <-time.After(outagePoll):
+			case <-clock.After(outagePoll):
 			}
 		}
 	}
@@ -686,7 +688,7 @@ func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report
 	checkOutageStop(ctx, t, s, project, write)
 
 	runs := project.startBoth(ctx, t)
-	waitOutageMarkers(ctx, t, project.pulumiMarker, project.tofuMarker)
+	waitOutageMarkers(ctx, t, s.clock, project.pulumiMarker, project.tofuMarker)
 
 	writesAt := map[string]time.Time{
 		e2e.ToolPulumi: outageWritesAt(t, project.pulumiMarker),
@@ -700,7 +702,7 @@ func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report
 		}
 	})
 
-	started := time.Now()
+	started := s.clock.Now()
 	s.probe.Stop(ctx, t, write, outageRetryAfter)
 
 	if err := s.probe.WaitReady(ctx, http.StatusServiceUnavailable); err != nil {
@@ -713,18 +715,18 @@ func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report
 
 	cancelOutageUpdateDuringOutage(ctx, t, project)
 
-	if remaining := outageLongWindow - time.Since(started); remaining > 0 {
+	if remaining := outageLongWindow - s.clock.Now().Sub(started); remaining > 0 {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("outage wait ended: %v", ctx.Err())
-		case <-time.After(remaining):
+		case <-s.clock.After(remaining):
 		}
 	}
 
 	s.probe.Restore(ctx, t)
 	restored = true
 
-	t.Logf("PostgreSQL stopped for %s", time.Since(started).Round(time.Second))
+	t.Logf("PostgreSQL stopped for %s", s.clock.Now().Sub(started).Round(time.Second))
 
 	checkOutageNoRestart(t, s.cluster, idsBefore)
 
@@ -797,12 +799,12 @@ func runShortOutageRound(
 	checkOutageStop(ctx, t, s, project, write)
 
 	runs := project.startBoth(ctx, t)
-	waitOutageMarkers(ctx, t, project.pulumiMarker, project.tofuMarker)
+	waitOutageMarkers(ctx, t, s.clock, project.pulumiMarker, project.tofuMarker)
 
 	select {
 	case <-ctx.Done():
 		t.Fatalf("wait for the short outage ended: %v", ctx.Err())
-	case <-time.After(outageWork*time.Second - outageShortLead):
+	case <-s.clock.After(outageWork*time.Second - outageShortLead):
 	}
 
 	restored := false
@@ -818,7 +820,7 @@ func runShortOutageRound(
 	select {
 	case <-ctx.Done():
 		t.Fatalf("short outage wait ended: %v", ctx.Err())
-	case <-time.After(window):
+	case <-s.clock.After(window):
 	}
 
 	s.probe.Restore(ctx, t)
