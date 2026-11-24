@@ -60,11 +60,10 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The release build answers 0. Proof: `internal/api/pulumi/journal_release.go:9`
-  (`const maxSupportedJournalVersion = 0` under `//go:build !journalrecording`).
+  (`const maxSupportedJournalVersion = 0` under the build constraint `!journalrecording`).
 - The release build has no journal writer. Proof:
   `pkg/dustpan/journal_release.go:10-13` returns `nil, nil`.
-- The setting exists with the default `false`. Proof:
-  `internal/cli/settings.go:357-362`.
+- The setting exists with the default `false`. Proof: the fact of "What main already does" about `disable-pulumi-journaling`.
 - The 409 message and error code exist. Proof:
   `pkg/stack/journal_build.go:346` and
   `internal/api/pulumi/journal_refusals_recording_test.go:15-37`.
@@ -135,48 +134,33 @@ Where the path still costs the person time or surprises them:
 
 ## What main already does
 
-Each fact names its file, line and function on main at 5aa56d2. The change
-specifies only the difference.
+Each fact names its file, line and function on main at 0d8a915. The change specifies only the difference.
 
-- The gate answers the lower of the offer and the supported version for a
-  CLI from v3.250.0 to v3.268.0. (`internal/api/pulumi/journal.go:96`,
-  `negotiateJournalVersion`; bounds at `journal.go:14` and `journal.go:22`)
-- With the setting `true`, a start answers 0 before the gate runs.
-  (`internal/api/pulumi/updates.go:484`, `journalVersionFor`)
-- The start stores the negotiated version on the update row for every kind,
-  a preview too. (`pkg/stack/updates.go:527`, `StartBy`:
-  `u.JournalVersion = journalVersion`). The build skips a non-mutating
-  update (`pkg/stack/journal_build.go:358`), and the store refuses journal
-  rows for a preview (`pkg/store/storetest/updates.go:154`).
-- The handler copies the constant into `supportedJournal`.
-  (`internal/api/pulumi/pulumi.go:249`)
-- The recording build answers 2 and wires the writer with the verifier.
-  (`internal/api/pulumi/journal_recording.go:8`,
-  `pkg/dustpan/journal_recording.go:15`)
-- The server calls `journalWriter(cfg)` in both builds.
-  (`pkg/dustpan/dustpan.go:1915`)
-- `TestPulumiJournalingBothModes` runs in `make e2e` on the release build,
-  where both runs answer 0, so it compares two checkpoint runs.
-  (`e2e/journaling_test.go:20`, `e2e/journaling_build_release_test.go:7`)
-- `make e2e-journal` runs four journal steps on the recording build with
-  v3.268.0 only, and not `TestPulumiJournalingBothModes`. (`Makefile:314-315`)
-- The default Pulumi matrix is v3.262.0, v3.250.0 and v3.200.0.
-  (`e2e/tool.go:103`)
-- The route coverage test excuses the journal route in the release suite.
-  (`e2e/coverage_pulumi.go:262-274`, `journalAllowEntries`)
-- `make check` runs `lint-journal-build`; `journal-guard` and
-  `journal-test` are their own targets. (`Makefile:14`, `Makefile:44-45`,
-  `Makefile:360-367`)
-- CI runs `make journal-guard`, `make lint-journal-build`,
-  `make journal-test` and `make e2e-journal`.
-  (`.github/workflows/ci.yml:195-196`, `ci.yml:264-282`, `ci.yml:365-378`,
-  `ci.yml:639-657`)
-- The journal batch blob key has the namespace prefix and one key for each
-  attempt. (`pkg/stack/blobscope.go:19`, `pkg/stack/journal_entries.go:758`)
-- The upgrade report counts running journaled updates.
-  (`internal/api/server/upgrade.go:27`)
+- The gate answers the lower of the offer and the supported version for a CLI from the oldest to the newest verified version (`internal/api/pulumi/journal.go:96 (func negotiateJournalVersion)`)
+- The oldest verified CLI version of the gate is a function of the handler package (`internal/api/pulumi/journal.go:14 (func oldestVerifiedJournalCLI)`)
+- The newest verified CLI version of the gate is a function of the handler package (`internal/api/pulumi/journal.go:22 (func newestVerifiedJournalCLI)`)
+- With the setting `true`, a start answers 0 before the gate runs (`internal/api/pulumi/updates.go:486 (func journalVersionFor)`)
+- The start stores the negotiated version on the update row for every kind, a preview too (`pkg/stack/updates.go:546 (func StartBy)`)
+- The build skips a non-mutating update (`pkg/stack/journal_build.go:358 (func buildBeforeEnd)`)
+- A `complete` with `succeeded` after a refused or missing batch answers `ErrJournalIncomplete` (`pkg/stack/journal_build.go:346 (func checkJournalComplete)`)
+- The handler copies the constant into `supportedJournal` (`internal/api/pulumi/pulumi.go:253 (func NewHandler)`)
+- The release build declares the constant as 0 (`internal/api/pulumi/journal_release.go:9 (const maxSupportedJournalVersion)`)
+- The recording build declares the constant as 2 (`internal/api/pulumi/journal_recording.go:8 (const maxSupportedJournalVersion)`)
+- The release build has no journal writer and returns nil (`pkg/dustpan/journal_release.go:10 (func journalWriter)`)
+- The recording build wires the journal writer with the verifier (`pkg/dustpan/journal_recording.go:15 (func journalWriter)`)
+- The server calls `journalWriter(cfg)` in both builds (`pkg/dustpan/dustpan.go:2129 (func newServices)`)
+- The setting `disable-pulumi-journaling` exists with the default `false` (`internal/cli/settings.go:393`)
+- `TestPulumiJournalingBothModes` runs in `make e2e` on the release build, where both runs answer 0 (`e2e/journaling_test.go:20 (func TestPulumiJournalingBothModes)`)
+- The release e2e build answers zero by design (`e2e/journaling_build_release_test.go:8 (func journalingBuildAnswersNonzero)`)
+- The route coverage test excuses the journal route in the release suite (`e2e/coverage_pulumi.go:267 (func journalAllowEntries)`)
+- `make check` runs `lint-journal-build` (`Makefile:47 (make target lint-journal-build)`)
+- `make e2e-journal` runs the journal steps on the recording build (`Makefile:385 (make target e2e-journal)`)
+- `make journal-test` runs the route tests of the recording build (`Makefile:434 (make target journal-test)`)
+- `make journal-guard` refuses a release path that uses the tag (`Makefile:437 (make target journal-guard)`)
+- The journal batch blob key has the namespace prefix and one key for each attempt (`pkg/stack/journal_entries.go:529 (func Append)`)
+- The upgrade report counts running journaled updates (`internal/api/server/upgrade.go:27`)
 
-## Preconditions of ADR 43 (analysis at 5aa56d2)
+### Preconditions of ADR 43 (analysis at 5aa56d2)
 
 Decision 2.4 and work item 19 name the preconditions. Work item 19:
 "A release answers a non-zero journal version only after the work finishes
@@ -185,16 +169,16 @@ too.
 
 | Item | State | Evidence |
 | --- | --- | --- |
-| 1 Setting and answer 0 (#404) | partial, done here | setting `internal/cli/settings.go:357-362`, answer 0 when off `internal/api/pulumi/updates.go:484`. Decision 1.5 (previews answer 0) is not in code: `journalVersionFor` and `Updates.StartBy` (`pkg/stack/updates.go:490-527`) do not read the kind. This change adds it. |
-| 2 Version gate (#405) | done | `internal/api/pulumi/journal.go:14-24`, `journal.go:96` |
+| 1 Setting and answer 0 (#404) | partial, done here | setting `internal/cli/settings.go:393-397`, answer 0 when off `internal/api/pulumi/updates.go:486`. Decision 1.5 (previews answer 0) is not in code: `journalVersionFor` and `Updates.StartBy` (`pkg/stack/updates.go:490-527`) do not read the kind. This change adds it. |
+| 2 Version gate (#405) | done | `internal/api/pulumi/journal.go:14-24`, `internal/api/pulumi/journal.go:96` |
 | 3 Package and depguard (#406) | done | `.golangci.yml:116`; port `pkg/stack/journal.go:11` |
-| 4 Generated types (#407) | done | `internal/pulumijournal/internal/gen/gen.go`, `pin.go`; `make generate` (`Makefile`, target `generate`) |
+| 4 Generated types (#407) | done | `internal/pulumijournal/internal/gen/gen.go`, `internal/pulumijournal/internal/gen/pin.go`; `make generate` (`Makefile`, target `generate`) |
 | 5 Decoder (#408) | done | `internal/pulumijournal/decode.go` |
 | 6 Version 1 replayer (#409) | done | `internal/pulumijournal/replay.go` (attribution lines 15-40) |
 | 7 Corpus (#410, closed) | not done | 5 cases, kinds 0, 1 and 10 only, no recorded CLI release (`internal/pulumijournal/testdata/corpus/`). Open: #3207 |
-| 8 Entry storage (#411) | done | `pkg/stack/journal_entries.go:534`, key `journal_entries.go:758` |
+| 8 Entry storage (#411) | done | `pkg/stack/journal_entries.go:534`, key `pkg/stack/journal_entries.go:758` |
 | 9 Journal route (#412) | done | `internal/api/pulumi/routes.go:118` |
-| 10 Streaming build (#413) | partial | two-pass build `internal/pulumijournal/replay.go:23-25`; kinds 7 and 10 hold the base in memory (`replay.go:404`, `migration.go:73`). Open: #456 |
+| 10 Streaming build (#413) | partial | two-pass build `internal/pulumijournal/replay.go:23-25`; kinds 7 and 10 hold the base in memory (`internal/pulumijournal/replay.go:404`, `internal/pulumijournal/migration.go:73`). Open: #456 |
 | 11 Refusals, complete, cancel (#414) | done | `pkg/stack/journal_build.go:346`; e2e `e2e/journaling_refusal_test.go:24` (decision 10.4), green in `e2e-journal` |
 | 12 Version 2 (#415) | done, needs 7 | `internal/pulumijournal/migration.go:181`; e2e `e2e/journaling_migration_test.go:27` (decision 2.3) |
 | 13 Bounds (#417, closed) | partial | numbers `internal/pulumijournal/bounds.go:32-48`, `docs/reference/journal-limits.md`; decision 9.5 not measured ("The project has not yet checked whether the CLI waits past 20 minutes"). Open: #672, #456 |
@@ -225,8 +209,8 @@ Changed by: ADR 151 (decisions 6 and 10), ADR 220 (decision 6). Current rule
 (`docs/adr/INDEX.md`): "this ADR, with ADR 151, 220". ADR 281 also changes
 decision 6.1 (one key for each attempt) without a change link (#2187).
 
-- 1.1: "**Journaling is on by default.** One setting in
-  `internal/cli/settings.go` turns it off:
+- 1.1: "**Journaling is on by default.** One setting in the settings of
+  the CLI turns it off:
   `--disable-pulumi-journaling` (`DUSTPAN_DISABLE_PULUMI_JOURNALING`). It is
   a `boolSetting` with the default `false`."
 - 1.2: "**Off answers version 0.** When the setting is `true`, start-update
