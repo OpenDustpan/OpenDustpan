@@ -194,9 +194,9 @@ func TestDatabaseOutageProbeCapabilities(t *testing.T) {
 			part:       ha.PartWrite503,
 		},
 		{
-			name: "no atomic state locks", writeStatus: http.StatusServiceUnavailable,
+			name: "no 503 on lock", writeStatus: http.StatusServiceUnavailable,
 			lockStatus: http.StatusInternalServerError,
-			want:       "missing part atomic state locks",
+			want:       "missing part 503 on lock during the outage",
 			part:       ha.PartAtomicStateLocks,
 		},
 	}

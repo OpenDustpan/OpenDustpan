@@ -761,8 +761,8 @@ func checkOutageNoRestart(t *testing.T, cluster *e2e.HACluster, before [][]strin
 }
 
 // checkOutageStop stops the database, probes the server parts that the test
-// needs and restores the database, before any CLI run. A missing part skips
-// the test with no CLI run, and the skip names the part. A proxy that cannot
+// needs and restores the database, before any CLI run. A missing part fails
+// the test with no CLI run, and the failure names the part. A proxy that cannot
 // stop the database, or any other error, fails the test.
 func checkOutageStop(
 	ctx context.Context, t *testing.T, s *outageSetup, project outageProject, write ha.InstanceRequest,
@@ -789,7 +789,7 @@ func checkOutageStop(
 	}
 
 	if part, missing := ha.MissingPartOf(err); missing {
-		t.Skipf("the outage probe needs the server part %q: %v", part, err)
+		t.Fatalf("the outage probe needs the server part %q: %v", part, err)
 	}
 
 	if err != nil {

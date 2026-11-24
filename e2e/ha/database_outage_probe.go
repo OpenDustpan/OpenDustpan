@@ -30,15 +30,15 @@ var (
 	errMissingPart    = errors.New("the server does not have a part that the outage probe needs")
 )
 
-// The server parts that the outage probe needs. The probe skips when one is
-// missing, and the skip names the part.
+// The server parts that the outage probe needs. The probe fails when one is
+// missing, and the failure names the part.
 const (
 	// PartWrite503 answers each write with 503 and Retry-After while the
 	// database is down.
 	PartWrite503 = "503 on write during the outage"
 	// PartAtomicStateLocks refuses a workspace lock with 503 while the
 	// database is down, so that no lock stays without its state write.
-	PartAtomicStateLocks = "atomic state locks"
+	PartAtomicStateLocks = "503 on lock during the outage"
 )
 
 // missingPartError is the error of a capability probe that names the missing

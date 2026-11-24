@@ -9,8 +9,8 @@ suite.
 Before each outage, the suite stops PostgreSQL, checks that each instance
 refuses a write and a workspace lock with `503`, and starts PostgreSQL again.
 If the server does not have a part that the probe needs, the outage test
-skips before it starts a CLI command. The skip message names the part:
-`503 on write during the outage` or `atomic state locks`.
+fails before it starts a CLI command. The failure message names the part:
+`503 on write during the outage` or `503 on lock during the outage`.
 
 The suite installs each Pulumi CLI and OpenTofu version of the suite matrix.
 If the suite cannot install a version, the test fails and names that version. For
