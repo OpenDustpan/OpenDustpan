@@ -41,18 +41,14 @@ func TestConcurrentOpenOnRepeatableReadServer(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for i := range instances {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			s, openErr := postgres.Open(t.Context(), u.String())
 			if openErr == nil {
 				s.Close()
 			}
 
 			errs[i] = openErr
-		}()
+		})
 	}
 
 	wg.Wait()
