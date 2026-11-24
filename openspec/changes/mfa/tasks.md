@@ -4,13 +4,13 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing test for a pending sign-in on local password in NEW file internal/mfasvc/signin_pending_test.go. Route: POST /api/dustpan/v1/sign-in/password, credential kind: local password with no session cookie. Check: TestMfaLocalPasswordNeedsSecondFactor fails on main.
+- [ ] 1.1 Write failing test for a pending sign-in on local password in NEW file internal/mfasvc/signin_pending_test.go. The test uses `mfa.Pending` (`pkg/mfa/mfa.go:275`) and `CreatePending` (`pkg/mfa/mfa.go:289`). Route: POST /api/dustpan/v1/sign-in/password, credential kind: local password with no session cookie. Check: TestMfaLocalPasswordNeedsSecondFactor fails on main.
 - [ ] 1.2 Write failing test for a stale step on token creation in NEW file pkg/accesstoken/fresh_step_test.go. Route: POST /api/dustpan/v1/me/tokens, credential kind: session cookie with an old MFA step. Check: TestMfaFreshStepForTokenAndReveal fails on main.
-- [ ] 1.3 Write failing test for VerifySecondFactor (NEW) with a replayed code in NEW file internal/mfasvc/verify_second_factor_test.go. Route: POST /api/dustpan/v1/sign-in/password, then the second factor step, credential kind: pending sign-in with a TOTP code. Check: TestVerifySecondFactorRefusesReplay fails on main.
+- [ ] 1.3 Write failing test for a replayed TOTP code on a pending sign-in in NEW file internal/mfasvc/second_factor_test.go. The test expects the single-use rule of the accepted time step of `stepup.TOTP`. Route: POST /api/dustpan/v1/sign-in/password, then the second factor step, credential kind: pending sign-in with a TOTP code. Check: TestSecondFactorRefusesReplay fails on main.
 
 ## 1b. Build and hostile tests
 
-- [ ] 1.4 SECURITY. Build the service MFA gate in NEW file internal/mfasvc/signin_pending.go: the pending sign-in type, VerifySecondFactor (NEW) with single-use TOTP codes, and the cookie-bound fresh step. Check: TestMfaLocalPasswordNeedsSecondFactor and TestVerifySecondFactorRefusesReplay pass.
+- [ ] 1.4 SECURITY. Build the service MFA gate in NEW file internal/mfasvc/signin_pending.go: it creates `mfa.Pending` on a correct local or LDAP password when require MFA is on, and it turns the pending sign-in into a session only through `PendingStore.CompletePending` (`pkg/mfa/mfa.go:315`) after a valid second factor. A TOTP code goes through the single-use rule of `stepup` (`AcceptStep`, `ErrUsed`). A wrong factor counts in `PendingStore.FailPending`. The cookie-bound fresh step stays. Do not add a pending type and do not add a second single-use rule. Check: TestMfaLocalPasswordNeedsSecondFactor and TestSecondFactorRefusesReplay pass.
 - [ ] 1.5 SECURITY. Write a hostile handler test for malformed factor input in NEW file internal/mfasvc/handler_input_test.go. Route: POST /api/dustpan/v1/sign-in/password, then the second factor step, credential kind: pending sign-in with a malformed code. Check: TestSecondFactorHandlerRefusesMalformedCode passes and a malformed code gets a refusal and no session.
 
 ## 2. Side effects (computed from main)

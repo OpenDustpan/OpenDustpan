@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Roadmap: `docs/roadmap.md:149` (MFA).
@@ -64,6 +64,9 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Main tests the freshness hook for access tokens (`pkg/accesstoken/accesstoken_test.go:779`)
+- Main has the pending sign-in: `mfa.Pending` (`pkg/mfa/mfa.go:275`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) with `CreatePending`, `FailPending` and `CompletePending` (`pkg/mfa/mfa.go:315`). This change adds no second pending type.
+- Main has the passkey sign-in ceremony: `FinishSignIn` (line 374) and the pending ID in `Binding` (line 128) in the file (read only) `internal/mfasvc/service.go`.
+- Main has the single-use rule of a TOTP code: the store accepts a time step one time (`stepup.ErrUsed` at line 50, `TOTP.LastStep` at line 647, `AcceptStep` at line 728 in the file (read only) `internal/stepup/stepup.go`). This change reuses that rule and adds no second rule.
 
 ## ADR check
 

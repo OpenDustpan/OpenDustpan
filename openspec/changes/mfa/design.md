@@ -9,7 +9,7 @@ Built-in MFA for local and LDAP sign-in, no step for SSO, fresh-step checks for 
 
 ## Structure
 
-Unexported pending sign-in type made only by its constructor; a session issues only from a verified pending value.
+The pending sign-in is `mfa.Pending` (`pkg/mfa/mfa.go:275`), kept in `mfa.PendingStore`. A session issues only through `PendingStore.CompletePending` (`pkg/mfa/mfa.go:315`). This change adds no second pending type.
 
 ## Risks
 
@@ -51,7 +51,7 @@ States and transitions after this change:
 
 ```mermaid
 stateDiagram-v2
- [*] --> Pending: NEW
+ [*] --> Pending
  Pending --> Session: second factor ok
  Pending --> [*]: refused
 ```
@@ -84,17 +84,17 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | console to sign-in service | S | An attacker replays a TOTP code. | boundary check | Reject a code that is not 6 digits. | Send a malformed code; refused. |
-| console to sign-in service | S | An attacker replays a TOTP code. | encode or contain | Compare the code in constant time and store only a hash of used codes. | Read the used-code record; it holds no plain code. |
-| console to sign-in service | S | An attacker replays a TOTP code. | limit | Count wrong factors in the factor lock of the person. | Send wrong codes past the count; the person is locked. |
-| console to sign-in service | S | An attacker replays a TOTP code. | authorize at point of use | Single-use check in the service for the pending sign-in. | Reuse a code; no session. |
+| console to sign-in service | S | An attacker replays a TOTP code. | encode or contain | Compare the code in constant time. The store keeps the accepted time step (`TOTP.LastStep`) and no code. | Read the factor record; it holds no plain code. |
+| console to sign-in service | S | An attacker replays a TOTP code. | limit | Count wrong factors on the pending sign-in with `PendingStore.FailPending`. | Send wrong codes past the count; the pending sign-in is void. |
+| console to sign-in service | S | An attacker replays a TOTP code. | authorize at point of use | Single-use check of the time step, with the rule of the `stepup` package (`AcceptStep`). | Reuse a code; no session. |
 | console to sign-in service | S | An attacker replays a TOTP code. | fail closed | Deny on a store error and write an audit entry. | Fail the store during verify; no session and an audit entry. |
 
 ## Contracts
 
-**mfa.PendingSignIn**
+**mfa.Pending**
 
 - Invariant: A pending sign-in never authenticates a request.
-- `VerifySecondFactor`: pre: The pending sign-in is valid.. Post: A valid factor issues a session.; A used code issues no session..
+- `CompletePending`: pre: The pending sign-in exists, is not void and did not expire. Post: A valid factor issues one session and deletes the pending sign-in.; A used code issues no session.
 
 ## Failure modes
 
