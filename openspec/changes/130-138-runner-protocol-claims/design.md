@@ -4,8 +4,8 @@ Main has the server side of the runner protocol: poll, heartbeat and claim renew
 
 ## Decisions
 
-1. **Reuse the routes of main.** The loop calls `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`. The earlier draft added `POST /runner/v1/claims` and `POST /runner/v1/claims/heartbeat`. They repeat poll and renew, so the change drops them. One code path serves each action.
-2. **The lease is the lease of the pool.** The server sets each claim to `pool.EffectiveLease()` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews every `runner.RenewEvery(lease)` and takes the lease from the join answer (`JoinResponse.Lease`) or the claim. The change has no fixed lease and no constant. This keeps the default visible in the API (the pool shows its effective lease).
+1. **Reuse the routes of main.** The loop calls `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`. The change adds no second route for poll, renew or heartbeat. One code path serves each action.
+2. **The lease is the lease of the pool.** The server sets each claim to `Pool.EffectiveLease` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews every `runner.RenewEvery(lease)` and takes the lease from the join answer (the `lease` field of `protocol.JoinResponse`) or the claim. The change has no fixed lease and no constant. This keeps the default visible in the API (the pool shows its effective lease).
 3. **Short protocol codes.** `/runner/v1` keeps `bad-proof` 401, `retired` 403, `rate-limited` 429, `not-found` 404 and `claim-lost` 409. The loop maps each code to the action of the table in ADR 131 decision 12. There is no second error shape.
 4. **A runner of another pool gets no work of this pool.** The claim query uses the pool of the runner. The test polls with a runner of pool B while work waits in pool A and gets 204.
 5. **No upload here.** The report upload and the end of a claim by report are not in this change. The change `130-138-runner-staged-report-port` owns them.

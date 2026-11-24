@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #1028.
@@ -46,7 +46,7 @@ Out of scope:
 
 Depends on:
 
-- `add-job-session-paths-runner-2` (the part before it in the split)
+- None. The part before it in the split is on main.
 
 ## Usability
 
