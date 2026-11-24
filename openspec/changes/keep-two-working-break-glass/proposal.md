@@ -38,8 +38,8 @@ Evidence for the claims above:
 
 ## What Changes
 
-- New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The count also drops by time alone when an account expires, and the route shows it. Its action is server:read-break-glass and its object is @server.
-- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. The guard never refuses it, because it raises the count, also when the count is zero.
+- New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The count also drops by time alone when an account expires, and the route shows it. Its action is server:read-principals and its object is @server (ServerObject). No new action exists.
+- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. Its action is server:manage-principals and its object is @server (ServerObject). The guard never refuses it, because it raises the count, also when the count is zero.
 - A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. A revoke of that grant, a membership change or a move of a principal runs the guard.
 - A guard in the write transaction of each covered change. Disable, delete and sweep refuse when no enabled account would stay. Each disable writes an audit entry and notifies the other administrators. Re-enable stays checked and a disable works in maintenance mode. Every other lowering change refuses when it lowers the count below two. Each refusal writes an audit entry.
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
