@@ -2,6 +2,7 @@ package ha_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
@@ -11,6 +12,8 @@ import (
 
 	"opendustpan.org/opendustpan/e2e/ha"
 )
+
+var errLockAnswered500 = errors.New("lock answered 500")
 
 type probeProxyFake struct {
 	stops  int
@@ -178,20 +181,23 @@ func TestDatabaseOutageProbeCapabilities(t *testing.T) {
 		writeStatus int
 		lockStatus  int
 		want        string
+		part        string
 	}{
 		{
 			name: "both parts", writeStatus: http.StatusServiceUnavailable,
-			lockStatus: http.StatusServiceUnavailable, want: "",
+			lockStatus: http.StatusServiceUnavailable, want: "", part: "",
 		},
 		{
-			name: "no 503 shape", writeStatus: http.StatusInternalServerError,
+			name: "no 503 on write", writeStatus: http.StatusInternalServerError,
 			lockStatus: http.StatusServiceUnavailable,
-			want:       "missing part database-outage-503-shape",
+			want:       "missing part 503 on write during the outage",
+			part:       ha.PartWrite503,
 		},
 		{
 			name: "no atomic state locks", writeStatus: http.StatusServiceUnavailable,
 			lockStatus: http.StatusInternalServerError,
-			want:       "missing part database-outage-atomic-state-locks",
+			want:       "missing part atomic state locks",
+			part:       ha.PartAtomicStateLocks,
 		},
 	}
 
@@ -214,6 +220,45 @@ func TestDatabaseOutageProbeCapabilities(t *testing.T) {
 			}
 
 			checkPartError(t, err, tt.want)
+
+			if part, missing := ha.MissingPartOf(err); part != tt.part || missing != (tt.part != "") {
+				t.Errorf("MissingPartOf(%v) = %q, %t, want %q", err, part, missing, tt.part)
+			}
+		})
+	}
+}
+
+// TestDatabaseOutageMissingPartOf proves that only a missing part error names
+// a part, also when a caller wraps it, so that the probe skips only for a
+// missing part and fails for each other error.
+func TestDatabaseOutageMissingPartOf(t *testing.T) {
+	t.Parallel()
+
+	cause := errLockAnswered500
+
+	tests := []struct {
+		name string
+		err  error
+		part string
+	}{
+		{name: "nil", err: nil, part: ""},
+		{name: "other error", err: cause, part: ""},
+		{name: "missing part", err: ha.MissingPart(ha.PartAtomicStateLocks, cause), part: ha.PartAtomicStateLocks},
+		{
+			name: "wrapped missing part",
+			err:  fmt.Errorf("workspace w: %w", ha.MissingPart(ha.PartWrite503, cause)),
+			part: ha.PartWrite503,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			part, missing := ha.MissingPartOf(tt.err)
+			if part != tt.part || missing != (tt.part != "") {
+				t.Errorf("MissingPartOf(%v) = %q, %t, want %q", tt.err, part, missing, tt.part)
+			}
 		})
 	}
 }
@@ -288,6 +333,7 @@ func TestDatabaseOutageProbeShortWindow(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base,
 		},
 		{
@@ -295,6 +341,7 @@ func TestDatabaseOutageProbeShortWindow(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base.Add(10 * time.Second),
 		},
 	}

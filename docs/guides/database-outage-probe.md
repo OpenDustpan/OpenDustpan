@@ -7,8 +7,10 @@ suite.
 ## Long outage
 
 Before each outage, the suite stops PostgreSQL, checks that each instance
-refuses a write with `503`, and starts PostgreSQL again. If a write is not
-refused, the outage test fails before it starts a CLI command.
+refuses a write and a workspace lock with `503`, and starts PostgreSQL again.
+If the server does not have a part that the probe needs, the outage test
+skips before it starts a CLI command. The skip message names the part:
+`503 on write during the outage` or `atomic state locks`.
 
 The suite installs each Pulumi CLI and OpenTofu version of the suite matrix.
 If the suite cannot install a version, the test fails and names that version. For
@@ -62,7 +64,9 @@ when `DUSTPAN_TEST_POSTGRES_URL` has no value.
 ## Check the results
 
 The retry report lists each CLI version and the seconds it retried one state
-write in the long outage. If a version has no refused write, the test fails
+write in the long outage. The suite measures the window in each outage
+separately. If a version runs in more than one outage, the report shows its
+smallest window. If a version has no refused write, the test fails
 and names that version. The short outage uses that report in the same run.
 
 ## References

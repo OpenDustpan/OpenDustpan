@@ -16,21 +16,30 @@ var (
 )
 
 // WriteAttempt is one retry of one state version write during the outage.
+// Round names the outage of the attempt: a retry window never spans two
+// outages.
 type WriteAttempt struct {
 	Version string
 	Method  string
 	Path    string
 	Status  int
+	Round   int
 	At      time.Time
 }
 
-// RetryReport holds the retry window of each CLI version of the matrix.
+// roundKey names the attempts of one CLI version in one outage.
+type roundKey struct {
+	version string
+	round   int
+}
+
+// RetryReport holds the retry window of each CLI version of the matrix: the
+// smallest window of the version over the outages that it retried in.
 type RetryReport struct {
 	order     []string
 	attempted map[string]bool
-	windows   map[string]time.Duration
-	first     map[string]time.Time
-	last      map[string]time.Time
+	first     map[roundKey]time.Time
+	last      map[roundKey]time.Time
 }
 
 // VersionLabel names one CLI version in the retry report.
@@ -43,15 +52,12 @@ func NewRetryReport(matrix []CLIVersion) *RetryReport {
 	report := &RetryReport{
 		order:     make([]string, 0, len(matrix)),
 		attempted: map[string]bool{},
-		windows:   map[string]time.Duration{},
-		first:     map[string]time.Time{},
-		last:      map[string]time.Time{},
+		first:     map[roundKey]time.Time{},
+		last:      map[roundKey]time.Time{},
 	}
 
 	for _, cli := range matrix {
-		label := VersionLabel(cli.Tool, cli.Version)
-		report.order = append(report.order, label)
-		report.windows[label] = 0
+		report.order = append(report.order, VersionLabel(cli.Tool, cli.Version))
 	}
 
 	return report
@@ -74,19 +80,17 @@ func (r *RetryReport) Add(attempt WriteAttempt) error {
 
 	r.attempted[attempt.Version] = true
 
-	version := attempt.Version
+	key := roundKey{version: attempt.Version, round: attempt.Round}
 
-	first, seen := r.first[version]
+	first, seen := r.first[key]
 	if !seen || attempt.At.Before(first) {
-		r.first[version] = attempt.At
+		r.first[key] = attempt.At
 	}
 
-	last, seen := r.last[version]
+	last, seen := r.last[key]
 	if !seen || attempt.At.After(last) {
-		r.last[version] = attempt.At
+		r.last[key] = attempt.At
 	}
-
-	r.windows[version] = r.last[version].Sub(r.first[version])
 
 	return nil
 }
@@ -103,7 +107,7 @@ func (r *RetryReport) Shortest() time.Duration {
 			continue
 		}
 
-		window := r.windows[label]
+		window := r.window(label)
 		if !found || window < shortest {
 			shortest = window
 			found = true
@@ -139,8 +143,29 @@ func (r *RetryReport) String() string {
 			continue
 		}
 
-		parts = append(parts, fmt.Sprintf("%s: %s", label, r.windows[label].Round(time.Second)))
+		parts = append(parts, fmt.Sprintf("%s: %s", label, r.window(label).Round(time.Second)))
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// window returns the smallest window of version over its rounds, from the
+// first to the last attempt of one round.
+func (r *RetryReport) window(version string) time.Duration {
+	window := time.Duration(0)
+	found := false
+
+	for key, first := range r.first {
+		if key.version != version {
+			continue
+		}
+
+		round := r.last[key].Sub(first)
+		if !found || round < window {
+			window = round
+			found = true
+		}
+	}
+
+	return window
 }

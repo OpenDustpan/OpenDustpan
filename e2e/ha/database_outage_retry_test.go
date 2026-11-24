@@ -66,6 +66,7 @@ func TestDatabaseOutageRetryReport(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base,
 		},
 		{
@@ -73,6 +74,7 @@ func TestDatabaseOutageRetryReport(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base.Add(8 * time.Second),
 		},
 		{
@@ -80,6 +82,7 @@ func TestDatabaseOutageRetryReport(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base,
 		},
 		{
@@ -87,6 +90,7 @@ func TestDatabaseOutageRetryReport(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base.Add(6 * time.Second),
 		},
 	}
@@ -125,6 +129,7 @@ func TestDatabaseOutageRetryReportOneAttempt(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base,
 		},
 		{
@@ -132,6 +137,7 @@ func TestDatabaseOutageRetryReportOneAttempt(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base.Add(8 * time.Second),
 		},
 		{
@@ -139,6 +145,7 @@ func TestDatabaseOutageRetryReportOneAttempt(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/v2/state-versions",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      base,
 		},
 	}
@@ -181,6 +188,7 @@ func TestDatabaseOutageRetryReportTwoPaths(t *testing.T) {
 			Method:  a.method,
 			Path:    a.path,
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      a.at,
 		}
 
@@ -194,6 +202,50 @@ func TestDatabaseOutageRetryReportTwoPaths(t *testing.T) {
 	}
 
 	if got, want := report.String(), "pulumi 3.262.0: 9s"; got != want {
+		t.Errorf("retry report is %q, want %q", got, want)
+	}
+}
+
+// TestDatabaseOutageRetryReportPerRound proves that a window never spans two
+// rounds: a version that retries in two outages gets the window of each
+// outage, and the report keeps the smallest of them.
+func TestDatabaseOutageRetryReportPerRound(t *testing.T) {
+	t.Parallel()
+
+	matrix := []ha.CLIVersion{{Tool: "pulumi", Version: "3.262.0"}}
+	report := ha.NewRetryReport(matrix)
+	base := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
+
+	attempts := []struct {
+		round int
+		at    time.Time
+	}{
+		{0, base},
+		{0, base.Add(8 * time.Second)},
+		{1, base.Add(100 * time.Second)},
+		{1, base.Add(106 * time.Second)},
+	}
+
+	for _, a := range attempts {
+		attempt := ha.WriteAttempt{
+			Version: "pulumi 3.262.0",
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/acme/web/dev/update",
+			Status:  http.StatusServiceUnavailable,
+			Round:   a.round,
+			At:      a.at,
+		}
+
+		if err := report.Add(attempt); err != nil {
+			t.Fatalf("record round %d: %v", a.round, err)
+		}
+	}
+
+	if got := report.Shortest(); got != 6*time.Second {
+		t.Errorf("smallest retry window is %s, want 6s (round 1), not a window across rounds", got)
+	}
+
+	if got, want := report.String(), "pulumi 3.262.0: 6s"; got != want {
 		t.Errorf("retry report is %q, want %q", got, want)
 	}
 }
@@ -216,6 +268,7 @@ func TestDatabaseOutageRetryReportNotMeasured(t *testing.T) {
 			Method:  http.MethodPost,
 			Path:    "/api/stacks/acme/web/dev/update",
 			Status:  http.StatusServiceUnavailable,
+			Round:   0,
 			At:      at,
 		}
 

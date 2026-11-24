@@ -30,21 +30,47 @@ var (
 	errMissingPart    = errors.New("the server does not have a part that the outage probe needs")
 )
 
-// The server parts that the outage probe needs. The probe fails, and does not
-// skip, when one is missing, and the failure names the part.
+// The server parts that the outage probe needs. The probe skips when one is
+// missing, and the skip names the part.
 const (
-	// Part503Shape answers each write with 503 and Retry-After while the
+	// PartWrite503 answers each write with 503 and Retry-After while the
 	// database is down.
-	Part503Shape = "database-outage-503-shape"
+	PartWrite503 = "503 on write during the outage"
 	// PartAtomicStateLocks refuses a workspace lock with 503 while the
 	// database is down, so that no lock stays without its state write.
-	PartAtomicStateLocks = "database-outage-atomic-state-locks"
+	PartAtomicStateLocks = "atomic state locks"
 )
+
+// missingPartError is the error of a capability probe that names the missing
+// server part.
+type missingPartError struct {
+	part string
+	err  error
+}
+
+func (e *missingPartError) Error() string {
+	return fmt.Sprintf("%v: missing part %s: %v", errMissingPart, e.part, e.err)
+}
+
+func (e *missingPartError) Unwrap() []error {
+	return []error{errMissingPart, e.err}
+}
 
 // MissingPart returns the error of a capability probe that names the missing
 // server part.
 func MissingPart(part string, err error) error {
-	return fmt.Errorf("%w: missing part %s: %w", errMissingPart, part, err)
+	return &missingPartError{part: part, err: err}
+}
+
+// MissingPartOf returns the part that err names, and true, when err is a
+// missing part error. It returns false for each other error.
+func MissingPartOf(err error) (string, bool) {
+	var missing *missingPartError
+	if !errors.As(err, &missing) {
+		return "", false
+	}
+
+	return missing.part, true
 }
 
 // DatabaseProxy stops and starts the database that the instances use.
@@ -145,7 +171,7 @@ func (p *DatabaseOutageProbe) Stop(
 
 // ProbeCapabilities stops the database and checks the server parts that the
 // probe needs: write must answer 503 with retryAfter on every instance
-// (Part503Shape), and lock must answer the same (PartAtomicStateLocks). A
+// (PartWrite503), and lock must answer the same (PartAtomicStateLocks). A
 // wrong answer gives an error that names the missing part. The caller
 // restores the database with Restore, also when the probe fails.
 func (p *DatabaseOutageProbe) ProbeCapabilities(
@@ -162,7 +188,7 @@ func (p *DatabaseOutageProbe) ProbeCapabilities(
 		part string
 		req  InstanceRequest
 	}{
-		{part: Part503Shape, req: write},
+		{part: PartWrite503, req: write},
 		{part: PartAtomicStateLocks, req: lock},
 	}
 

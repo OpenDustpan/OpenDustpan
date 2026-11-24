@@ -564,6 +564,7 @@ func recordOutageRetries(
 			Method:  entry.Method,
 			Path:    entry.Path,
 			Status:  entry.Status,
+			Round:   round.index,
 			At:      entry.At,
 		}
 
@@ -607,9 +608,9 @@ func checkOutageNoRestart(t *testing.T, cluster *e2e.HACluster, before [][]strin
 }
 
 // checkOutageStop stops the database, probes the server parts that the test
-// needs and restores the database, before any CLI run. A proxy that cannot
-// stop the database, or a missing part, fails the test with no CLI run. The
-// failure names the missing part.
+// needs and restores the database, before any CLI run. A missing part skips
+// the test with no CLI run, and the skip names the part. A proxy that cannot
+// stop the database, or any other error, fails the test.
 func checkOutageStop(
 	ctx context.Context, t *testing.T, s *outageSetup, project outageProject, write ha.InstanceRequest,
 ) {
@@ -624,16 +625,22 @@ func checkOutageStop(
 	})
 
 	lock := outageLockRequest(s.env, s.env.WorkspaceIDByName(ctx, t, project.workspace))
-	if err := s.probe.ProbeCapabilities(ctx, t, write, lock, outageRetryAfter); err != nil {
-		t.Fatalf("probe the server parts: %v", err)
-	}
+	err := s.probe.ProbeCapabilities(ctx, t, write, lock, outageRetryAfter)
 
 	s.probe.Restore(ctx, t)
 	restored = true
 
-	if outageLocked(ctx, t, s.env, project.workspace) {
-		t.Fatalf("probe the server parts: %v", ha.MissingPart(ha.PartAtomicStateLocks,
-			fmt.Errorf("workspace %s: %w", project.workspace, errOutageLockStays)))
+	if err == nil && outageLocked(ctx, t, s.env, project.workspace) {
+		err = ha.MissingPart(ha.PartAtomicStateLocks,
+			fmt.Errorf("workspace %s: %w", project.workspace, errOutageLockStays))
+	}
+
+	if part, missing := ha.MissingPartOf(err); missing {
+		t.Skipf("the outage probe needs the server part %q: %v", part, err)
+	}
+
+	if err != nil {
+		t.Fatalf("probe the server parts: %v", err)
 	}
 }
 
