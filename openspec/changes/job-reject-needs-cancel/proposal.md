@@ -12,7 +12,7 @@ Depends on: none. The approvals route and `job.Service.Approve` exist on main. T
 
 The user path this change must make work:
 
-1. **API.** `GET /api/dustpan/v1/namespaces/{namespace}/access/grants` lists who holds `job:cancel` and `job:approve` on a unit.
+1. **API.** `GET /api/server/namespaces/{namespace}/grants` (`namespaceGrantsPath`, `internal/api/server/access.go:283`) lists who holds `job:cancel` and `job:approve` on a unit.
 2. **API.** A person with `job:approve` and without `job:cancel` posts the verdict `reject` to `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` for a job that another person started.
 3. **API.** The answer is 403, and the audit log shows the refusal.
 4. **Docs page.** `docs/guides/approval-rules.md` says which action a rejection needs.
@@ -21,14 +21,14 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A person rejects a job that another person started, and holds `job:approve` but not `job:cancel`. | 403 with code `access.denied` names `job:cancel` and the unit. | `GET /api/dustpan/v1/namespaces/{namespace}/access/grants` (the grant list; a namespace administrator adds the grant) |
-| A person without `job:approve` posts a verdict. | 403 with code `access.denied` names `job:approve`, as today. | `GET /api/dustpan/v1/namespaces/{namespace}/access/grants` |
-| An agent posts a rejection for a person that did not start the job, and the person holds `job:approve` but not `job:cancel`. | 403 with code `access.denied` names `job:cancel`. The rule uses the person, so an agent gets no more than the person has. | `GET /api/dustpan/v1/namespaces/{namespace}/access/grants` |
+| A person rejects a job that another person started, and holds `job:approve` but not `job:cancel`. | 403 with code `access.denied` names `job:cancel` and the unit. | `GET /api/server/namespaces/{namespace}/grants` (the grant list; a namespace administrator adds the grant) |
+| A person without `job:approve` posts a verdict. | 403 with code `access.denied` names `job:approve`, as today. | `GET /api/server/namespaces/{namespace}/grants` |
+| An agent posts a rejection for a person that did not start the job, and the person holds `job:approve` but not `job:cancel`. | 403 with code `access.denied` names `job:cancel`. The rule uses the person, so an agent gets no more than the person has. | `GET /api/server/namespaces/{namespace}/grants` |
 
-Evidence that the gap exists on main (`e8f5dfdbf`):
+Evidence that the gap exists on main (`0d8a9151`):
 
-- A rejection needs `job:approve` only. Proof: `rg -n "ActionJobApprove" pkg/job/service_approve.go` prints `authorizedJob` (the line `s.authorizer.Authorize(ctx, a.Principal, ActionJobApprove, j.Spec.Unit)`), and `checkApprover`, which holds the other checks, runs for `VerdictApprove` only (`pkg/job/service_approve.go:67`).
-- The comment on `checkGroups` states the rule today: "any holder of job:approve can reject, because a rejection only stops the change."
+- A rejection needs `job:approve` only. Proof: `rg -n "ActionJobApprove" pkg/job/service_approve.go` prints `authorizedJob` (`pkg/job/service_approve.go:165`, which calls `authorizedFor` with `ActionJobApprove`, `pkg/job/service_cancel.go:152`), and `checkApproval`, which calls `checkApprover`, runs for `VerdictApprove` only (`pkg/job/service_approve.go:67`).
+- The comment on `checkGroups` (`pkg/job/service_approve.go:276`) states the rule today: "any holder of job:approve can reject, because a rejection only stops the change."
 - A rejection ends the job in the state `rejected` (`pkg/job/state.go:36`), as a cancel ends it in `canceled`. Both stop the job and both write an audit entry (ADR 103 decision 9). A person with `job:approve` and without `job:cancel` can stop the job of another person. That is the gap.
 
 ## What Changes
@@ -44,7 +44,7 @@ Out of scope:
 - The confirmation route of #3251. A rejection of a confirmation is made by the person who asked, with the start action (ADR 103 decision 9, row "Confirmation or its rejection"). This change does not touch it. So a `planner` that started a plan job still rejects its own confirmation with `unit:run-plan`.
 - The built-in role sets. This change adds no action to a role.
 - The expiry of a gate and the cancel route.
-- The difference between ADR 128 decision 10 ("`job.Service.Approve` refuses each verdict, `approve` and `reject`, whose actor has an agent reference, with `ErrAgentDenied`") and the code, which allows a rejection by an agent (`pkg/job/service_approve.go:30`, "A rejection by an agent is allowed"; `checkApprover`, which refuses an agent, runs for `VerdictApprove` only). The PM files it as a bug issue. This change applies its rule to the person of the agent, so it holds in both cases.
+- The difference between ADR 128 decision 10 ("`job.Service.Approve` refuses each verdict, `approve` and `reject`, whose actor has an agent reference, with `ErrAgentDenied`") and the code, which allows a rejection by an agent (`pkg/job/service_approve.go:29`, "A rejection by an agent is allowed"; `checkApprover`, which refuses an agent, runs for `VerdictApprove` only). The PM files it as a bug issue. This change applies its rule to the person of the agent, so it holds in both cases.
 
 Depends on: none.
 
@@ -75,23 +75,23 @@ none
 Questions considered and answered:
 
 - Who decides the rule? The owner, on 2026-11-15 (option b). This change implements it.
-- Does the requester need `job:cancel` to reject its own job? No. The owner excepted the requester, so a `planner`, which holds `unit:run-plan` and not `job:cancel` (`pkg/access/planner_role_test.go`), can reject its own job.
-- Which test finds the requester? `a.Principal.Subject == j.StartedBy`, the test of the self-approval rule (`pkg/job/service_approve.go:259`). A user who started the job through an agent is the starter by subject.
+- Does the requester need `job:cancel` to reject its own job? No. The owner excepted the requester, so a `planner`, which holds `unit:run-plan` and not `job:cancel` (`pkg/access/planner_role_test.go:37`), can reject its own job.
+- Which test finds the requester? `a.Principal.Subject == j.StartedBy`, the test of the self-approval rule (`pkg/job/service_approve.go:227`, in `checkApprover`). A user who started the job through an agent is the starter by subject.
 - What does an agent do? The rule tests the principal, which is the person that the agent acts for (ADR 100 decision 17). An agent reaches a rejection only as far as its person does. ADR 128 decision 10 refuses an agent verdict, and the code does not yet (see "Out of scope"); the new rule holds either way.
 - Does this change a built-in role? No. See the owner question below.
 
 ## Owner question outside this change
 
-This question does not block the change, because the rule works without it. The PM puts it in `decisions/pending/QUEUE.md`. Nobody decides it provisionally.
+This question does not block the change, because the rule works without it. The PM puts it in the queue of owner decisions. Nobody decides it provisionally.
 
-- The owner wishes that a role that can start a job can also cancel it. Today only `planner` breaks this: it holds `unit:run-plan` and not `job:cancel`. Should `planner` hold `job:cancel`? That answer changes ADR 212 decision 1 ("It cannot apply, destroy, approve or read a secret value" does not name `job:cancel`, but `planner_role_test.go` asserts that it does not hold it) and ADR 373 decision 1 (owner-tagged). It needs an RFC and then an ADR first, and the owner decides.
+- The owner wishes that a role that can start a job can also cancel it. Today only `planner` breaks this: it holds `unit:run-plan` and not `job:cancel`. Should `planner` hold `job:cancel`? That answer changes ADR 212 decision 1 ("It cannot apply, destroy, approve or read a secret value" does not name `job:cancel`, but `pkg/access/planner_role_test.go:37` asserts that it does not hold it) and ADR 373 decision 1 (owner-tagged). It needs an RFC and then an ADR first, and the owner decides.
 
 ## What main already does
 
-Each fact names its file, line and function on main (commit `e8f5dfdbf`).
+Each fact names its file, line and function on main (commit `0d8a9151`).
 
-- `Service.Approve` checks the verdict, the read and the approve action, the waiting gates, and then runs `checkApproval` for `VerdictApprove` only. (`pkg/job/service_approve.go:39`)
-- `authorizedJob` returns a `*DeniedError` on `job:approve`, and `ErrNotFound` for a caller without `job:read`. (`pkg/job/service_approve.go`, function `authorizedJob`)
-- `checkApprover` refuses an agent, a subject that fills no slot, and the starter. (`pkg/job/service_approve.go:242`)
-- The route checks `job:approve` and writes an audit entry for a refusal of security. (`internal/api/jobs/approve.go:115`, `recordApprovalRefusal`)
-- `ActionJobCancel` is in the family `data`. (`pkg/access/access.go`)
+- `Service.Approve` checks the verdict, the read and the approve action, the waiting gates, and then runs `checkApproval` for `VerdictApprove` only. (`pkg/job/service_approve.go:38`, `Approve`)
+- `authorizedJob` returns a `*DeniedError` on `job:approve`, and `ErrNotFound` for a caller without `job:read`. (`pkg/job/service_approve.go:165`, `authorizedJob`)
+- `checkApprover` refuses an agent, a subject that fills no slot, and the starter. (`pkg/job/service_approve.go:210`, `checkApprover`)
+- The route checks `job:approve` and writes an audit entry for a refusal of security. (`internal/api/jobs/approve.go:116`, `approveJob`; `internal/api/jobs/approve.go:245`, `recordApprovalRefusal`)
+- `ActionJobCancel` is in the family `data`. (`pkg/access/access.go:226`)
