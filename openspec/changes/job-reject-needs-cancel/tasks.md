@@ -15,14 +15,14 @@
   - Check: `go test -race ./pkg/job/...`
   - Confirmed by: CI
   - OpenDustpan: `pkg/job/service_approve.go`
-- [ ] 2.2 SECURITY. Make `approveJob` authorize `job:cancel` for a `reject` verdict by a person that is not the starter, and write the refusal entry with `recordApprovalRefusal`. Update the doc comments of `Approve` and `checkGroups` (the line "any holder of job:approve can reject").
+- [ ] 2.2 SECURITY. Make `approveJob` (`internal/api/jobs/approve.go:116`) authorize `job:cancel` for a `reject` verdict by a person that is not the starter, and write the refusal entry with `recordApprovalRefusal` (`internal/api/jobs/approve.go:245`). Update the doc comments of `Approve` (`pkg/job/service_approve.go:29`) and `checkGroups` (`pkg/job/service_approve.go:276`) (the line "any holder of job:approve can reject").
   - Check: `go test -race ./internal/api/jobs/...`
   - Confirmed by: CI
   - OpenDustpan: `internal/api/jobs/approve.go`, `pkg/job/service_approve.go`
-- [ ] 2.3 Mutation check: remove the guard of 2.1 and of 2.2 one at a time, and record that the tests of 1.1 and 1.2 fail. Record the output in the pull request body.
+- [ ] 2.3 Mutation check: remove the guard of 2.1 (`checkRejector` in `pkg/job/service_approve.go`) and of 2.2 (the `job:cancel` check in `internal/api/jobs/approve.go`) one at a time, and record that the tests of 1.1 and 1.2 fail. Record the output in the pull request body.
   - Check: the recorded output
   - Confirmed by: the reviewer
-  - OpenDustpan: none
+  - OpenDustpan: `pkg/job/service_approve.go`, `internal/api/jobs/approve.go` (changed for the check only, then restored)
 
 ## 3. Side effects (computed from main)
 
