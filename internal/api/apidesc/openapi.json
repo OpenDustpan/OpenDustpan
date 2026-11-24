@@ -1350,6 +1350,17 @@
         ],
         "type": "object"
       },
+      "CreateFreezeRequest": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "CreateGitHostConnectionRequest": {
         "properties": {
           "apiAddress": {
@@ -3054,6 +3065,45 @@
         ],
         "type": "object"
       },
+      "Freeze": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "endedBy": {
+            "type": "string"
+          },
+          "endsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "createdBy",
+          "id",
+          "namespace",
+          "reason",
+          "startsAt"
+        ],
+        "type": "object"
+      },
       "Gate": {
         "properties": {
           "checkedWith": {
@@ -4368,6 +4418,20 @@
         "required": [
           "total",
           "units"
+        ],
+        "type": "object"
+      },
+      "ListFreezesResponse": {
+        "properties": {
+          "freezes": {
+            "items": {
+              "$ref": "#/components/schemas/Freeze"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "freezes"
         ],
         "type": "object"
       },
@@ -8898,6 +8962,12 @@
       },
       "StartJobRequest": {
         "properties": {
+          "breakFreezeReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "location": {
             "oneOf": [
               {
@@ -8929,6 +8999,7 @@
           }
         },
         "required": [
+          "breakFreezeReason",
           "location",
           "operation",
           "pool",
@@ -15846,6 +15917,160 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/freezes": {
+      "get": {
+        "operationId": "listFreezes",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFreezesResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "freezes"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createFreeze",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFreezeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Freeze"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "freezes"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-freezes",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/freezes/current/end": {
+      "post": {
+        "operationId": "endFreeze",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Freeze"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "freezes"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-freezes",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/gates": {
       "get": {
         "operationId": "listGates",
@@ -16892,6 +17117,10 @@
           {
             "action": "unit:run-plan",
             "object": "unit"
+          },
+          {
+            "action": "namespace:break-freeze",
+            "object": "namespace"
           }
         ]
       }
@@ -25910,6 +26139,9 @@
     },
     {
       "name": "drift"
+    },
+    {
+      "name": "freezes"
     },
     {
       "name": "gates"

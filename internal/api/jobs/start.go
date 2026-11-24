@@ -61,7 +61,7 @@ type startBody struct {
 	// BreakFreezeReason, when it is present, asks for a break-glass start through
 	// an active freeze. The reason must not be empty. An absent field is no
 	// break-glass.
-	BreakFreezeReason *string `json:"break_freeze_reason"`
+	BreakFreezeReason *string `json:"breakFreezeReason"`
 }
 
 type unitRequest struct {
@@ -349,7 +349,7 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 }
 
 // withBreakGlass sets the break-glass of req when the body holds
-// break_freeze_reason. The job service checks the action, the reason and the
+// breakFreezeReason. The job service checks the action, the reason and the
 // active freeze again. A body without the field starts no break-glass.
 func withBreakGlass(req job.StartRequest, b *startBody) (job.StartRequest, error) {
 	if b.BreakFreezeReason == nil {
@@ -368,18 +368,18 @@ func withBreakGlass(req job.StartRequest, b *startBody) (job.StartRequest, error
 	return req, nil
 }
 
-// checkBreakFreezeReason checks the break_freeze_reason of a start: 1 to 500
+// checkBreakFreezeReason checks the breakFreezeReason of a start: 1 to 500
 // characters, with no character that the audit log refuses. The job service
 // checks the reason again. This check stays so that an empty or hostile reason
 // is refused at the boundary, whatever the service does.
 func checkBreakFreezeReason(reason string) error {
 	if reason == "" {
-		return fmt.Errorf("%w: break_freeze_reason needs 1 to %d characters", job.ErrInvalid, audit.MaxReasonLen)
+		return fmt.Errorf("%w: breakFreezeReason needs 1 to %d characters", job.ErrInvalid, audit.MaxReasonLen)
 	}
 
 	err := audit.ValidateReason(reason)
 	if err != nil {
-		return fmt.Errorf("%w: break_freeze_reason: %w", job.ErrInvalid, err)
+		return fmt.Errorf("%w: breakFreezeReason: %w", job.ErrInvalid, err)
 	}
 
 	return nil

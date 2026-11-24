@@ -25,11 +25,11 @@ import (
 const (
 	freezesURL   = "/api/dustpan/v1/namespaces/acme/freezes"
 	freezeEndURL = freezesURL + "/current/end"
-	// breakBodyFormat is a start body with a break_freeze_reason. The verb
+	// breakBodyFormat is a start body with a breakFreezeReason. The verb
 	// fills the reason.
 	breakBodyFormat = `{"unit":{"tool":"opentofu","name":"net"},"operation":"plan","pool":"ci",` +
 		`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"check",` +
-		`"break_freeze_reason":"%s"}`
+		`"breakFreezeReason":"%s"}`
 )
 
 // fakeFreezes is an in-memory job.FreezeStore. Like the store, it refuses a
