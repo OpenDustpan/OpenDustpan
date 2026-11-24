@@ -539,6 +539,29 @@ func longOutageStep(round *outageRound) string {
 	return fmt.Sprintf("long database outage %d", round.index)
 }
 
+// logOutageRefused logs each distinct method, path, status and user agent of
+// the 503 answers in step, so that a failed match shows what the CLIs sent.
+func logOutageRefused(t *testing.T, step string, entries []e2e.Entry) {
+	t.Helper()
+
+	seen := map[string]bool{}
+
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Step != step || entry.Status != http.StatusServiceUnavailable {
+			continue
+		}
+
+		line := fmt.Sprintf("%s %s %d %q", entry.Method, entry.Path, entry.Status, entry.UserAgent)
+		if seen[line] {
+			continue
+		}
+
+		seen[line] = true
+		t.Logf("503 in %s: %s", step, line)
+	}
+}
+
 func recordOutageRetries(
 	t *testing.T, s *outageSetup, round *outageRound, report *ha.RetryReport, writesAt map[string]time.Time,
 ) {
@@ -550,6 +573,8 @@ func recordOutageRetries(
 		e2e.ToolTofu:   ha.VersionLabel(round.tofu.Tool, round.tofu.Version),
 	}
 	entries := s.env.Recorder.Entries()
+
+	logOutageRefused(t, step, entries)
 
 	for i := range entries {
 		entry := &entries[i]
