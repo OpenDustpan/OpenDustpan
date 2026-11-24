@@ -357,11 +357,29 @@ func (p outageProject) startBoth(ctx context.Context, t *testing.T) outageRuns {
 	t.Helper()
 
 	return outageRuns{
-		up: p.pulumi.start(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + p.pulumiMarker},
-			"up", "--yes", "--non-interactive", "--stack", p.stack),
-		apply: p.tofu.start(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + p.tofuMarker},
-			"apply", "-input=false", "-auto-approve", "-no-color", "-replace=terraform_data.wait"),
+		up:    p.pulumi.start(ctx, t, p.pulumiEnv(), p.upArgs()...),
+		apply: p.tofu.start(ctx, t, p.tofuEnv(), outageApplyArgs()...),
 	}
+}
+
+// pulumiEnv and tofuEnv set the marker that the wait resource of each CLI
+// touches when it starts.
+func (p outageProject) pulumiEnv() []string {
+	return []string{"E2E_HA_PULUMI_STARTED=" + p.pulumiMarker}
+}
+
+func (p outageProject) tofuEnv() []string {
+	return []string{"E2E_HA_TOFU_STARTED=" + p.tofuMarker}
+}
+
+// upArgs and outageApplyArgs are the commands that startBoth runs during the
+// outage.
+func (p outageProject) upArgs() []string {
+	return []string{"up", "--yes", "--non-interactive", "--stack", p.stack}
+}
+
+func outageApplyArgs() []string {
+	return []string{"apply", "-input=false", "-auto-approve", "-no-color", "-replace=terraform_data.wait"}
 }
 
 func waitOutageMarkers(ctx context.Context, t *testing.T, clock ha.OutageClock, paths ...string) {
@@ -522,16 +540,65 @@ func cancelOutageUpdateDuringOutage(ctx context.Context, t *testing.T, project o
 func cancelOutageUpdate(ctx context.Context, t *testing.T, s *outageSetup, project outageProject) {
 	t.Helper()
 
+	if !outageUpdateActive(ctx, t, s, project) {
+		return
+	}
+
+	project.pulumi.run(ctx, t, "cancel", "--yes", "--stack", project.stack)
+}
+
+// outageUpdateActive reports whether the stack of project has an active
+// update: the update lock of the stack.
+func outageUpdateActive(ctx context.Context, t *testing.T, s *outageSetup, project outageProject) bool {
+	t.Helper()
+
 	status, body, err := s.env.APIStatus(ctx, http.MethodGet, "/api/stacks/"+project.stack, "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("read stack %s: %d, %v (%s)", project.stack, status, err, body)
 	}
 
-	if !strings.Contains(body, `"activeUpdate":"`) || strings.Contains(body, `"activeUpdate":""`) {
+	return strings.Contains(body, `"activeUpdate":"`) && !strings.Contains(body, `"activeUpdate":""`)
+}
+
+// outageHistory returns the number of updates in the history of the stack of
+// project.
+func outageHistory(ctx context.Context, t *testing.T, project outageProject) int {
+	t.Helper()
+
+	out := project.pulumi.output(ctx, t, "stack", "history", "--json", "--stack", project.stack)
+
+	var updates []json.RawMessage
+	if err := json.Unmarshal([]byte(out), &updates); err != nil {
+		t.Fatalf("decode the history of stack %s: %v (%s)", project.stack, err, out)
+	}
+
+	return len(updates)
+}
+
+// outageDeployment is the part of a Pulumi stack export that shows that the
+// state can be read.
+type outageDeployment struct {
+	Version    int             `json:"version"`
+	Deployment json.RawMessage `json:"deployment"`
+}
+
+// checkOutageExport fails when the state of the stack of project cannot be
+// exported and decoded.
+func checkOutageExport(ctx context.Context, t *testing.T, project outageProject) {
+	t.Helper()
+
+	out := project.pulumi.output(ctx, t, "stack", "export", "--stack", project.stack)
+
+	var doc outageDeployment
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Errorf("the state of stack %s is not valid JSON after the failed pulumi up: %v", project.stack, err)
+
 		return
 	}
 
-	project.pulumi.run(ctx, t, "cancel", "--yes", "--stack", project.stack)
+	if doc.Version == 0 || len(doc.Deployment) == 0 {
+		t.Errorf("the state of stack %s has no deployment after the failed pulumi up:\n%s", project.stack, out)
+	}
 }
 
 // outageWritesAt returns the earliest time of the first state write of the
@@ -595,6 +662,12 @@ func recordOutageRetries(
 
 		if entry.Step != step || entry.Status != http.StatusServiceUnavailable ||
 			entry.Method == http.MethodGet {
+			continue
+		}
+
+		// The report measures only the write kinds. Another refused write,
+		// such as a lease renewal, is in the log of logOutageRefused only.
+		if _, found := ha.WriteKindOf(entry.Method, entry.Path); !found {
 			continue
 		}
 
@@ -818,9 +891,11 @@ func TestDatabaseOutageLongOutage(t *testing.T) {
 	runLongOutage(t, s)
 }
 
-// TestDatabaseOutageShortOutage measures the retry window in the long step and
-// stops PostgreSQL for half of the smallest window in the same run, once for
-// each round of the matrix.
+// TestDatabaseOutageShortOutage measures the retry window of each write kind in
+// the long step and stops PostgreSQL for half of the smallest window above
+// 0 s in the same run, once for each round of the matrix. A command whose
+// write kinds all retry must exit 0. A command with a write kind that is not
+// retried must fail clean and succeed on the next run.
 func TestDatabaseOutageShortOutage(t *testing.T) {
 	t.Parallel()
 
@@ -972,20 +1047,121 @@ func runShortOutageRound(
 
 	logOutageRecovery(t, s, step, returned, readyAfter())
 
-	for what, run := range map[string]*outageRun{"pulumi up": runs.up, "tofu apply": runs.apply} {
-		if run.err != nil {
-			t.Fatalf("%s: %v", what, run.err)
+	checkShortOutageUp(ctx, t, s, project, shortOutageCommand{
+		run:        runs.up,
+		notRetried: report.NotRetried(ha.VersionLabel(round.pulumi.Tool, round.pulumi.Version)),
+		before:     0,
+	})
+	checkShortOutageApply(ctx, t, s, project, shortOutageCommand{
+		run:        runs.apply,
+		notRetried: report.NotRetried(ha.VersionLabel(round.tofu.Tool, round.tofu.Version)),
+		before:     before,
+	})
+
+	checkOutageNoChanges(ctx, t, s, project)
+}
+
+// shortOutageCommand is one CLI run of the short outage: the run, the write
+// kinds that its version does not retry, and the state versions of the
+// workspace before the run (OpenTofu only).
+type shortOutageCommand struct {
+	run        *outageRun
+	notRetried []ha.WriteKind
+	before     int
+}
+
+// kindNames joins the names of write kinds for a message.
+func kindNames(kinds []ha.WriteKind) string {
+	names := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		names = append(names, string(kind))
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// checkShortOutageUp checks the pulumi up of the short outage. When each
+// write kind of the version retries, the command must exit 0. When the
+// version does not retry a write kind (a window of 0 s), the command must
+// fail clean: a non-zero exit, a state that exports, no active update, and a
+// next run of the same command that exits 0 with exactly one new update.
+func checkShortOutageUp(
+	ctx context.Context, t *testing.T, s *outageSetup, project outageProject, cmd shortOutageCommand,
+) {
+	t.Helper()
+
+	run, notRetried := cmd.run, cmd.notRetried
+
+	if run.err != nil {
+		t.Fatalf("pulumi up: %v", run.err)
+	}
+
+	if len(notRetried) == 0 {
+		if run.res.ExitCode != 0 {
+			t.Errorf("pulumi up exits %d, want 0:\n%s%s", run.res.ExitCode, run.res.Stdout, run.res.Stderr)
 		}
 
-		if run.res.ExitCode != 0 {
-			t.Errorf("%s exits %d, want 0:\n%s%s", what, run.res.ExitCode, run.res.Stdout, run.res.Stderr)
+		return
+	}
+
+	if run.res.ExitCode == 0 {
+		t.Errorf("pulumi up exits 0, want a failure: the version does not retry the write kinds %s",
+			kindNames(notRetried))
+	}
+
+	checkOutageExport(ctx, t, project)
+
+	if outageUpdateActive(ctx, t, s, project) {
+		t.Errorf("stack %s has an active update after the failed pulumi up", project.stack)
+		cancelOutageUpdate(ctx, t, s, project)
+	}
+
+	after := outageHistory(ctx, t, project)
+
+	project.pulumi.runWith(ctx, t, project.pulumiEnv(), project.upArgs()...)
+
+	if got, want := outageHistory(ctx, t, project), after+1; got != want {
+		t.Errorf("%d updates of stack %s after the next pulumi up, want %d (%d after the failed run, plus 1)",
+			got, project.stack, want, after)
+	}
+}
+
+// checkShortOutageApply checks the tofu apply of the short outage. When the
+// version retries the state version write, the command must exit 0 with
+// exactly one new state version. When it does not retry it (a window of
+// 0 s), the command must fail clean: a non-zero exit, no new state version,
+// no lock, and a next run of the same command that exits 0 with exactly one
+// new state version.
+func checkShortOutageApply(
+	ctx context.Context, t *testing.T, s *outageSetup, project outageProject, cmd shortOutageCommand,
+) {
+	t.Helper()
+
+	run, notRetried, before := cmd.run, cmd.notRetried, cmd.before
+
+	if run.err != nil {
+		t.Fatalf("tofu apply: %v", run.err)
+	}
+
+	if len(notRetried) > 0 {
+		if run.res.ExitCode == 0 {
+			t.Errorf("tofu apply exits 0, want a failure: the version does not retry the write kinds %s",
+				kindNames(notRetried))
 		}
+
+		if got := outageVersions(ctx, t, s.env, project.workspace); got != before {
+			t.Errorf("%d state versions after the failed apply, want %d", got, before)
+		}
+
+		checkOutageUnlocked(ctx, t, s.env, project.workspace)
+
+		project.tofu.runWith(ctx, t, project.tofuEnv(), outageApplyArgs()...)
+	} else if run.res.ExitCode != 0 {
+		t.Errorf("tofu apply exits %d, want 0:\n%s%s", run.res.ExitCode, run.res.Stdout, run.res.Stderr)
 	}
 
 	if got, want := outageVersions(ctx, t, s.env, project.workspace), before+1; got != want {
 		t.Errorf("%d state versions after the short outage, want %d (%d before the apply, plus 1)",
 			got, want, before)
 	}
-
-	checkOutageNoChanges(ctx, t, s, project)
 }

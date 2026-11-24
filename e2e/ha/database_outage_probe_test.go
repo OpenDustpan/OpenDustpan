@@ -309,7 +309,8 @@ func TestNewDatabaseOutageProbe(t *testing.T) {
 }
 
 // TestDatabaseOutageProbeShortWindow proves that the fixture sets the short
-// stop to half the smallest measured retry window and refuses a longer stop.
+// stop to half the smallest measured retry window above 0 s and refuses a
+// longer stop.
 func TestDatabaseOutageProbeShortWindow(t *testing.T) {
 	t.Parallel()
 
@@ -327,19 +328,29 @@ func TestDatabaseOutageProbeShortWindow(t *testing.T) {
 	report := ha.NewRetryReport(matrix)
 	base := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
 
+	// The checkpoint write has one attempt: its window of 0 s does not set
+	// the short window.
 	attempts := []ha.WriteAttempt{
 		{
 			Version: "pulumi 3.262.0",
-			Method:  http.MethodPost,
-			Path:    "/api/v2/state-versions",
+			Method:  http.MethodPatch,
+			Path:    "/api/stacks/acme/web/dev/update/u1/checkpoint",
 			Status:  http.StatusServiceUnavailable,
 			Round:   0,
 			At:      base,
 		},
 		{
-			Version: "pulumi 3.262.0",
+			Version: "tofu 1.12.12",
 			Method:  http.MethodPost,
-			Path:    "/api/v2/state-versions",
+			Path:    "/api/v2/workspaces/ws-1/state-versions",
+			Status:  http.StatusServiceUnavailable,
+			Round:   0,
+			At:      base,
+		},
+		{
+			Version: "tofu 1.12.12",
+			Method:  http.MethodPost,
+			Path:    "/api/v2/workspaces/ws-1/state-versions",
 			Status:  http.StatusServiceUnavailable,
 			Round:   0,
 			At:      base.Add(10 * time.Second),

@@ -33,18 +33,32 @@ and `tofu plan -detailed-exitcode` must show no changes.
 
 ## Short outage
 
-The suite measures the smallest retry window from the long outage, in the
-same run.
+The suite measures the smallest retry window above 0 seconds from the long
+outage, in the same run.
 It sets the short stop to 50 percent of that smallest window.
 
 During the short stop, the suite waits until the commands are near their
-state writes, then stops PostgreSQL for the short window. Both commands must
-end with exit code `0`. The next `pulumi preview --expect-no-changes` and
-`tofu plan -detailed-exitcode` must show no changes.
+state writes. It stops PostgreSQL 2 seconds before the Pulumi step ends, so
+that the checkpoint save at the end of the step meets the stop. The stop
+lasts for the short window.
 
-If the long outage measures no retry window, both the long outage test and
-the short outage test fail. A version that has only one refused write has no
-retry window. The suite does not use a default window.
+For each command, the result depends on the write kinds of its CLI version:
+
+- If the version retries each of its write kinds (a window above 0 seconds),
+  the command must end with exit code `0`.
+- If the version does not retry a write kind (a window of 0 seconds), the
+  command must fail with a non-zero exit code. The state must stay valid: no
+  new OpenTofu state version, a Pulumi state that `pulumi stack export` can
+  read, and no lock. The suite then runs the same command again. It must end
+  with exit code `0` and add exactly one new state version.
+
+After the short stop, OpenTofu has exactly one new state version. The next
+`pulumi preview --expect-no-changes` and `tofu plan -detailed-exitcode` must
+show no changes.
+
+If the long outage measures no retry window above 0 seconds, both the long
+outage test and the short outage test fail. The suite does not use a default
+window.
 
 ## Commands
 
@@ -63,11 +77,21 @@ when `DUSTPAN_TEST_POSTGRES_URL` has no value.
 
 ## Check the results
 
-The retry report lists each CLI version and the seconds it retried one state
-write in the long outage. The suite measures the window in each outage
-separately. If a version runs in more than one outage, the report shows its
-smallest window. If a version has no refused write, the test fails
-and names that version. The short outage uses that report in the same run.
+The retry report lists, for each CLI version and each write kind, the seconds
+that the CLI retried one refused write of that kind in the long outage. The
+write kinds are the Pulumi `checkpoint`, `events` and `complete` writes and
+the OpenTofu `state version` write. A kind with only one refused write is not
+retried, and the report shows `0s` for it. The report does not list a kind
+that had no refused write. For example:
+
+```text
+retry report: pulumi 3.262.0 checkpoint: 0s, pulumi 3.262.0 events: 29s, tofu 1.12.0 state version: 30s
+```
+
+The suite measures the window in each outage separately. If a version runs in
+more than one outage, the report shows its smallest window. If a version has
+no refused write, the test fails and names that version. The short outage
+uses that report in the same run.
 
 ## References
 

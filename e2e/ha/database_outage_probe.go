@@ -23,7 +23,7 @@ var (
 	errNoProxy        = errors.New("database outage probe needs a database proxy")
 	errNoInstances    = errors.New("database outage probe needs at least one instance")
 	errNoMatrix       = errors.New("database outage probe needs at least one CLI version")
-	errNoRetry        = errors.New("no retry window measured")
+	errNoRetry        = errors.New("no retry window above 0 s measured")
 	errBadShortWindow = errors.New("short outage window is above half the smallest retry window")
 	errNotUnavailable = errors.New("write did not answer 503")
 	errRetryAfter     = errors.New("write answered with the wrong Retry-After")
@@ -297,7 +297,8 @@ func (p *DatabaseOutageProbe) CheckWrites(
 	return nil
 }
 
-// ShortWindow returns half of the smallest retry window measured in the long outage.
+// ShortWindow returns half of the smallest retry window above 0 s measured in
+// the long outage.
 func (p *DatabaseOutageProbe) ShortWindow(report *RetryReport) (time.Duration, error) {
 	if report == nil {
 		return 0, errNoRetry
@@ -316,7 +317,8 @@ func (p *DatabaseOutageProbe) ShortWindow(report *RetryReport) (time.Duration, e
 	return window, nil
 }
 
-// CheckShortWindow refuses a stop above half of the smallest retry window.
+// CheckShortWindow refuses a stop above half of the smallest retry window
+// above 0 s.
 func (p *DatabaseOutageProbe) CheckShortWindow(window time.Duration, report *RetryReport) error {
 	if window <= 0 {
 		return errNoRetry
