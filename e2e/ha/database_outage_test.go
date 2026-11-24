@@ -231,14 +231,29 @@ func (c outageCLI) start(ctx context.Context, t *testing.T, extra []string, args
 func (c outageCLI) run(ctx context.Context, t *testing.T, args ...string) {
 	t.Helper()
 
-	c.output(ctx, t, args...)
+	c.outputWith(ctx, t, nil, args...)
+}
+
+// runWith runs one command that must exit 0, with extra environment variables.
+func (c outageCLI) runWith(ctx context.Context, t *testing.T, extra []string, args ...string) {
+	t.Helper()
+
+	c.outputWith(ctx, t, extra, args...)
 }
 
 // output runs one command that must exit 0 and returns its standard output.
 func (c outageCLI) output(ctx context.Context, t *testing.T, args ...string) string {
 	t.Helper()
 
-	res, err := c.env.RunAs(ctx, c.install, c.dir, nil, args...)
+	return c.outputWith(ctx, t, nil, args...)
+}
+
+// outputWith runs one command that must exit 0, with extra environment
+// variables, and returns its standard output.
+func (c outageCLI) outputWith(ctx context.Context, t *testing.T, extra []string, args ...string) string {
+	t.Helper()
+
+	res, err := c.env.RunAs(ctx, c.install, c.dir, extra, args...)
 	if err != nil {
 		t.Fatalf("%s %s: %v", c.install.Tool, strings.Join(args, " "), err)
 	}
@@ -747,8 +762,10 @@ func runLongOutageRound(t *testing.T, s *outageSetup, round *outageRound, report
 	checkOutageUnlocked(ctx, t, s.env, project.workspace)
 	cancelOutageUpdate(ctx, t, s, project)
 
-	project.pulumi.run(ctx, t, "up", "--yes", "--non-interactive", "--stack", project.stack)
-	project.tofu.run(ctx, t, "apply", "-input=false", "-auto-approve", "-no-color")
+	project.pulumi.runWith(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + project.pulumiMarker},
+		"up", "--yes", "--non-interactive", "--stack", project.stack)
+	project.tofu.runWith(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + project.tofuMarker},
+		"apply", "-input=false", "-auto-approve", "-no-color")
 	checkOutageNoChanges(ctx, t, s, project)
 }
 
