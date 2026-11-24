@@ -1117,6 +1117,7 @@ func TestGateConfigDeniedWriteKeepsDefault(t *testing.T) {
 			GroupIDs:   nil,
 			Users:      nil,
 			UnitOwners: false,
+			UserIDs:    nil,
 		},
 		Unless: "",
 		Reads:  nil,

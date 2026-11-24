@@ -34,6 +34,7 @@ func TestConfigServiceRefusesHiddenRunesInApproverUser(t *testing.T) {
 				GroupIDs:   nil,
 				Users:      []string{"a" + string(tc.r) + "b"},
 				UnitOwners: false,
+				UserIDs:    nil,
 			}
 			def.Count = 1
 

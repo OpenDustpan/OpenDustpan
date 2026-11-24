@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -407,7 +408,8 @@ func encodePhase(p *job.Phase) phaseBody {
 		})
 	}
 
-	for _, g := range p.Gates {
+	for i := range p.Gates {
+		g := &p.Gates[i]
 		out.Gates = append(out.Gates, gateBody{
 			Type: string(g.Type), Name: g.Name, Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
 			AllowSelf: g.AllowSelf, TimeoutNanos: int64(g.Timeout), BindPlan: g.BindPlan,
@@ -444,6 +446,10 @@ func decodePhase(b *phaseBody) job.Phase {
 		out.Gates = append(out.Gates, job.Gate{
 			Type: job.GateType(g.Type), Name: g.Name, Approvals: g.Approvals, Groups: g.Groups, GroupIDs: g.GroupIDs,
 			AllowSelf: g.AllowSelf, Timeout: time.Duration(g.TimeoutNanos), BindPlan: g.BindPlan,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		})
 	}
 

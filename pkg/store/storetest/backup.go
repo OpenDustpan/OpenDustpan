@@ -900,6 +900,7 @@ func seedBackupGate(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			GroupIDs:   []string{"group-id-1"},
 			Users:      nil,
 			UnitOwners: false,
+			UserIDs:    nil,
 		},
 		AuthorMayApprove: false,
 		Timeout:          0,

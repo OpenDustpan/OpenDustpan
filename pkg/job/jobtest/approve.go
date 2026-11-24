@@ -56,6 +56,10 @@ func awaitingApprovalFor(t *testing.T, h Harness, f fixture, op job.Operation) j
 	return awaitingApprovalWith(t, h, f, op, []job.Gate{{
 		Type: job.GateApproval, Name: "", Approvals: needApprovals, Groups: nil, GroupIDs: nil, AllowSelf: false,
 		Timeout: 0, BindPlan: true,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}})
 }
 
@@ -234,18 +238,26 @@ const (
 func severalGates() []job.Gate {
 	return []job.Gate{
 		{
-			Type:      job.GateApproval,
-			Name:      "default/namespace/acme",
-			Approvals: needApprovals,
-			Groups:    []string{"platform"},
-			GroupIDs:  []string{"grp-a"},
-			AllowSelf: false,
-			Timeout:   0,
-			BindPlan:  true,
+			Type:       job.GateApproval,
+			Name:       "default/namespace/acme",
+			Approvals:  needApprovals,
+			Groups:     []string{"platform"},
+			GroupIDs:   []string{"grp-a"},
+			AllowSelf:  false,
+			Timeout:    0,
+			BindPlan:   true,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		},
 		{
 			Type: job.GateApproval, Name: "default", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
 			Timeout: 0, BindPlan: true,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		},
 	}
 }
