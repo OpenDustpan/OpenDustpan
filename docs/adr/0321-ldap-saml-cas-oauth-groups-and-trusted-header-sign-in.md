@@ -5,6 +5,9 @@ Changed by:
 
 - ADR 332 extends decisions 13, 14, 15 and 22: SP-started SAML is the normal path. An optional IdP-started mode is never a fresh sign-in.
 - ADR 332 changes decisions 19, 30, 33 and 38: group claims map to groups by the rule of ADR 332.
+- ADR 397 changes decision 29: a CAS provider needs a subject attribute.
+- ADR 397 changes decision 36: the trusted header has no plain mode.
+- ADR 397 extends decision 7: an OAuth 2.0 provider takes the subject from `sub` only.
 
 
 Changes:

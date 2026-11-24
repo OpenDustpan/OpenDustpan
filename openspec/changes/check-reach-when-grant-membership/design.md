@@ -10,6 +10,10 @@ Grant, membership and token issue are act-as paths. The reach check and the writ
 4. **Flag life cycle.** The flag holds the stable ID of the edge. When the grant, principal, group or membership ends, the same transaction ends the flag and writes an audit entry.
 5. **Protected group.** Owner decision, 13 Nov 2026 (queue P21). A group with write access to every state is protected. A grant that protects a group with identity provider members needs a trust decision in the same request.
 
+## Store, backup and sweep
+
+The flag is a stored record, so each adapter and the backup carry it. The NEW files internal/store/sqlite/flags.go and internal/store/postgres/flags.go, internal/store/sqlite/migrations/0168_baseline.sql, internal/store/postgres/migrations/0168_baseline.sql, internal/store/sqlite/queries.sql, internal/store/postgres/queries.sql, internal/store/sqlite/audit.go, internal/store/postgres/audit.go, internal/store/sqlite/maintenance_revocations.go and internal/store/postgres/maintenance_revocations.go write it in the transaction of the edge write. pkg/backup/access_tables.go, pkg/backup/backup.go, pkg/backup/portable_tables.go and pkg/backup/devstrip_coverage_test.go, with internal/store/sqlite/backup_columns.go and internal/store/postgres/backup.go, put it in the backup and the restore. pkg/maintenance/reducing.go ends the flags of a revoked edge in the sweep. The conformance cases are in the NEW file pkg/store/storetest/cover_concurrent.go, pkg/store/storetest/delete_grants_audit.go, pkg/store/storetest/maintenance_revocations.go and pkg/access/accesstest/moves.go.
+
 ## Structure
 
 An unexported coverProof type with a constructor that returns a value only when the caller reach covers the target reach. The grant, member and token services take this type, so no write path skips the check. The flag references the edge by stable ID.
