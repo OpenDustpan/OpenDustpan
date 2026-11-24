@@ -329,6 +329,17 @@ resource "terraform_data" "wait" {
 	project.pulumi.run(ctx, t, "config", "set", "--secret", "--stack", project.stack,
 		name+":"+outageSecretKey, outageSecretValue)
 
+	// One apply before the outage gives the workspace a state version, so that
+	// the apply during the outage reads the current state and then writes a
+	// new state version. The marker of this apply is removed, so that the
+	// outage waits for the marker of the next apply.
+	project.tofu.runWith(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + project.tofuMarker},
+		"apply", "-input=false", "-auto-approve", "-no-color")
+
+	if err := os.Remove(project.tofuMarker); err != nil {
+		t.Fatalf("remove the OpenTofu marker of the first apply: %v", err)
+	}
+
 	return project
 }
 
@@ -339,6 +350,8 @@ type outageRuns struct {
 	apply *outageRun
 }
 
+// startBoth starts both CLIs. The apply replaces the wait resource, so that
+// its command runs again although the workspace already has it in its state.
 func (p outageProject) startBoth(ctx context.Context, t *testing.T) outageRuns {
 	t.Helper()
 
@@ -346,7 +359,7 @@ func (p outageProject) startBoth(ctx context.Context, t *testing.T) outageRuns {
 		up: p.pulumi.start(ctx, t, []string{"E2E_HA_PULUMI_STARTED=" + p.pulumiMarker},
 			"up", "--yes", "--non-interactive", "--stack", p.stack),
 		apply: p.tofu.start(ctx, t, []string{"E2E_HA_TOFU_STARTED=" + p.tofuMarker},
-			"apply", "-input=false", "-auto-approve", "-no-color"),
+			"apply", "-input=false", "-auto-approve", "-no-color", "-replace=terraform_data.wait"),
 	}
 }
 
