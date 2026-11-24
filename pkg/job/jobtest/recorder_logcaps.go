@@ -16,6 +16,7 @@ func logCapCases() []recorderCase {
 		{"log caps: a chunk above the step byte cap is ErrInvalid and keeps no byte", testLogCapStepBytes},
 		{"log caps: a chunk above the phase chunk cap is ErrInvalid and makes no log", testLogCapPhaseChunks},
 		{"log caps: the reserve of the store refuses a chunk above the phase byte cap", testLogCapReservePhaseBytes},
+		{"log caps: a reserved chunk that is not confirmed counts for the caps of the phase", testLogCapReservedCounts},
 		{"log caps: caps that are not positive are ErrInvalid", testLogCapNotPositive},
 	}
 }
@@ -131,6 +132,46 @@ func testLogCapReservePhaseBytes(t *testing.T, h RecorderHarness) {
 	// The same reserve with no caps is stored: the refusal kept no row.
 	c.Caps = nil
 	if _, err = h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, c, nil); err != nil {
+		t.Fatalf("the reserve with no caps = %v", err)
+	}
+}
+
+// testLogCapReservedCounts reserves a chunk on one step and does not confirm
+// it, then reserves a chunk on a second step of the same phase. The two reserves
+// together pass the phase byte cap, so the second one is refused.
+func testLogCapReservedCounts(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	a := logCaseStep(t, h)
+	mustBegin(t, h, a, stepApply)
+
+	caps := wideCaps()
+	caps.BytesPerPhase = 8
+
+	if err := appendCapped(t, h, a, chunkOf{stepPrepare, 0, "abcd"}, caps); err != nil {
+		t.Fatalf("chunk 0 of the step prepare = %v", err)
+	}
+
+	if err := appendCapped(t, h, a, chunkOf{stepApply, 0, "ef"}, caps); err != nil {
+		t.Fatalf("chunk 0 of the step apply = %v", err)
+	}
+
+	const content = "xy"
+
+	c := job.ChunkReserve{Seq: 1, SHA256: hashOf(content), Size: int64(len(content)), Caps: &caps}
+
+	// The reserve of the step prepare stays unconfirmed: 6 bytes are confirmed
+	// and 2 are reserved, which is the cap of 8.
+	if _, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, c, nil); err != nil {
+		t.Fatalf("the reserve of chunk 1 of the step prepare = %v", err)
+	}
+
+	_, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepApply, c, nil)
+	wantCap(t, "the reserve on a second step above the phase byte cap", err, job.LogCapPhaseBytes)
+
+	// The refusal kept no row: the same reserve with no caps is stored.
+	c.Caps = nil
+	if _, err = h.Records.ReserveLogChunk(t.Context(), a.Claim, stepApply, c, nil); err != nil {
 		t.Fatalf("the reserve with no caps = %v", err)
 	}
 }

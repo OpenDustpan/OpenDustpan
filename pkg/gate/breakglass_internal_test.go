@@ -42,7 +42,7 @@ func TestApplyBreakGlassOnlyPassesRuleFailed(t *testing.T) {
 
 		svc.breakGlass, svc.now = spy, time.Now
 		run.svc, run.onlyErrors = &svc, true
-		run.refusal = &RefusalError{Err: refusalErr, Record: "", Messages: nil}
+		run.refusal = &RefusalError{Err: refusalErr, Record: "", Messages: nil, Job: nil}
 
 		key := BreakGlassKey{Holder: "alice", UnitID: "ws-1", Kind: OperationApply}
 

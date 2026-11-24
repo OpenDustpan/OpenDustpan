@@ -26,6 +26,7 @@ func TestApprovalRefusalNamesRecordRead(t *testing.T) {
 		Messages: []string{
 			"The approval rule 'netops' needs 2 approvals of the unit before a write of state",
 		},
+		Job: nil,
 	}
 
 	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: refused, got: nil}

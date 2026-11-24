@@ -8,6 +8,18 @@ When a caller with unit:read-secrets calls reveal with unit, version and one val
 - **WHEN** caller with unit:read-secrets reveals one path through Reveal
 - **THEN** server answers that value with Reveal and writes one reveal entry with channel and principalKind before the first byte
 
+#### Scenario: audit entry before open
+- **WHEN** the open or the decrypt fails after the audit write
+- **THEN** the entry stays, holds the failure outcome, and the server answers 500 with no bytes
+
+#### Scenario: version is optional
+- **WHEN** the caller omits `version`
+- **THEN** the server reveals from the current version and the answer names the version that it used
+
+#### Scenario: version too long
+- **WHEN** the caller sends a `version` that is too long for the version form of the tool, for a Pulumi stack or for an OpenTofu workspace
+- **THEN** the server answers 400 with no secret bytes, and one guard for each tool applies
+
 #### Scenario: Reveal retry writes again
 - **WHEN** caller repeats the same reveal call after a disconnect
 - **THEN** each delivered answer has its own reveal entry
@@ -18,7 +30,7 @@ If a reveal names an unknown version, an unknown path, a non-secret path or a Pu
 
 #### Scenario: unknown version
 - **WHEN** reveal names a version that does not exist
-- **THEN** server answers 404 with no secret bytes
+- **THEN** server answers 404 with no secret bytes and writes one audit entry
 
 #### Scenario: non-secret path
 - **WHEN** reveal names a path that holds no secret
@@ -34,7 +46,7 @@ If the target version is shredded or redacted, then the server SHALL refuse plai
 
 #### Scenario: shredded item
 - **WHEN** caller reveals an item whose key is shredded
-- **THEN** server answers 410 before any blob read, and `secret.ErrShredded` does not give 500
+- **THEN** server answers 410 with the code `state.value-shredded` before any blob read, and `secret.ErrShredded` does not give 500
 
 ### Requirement: deny without grant
 
@@ -61,7 +73,7 @@ If a reveal fails to write its audit entry, then the server SHALL answer 500 wit
 Each refusal of the reveal route SHALL write one audit entry, and the reveal route SHALL count refusals with the denial limiter that `39-reading-state-contents` defines.
 
 #### Scenario: each refusal writes an entry
-- **WHEN** reveal is refused for a bad path, a missing version, another secrets provider or an OpenTofu refusal
+- **WHEN** reveal is refused for a bad path, a missing version (404 included), another secrets provider or an OpenTofu refusal
 - **THEN** server writes one audit entry that holds no secret and names the reason
 
 #### Scenario: refusals reach the limiter
