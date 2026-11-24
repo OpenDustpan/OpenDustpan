@@ -326,6 +326,10 @@ func GateFor(ctx context.Context, d *policy.Combined, bindPlan bool, groups gate
 			Type: job.GateApproval, Name: fmt.Sprintf("requirement-%d", i+1), Approvals: a.Count, Groups: names,
 			GroupIDs:  ids,
 			AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		})
 	}
 

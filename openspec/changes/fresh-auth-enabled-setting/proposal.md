@@ -1,5 +1,5 @@
 ---
-version: 8
+version: 9
 ---
 
 Issue: #3257.
@@ -21,10 +21,10 @@ The path after this change:
 
 - No code reads a setting `freshAuthEnabled`. Proof: `rg -n 'freshAuthEnabled' --glob '*.go' .` prints nothing on main (15 Nov 2026).
 - Each fresh-step call site is on for everyone today. The sites that `rg` finds on main (the full list is task 1.1):
-  - `internal/api/server/freshness.go`: `requireFresh` (:112), `checkTokenFreshness` (:146)
+  - `internal/api/server/freshness.go`: `requireFresh` (:112), `checkTokenFreshness` (:180)
   - `internal/api/server/tokens.go` (:478, :592, :797, :849), `internal/api/server/tokenpolicy.go` (:153), `internal/api/server/sessionpolicy.go` (:146), `internal/api/server/providers.go` (:271, :333, :365), `internal/api/server/githost_app.go` (:210, :263, :444, :487), `internal/api/server/localusers.go` (:691), `internal/api/server/settings.go` (:428, :445)
   - `internal/api/tfe/freshness.go` (:54), `internal/api/pulumi/freshness.go` (:66), `internal/api/profile/freshness.go` (:62), `internal/api/issuer/freshness.go` (:62)
-  - `pkg/accesstoken/service.go` (:165, :418, :805), `pkg/profile/service.go` (:498), `pkg/profile/issuer_settings.go` (:303), `internal/issuersvc/settings.go` (:142)
+  - `pkg/accesstoken/service.go` (:165, :418, :873), `pkg/profile/service.go` (:498), `pkg/profile/issuer_settings.go` (:303), `internal/issuersvc/settings.go` (:142)
   - `pkg/setting/change.go` (:153), `pkg/dustpan/auditchain.go` (:557)
   - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:279, `freshAuth`), `internal/store/jobstore/events.go` (:18, `checkDestroyProof`)
   - `internal/api/server/gate_config.go` (:120, :130, :365, :560, `freshAuthSeconds`)
@@ -72,9 +72,9 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 - pkg/dustpan (wiring): makes the one `Policy` and the `Guard` of each layer.
 - internal/api/apidesc (`internal/api/apidesc/openapi.json`), clients/typescript: regenerated.
 - docs/guides/approval-rules.md, docs/guides/access-tokens.md, docs/guides/console-sign-in.md: the setting and its effect.
-- e2e/signin_token.go (new): the helper `EnableFreshAuth`. e2e/tokens_test.go, e2e/audit_chain_test.go, e2e/sessionpolicy_test.go, e2e/decision_record_retention_setting_test.go, e2e/restore_access_setting_test.go, e2e/issuer_test.go, e2e/profiles_test.go, e2e/e2e_test.go, e2e/signin_test.go, e2e/approval_rules_test.go, e2e/gate_routes_test.go, e2e/proxy_rules_test.go, e2e/namespace_principals_test.go, e2e/localusers_test.go, e2e/passkeys_test.go: call it, because the default is off and these steps expect a fresh step for an access token.
+- e2e/signin_token.go (on main): add the NEW helper `EnableFreshAuth`. e2e/tokens_test.go, e2e/audit_chain_test.go, e2e/sessionpolicy_test.go, e2e/decision_record_retention_setting_test.go, e2e/restore_access_setting_test.go, e2e/issuer_test.go, e2e/profiles_test.go, e2e/e2e_test.go, e2e/signin_test.go, e2e/approval_rules_test.go, e2e/gate_routes_test.go, e2e/proxy_rules_test.go, e2e/namespace_principals_test.go, e2e/localusers_test.go, e2e/passkeys_test.go: call it, because the default is off and these steps expect a fresh step for an access token.
 - pkg/job/service.go: the new field `ServiceConfig.FreshGuard` (a `freshstep.Guard`). The zero value requires a fresh step, so a missing field fails closed.  e2e/coverage_jobs.go, internal/api/jobs/ipallow_test.go, internal/api/jobs/pool_answer_test.go, internal/api/jobs/routes_test.go, internal/api/server/githost_fixture_test.go, internal/api/server/signin_test.go, pkg/job/service_test.go: set the new field in each `ServiceConfig` literal, because exhaustruct needs every field.
-- cmd/opendustpan/host.go, cmd/opendustpan/host_test.go, pkg/dustpan/dustpan.go, pkg/store/storetest/delegation.go, pkg/dustpan/tempadmin_test.go, pkg/dustpan/sweep_chain_internal_test.go, pkg/dustpan/signin_budget_internal_test.go, pkg/dustpan/schedules_internal_test.go, pkg/dustpan/restored_dev_internal_test.go, pkg/dustpan/lease_bench_test.go, pkg/dustpan/components_internal_test.go, pkg/accesstoken/accesstoken_test.go, pkg/accesstoken/reach_test.go, pkg/accesstoken/mtls_trust_token_test.go, pkg/accesstoken/maker_test.go, pkg/accesstoken/maker_nosweep_test.go, pkg/accesstoken/maker_cache_test.go, pkg/accesstoken/kind_closed_test.go, pkg/accesstoken/host_test.go, internal/trustrulesvc/mtls_helpers_test.go, internal/store/postgres/policy_handles_test.go, internal/api/trustrules/helpers_test.go, internal/api/server/routes_test.go, internal/api/server/old_kind_token_test.go, internal/api/server/firstadmin_test.go, internal/api/server/caller_routes_test.go, internal/api/server/access_test.go, internal/api/pulumi/lease_maker_test.go, internal/api/pulumi/lease_maker_store_test.go, internal/api/pulumi/lease_maker_order_test.go, internal/api/pulumi/authenticate_maker_test.go: set the new required field `accesstoken.Config.Guard` in each `accesstoken.Config` literal (31 files, 40 literals on main; task 1.1 greps `accesstoken.Config{` again), because exhaustruct needs every field. The test files that need a ready `Guard` use the helpers cmd/opendustpan/freshguard_helper_test.go and internal/store/postgres/freshguard_helper_test.go (new).
+- cmd/opendustpan/host.go, cmd/opendustpan/host_test.go, pkg/dustpan/dustpan.go, pkg/store/storetest/delegation.go, pkg/dustpan/tempadmin_test.go, pkg/dustpan/sweep_chain_internal_test.go, pkg/dustpan/signin_budget_internal_test.go, pkg/dustpan/schedules_internal_test.go, pkg/dustpan/restored_dev_internal_test.go, pkg/dustpan/lease_bench_test.go, pkg/dustpan/components_internal_test.go, pkg/accesstoken/accesstoken_test.go, pkg/accesstoken/reach_test.go, pkg/accesstoken/mtls_trust_token_test.go, pkg/accesstoken/maker_test.go, pkg/accesstoken/maker_nosweep_test.go, pkg/accesstoken/maker_cache_test.go, pkg/accesstoken/kind_closed_test.go, pkg/accesstoken/host_test.go, internal/trustrulesvc/mtls_helpers_test.go, internal/store/postgres/policy_handles_test.go, internal/api/trustrules/helpers_test.go, internal/api/server/routes_test.go, internal/api/server/old_kind_token_test.go, internal/api/server/firstadmin_test.go, internal/api/server/caller_routes_test.go, internal/api/server/access_test.go, internal/api/pulumi/lease_maker_test.go, internal/api/pulumi/lease_maker_store_test.go, internal/api/pulumi/lease_maker_order_test.go, internal/api/pulumi/authenticate_maker_test.go: set the new required field `accesstoken.Config.Guard` in each `accesstoken.Config` literal (31 files, 40 literals on main; task 1.1 greps `accesstoken.Config{` again), because exhaustruct needs every field. No preflight PR adds the field: task 2.1a of this change adds `Guard` to `accesstoken.Config` and sets it in every existing literal. The test files that need a ready `Guard` use the helpers cmd/opendustpan/freshguard_helper_test.go and internal/store/postgres/freshguard_helper_test.go (new).
 - internal/store/jobstore/export_internal_test.go: the test export `CheckDestroyProofStepOn` and `CheckDestroyProofStepOff`, so that the black-box store test can call `checkDestroyProof`.
 - internal/api/tfe/freshstep_policy_test.go, internal/api/pulumi/freshstep_policy_test.go, internal/api/profile/freshstep_policy_test.go, internal/api/issuer/freshstep_policy_test.go, internal/issuersvc/freshstep_policy_test.go, internal/trustrulesvc/freshstep_policy_test.go, pkg/accesstoken/freshstep_policy_test.go (new): the table of each layer with the setting off and on.
 - e2e/settings_test.go: the step that changes `freshAuthEnabled` and reads its effective value. No e2e step approves a `destroy` with an access token: the jobs API cannot start a `destroy` job (`job.unsupported`), so `TestDestroyApprovalByTokenFollowsSetting` proves that case.
@@ -95,10 +95,10 @@ Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on cur
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - `requireFresh` runs the freshness check of a change on a request with a console session (`internal/api/server/freshness.go:112`)
-- `checkTokenFreshness` refuses a token change from a stale session (`internal/api/server/freshness.go:146`)
-- `Service.requireFresh` of the access token service runs the freshness port (`pkg/accesstoken/service.go:805`)
-- `newDestroyFresh` accepts only a person's console session (`pkg/job/service_approve.go:325`)
-- `freshAuth` reports a valid authentication at most `ConfirmFreshness` old (`pkg/job/gate.go:287`)
+- `checkTokenFreshness` refuses a token change from a stale session (`internal/api/server/freshness.go:180`)
+- `Service.requireFresh` of the access token service runs the freshness port (`pkg/accesstoken/service.go:873`)
+- `newDestroyFresh` accepts only a person's console session (`pkg/job/service_approve.go:380`)
+- `freshAuth` reports a valid authentication at most `ConfirmFreshness` old (`pkg/job/gate.go:316`)
 - `ErrFreshStepRequired` is the refusal of a weaker setting without a step (`pkg/setting/setting.go:109`)
 
 ## ADR check

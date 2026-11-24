@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -370,12 +371,16 @@ func TestScheduledDriftCheckNeverWaitsForApproval(t *testing.T) {
 			Gates: map[job.PhaseKind][]job.Gate{
 				job.PhaseApply: {{
 					Type: job.GateApproval, Name: "",
-					Approvals: 1,
-					Groups:    nil,
-					GroupIDs:  nil,
-					AllowSelf: false,
-					Timeout:   0,
-					BindPlan:  true,
+					Approvals:  1,
+					Groups:     nil,
+					GroupIDs:   nil,
+					AllowSelf:  false,
+					Timeout:    0,
+					BindPlan:   true,
+					Users:      nil,
+					UserIDs:    nil,
+					UnitOwners: false,
+					Scope:      gate.Scope{},
 				}},
 			},
 		}
