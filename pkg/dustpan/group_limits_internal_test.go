@@ -397,6 +397,7 @@ func seedGateAndRule(t *testing.T, st *sqlite.Store, gateName, ruleGroupID strin
 		Scope: gate.NamespaceScope("acme"), ID: "r1", Version: 0,
 		Approvers: gate.Approvers{
 			Groups: []string{"approved"}, GroupIDs: []string{ruleGroupID}, Users: nil, UnitOwners: false,
+			UserIDs: nil,
 		},
 		Count: 1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
 	}, 0, fence, e)

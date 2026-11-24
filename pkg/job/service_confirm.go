@@ -97,7 +97,8 @@ func checkConfirmable(j *Job) error {
 
 	phase := &j.Phases[j.Current]
 
-	for _, g := range phase.Gates {
+	for i := range phase.Gates {
+		g := &phase.Gates[i]
 		// A confirmation gate waits until one confirmation is recorded.
 		if typeOf(g.Type) == GateConfirmation && !hasConfirmation(phase) {
 			return nil

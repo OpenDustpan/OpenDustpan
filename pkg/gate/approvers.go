@@ -69,7 +69,7 @@ func RuleApprovers(a Approvers) Approvers {
 		return a
 	}
 
-	return Approvers{Groups: a.Groups, GroupIDs: nil, Users: []string{NoApprover}, UnitOwners: false}
+	return Approvers{Groups: a.Groups, GroupIDs: nil, Users: []string{NoApprover}, UnitOwners: false, UserIDs: nil}
 }
 
 // NamesNobody reports whether nobody can meet a: it holds no group, does not
@@ -165,7 +165,8 @@ func (p ApproverPolicy) ruleApprovers(a Approvers) Approvers {
 
 	out := Approvers{
 		Groups: read.Groups, GroupIDs: read.GroupIDs, UnitOwners: read.UnitOwners,
-		Users: slices.DeleteFunc(slices.Clone(read.Users), func(u string) bool { return !p.CountsAsSignature(u) }),
+		Users:   slices.DeleteFunc(slices.Clone(read.Users), func(u string) bool { return !p.CountsAsSignature(u) }),
+		UserIDs: nil,
 	}
 
 	if out.Empty() {
