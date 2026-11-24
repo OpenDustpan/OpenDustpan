@@ -39,6 +39,25 @@ The server SHALL name each user in the approvers of a gate by the stable princip
 - **WHEN** a person starts a job
 - **THEN** the start fails with an error that wraps `gate.ErrUnavailable` and names the requirement
 
+### Requirement: The dev strip keeps user names and IDs in lockstep
+
+The backup dev strip SHALL remove `UserIDs[i]` together with `Users[i]` when it removes a dev subject from the approvers of a stored object. When `UserIDs` is not nil and its length differs from the length of `Users`, the strip SHALL fail closed with an error and SHALL write nothing.
+
+#### Scenario: A dev subject at one index
+- **GIVEN** a stored default with `Users` of three subjects, the second a dev subject, and `UserIDs` of three IDs
+- **WHEN** the dev strip runs
+- **THEN** the second subject and the second ID are removed and the other entries keep their order
+
+#### Scenario: The lengths differ
+- **GIVEN** a stored default with `Users` of two subjects and `UserIDs` of one ID
+- **WHEN** the dev strip runs
+- **THEN** the strip fails with an error and the stored object does not change
+
+#### Scenario: A body with no IDs
+- **GIVEN** a stored default with `Users` and no `UserIDs`
+- **WHEN** the dev strip runs
+- **THEN** the strip removes the dev subjects from `Users` as before
+
 ### Requirement: Unit owners resolve at each approval
 
 When a gate names the unit owners, the server SHALL read the owners of the unit from the context at the scope of the rule or wider at each approval, and SHALL count only the entries `group:<name>` and `principal:<ID>`. The server SHALL fail closed on a read error.
