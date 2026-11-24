@@ -125,7 +125,7 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 
 	svc, err := gate.NewService(gate.ServiceConfig{
 		Store: store, Engine: newGateEngine(), Producers: nil,
-		Units: facts, Subjects: principalSubjects{principals: principals},
+		Units: facts, Subjects: newJobClaimSubjects(cfg.jobStore, principalSubjects{principals: principals}),
 		Fences:     namespaceFences{namespaces: namespaces},
 		KindReader: kindReader, IsDev: principal.IsDevSubject, Now: cfg.now, Log: log,
 		// No pass store is wired here, so a break-glass fails closed with

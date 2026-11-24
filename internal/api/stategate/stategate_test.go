@@ -287,15 +287,28 @@ func TestAdmitRefusesEachGuardError(t *testing.T) {
 		{"credential denied", fmt.Errorf("job token: %w", identity.ErrDenied), errcode.GateDenied},
 		{
 			"gate deny",
-			&gate.RefusalError{Err: gate.ErrDenied, Record: "rec-2", Messages: []string{"Frozen."}},
+			&gate.RefusalError{Err: gate.ErrDenied, Record: "rec-2", Messages: []string{"Frozen."}, Job: nil},
 			"gate.denied",
 		},
-		{"access limit", &gate.RefusalError{Err: gate.ErrLimited, Record: "", Messages: nil}, "gate.limited"},
-		{"rule failed", &gate.RefusalError{Err: gate.ErrRuleFailed, Record: "", Messages: nil}, "gate.rule-failed"},
-		{"refusal with no sentinel", &gate.RefusalError{Err: nil, Record: "", Messages: nil}, errcode.GateUnavailable},
+		{
+			"access limit",
+			&gate.RefusalError{Err: gate.ErrLimited, Record: "", Messages: nil, Job: nil},
+			"gate.limited",
+		},
+		{
+			"rule failed",
+			&gate.RefusalError{Err: gate.ErrRuleFailed, Record: "", Messages: nil, Job: nil},
+			"gate.rule-failed",
+		},
+		{
+			"refusal with no sentinel",
+			&gate.RefusalError{Err: nil, Record: "", Messages: nil, Job: nil},
+			errcode.GateUnavailable,
+		},
 		{
 			"refusal with an unknown sentinel",
-			&gate.RefusalError{Err: errNewSentinel, Record: "", Messages: []string{"New."}}, errcode.GateUnavailable,
+			&gate.RefusalError{Err: errNewSentinel, Record: "", Messages: []string{"New."}, Job: nil},
+			errcode.GateUnavailable,
 		},
 		{"nil refusal", (*gate.RefusalError)(nil), errcode.GateUnavailable},
 		{"guard error with a line break", errLineBreak, errcode.GateUnavailable},
@@ -332,6 +345,7 @@ func TestAdmitAnswersAStoreFaultAsUnavailable(t *testing.T) {
 			"inside a refusal",
 			&gate.RefusalError{
 				Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, namespace.ErrUnavailable), Record: "", Messages: nil,
+				Job: nil,
 			},
 		},
 	}
@@ -541,9 +555,15 @@ func TestDetailIsOneLine(t *testing.T) {
 		name    string
 		refused *gate.RefusalError
 	}{
-		{"message with CRLF", &gate.RefusalError{Err: gate.ErrDenied, Record: "", Messages: []string{"a\r\nFAKE: b"}}},
-		{"record with LF", &gate.RefusalError{Err: gate.ErrDenied, Record: "rec\nFAKE", Messages: nil}},
-		{"several messages", &gate.RefusalError{Err: gate.ErrDenied, Record: "", Messages: []string{"a\n", "\rb"}}},
+		{
+			"message with CRLF",
+			&gate.RefusalError{Err: gate.ErrDenied, Record: "", Messages: []string{"a\r\nFAKE: b"}, Job: nil},
+		},
+		{"record with LF", &gate.RefusalError{Err: gate.ErrDenied, Record: "rec\nFAKE", Messages: nil, Job: nil}},
+		{
+			"several messages",
+			&gate.RefusalError{Err: gate.ErrDenied, Record: "", Messages: []string{"a\n", "\rb"}, Job: nil},
+		},
 	}
 
 	for _, tc := range cases {

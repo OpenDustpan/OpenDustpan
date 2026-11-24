@@ -138,6 +138,10 @@ type RefusalError struct {
 	// Messages are the rendered messages of the gates or the limit that
 	// refused, in the order of the record.
 	Messages []string
+	// Job is the job claim of the subject of a refused write with a job token,
+	// so that the log of the refusal names the job and its phase. It is nil
+	// for each other credential, and for a refusal of the subject source.
+	Job *JobClaim
 }
 
 // Error returns the sentinel text, the messages and the record ID.

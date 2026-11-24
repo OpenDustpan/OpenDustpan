@@ -4,14 +4,14 @@ Three serve instances behind a round-robin proxy on one PostgreSQL database. A d
 
 ## Decisions
 
-1. **Probe reuses real CLI scenarios with provisional margin.** Reuse the existing full milestone 1 Pulumi scenario and milestone 2 OpenTofu scenario through the proxy. Add two outage steps, 7a long and 7b short, plus retry measurement per CLI version and per write kind. The probe runs only when both depended parts are merged, else the probe skips with a message that names the missing part. Until the PM answers the open question, the probe uses the provisional margin of 50 percent of the smallest measured retry window above 0 s for the short stop.
+1. **Probe reuses real CLI scenarios with provisional margin.** Reuse the existing full milestone 1 Pulumi scenario and milestone 2 OpenTofu scenario through the proxy. Add two outage steps, 7a long and 7b short, plus retry measurement per CLI version and per write kind. The probe needs both depended parts on main. When one is missing, the probe test fails with a message that names the missing part, so that a missing part is never a silent pass. Until the PM answers the open question, the probe uses the provisional margin of 50 percent of the smallest measured retry window above 0 s for the short stop.
 2. **Outage is at the database proxy with deferred restore.** The database proxy stops PostgreSQL, not the server instances. Health and API assertions run against each instance directly and through the proxy so the record shows every instance answered 503 with Retry-After during the outage. The fixture wraps each stop in a deferred restore that restarts PostgreSQL and polls GET /health/ready to green, and the stop asserts it took effect by a failed write probe before CLI work starts.
 
 3. **The retry window is measured per write kind.** The kinds are the Pulumi checkpoint, events and complete writes and the OpenTofu state version write. A kind that the CLI does not retry reports 0 s. The short outage stops 2 s before the Pulumi step ends (`outageShortLead`), so the end-of-step checkpoint save meets the stop. For a kind with a window above 0 s the probe asserts exit 0. For a kind with a window of 0 s the probe asserts a clean failure: the CLI exits non-zero, the state is not corrupt, the lock is released, and the next run of the same command ends with exit 0 and exactly one new state version. The probe does not change which instances stay in the proxy pool during an outage.
 
 ## Structure
 
-No new server structure. The bug class is a missing outage regression. The constructor is the NEW suite fixture `NewDatabaseOutageProbe` that takes the proxy control, the instance list, and the CLI matrix, and refuses an empty matrix or a short window above 50 percent of the smallest measured retry window above 0 s.
+No new server structure. The bug class is a missing outage regression. The constructor is the suite fixture `NewDatabaseOutageProbe` that takes the proxy control, the instance list, and the CLI matrix, and refuses an empty matrix or a short window above 50 percent of the smallest measured retry window above 0 s.
 
 ## Risks
 
