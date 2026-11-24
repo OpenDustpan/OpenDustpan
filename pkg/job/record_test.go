@@ -498,6 +498,9 @@ func TestPlanChunkCapsFailsClosedOnAClosedLog(t *testing.T) {
 	}
 }
 
+// errLookup is the error of a lookup of a reserved chunk that fails.
+var errLookup = errors.New("lookup of the reserved chunk failed")
+
 // TestPlanChunkCapsCountsTheReservedChunksFailsClosed proves that the count of
 // the reserved chunks of a phase fails closed: a lookup that gives an error for
 // the log of another step is an error of the reserve, and a missing lookup is
@@ -505,7 +508,6 @@ func TestPlanChunkCapsFailsClosedOnAClosedLog(t *testing.T) {
 func TestPlanChunkCapsCountsTheReservedChunksFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	errLookup := errors.New("lookup of the reserved chunk failed")
 	caps := &job.LogCaps{ChunksPerStep: 100, BytesPerStep: 100, ChunksPerPhase: 100, BytesPerPhase: 100}
 	key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
 
