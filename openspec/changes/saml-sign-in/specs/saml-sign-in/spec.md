@@ -60,6 +60,30 @@ The server SHALL answer the identity provider's POST to the ACS route with a pag
 - **WHEN** the browser runs no script on the ACS page
 - **THEN** the page shows a "Continue" button that posts the fields.
 
+#### Scenario: Callback reached without the ACS page
+- **WHEN** a same-site POST reaches the callback route directly, with a response that fails a check of the adapter
+- **THEN** the server gives 400 and opens no session, as for a response that came through the ACS page.
+
+### Requirement: ACS re-post page
+
+The server SHALL answer the ACS route only for `POST` with a body of at most 256 KiB, SHALL render the page with `html/template` with every field value escaped, and SHALL put only the form, the two hidden fields and a visible "Continue" button in the page, with no external resource.
+
+#### Scenario: Hostile RelayState
+- **WHEN** the identity provider posts a `RelayState` that holds a double quote, `</script>` and a `javascript:` URL
+- **THEN** the page holds the value only as escaped text in the value of a hidden input, and no new element, attribute, script or link comes from it.
+
+#### Scenario: Hostile SAMLResponse
+- **WHEN** the identity provider posts a `SAMLResponse` that holds a double quote, `</script>` and a `javascript:` URL
+- **THEN** the page holds the value only as escaped text in the value of a hidden input, and no new element, attribute, script or link comes from it.
+
+#### Scenario: GET to the ACS route
+- **WHEN** a browser sends `GET` to the ACS route
+- **THEN** the server gives 405 and renders no page.
+
+#### Scenario: Body above the limit
+- **WHEN** the ACS route gets a body of 256 KiB plus 1 byte
+- **THEN** the server gives 400 and renders no page.
+
 ### Requirement: IdP-started SAML off by default
 
 The server SHALL refuse an unsolicited SAML response unless `allowIdpStarted` is on for the provider, and when it is on SHALL require a one-time assertion ID, an assertion age of at most 300 seconds, and the audience and recipient checks, and SHALL never mark that sign-in as fresh.
@@ -99,3 +123,11 @@ The server SHALL take the subject from a persistent `NameID` or from the attribu
 #### Scenario: Transient NameID
 - **WHEN** the signed assertion has a transient `NameID` and the provider uses the `NameID`
 - **THEN** the server gives 400 and opens no session.
+
+### Requirement: ACS page headers
+
+The server SHALL send the ACS page with `Content-Security-Policy` `default-src 'none'` and `form-action 'self'`, a script only by its `sha256` hash and never `'unsafe-inline'`, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+
+#### Scenario: Headers of the page
+- **WHEN** the ACS route answers a valid form
+- **THEN** the answer has a `Content-Security-Policy` with `default-src 'none'`, `form-action 'self'` and no `'unsafe-inline'`, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.

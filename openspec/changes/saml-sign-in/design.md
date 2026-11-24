@@ -47,7 +47,14 @@ No field takes a SHA-1 algorithm. A field the API does not know is a 400.
 ## Decisions
 
 1. **SP-started first (ADR 332 d1).** The start route makes an `AuthnRequest` with an `ID` of 128 random bits, keeps the ID in the field RequestID of `session.PendingRedirect`, and sends it with HTTP-Redirect (ADR 321 d13). A fresh request sets ForceAuthn="true" (ADR 321 d22).
-2. **The cross-site POST and the `Lax` cookie.** The identity provider posts the response from its own origin. A browser does not send a `SameSite=Lax` cookie with a cross-site POST, so the sealed sign-in request (`internal/api/server/signin.go:400`) is not there. ADR 297 owner decision (b) keeps `Lax`. The ACS route therefore does only the shape checks (size, form, one value for each field) and answers a page that posts the same two fields to the callback route of the server. That POST is same-site, so the cookie goes with it. The callback route checks the origin of the request with the same-site check of `internal/sessionauth/sessionauth.go:232` (`sameSite`) before it reads the body, answers 403 and records the refusal with `recordOtherSiteSignIn` (`internal/api/server/signin.go:769`) when it fails, and then runs the full checks. The page is an `html/template` with the fields as hidden inputs, one script whose SHA-256 hash is in the `Content-Security-Policy` of that answer, `Cache-Control: no-store`, and a "Continue" button for a browser with no JavaScript. Nothing in the ACS route reads the XML.
+2. **The cross-site POST and the `Lax` cookie.** The identity provider posts the response from its own origin. A browser does not send a `SameSite=Lax` cookie with a cross-site POST, so the sealed sign-in request (`internal/api/server/signin.go:400`) is not there. ADR 297 owner decision (b) keeps `Lax`. The ACS route therefore does only the shape checks (size, form, one value for each field) and answers a page that posts the same two fields to the callback route of the server. That POST is same-site, so the cookie goes with it. The callback route checks the origin of the request with the same-site check of `internal/sessionauth/sessionauth.go:232` (`sameSite`) before it reads the body, answers 403 and records the refusal with `recordOtherSiteSignIn` (`internal/api/server/signin.go:769`) when it fails, and then runs the full checks. Nothing in the ACS route reads the XML. The re-post page has these rules (the lead accepted the page with them, 2026-11-24):
+   - The ACS route accepts `POST` only. Another method gets 405. It reads at most 256 KiB of body, the same limit as the callback; a larger body gets 400 and no page.
+   - The page is rendered with `html/template` only. `SAMLResponse` and `RelayState` are hidden inputs. The template escapes every field value in its attribute context; no value is put in a script, a URL attribute or a style.
+   - The page holds the form, the two hidden inputs and a visible submit button labeled "Continue", and nothing else: no other text, no image, no style sheet, no font and no other external resource.
+   - The answer has `Content-Security-Policy: default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`. When the page has its one auto-submit script, the policy adds `script-src 'sha256-<hash>'` for that script only, never `'unsafe-inline'`. The script holds no field value, so its hash is fixed at build time.
+   - The answer has `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+   - The visible button is the fallback for a browser that runs no script.
+   - The callback step does every check again. It does not trust that a request came through the ACS page: the same-site check, the body limit, the form shape and all the checks of decision 3 run at the callback. Each such check carries the defense-in-depth comment that names the other layers it does not rely on.
 3. **Checks as if the library failed (ADR 321 d14, d21).** The adapter does each of these checks itself. Each check has its own hostile test with a verifier seam that simulates a library that accepts everything (decision 9).
    - The body is at most 256 KiB before the decode (ADR 321 d16). The value is standard base64 only. A value that decodes to compressed data or to more than 256 KiB is refused. The HTTP-POST binding has no compression; the gosaml2 setting MaximumDecompressedBodySize is still set to 256 KiB as a second layer.
    - The XML parser is a guarded reader in front of `etree`: it refuses a `DOCTYPE`, an `ENTITY`, a processing instruction other than the XML declaration, a depth above 64, and more than 20,000 tokens (MaximumXMLTokens). `github.com/mattermost/xml-roundtrip-validator` (through gosaml2) runs as a second layer.
@@ -143,11 +150,11 @@ The CI job is a workflow patch: the staging copy is NEW file `test/samldiff/saml
 
 ## Real identity provider e2e (C6)
 
-Needs approval before task 5.x (the lead approves). The in-process e2e step (ADR 321 consequence, ADR 55) does not need it.
+Needs approval before task 5.x (the lead approves). The lead approved group 5 on 2026-11-24: CI only, gated by `E2E_SAML_IDP=1`, the image pinned by digest, and the image at least 14 days old. The release date was checked from the quay.io tag API: the first image of 26.8.2 (tag 26.8.2-0) was pushed on 2026-11-05, and the chosen tag 26.8.2-1 on 2026-11-09. The tags 26.8.2 and 26.8.2-3 moved on 2026-11-19 and are not used. The GitHub release page could not be read from this session; task 0.2 confirms the release date there. If task 0.2 finds a release date less than 14 days before the work starts, it takes the newest release that is old enough. The in-process e2e step (ADR 321 consequence, ADR 55) does not need it.
 
 | Candidate | Image | License | Last push | Result |
 |---|---|---|---|---|
-| Keycloak 26.8.2-1 | `quay.io/keycloak/keycloak@sha256:723b1d6e254c0fc96d5cffec860c7e0744d6a3277822b865bb538cf891575e41` (amd64 `sha256:c126f032d43b941ed7c5ccca7d6571596d8eab84d748afd7c86989e48ef07b8f`, 265,049,401 bytes compressed) | Apache-2.0 | 2026-11-09 (15 days) | chosen; its start time is measured by task 5.1 |
+| Keycloak 26.8.2-1 | `quay.io/keycloak/keycloak@sha256:723b1d6e254c0fc96d5cffec860c7e0744d6a3277822b865bb538cf891575e41` (amd64 `sha256:c126f032d43b941ed7c5ccca7d6571596d8eab84d748afd7c86989e48ef07b8f`, 265,049,401 bytes compressed) | Apache-2.0, to be confirmed by task 0.2 | image tag 26.8.2-1 pushed 2026-11-09 (15 days); the first image of the release, 26.8.2-0, was pushed 2026-11-05 (19 days), from the quay.io tag API | chosen; its start time is measured by task 5.1 |
 | SimpleSAMLphp (cirrusid/simplesamlphp) | `sha256:ae33d1fa...`, 272 MB | LGPL-2.1 | 2026-10-23 | refused: license |
 | kristophjunge/test-saml-idp | no digest in the registry API, 190 MB | not checked | 2018-02-04 | refused: not maintained |
 | A Go test IdP | none | n/a | n/a | not independent: it signs with `goxmldsig`. Used for the in-process e2e step only. |
@@ -169,7 +176,8 @@ The step runs only with `E2E_SAML_IDP=1`, as `e2e/compose_test.go:51-55` runs th
 
 | Layer | Guard | Hostile test |
 |---|---|---|
-| HTTP boundary (ACS route) | 256 KiB, form shape, one value for each field, no XML read | `TestACSRefusals` |
+| HTTP boundary (ACS route) | `POST` only, 256 KiB, form shape, one value for each field, no XML read | `TestACSRefusals` |
+| ACS page (encode) | `html/template`, fixed CSP with a script hash, `no-store`, `no-referrer`, hostile values inert | `TestACSPageIsInert`, `TestACSPageHeaders` |
 | HTTP boundary (callback route) | `Origin`, 256 KiB, form shape | `TestSAMLCallbackRefusals` |
 | Decode | base64 only, size after decode, no compression | `TestDecodeRefusals`, `FuzzDecodeResponse` |
 | Parse | no DTD, no entity, depth 64, 20,000 tokens, round trip | `TestParseRefusals`, `FuzzParseXML` |
