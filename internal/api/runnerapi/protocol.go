@@ -339,7 +339,7 @@ func (h *Handler) claimState(r *http.Request, runnerID, operation string) (claim
 func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
 
-	var req ClaimWorkRequest
+	var req protocol.ClaimWorkRequest
 	if err := decodeBody(c.body, &req); err != nil {
 		h.writeError(ctx, w, err)
 
@@ -361,7 +361,7 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	wait := min(max(req.Wait.Std(), 0), MaxPollWait)
+	wait := min(max(req.Wait.Std(), 0), protocol.MaxPollWait)
 	deadline := time.NewTimer(wait)
 
 	defer deadline.Stop()
@@ -683,7 +683,7 @@ func (h *Handler) renew(w http.ResponseWriter, r *http.Request, c *call) {
 	case errors.Is(err, runner.ErrSessionWaitPassed):
 		// The store changed nothing. The claimer releases the claim with
 		// its own rules, then the runner gets the claim-lost answer.
-		if giveErr := h.giveBack(r, &c.runner, claim); giveErr != nil {
+		if giveErr := h.giveBack(ctx, &c.runner, claim); giveErr != nil {
 			h.writeError(ctx, w, giveErr)
 
 			return
@@ -724,7 +724,7 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 
-	if err = h.giveBack(r, &c.runner, claim); err != nil {
+	if err = h.giveBack(ctx, &c.runner, claim); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -740,7 +740,6 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 // does to the operation: a phase after a started change fails, and a cancel
 // ends the job. A claim with a job session is not released.
 func (h *Handler) giveBack(ctx context.Context, rn *runner.Runner, claim durable.Claim) error {
-
 	rec, err := h.handoffs.LookupClaim(ctx, claim)
 	if err != nil {
 		return fmt.Errorf("look up claim: %w", err)
@@ -755,10 +754,12 @@ func (h *Handler) giveBack(ctx context.Context, rn *runner.Runner, claim durable
 		return fmt.Errorf("select pool: %w", err)
 	}
 
-	fence, fenceErr := h.fenceOf(r, rn.Namespace)
+	n, fenceErr := h.namespaces.WritableHere(ctx, rn.Namespace)
 	if fenceErr != nil {
-		return fenceErr
+		return fmt.Errorf("namespace of the runner: %w", fenceErr)
 	}
+
+	fence := n.Fence()
 
 	switch pool.Purpose {
 	case runner.PurposeJobs:
