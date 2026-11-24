@@ -35,7 +35,7 @@ Evidence for the claims above:
 - New route POST /api/dustpan/v1/namespaces/{namespace}/freezes creates a freeze with reason, creator subject, and time, with the freeze manage action on the namespace
 - New route POST /api/dustpan/v1/namespaces/{namespace}/freezes/current/end ends the active freeze with end record, with the freeze manage action on the namespace
 - New route GET /api/dustpan/v1/namespaces/{namespace}/freezes lists freezes in time order with active state, with the namespace read action on the namespace
-- Freeze guard on job start, cancel, and phase dispatch with break-glass start through break_freeze_reason for break-freeze holders on the namespace
+- Freeze guard on job start, cancel, and phase dispatch with break-glass start through breakFreezeReason for break-freeze holders on the namespace
 - Audit entries for freeze create, freeze end, and break-glass start
 
 Out of scope:
