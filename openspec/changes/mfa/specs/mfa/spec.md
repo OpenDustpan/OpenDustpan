@@ -2,11 +2,19 @@
 
 ### Requirement: require-mfa-password-signin
 
-When require MFA is on, the server SHALL create a pending sign-in and no session for a correct local or LDAP password.
+While built-in MFA is on, the server SHALL create a pending sign-in and no session for a correct local or LDAP password when the person has a factor, when require MFA is on, or when an SSO provider exists and the password sign-in is on.
 
 #### Scenario: Password only
-- **WHEN** require MFA is on and a person gives a correct password
+- **WHEN** built-in MFA is on, require MFA is on and a person gives a correct password
 - **THEN** the server answers 202, sets the pending cookie, creates a pending sign-in and issues no session
+
+#### Scenario: Person with a factor, require MFA off
+- **WHEN** built-in MFA is on, require MFA is off, and a person who has a factor gives a correct password
+- **THEN** the server answers 202, sets the pending cookie, creates a pending sign-in and issues no session
+
+#### Scenario: SSO provider next to the password sign-in
+- **WHEN** an SSO provider exists, the password sign-in is on, built-in MFA is on, require MFA is off, and a person gives a correct password
+- **THEN** the server answers 202, creates a pending sign-in and issues no session
 
 ### Requirement: sso-no-added-step
 
