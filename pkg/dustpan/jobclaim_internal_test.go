@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -105,6 +106,20 @@ func TestJobClaimSubjectsDenied(t *testing.T) {
 	canceled := testPlanJob("job-canceled", 0)
 	canceled.State = job.StateCanceled
 
+	// A job that does not hold its unit has no claim, also with Current at the
+	// apply phase (index 1).
+	waiting := map[job.ID]job.State{
+		"job-queued": job.StateQueued, "job-approval": job.StateAwaitingApproval,
+		"job-awaiting-state": job.StateAwaitingState, "job-empty-state": "", "job-unknown-state": "mystery",
+	}
+	notLive := map[job.ID]job.Job{}
+
+	for id, state := range waiting {
+		w := testPlanJob(id, 1)
+		w.State = state
+		notLive[id] = w
+	}
+
 	beforeStart := testPlanJob("job-before", -1)
 	atEnd := testPlanJob("job-at-end", 2)
 	pastEnd := testPlanJob("job-past", 3)
@@ -123,6 +138,11 @@ func TestJobClaimSubjectsDenied(t *testing.T) {
 		{name: "a blank job ID is denied", jobID: "  "},
 		{name: "a terminal job is denied", jobID: "job-done"},
 		{name: "a canceled job is denied", jobID: "job-canceled"},
+		{name: "a queued job at the apply phase is denied", jobID: "job-queued"},
+		{name: "a job that waits for approval at the apply phase is denied", jobID: "job-approval"},
+		{name: "a job that waits for a state at the apply phase is denied", jobID: "job-awaiting-state"},
+		{name: "a job with an empty state is denied", jobID: "job-empty-state"},
+		{name: "a job with an unknown state is denied", jobID: "job-unknown-state"},
 		{name: "a phase index before the first phase is denied", jobID: "job-before"},
 		{name: "a phase index equal to the number of phases is denied", jobID: "job-at-end"},
 		{name: "a phase index past the last phase is denied", jobID: "job-past"},
@@ -138,6 +158,7 @@ func TestJobClaimSubjectsDenied(t *testing.T) {
 				"job-done": terminal, "job-canceled": canceled, "job-before": beforeStart, "job-at-end": atEnd,
 				"job-past": pastEnd, "": emptyID, "  ": blankID,
 			}}
+			maps.Copy(reader.jobs, notLive)
 			src := newJobClaimSubjects(reader, fakeInnerSubjects{})
 
 			got, err := src.Subject(t.Context(), claimTestPrincipal("token-1", tt.jobID))

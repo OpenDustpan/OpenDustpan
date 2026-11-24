@@ -82,7 +82,10 @@ func (s jobClaimSubjects) claim(ctx context.Context, id string) (*gate.JobClaim,
 		return nil, fmt.Errorf("job %q: %w", id, err)
 	}
 
-	if j.State.Terminal() {
+	// Defense in depth: the token liveness check of the job token service stops a
+	// job that does not hold its unit too. This check does not rely on it. Only
+	// a state that holds the unit gets a claim, and an unknown state is denied.
+	if !j.State.HoldsUnit() {
 		return nil, fmt.Errorf("%w: job %q is %s and takes no state write", identity.ErrDenied, id, j.State)
 	}
 
