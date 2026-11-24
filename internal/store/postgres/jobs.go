@@ -59,7 +59,7 @@ func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
 	attempt := r.s.newAttempt(ctx)
 
-	err := pgx.BeginFunc(ctx, r.s.txs, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, r.s.txs, writeTxOptions(), func(tx pgx.Tx) error {
 		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
 		}

@@ -4459,3 +4459,15 @@ decisions:
   accepted_artifact: "docs/adr/0396-sweeps-run-on-the-teams-own-runners-and-the-cli-does-not-audit-its-own-usage-errors.md"
   evidence:
   - "docs/adr/0396-sweeps-run-on-the-teams-own-runners-and-the-cli-does-not-audit-its-own-usage-errors.md"
+- id: "adr-0397"
+  title: "ADR 397: Sign-in subjects never change, and the trusted header has no plain mode"
+  decision: "1. **CAS needs a subject attribute (owner, 2026-11-13).** A CAS provider has a subject attribute that the administrator names. A provider without it is refused when the administrator saves it. The CAS `user` is never the subject.\n2. **The trusted header has no plain mode (owner, 2026-11-13).** The only mode is `jwt`. It keeps the two layers of ADR 321 decision 36: the peer list and the signature check. The code for the plain mode and its shared secret is removed. A provider that has the plain mode is refused.\n3. **An OAuth 2.0 provider uses `sub` only (owner, 2026-11-13).** The subject is the `sub` claim. The provider has no setting for another claim. A response without `sub` gets the refusal reason `sign-in.subject-missing` in the audit log. The browser gets the generic refusal.\n4. **LDAP keeps the immutable identifiers (owner, 2026-11-13).** The subject of an LDAP provider is `entryUUID` or `objectGUID`.\n5. **An unlisted peer gets a refusal with a record.** A request from a peer that is not in the proxy list gets the reason `sign-in.untrusted-proxy`. The audit entry holds the TCP peer, never a forwarded header.\n6. **The rule can be loosened later (owner, 2026-11-13).** A later ADR may allow a mutable source. It needs a decision of the owner."
+  reason: "ADR 321 decisions 29 and 36 are marked (PM). They are not owner decisions. They let a CAS provider use the CAS `user` as the subject, and they give the trusted header a plain mode with a shared secret. The `user` of a CAS server and a header value can change for the same person. A changed subject makes a new principal, or lets a person take over the principal of another person."
+  scope:
+  - "docs/adr/0397-sign-in-subjects-never-change-and-the-trusted-header-has-no-plain-mode.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-24"
+  accepted_artifact: "docs/adr/0397-sign-in-subjects-never-change-and-the-trusted-header-has-no-plain-mode.md"
+  evidence:
+  - "docs/adr/0397-sign-in-subjects-never-change-and-the-trusted-header-has-no-plain-mode.md"

@@ -151,6 +151,7 @@ func fullRecord(t *testing.T) gate.Record {
 				Name: gate.RuleRequirement("finance"), Version: 1,
 				Approvers: gate.Approvers{
 					Groups: []string{"finance"}, GroupIDs: []string{"g-finance"}, Users: []string{}, UnitOwners: false,
+					UserIDs: nil,
 				},
 				Count: 2, AuthorMayApprove: false, FreshAuth: gate.FreshAuth{Set: true, Seconds: 300},
 				TimeoutSeconds: 604800,
@@ -168,6 +169,7 @@ func fullRecord(t *testing.T) gate.Record {
 					GroupIDs:   []string{},
 					Users:      []string{"carol"},
 					UnitOwners: true,
+					UserIDs:    nil,
 				},
 				Count:            1,
 				AuthorMayApprove: false,

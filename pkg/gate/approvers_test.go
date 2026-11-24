@@ -64,7 +64,7 @@ func (s approverStore) Snapshot(ctx context.Context, scopes []gate.Scope) (gate.
 
 // users returns approvers that name the users only.
 func users(names ...string) gate.Approvers {
-	return gate.Approvers{Groups: nil, GroupIDs: nil, Users: names, UnitOwners: false}
+	return gate.Approvers{Groups: nil, GroupIDs: nil, Users: names, UnitOwners: false, UserIDs: nil}
 }
 
 // newApproverEnv returns a service over a store whose rule two-eyes has the
@@ -155,7 +155,13 @@ func (tc approverCase) check(t *testing.T, kinds gate.KindReader) {
 func TestEvaluateAppliesRuleApprovers(t *testing.T) {
 	t.Parallel()
 
-	sre := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: []string{"dev:admin"}, UnitOwners: false}
+	sre := gate.Approvers{
+		Groups:     []string{"sre"},
+		GroupIDs:   nil,
+		Users:      []string{"dev:admin"},
+		UnitOwners: false,
+		UserIDs:    nil,
+	}
 
 	nobody := []string{gate.NoApprover}
 	open := gate.ResultAwaitingApproval
@@ -186,7 +192,7 @@ func TestEvaluateAppliesRuleApprovers(t *testing.T) {
 func TestEvaluateDevTable4a4b(t *testing.T) {
 	t.Parallel()
 
-	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
+	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil}
 	nobody := []string{gate.NoApprover}
 
 	tests := []approverCase{
@@ -344,7 +350,7 @@ func TestEvaluateDevInstallationKeepsDevApprovers(t *testing.T) {
 func TestEvaluateEmptyApproverListDenies(t *testing.T) {
 	t.Parallel()
 
-	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
+	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil}
 
 	for _, kind := range []string{"production", "dev"} {
 		t.Run(kind, func(t *testing.T) {
@@ -403,11 +409,35 @@ func preset(a gate.Approvers) gate.ApprovalDefault {
 func TestGateRefusesRuleWithoutApprover(t *testing.T) {
 	t.Parallel()
 
-	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false}
-	nobody := gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{gate.NoApprover}, UnitOwners: false}
-	mixed := gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{gate.NoApprover, "alice"}, UnitOwners: false}
-	group := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: []string{gate.NoApprover}, UnitOwners: false}
-	owners := gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{gate.NoApprover}, UnitOwners: true}
+	none := gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil}
+	nobody := gate.Approvers{
+		Groups:     nil,
+		GroupIDs:   nil,
+		Users:      []string{gate.NoApprover},
+		UnitOwners: false,
+		UserIDs:    nil,
+	}
+	mixed := gate.Approvers{
+		Groups:     nil,
+		GroupIDs:   nil,
+		Users:      []string{gate.NoApprover, "alice"},
+		UnitOwners: false,
+		UserIDs:    nil,
+	}
+	group := gate.Approvers{
+		Groups:     []string{"sre"},
+		GroupIDs:   nil,
+		Users:      []string{gate.NoApprover},
+		UnitOwners: false,
+		UserIDs:    nil,
+	}
+	owners := gate.Approvers{
+		Groups:     nil,
+		GroupIDs:   nil,
+		Users:      []string{gate.NoApprover},
+		UnitOwners: true,
+		UserIDs:    nil,
+	}
 
 	tests := []struct {
 		name string
@@ -442,12 +472,12 @@ func TestGateRefusesRuleWithoutApprover(t *testing.T) {
 func TestRuleApproversReadsAnEmptyListAsNoApprover(t *testing.T) {
 	t.Parallel()
 
-	got := gate.RuleApprovers(gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false})
+	got := gate.RuleApprovers(gate.Approvers{Groups: nil, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil})
 	if len(got.Users) != 1 || got.Users[0] != gate.NoApprover || len(got.Groups) != 0 || got.UnitOwners {
 		t.Errorf("RuleApprovers(empty) = %+v, want Users [NoApprover]", got)
 	}
 
-	keep := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false}
+	keep := gate.Approvers{Groups: []string{"sre"}, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil}
 	if got := gate.RuleApprovers(keep); len(got.Users) != 0 || len(got.Groups) != 1 {
 		t.Errorf("RuleApprovers(groups) = %+v, want unchanged", got)
 	}
@@ -512,7 +542,9 @@ func TestApproverPolicyValidate(t *testing.T) {
 			t.Parallel()
 
 			policy := gate.ApproverPolicy{Production: tc.production, IsDev: principalpkg.IsDevSubject}
-			err := policy.Validate(gate.Approvers{Groups: nil, GroupIDs: nil, Users: tc.users, UnitOwners: false})
+			err := policy.Validate(
+				gate.Approvers{Groups: nil, GroupIDs: nil, Users: tc.users, UnitOwners: false, UserIDs: nil},
+			)
 			if (err != nil) != tc.wantErr || (err != nil && !errors.Is(err, gate.ErrInvalid)) {
 				t.Errorf("ValidateApprovers(%v) = %v, want error %v wrapping ErrInvalid", tc.users, err, tc.wantErr)
 			}

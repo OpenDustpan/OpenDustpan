@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -48,10 +49,18 @@ func TestGetJobListsTheGatesWithTheirFilledSlots(t *testing.T) {
 		{
 			Type: job.GateApproval, Name: "default/namespace/acme", Approvals: 2, Groups: []string{"platform"},
 			GroupIDs: []string{"grp-a"}, AllowSelf: false, Timeout: 0, BindPlan: false,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		},
 		{
 			Type: job.GateApproval, Name: "default", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false,
 			Timeout: 0, BindPlan: false,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		},
 	}
 	stored.Phases[0].Approvals = []job.Approval{

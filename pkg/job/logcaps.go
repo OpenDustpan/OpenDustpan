@@ -140,7 +140,12 @@ func (caps *LogCaps) PlanChunk(
 		step = logCount{chunks: log.Chunks, bytes: log.Size}
 	}
 
-	if capErr := caps.check(k.Phase, c.Size, step, logTotals(j, k.Phase)); capErr != nil {
+	phase, err := logTotals(j, k.Phase, lookup)
+	if err != nil {
+		return ChunkPlan{}, err
+	}
+
+	if capErr := caps.check(k.Phase, c.Size, step, phase); capErr != nil {
 		return ChunkPlan{}, capErr
 	}
 
@@ -155,22 +160,49 @@ type logCount struct {
 }
 
 // logTotals returns the chunks and the bytes of the logs of the steps of the
-// phase at index phase of j. A step with no log counts nothing.
-func logTotals(j *Job, phase int) logCount {
+// phase at index phase of j. A step with no log counts nothing. The counters of
+// a log hold only the confirmed chunks, so logTotals also counts the reserved
+// chunk of each log that is not confirmed yet: it is the chunk with the number
+// LogRef.Chunks, because a log accepts only the next chunk. Steps of one phase
+// that run in parallel then see the reserve of each other, and the caps of the
+// phase hold.
+func logTotals(
+	j *Job, phase int, lookup func(version string, seq int) (ChunkRow, bool, error),
+) (logCount, error) {
 	var total logCount
 
 	if phase < 0 || phase >= len(j.Phases) {
-		return total
+		return total, nil
 	}
 
 	for i := range j.Phases[phase].Steps {
-		if l := j.Phases[phase].Steps[i].Log; l != nil {
-			total.chunks += l.Chunks
-			total.bytes += l.Size
+		l := j.Phases[phase].Steps[i].Log
+		if l == nil {
+			continue
+		}
+
+		total.chunks += l.Chunks
+		total.bytes += l.Size
+
+		// Fail closed: with no lookup the reserved chunks cannot be counted, and
+		// the caps of the phase would open again. No store passes a nil lookup;
+		// this check stays so that a later caller cannot skip the count.
+		if lookup == nil {
+			return logCount{}, fmt.Errorf("%w: no chunk lookup for the caps of the log", ErrInvalid)
+		}
+
+		row, ok, err := lookup(l.ID, l.Chunks)
+		if err != nil {
+			return logCount{}, err
+		}
+
+		if ok && !row.Confirmed {
+			total.chunks++
+			total.bytes += row.Size
 		}
 	}
 
-	return total
+	return total, nil
 }
 
 // check returns a LogCapError when a new chunk of size bytes passes a cap. step

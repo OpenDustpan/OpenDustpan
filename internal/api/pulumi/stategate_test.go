@@ -307,6 +307,7 @@ func guardAnswers() []guardAnswer {
 			name: "deny gate", result: "", status: http.StatusForbidden, code: "gate.denied",
 			err: &gate.RefusalError{
 				Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen.\r\nInjected: line"},
+				Job: nil,
 			},
 			// The CR and the LF of the message become spaces.
 			text: "Writes are frozen.  Injected: line (error gate.denied, decision record gdr-test;" +
@@ -314,13 +315,15 @@ func guardAnswers() []guardAnswer {
 		},
 		{
 			name: "access limit", result: "", status: http.StatusForbidden, code: "gate.limited",
-			err: &gate.RefusalError{Err: gate.ErrLimited, Record: "gdr-limit", Messages: []string{"no-writes"}},
+			err: &gate.RefusalError{
+				Err: gate.ErrLimited, Record: "gdr-limit", Messages: []string{"no-writes"}, Job: nil,
+			},
 			text: "no-writes (error gate.limited, decision record gdr-limit;" +
 				" to read the record, send GET /api/dustpan/v1/namespaces/acme/decision-records/gdr-limit)",
 		},
 		{
 			name: "final gate", result: "", status: http.StatusForbidden, code: "gate.final",
-			err:  &gate.RefusalError{Err: gate.ErrFinal, Record: "gdr-final", Messages: []string{"final"}},
+			err:  &gate.RefusalError{Err: gate.ErrFinal, Record: "gdr-final", Messages: []string{"final"}, Job: nil},
 			text: "decision record gdr-final",
 		},
 		{

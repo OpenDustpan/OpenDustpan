@@ -131,7 +131,7 @@ func TestRestoreRefusesAStateThatCannotBeRead(t *testing.T) {
 			rec := serveGuarded(t, newAuditedHandler(t, ws, guard, entries), restoreRoute())
 			checkRefusalDocument(t, rec, guardRefusal{
 				name: "unreadable", code: tc.code, message: stategate.StateUnreadableText,
-				err: &gate.RefusalError{Err: gate.ErrUnavailable, Record: "", Messages: nil},
+				err: &gate.RefusalError{Err: gate.ErrUnavailable, Record: "", Messages: nil, Job: nil},
 			})
 
 			if ws.count() != 0 || len(guard.seen) != 0 {
