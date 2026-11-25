@@ -189,6 +189,25 @@ The revoke of the last site administrator is refused with `409` and the code
 `access.last-site-administrator`. The refusal writes an audit entry with the
 outcome `failure` and the reason `access.last-site-administrator`.
 
+A grant of a housekeeping principal (`housekeeping:<purpose>`) can be revoked
+by a caller who holds `server:manage-access` on `@server`, for example a site
+administrator. The caller does not need to hold each action of the grant. The
+audit entry of the revoke has the reason
+`housekeeping grant revoked by a holder of server:manage-access on @server`.
+This applies to a revoke only: to give a housekeeping role, the caller must
+hold each of its actions. A revoked housekeeping grant stays revoked. The
+server writes these grants only at the install and when it creates a
+namespace, and never writes them again. To find the grants, read the access
+review with the `subject` filter of the principal, then revoke each grant by
+its ID:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://dustpan.example.com/api/server/access-review?subject=principal:<id>"
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/server/grants/grt-...
+```
+
 A grant on one collection reaches only that collection and its units. A writer
 on collection A that writes a unit of collection B gets `403` and nothing
 changes. A viewer reads the state with `pulumi stack export` or

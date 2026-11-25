@@ -215,6 +215,17 @@ suffix" for each reason that gets this text.
     group route writes a `failure` entry when the change has a record. That
     entry holds the reason of the missing actions for any escalation refusal
     that names at least one missing action.
+<!-- code-rule: access.HousekeepingRevokeReason -->
+- A caller who holds `server:manage-access` on `@server` can revoke a grant
+  of a housekeeping principal (`housekeeping:<purpose>`). The caller does not
+  need to hold each action of the grant, but needs the manage action of the
+  object of the grant. The rule applies to a revoke only. A grant of a
+  housekeeping role still needs each of its actions. The audit entry of the
+  revoke has the reason
+  `housekeeping grant revoked by a holder of server:manage-access on @server`.
+  A revoked housekeeping grant stays revoked: the server writes these grants
+  only at the install and when it creates a namespace, and never again for
+  that namespace.
 <!-- code-rule: access.ErrBuiltIn -->
 - A built-in role cannot be changed or deleted. The server answers 409 with
   no specific code. The server writes an audit entry with the outcome
