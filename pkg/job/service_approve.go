@@ -123,6 +123,13 @@ func (s *service) checkDestroyAuth(ctx context.Context, a Actor, ap *Approval) e
 	// The guard returns nil only when the policy requires no step. Any error
 	// from it means that the step is required: the session proof below decides.
 	if err := s.fresh.Require(ctx, a.Principal.Subject); err == nil {
+		// Defense in depth: the HTTP handler and the job store also allow only a
+		// person here. This check stays so that a service, a workload or an agent
+		// never gets the authentication none, whatever credential it holds.
+		if a.Agent != "" || a.Principal.Kind != identity.KindPerson {
+			return fmt.Errorf("%w: only a person can approve a destroy when the setting is off", ErrAuthStale)
+		}
+
 		ap.Auth, ap.AuthAt = ConfirmAuthNone, time.Time{}
 
 		return nil

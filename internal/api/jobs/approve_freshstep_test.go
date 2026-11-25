@@ -92,7 +92,9 @@ func TestDestroyApprovalByTokenFollowsSetting(t *testing.T) {
 		{"setting off", off, identity.KindPerson, http.StatusCreated, "", 1},
 		{"setting on", on, identity.KindPerson, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
 		{"no policy", nil, identity.KindPerson, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
-		{"setting off, agent principal", off, identity.KindAgent, http.StatusForbidden, errcode.JobAgentDenied, 0},
+		{"setting off, service principal", off, identity.KindService, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
+		{"setting off, workload principal", off, identity.KindWorkload, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
+		{"setting off, agent principal", off, identity.KindAgent, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
 		{"setting on, agent principal", on, identity.KindAgent, http.StatusForbidden, errcode.MFAFreshStepRequired, 0},
 	}
 

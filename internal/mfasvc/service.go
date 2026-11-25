@@ -185,6 +185,13 @@ func (s *Service) FinishRegistration(
 
 	object := principal.Ref(p.ID)
 
+	// Defense in depth: the handler checks the fresh step too, and the begin
+	// call checks it as well; this check stays so that a finish call from a
+	// caller with no fresh step never reaches the store.
+	if !a.Fresh {
+		return none, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "no fresh step", mfa.ErrFreshStep)
+	}
+
 	if err := mfa.ValidatePasskeyName(name); err != nil {
 		return none, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "name not valid", err)
 	}

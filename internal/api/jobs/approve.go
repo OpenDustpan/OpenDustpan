@@ -196,9 +196,9 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 // Defense in depth: the service and the job store check the proof and the
 // credential too, with the same policy. This handler has no session MFA proof
 // yet. With the setting freshAuthEnabled on, it refuses a destroy even when an
-// implementation of the service would allow it. With the setting off, an agent
-// principal still gets no approval of a destroy. This check does not rely on
-// the service or on the store.
+// implementation of the service would allow it. With the setting off, only a
+// person gets an approval of a destroy. This check does not rely on the service
+// or on the store.
 func (h *Handler) checkDestroyFresh(ctx context.Context, p identity.Principal, t *target, v job.Verdict) error {
 	if v != job.VerdictApprove || t.job.Spec.Operation != job.OperationDestroy {
 		return nil
@@ -207,8 +207,12 @@ func (h *Handler) checkDestroyFresh(ctx context.Context, p identity.Principal, t
 	// The guard reads the setting here, at the point of use. Its check always
 	// refuses, so a nil result means that the policy requires no step.
 	if h.freshGuard.Require(ctx, p.Subject) == nil {
-		if p.Kind == identity.KindAgent {
-			return job.ErrAgentDenied
+		// Defense in depth: the service and the job store also allow only a
+		// person here. This check stays so that a service, a workload or an agent
+		// never gets the approval of a destroy without a step, whatever the
+		// credential.
+		if p.Kind != identity.KindPerson {
+			return job.ErrAuthStale
 		}
 
 		return nil

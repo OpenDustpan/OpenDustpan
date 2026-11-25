@@ -12,10 +12,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/durable"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // Page sizes of List.
@@ -38,9 +38,9 @@ const createAttempts = 2
 // Store serves job.Store and job.FreezeStore from one Runner.
 type Store struct {
 	run Runner
-	// fresh says if the approval of a destroy needs a fresh step. The zero
-	// Guard requires the step (fail closed).
-	fresh freshstep.Guard
+	// fresh says if the approval of a destroy needs a fresh step, from the
+	// stored value of the setting. Nil requires the step (fail closed).
+	fresh FreshResolver
 }
 
 var (
@@ -49,39 +49,53 @@ var (
 	_ job.FinalVersionReader = (*Store)(nil)
 )
 
-// New returns the job stores over run. Its guard is the zero Guard, so each
-// approval of a destroy needs the step until SetFreshPolicy runs.
+// FreshResolver says whether the approval of a destroy needs a fresh step.
+// It gets the database value of the setting freshAuthEnabled that the write
+// transaction read, and nil when no row holds it. It applies the effective
+// value of the setting: the static layer, then the database value, then the
+// default. An error means that the step is required.
+type FreshResolver func(stored *string) (required bool, err error)
+
+// New returns the job stores over run. Its resolver is nil, so each approval
+// of a destroy needs the step until SetFreshResolver runs.
 func New(run Runner) *Store {
-	return &Store{run: run, fresh: freshstep.Guard{}}
+	return &Store{run: run, fresh: nil}
 }
 
-// SetFreshPolicy sets the policy that says if the approval of a destroy needs
-// a fresh step. The server sets it once, before the store serves a request.
-// With no policy, each approval of a destroy needs the step.
-func (s *Store) SetFreshPolicy(p freshstep.Policy) {
-	if p == nil {
-		p = freshstep.PolicyFunc(nil)
-	}
+// SetFreshResolver sets the resolver that says if the approval of a destroy
+// needs a fresh step. The server sets it once, before the store serves a
+// request. With no resolver, each approval of a destroy needs the step.
+func (s *Store) SetFreshResolver(r FreshResolver) {
+	s.fresh = r
+}
 
-	g, err := freshstep.NewGuard(p, func(context.Context, string) error {
-		return job.ErrAuthStale
-	})
+// freshRequired reports whether the approval of a destroy in the transaction
+// tx needs a fresh step. The stored value is read in tx, so the rule uses the
+// value that the write commits with. With no resolver, or when the resolver
+// fails, the step is required (fail closed). A failed read of the row fails
+// the write.
+func freshRequired(ctx context.Context, r FreshResolver, tx Tx) (bool, error) {
+	value, found, err := tx.SettingValue(ctx, setting.SettingFreshAuthEnabled)
 	if err != nil {
-		// NewGuard fails only on a nil policy or a nil check, and neither is
-		// nil here. Keep the zero Guard, which requires the step (fail closed).
-		s.fresh = freshstep.Guard{}
-
-		return
+		return false, fmt.Errorf("read the fresh authentication setting: %w", err)
 	}
 
-	s.fresh = g
-}
+	if r == nil {
+		return true, nil
+	}
 
-// FreshStepRequired reports whether the approval of a destroy needs a fresh
-// step. It is true with no policy, and when the policy cannot read the
-// setting. Any error from the guard means that the step is required.
-func (s *Store) FreshStepRequired(ctx context.Context) bool {
-	return s.fresh.Require(ctx, "") != nil
+	var stored *string
+	if found {
+		stored = &value
+	}
+
+	required, err := r(stored)
+	// Fail closed: a resolver that cannot read the setting requires the step.
+	if err != nil {
+		required = true
+	}
+
+	return required, nil
 }
 
 // Create implements job.Store.

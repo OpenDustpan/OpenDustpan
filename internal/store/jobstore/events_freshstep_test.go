@@ -1,13 +1,11 @@
 package jobstore_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
-	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -83,29 +81,30 @@ func TestDestroyProofFollowsTheSetting(t *testing.T) {
 	}
 }
 
-// TestStoreWithoutPolicyRequiresTheStep proves that the store fails closed:
-// a store with no policy, or a policy that cannot read the setting, requires
-// the step.
-func TestStoreWithoutPolicyRequiresTheStep(t *testing.T) {
+// TestFreshRequiredFailsClosed proves that the store requires the step when it
+// has no resolver, when the resolver cannot read the setting, and when the
+// transaction cannot read the row. A resolver that answers no step lets the
+// approval through, and it gets the stored value that the transaction read.
+func TestFreshRequiredFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	failing := freshstep.NewPolicy(func(context.Context) (bool, error) {
-		return false, errSettingsDown
-	})
-	off := freshstep.PolicyFunc(func(context.Context) bool { return false })
-	on := freshstep.PolicyFunc(func(context.Context) bool { return true })
+	off := func(*string) (bool, error) { return false, nil }
+	on := func(*string) (bool, error) { return true, nil }
+	failing := func(*string) (bool, error) { return false, errSettingsDown }
 	tests := []struct {
-		name   string
-		policy freshstep.Policy
-		set    bool // call SetFreshPolicy with policy, also when it is nil
-		want   bool
+		name     string
+		resolver jobstore.FreshResolver
+		settings map[string]string
+		readErr  error
+		want     bool
+		wantErr  bool
 	}{
-		{"no policy", nil, false, true},
-		{"nil policy set", nil, true, true},
-		{"nil policy func set", freshstep.PolicyFunc(nil), true, true},
-		{"unreadable setting", failing, true, true},
-		{"setting on", on, true, true},
-		{"setting off", off, true, false},
+		{"no resolver", nil, nil, nil, true, false},
+		{"no resolver, setting off", nil, map[string]string{"freshAuthEnabled": "false"}, nil, true, false},
+		{"setting on", on, nil, nil, true, false},
+		{"setting off", off, map[string]string{"freshAuthEnabled": "false"}, nil, false, false},
+		{"unreadable setting", failing, nil, nil, true, false},
+		{"unreadable row", off, nil, errSettingsDown, false, true},
 	}
 
 	for _, tc := range tests {
@@ -113,12 +112,19 @@ func TestStoreWithoutPolicyRequiresTheStep(t *testing.T) {
 			t.Parallel()
 
 			s := jobstore.New(nil)
-			if tc.set {
-				s.SetFreshPolicy(tc.policy)
+			if tc.resolver != nil {
+				s.SetFreshResolver(tc.resolver)
 			}
 
-			if got := s.FreshStepRequired(t.Context()); got != tc.want {
-				t.Fatalf("FreshStepRequired = %v, want %v", got, tc.want)
+			tx := settingTx{fakeTx: newFakeTx(time.Time{}), settings: tc.settings, err: tc.readErr}
+
+			got, err := jobstore.ReadFreshRequired(t.Context(), s, tx)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("FreshRequired error = %v, want error %v", err, tc.wantErr)
+			}
+
+			if got != tc.want {
+				t.Fatalf("FreshRequired = %v, want %v", got, tc.want)
 			}
 		})
 	}

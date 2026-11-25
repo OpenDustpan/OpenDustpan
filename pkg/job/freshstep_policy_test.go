@@ -102,7 +102,7 @@ func TestDestroyApprovalFollowsTheFreshPolicy(t *testing.T) {
 		{"off, token, no step", off, false, func(*rig) job.Actor { return tokenActor() }, nil, "none"},
 		{"off, no credential, no step", off, false, func(*rig) job.Actor { return actorOf("carol") }, nil, "none"},
 		{"off, session with a step", off, false, sessionActor, nil, "none"},
-		{"off, agent", off, false, agent, job.ErrAgentDenied, ""},
+		{"off, agent", off, false, agent, job.ErrAuthStale, ""},
 		{"on, token, no step", on, false, func(*rig) job.Actor { return tokenActor() }, job.ErrAuthStale, ""},
 		{"on, no step", on, false, func(*rig) job.Actor { return actorOf("carol") }, job.ErrAuthStale, ""},
 		{"on, agent", on, false, agent, job.ErrAuthStale, ""},

@@ -124,6 +124,11 @@ type Tx interface {
 	// Now returns the time on the clock of the database.
 	Now(ctx context.Context) (time.Time, error)
 
+	// SettingValue returns the database value of the installation setting key
+	// from the settings table, and false when no row holds the key. It reads
+	// the rows of the installation scope only.
+	SettingValue(ctx context.Context, key string) (value string, found bool, err error)
+
 	// Job returns the job id, and false when none exists.
 	Job(ctx context.Context, id job.ID) (Row, bool, error)
 	// JobByKey returns the job of the namespace with the key, and false

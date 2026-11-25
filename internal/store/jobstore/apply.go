@@ -29,11 +29,14 @@ func (s *Store) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 
 	var out job.Job
 
-	// The policy reads the setting before the transaction opens, so that the
-	// read does not wait on the write of this transaction.
-	fresh := s.FreshStepRequired(ctx)
-
 	err := s.run.Write(ctx, fence, func(tx Tx) error {
+		// The setting is read in the transaction of the write, so that the
+		// approval decides with the value that the write commits with.
+		fresh, err := freshRequired(ctx, s.fresh, tx)
+		if err != nil {
+			return err
+		}
+
 		next, err := applyIn(ctx, tx, &c, fence.Namespace, fresh)
 		if err != nil {
 			return err

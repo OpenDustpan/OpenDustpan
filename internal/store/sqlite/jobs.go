@@ -142,6 +142,21 @@ func (t *jobTx) Now(ctx context.Context) (time.Time, error) {
 	return databaseNow(ctx, t.q)
 }
 
+// SettingValue implements jobstore.Tx. It reads the row of the installation
+// scope in this transaction.
+func (t *jobTx) SettingValue(ctx context.Context, key string) (string, bool, error) {
+	value, err := t.q.GetSettingValue(ctx, db.GetSettingValueParams{ScopeID: serverScopeID, Key: key})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("select setting %s: %w", key, err)
+	}
+
+	return value, true, nil
+}
+
 // Job implements jobstore.Tx.
 func (t *jobTx) Job(ctx context.Context, id job.ID) (jobstore.Row, bool, error) {
 	row, err := t.q.GetJob(ctx, string(id))

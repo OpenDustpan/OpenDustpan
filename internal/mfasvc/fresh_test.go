@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/mfasvc"
+	"opendustpan.org/opendustpan/internal/webauthntest"
 	"opendustpan.org/opendustpan/pkg/mfa"
 )
 
@@ -43,6 +44,49 @@ func TestFactorChangeNeedsFreshActor(t *testing.T) {
 		after, err := f.svc.Passkeys(t.Context(), a)
 		if err != nil || len(after) != len(before) {
 			t.Fatalf("passkeys after = %d, %v; want %d unchanged", len(after), err, len(before))
+		}
+	})
+
+	t.Run("finish", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+
+		// The begin call runs with a fresh step, so the challenge exists. The
+		// finish call comes from a caller with no fresh step, which skips the
+		// begin call's check.
+		options, err := f.svc.BeginRegistration(t.Context(), actor(alice, "ses-alice"), personOf(alice))
+		if err != nil {
+			t.Fatalf("begin registration: %v", err)
+		}
+
+		c, err := webauthntest.ChallengeOf(options)
+		if err != nil {
+			t.Fatalf("challenge: %v", err)
+		}
+
+		cred, err := webauthntest.NewCredential([]byte(alice), true)
+		if err != nil {
+			t.Fatalf("credential: %v", err)
+		}
+
+		response, err := f.auth.Register(cred, webauthntest.For(c))
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+
+		a := actor(alice, "ses-alice")
+		a.Fresh = false
+
+		_, err = f.svc.FinishRegistration(t.Context(), a, personOf(alice), "laptop", response)
+		if err == nil {
+			t.Fatal("FinishRegistration with no fresh step: err = nil, want a refusal")
+		}
+
+		f.wantRefusal(t, "FinishRegistration with no fresh step", err, mfa.ErrFreshStep, mfasvc.ActionAddRefused)
+
+		if added := f.entries(t, mfasvc.ActionPasskeyAdded); len(added) != 0 {
+			t.Fatalf("added entries = %d, want 0", len(added))
 		}
 	})
 

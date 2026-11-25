@@ -370,6 +370,10 @@ func (f *fakeTx) CheckClaim(context.Context, durable.Claim) error { return nil }
 // AppendAudit implements jobstore.Tx.
 func (f *fakeTx) AppendAudit(context.Context, []audit.Entry) error { return nil }
 
+// SettingValue implements jobstore.Tx: no setting row, so the store uses the
+// default of the resolver.
+func (f *fakeTx) SettingValue(context.Context, string) (string, bool, error) { return "", false, nil }
+
 // put stores j as the row of its ID, as a write of the store would.
 func (f *fakeTx) put(t *testing.T, j *job.Job) {
 	t.Helper()

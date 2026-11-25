@@ -35,5 +35,11 @@ func CheckDestroyProofStepOff(j *job.Job, ap *job.Approval, now time.Time) error
 	return checkDestroyProof(j, ap, writeRules{now: now, freshRequired: false})
 }
 
+// FreshRequired exposes freshRequired of s, read in the transaction tx, to the
+// black-box tests.
+func ReadFreshRequired(ctx context.Context, s *Store, tx Tx) (bool, error) {
+	return freshRequired(ctx, s.fresh, tx)
+}
+
 // NextJobUpdateAt exposes nextUpdateAt to the black-box tests.
 func NextJobUpdateAt(now, stored time.Time) time.Time { return nextUpdateAt(now, stored) }

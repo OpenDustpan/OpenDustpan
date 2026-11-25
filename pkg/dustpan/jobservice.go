@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -22,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/unitsettings"
 )
 
@@ -64,10 +67,11 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 
 	approvers := jobApprovers(cfg)
 
-	// The store reads the same setting as the service and the handler. A store
-	// with no such setter keeps its default and requires the step.
-	if s, ok := cfg.jobStore.(freshPolicySetter); ok {
-		s.SetFreshPolicy(freshPolicyOf(cfg))
+	// The store reads the same setting as the service and the handler, in the
+	// transaction of each approval. A store with no such setter keeps its
+	// default and requires the step.
+	if s, ok := cfg.jobStore.(freshResolverSetter); ok {
+		s.SetFreshResolver(freshResolverOf(cfg))
 	}
 
 	freshGuard, err := job.NewFreshGuard(freshPolicyOf(cfg))
@@ -96,6 +100,58 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 	}
 
 	return starter, nil
+}
+
+// freshResolverSetter is a job store that reads the fresh authentication
+// setting in the transaction of an approval. The server sets the resolver
+// after it builds the store.
+type freshResolverSetter interface {
+	SetFreshResolver(r jobstore.FreshResolver)
+}
+
+// freshResolverOf returns the resolver that the job store runs in the write
+// transaction of an approval. It uses the same declaration and static layer of
+// freshAuthEnabled as freshPolicyOf, and the database value that the
+// transaction read. It returns nil when the server keeps no settings store, and
+// the store then requires the step.
+func freshResolverOf(cfg *settings) jobstore.FreshResolver {
+	if cfg.settingsConfig.store == nil {
+		return nil
+	}
+
+	registry, err := setting.NewRegistry(settingDeclarations(cfg))
+	if err != nil {
+		// Defense in depth: NewServer checks the declarations before it builds
+		// the store. A set of declarations that fails here gives no resolver, and
+		// the store requires the step.
+		return nil
+	}
+
+	d, ok := registry.Lookup(setting.InstallationScope().Level(), setting.SettingFreshAuthEnabled)
+	if !ok {
+		return nil
+	}
+
+	static := cfg.settingsConfig.static
+	if static == nil {
+		static = setting.NoStatic{}
+	}
+
+	return func(stored *string) (bool, error) {
+		var layer *setting.StaticValue
+		if v, set := static.Lookup(setting.SettingFreshAuthEnabled); set {
+			layer = &v
+		}
+
+		item := setting.Effective(d, stored, layer)
+
+		on, err := strconv.ParseBool(item.Value)
+		if err != nil {
+			return false, fmt.Errorf("read the fresh authentication setting: %w", err)
+		}
+
+		return on, nil
+	}
 }
 
 // jobApprovers returns the policy that counts the signatures of approvers: the
