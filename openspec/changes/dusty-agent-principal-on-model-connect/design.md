@@ -13,6 +13,7 @@ RFC 121 decision 7 says the model connect request creates Dusty. Main has no `Co
 7. **Reads.** `GET /api/server/principals?kind=agent` adds `sponsors`, `creator` and `ceilingGrants` for the kind `agent`. A reader needs the same action as the principal list.
 8. **The write is checked once, then again.** `NewConnectWrite` refuses a write that has no principal, 0 or more than 5 sponsors, a repeated sponsor, a subject other than `dusty` for the kind `agent`, or a ceiling grant that names a role other than `agent-tools-read` or `agent-tools`. The adapter checks the same limits again inside the transaction (see the layers table).
 9. **One validation.** `CreateAgent` and `ConnectModel` call one unexported function of the service, `validateAgentRecord`, for the subject, the sponsors and the fallback group. No second copy of the rules exists.
+10. **Agent tables follow `trust_rules` in a backup.** `agent_record` and `agent_sponsor` are access tables: a backup carries them and a restore puts them back only when the caller holds server:restore-access, in the same step that replaces the principals table. The principal, the record and the sponsors of an agent always come from one backup. A restore that would separate them is refused before the swap (task 2.9). No option lets a restore bring back the principal without its record.
 
 ## Structure
 
