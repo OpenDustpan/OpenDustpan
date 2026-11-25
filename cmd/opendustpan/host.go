@@ -44,6 +44,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
@@ -453,9 +454,29 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	return hostMade{subject: in.person, secret: got.Secret.Reveal(), expires: got.Token.ExpiresAt}, nil
 }
 
-// hostTokenService returns the access token service of a host command. It has
-// no reach config: a host command makes a token and reads no reach.
+// hostSettings returns the settings reader of a host command: the stored value
+// of each setting over the declarations of the server. A host command has no
+// flags of the serve command, so it has no static layer.
+func hostSettings(st store) (*setting.Service, error) {
+	builtin := st.builtin()
+
+	registry, err := setting.NewRegistry(append(cli.SettingDeclarations(), builtin.SettingDeclarations()...))
+	if err != nil {
+		return nil, fmt.Errorf("settings registry: %w", err)
+	}
+
+	return setting.NewService(builtin.SettingStore(), registry, nil, nil, nil), nil
+}
+
+// hostTokenService returns the access token service of a host command. Its
+// reach config has no store of grants: a host command makes a token and reads
+// no reach. It holds the settings reader, as each reach config does.
 func hostTokenService(st store) (*accesstoken.Service, error) {
+	settings, err := hostSettings(st)
+	if err != nil {
+		return nil, err
+	}
+
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers: nil,
 		Reach: access.ReachConfig{
@@ -465,7 +486,7 @@ func hostTokenService(st store) (*accesstoken.Service, error) {
 			Principals:  nil,
 			Collections: nil,
 			Units:       nil,
-			Settings:    nil,
+			Settings:    settings,
 		},
 		Store:      st,
 		Principals: st,

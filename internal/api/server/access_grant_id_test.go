@@ -311,8 +311,8 @@ func TestRevokeGrantReadFailureDoesNotEchoTheID(t *testing.T) {
 
 			f := newAccessFixtureAll(t, accessFixtureParts{
 				entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
-				links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil}, now: nil,
-				logger: nil, noSignIn: false,
+				links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil, authzSettings: nil},
+				now: nil, logger: nil, noSignIn: false,
 				getGrantErr: readErr, afterRevoke: nil, tokenList: nil,
 			})
 

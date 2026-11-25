@@ -172,6 +172,118 @@ func TestExplainNamesNoGrantWhenTheSettingIsFalse(t *testing.T) {
 	}
 }
 
+// TestInstallationReachAccessReview proves that the access review of a
+// namespace shows a grant on the installation as inherited only while the
+// setting is `true`. While it is `false`, the review shows no row for it.
+func TestInstallationReachAccessReview(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fixture  func(testing.TB) reachFixture
+		wantRows int
+	}{
+		{name: "the setting is true", fixture: reachOn, wantRows: 1},
+		{name: "the setting is false", fixture: reachOff, wantRows: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := tc.fixture(t).fixture
+			f.person(t, "holder")
+			f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
+
+			page, err := f.svc.Review(t.Context(), identity.NamespaceObject("acme"), access.ReviewRequest{
+				From: nil, To: nil, Subject: "principal:prn-holder", Cursor: "", Limit: 0, Expand: false,
+			})
+			if err != nil {
+				t.Fatalf("review: %v", err)
+			}
+
+			inherited := 0
+
+			for i := range page.Entries {
+				if from := page.Entries[i].InheritedFrom; from != nil && from.IsServer() {
+					inherited++
+				}
+			}
+
+			if inherited != tc.wantRows {
+				t.Fatalf(
+					"rows inherited from @server = %d, want %d (entries %+v)",
+					inherited,
+					tc.wantRows,
+					page.Entries,
+				)
+			}
+		})
+	}
+}
+
+// TestInstallationReachDiscoveryGrantID proves the grant ID discovery of a
+// namespace: a grant on the installation never gives the ID of a grant, with
+// the setting `true` or `false`, a grant on a collection of the namespace
+// gives its ID in both cases, and a failed read of the setting gives an error
+// and no ID.
+func TestInstallationReachDiscoveryGrantID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		settings     reachReader
+		onCollection bool
+		wantID       bool
+		wantErr      bool
+	}{
+		{
+			name: "installation grant, setting true", settings: reachReader{value: new("true"), err: nil},
+			onCollection: false, wantID: false, wantErr: false,
+		},
+		{
+			name: "installation grant, setting false", settings: reachReader{value: new("false"), err: nil},
+			onCollection: false, wantID: false, wantErr: false,
+		},
+		{
+			name: "collection grant, setting false", settings: reachReader{value: new("false"), err: nil},
+			onCollection: true, wantID: true, wantErr: false,
+		},
+		{
+			name: "failed read", settings: reachReader{value: new("true"), err: errSettingsGone},
+			onCollection: false, wantID: false, wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := collections{}
+			f := newFixtureWithSettings(t, units, tc.settings)
+			f.units = units
+			holder := f.person(t, "holder")
+
+			f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
+
+			if tc.onCollection {
+				payments := identity.CollectionObject("acme", "payments")
+				f.collection(payments)
+				f.grant(t, prn("holder"), access.RoleViewer, payments)
+			}
+
+			id, err := f.authz.DiscoveryGrantID(t.Context(), holder, "acme")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("discovery grant ID error = %v, want error %t", err, tc.wantErr)
+			}
+
+			if (id != "") != tc.wantID {
+				t.Fatalf("discovery grant ID = %q, want an ID: %t", id, tc.wantID)
+			}
+		})
+	}
+}
+
 // TestInstallationReachFailedReadDenies proves the fail-closed rule of the
 // reach setting: a failed read and a value that is not a boolean deny the
 // decision inside a namespace, with an error.
@@ -250,9 +362,9 @@ func TestInstallationReachReadsTheNewValueOnTheNextRequest(t *testing.T) {
 
 // TestInstallationReachActionScopes proves that each action of the families
 // has one scope: the operator scope holds each operator action and the
-// administration actions that ADR 216 decision 3 puts in it, and no other
-// action. The list below is the table of that decision. An action that moves
-// to the other side fails this test.
+// administration actions that act on the installation as a whole, and no other
+// action. The list below is that table. An action that moves to the other
+// side fails this test.
 func TestInstallationReachActionScopes(t *testing.T) {
 	t.Parallel()
 

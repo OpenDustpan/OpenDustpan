@@ -114,8 +114,8 @@ func (a *Authorizer) WithSettingsPort(settings Settings) *Authorizer {
 	return &out
 }
 
-// OperatorScope reports whether action has operator scope (ADR 216 decision 3):
-// each action of the operator family, and the administration actions that act
+// OperatorScope reports whether action has operator scope: each action of the operator family, and the administration
+// actions that act
 // on the installation as a whole. A grant on the installation gives an action
 // inside a namespace only when the setting of the reach allows it, and it always
 // gives an action of the operator scope.
@@ -128,7 +128,7 @@ func OperatorScope(action identity.Action) bool {
 }
 
 // operatorAdministrationActions are the administration actions that have
-// operator scope in the table of ADR 216 decision 3.
+// operator scope. They act on the installation as a whole.
 func operatorAdministrationActions() []identity.Action {
 	return []identity.Action{
 		identity.ActionServerReadPrincipals, identity.ActionServerManagePrincipals,

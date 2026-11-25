@@ -30,7 +30,26 @@ func (r capReader) Effective(ctx context.Context, scope setting.Scope, key strin
 		return access.FixedSettings(true).Effective(ctx, scope, key)
 	}
 
-	return setting.Effective(access.SettingDeclarations()[0], r.value, nil), r.err
+	decl, found := declarationOf(key)
+	if !found {
+		return setting.Item{}, errSettingsGone
+	}
+
+	return setting.Effective(decl, r.value, nil), r.err
+}
+
+// declarationOf returns the declaration of the access setting with key.
+func declarationOf(key string) (setting.Declaration, bool) {
+	for _, d := range access.SettingDeclarations() {
+		if d.Key == key {
+			return d, true
+		}
+	}
+
+	return setting.Declaration{
+		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false, StaticCredentialHost: false,
+		Apply: "", Check: nil, ReducesSecurity: nil, Doc: "",
+	}, false
 }
 
 // TestCollectionUnitCapResolution proves that the cap of the export of a
@@ -193,18 +212,12 @@ func TestBoundCollectionUnitCap(t *testing.T) {
 func reachSettingDeclaration(t *testing.T) setting.Declaration {
 	t.Helper()
 
-	for _, d := range access.SettingDeclarations() {
-		if d.Key == access.SettingInstallationGrantsReachNamespaces {
-			return d
-		}
+	d, found := declarationOf(access.SettingInstallationGrantsReachNamespaces)
+	if !found {
+		t.Fatalf("no declaration of %s", access.SettingInstallationGrantsReachNamespaces)
 	}
 
-	t.Fatalf("no declaration of %s", access.SettingInstallationGrantsReachNamespaces)
-
-	return setting.Declaration{
-		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false, StaticCredentialHost: false,
-		Apply: "", Check: nil, ReducesSecurity: nil, Doc: "",
-	}
+	return d
 }
 
 // TestInstallationGrantsReachNamespacesDeclaration proves the shape of the
@@ -397,8 +410,12 @@ func TestCollectionUnitCapDeclaration(t *testing.T) {
 		t.Fatalf("declarations = %d, want 2", len(decls))
 	}
 
-	d := decls[0]
-	if d.Key != access.SettingCollectionUnitCap || d.Level != setting.LevelInstallation || d.Kind != setting.KindInt ||
+	d, found := declarationOf(access.SettingCollectionUnitCap)
+	if !found {
+		t.Fatalf("no declaration of %s", access.SettingCollectionUnitCap)
+	}
+
+	if d.Level != setting.LevelInstallation || d.Kind != setting.KindInt ||
 		d.Default != strconv.Itoa(access.DefaultCollectionUnitCap) || !d.Database || d.Secret ||
 		d.Apply != setting.ApplyLive || d.Doc == "" {
 		t.Fatalf("declaration = %+v, want the installation cap of the export of a collection", d)

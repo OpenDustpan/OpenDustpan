@@ -321,7 +321,7 @@ func TestRevokeOfLostMakersSurvivesTheCancelOfTheRequest(t *testing.T) {
 
 	f := newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
-		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
+		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil, authzSettings: nil},
 		now: nil, logger: nil, noSignIn: false, getGrantErr: nil, afterRevoke: cancel, tokenList: nil,
 	})
 	seedLostMaker(t, f, pathDirect)
@@ -375,7 +375,7 @@ func TestRevokeOfLostMakersEndsAtItsTimeout(t *testing.T) {
 
 	f := newAccessFixtureAll(t, accessFixtureParts{
 		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
-		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil},
+		links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil, authzSettings: nil},
 		now: nil, logger: slog.New(slog.NewTextHandler(&logs, nil)), noSignIn: false, getGrantErr: nil,
 		afterRevoke: nil, tokenList: block,
 	})

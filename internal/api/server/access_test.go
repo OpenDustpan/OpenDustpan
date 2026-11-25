@@ -129,10 +129,12 @@ func newAccessFixtureFull(
 
 // accessPorts holds the ports of the fixture that a test replaces. A nil
 // field keeps the port of the fixture: the stub collection port that lists no
-// unit, and no settings reader.
+// unit, and no settings reader. authzSettings is the reach setting that the
+// authorizer of the routes reads; a nil port keeps the default true.
 type accessPorts struct {
-	collections access.UnitCollections
-	settings    access.Settings
+	collections   access.UnitCollections
+	settings      access.Settings
+	authzSettings access.Settings
 }
 
 // accessFixtureParts holds the optional parts of a fixture: its audit store,
@@ -187,7 +189,7 @@ func newAccessFixtureSignIn(
 
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
-		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
+		ports: accessPorts{collections: nil, settings: nil, authzSettings: nil}, now: nil, logger: nil,
 		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
@@ -210,7 +212,7 @@ func newAccessFixtureLinks(
 
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: links,
-		ports: accessPorts{collections: nil, settings: nil}, now: nil, logger: nil,
+		ports: accessPorts{collections: nil, settings: nil, authzSettings: nil}, now: nil, logger: nil,
 		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
@@ -225,7 +227,7 @@ func newAccessFixtureClock(
 
 	return newAccessFixtureAll(t, accessFixtureParts{
 		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks,
-		ports: accessPorts{collections: nil, settings: nil}, now: now, logger: logger,
+		ports: accessPorts{collections: nil, settings: nil, authzSettings: nil}, now: now, logger: logger,
 		noSignIn: false, getGrantErr: nil, afterRevoke: nil, tokenList: nil,
 	})
 }
@@ -238,6 +240,16 @@ func handlerLogger(logger *slog.Logger) *slog.Logger {
 	}
 
 	return slog.New(slog.DiscardHandler)
+}
+
+// withReachSettingPort gives authz the settings port settings, and returns
+// authz unchanged for a nil port: the authorizer then reads the default true.
+func withReachSettingPort(authz *access.Authorizer, settings access.Settings) *access.Authorizer {
+	if settings == nil {
+		return authz
+	}
+
+	return authz.WithSettingsPort(settings)
 }
 
 // newAccessFixtureAll builds the fixture with the parts of a fixture.
@@ -274,6 +286,11 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
+
+	// The reach setting decides the chain of a namespace object. A test that
+	// sets it gives the authorizer its port here; without the port the
+	// default true applies.
+	authz = withReachSettingPort(authz, parts.ports.authzSettings)
 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store:      readFailStore{Store: st, err: parts.getGrantErr, afterRevoke: parts.afterRevoke},
