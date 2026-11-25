@@ -424,6 +424,41 @@ func RemovePasskey(ctx context.Context, tx Tx, personID, id string) error {
 	return nil
 }
 
+// RotatePasskey ends the passkey oldID of the person personID and stores
+// next in its place. The adapter runs it in one transaction, so a failure
+// of any step keeps the old passkey. It returns mfa.ErrNotFound for an
+// unknown passkey or the passkey of another person.
+func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.Passkey) error {
+	// Defense in depth: the service passes the person of the request. This
+	// check stays so that a new caller cannot rotate into another person.
+	if next.PersonID != personID {
+		return fmt.Errorf("%w: the new passkey belongs to another person", mfa.ErrInvalid)
+	}
+
+	if _, err := person(ctx, tx, personID); err != nil {
+		if errors.Is(err, principal.ErrNotFound) {
+			return mfa.ErrNotFound
+		}
+
+		return err
+	}
+
+	if _, err := owned(ctx, tx, personID, oldID); err != nil {
+		return err
+	}
+
+	n, err := tx.DeletePasskey(ctx, oldID, personID)
+	if err != nil {
+		return fmt.Errorf("delete passkey: %w", err)
+	}
+
+	if n != 1 {
+		return mfa.ErrNotFound
+	}
+
+	return AddPasskey(ctx, tx, next)
+}
+
 // owned returns the row of the passkey id, or mfa.ErrNotFound unless it
 // exists and belongs to the person personID.
 func owned(ctx context.Context, tx Tx, personID, id string) (Row, error) {

@@ -43,14 +43,14 @@ A site administrator adds a break-glass account, its first passkey and its
 grant in three requests. Each needs a recent sign-in.
 
 1. Make the passkey with an authenticator. Send `POST
-   /api/server/break-glass/accounts` with the person and the passkey:
+   /api/dustpan/v1/break-glass/accounts` with the person and the passkey:
 
    ```json
    {
      "subject": "break-glass:recovery",
      "displayName": "Recovery",
      "name": "recovery-key",
-     "credentialID": "<base64url>",
+     "credential": "<base64url>",
      "publicKey": "<base64url>",
      "transports": ["usb"]
    }
@@ -71,13 +71,13 @@ account with `DELETE /api/server/principals/{id}`, and add it again. If the
 grant request fails, retry it: the account has a passkey but no grant, and the
 count does not include it.
 
-The action `server:manage-break-glass` allows the add and the rotation. The
-action `server:read-break-glass` allows the list. Only a site administrator
-holds the two actions.
+The action `server:manage-principals` allows the add and the rotation. The
+action `server:read-principals` allows the list. Both actions apply to the
+installation object.
 
 ## List the accounts and the count
 
-`GET /api/server/break-glass/accounts` returns each break-glass account with
+`GET /api/dustpan/v1/break-glass/accounts` returns each break-glass account with
 its passkeys, and the live count:
 
 ```json
@@ -97,21 +97,21 @@ a write.
 
 ## Rotate a passkey
 
-`POST /api/server/break-glass/accounts/{id}/rotate` replaces one passkey of
+`POST /api/dustpan/v1/break-glass/accounts/{id}/rotate` replaces one passkey of
 an account with a new one. The rotation needs a recent sign-in. The body names
 the old passkey and the new one:
 
 ```json
 {
-  "oldPasskeyID": "pky-...",
+  "oldPasskey": "pky-...",
   "name": "next-key",
-  "credentialID": "<base64url>",
+  "credential": "<base64url>",
   "publicKey": "<base64url>",
   "transports": ["usb"]
 }
 ```
 
-The server writes the new passkey, removes the old one and writes the audit
+The server writes the new passkey, deletes the old one and writes the audit
 entry in one database transaction. A failed write keeps the old passkey. Two
 rotations of one account run one after the other, and the second rotation
 sees the new passkey. An account that is not a break-glass account, or a
@@ -216,8 +216,8 @@ this entry after a restore, then disable the account again when a second
 account exists.
 
 A restore also counts the working break-glass accounts before and after it.
-A working account is a local person of the installation that is enabled and
-not deleted, has a passkey that is not suspended, and holds a current grant
+A working account is a local person of the installation that stays enabled
+and stays in the store, has a passkey that is not suspended, and holds a current grant
 without a condition of `site-administrator` or `account-administrator` on the
 installation, directly or through a group. The restore stops with the code
 `principal.no-working-break-glass` when it lowers this count and leaves fewer

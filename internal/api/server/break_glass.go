@@ -5,8 +5,8 @@ package server
 // sign-in path fails, so the routes that change one need a fresh
 // authentication and name the object @server:
 //
-//   - server:read-break-glass lists the accounts and the live count,
-//   - server:manage-break-glass adds an account with its first passkey and
+//   - server:read-principals lists the accounts and the live count,
+//   - server:manage-principals adds an account with its first passkey and
 //     rotates the passkey of an account.
 //
 // The list route reads the working count of the store at the request time:
@@ -41,8 +41,8 @@ import (
 
 // Route paths and the description tag of the break-glass accounts.
 const (
-	breakGlassPath        = "/api/server/break-glass/accounts"
-	breakGlassAccountPath = "/api/server/break-glass/accounts/{id}"
+	breakGlassPath        = "/api/dustpan/v1/break-glass/accounts"
+	breakGlassAccountPath = "/api/dustpan/v1/break-glass/accounts/{id}"
 	tagBreakGlass         = "break-glass"
 )
 
@@ -54,8 +54,8 @@ const maxBreakGlassBodyBytes = 16 * 1024
 // errBreakGlassBody reports a body that is not the one of a break-glass
 // add or rotation.
 var errBreakGlassBody = errors.New(
-	`invalid break-glass body: provide {"subject":"...","name":"...","credentialId":"...","publicKey":"..."} ` +
-		`or {"oldPasskeyId":"pky-...","name":"...","credentialId":"...","publicKey":"..."}`,
+	`invalid break-glass body: provide {"subject":"...","name":"...","credential":"...","publicKey":"..."} ` +
+		`or {"oldPasskey":"pky-...","name":"...","credential":"...","publicKey":"..."}`,
 )
 
 // errBreakGlassNotFound is the answer of a rotation of an ID that names no
@@ -107,7 +107,7 @@ type addBreakGlassRequest struct {
 	Subject        string   `json:"subject"`
 	DisplayName    string   `json:"displayName"`
 	Name           string   `json:"name"`
-	CredentialID   string   `json:"credentialID"`
+	Credential     string   `json:"credential"`
 	PublicKey      string   `json:"publicKey"`
 	Transports     []string `json:"transports"`
 	SignCount      uint32   `json:"signCount"`
@@ -117,7 +117,7 @@ type addBreakGlassRequest struct {
 // passkey returns the passkey fields of the body.
 func (r addBreakGlassRequest) passkey() breakGlassPasskey {
 	return breakGlassPasskey{
-		Name: r.Name, CredentialID: r.CredentialID, PublicKey: r.PublicKey,
+		Name: r.Name, CredentialID: r.Credential, PublicKey: r.PublicKey,
 		Transports: r.Transports, SignCount: r.SignCount, BackupEligible: r.BackupEligible,
 	}
 }
@@ -125,9 +125,9 @@ func (r addBreakGlassRequest) passkey() breakGlassPasskey {
 // rotateBreakGlassRequest is the body of a break-glass rotation: the passkey
 // that ends and the passkey that replaces it.
 type rotateBreakGlassRequest struct {
-	OldPasskeyID   string   `json:"oldPasskeyID"`
+	OldPasskey     string   `json:"oldPasskey"`
 	Name           string   `json:"name"`
-	CredentialID   string   `json:"credentialID"`
+	Credential     string   `json:"credential"`
 	PublicKey      string   `json:"publicKey"`
 	Transports     []string `json:"transports"`
 	SignCount      uint32   `json:"signCount"`
@@ -137,7 +137,7 @@ type rotateBreakGlassRequest struct {
 // passkey returns the passkey fields of the body.
 func (r rotateBreakGlassRequest) passkey() breakGlassPasskey {
 	return breakGlassPasskey{
-		Name: r.Name, CredentialID: r.CredentialID, PublicKey: r.PublicKey,
+		Name: r.Name, CredentialID: r.Credential, PublicKey: r.PublicKey,
 		Transports: r.Transports, SignCount: r.SignCount, BackupEligible: r.BackupEligible,
 	}
 }
@@ -159,15 +159,15 @@ func (h *Handler) breakGlassRoutes() []Route {
 		return nil
 	}
 
-	read := []identity.Action{identity.ActionServerReadBreakGlass}
-	manage := []identity.Action{identity.ActionServerManageBreakGlass}
+	read := []identity.Action{identity.ActionServerReadPrincipals}
+	manage := []identity.Action{identity.ActionServerManagePrincipals}
 
 	return []Route{
 		authorizedRoute(http.MethodGet, breakGlassPath, read, resolveServer, h.listBreakGlass),
 		authorizedRoute(http.MethodPost, breakGlassPath, manage, resolveServer,
-			h.fresh(identity.ActionServerManageBreakGlass, h.addBreakGlass)),
+			h.fresh(identity.ActionServerManagePrincipals, h.addBreakGlass)),
 		authorizedRoute(http.MethodPost, breakGlassAccountPath+"/rotate", manage, resolveServer,
-			h.fresh(identity.ActionServerManageBreakGlass, h.rotateBreakGlass)),
+			h.fresh(identity.ActionServerManagePrincipals, h.rotateBreakGlass)),
 	}
 }
 
@@ -203,7 +203,7 @@ func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p ident
 		out.Missing = int64(principal.FloorWorkingPaths) - working
 	}
 
-	entry := callerEntry(r, p, identity.ActionServerReadBreakGlass)
+	entry := callerEntry(r, p, identity.ActionServerReadPrincipals)
 
 	for i := range accounts {
 		account := &accounts[i]
@@ -243,14 +243,14 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	entry := callerEntry(r, p, identity.ActionServerManageBreakGlass)
+	entry := callerEntry(r, p, identity.ActionServerManagePrincipals)
 
 	account, err := h.principals.CreateBreakGlassAccount(ctx, entry, principal.Input{
 		Subject: req.Subject, DisplayName: req.DisplayName, Kind: principal.KindPerson,
 	})
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
-			at: h.now(), action: identity.ActionServerManageBreakGlass, object: "break-glass",
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: "break-glass",
 			outcome: audit.OutcomeFailure,
 		}, refusalReason(err))
 		h.writeError(ctx, w, err)
@@ -287,7 +287,7 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 	account, err := h.breakGlassAccount(ctx, id)
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
-			at: h.now(), action: identity.ActionServerManageBreakGlass, object: principal.Ref(id),
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: principal.Ref(id),
 			outcome: audit.OutcomeDenied,
 		}, "the ID names no break-glass account")
 		h.writeError(ctx, w, err)
@@ -302,9 +302,9 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
-	entry := callerEntry(r, p, identity.ActionServerManageBreakGlass)
+	entry := callerEntry(r, p, identity.ActionServerManagePrincipals)
 
-	err = h.passkeys.RotatePasskey(ctx, breakGlassActor(r, entry), account.ID, req.OldPasskeyID, key)
+	err = h.passkeys.RotatePasskey(ctx, breakGlassActor(r, entry), account.ID, req.OldPasskey, key)
 	if err != nil {
 		if errors.Is(err, mfa.ErrNotFound) {
 			err = errBreakGlassNotFound
@@ -377,7 +377,7 @@ func passkeyOf(in breakGlassPasskey) (mfa.Passkey, error) {
 		return mfa.Passkey{}, err
 	}
 
-	credential, err := decodePasskeyValue("credentialID", in.CredentialID, mfa.MaxCredentialIDBytes)
+	credential, err := decodePasskeyValue("credential", in.CredentialID, mfa.MaxCredentialIDBytes)
 	if err != nil {
 		return mfa.Passkey{}, err
 	}

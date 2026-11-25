@@ -9,13 +9,13 @@ import (
 
 // breakGlassPath is the path of the add and the list of the break-glass
 // accounts.
-const breakGlassPath = "/api/server/break-glass/accounts"
+const breakGlassPath = "/api/dustpan/v1/break-glass/accounts"
 
 // breakGlassAddBody is a valid add of a break-glass account with one
 // passkey. The credential ID and the public key are three bytes each in
 // base64url without padding.
 const breakGlassAddBody = `{"subject":"break-glass:recovery","displayName":"Recovery",` +
-	`"name":"recovery-key","credentialID":"AQID","publicKey":"BAUG","transports":["usb"]}`
+	`"name":"recovery-key","credential":"AQID","publicKey":"BAUG","transports":["usb"]}`
 
 // breakGlassPasskeyDoc is the part of a passkey that this test reads.
 type breakGlassPasskeyDoc struct {
@@ -95,8 +95,8 @@ func checkBreakGlassRotateFreshStep(
 	t.Helper()
 
 	rotatePath := breakGlassPath + "/" + account.ID + "/rotate"
-	rotateBody := []byte(`{"oldPasskeyID":"` + account.Passkeys[0].ID + `","name":"next-key",` +
-		`"credentialID":"BwgJ","publicKey":"CgsM","transports":["nfc"]}`)
+	rotateBody := []byte(`{"oldPasskey":"` + account.Passkeys[0].ID + `","name":"next-key",` +
+		`"credential":"BwgJ","publicKey":"CgsM","transports":["nfc"]}`)
 
 	rec := f.asToken(t, "admin", http.MethodPost, rotatePath, rotateBody)
 	if rec.Code != http.StatusForbidden {
