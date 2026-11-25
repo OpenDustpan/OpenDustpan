@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [x] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Add the docs test in NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go, which runs each command of the page from the root of the repository. Check: the commands on the page run as written in that test. No route: the test runs the commands of the page from the root of the repository and calls no route. `make docs-lint` passes on each edited guide.
+- [x] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Add the page to docs/commands-checked-pages.txt, or to docs/commands-pending-pages.txt if its shell block cannot run in `make docs-commands-check`. Add the docs test in NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go, which runs each command of the page from the root of the repository. Check: the commands on the page run as written in that test. No route: the test runs the commands of the page from the root of the repository and calls no route. `make docs-lint` passes on each edited guide.
 - [x] 4.2 Agent pre-run (human run-through in person-steps (add-job-session-paths-runner-unmanaged-sweep-store 4.2)): Run the usability check from the docs page alone. Check: An embedder runs the suite on a new adapter from the page. Record the transcript in the pull request body.
 - [ ] 4.3 The wiring, the route and the e2e step with the real runner. Check: BLOCKED by the last part of the split (sweep claimer wiring and sweep routes). This part ships no route and no credential.
 - [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
