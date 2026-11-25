@@ -56,7 +56,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The authorizer adds the installation object for a namespace object and reads no setting. (`pkg/access/authorizer.go:967 (func chainObjects)`)
-- The reach and the access review use the same function. (`pkg/access/reach.go:970 (func Reach.chain)`, `pkg/access/review_service.go:586 (func Service.reviewScope)`)
+- The reach and the access review use the same function. (`pkg/access/reach.go:969 (func Reach.chain)`, `pkg/access/review_service.go:586 (func Service.reviewScope)`)
 - The only setting of the package is `accessReview.collectionUnitCap`, declared in `SettingDeclarations`. (`pkg/access/settings.go:47 (func SettingDeclarations)`)
 
 ## ADR check
