@@ -33,10 +33,7 @@ func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecov
 		return err
 	}
 
-	opts := pgx.TxOptions{
-		IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite, DeferrableMode: pgx.NotDeferrable,
-		BeginQuery: "", CommitQuery: "",
-	}
+	opts := writeTxOptions()
 
 	run := func(ctx context.Context, fn func(q *db.Queries) error) error {
 		return pgx.BeginTxFunc(ctx, s.txs, opts, func(tx pgx.Tx) error { return fn(s.queries.WithTx(tx)) })

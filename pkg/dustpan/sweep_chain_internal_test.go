@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 )
 
 // sweepChainServer answers a Server with the chain, the deleted-unit
@@ -232,6 +233,7 @@ func TestSweepOnceSkipsWhileChainChangeWaits(t *testing.T) {
 		},
 		Logger: nil, Now: nil,
 		NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

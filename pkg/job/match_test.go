@@ -14,6 +14,10 @@ func matchGate(name string, n int, allowSelf bool) job.Gate {
 	return job.Gate{
 		Type: job.GateApproval, Name: name, Approvals: n, Groups: nil, GroupIDs: nil, AllowSelf: allowSelf,
 		Timeout: 0, BindPlan: false,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 }
 

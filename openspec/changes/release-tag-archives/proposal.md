@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #3662
 
 ## Why
@@ -22,64 +26,72 @@ Errors the person may hit, and the one command that helps:
 
 ## What Changes
 
-- A new script `scripts/release-upload.sh <version> <dir>` checks the set again with `scripts/release-verify.sh`, with a shape allowlist (the five names, exactly one line for each archive and no other line) and with `sha256sum --check --strict`, also when `release-verify.sh` is replaced by a script that passes, refuses when a release for the tag exists, and creates one draft release with the four archives and `SHA256SUMS`. It never publishes.
-- The tag workflow gets three changes (a workflow patch, see "Workflow patch" in `design.md`): the jobs `archives-build` and `archives-verify` before the image job, the job `release-draft` after it, and a `permissions` block for each job in place of the block for the whole file.
-- `make release-record-check` passes `VERSION` through the environment, so that a quote in the value cannot end the shell quoting.
-- A test path with no tag: the tests of the new script run in the Go job of every pull request. They build the archives of a test version in a copy of the work tree and run the new script with a fake `gh`. A second test reads `release.yml` and checks its structure.
-- `docs/guides/install.md` gets one maintainer section: "Maintainer: publish the release archives".
+The upload script, its tests, the maintainer section of the install page and the Makefile line are on main (pull request 3762). This change is the rest: the tag workflow and the test of its structure. It is one pull request, and the managed Droid computer `dustpan` opens it, because the cloud agent cannot push `.github/workflows`.
+
+- The tag workflow gets three changes (a workflow patch, see "Workflow patch" in the design): the jobs `archives-build` and `archives-verify` before the image job, the job `release-draft` after it, and a `permissions` block for each job in place of the block for the whole file.
+- A test of the structure of the workflow. A checker function reads `.github/workflows/release.yml` and returns one finding for each missing guard. A second test runs the checker on mutated copies of the file. The tests run in the Go job of every pull request, so no tag is needed.
 
 Out of scope:
 
 - Tagging or releasing. The workflow runs on a tag push only. No one tags until the owner says so.
-- The archive build and verify scripts. They are on main and unchanged.
-- The Helm chart. The workflow pushes the chart already (`.github/workflows/release.yml:213-235`). The release page does not list the chart: the chart is an OCI artifact in the registry. See "Decisions" in `design.md`.
+- The archive build and verify scripts and the upload script. They are on main and unchanged.
+- The Helm chart. The workflow pushes the chart already. The release page does not list the chart: the chart is an OCI artifact in the registry. See "Decisions" in the design.
 - Signing, an SBOM, OS packages and a `zip` archive. ADR 283 decision 4 and ADR 278 exclude them.
-- The operator part of the install page (the download, check and unpack commands). The change `release-artifacts-image-install-docs` owns it. See "Relation to other changes" in `design.md`.
-- The image `--build-arg VERSION` and the console pin. That change owns them.
+- The operator part of the install page (the download, check and unpack commands). It is on main, and it still says that no archive exists. The first real release is the time to change that sentence.
 
-Depends on:
+Depends on, all on main:
 
-- `release-artifacts-binary-archives`. Its scripts are on main (`scripts/release-build.sh`, `scripts/release-verify.sh`, `Makefile:198-212`).
+- `release-artifacts-binary-archives`: the build and verify scripts.
+- The upload script of pull request 3762.
 
 ## Prototype output
 
-The workflow test reads `.github/workflows/release.yml`. This is the output of a prototype run on main (head `3443bb35d`): it parses the file and lists each job with its `needs`, its `permissions`, each `uses:` pin and each `run:` block that holds a template value. The counts in this change come from it.
+The workflow test reads `.github/workflows/release.yml`. This is the output of a prototype run on main (head `ddf630a81`): it parses the file and lists each job with its `needs`, its `permissions`, each `uses:` pin and each `run:` block that holds a template value. The counts in this change come from it.
 
 ```
 permissions(file): {'contents': 'read', 'packages': 'write'}
-publish needs= None permissions= None if= github.event_name == 'push' && startsWit...
+publish needs= None permissions= None if= github.event_name == 'push' &&...
    uses actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
    uses docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
    uses docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-(no run: block holds a template value)
+   run blocks with a template value: none
 ```
 
-So main has one job, no `needs`, no job-level `permissions`, three pins (all full SHAs) and no `run:` block with a template value. After the patch: four jobs, `needs` on three of them, a `permissions` block on each, eight pins in total (checkout in four jobs, `setup-go`, `upload-artifact`, `download-artifact` twice, plus the three of `publish`), and still no `run:` block with a template value.
+So main has one job, no `needs`, no job-level `permissions`, three pins (all full SHAs) and no `run:` block with a template value. The same prototype on the patched file prints: file permissions `{}`, four jobs (`archives-build`, `archives-verify`, `publish`, `release-draft`), `needs` on three of them, a `permissions` block on each, ten pins (checkout in four jobs, `setup-go`, `upload-artifact`, `download-artifact` twice, and the three of `publish`) and no `run:` block with a template value.
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- The release page has no files until a person publishes the draft. The maintainer section says so, and it says what to read in the draft first.
-- A failed run can leave a draft with some files. The step message says to delete the draft and re-run. Use "Re-run failed jobs", not "Re-run all jobs": the image and chart steps refuse a second push of a released tag, so a full re-run stops there, before the draft job.
+- The release page has no files until a person publishes the draft. The maintainer section of the install page says so, and it says what to read in the draft first.
+- A failed run can leave a draft with some files. The step message says to delete the draft and re-run. Use "Re-run failed jobs", not "Re-run all jobs": the chart step refuses a second push of a released tag, so a full re-run stops there, before the draft job.
 - `SHA256SUMS` is no signature (ADR 283 decision 4). The maintainer section and the release notes say so. They make no compliance claim.
 
 ## What main already does
 
-Each fact names its file, line and function on main (head `3443bb35d`). The change specifies only the difference. These facts were checked in the session that wrote this change.
+Each fact names its file, line and function on main at ddf630a81. The change specifies only the difference.
 
-- The workflow runs on a push of a tag `v*` (`.github/workflows/release.yml:22 (the on block of workflow release)`). It has one job, `publish`, with the guard `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'OpenDustpan/OpenDustpan'` (`:39`). The permissions are for the whole file: `contents: read` and `packages: write` (`:27-29`). It has no `needs`, no archive step, no `scripts/release-*.sh` call and no `gh release` call (`rg -n "release-build|release-verify|gh release|upload-artifact" .github/workflows/release.yml` prints nothing).
-- The job checks the actor (`:46`), checks that the tag is `vX.Y.Z` (`:61`), builds the image once with `docker buildx build ... --push .` and no `--build-arg` (`:161`), compares the digests of both registries, and pushes the chart with `helm package` and `helm push` (`:213-235`).
-- Actions are pinned by full SHA with the release in a comment: `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1` (`:42`), `docker/setup-qemu-action` (`:84`), `docker/setup-buildx-action` (`:86`). Other workflows on main pin `actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0` (`.github/workflows/ci.yml:173`), `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2` (`.github/workflows/auto-regen-resolve.yml:97`) and `actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2` (`.github/workflows/auto-regen-push.yml:69`).
-- The build script takes two arguments (`scripts/release-build.sh:13 (func main body, argument check)`) and checks the version against `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` (`:30`). It runs `scripts/check-release-record.sh` first (`:42`). It builds four pairs, `linux amd64`, `linux arm64`, `darwin amd64` and `darwin arm64` (`:57-62`), with `CGO_ENABLED=0 ... go build -trimpath -buildvcs=false -ldflags "-X main.version=${version}"` (`:70-72`). Each archive is `opendustpan_${version}_${os}_${arch}.tar.gz` (`:69`) with `LICENSE`, `README.md`, the binary and `third_party_licenses/` (`:73-84`). It writes `SHA256SUMS` with `sha256sum -- *.tar.gz` (`:87`), so each line is `<64 hex>  <name>`.
-- The verify script takes two arguments (`scripts/release-verify.sh:111 (func main body, argument check)`) and reports each refusal through `scripts/release-verify.sh:127 (func fail)`. It refuses a set unless the directory holds exactly the four archives and `SHA256SUMS` (`:132-153`), the `SHA256SUMS` lines match `^([0-9a-f]{64})\ \ ([^[:space:]/]+)$` (`:158`), each checksum matches (`:175-178`), each archive holds only the allowed entries with `LICENSE` and a file of `third_party_licenses/` (`:184-229`), and the binary carries the version stamp (`:235-237`). It never runs the binary and never writes a file (`scripts/release-verify.sh:111`)
-- `make licenses` checks the license files for the same four pairs (`Makefile:141`)
-- `make release-record-check` interpolates the version into the shell text: `./scripts/check-release-record.sh '$(VERSION)'` (`Makefile:193`). A value with a single quote ends the quoting. This is the same fault as issue 3661 (`Makefile:193 (make target release-record-check)`)
-- The test builds the archives twice in a copy of the work tree with an extended release record ; the helpers `copyWorkTree`, `extendRecord` and `runInTree` exist (`internal/releaserecord/release_archives_test.go:32 (func TestReleaseArchivesAreReproducible)`)
-- The existing tests check the structure of `release.yml` as text (`e2e/release_workflow_test.go:57 (func TestReleasePushesOneDigestToBothRegistries)`). The tests pass on the file as the patch of this change leaves it (the session that wrote this change ran `go test -tags e2e -run TestReleasePushesOneDigestToBothRegistries ./e2e` with the patch applied, then reverted it)
-- The Helm chart is released by the same workflow: it is packaged with the tag as chart version and app version and pushed as an OCI artifact to `oci://ghcr.io/opendustpan/charts` (`.github/workflows/release.yml:213-235`). `docs/guides/install.md` shows `helm install ... oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0`.
-- `docs/guides/install.md` has no section for the archives and no section for the publish of a release. Its last section is "Maintainer setup: Docker Hub secrets" (`docs/guides/install.md:73`)
-- `go.yaml.in/yaml/v3` is a direct requirement in `go.mod:15` and a test already imports it (`deploy/helm/charttest/values_reference_test.go`). The workflow test can parse YAML with it and adds no dependency.
+- The upload script ends with a one-line refusal on stderr and a non-zero exit code. (`scripts/release-upload.sh:36 (func refuse)`)
+- The verify script reports each refusal with one function. (`scripts/release-verify.sh:40 (func fail)`)
+- The make target `release-build` builds the four archives with the version in the environment. (`Makefile:209 (make target release-build)`)
+- The make target `release-record-check` passes the version through the environment. (`Makefile:194 (make target release-record-check)`)
+- The test of the build builds the archives twice in a copy of the work tree. (`internal/releaserecord/release_archives_test.go:32 (func TestReleaseArchivesAreReproducible)`)
+- The test of the upload script runs it with a fake `gh` and reads the recorded calls. (`internal/releaserecord/release_upload_test.go:325 (func TestReleaseUploadCreatesOneDraft)`)
+- The test of the build refuses a bad version. (`internal/releaserecord/release_archives_test.go:176 (func TestReleaseBuildRefusesABadVersion)`)
+- The test of the verify script refuses bad input. (`internal/releaserecord/release_verify_test.go:324 (func TestReleaseVerifyRefusesBadInput)`)
+- The existing workflow test reads the file as text. (`e2e/release_workflow_test.go:57 (func TestReleasePushesOneDigestToBothRegistries)`)
+- The existing test helper reads the last job-level `if:` line, so the guard line of each new job keeps the same text. (`e2e/release_workflow_test.go:202 (func jobGuardClauses)`)
+
+Facts about files that these markers do not cover, from main at ddf630a81:
+
+- The workflow runs on a push of a tag `v*`, and it sets `contents: read` and `packages: write` for the whole file, at `.github/workflows/release.yml` lines 23 to 29.
+- The workflow has one job, `publish`, with the guard `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'OpenDustpan/OpenDustpan'` at line 39. The job runs on `ubuntu-26.04` and has no `needs` and no `permissions` block.
+- The workflow has no archive step, no call of a release script and no `gh release` call: `rg -n "release-build|release-verify|release-upload|gh release|upload-artifact" .github/workflows/release.yml` prints nothing.
+- The job `publish` checks the actor (line 46) and checks that the tag is `vX.Y.Z` (line 61). It builds the image once with `--build-arg VERSION="${TAG}"` (line 161) and pushes the chart, and refuses a chart version that is released (line 213).
+- Actions are pinned by full SHA with the release in a comment, for example `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1` (line 42).
+- Other workflows pin `actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0` (`.github/workflows/ci.yml` line 178), `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2` (`.github/workflows/auto-regen-resolve.yml` line 97) and `actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2` (`.github/workflows/auto-regen-push.yml` line 69).
+- The install page has the section "Maintainer: publish the release archives" at line 224 of `docs/guides/install.md`.
+- `go.yaml.in/yaml/v3` is a direct requirement at line 15 of `go.mod`, and a test already imports it, so the workflow test adds no dependency.
 
 ## ADR check
 
@@ -124,7 +136,7 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 **ADR 21: The first tagged release** (not owner-tagged).
 
 - Quote, "Artifacts": "The release ships binary archives that are cross-built, with checksums."
-- Quote, "Process": "A workflow that a tag triggers makes the release. A new release tool (for example GoReleaser) needs a "yes" from the owner first (`CLAUDE.md`: ask before adding a dependency)."
+- Quote, "Process": "A workflow that a tag triggers makes the release. A new release tool (for example GoReleaser) needs a "yes" from the owner first."
 - Effect: the change uses the existing scripts and the `gh` command of the runner image, and adds no release tool and no dependency.
 - Conflict: none.
 
@@ -135,7 +147,7 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 
 **ADR 325: The release record turns the shipped-migration checks on** (not owner-tagged: a PM decision on the owner's behalf; it changes the mechanism of ADRs 322 and 323 only).
 
-- Effect: `scripts/release-build.sh` runs the record check first. The change keeps that: a tag whose commit has no record lines fails in the build job, before any image is pushed.
+- Effect: The build script runs the record check first. The change keeps that: a tag whose commit has no record lines fails in the build job, before any image is pushed.
 - Conflict: none.
 
 **ADR 250: Defense in depth for security code** (owner-tagged: "The project owner decided it.").
@@ -143,7 +155,7 @@ Each quote is copied from the file in `docs/adr/`. The owner tags, the "Changed 
 - Decisions that apply: 1, 4.
 - Quote, decision 1: "Every security-relevant path has at least two independent layers. Each layer must stop the attack alone, without help from the others."
 - Quote, decision 4: "The test sends hostile input directly to that layer, as if every other layer had failed."
-- Effect: the supply-chain parts of the change (the pins, the permissions, the checksum check and the upload) are security code. "Layers" in `design.md` lists each layer and its hostile test.
+- Effect: the supply-chain parts of the change (the pins, the permissions, the checksum check and the upload) are security code. "Layers" in the design lists each layer and its hostile test.
 - Conflict: none.
 
 ## Open questions
@@ -153,8 +165,8 @@ none
 Questions considered and answered:
 
 - Draft or published release? A draft. ADR 283 decision 3 says the release ships the archives, and it names no release type. A draft changes nothing for an operator until a person publishes it, and a person can delete it. A published release cannot be undone without a public trace. No ADR asks for an automatic publish. The change keeps the draft step as one `--draft` flag, so the owner can ask for another type later with a one-line change.
-- Does the chart belong to this change? No. The workflow pushes it already, and ADR 246 decision 3 says it ships as an OCI artifact in the registry. A release page file would be a second copy with a second checksum story. See "Decisions" in `design.md`.
+- Does the chart belong to this change? No. The workflow pushes it already, and ADR 246 decision 3 says it ships as an OCI artifact in the registry. A release page file would be a second copy with a second checksum story. See "Decisions" in the design.
 - Sign the archives? No. ADR 283 decision 4.
 - Which job runs first, the image or the archives? The archives. The archives are built and checked before the first push to a registry, because a registry push is public and cannot be taken back. The draft is created last, because it is the one step that a person can undo.
-- Where does the dry run run? In the Go job of every pull request, as tests. No tag and no workflow run are needed. See "Test path with no tag" in `design.md`.
+- Where does the dry run run? In the Go job of every pull request, as tests. No tag and no workflow run are needed. See "Test path with no tag" in the design.
 - Does the change tag or release? No. See ADR 279 above.

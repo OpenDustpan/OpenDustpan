@@ -1915,6 +1915,12 @@
           "unitOwners": {
             "type": "boolean"
           },
+          "userIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "users": {
             "items": {
               "type": "string"
@@ -1926,6 +1932,7 @@
           "groupIds",
           "groups",
           "unitOwners",
+          "userIds",
           "users"
         ],
         "type": "object"

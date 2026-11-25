@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 11
 ---
 
 Issue: #1028.
@@ -40,13 +40,13 @@ Out of scope:
 
 - The sweep claimer and its wiring (last part of the split).
 - The sweep routes and the management routes (last part of the split).
-- The match and findings logic.
+- The match and findings logic. The 1,000-observation limit of Record is enforced by the memory adapter in this change. The SQL adapters meet it in the change 160-165-report-intake-findings (task 2.1).
 - The durable operation that a sweep start creates (the claimer part).
 - Other parts of the split of add-job-session-paths-runner.
 
 Depends on:
 
-- `add-job-session-paths-runner-2` (the part before it in the split)
+- None. The part before it in the split is on main.
 
 ## Usability
 

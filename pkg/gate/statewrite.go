@@ -13,7 +13,6 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // stateWriteSchema returns the version of the fact schema of state.write.
@@ -59,10 +58,18 @@ type StateWrite struct {
 // *RefusalError, and any other error also refuses the write: the guard fails
 // closed.
 //
-// A job token skips the gates only as far as Evaluate allows: a write by a
-// phase that passed change.apply to a unit of its own job, or the lock or
-// the update lease of the plan in any other phase. Each other write with a
-// job token fails with identity.ErrDenied. The access limits hold for it.
+// A write with a job token meets the job model first: a phase that passed
+// change.apply writes a unit of its own job, and any other phase writes only
+// the lock or the update lease of its plan. Each other write with a job token
+// fails with identity.ErrDenied, runs no gate and writes no decision record.
+// A write that the job model allows then meets the gates of state.write and
+// writes a decision record, as the write of a person does, so a deny gate
+// refuses it. The access limits hold for a job token too.
+//
+// A refusal of a write with a job token is a *RefusalError whose Job is the
+// claim of the subject: a refusal of the job model wraps identity.ErrDenied
+// and no gate sentinel. A refusal of the subject source has no subject, so it
+// has no claim.
 func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, error) {
 	ctx = withFactMemo(ctx)
 
@@ -71,6 +78,48 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 		return Decision{}, fmt.Errorf("state.write: %w", err)
 	}
 
+	d, err := s.guardSubjectWrite(ctx, w, subject)
+	if err != nil {
+		return Decision{}, withJobClaim(err, subject.Job)
+	}
+
+	return d, nil
+}
+
+// withJobClaim returns err with the job claim on its refusal. A refusal of
+// the job model is not a *RefusalError, so it becomes one that wraps it. Any
+// other error comes back unchanged.
+func withJobClaim(err error, job *JobClaim) error {
+	// Defense in depth: the subject source sets a claim only for a job token,
+	// and the log of the refusal checks for a nil claim too; this check does
+	// not rely on them and stays so that a refusal with no claim never becomes
+	// a job-model refusal.
+	if job == nil {
+		return err
+	}
+
+	if refused, ok := errors.AsType[*RefusalError](err); ok {
+		// Defense in depth: the gate code builds each refusal as a non-nil
+		// value, and the subject, unit and fence sources return their own
+		// errors; this check does not rely on them and stays so that a typed
+		// nil from a new source cannot panic here.
+		if refused != nil {
+			refused.Job = job
+		}
+
+		return err
+	}
+
+	if errors.Is(err, identity.ErrDenied) {
+		return &RefusalError{Err: err, Record: "", Messages: nil, Job: job}
+	}
+
+	return err
+}
+
+// guardSubjectWrite checks the access limits and evaluates the gates of w
+// for subject.
+func (s *Service) guardSubjectWrite(ctx context.Context, w StateWrite, subject Subject) (Decision, error) {
 	if !subject.BreakGlassAccount {
 		call := AccessCall{Principal: w.Principal, Action: w.Action, Object: w.Unit}
 
@@ -79,28 +128,8 @@ func (s *Service) GuardStateWrite(ctx context.Context, w StateWrite) (Decision, 
 		}
 	}
 
-	if subject.Credential == CredentialJobToken {
-		// The job model decides a write with a job token. The write needs no
-		// fence, because it writes no decision record.
-		return s.Evaluate(ctx, Change{
-			Point:     PointStateWrite,
-			Namespace: w.Unit.Namespace(),
-			Ref:       ChangeRef{Kind: ChangeStateWrite, ID: ""},
-			Subject:   subject,
-			Source:    w.Source,
-			Author:    subject.ID,
-			Operation: w.Operation,
-			Units: []identity.Object{
-				w.Unit,
-			},
-			Holders:    nil,
-			PlanLock:   w.PlanLock,
-			BreakGlass: "",
-			Fence:      namespace.Fence{Namespace: w.Unit.Namespace(), FailoverVersion: 0},
-			State:      nil,
-		})
-	}
-
+	// The fence is read for each credential: a write with a job token that the
+	// job model allows writes a decision record too.
 	fence, err := s.fences.Fence(ctx, w.Unit.Namespace())
 	if err != nil {
 		return Decision{}, fmt.Errorf("state.write: fence: %w", err)
@@ -194,7 +223,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy Appro
 	// depth: the adapter reads the state from the store, and the facts
 	// builder checks the change again. This check does not rely on either.
 	if err = checkStateChange(c); err != nil {
-		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}}
+		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}, Job: nil}
 	}
 
 	run, err := s.newStateWriteRun(ctx, c, policy)
@@ -214,6 +243,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy Appro
 			Err:      fmt.Errorf("%w: write the decision record: %w", ErrUnavailable, err),
 			Record:   rec.ID,
 			Messages: []string{"The decision record could not be written, so the write is refused."},
+			Job:      nil,
 		}
 	}
 
@@ -321,15 +351,17 @@ func (r *stateWriteRun) decide(rec *Record, total *unitEffect, engineDown bool) 
 
 	switch {
 	case len(total.denies) > 0:
-		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.denies}
+		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.denies, Job: nil}
 	case engineDown:
 		rec.Result = ResultError
-		r.refusal = &RefusalError{Err: ErrUnavailable, Record: "", Messages: []string{cleanText(r.engineErr.Error())}}
+		r.refusal = &RefusalError{
+			Err: ErrUnavailable, Record: "", Messages: []string{cleanText(r.engineErr.Error())}, Job: nil,
+		}
 	case len(total.errs) > 0:
-		r.refusal = &RefusalError{Err: ErrRuleFailed, Record: "", Messages: total.errs}
+		r.refusal = &RefusalError{Err: ErrRuleFailed, Record: "", Messages: total.errs, Job: nil}
 	case len(total.approvals) > 0:
 		// A CLI cannot wait for people, so an approval outcome refuses.
-		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.approvals}
+		r.refusal = &RefusalError{Err: ErrDenied, Record: "", Messages: total.approvals, Job: nil}
 	default:
 	}
 }
@@ -895,6 +927,7 @@ func (r *stateWriteRun) applyBreakGlass(ctx context.Context, rec *Record, key Br
 		r.refusal = &RefusalError{
 			Err: fmt.Errorf("%w: break-glass pass: %w", ErrUnavailable, err), Record: "",
 			Messages: []string{"The break-glass pass could not be checked, so the write is refused."},
+			Job:      nil,
 		}
 	}
 }

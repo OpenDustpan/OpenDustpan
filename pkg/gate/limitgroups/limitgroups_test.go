@@ -392,7 +392,7 @@ func gateAt(condition, unless string) gate.Gate {
 func ruleAt(groupIDs []string) gate.ApprovalRule {
 	return gate.ApprovalRule{
 		Scope: gate.NamespaceScope("acme"), ID: "r1", Version: 1,
-		Approvers: gate.Approvers{Groups: nil, GroupIDs: groupIDs, Users: nil, UnitOwners: false},
+		Approvers: gate.Approvers{Groups: nil, GroupIDs: groupIDs, Users: nil, UnitOwners: false, UserIDs: nil},
 		Count:     1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
 	}
 }
@@ -402,7 +402,7 @@ func ruleAt(groupIDs []string) gate.ApprovalRule {
 func ruleNamed(groups []string) gate.ApprovalRule {
 	return gate.ApprovalRule{
 		Scope: gate.NamespaceScope("acme"), ID: "r1", Version: 1,
-		Approvers: gate.Approvers{Groups: groups, GroupIDs: nil, Users: nil, UnitOwners: false},
+		Approvers: gate.Approvers{Groups: groups, GroupIDs: nil, Users: nil, UnitOwners: false, UserIDs: nil},
 		Count:     1, AuthorMayApprove: false, FreshAuth: gate.NoFreshAuth(), Timeout: 0,
 	}
 }

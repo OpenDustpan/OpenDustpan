@@ -42,23 +42,23 @@ When the archives and the registry pushes pass, the release workflow SHALL creat
 
 ### Requirement: The upload checks the set itself
 
-When `scripts/release-upload.sh` runs, it SHALL check the version, run `scripts/release-verify.sh`, check the shape of the set against an allowlist (exactly the five names as regular files, exactly one SHA256SUMS line for each archive and no other line), and run `sha256sum --check --strict SHA256SUMS` on the files in its directory, and call `gh` only after all pass. The directory argument may be a link; the script resolves it once and uses the resolved path for every step.
+When `scripts/release-upload.sh` runs, it SHALL check the version, run the verify script, check the shape of the set against an allowlist (exactly the five names as regular files, exactly one SHA256SUMS line for each archive and no other line), and run `sha256sum --check --strict SHA256SUMS` on the files in its directory, and call `gh` only after all pass. The directory argument may be a link; the script resolves it once and uses the resolved path for every step.
 
 #### Scenario: A changed archive
 - **WHEN** one byte of an archive differs from its `SHA256SUMS` line
-- **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
+- **THEN** the script exits with a non-zero status and makes no `gh` call, also when the verify script is replaced by a script that passes.
 
 #### Scenario: A hostile set
 - **WHEN** `SHA256SUMS` names another file, lacks an archive, repeats a line, or holds any other line, or the directory holds an extra file or a link
-- **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
+- **THEN** the script exits with a non-zero status and makes no `gh` call, also when the verify script is replaced by a script that passes.
 
 #### Scenario: A directory name that another set can answer to
 - **WHEN** `CDPATH` holds a directory with a second good set of the same name, or the directory argument is `-` and `OLDPWD` is a second good set
-- **THEN** the script checks and uploads the same directory: it makes no `gh` call, or the `gh` call runs in the checked directory, also when `release-verify.sh` is replaced by a script that passes.
+- **THEN** the script checks and uploads the same directory: it makes no `gh` call, or the `gh` call runs in the checked directory, also when the verify script is replaced by a script that passes.
 
 #### Scenario: A hidden byte in SHA256SUMS
 - **WHEN** a `SHA256SUMS` line is followed by a NUL byte and more bytes, or by a carriage return, or the file has no final newline
-- **THEN** the script exits with a non-zero status and makes no `gh` call, also when `release-verify.sh` is replaced by a script that passes.
+- **THEN** the script exits with a non-zero status and makes no `gh` call, also when the verify script is replaced by a script that passes.
 
 #### Scenario: A hostile directory name in a message
 - **WHEN** the directory argument is not a directory and holds a newline

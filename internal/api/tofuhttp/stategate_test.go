@@ -231,7 +231,7 @@ type guardOutcome struct {
 // guardOutcomes returns each kind of answer of the guard.
 func guardOutcomes() []guardOutcome {
 	refusal := func(sentinel error, msg string) error {
-		return &gate.RefusalError{Err: sentinel, Record: "gdr-test", Messages: []string{msg}}
+		return &gate.RefusalError{Err: sentinel, Record: "gdr-test", Messages: []string{msg}, Job: nil}
 	}
 
 	return []guardOutcome{
@@ -462,7 +462,7 @@ func TestStateWriteGuardSkipsWritesUnderAPassedLock(t *testing.T) {
 			t.Parallel()
 
 			g := newGuardedHandler(t, newFakeGuard(gate.ResultAllow, &gate.RefusalError{
-				Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."},
+				Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."}, Job: nil,
 			}))
 			lockedBy(lockOne, "alice")(g.units.fakeUnits)
 
@@ -513,7 +513,7 @@ func TestStateWriteGuardRunsAfterTheCreate(t *testing.T) {
 	t.Parallel()
 
 	g := newGuardedHandler(t, newFakeGuard(gate.ResultAllow, &gate.RefusalError{
-		Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."},
+		Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."}, Job: nil,
 	}))
 	g.units.exists = false
 
@@ -531,6 +531,7 @@ func TestStateWriteGuardMessageStaysOneLine(t *testing.T) {
 
 	g := newGuardedHandler(t, newFakeGuard(gate.ResultAllow, &gate.RefusalError{
 		Err: gate.ErrDenied, Record: "gdr-a\r\nInjected: yes", Messages: []string{"Frozen.\r\nX-Injected: yes"},
+		Job: nil,
 	}))
 
 	rec := do(g.h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
@@ -563,7 +564,7 @@ func TestStateWriteGuardRunsForALockThatTheCallerDoesNotHold(t *testing.T) {
 			t.Parallel()
 
 			g := newGuardedHandler(t, newFakeGuard(gate.ResultAllow, &gate.RefusalError{
-				Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."},
+				Err: gate.ErrDenied, Record: "gdr-test", Messages: []string{"Writes are frozen."}, Job: nil,
 			}))
 			g.units.acceptAll = true
 			tc.prepare(g.units.fakeUnits)

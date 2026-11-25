@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #623, #627, #633.
@@ -34,12 +34,12 @@ Evidence for the claims above:
 - The IP allowlist code is in internal/api/server/ip_allowlist.go and pkg/ipallow. Proof: The pack path list shows both as existing.
 - The principal domain is in pkg/principal and the guides are in docs/guides. Proof: The pack path list shows both as existing.
 - The passkey or hardware key requirement comes from decision 23 of ADR 70, and ADR 320 decision 23 repeats it. Proof: Pack issue 627 and ADR 320 decision 23 text: it signs in with a passkey or a hardware key only.
-- Main already has a test that the inactivity sweep never disables a break-glass account. Proof: Pack main list: TestSweepNeverDisablesBreakGlass at pkg/accesstoken/accesstoken_test.go:1271.
+- Main already has a test that the inactivity sweep never disables a break-glass account. Proof: Pack main list: TestSweepNeverDisablesBreakGlass at pkg/accesstoken/accesstoken_test.go:1301.
 
 ## What Changes
 
-- New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The count also drops by time alone when an account expires, and the route shows it. Its action is server:read-break-glass and its object is @server.
-- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. The guard never refuses it, because it raises the count, also when the count is zero.
+- New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The count also drops by time alone when an account expires, and the route shows it. Its action is server:read-principals and its object is @server (ServerObject). No new action exists.
+- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. Its action is server:manage-principals and its object is @server (ServerObject). The guard never refuses it, because it raises the count, also when the count is zero.
 - A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. A revoke of that grant, a membership change or a move of a principal runs the guard.
 - A guard in the write transaction of each covered change. Disable, delete and sweep refuse when no enabled account would stay. Each disable writes an audit entry and notifies the other administrators. Re-enable stays checked and a disable works in maintenance mode. Every other lowering change refuses when it lowers the count below two. Each refusal writes an audit entry.
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
@@ -77,8 +77,8 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The passkey port removes a passkey in its own transaction. This change adds the rotation method next to it. (`pkg/mfa/mfa.go:227 (func RemovePasskey of PasskeyStore)`)
 - The service removes a passkey of the caller. The rotation service method sits next to it. (`internal/mfasvc/service.go:553 (func RemovePasskey)`)
-- A test shows that the inactivity sweep never disables a break-glass account. This change replaces that rule with the last-enabled rule for the sweep. (`pkg/accesstoken/accesstoken_test.go:1271 (func TestSweepNeverDisablesBreakGlass)`)
-- A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1218 (func TestSweepDisablesInactiveTokensAndAccounts)`)
+- A test shows that the inactivity sweep never disables a break-glass account. This change replaces that rule with the last-enabled rule for the sweep. (`pkg/accesstoken/accesstoken_test.go:1301 (func TestSweepNeverDisablesBreakGlass)`)
+- A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1248 (func TestSweepDisablesInactiveTokensAndAccounts)`)
 - A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:85 (func TestExpiredTempAdminStaysDenied)`)
 - Restore error codes exist on main. (`internal/errcode/catalog_restore.go:7 (error code restore.blobs-missing)`)
 

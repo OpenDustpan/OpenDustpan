@@ -647,6 +647,7 @@ func testGateFields(t *testing.T, s GateStore) {
 		GroupIDs:   []string{"id-sre", "id-dba"},
 		Users:      []string{"alice"},
 		UnitOwners: true,
+		UserIDs:    nil,
 	}
 	fresh := gate.FreshAuth{Set: true, Seconds: 300}
 
@@ -659,13 +660,19 @@ func testGateFields(t *testing.T, s GateStore) {
 		Scope: scope, ID: "no-agents", Version: 1, Policy: `forbid (principal, action, resource);`,
 	}
 	owner := gate.OwnershipRule{
-		Scope:     scope,
-		ID:        "net-owners",
-		Version:   1,
-		Mode:      gate.ModeEnforce,
-		Paths:     []string{"modules/net/**"},
-		When:      "context.plan.destroy > 0",
-		Approvers: gate.Approvers{Groups: []string{"net"}, GroupIDs: []string{"id-net"}, Users: nil, UnitOwners: false},
+		Scope:   scope,
+		ID:      "net-owners",
+		Version: 1,
+		Mode:    gate.ModeEnforce,
+		Paths:   []string{"modules/net/**"},
+		When:    "context.plan.destroy > 0",
+		Approvers: gate.Approvers{
+			Groups:     []string{"net"},
+			GroupIDs:   []string{"id-net"},
+			Users:      nil,
+			UnitOwners: false,
+			UserIDs:    nil,
+		},
 		Count:     1,
 		FreshAuth: gate.NoFreshAuth(),
 		Reads:     []gate.ID{"network"},
