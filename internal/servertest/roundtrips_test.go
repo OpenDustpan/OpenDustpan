@@ -1069,6 +1069,13 @@ func requestFlows() []requestFlow {
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
+		// The list reads the break-glass accounts, their passkeys and grants,
+		// and the working count. PostgreSQL measured 5 round trips.
+		{"break-glass list", 5, func(h *rtHarness) {
+			h.measure(func() {
+				h.call(http.MethodGet, "/api/dustpan/v1/break-glass/accounts", "", http.StatusOK)
+			})
+		}},
 		{"pulumi cancel", 36, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
