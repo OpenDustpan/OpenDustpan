@@ -3,6 +3,7 @@
 package unmanagedtest
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
@@ -32,14 +33,33 @@ const (
 // runner pool Pool and a runner pool JobPool in it, and returns the current
 // fence of the namespace. PurgeNamespace deletes the namespace name, as the
 // purge of a namespace does after it calls Links.DropNamespace: a later
-// Namespace of the same name makes a new namespace with a new ID.
+// Namespace of the same name makes a new namespace with a new ID. A nil
+// PurgeNamespace means that the adapter has no purge.
+//
+// Pool makes a runner pool name in the namespace ns, which exists, with the
+// purpose PurposeSweeps or PurposeJobs. Failover raises the failover
+// version of the namespace name and returns its new fence; the suite calls it
+// from another goroutine, so it returns its error and never stops the test.
+// SetPool changes the purpose of the pool name of ns, or deletes the pool when
+// purpose is empty, as a restore of another version can leave it. An adapter
+// that keeps pools under a foreign key passes the key in its test schema.
+//
+// RenameNamespace changes the name of the namespace ns to newName and keeps
+// its ID. FailAudit makes each later append of an audit entry fail inside the
+// write transaction, after the fence check and after the write of the rows.
+// Each is nil for an adapter that cannot do it.
 type Harness struct {
-	Index          unmanaged.Index
-	Links          unmanaged.Links
-	Findings       unmanaged.FindingStore
-	Scans          unmanaged.ScanStore
-	Namespace      func(t *testing.T, name string) namespace.Fence
-	PurgeNamespace func(t *testing.T, name string)
+	Index           unmanaged.Index
+	Links           unmanaged.Links
+	Findings        unmanaged.FindingStore
+	Scans           unmanaged.ScanStore
+	Namespace       func(t *testing.T, name string) namespace.Fence
+	PurgeNamespace  func(t *testing.T, name string)
+	Pool            func(t *testing.T, ns, name, purpose string)
+	Failover        func(ctx context.Context, name string) (namespace.Fence, error)
+	SetPool         func(t *testing.T, ns, name, purpose string)
+	RenameNamespace func(t *testing.T, ns, newName string)
+	FailAudit       func(t *testing.T)
 }
 
 // Factory returns a fresh harness for one subtest.
@@ -59,7 +79,7 @@ type suiteCase struct {
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	runCases(t, newHarness, slices.Concat(indexCases(), linkCases(), findingCases(), scanCases()))
+	runCases(t, newHarness, slices.Concat(indexCases(), linkCases(), findingCases(), scanCases(), sweepStoreCases()))
 }
 
 // RunSweepStore runs the cases of the findings and of the sweeps. An adapter
@@ -69,7 +89,7 @@ func Run(t *testing.T, newHarness Factory) {
 func RunSweepStore(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	runCases(t, newHarness, slices.Concat(findingCases(), scanCases()))
+	runCases(t, newHarness, slices.Concat(findingCases(), scanCases(), sweepStoreCases()))
 }
 
 // RunScanStore runs the cases of the sweeps alone. An adapter that holds the
@@ -77,7 +97,7 @@ func RunSweepStore(t *testing.T, newHarness Factory) {
 func RunScanStore(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	runCases(t, newHarness, scanCases())
+	runCases(t, newHarness, slices.Concat(scanCases(), sweepStoreCases()))
 }
 
 // runCases runs each case of cases in its own subtest.
@@ -95,6 +115,18 @@ func runCases(t *testing.T, newHarness Factory, cases []suiteCase) {
 // Unit returns a valid unit of namespace ns with ID id.
 func Unit(ns, id string) graph.Unit {
 	return graph.Unit{Namespace: namespace.Name(ns), Tool: "opentofu", ID: id}
+}
+
+// HostileSQLText returns names that hold SQL text. An adapter test sends each
+// one as a namespace name, a target name and a pool name, and checks that the
+// store binds it as data and never runs it.
+func HostileSQLText() []string {
+	return []string{
+		`acme'; DROP TABLE unmanaged_targets; --`,
+		`x' OR '1'='1`,
+		`"); DELETE FROM unmanaged_scans; --`,
+		`aws' UNION SELECT name FROM namespaces --`,
+	}
 }
 
 // AWSKey returns the key of an S3 bucket named name.
