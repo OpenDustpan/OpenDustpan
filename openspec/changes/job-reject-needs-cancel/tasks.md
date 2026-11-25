@@ -19,7 +19,7 @@
   - Check: `go test -race ./internal/api/jobs/...`
   - Confirmed by: CI
   - OpenDustpan: `internal/api/jobs/approve.go`, `pkg/job/service_approve.go`
-- [ ] 2.3 Mutation check: remove the guard of 2.1 (`checkRejector` in `pkg/job/service_approve.go`) and of 2.2 (the `job:cancel` check in `internal/api/jobs/approve.go`) one at a time, and record that the tests of 1.1 and 1.2 fail. Record the output in the pull request body.
+- [x] 2.3 Mutation check: remove the guard of 2.1 (`checkRejector` in `pkg/job/service_approve.go`) and of 2.2 (the `job:cancel` check in `internal/api/jobs/approve.go`) one at a time, and record that the tests of 1.1 and 1.2 fail. Record the output in the pull request body.
   - Check: the recorded output
   - Confirmed by: the reviewer
   - OpenDustpan: `pkg/job/service_approve.go`, `internal/api/jobs/approve.go` (changed for the check only, then restored)
