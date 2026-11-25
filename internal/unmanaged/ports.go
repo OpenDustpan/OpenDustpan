@@ -15,7 +15,8 @@ const (
 	// match reads a report in batches of this size.
 	MaxLookup = 1000
 	// MaxObservations is the most observations that one call to
-	// FindingStore.Record takes.
+	// FindingStore.Record takes. Only the memory adapter enforces it in this
+	// version: the SQL adapters have no finding store yet.
 	MaxObservations = 1000
 	// MaxIndexEntries bounds the entries of one unit in the index. A unit
 	// with more resources indexes the first ones by resource key and marks
@@ -347,20 +348,23 @@ type ScanStore interface {
 	UpdateTarget(ctx context.Context, t Target, fence namespace.Fence, e audit.Entry) error
 	// DeleteTarget deletes the target name of ns, cancels its sweep that did
 	// not end, and appends e. The findings of its sweeps stay. It returns
-	// ErrNotFound and namespace.ErrFenced.
+	// ErrInvalidTarget for a name that fails CheckTargetName, ErrNotFound and
+	// namespace.ErrFenced.
 	DeleteTarget(ctx context.Context, ns namespace.Name, name string, fence namespace.Fence, e audit.Entry) error
 	// Targets returns the targets of ns ordered by name.
 	Targets(ctx context.Context, ns namespace.Name) ([]Target, error)
 	// StartScan stores s with the status ScanQueued and appends e. For a
 	// cloud sweep, it starts the durable operation that a runner of the pool
 	// of the target claims, in the same transaction. It returns
-	// ErrScanBusy when the target has a sweep that did not end, ErrNotFound
-	// for an unknown target, and namespace.ErrFenced.
+	// ErrInvalidTarget or ErrInvalidScan for a sweep that fails
+	// Scan.CheckStart, ErrScanBusy when the target has a sweep that did not
+	// end, ErrNotFound for an unknown target, and namespace.ErrFenced.
 	StartScan(ctx context.Context, s Scan, fence namespace.Fence, e audit.Entry) (Scan, error)
 	// AdvanceScan applies a.Event with a.Update to the sweep a.ID of
 	// a.Namespace, by NextScan. At an end status, it appends e with the
-	// counts of the sweep. It returns the new sweep, ErrNotFound,
-	// ErrTransition and namespace.ErrFenced.
+	// counts of the sweep. It returns the new sweep, ErrInvalidScan for an
+	// advance that fails CheckAdvance, ErrNotFound, ErrTransition and
+	// namespace.ErrFenced.
 	AdvanceScan(ctx context.Context, a ScanAdvance, fence namespace.Fence, e audit.Entry) (Scan, error)
 	// Scan returns the sweep id of ns, or ErrNotFound.
 	Scan(ctx context.Context, ns namespace.Name, id string) (Scan, error)
