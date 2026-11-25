@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -163,6 +164,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
 		Logger: nil, Now: nil, NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
