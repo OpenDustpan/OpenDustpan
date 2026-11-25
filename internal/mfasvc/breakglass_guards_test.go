@@ -362,3 +362,49 @@ func TestBreakGlassAddNeedsCaller(t *testing.T) {
 
 	wantGlassUnchanged(t, f, old, mfasvc.ActionPasskeyAdded)
 }
+
+// TestBreakGlassAddPersonRefusesKind proves that AddBreakGlassPerson refuses
+// an input of another kind before it touches the store: one denial entry,
+// and no person, no passkey and no success entry.
+func TestBreakGlassAddPersonRefusesKind(t *testing.T) {
+	t.Parallel()
+
+	f := newBreakGlassFixture(t)
+
+	q := principal.Query{After: "", Low: "", High: "", Limit: 100}
+
+	persons, _, err := f.store.ListPrincipals(t.Context(), q, principal.KindPerson)
+	if err != nil {
+		t.Fatalf("list the persons: %v", err)
+	}
+
+	for _, kind := range []principal.Kind{principal.KindService, principal.KindWorkload} {
+		in := principal.Input{Subject: "break-glass-two", DisplayName: "Break glass two", Kind: kind}
+
+		_, _, addErr := f.svc.AddBreakGlassPerson(t.Context(), actor(glass, "ses-glass"), in, newPasskey("new"))
+		f.wantRefusal(t, "add of a "+string(kind), addErr, principal.ErrBreakGlassKind, mfasvc.ActionAddRefused)
+
+		refusals := f.entries(t, mfasvc.ActionAddRefused)
+		if cause := refusals[0].Changes; len(cause) != 1 || cause[0].New != "a break-glass account is a person" {
+			t.Fatalf("add of a %s: refusal changes = %+v, want the cause of the kind check", kind, cause)
+		}
+	}
+
+	_, keyErr := f.store.PasskeyByCredentialID(t.Context(), []byte("credential-new"))
+	if !errors.Is(keyErr, mfa.ErrNotFound) {
+		t.Fatalf("passkey after the refused add: err = %v, want ErrNotFound", keyErr)
+	}
+
+	after, _, listErr := f.store.ListPrincipals(t.Context(), q, principal.KindPerson)
+	if listErr != nil {
+		t.Fatalf("list the persons after the refused add: %v", listErr)
+	}
+
+	if len(after) != len(persons) {
+		t.Fatalf("persons = %d, want %d: the refused add stored an account", len(after), len(persons))
+	}
+
+	if got := f.entries(t, mfasvc.ActionPasskeyAdded); len(got) != 0 {
+		t.Fatalf("passkey add entries = %d, want 0", len(got))
+	}
+}

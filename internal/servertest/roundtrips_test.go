@@ -1614,7 +1614,9 @@ const attemptClaimTrips = 23
 // version of each unit from the restored rows.
 //
 // The fixed part also holds breakGlassFloorTrips: the swap counts the working
-// break-glass accounts before and after it.
+// break-glass accounts of the installation before and after it, and lists the
+// namespaces that hold a break-glass account on the live and on the staged
+// side.
 // The fixed part also holds serverAuditLockTrips: the swap transaction takes
 // the advisory lock of the server audit scope.
 //
@@ -1772,9 +1774,13 @@ const stagedTriggerClockTrips = 1
 // breakGlassFloorTrips is the number of round trips of the check of the
 // working break-glass accounts in the swap step: the read of the clock of the
 // store, the count of the live data before the swap and the count after it,
-// once for each restore. The count is fixed: it does not grow with the units
-// or the tables.
-const breakGlassFloorTrips = 3
+// and the list of the namespaces that hold a break-glass account on the live
+// and on the staged side, once for each restore. The runs of this test seed
+// no break-glass account of a namespace, so the lists answer no namespace and
+// no per-namespace count runs. Each namespace with a break-glass account
+// would add 2 round trips, one count on each side. The count of this constant
+// is fixed: it does not grow with the units or the tables.
+const breakGlassFloorTrips = 5
 
 // breakGlassPasswordTrips is the number of round trips of the check for
 // break-glass accounts with a local password in the swap step: the query

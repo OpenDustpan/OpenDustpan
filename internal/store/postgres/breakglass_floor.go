@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/codec"
@@ -20,8 +21,16 @@ func (s *Store) CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64
 }
 
 // CountWorkingBreakGlassInNamespace implements
-// principal.WorkingBreakGlassCounter. An empty ns is the installation scope.
+// principal.WorkingBreakGlassCounter. It returns ErrInvalid for an empty ns:
+// CountWorkingBreakGlass holds the installation scope.
 func (s *Store) CountWorkingBreakGlassInNamespace(ctx context.Context, ns namespace.Name, at time.Time) (int64, error) {
+	// Defense in depth: the service does not ask for an empty scope. This
+	// check stays so that a new caller cannot read the installation count
+	// through the namespace port. It does not rely on the caller.
+	if ns == "" {
+		return 0, fmt.Errorf("count working break-glass accounts of a namespace: %w", principal.ErrInvalid)
+	}
+
 	return countWorkingBreakGlassInNamespace(ctx, s.queries, ns, at)
 }
 
@@ -84,6 +93,70 @@ func countWorkingBreakGlassInNamespace(
 	}
 
 	return n, nil
+}
+
+// breakGlassScopes holds the working count of every namespace that holds a
+// break-glass person in one side of a swap.
+type breakGlassScopes struct {
+	names  []namespace.Name
+	counts map[namespace.Name]int64
+}
+
+// breakGlassScopeCounts counts the working break-glass accounts of every
+// namespace that holds a break-glass person in the data that q reads, at the
+// time at.
+func breakGlassScopeCounts(ctx context.Context, q *db.Queries, at time.Time) (breakGlassScopes, error) {
+	names, err := q.ListBreakGlassNamespaceScopes(ctx)
+	if err != nil {
+		return breakGlassScopes{}, fmt.Errorf("list the namespaces of the break-glass accounts: %w: %w",
+			principal.ErrBreakGlassUnavailable, err)
+	}
+
+	out := breakGlassScopes{
+		names:  make([]namespace.Name, 0, len(names)),
+		counts: make(map[namespace.Name]int64, len(names)),
+	}
+
+	for _, name := range names {
+		ns := namespace.Name(name)
+
+		n, err := countWorkingBreakGlassInNamespace(ctx, q, ns, at)
+		if err != nil {
+			return breakGlassScopes{}, err
+		}
+
+		out.names = append(out.names, ns)
+		out.counts[ns] = n
+	}
+
+	return out, nil
+}
+
+// checkNamespaceFloors refuses a swap that lowers the working break-glass
+// count of a namespace below the floor. The scopes are the namespaces that
+// hold a break-glass person in the live or the staged data; a namespace that
+// the staged data drops counts as zero. The count of one namespace never
+// counts the accounts of another namespace or of the installation, so a
+// restore that drops the accounts of one namespace is refused even when the
+// other scopes hold enough of them.
+func checkNamespaceFloors(before, after breakGlassScopes) error {
+	scopes := make([]namespace.Name, 0, len(before.names)+len(after.names))
+	seen := make(map[namespace.Name]bool, len(before.names)+len(after.names))
+
+	for _, ns := range slices.Concat(before.names, after.names) {
+		if !seen[ns] {
+			seen[ns] = true
+			scopes = append(scopes, ns)
+		}
+	}
+
+	for _, ns := range scopes {
+		if err := checkWorkingBreakGlassFloor(before.counts[ns], after.counts[ns]); err != nil {
+			return fmt.Errorf("namespace %q: %w", ns, err)
+		}
+	}
+
+	return nil
 }
 
 // The object kinds that the count reads, as the grants store them.

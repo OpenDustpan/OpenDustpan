@@ -41,10 +41,162 @@ func TestBreakGlassRestoreAndRace(t *testing.T) {
 		runBreakGlassRestoreRefusal(t)
 	})
 
+	t.Run("restore of a namespace below the floor", func(t *testing.T) {
+		t.Parallel()
+		runBreakGlassNamespaceRestoreRefusal(t)
+	})
+
 	t.Run("parallel disable of the last two working accounts", func(t *testing.T) {
 		t.Parallel()
 		runBreakGlassDisableRace(t)
 	})
+}
+
+// breakGlassRestoreNamespaces are the namespaces of the namespace restore
+// case. The staged data of nsLow holds one working account while its live
+// data holds two. nsHigh holds two working accounts on both sides.
+const (
+	nsLow  = namespace.Name("restore-ns-low")
+	nsHigh = namespace.Name("restore-ns-high")
+)
+
+// runBreakGlassNamespaceRestoreRefusal restores a backup whose namespace
+// nsLow holds one working account over live data that holds two, while
+// nsHigh holds two on both sides and the installation holds two. The restore
+// is refused: the count of one namespace covers only the principals of that
+// namespace, so the accounts of nsHigh and of the installation never fill
+// nsLow up to the floor. The live data stays.
+func runBreakGlassNamespaceRestoreRefusal(t *testing.T) {
+	t.Helper()
+
+	target := openBreakGlassBlobs(t)
+
+	source := newBreakGlassRestoreRig(t, target)
+	seedWorkingBreakGlass(t, source.store, "prn-bg-1")
+	seedWorkingBreakGlass(t, source.store, "prn-bg-2")
+	seedBreakGlassNamespace(t, source.store, nsLow)
+	seedBreakGlassNamespace(t, source.store, nsHigh)
+	seedNamespaceWorkingBreakGlass(t, source.store, nsLow, "prn-low-1")
+	seedNamespaceWorkingBreakGlass(t, source.store, nsHigh, "prn-high-1")
+	seedNamespaceWorkingBreakGlass(t, source.store, nsHigh, "prn-high-2")
+
+	backupID := backup.ID(ident.NewID("bkp-"))
+	if _, err := source.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	dest := newBreakGlassRestoreRig(t, target)
+	liveIDs := []string{"prn-bg-1", "prn-bg-2", "prn-low-1", "prn-low-2", "prn-high-1", "prn-high-2"}
+
+	seedWorkingBreakGlass(t, dest.store, "prn-bg-1")
+	seedWorkingBreakGlass(t, dest.store, "prn-bg-2")
+	seedBreakGlassNamespace(t, dest.store, nsLow)
+	seedBreakGlassNamespace(t, dest.store, nsHigh)
+	seedNamespaceWorkingBreakGlass(t, dest.store, nsLow, "prn-low-1")
+	seedNamespaceWorkingBreakGlass(t, dest.store, nsLow, "prn-low-2")
+	seedNamespaceWorkingBreakGlass(t, dest.store, nsHigh, "prn-high-1")
+	seedNamespaceWorkingBreakGlass(t, dest.store, nsHigh, "prn-high-2")
+
+	before := breakGlassLiveRows(t, dest.store, liveIDs)
+
+	restoreID := backup.RestoreID(ident.NewID("rst-"))
+	req := backup.RestoreRequest{
+		BackupID: backupID, PreBackupID: "", CheckOnly: false, Force: false, RequestedBy: "tester",
+		KeepAccessTables: false,
+	}
+
+	if err := dest.restores.Start(t.Context(), restoreID, req); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+
+	row := runBreakGlassRestore(t, dest.restores, restoreID)
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want %q (error %q)", row.State, backup.RestoreFailed, row.Error)
+	}
+
+	if row.DevReport == nil || row.DevReport.ErrorCode != backup.CodeNoWorkingBreakGlass {
+		t.Fatalf("restore code = %+v, want %q", row.DevReport, backup.CodeNoWorkingBreakGlass)
+	}
+
+	if after := breakGlassLiveRows(t, dest.store, liveIDs); !reflect.DeepEqual(after, before) {
+		t.Fatalf("live accounts after the refused restore = %+v, want %+v", after, before)
+	}
+
+	checkRestoreFailureEntry(t, dest.store, restoreID)
+
+	// The live count of each namespace still holds its own two accounts: a
+	// refused restore changed no count, and the count of one namespace never
+	// held the accounts of the other.
+	at := time.Now()
+	for _, ns := range []namespace.Name{nsLow, nsHigh} {
+		n, err := dest.store.CountWorkingBreakGlassInNamespace(t.Context(), ns, at)
+		if err != nil || n != 2 {
+			t.Fatalf("working count of %q = %d, %v; want 2", ns, n, err)
+		}
+	}
+}
+
+// seedBreakGlassNamespace stores the namespace ns with the failover version 1.
+func seedBreakGlassNamespace(t *testing.T, st *sqlite.Store, ns namespace.Name) {
+	t.Helper()
+
+	err := st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID: namespace.NewID(), CreatedAt: time.Now().UTC(), Name: ns, PrimaryInstallation: "",
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("create namespace %q: %v", ns, err)
+	}
+}
+
+// seedNamespaceWorkingBreakGlass stores a working break-glass account of ns:
+// an enabled local person of ns with a passkey and a site administrator
+// grant on the object of ns.
+func seedNamespaceWorkingBreakGlass(t *testing.T, st *sqlite.Store, ns namespace.Name, id string) {
+	t.Helper()
+
+	ctx := t.Context()
+	at := time.Now().UTC().Truncate(time.Millisecond)
+
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{},
+		ID: id, Subject: id + "@example.com", DisplayName: id, Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: ns, GroupCount: 0, BreakGlass: true,
+	}
+
+	change := storetest.ServerChange(at, "principal:"+id)
+	change.Namespace = ns
+
+	fence := namespace.Fence{Namespace: ns, FailoverVersion: 1}
+
+	if err := st.CreateNamespacePrincipal(ctx, p, fence, change); err != nil {
+		t.Fatalf("create break-glass principal %q of %q: %v", id, ns, err)
+	}
+
+	passkey := mfa.Passkey{
+		CreatedAt: at, LastUsedAt: time.Time{}, SuspendedAt: time.Time{},
+		ID: "pky-" + id, PersonID: id, Name: "key-" + id,
+		CredentialID: []byte("credential-" + id), PublicKey: []byte("public-key-" + id),
+		Transports: nil, AAGUID: [16]byte{}, SignCount: 0, BackupEligible: false,
+	}
+
+	if err := st.AddPasskey(ctx, passkey, storetest.ServerChange(at, "passkey:pky-"+id)); err != nil {
+		t.Fatalf("add passkey of %q: %v", id, err)
+	}
+
+	grant := access.Grant{
+		CreatedAt: at, Condition: nil, Object: identity.NamespaceObject(ns), ID: "grt-" + id,
+		Role: access.RoleSiteAdministrator, CreatedBy: "admin",
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: id},
+	}
+
+	grantChange := storetest.ServerChange(at, "grant:grt-"+id)
+	grantChange.Namespace = ns
+
+	err := st.CreateGrant(ctx, grant, fence, grantChange, nil)
+	if err != nil {
+		t.Fatalf("create grant of %q: %v", id, err)
+	}
 }
 
 // runBreakGlassRestoreRefusal restores a backup with one working account over

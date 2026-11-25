@@ -94,6 +94,10 @@ func passkeyCases() []passkeyCase {
 			name: "an add of a break-glass person whose passkey insert fails stores no person and no entry",
 			test: testAddBreakGlassPersonInsertFails,
 		},
+		{
+			name: "an add of a hostile principal or passkey is refused and stores nothing",
+			test: testAddBreakGlassPersonGuards,
+		},
 		{name: "a rotation ends the old passkey and stores the new one", test: testRotate},
 		{
 			name: "a rotation whose insert fails keeps the old passkey",
@@ -1034,10 +1038,10 @@ func testRemoveRace(t *testing.T, s PasskeyStore) {
 	}
 }
 
-// breakGlassPrincipal returns the break-glass person id with the subject
-// subject, as an add of a break-glass account builds it.
-func breakGlassPrincipal(id, subject string) principal.Principal {
-	p := principalOf(id, subject, principal.KindPerson)
+// breakGlassPrincipal returns the break-glass person prn-1, as an add of a
+// break-glass account builds it.
+func breakGlassPrincipal() principal.Principal {
+	p := principalOf("prn-1", "break-glass-1", principal.KindPerson)
 	p.BreakGlass = true
 
 	return p
@@ -1048,7 +1052,7 @@ func breakGlassPrincipal(id, subject string) principal.Principal {
 func testAddBreakGlassPerson(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
-	p := breakGlassPrincipal("prn-1", "break-glass-1")
+	p := breakGlassPrincipal()
 	first := passkeyOf(1, p.ID)
 
 	err := s.AddBreakGlassPerson(t.Context(), p, first,
@@ -1079,7 +1083,7 @@ func testAddBreakGlassPersonInsertFails(t *testing.T, s PasskeyStore) {
 	owner := mustBreakGlass(t, s, 2)
 	mustAdd(t, s, 1, owner)
 
-	p := breakGlassPrincipal("prn-1", "break-glass-1")
+	p := breakGlassPrincipal()
 	first := passkeyOf(2, p.ID)
 	first.CredentialID = credential(1)
 
@@ -1093,6 +1097,96 @@ func testAddBreakGlassPersonInsertFails(t *testing.T, s PasskeyStore) {
 
 	wantEntries(t, s, principal.Ref(p.ID), 0)
 	wantEntries(t, s, passkeyObject(2), 0)
+}
+
+// testAddBreakGlassPersonGuards sends the hostile principals and passkeys of
+// the store guards of AddBreakGlassPerson to the store alone. Each refusal
+// stores no person, no passkey and no entry: every guard runs before the
+// first insert of the transaction.
+func testAddBreakGlassPersonGuards(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	cases := []struct {
+		name   string
+		setup  func(t *testing.T, s PasskeyStore)
+		person func() principal.Principal
+		mutate func(next *mfa.Passkey)
+	}{
+		{
+			name:  "a principal of another kind",
+			setup: nil,
+			person: func() principal.Principal {
+				p := breakGlassPrincipal()
+				p.Kind = principal.KindService
+
+				return p
+			},
+			mutate: nil,
+		},
+		{
+			name:  "a person that is not a break-glass account",
+			setup: nil,
+			person: func() principal.Principal {
+				p := breakGlassPrincipal()
+				p.BreakGlass = false
+
+				return p
+			},
+			mutate: nil,
+		},
+		{
+			name:  "a person of a namespace",
+			setup: nil,
+			person: func() principal.Principal {
+				p := breakGlassPrincipal()
+				p.Namespace = "team"
+
+				return p
+			},
+			mutate: nil,
+		},
+		{
+			name: "a first passkey of another person",
+			setup: func(t *testing.T, s PasskeyStore) {
+				t.Helper()
+				mustPerson(t, s, 5)
+			},
+			person: breakGlassPrincipal,
+			mutate: func(next *mfa.Passkey) { next.PersonID = "prn-5" },
+		},
+	}
+
+	for _, tc := range cases {
+		if tc.setup != nil {
+			tc.setup(t, s)
+		}
+
+		p := tc.person()
+		first := passkeyOf(1, p.ID)
+
+		if tc.mutate != nil {
+			tc.mutate(&first)
+		}
+
+		err := s.AddBreakGlassPerson(t.Context(), p, first,
+			entry(principal.Ref(p.ID), at(0)), entry(passkeyObject(1), at(11)))
+		wantErr(t, "add "+tc.name, err, mfa.ErrInvalid)
+
+		if _, err := s.GetPrincipal(t.Context(), p.ID); !errors.Is(err, principal.ErrNotFound) {
+			t.Fatalf("%s: principal after the refused add: err = %v, want ErrNotFound", tc.name, err)
+		}
+
+		if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+			t.Fatalf("%s: passkey after the refused add: err = %v, want ErrNotFound", tc.name, err)
+		}
+
+		if n := count(t, s, "prn-5"); n != 0 {
+			t.Fatalf("%s: passkeys of the other person = %d, want 0", tc.name, n)
+		}
+
+		wantEntries(t, s, principal.Ref(p.ID), 0)
+		wantEntries(t, s, passkeyObject(1), 0)
+	}
 }
 
 // testRotate proves that one rotation ends the old passkey and stores the

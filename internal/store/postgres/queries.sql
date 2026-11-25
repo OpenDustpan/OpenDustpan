@@ -1805,6 +1805,16 @@ WHERE p.break_glass
       )
   );
 
+-- name: ListBreakGlassNamespaceScopes :many
+-- The namespaces that hold a break-glass person: the scopes that the
+-- namespace count of a restore reads. The installation is no row: its empty
+-- namespace is the scope of CountWorkingBreakGlass.
+SELECT DISTINCT p.namespace FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.deleted_at_ms IS NULL
+  AND p.namespace <> '';
+
 -- name: GetPrincipalNamespace :one
 -- The namespace of a current principal: empty for a principal of the
 -- installation. A grant write reads it in its own transaction.

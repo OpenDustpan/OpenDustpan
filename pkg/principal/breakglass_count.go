@@ -33,11 +33,9 @@ type WorkingBreakGlassCounter interface {
 
 	// CountWorkingBreakGlassInNamespace returns the number of working
 	// break-glass accounts of the namespace scope ns at the time at. The
-	// scope holds the principals of ns and the grants on ns.
-	//
-	// An empty ns names the installation scope. The count then gives the
-	// same result as CountWorkingBreakGlass: the principals of the
-	// installation with a grant on the installation. It returns
+	// scope holds the principals of ns and the grants on ns, and no
+	// principal or grant of another scope. It returns ErrInvalid for an
+	// empty ns: the installation uses CountWorkingBreakGlass. It returns
 	// ErrBreakGlassUnavailable when the store cannot count.
 	CountWorkingBreakGlassInNamespace(ctx context.Context, ns namespace.Name, at time.Time) (int64, error)
 }

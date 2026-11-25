@@ -24,8 +24,16 @@ func (s *Store) CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64
 }
 
 // CountWorkingBreakGlassInNamespace implements
-// principal.WorkingBreakGlassCounter. An empty ns is the installation scope.
+// principal.WorkingBreakGlassCounter. It returns ErrInvalid for an empty ns:
+// CountWorkingBreakGlass holds the installation scope.
 func (s *Store) CountWorkingBreakGlassInNamespace(ctx context.Context, ns namespace.Name, at time.Time) (int64, error) {
+	// Defense in depth: the service does not ask for an empty scope. This
+	// check stays so that a new caller cannot read the installation count
+	// through the namespace port. It does not rely on the caller.
+	if ns == "" {
+		return 0, fmt.Errorf("count working break-glass accounts of a namespace: %w", principal.ErrInvalid)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -73,7 +81,69 @@ func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 
+	if err := checkNamespaceFloors(ctx, tx, at); err != nil {
+		return err
+	}
+
 	return checkWorkingBreakGlassFloor(before, after)
+}
+
+// checkNamespaceFloors refuses a swap that lowers the working break-glass
+// count of a namespace below the floor. The scopes are the namespaces that
+// hold a break-glass person in the live or the staged data. The count of one
+// namespace never counts the accounts of another namespace or of the
+// installation, so a restore that drops the accounts of one namespace is
+// refused even when the other scopes hold enough of them.
+func checkNamespaceFloors(ctx context.Context, tx *sql.Tx, at time.Time) error {
+	scopes, scopesErr := breakGlassRestoreScopes(ctx, tx)
+	if scopesErr != nil {
+		return scopesErr
+	}
+
+	for _, ns := range scopes {
+		before, beforeErr := countWorkingBreakGlassInNamespace(ctx, tx, breakGlassSchemaLive, ns, at)
+		if beforeErr != nil {
+			return beforeErr
+		}
+
+		after, afterErr := countWorkingBreakGlassInNamespace(ctx, tx, breakGlassSchemaMain, ns, at)
+		if afterErr != nil {
+			return afterErr
+		}
+
+		if err := checkWorkingBreakGlassFloor(before, after); err != nil {
+			return fmt.Errorf("namespace %q: %w", ns, err)
+		}
+	}
+
+	return nil
+}
+
+// breakGlassRestoreScopes returns the namespaces that hold a break-glass
+// person in the live or the staged schema, each once, in the order of the
+// live scopes first.
+func breakGlassRestoreScopes(ctx context.Context, tx *sql.Tx) ([]namespace.Name, error) {
+	live, liveErr := breakGlassNamespaceScopes(ctx, tx, breakGlassSchemaLive)
+	if liveErr != nil {
+		return nil, liveErr
+	}
+
+	staged, stagedErr := breakGlassNamespaceScopes(ctx, tx, breakGlassSchemaMain)
+	if stagedErr != nil {
+		return nil, stagedErr
+	}
+
+	seen := make(map[namespace.Name]bool, len(live)+len(staged))
+	out := make([]namespace.Name, 0, len(live)+len(staged))
+
+	for _, ns := range append(live, staged...) {
+		if !seen[ns] {
+			seen[ns] = true
+			out = append(out, ns)
+		}
+	}
+
+	return out, nil
 }
 
 // checkBreakGlassPasswords refuses data that holds a break-glass account with
@@ -180,6 +250,74 @@ func workingBreakGlassQuery(schema breakGlassSchema) (string, error) {
 // installation at the time at in the schema.
 func countWorkingBreakGlass(ctx context.Context, q sqlQueryer, schema breakGlassSchema, at time.Time) (int64, error) {
 	return countWorkingBreakGlassInNamespace(ctx, q, schema, "", at)
+}
+
+// breakGlassNamespacesQuery holds the text of the namespaces of one schema
+// that hold a break-glass person. %[1]s is the schema. The installation is
+// no row: its empty namespace is the scope of CountWorkingBreakGlass.
+const breakGlassNamespacesQuery = `SELECT DISTINCT p.namespace FROM %[1]s.principals p
+WHERE p.break_glass = 1
+  AND p.kind = 'person'
+  AND p.deleted_at_ms IS NULL
+  AND p.namespace <> ''`
+
+// breakGlassNamespaceScopes returns the namespaces of the schema that hold a
+// break-glass person, in no order. The schema is one of the fixed constants,
+// so no input reaches the text.
+func breakGlassNamespaceScopes(ctx context.Context, tx *sql.Tx, schema breakGlassSchema) ([]namespace.Name, error) {
+	var text string
+
+	switch schema {
+	case breakGlassSchemaMain, breakGlassSchemaLive:
+		text = fmt.Sprintf(breakGlassNamespacesQuery, schema)
+	default:
+		return nil, fmt.Errorf("list the namespaces of the break-glass accounts: unknown schema %q: %w",
+			string(schema), principal.ErrBreakGlassUnavailable)
+	}
+
+	rows, err := tx.QueryContext(ctx, text)
+	if err != nil {
+		return nil, fmt.Errorf("list the namespaces of the break-glass accounts: %w: %w",
+			principal.ErrBreakGlassUnavailable, err)
+	}
+
+	var (
+		out     []namespace.Name
+		scanErr error
+	)
+
+	func() {
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil && scanErr == nil {
+				scanErr = fmt.Errorf("list the namespaces of the break-glass accounts: %w: %w",
+					principal.ErrBreakGlassUnavailable, closeErr)
+			}
+		}()
+
+		for rows.Next() {
+			var ns string
+
+			if err := rows.Scan(&ns); err != nil {
+				scanErr = fmt.Errorf("scan a namespace of the break-glass accounts: %w: %w",
+					principal.ErrBreakGlassUnavailable, err)
+
+				return
+			}
+
+			out = append(out, namespace.Name(ns))
+		}
+
+		if err := rows.Err(); err != nil {
+			scanErr = fmt.Errorf("list the namespaces of the break-glass accounts: %w: %w",
+				principal.ErrBreakGlassUnavailable, err)
+		}
+	}()
+
+	if scanErr != nil {
+		return nil, scanErr
+	}
+
+	return out, nil
 }
 
 // countWorkingBreakGlassInNamespace counts the working break-glass accounts of

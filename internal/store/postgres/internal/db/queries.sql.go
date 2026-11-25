@@ -15541,6 +15541,37 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 	return items, nil
 }
 
+const listBreakGlassNamespaceScopes = `-- name: ListBreakGlassNamespaceScopes :many
+SELECT DISTINCT p.namespace FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.deleted_at_ms IS NULL
+  AND p.namespace <> ''
+`
+
+// The namespaces that hold a break-glass person: the scopes that the
+// namespace count of a restore reads. The installation is no row: its empty
+// namespace is the scope of CountWorkingBreakGlass.
+func (q *Queries) ListBreakGlassNamespaceScopes(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listBreakGlassNamespaceScopes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var namespace string
+		if err := rows.Scan(&namespace); err != nil {
+			return nil, err
+		}
+		items = append(items, namespace)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCollectionUnitIDs = `-- name: ListCollectionUnitIDs :many
 SELECT m.unit_id
 FROM collection_members AS m
