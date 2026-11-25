@@ -2,51 +2,35 @@
 
 ### Requirement: guard-last-enabled
 
-If a disable, delete or sweep leaves no enabled break-glass account, then the server SHALL refuse the change in its write transaction.
+If a disable or a delete leaves no enabled break-glass account, then the server SHALL refuse the change in its write statement and answer 409 with the code principal.no-working-break-glass.
 
 #### Scenario: Disable of the last enabled account is refused
 - **WHEN** a site administrator disables the last enabled break-glass account
-- **THEN** the server answers 409, keeps the account enabled and writes an audit entry for the refused change
+- **THEN** the server answers 409 with principal.no-working-break-glass, keeps the account enabled and writes an audit entry for the refused change
+
+#### Scenario: Delete of the last enabled account is refused
+- **WHEN** a site administrator deletes the last enabled break-glass account
+- **THEN** the server answers 409 with principal.no-working-break-glass and keeps the account
 
 #### Scenario: Disable that leaves one enabled account passes
 - **WHEN** a site administrator disables one of two enabled break-glass accounts
-- **THEN** the server accepts the change, writes an audit entry, notifies the other administrators and names the live count
+- **THEN** the server accepts the change, writes an audit entry and names the live count
 
 #### Scenario: Disable in maintenance mode
 - **WHEN** a site administrator disables one of two accounts in maintenance mode
 - **THEN** the server accepts the change
 
-#### Scenario: Sweep of the last account is refused
-- **WHEN** the sweep tries to delete the last enabled break-glass account
-- **THEN** the server refuses it and writes a record that names the sweep, the account and the reason
+### Requirement: sweep-exempt
 
-### Requirement: guard-floor
+The inactivity sweep SHALL NOT disable a break-glass account, and SHALL write one audit record for each break-glass account that it skips.
 
-If a grant revoke, a credential change, a passkey removal, an expiry change, a policy block or an IP allowlist change leaves fewer than two working break-glass paths, then the server SHALL refuse the change in its write transaction.
+#### Scenario: Sweep skips an inactive break-glass account
+- **WHEN** the sweep runs and a break-glass account is inactive for longer than the period
+- **THEN** the account stays enabled and the sweep writes one record of kind change with outcome success, in scope @server, with the principal reference of the account as object and the reason "break-glass account is exempt"
 
-#### Scenario: IP allowlist change below the floor is refused
-- **WHEN** an IP allowlist change leaves one working path
-- **THEN** the server answers 409 with the live count, keeps the old list and writes an audit entry
-
-#### Scenario: Passkey removal below the floor is refused
-- **WHEN** a person removes the passkey of a break-glass account and the count would fall below two
-- **THEN** the server answers 409 and keeps the passkey
-
-#### Scenario: Policy block below the floor is refused
-- **WHEN** a policy block blocks an account and the count would fall below two
-- **THEN** the server answers 409 and keeps the account unblocked
-
-#### Scenario: Expiry change below the floor is refused
-- **WHEN** an expiry change puts an account in the past and the count would fall below two
-- **THEN** the server answers 409 and keeps the old expiry
-
-#### Scenario: Hosted admin grant revoke is refused
-- **WHEN** a revoke of the role admin of a namespace leaves fewer than two break-glass principals
-- **THEN** the server answers 409 and keeps the grant
-
-#### Scenario: A change that does not lower the count passes
-- **WHEN** the installation holds one working path and a change leaves the count the same
-- **THEN** the server accepts the change
+#### Scenario: Sweep with no break-glass account
+- **WHEN** the sweep runs and no break-glass account is inactive
+- **THEN** the sweep writes no exemption record
 
 ### Requirement: add-raises-count
 
@@ -74,19 +58,15 @@ When a site administrator reads the list of break-glass accounts, the server SHA
 
 ### Requirement: guard-race
 
-If a concurrent write holds the lock on the break-glass set past the lock timeout, then the server SHALL answer 409 with the code break-glass.busy and write nothing.
+If two requests disable the last two enabled break-glass accounts together, then the server SHALL accept one request and refuse the other.
 
 #### Scenario: Second request after the first commit
 - **WHEN** two requests disable the last two accounts
-- **THEN** one request succeeds and the other gets 409
+- **THEN** one request succeeds and the other gets 409 with principal.no-working-break-glass
 
-#### Scenario: Lock timeout
-- **WHEN** the lock wait passes the timeout
-- **THEN** the server answers 409 with break-glass.busy, stores no change and allows a safe retry
-
-#### Scenario: Sign-in during a lock wait
-- **WHEN** a break-glass sign-in runs while a guarded change waits for the lock
-- **THEN** the sign-in does not take the guard lock and writes a whole session
+#### Scenario: Sign-in during a disable
+- **WHEN** a break-glass sign-in runs while a disable runs
+- **THEN** the sign-in takes no guard step and writes a whole session
 
 ### Requirement: restore-guard
 
@@ -94,7 +74,7 @@ If a restore leaves fewer than two working break-glass paths in the staged data 
 
 #### Scenario: Old backup with one account
 - **WHEN** an operator restores a backup with one working account
-- **THEN** the server answers 409 with break-glass.restore-refused and the data stays unchanged
+- **THEN** the server answers 409 with principal.no-working-break-glass and the data stays unchanged
 
 #### Scenario: Backup with two accounts
 - **WHEN** an operator restores a backup with two working accounts

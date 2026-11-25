@@ -79,6 +79,13 @@ only if the transcript leaves doubt; most need no second pass. Tick each task wh
 - [ ] 4.3 Mark the change `approval-defaults-take-effect-live` stale in its own pull request (its premise is false on main). Check: that pull request exists. A person's step.
 - [ ] 0.1 For each open PR that touches `pkg/store/`: merge, close as stale, or mark "port with branch mode". Check: a table of the 23 PRs and their outcome in STATE.md. Confirmed by: A person's step (the lead triages the open store PRs).
 
+## Agent steps that wait for a capability that is not on main
+
+An agent runs each step below when the capability lands. A person does not run it.
+
+- [ ] 4.1 Add an e2e step with the real CLI over TLS in the existing file e2e/break_glass_test.go (extend it). It calls the route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate and the disable route with an access token of a site administrator. It needs passkey sign-in for local users, which is not on main. Check: The steps pass on sqlite and postgres: a refused disable, an atomic rotation and a refused restore. Written by: keep-two-working-break-glass 4.1.
+- [ ] 4.2 Ship the docs page and run its commands as written. Check: The docs test runs each command. Written by: keep-two-working-break-glass 4.2.
+
 ## Archived origin (tick here with evidence; the change is closed)
 
 - [ ] 4.2 Run usability check of the agent-block read path. Check: Persona completes the user path from the docs page alone, and each error names the one command that helps. A person's step.
