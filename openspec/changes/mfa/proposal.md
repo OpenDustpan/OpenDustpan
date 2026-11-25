@@ -1,5 +1,5 @@
 ---
-version: 15
+version: 16
 ---
 
 Issue: #4064
@@ -37,14 +37,15 @@ Evidence for the claims above:
 
 - Require a TOTP, recovery code or passkey second factor for local and LDAP password sign-in when built-in MFA is on and the rule of ADR 285 decisions 20 and 21 says so: the person has a factor, require MFA is on, or an SSO provider exists next to the password sign-in.
 - Add one route for the second factor of a pending sign-in, `POST /api/dustpan/v1/sign-in/second-factor`, with a method field.
-- Add the SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`, with their conformance suites.
-- Add one port method that accepts a TOTP time step for a sign-in and touches no step-up counter.
+- Use the stores of the change `mfa-store`: the SQLite and PostgreSQL adapters of `mfa.PendingStore`, `mfa.RecoveryCodeStore` and `stepup.TOTPStore`. This change adds no adapter and no table.
+- Call the NEW port method `AcceptSignInStep` of the change `mfa-store` for the single-use rule of a TOTP code at sign-in.
 - Store the MFA policy as three installation settings: `mfa.enabled`, `mfa.requireForAll` and `mfa.enrollmentGraceDays`.
 - Keep SSO sign-in with no added built-in second factor.
 - Require a fresh MFA step for access token creation and secret reveal inside one window.
 
 Out of scope:
 
+- The tables, the queries, the adapters, the backup and restore rules and the NEW port method `AcceptSignInStep`, owned by the change `mfa-store`
 - OIDC, SAML, CAS, OAuth 2.0, trusted-header, and SCIM behavior
 - Signed-request recovery, and the reset of the factors of a person by a temporary administrator of a recovery with no fresh step (ADR 372 decision 6), owned by the signed-request-recovery change
 - Token expiry email and SMTP settings
@@ -56,6 +57,7 @@ Out of scope:
 
 Depends on:
 
+- mfa-store
 - ldap-sign-in
 - add-one-generic-settings-api
 - fresh-authentication-window-0-turns
@@ -73,10 +75,9 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main tests the freshness hook for access tokens (`pkg/accesstoken/accesstoken_test.go:779`)
 - Main has the pending sign-in: `mfa.Pending` (`pkg/mfa/mfa.go:275`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) with `CreatePending`, `FailPending` and `CompletePending` (`pkg/mfa/mfa.go:315`). This change adds no second pending type.
 - Main has the passkey sign-in ceremony: `FinishSignIn` (line 374) and the pending ID in `Binding` (line 128) in the file (read only) `internal/mfasvc/service.go`.
-- Main has no adapter for the pending sign-in, the recovery codes or the TOTP factor. `mfa.RecoveryCodeStore` (`pkg/mfa/mfa.go:245`), `mfa.PendingStore` (`pkg/mfa/mfa.go:289`) and `stepup.TOTPStore` (`internal/stepup/stepup.go:680`) have no implementation in `internal/store`, and `mfatest.Run` skips each case (`pkg/mfa/mfatest/suite.go:110`).
+- Main has no adapter of the pending sign-in, the recovery codes or the TOTP factor, and the change `mfa-store` adds them before this change starts.
 - Main fails a password sign-in closed with `ReasonSecondFactor` (`internal/localusersvc/signin.go:340`) and has no route that takes a second factor. The password route answers 204 with a session cookie (read only) `internal/api/server/localusers.go`.
-- Main counts a TOTP failure on the step-up counter before the time step check: `BeginTOTPAttempt` (`internal/stepup/stepup.go:705`) comes before `AcceptStep` (`internal/stepup/stepup.go:728`), and the comment of `TOTP` (`internal/stepup/stepup.go:634`) says that the sign-in has its own counters.
-- Main has the single-use rule of a TOTP code: the store accepts a time step one time (`stepup.ErrUsed` at line 50, `TOTP.LastStep` at line 647, `AcceptStep` at line 728 in the file `internal/stepup/stepup.go`). This change reuses that rule through one new port method and adds no second rule.
+- Main has the single-use rule of a TOTP code in the file (read only) `internal/stepup/stepup.go`. The change `mfa-store` adds the NEW method `AcceptSignInStep` for the sign-in, and this change reuses that rule through it.
 
 ## ADR check
 
@@ -109,7 +110,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: the change of ADR 285 decisions 20 and 21.
 - Changed by: ADR 301 extends decision 1; ADR 333 extends decision 4.
 - Quote: "Changes ADR 285 decisions 5, 17, 19, 20 and 21: "end every session" becomes a bump of the session generation. A good second factor issues cookies, not a stored session. An enroll-only session is a claim of the cookies."
-- Effect: a good second factor issues cookies through `CompletePending`, and the second-factor time of task 3.9 is kept in the sealed cookies.
+- Effect: a good second factor issues cookies through `CompletePending`, and the second-factor time of task 2.9 is kept in the sealed cookies.
 - Conflict: none.
 
 **ADR 56: MFA freshness for token creation and secret reveal** (not owner-tagged).
