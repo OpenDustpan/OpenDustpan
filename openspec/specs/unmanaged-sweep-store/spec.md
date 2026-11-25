@@ -1,7 +1,7 @@
 # unmanaged-sweep-store Specification
 
 ## Purpose
-TBD - created by archiving change add-job-session-paths-runner-unmanaged-sweep-store. Update Purpose after archive.
+The sweep store holds the state of unmanaged-job sweeps. This capability covers the fenced writes of the store and the check that a pool may run a sweep (a pool of the same namespace that is not a pool for jobs). It does not cover the sweep routes, the claimer or the runner credentials.
 
 ## Requirements
 
