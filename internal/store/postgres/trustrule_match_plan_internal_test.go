@@ -23,8 +23,8 @@ INSERT INTO trust_rules (
 	id, namespace, name, issuer, audience, key_source, static_keys, conditions_json,
 	principal_id, created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
 )
-SELECT 'plan-' || n, $1, 'plan-' || n, 'https://token.actions.example.com', 'https://dustpan.example.com',
-	'discovery', '', '[]', $2, 'ana', 0, 1, 'spiffe://example.org/ns/acme/sa/plan-' || n, $3
+SELECT 'plan-' || n, $1::text, 'plan-' || n, 'https://token.actions.example.com', 'https://dustpan.example.com',
+	'discovery', '', '[]', $2::text, 'ana', 0, 1, 'spiffe://example.org/ns/acme/sa/plan-' || n, $3::text
 FROM generate_series(1, 19000) AS n`,
 		fix.fence.Namespace.String(), fix.rule.PrincipalID, fix.rule.BundleID)
 	if err != nil {
