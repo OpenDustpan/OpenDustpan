@@ -5,8 +5,6 @@ const (
 	BreakGlassSelfReview = "break-glass.self-review"
 	// BreakGlassNotFound means that no break-glass account has the ID, or that the passkey is not one of the account.
 	BreakGlassNotFound = "break-glass.not-found"
-	// BreakGlassBusy means that another change held the break-glass lock past its timeout.
-	BreakGlassBusy = "break-glass.busy"
 )
 
 // breakGlassSpecs are the codes of the reviews of the break-glass uses and of
@@ -21,11 +19,6 @@ func breakGlassSpecs() []Spec {
 		{
 			Code:    BreakGlassNotFound,
 			Meaning: "no break-glass account has the ID, or the passkey is not one of the account",
-			Args:    nil,
-		},
-		{
-			Code:    BreakGlassBusy,
-			Meaning: "another change held the break-glass lock past its timeout",
 			Args:    nil,
 		},
 	}

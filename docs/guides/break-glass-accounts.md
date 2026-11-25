@@ -118,19 +118,6 @@ sees the new passkey. An account that is not a break-glass account, or a
 passkey that the account does not hold, answers `404` with the error code
 `break-glass.not-found`. The answer of a change is `204`.
 
-## The lock timeout
-
-The setting `principal.breakGlassLockSeconds` holds the number of whole
-seconds for a lock wait of a guarded change. Its default is `5`, and it takes
-`1` to `60`. `GET /api/dustpan/v1/settings` shows its effective value and the
-layer that gave it.
-
-The server does not use this setting yet. A disable or a delete of a
-break-glass account counts the enabled accounts in the database transaction
-of the write, and does not wait for a separate lock. A change that this count
-refuses answers `409` with the error code `principal.no-working-break-glass`
-and writes nothing.
-
 ## The session limit
 
 A session of a break-glass account ends 1 hour after the sign-in. The limit is
@@ -201,7 +188,10 @@ The enable of a disabled account is not a revocation. It stays refused with
 
 ## Other paths
 
-The inactivity disable never disables a break-glass account. The expiry of a
+The inactivity disable never disables a break-glass account. Each run of the
+sweep that skips one writes an audit entry in the scope `@server` with the
+reason `break-glass account is exempt`. The entry names the account, so the
+audit log shows why the account stayed enabled. The expiry of a
 temporary administrator ends a temporary administrator only, and a temporary
 administrator is never a break-glass account.
 

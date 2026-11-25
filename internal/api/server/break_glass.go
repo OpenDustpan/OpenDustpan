@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -51,6 +52,10 @@ const (
 // them in base64, so this is ample.
 const maxBreakGlassBodyBytes = 16 * 1024
 
+// maxBreakGlassIDLength is the most characters that the ID of a principal
+// has. It is the limit that the principal package uses for its own IDs.
+const maxBreakGlassIDLength = 64
+
 // errBreakGlassBody reports a body that is not the one of a break-glass
 // add or rotation.
 var errBreakGlassBody = errors.New(
@@ -64,11 +69,6 @@ var errBreakGlassNotFound = &codedError{
 	status: http.StatusNotFound, code: errcode.BreakGlassNotFound, args: nil,
 	message: "No break-glass account has this ID, or the passkey is not one of its records.",
 }
-
-// breakGlassBusyMessage is the answer of a guarded change that waited for
-// the break-glass lock past its timeout.
-const breakGlassBusyMessage = "Another change holds the break-glass lock. " +
-	"The server wrote nothing. Retry the request."
 
 // breakGlassAccountResponse is one break-glass account on the wire. Enabled
 // is false after a disable, and a null disabledAt means that the account is
@@ -238,7 +238,7 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(ctx, w, passkeyError(err))
 
 		return
 	}
@@ -284,6 +284,22 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
+	// Allowlist check at the boundary: an ID of another shape names no
+	// break-glass account, so nothing reaches the principal service. The audit
+	// entry names the route object, not the hostile text. Defense in depth:
+	// the store reads by placeholder and breakGlassAccount refuses an unknown
+	// record; this check stays so that a hostile ID never reaches either
+	// layer, and it does not rely on them.
+	if !ident.Valid(id, maxBreakGlassIDLength) {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: "break-glass",
+			outcome: audit.OutcomeDenied,
+		}, "the ID has a form that no break-glass account has")
+		h.writeError(ctx, w, errBreakGlassNotFound)
+
+		return
+	}
+
 	account, err := h.breakGlassAccount(ctx, id)
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
@@ -297,7 +313,7 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(ctx, w, passkeyError(err))
 
 		return
 	}

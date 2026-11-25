@@ -68,7 +68,6 @@ func TestDatabaseSettingsAreDeclared(t *testing.T) {
 	}{
 		{key: access.SettingCollectionUnitCap, want: strconv.Itoa(access.DefaultCollectionUnitCap)},
 		{key: "branding.preset", want: ""},
-		{key: "principal.breakGlassLockSeconds", want: "5"},
 	} {
 		d, ok := registry.Lookup(setting.LevelInstallation, c.key)
 		if !ok || !d.Database || d.Default != c.want {

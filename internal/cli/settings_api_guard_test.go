@@ -28,7 +28,6 @@ func TestOnlyKnownSettingsTakeDatabaseValues(t *testing.T) {
 		"password.minLength",
 		"password.requireLettersAndDigits",
 		"password.resetLifetime",
-		"principal.breakGlassLockSeconds",
 		"principal.removalAlertCount",
 		"principal.removalAlertPercent",
 		"principal.removalAlertWindow",

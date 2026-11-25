@@ -462,6 +462,10 @@ func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.
 		return fmt.Errorf("delete passkey: %w", err)
 	}
 
+	// Defense in depth: owned() above already checks the owner of the passkey.
+	// This check stays so that a race, or a later change of owned(), cannot
+	// let the rotation store a new passkey after a delete that removed no row
+	// of this person. It does not rely on owned() or on the service.
 	if n != 1 {
 		return mfa.ErrNotFound
 	}

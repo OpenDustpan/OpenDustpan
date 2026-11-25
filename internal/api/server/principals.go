@@ -1170,8 +1170,6 @@ func classifyBreakGlass(err error) (failure, bool) {
 			principal.ErrBreakGlassKind.Error(),
 			errcode.PrincipalBreakGlassKind,
 		), true
-	case errors.Is(err, principal.ErrBreakGlassBusy):
-		return failCoded(http.StatusConflict, breakGlassBusyMessage, errcode.BreakGlassBusy), true
 	case errors.Is(err, errBreakGlassBody):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, breakglass.ErrSelfReview):

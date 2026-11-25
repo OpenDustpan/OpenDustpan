@@ -77,8 +77,7 @@ var (
 	// ErrBreakGlassFloor reports a change that would leave fewer than the
 	// floor of working break-glass paths.
 	ErrBreakGlassFloor = errors.New("the change leaves too few working break-glass paths")
-	// ErrBreakGlassBusy reports a guard lock wait that passed its timeout.
-	ErrBreakGlassBusy = errors.New("break-glass guard is busy")
+
 	// ErrBreakGlassUnavailable reports that the store cannot count the
 	// working break-glass accounts. A caller that cannot count refuses the
 	// change (fail closed).

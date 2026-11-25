@@ -101,6 +101,11 @@ func passkeyCases() []passkeyCase {
 			test: testRotateNotBreakGlass,
 		},
 		{
+			name: "a rotation to a new passkey of another person fails with ErrInvalid, keeps the old passkey " +
+				"and stores nothing",
+			test: testRotateOtherPerson,
+		},
+		{
 			name: "two rotations of one passkey at the same time: one wins and one working credential stays",
 			test: testRotateRace,
 		},
@@ -1134,6 +1139,38 @@ func testRotateNotBreakGlass(t *testing.T, s PasskeyStore) {
 	}
 
 	wantEntries(t, s, passkeyObject(2), 0)
+}
+
+// testRotateOtherPerson proves that a rotation whose new passkey names
+// another person fails with ErrInvalid, keeps the old passkey, stores no
+// passkey for the other person and appends no entry.
+func testRotateOtherPerson(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustBreakGlass(t, s, 1)
+	other := mustBreakGlass(t, s, 2)
+	mustAdd(t, s, 1, pid)
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", passkeyOf(3, other), entry(passkeyObject(3), at(60)))
+	wantErr(t, "rotate into a passkey of another person", err, mfa.ErrInvalid)
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the refused rotation: %v", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(3)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("new passkey after the refused rotation: err = %v, want ErrNotFound", err)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys of the person = %d, want 1", n)
+	}
+
+	if n := count(t, s, other); n != 0 {
+		t.Fatalf("passkeys of the other person = %d, want 0", n)
+	}
+
+	wantEntries(t, s, passkeyObject(3), 0)
 }
 
 // testRotateRace proves that two rotations of one passkey at the same time

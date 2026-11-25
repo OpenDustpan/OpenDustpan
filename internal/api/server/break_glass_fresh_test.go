@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -350,6 +351,66 @@ func addBreakGlassAccount(t *testing.T, f accessFixture) breakGlassAccountDoc {
 	}
 
 	return account
+}
+
+// TestBreakGlassRotateRefusesHostilePathID sends a hostile ID in the path of
+// the rotation. The handler checks the ID at the boundary, before it asks the
+// principal service. Each refusal answers 404 with break-glass.not-found and
+// writes one denied entry on the "break-glass" object. The service answers
+// 404 for such an ID too, but it names the hostile ID as the object of its
+// entry: a row whose guard is removed misses the entry, and fails.
+func TestBreakGlassRotateRefusesHostilePathID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"ID over the length limit", "prn-" + strings.Repeat("a", 200)},
+		{"ID with CR LF", "prn-x\r\nX-Injected: 1"},
+		// The mux cleans a ".." segment with a redirect before the handler
+		// runs, so a dot row starts with a dot instead.
+		{"ID that starts with a dot", ".prn"},
+		{"ID with an encoded slash", "prn-a/../prn-b"},
+		{"ID with a space", "prn- x"},
+		{"ID with uppercase and unicode", "PRN-éÉ"},
+		{"ID with an SQL quote", "prn-x' OR '1'='1"},
+		{"ID with a percent sign", "prn-%41"},
+		{"ID that starts with a dash", "-prn"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixture(t)
+			f.seedSessionAdmin(t, "admin")
+			account := addBreakGlassAccount(t, f)
+
+			body := breakGlassBody(t, map[string]any{"oldPasskey": account.Passkeys[0].ID, "name": "next-key"})
+			path := breakGlassPath + "/" + url.PathEscape(c.id) + "/rotate"
+			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, path, body)
+
+			if got := decodeErrorBody(t, rec); rec.Code != http.StatusNotFound ||
+				got.ErrorCode != errcode.BreakGlassNotFound {
+				t.Fatalf("rotate %q = %d %s, want 404 with errorCode %s", c.id, rec.Code, rec.Body.String(),
+					errcode.BreakGlassNotFound)
+			}
+
+			denied := floorEntries(t, f.store, identity.ActionServerManagePrincipals, audit.OutcomeDenied,
+				"break-glass")
+			if len(denied) != 1 || denied[0].Reason == "" {
+				t.Fatalf("denied entries on break-glass = %+v, want one with a reason", denied)
+			}
+
+			// The refusal kept the passkey of the real account.
+			accounts := breakGlassAccounts(t, f)
+			if len(accounts) != 1 || len(accounts[0].Passkeys) != 1 ||
+				accounts[0].Passkeys[0].ID != account.Passkeys[0].ID {
+				t.Fatalf("accounts = %+v, want the old passkey %s only", accounts, account.Passkeys[0].ID)
+			}
+		})
+	}
 }
 
 // TestBreakGlassRotateRefusesOtherRecords sends a rotation to an ID that is
