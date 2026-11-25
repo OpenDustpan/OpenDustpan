@@ -72,6 +72,19 @@ func count(errs []error, want error) (int, error) {
 	return wins, other
 }
 
+// concurrentCases returns the cases that race two writes of one namespace.
+func concurrentCases() []suiteCase {
+	return []suiteCase{
+		{"two claimers of one phase: one wins", testTwoClaimers},
+		{"parallel dispatches on one unit: one holds it", testParallelUnitBusy},
+		{"a dispatch and a manual lock in parallel give one serial order", testDispatchAndLockInParallel},
+		{
+			"a freeze create and a change dispatch in parallel give one serial order",
+			testConcurrentFreezeCreateAndDispatch,
+		},
+	}
+}
+
 // testTwoClaimers races several claimers for one phase. The durable store
 // gives the operation to one of them. Of several writers of the claim of the
 // job at one version, one wins and the others read the job again with
@@ -246,6 +259,96 @@ func raceDispatchAndLock(t *testing.T, h Harness, f fixture, j *job.Job, target 
 	wg.Wait()
 
 	return out
+}
+
+// freezeRaceResult holds the error of each call of a race between a change
+// dispatch and a freeze create.
+type freezeRaceResult struct {
+	dispatch error
+	freeze   error
+}
+
+// raceDispatchAndFreeze dispatches j and creates fr at the same time, and
+// returns the error of each call.
+func raceDispatchAndFreeze(t *testing.T, h Harness, f fixture, j *job.Job, fr job.Freeze) freezeRaceResult {
+	t.Helper()
+
+	var (
+		wg    sync.WaitGroup
+		start = make(chan struct{})
+		out   freezeRaceResult
+	)
+
+	wg.Go(func() {
+		<-start
+
+		_, out.dispatch = h.Jobs.Apply(t.Context(), dispatch(j), f.fence, nil)
+	})
+
+	wg.Go(func() {
+		<-start
+
+		out.freeze = h.Freezes.CreateFreeze(t.Context(), fr, f.fence,
+			entry(f.unit, job.ActionNamespaceManageFreezes))
+	})
+
+	close(start)
+	wg.Wait()
+
+	return out
+}
+
+// testConcurrentFreezeCreateAndDispatch is the ConcurrentFreezeCreateAndDispatch
+// case: it races the change dispatch of a job with the create of a freeze of
+// its namespace. The transactions serialize, so the dispatch runs first and
+// the job is dispatched, or the freeze comes first and the dispatch is
+// ErrFrozen with the job still queued. A later change dispatch is ErrFrozen
+// in both orders.
+func testConcurrentFreezeCreateAndDispatch(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	other, err := h.Domain.CreateUnit(t.Context(), f.fence, "opentofu", "dns")
+	if err != nil {
+		t.Fatalf("CreateUnit = %v", err)
+	}
+
+	for range lockRaceRounds {
+		j := create(t, h, f, newJob(f.unit, job.OperationRefresh, ""), nil)
+		fr := newFreeze(f)
+		got := raceDispatchAndFreeze(t, h, f, &j, fr)
+
+		if got.freeze != nil {
+			t.Fatalf("CreateFreeze = %v", got.freeze)
+		}
+
+		if got.dispatch != nil && !errors.Is(got.dispatch, job.ErrFrozen) {
+			t.Fatalf("dispatch racing a freeze = %v, want nil or ErrFrozen", got.dispatch)
+		}
+
+		want := job.StateDispatched
+		if got.dispatch != nil {
+			want = job.StateQueued
+		}
+
+		assertState(t, h, j.ID, want)
+
+		// The freeze is in place, so a later change dispatch is refused. The
+		// other unit keeps the one-change rule from answering first.
+		next := create(t, h, f, newJob(other, job.OperationRefresh, ""), nil)
+		if _, err := h.Jobs.Apply(t.Context(), dispatch(&next), f.fence, nil); !errors.Is(err, job.ErrFrozen) {
+			t.Fatalf("dispatch after the freeze = %v, want ErrFrozen", err)
+		}
+
+		err := h.Freezes.EndFreeze(t.Context(), fr.ID, "bo", f.fence,
+			entry(f.unit, job.ActionNamespaceManageFreezes))
+		if err != nil {
+			t.Fatalf("EndFreeze = %v", err)
+		}
+
+		cancelJobs(t, h, f, j.ID, next.ID)
+	}
 }
 
 // cancelJobs ends the jobs, so that the rounds of a case stay below the limit

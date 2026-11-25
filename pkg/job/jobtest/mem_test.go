@@ -662,7 +662,10 @@ func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, []job.Dam
 	return out, damaged, nil
 }
 
-// CreateFreeze implements job.FreezeStore.
+// CreateFreeze implements job.FreezeStore. The mutex is the namespace row
+// lock of the SQL adapters: the active check and the insert run under one
+// lock, as they run in the transaction of a create, so a dispatch and a
+// create have one serial order.
 func (m *memDB) CreateFreeze(_ context.Context, f job.Freeze, fence namespace.Fence, e audit.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

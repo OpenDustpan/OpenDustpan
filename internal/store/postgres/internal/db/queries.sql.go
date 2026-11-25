@@ -6388,21 +6388,29 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 }
 
 const getActiveJobFreeze = `-- name: GetActiveJobFreeze :one
-SELECT f.id FROM job_freezes AS f
-JOIN namespaces AS n ON n.id = f.namespace_id
-WHERE n.name = $1 AND f.starts_at_ms <= $2
-  AND (f.ends_at_ms = 0 OR $2 < f.ends_at_ms)
-ORDER BY f.starts_at_ms, f.id
+SELECT COALESCE(f.id, '') AS id
+FROM namespaces AS n
+LEFT JOIN job_freezes AS f
+  ON f.namespace_id = n.id AND f.starts_at_ms <= $1
+  AND (f.ends_at_ms = 0 OR $1 < f.ends_at_ms)
+WHERE n.name = $2
+ORDER BY f.starts_at_ms NULLS LAST, f.id
 LIMIT 1
+FOR SHARE OF n
 `
 
 type GetActiveJobFreezeParams struct {
-	Namespace string
 	NowMs     int64
+	Namespace string
 }
 
+// The read locks the namespace row FOR SHARE, so a freeze create that locks
+// the same row FOR NO KEY UPDATE waits, and a freeze that the create commits
+// first is seen here. The left join keeps the namespace row when no freeze is
+// active, so the read locks the row either way. A lock on a freeze row alone
+// locks an existing row only.
 func (q *Queries) GetActiveJobFreeze(ctx context.Context, arg GetActiveJobFreezeParams) (string, error) {
-	row := q.db.QueryRow(ctx, getActiveJobFreeze, arg.Namespace, arg.NowMs)
+	row := q.db.QueryRow(ctx, getActiveJobFreeze, arg.NowMs, arg.Namespace)
 	var id string
 	err := row.Scan(&id)
 	return id, err
@@ -13115,33 +13123,39 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) error {
 }
 
 const insertJobFreeze = `-- name: InsertJobFreeze :execrows
-INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
-VALUES (
-    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2), $3,
-    $4, $5, $6, $7
+WITH locked AS (
+    SELECT n.id FROM namespaces AS n WHERE n.name = $7 FOR NO KEY UPDATE
 )
+INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
+SELECT $1, locked.id, $2, $3, $4,
+       $5, $6
+FROM locked
 ON CONFLICT (id) DO NOTHING
 `
 
 type InsertJobFreezeParams struct {
 	ID         string
-	Namespace  string
 	Reason     string
 	StartsAtMs int64
 	EndsAtMs   int64
 	CreatedBy  string
 	EndedBy    string
+	Namespace  string
 }
 
+// The insert locks the namespace row FOR NO KEY UPDATE before it inserts, so
+// a dispatch that reads the active freeze with the same row FOR SHARE waits,
+// and a freeze that this insert makes cannot pass a dispatch that read no
+// freeze. A lock on the freeze row alone locks an existing row only.
 func (q *Queries) InsertJobFreeze(ctx context.Context, arg InsertJobFreezeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertJobFreeze,
 		arg.ID,
-		arg.Namespace,
 		arg.Reason,
 		arg.StartsAtMs,
 		arg.EndsAtMs,
 		arg.CreatedBy,
 		arg.EndedBy,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err

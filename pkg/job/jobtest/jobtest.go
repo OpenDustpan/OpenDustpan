@@ -186,15 +186,12 @@ func Run(t *testing.T, newHarness Factory) {
 		{"list filters by unit and state, newest first", testList},
 		{"a fence of another namespace reaches no job", testForeignNamespace},
 		{"parallel creates with one key give one job", testParallelCreatesOneKey},
-		{"two claimers of one phase: one wins", testTwoClaimers},
-		{"parallel dispatches on one unit: one holds it", testParallelUnitBusy},
-		{"a dispatch and a manual lock in parallel give one serial order", testDispatchAndLockInParallel},
 		{"a dispatch of a renamed unit still obeys the lock of its namespace", testRenamedUnitLocked},
 		{"a dispatch of a renamed unit still obeys the lock of the unit", testRenamedUnitOwnLock},
 		{"a dispatch of a unit that left the inventory is refused", testUnitGone},
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
-	}, freezeCases(), createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
+	}, concurrentCases(), freezeCases(), createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
 		endClaimCases(), claimBoundCases(), claimGateCases(), claimCases())
 
 	runCases(t, newHarness, cases)

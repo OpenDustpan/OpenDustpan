@@ -102,7 +102,7 @@ func TestReconcileDispatchGuardsTheFreeze(t *testing.T) {
 	}
 
 	active := &listedFreezes{FreezeStore: nil, freezes: []job.Freeze{{
-		ID: "frz-1", Namespace: "acme", Reason: "release week", StartsAt: time.Now().Add(-time.Hour),
+		ID: "frz-1", Namespace: "acme", Reason: "release week", StartsAt: freezeTestNow().Add(-time.Hour),
 		EndsAt: time.Time{}, CreatedBy: "bo", EndedBy: "",
 	}}, err: nil}
 

@@ -4316,6 +4316,10 @@ ORDER BY j.seq
 LIMIT sqlc.arg(max_rows);
 
 -- name: GetActiveJobFreeze :one
+-- SQLite has one writer at a time and this store runs every write over one
+-- connection behind a write gate, so the read and the insert of a freeze and
+-- the dispatch already serialize in their transactions. The read stays a
+-- plain SELECT: a row lock has no equivalent here.
 SELECT f.id FROM job_freezes AS f
 JOIN namespaces AS n ON n.id = f.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND f.starts_at_ms <= sqlc.arg(now_ms)
@@ -4324,6 +4328,9 @@ ORDER BY f.starts_at_ms, f.id
 LIMIT 1;
 
 -- name: InsertJobFreeze :execrows
+-- The single writer of SQLite serializes this insert with the dispatch, so
+-- the transaction needs no row lock. The unique index on the open freezes
+-- keeps one active freeze of each namespace.
 INSERT INTO job_freezes (id, namespace_id, reason, starts_at_ms, ends_at_ms, created_by, ended_by)
 VALUES (
     sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)), sqlc.arg(reason),

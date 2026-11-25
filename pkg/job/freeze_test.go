@@ -17,6 +17,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
+// freezeTestNow returns the fixed clock of the freeze tests. It is in the past,
+// so a freeze that starts before it is active for the real clock of a service.
+func freezeTestNow() time.Time {
+	return time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC)
+}
+
 // TestFreezeGuardAtJobStart checks the freeze guard of the real SQLite store:
 // a start and a phase dispatch of a phase that changes the unit are refused
 // with job.ErrFrozen during an active freeze unless the job has a break-glass,
@@ -181,7 +187,7 @@ func newFreezeGuard(t *testing.T, st *sqlite.Store, name string) freezeGuard {
 
 	fr := job.Freeze{
 		ID: ident.NewID("frz-"), Namespace: fence.Namespace, Reason: "release week",
-		StartsAt: time.Now().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+		StartsAt: freezeTestNow().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
 	}
 
 	if err := stores.CreateFreeze(t.Context(), fr, fence, freezeEntry(unit)); err != nil {
@@ -361,7 +367,7 @@ func freezeChange(j *job.Job, ev job.Event) job.Change {
 // freezeEntry returns a valid audit entry for the freeze actions on unit.
 func freezeEntry(unit identity.Object) audit.Entry {
 	return audit.Entry{
-		At: time.Now().UTC(), Namespace: unit.Namespace(), Subject: "al", IDPSubject: "", TokenID: "",
+		At: freezeTestNow(), Namespace: unit.Namespace(), Subject: "al", IDPSubject: "", TokenID: "",
 		Action: string(job.ActionNamespaceManageFreezes), Object: unit.String(), Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
@@ -405,7 +411,7 @@ func TestFreezeGate(t *testing.T) {
 	})
 
 	g := newFreezeGuard(t, st, "fzgate")
-	now := time.Now()
+	now := freezeTestNow()
 	gate, err := job.NewFreezeGate(t.Context(), g.freezes, g.fence.Namespace, now)
 	if err != nil {
 		t.Fatalf("NewFreezeGate = %v", err)
@@ -461,7 +467,7 @@ func TestFreezeRaceBetweenCheckAndDispatch(t *testing.T) {
 
 	fence, unit := freezeFixture(t, st, "fzrace")
 	stores := st.Jobs()
-	gate, err := job.NewFreezeGate(t.Context(), stores, fence.Namespace, time.Now())
+	gate, err := job.NewFreezeGate(t.Context(), stores, fence.Namespace, freezeTestNow())
 	if err != nil {
 		t.Fatalf("NewFreezeGate = %v", err)
 	}
@@ -480,7 +486,7 @@ func TestFreezeRaceBetweenCheckAndDispatch(t *testing.T) {
 	// stale, so it still allows the phase, and only the store refuses it.
 	fr := job.Freeze{
 		ID: ident.NewID("frz-"), Namespace: fence.Namespace, Reason: "release week",
-		StartsAt: time.Now().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+		StartsAt: freezeTestNow().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
 	}
 	if err := stores.CreateFreeze(t.Context(), fr, fence, freezeEntry(unit)); err != nil {
 		t.Fatalf("CreateFreeze = %v", err)
@@ -498,7 +504,7 @@ func TestFreezeRaceBetweenCheckAndDispatch(t *testing.T) {
 func TestFreezeGateWithoutStoreFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	gate, err := job.NewFreezeGate(t.Context(), nil, "acme", time.Now())
+	gate, err := job.NewFreezeGate(t.Context(), nil, "acme", freezeTestNow())
 	if !errors.Is(err, job.ErrNoFreezeStore) || gate != nil {
 		t.Fatalf("NewFreezeGate with a nil store = %v, %v; want ErrNoFreezeStore and no gate", gate, err)
 	}
@@ -539,7 +545,7 @@ func TestFreezeStartKeepsRunningJobs(t *testing.T) {
 
 	fr := job.Freeze{
 		ID: ident.NewID("frz-"), Namespace: fence.Namespace, Reason: "release week",
-		StartsAt: time.Now().Add(-time.Minute), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+		StartsAt: freezeTestNow().Add(-time.Minute), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
 	}
 	if err = stores.CreateFreeze(t.Context(), fr, fence, freezeEntry(unit)); err != nil {
 		t.Fatalf("CreateFreeze = %v", err)

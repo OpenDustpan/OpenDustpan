@@ -24,6 +24,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+// freezeTestNow returns the fixed clock of the freeze route tests. It is in
+// the past, so a freeze that starts before it is active for the real clock of
+// a service.
+func freezeTestNow() time.Time {
+	return time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC)
+}
+
 const (
 	freezesURL   = "/api/dustpan/v1/namespaces/acme/freezes"
 	freezeEndURL = freezesURL + "/current/end"
@@ -88,7 +95,7 @@ func (f *fakeFreezes) EndFreeze(ctx context.Context, id, by string, _ namespace.
 			return job.ErrFinished
 		}
 
-		fr.EndsAt = time.Now()
+		fr.EndsAt = freezeTestNow()
 		fr.EndedBy = by
 		f.entries = append(f.entries, e)
 
@@ -135,7 +142,7 @@ func (f *fakeFreezes) activeIn(ns namespace.Name) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	now := time.Now()
+	now := freezeTestNow()
 
 	for i := range f.freezes {
 		fr := &f.freezes[i]
@@ -273,7 +280,7 @@ func (f freezeFixture) openFreeze(t *testing.T) {
 		t.Context(),
 		job.Freeze{
 			ID: ident.NewID("frz-"), Namespace: ns, Reason: "release week",
-			StartsAt: time.Now().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+			StartsAt: freezeTestNow().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
 		},
 		namespace.Fence{Namespace: ns, FailoverVersion: 0},
 		entry,
@@ -902,7 +909,7 @@ func TestFreezeEndAfterAnotherCallerEndedTheFreeze(t *testing.T) {
 		for i := range f.freezes.freezes {
 			fr := &f.freezes.freezes[i]
 			if fr.ID == id && fr.EndsAt.IsZero() {
-				fr.EndsAt = time.Now()
+				fr.EndsAt = freezeTestNow()
 				fr.EndedBy = "ada"
 			}
 		}

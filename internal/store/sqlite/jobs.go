@@ -408,6 +408,10 @@ func (t *jobTx) ActiveFreeze(ctx context.Context, ns namespace.Name, at time.Tim
 		return "", false, fmt.Errorf("select active freeze: %w", err)
 	}
 
+	if id == "" {
+		return "", false, nil
+	}
+
 	return id, true, nil
 }
 
