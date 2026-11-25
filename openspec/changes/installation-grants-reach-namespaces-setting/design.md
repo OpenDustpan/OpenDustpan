@@ -74,7 +74,7 @@ Each file is named only when the design needs it.
 - `pkg/accesstoken/installation_reach_test.go` (NEW): the hostile test of the scope layer (task 1.6).
 - `internal/cli/settings_api_guard_test.go`: the key goes in `databaseKeys`.
 - `e2e/installation_grants_reach_test.go` (NEW): the e2e scenario of task 3.1.
-- `pkg/access/reach_namespaces_setting_test.go` (NEW) and `pkg/job/reach_namespaces_setting_test.go` (NEW): the probe tests of task 1.5. Main has neither file. The housekeeping changes keep their own test files; this change writes into none of them.
+- `pkg/access/reach_namespaces_setting_test.go` (NEW): the probe test of task 1.5. Main has no such file. The housekeeping changes keep their own test files; this change writes into none of them. The probe for the namespace purposes of the housekeeping is a task of `housekeeping-principals-sweeps`.
 - `docs/reference/settings-api.md`, `docs/guides/roles-and-grants.md`, `docs/guides/access-review.md`: the pages of task 3.2.
 
 Files that this change leaves out, and why:

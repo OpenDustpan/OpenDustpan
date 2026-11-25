@@ -28,7 +28,7 @@ Evidence for the claims above:
 - The setting `access.installationGrantsReachNamespaces` (ADR 216 decision 7): default `true`, database layer, live, lockable in the static layer. It is a new entry of `SettingDeclarations` in `pkg/access/settings.go`. It uses the settings routes `GET /api/dustpan/v1/settings` and `PATCH /api/dustpan/v1/settings`, which main has. This change adds no route.
 - With `false`, the authorizer, the reach, the lists of objects and the access review give a grant on `@server` only the actions of the operator scope.
 - A failed read of the setting denies the decision.
-- The probe tests run with the value `false` that `housekeeping-principals-install` (task 1.6) and `housekeeping-principals-sweeps` (task 1.3) leave out. This change adds its own probes as NEW tests in `pkg/access/reach_namespaces_setting_test.go` and `pkg/job/reach_namespaces_setting_test.go`. It writes into no test file of the housekeeping changes.
+- The probe tests run with the value `false` that `housekeeping-principals-install` (task 1.6) and `housekeeping-principals-sweeps` (task 1.3) leave out. This change adds its own access probe as a NEW test in `pkg/access/reach_namespaces_setting_test.go`. The probe for the namespace purposes is a task of `housekeeping-principals-sweeps`. This change writes into no test file of the housekeeping changes.
 
 Out of scope:
 

@@ -48,8 +48,8 @@ When a site administrator adds a break-glass account with a fresh authentication
 
 When a site administrator reads the list of break-glass accounts, the server SHALL compute the live count of working paths at read time.
 
-#### Scenario: Account expires by time
-- **WHEN** an account expires with no write and an administrator reads the list
+#### Scenario: Account disabled before the read
+- **WHEN** an account is disabled and an administrator reads the list
 - **THEN** the count excludes the account and the missing count rises
 
 #### Scenario: Upgrade reports missing accounts

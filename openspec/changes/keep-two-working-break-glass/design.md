@@ -29,7 +29,7 @@ An unexported type breakGlassSet in pkg/principal. Only its constructor loads th
 
 - Two parallel disables read the same count. The conditional update makes the second one match no row.
 - A restore of an old backup drops accounts. The restore check runs before the swap and again in the swap transaction.
-- An account expires by time and the count falls with no write. The list route computes the count at read time.
+- An account is disabled and a stored count would stay old. The list route computes the count from the live rows at read time.
 
 ## Layers (defense in depth)
 
@@ -100,7 +100,7 @@ flowchart LR
 | Server to data | D | A disable, delete or restore removes the last working path and locks every administrator out. | limit | The guard counts working paths in the write statement and refuses below the rule of the change kind. | Disable the last two accounts in parallel. One request fails with 409. |
 | Server to data | D | A disable, delete or restore removes the last working path and locks every administrator out. | authorize at point of use | The store checks the count again in the same statement, for each caller of the write path. | Call the store directly to delete the last enabled account. The store refuses. |
 | Server to data | D | A disable, delete or restore removes the last working path and locks every administrator out. | fail closed | A condition that matches no row changes nothing and answers principal.no-working-break-glass. | Disable the last enabled account. The answer is 409 and the row is unchanged. |
-| Backup files to server | T | A restored backup brings fewer break-glass accounts, or accounts that a policy blocks. | boundary check | The restore counts staged rows per scope before it runs the swap. | Restore a backup whose accounts are all expired. The restore is refused. |
+| Backup files to server | T | A restored backup brings fewer break-glass accounts, or accounts that a policy blocks. | boundary check | The restore counts staged rows per scope before it runs the swap. | Restore a backup whose accounts are all disabled. The restore is refused. |
 | Backup files to server | T | A restored backup brings fewer break-glass accounts, or accounts that a policy blocks. | encode or contain | The staged rows stay in a separate area until the swap, so the live tables stay unchanged. | Refuse a restore and read the live tables. They are unchanged. |
 | Backup files to server | T | A restored backup brings fewer break-glass accounts, or accounts that a policy blocks. | limit | The swap counts again on the staged rows in its own transaction, so a write that runs in the swap cannot change the result. | Start a disable during the swap. The count of the swap includes its result. |
 | Backup files to server | T | A restored backup brings fewer break-glass accounts, or accounts that a policy blocks. | authorize at point of use | The swap transaction counts again on the staged rows, whatever the first check said. | Change the staged rows after the first check. The swap refuses. |
