@@ -173,6 +173,23 @@ type headerEntry struct {
 	secret SecretRef
 }
 
+// withCopiedValue returns a copy of the entry whose value pointer is its
+// own. Defense in depth: a caller outside the package cannot reach the
+// field, and this copy stays so that even a caller inside the package
+// cannot change the value that the stored document holds through the map
+// that Headers answers.
+func (e headerEntry) withCopiedValue() headerEntry {
+	if e.value == nil {
+		return e
+	}
+
+	v := *e.value
+
+	e.value = &v
+
+	return e
+}
+
 // queryEntry is one extra query parameter of each call.
 type queryEntry struct {
 	// value is the plain value, or nil when the entry holds a secret.
@@ -180,6 +197,23 @@ type queryEntry struct {
 	// secret is the reference of the secret item, or empty for a plain
 	// value.
 	secret SecretRef
+}
+
+// withCopiedValue returns a copy of the entry whose value pointer is its
+// own. Defense in depth: a caller outside the package cannot reach the
+// field, and this copy stays so that even a caller inside the package
+// cannot change the value that the stored document holds through the map
+// that Query answers.
+func (e queryEntry) withCopiedValue() queryEntry {
+	if e.value == nil {
+		return e
+	}
+
+	v := *e.value
+
+	e.value = &v
+
+	return e
 }
 
 // outputTokensSpec is the output token limit of each call.
@@ -653,11 +687,29 @@ func (c ConnectionSpec) Model() string { return c.model }
 // Auth returns the authentication of the connection.
 func (c ConnectionSpec) Auth() authSpec { return c.auth }
 
-// Headers returns the extra headers of each call.
-func (c ConnectionSpec) Headers() map[string]headerEntry { return maps.Clone(c.headers) }
+// Headers returns the extra headers of each call. The map and the value of
+// each entry are copies, so that no caller can change the document that the
+// installation stores.
+func (c ConnectionSpec) Headers() map[string]headerEntry {
+	out := maps.Clone(c.headers)
+	for name, entry := range out {
+		out[name] = entry.withCopiedValue()
+	}
 
-// Query returns the extra query parameters of each call.
-func (c ConnectionSpec) Query() map[string]queryEntry { return maps.Clone(c.query) }
+	return out
+}
+
+// Query returns the extra query parameters of each call. The map and the
+// value of each entry are copies, so that no caller can change the document
+// that the installation stores.
+func (c ConnectionSpec) Query() map[string]queryEntry {
+	out := maps.Clone(c.query)
+	for name, entry := range out {
+		out[name] = entry.withCopiedValue()
+	}
+
+	return out
+}
 
 // UserAgent returns the User-Agent header of each call.
 func (c ConnectionSpec) UserAgent() string { return c.userAgent }

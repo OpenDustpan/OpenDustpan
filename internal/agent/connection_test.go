@@ -3,6 +3,7 @@
 package agent_test
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -295,6 +296,58 @@ func TestSecretRef_ASCIIOnly(t *testing.T) {
 
 	if !agent.IsSecretRef("itm-ab_1-z") {
 		t.Error("IsSecretRef(valid) = false, want true")
+	}
+}
+
+func TestHeaders_Query_DefensiveCopies(t *testing.T) {
+	t.Parallel()
+
+	raw := `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "headers": { "x-trace": { "value": "1" } },
+  "query": { "api-version": { "value": "2026-01-01" } },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "on" }
+}`
+
+	spec := mustParseValidSpec(t, raw)
+
+	// Change the maps that Headers and Query answer: drop one entry and
+	// copy another entry under a new name. The document must keep what the
+	// parse stored.
+	headers := spec.Headers()
+	header := headers["x-trace"]
+	delete(headers, "x-trace")
+	headers["x-swapped"] = header
+
+	query := spec.Query()
+	parameter := query["api-version"]
+	delete(query, "api-version")
+	query["api-version-swapped"] = parameter
+
+	fresh := mustParseValidSpec(t, raw)
+	if !bytes.Equal(spec.Marshal(), fresh.Marshal()) {
+		t.Error("the document changed through the copies that Headers and Query answer")
+	}
+
+	if _, ok := spec.Headers()["x-trace"]; !ok {
+		t.Error("Headers() lost x-trace after a change through an earlier copy")
+	}
+
+	if _, ok := spec.Query()["api-version"]; !ok {
+		t.Error("Query() lost api-version after a change through an earlier copy")
+	}
+
+	if _, ok := spec.Headers()["x-swapped"]; ok {
+		t.Error("Headers() answers x-swapped, which only a changed copy holds")
+	}
+
+	if _, ok := spec.Query()["api-version-swapped"]; ok {
+		t.Error("Query() answers api-version-swapped, which only a changed copy holds")
 	}
 }
 
