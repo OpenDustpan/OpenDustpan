@@ -25,7 +25,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/launcher/session"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -314,7 +316,7 @@ func CryptoRandom(r io.Reader, log *slog.Logger) func(n int64) int64 {
 		v, err := rand.Int(r, big.NewInt(n))
 		if err != nil {
 			log.Warn("the random source failed: the backoff takes its upper bound",
-				slog.String("error", err.Error()), slog.Int64("upper", n-1))
+				errorAttr("error", err), slog.Int64("upper", n-1))
 
 			return n - 1
 		}
@@ -405,7 +407,7 @@ func (l *Loop) pollFailed(ctx context.Context, err error, failures *int) error {
 	case errors.Is(err, ErrRateLimited):
 		*failures = 0
 
-		l.log.WarnContext(ctx, "the server limits the polls of the runner", slog.Any("error", err))
+		l.log.WarnContext(ctx, "the server limits the polls of the runner", errorAttr("error", err))
 
 		l.wait(ctx, retryAfter(err))
 	case errors.Is(err, ErrUnavailable):
@@ -413,7 +415,7 @@ func (l *Loop) pollFailed(ctx context.Context, err error, failures *int) error {
 		*failures++
 
 		l.log.WarnContext(ctx, "the poll failed: the loop waits and polls again",
-			slog.Any("error", err), slog.Duration("wait", d))
+			errorAttr("error", err), slog.Duration("wait", d))
 
 		l.wait(ctx, d)
 	default:
@@ -677,9 +679,9 @@ func (l *Loop) runWork(ctx context.Context, stop context.CancelCauseFunc, w prot
 
 	switch {
 	case cause != nil && !errors.Is(cause, context.Canceled):
-		l.log.WarnContext(ctx, "the work stopped", slog.String("operation", w.Operation), slog.Any("cause", cause))
+		l.log.WarnContext(ctx, "the work stopped", slog.String("operation", w.Operation), errorAttr("cause", cause))
 	case err != nil:
-		l.log.WarnContext(ctx, "the work failed", slog.String("operation", w.Operation), slog.Any("error", err))
+		l.log.WarnContext(ctx, "the work failed", slog.String("operation", w.Operation), errorAttr("error", err))
 	default:
 	}
 }
@@ -757,14 +759,14 @@ func (l *Loop) renew(
 	case !errors.Is(err, ErrUnavailable):
 		// Fail closed: a code that the loop does not know stops the work.
 		l.refused(ctx, path, "the code of the answer is not known",
-			slog.String("operation", op), slog.String("code", codeOf(err)))
+			slog.String("operation", op), errorAttr("error", err))
 		stopWork(err)
 
 		return expires, true
 	default:
 	}
 
-	l.log.WarnContext(ctx, "the renewal failed", slog.String("operation", op), slog.Any("error", err))
+	l.log.WarnContext(ctx, "the renewal failed", slog.String("operation", op), errorAttr("error", err))
 
 	// The expiry is the one that the server sent. A claim that the server
 	// could not renew has ended at that time.
@@ -825,13 +827,76 @@ func (l *Loop) renewed(ctx context.Context, s stops, op string, body []byte, exp
 	return rr.ExpiresAt, false
 }
 
-// codeOf returns the protocol code of err, or an empty string.
-func codeOf(err error) string {
-	if e, found := errors.AsType[*Error](err); found {
-		return e.Code
+// maxLogText is the longest text from outside the loop that one log
+// attribute holds: the message of a server answer or the text of an error. A
+// longer text is cut at this length.
+const maxLogText = 256
+
+// unknownCode is the logged value of a code that is not a code of the runner
+// protocol.
+const unknownCode = "unknown"
+
+// isProtocolCode reports whether code is a code of the runner protocol: the
+// allowlist of the codes that a log record names.
+func isProtocolCode(code string) bool {
+	switch code {
+	case protocol.ErrorInvalid, protocol.ErrorBadProof, protocol.ErrorKeyExpired, protocol.ErrorRetired,
+		protocol.ErrorGrantLost, protocol.ErrorTokenUsed, protocol.ErrorTokenExpired, protocol.ErrorNotFound,
+		protocol.ErrorClaimLost, protocol.ErrorCanceled, protocol.ErrorConflict, protocol.ErrorSourceNotReady,
+		protocol.ErrorPlanStale, protocol.ErrorVersionUnsupported, protocol.ErrorVersionAhead,
+		protocol.ErrorRateLimited, protocol.ErrorUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// errorAttr returns the log attribute key of err. It is the one way that the
+// loop puts an error in a log record, because the code, the message and the
+// text of an error can come from the server or the network. For an answer of
+// the server, the group holds the status, the code when it is a code of the
+// protocol (else "unknown" and the length of the code) and the message. For
+// any other error, it holds the text. Each text has no control character and
+// is at most maxLogText long, so that it cannot forge or flood a record.
+func errorAttr(key string, err error) slog.Attr {
+	if err == nil {
+		return slog.GroupAttrs(key)
 	}
 
-	return ""
+	e, found := errors.AsType[*Error](err)
+	if !found {
+		return slog.GroupAttrs(key, slog.String("text", logText(err.Error())))
+	}
+
+	message := slog.String("message", logText(e.Message))
+
+	if !isProtocolCode(e.Code) {
+		return slog.GroupAttrs(key, slog.Int("status", e.Status), slog.String("code", unknownCode),
+			slog.Int("code_length", len(e.Code)), message)
+	}
+
+	return slog.GroupAttrs(key, slog.Int("status", e.Status), slog.String("code", e.Code), message)
+}
+
+// logText returns s with no hidden rune (a control character such as CR or
+// LF, a format character, a line or a paragraph separator), cut to at most
+// maxLogText bytes at a rune boundary.
+func logText(s string) string {
+	var b strings.Builder
+
+	for _, r := range s {
+		if ident.IsHiddenRune(r) {
+			continue
+		}
+
+		if b.Len()+utf8.RuneLen(r) > maxLogText {
+			break
+		}
+
+		b.WriteRune(r)
+	}
+
+	return b.String()
 }
 
 func (l *Loop) now() time.Time {
@@ -873,7 +938,7 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 		case ctx.Err() != nil:
 			return
 		case errors.Is(err, ErrUnavailable):
-			l.log.WarnContext(ctx, "the heartbeat failed", slog.Any("error", err))
+			l.log.WarnContext(ctx, "the heartbeat failed", errorAttr("error", err))
 
 			continue
 		case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
@@ -883,7 +948,7 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 		default:
 			// Fail closed: a code that the loop does not know ends the loop.
 			l.refused(ctx, protocol.PathHeartbeat, "the code of the answer is not known",
-				slog.String("code", codeOf(err)))
+				errorAttr("error", err))
 			stop(err)
 
 			return

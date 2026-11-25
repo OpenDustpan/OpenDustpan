@@ -39,7 +39,7 @@ func TestCryptoRandomTakesTheUpperBoundWhenTheReaderFails(t *testing.T) {
 		t.Errorf("random(%d) = %d, want the upper bound %d", n, got, n-1)
 	}
 
-	if !logs.hasAttrs("the random source failed", map[string]string{"error": errReader.Error()}) {
+	if !logs.hasAttrs("the random source failed", map[string]string{"error.text": errReader.Error()}) {
 		t.Error("no log record that names the error of the reader")
 	}
 

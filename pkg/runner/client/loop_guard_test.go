@@ -51,6 +51,13 @@ func (c logCapture) Handle(_ context.Context, r slog.Record) error {
 
 		rec.attrs[a.Key] = a.Value.String()
 
+		// A group keeps each of its attributes as group.key, with the raw text.
+		if a.Value.Kind() == slog.KindGroup {
+			for _, g := range a.Value.Group() {
+				rec.attrs[a.Key+"."+g.Key] = g.Value.String()
+			}
+		}
+
 		return true
 	})
 
@@ -98,6 +105,14 @@ func (c logCapture) hasAttrs(message string, want map[string]string) bool {
 
 		return true
 	})
+}
+
+// all returns a copy of the records.
+func (c logCapture) all() []logRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return slices.Clone(*c.records)
 }
 
 // refusedMessage is the message of the record of a refused answer.
