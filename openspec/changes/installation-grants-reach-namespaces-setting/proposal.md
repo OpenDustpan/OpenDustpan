@@ -10,7 +10,7 @@ Issue: #3289.
 
 The user path this change must make work:
 
-1. **API.** The operator reads the setting `access.installationGrantsReachNamespaces` and its effective value (default `true`) in the settings API.
+1. **API.** The operator reads the setting `access.installationGrantsReachNamespaces` and its effective value (default `true`) with `GET /api/dustpan/v1/settings`, a route that main has.
 2. **API.** The operator sets it to `false`. A grant on `@server` then gives only the actions of the operator scope, and gives no action inside a namespace.
 
 Errors the person may hit, and the one command that helps:
@@ -25,10 +25,10 @@ Evidence for the claims above:
 
 ## What Changes
 
-- The setting `access.installationGrantsReachNamespaces` (ADR 216 decision 7): default `true`, database layer, live, lockable in the static layer.
+- The setting `access.installationGrantsReachNamespaces` (ADR 216 decision 7): default `true`, database layer, live, lockable in the static layer. It is a new entry of `SettingDeclarations` in `pkg/access/settings.go`. It uses the settings routes `GET /api/dustpan/v1/settings` and `PATCH /api/dustpan/v1/settings`, which main has. This change adds no route.
 - With `false`, the authorizer, the reach, the lists of objects and the access review give a grant on `@server` only the actions of the operator scope.
 - A failed read of the setting denies the decision.
-- The probe runs with the value `false` that `housekeeping-principals-install` (task 1.6) and `housekeeping-principals-sweeps` (task 1.3) leave out.
+- The probe tests run with the value `false` that `housekeeping-principals-install` (task 1.6) and `housekeeping-principals-sweeps` (task 1.3) leave out. This change adds its own probes as NEW tests in `pkg/access/reach_namespaces_setting_test.go` and `pkg/job/reach_namespaces_setting_test.go`. It writes into no test file of the housekeeping changes.
 
 Out of scope:
 
@@ -55,9 +55,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The authorizer adds the installation object for a namespace object and reads no setting. (`pkg/access/authorizer.go:967`, function `chainObjects`)
-- The reach and the access review use the same function. (`pkg/access/reach.go:970`, `pkg/access/review_service.go:586`)
-- The only setting of the package is `accessReview.collectionUnitCap`, declared in `SettingDeclarations`. (`pkg/access/settings.go`)
+- The authorizer adds the installation object for a namespace object and reads no setting. (`pkg/access/authorizer.go:967 (func chainObjects)`)
+- The reach and the access review use the same function. (`pkg/access/reach.go:970 (func Reach.chain)`, `pkg/access/review_service.go:586 (func Service.reviewScope)`)
+- The only setting of the package is `accessReview.collectionUnitCap`, declared in `SettingDeclarations`. (`pkg/access/settings.go:47 (func SettingDeclarations)`)
 
 ## ADR check
 
