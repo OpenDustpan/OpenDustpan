@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: No issue: a new change written from RFC 121 decision 7 and ADR 354. No issue of this change exists on main (checked with `gh` on 25 November 2026). The pull request names the issue of the milestone when the lead assigns it.
@@ -14,12 +14,13 @@ RFC 121 decision 7: "Dusty is an agent principal with the fixed name `dusty`. Th
 - Dusty: one agent record with the subject `dusty`, made inside the transaction that stores the model connection (decision 7). The connecting administrator is the creator and the first sponsor.
 - The ceiling grants of Dusty (decision 8): the built-in role `agent-tools-read` on the installation, and the built-in role `agent-tools` on the namespaces that the administrator picks, none by default. They are stored grants with the administrator as creator, in the same transaction.
 - `principal.Validate` refuses a password, a passkey, an MFA factor, a console session and a sign-in method for the kind `agent` (decision 1), and the grant service refuses a group membership, a protected role and a break-glass mark for it (decision 3).
+- A NEW store port `ConnectStore` in the NEW file `internal/agent/connectstore.go`. Its SQL adapters write the principal, the sponsor, the agent record, the ceiling grants and one audit entry for each write in ONE transaction, and read the grant check inside it. No port of main lets a caller give a transaction: `CreatePrincipal` and `Grant` each commit their own.
 - Audit entries for each write: the record, each sponsor, each ceiling grant, in the same transaction.
 - Reads: `GET /api/server/principals?kind=agent` lists the record with its sponsors and its ceiling grants (the route that the create route names in its 400 answer).
 
 ## Out of scope
 
-- The route that connects a model, with the connection document and the probe (ADR 129 decision 29: `PUT /api/agent/connection` answers 202 with a probe ID). The change `agent-connect-route` writes it. Its last step calls the NEW function `agent.ConnectModel` of this change in the transaction of its own write. This change does not write the connection.
+- The route that connects a model, with the connection document and the probe (ADR 129 decision 29: `PUT /api/agent/connection` answers 202 with a probe ID). The change `agent-connect-route` writes it. Its last step calls the NEW function `agent.ConnectModel` of this change in the transaction of its own write. If that route must write in the same transaction, it adds its write to the NEW `ConnectWrite` of this change then. This change does not write the connection.
 - The delegation record (person-delegates-dusty), the run that names a delegation (dusty-run-names-delegation), the notification, the disable and the delete of an agent, the sponsor grace period (RFC 121 decisions 4 to 6 after the record), and the installation agent policy (decision 19).
 - A client registration of an agent. Dusty has none (decision 10).
 - A second agent. The kind allows it. Only Dusty has a maker in this change.
@@ -37,7 +38,7 @@ The persona is the administrator who connects a model. The connect request shows
 
 - The kind `agent` is a constant of `principal.Kind` (`pkg/principal/principal.go:114 (const KindAgent)`)
 - `ParseKind` accepts the kind `agent` (`pkg/principal/principal.go:118 (func ParseKind)`)
-- `CreatePrincipal` refuses the kind `agent` and says the record comes from the model connect request (`pkg/principal/service.go:144 (func CreatePrincipal)`)
+- `CreatePrincipal` refuses the kind `agent` and says the record comes from the model connect request (`pkg/principal/service.go:144 (func CreatePrincipal)`; the refusal is the `if in.Kind == KindAgent` at `pkg/principal/service.go:150`)
 - The create route refuses the kind `agent` and names the list route (`internal/api/server/principals.go:765 (func createPrincipal)`)
 - The list route reads the principals of one kind (`internal/api/server/principals.go:793 (func listPrincipals)`)
 - `ActionServerManageAgent` "allows connecting and disconnecting a model" (`pkg/identity/identity.go:541 (const ActionServerManageAgent)`)

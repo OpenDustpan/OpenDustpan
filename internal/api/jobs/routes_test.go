@@ -239,15 +239,16 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 var errNoListing = errors.New("no route lists objects")
 
 // recordingAuthorizer allows the checks that holds names, as "<action> <object>",
-// and records every check in order.
+// returns fail[key] for checks in fail, and records every check in order.
 type recordingAuthorizer struct {
 	holds  map[string]bool
+	fail   map[string]error
 	checks []string
 	mu     sync.Mutex
 }
 
 func newAuthorizer(holds ...string) *recordingAuthorizer {
-	a := &recordingAuthorizer{holds: map[string]bool{}, checks: nil, mu: sync.Mutex{}}
+	a := &recordingAuthorizer{holds: map[string]bool{}, fail: map[string]error{}, checks: nil, mu: sync.Mutex{}}
 	for _, h := range holds {
 		a.holds[h] = true
 	}
@@ -264,6 +265,10 @@ func (a *recordingAuthorizer) Authorize(
 	defer a.mu.Unlock()
 
 	a.checks = append(a.checks, key)
+
+	if err := a.fail[key]; err != nil {
+		return err
+	}
 
 	if !a.holds[key] {
 		return fmt.Errorf("%w: %s", identity.ErrDenied, key)

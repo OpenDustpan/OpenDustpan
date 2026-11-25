@@ -164,7 +164,9 @@ func (h *Handler) buildRoutes() []Route {
 			IdempotencyKey: true, ETag: true, ServesDamaged: false, Resolve: h.resolveNamespace, Serve: h.startJob,
 		}, Route{
 			// The service checks job:read and job:approve on the unit again, and
-			// the state, the approver, the plan and the MFA step of a destroy.
+			// the state, the approver, the plan and the MFA step of a destroy. The
+			// handler and the service also check job:cancel on the unit when the
+			// caller rejects a job that another principal started.
 			Method: http.MethodPost, Path: approvalsPath, Scope: ScopeAuthorized,
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobApprove},
 			Filters: nil, Writes: nil,

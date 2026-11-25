@@ -1,3 +1,85 @@
 ## Context
 
-The setting `access.installationGrantsReachNamespaces` is in ADR 216 decision 7 and in no code on main. This design is a coarse placeholder. It is refined when the housekeeping changes are on main.
+ADR 216 decision 7 (owner) says: with `access.installationGrantsReachNamespaces` set to `false`, a grant on `@server` gives only the actions of the operator scope and never an action inside a namespace. On main the setting does not exist. The authorizer adds `@server` to the chain of each namespace, collection, unit and namespace principal, and reads no setting. This change adds the setting and makes every reader of the grants follow it.
+
+## Decisions
+
+1. **One declaration.** NEW `SettingInstallationGrantsReachNamespaces = "access.installationGrantsReachNamespaces"` in `pkg/access/settings.go`, next to `SettingCollectionUnitCap`. It is added to `SettingDeclarations()` after the existing entry: kind `setting.KindBool`, level installation, default `"true"`, `Database: true` (the static layer can lock it, so OpenDustpan Cloud locks `false`, ADR 63), `Apply: setting.ApplyLive`, no secret, no `Check` (the bool kind validates the text). `ReducesSecurity(old, next)` is true when `old == "false" && next == "true"`: a change that lets a grant on `@server` reach namespaces needs the fresh authentication that the settings API already asks for. The doc text is in strict STE.
+2. **One reading of the value.** NEW exported `InstallationGrantsReachNamespaces(ctx, settings Settings) (bool, error)` in `pkg/access/settings.go`. The type `Settings` is the one that `pkg/access/settings.go` already declares for `ServiceConfig`. A nil `Settings` returns `true`, the declared default (the configs of the conformance suites that do not test the setting have no settings port). A read that fails returns the error, and a value that is not `true` or `false` returns an error. The callers deny on an error (fail closed, step 5 of the rules for security code). The value is read once for each request: the request cache of `pkg/access/cache.go` keeps it, so a decision never reads two different values, and the next request reads the new value. `Authorize` and `ListObjects` write the denial to the audit log as for any other denied decision.
+3. **One place decides the chain.** `chainObjects` (`pkg/access/authorizer.go:921`) gets one new argument, `reachesNamespaces bool`. When it is `false`, the chain of a namespace, a collection, a unit and a principal of a namespace has no `identity.ServerObject()`. The chain of the installation object and of a principal of the installation keeps it, because these objects are in the operator scope. Operator actions are always checked on `@server` or on an installation principal, so they stay allowed through a grant on `@server`. The authorizer (`Authorizer.chain` in `pkg/access/authorizer.go`), the reach (`Reach.chain` in `pkg/access/reach.go`), the access review (`pkg/access/review_service.go`, through the `chain` method of `Authorizer`) and the grant checks (`pkg/access/service.go`, through the same method) all call this function, so they all follow the setting with no second rule.
+4. **The scope lists follow the same value.** `ListObjects` and the grant ID discovery read grants through `reachGrants` and `grantInScope`, not through the chain. `grantInScope` returns `false` for a grant on the installation when the value is `false` and the action is not an action of the operator scope (a role that holds a namespace action and a grant on `@server` then lists no namespace). `addToScope` is not changed: it never sees such a grant. With `false`, the wildcard read `namespaces/-` lists only the namespaces of grants on a namespace, a collection, a unit or a principal of a namespace (ADR 216 decision 10). The operator-scope check is `FamilyOf(action) == FamilyOperator` plus the administration actions that ADR 216 decision 3 puts in the operator scope: the test of task 2.2 compares both lists, so a new action cannot go to the wrong side without a failing test.
+5. **The bootstrap administrator is not a grant.** `Authorize` returns before it reads any grant when the caller principal has the field `Admin` set (`pkg/access/authorizer.go:123`; ADR 6: the holder of every action on the installation, with no grant). The decision 7 text speaks of a grant on `@server`, so this change does not change the bootstrap administrator and records it as a limit of the setting in `docs/guides/roles-and-grants.md` ("the bootstrap administrator token is not a grant: the setting does not limit it"). No decision of ADR 216 says otherwise, and this change makes none. (Benchmark: the cloud practice of a break-glass account that no tenant setting limits, with an audit entry for each use.)
+6. **Support access stays an ordinary grant.** ADR 216 decision 11 gives support access as a grant on the namespace. A grant on a namespace is not a grant on `@server`, so this change needs no code rule for it.
+7. **The settings port reaches the authorizer and the reach.** The two free-standing readers build their own `Reach`: `ReachOf` (`pkg/access/reach.go:438`), `GroupReachOf` (`:464`), `Protected` (`:520`) and `ProtectedGroups` (`pkg/access/protected_batch.go:25`) take a `ReachConfig` and return a bool, a map or a `Reach` to the caller. A method on the returned `Reach` would come too late, and the callers (`internal/api/server/principals.go:341` and `:378`, `internal/localusersvc/manage.go:167` and `:172`, `pkg/accesstoken/scope.go:359` and `:381`) could not call it. So the reach takes the setting from its config:
+   - `ReachConfig` gets the field `Settings Settings`. `ReachOf`, `GroupReachOf`, `Protected` and `ProtectedGroups` give the NEW field `ReachConfig.Settings` to the `Reach` that they build. `Reach` has an unexported field `settings`, and no settings method.
+   - `Settings` is required in a `ReachConfig`. `checkReachConfig` returns `ErrMissingDependency` ("settings") for a nil `Settings`, so a reach with no settings port fails closed and never reads a default `true`. A test that needs a fixed value uses the NEW constructor `access.FixedSettings(reaches bool) Settings` in `pkg/access/settings.go`; it answers the key of this change with `"true"` or `"false"`, and any other key with the not-found error that the `Settings` port documents for an unknown key.
+   - `AuthorizerConfig` gets no new field. NEW `Authorizer` gets the method `WithSettingsPort(Settings) *Authorizer`. It returns a copy that has an unexported `settings` field, so the many literals of `AuthorizerConfig` that name every field (exhaustruct) stay as they are. The method name is not `WithSettings`, because `dustpan.WithSettings` is a different server option. An `Authorizer` with no settings port uses the default `true` (decision 2). The copy of the authorizer that `Service.within` (`pkg/access/check.go`) builds for the transaction of a write takes the same settings port, with the chain that the Service read before the write.
+   - The `Settings` implementation is the one that `pkg/dustpan/dustpan.go` builds for `ServiceConfig`. The two `access.NewAuthorizer` calls of that file are followed by a call of the NEW method `Authorizer.WithSettingsPort` with it; the construction of the reader moves before them, because the authorizer is built first on main. Each production `ReachConfig` literal sets `Settings` with the same reader: `cmd/opendustpan/host.go`, `pkg/dustpan/localusers.go` (lines 287 and 299), `pkg/access/protected_batch.go` (`reachCache.config`, line 207), `e2e/coverage_server.go` and `e2e/coverage_signin.go`.
+   - Why a field and not a method: exhaustruct forces every one of the 91 `ReachConfig` literals on main (52 files) to name the field, so no caller can build a reach and skip the setting. A new caller that forgets it does not compile. This is the structure that makes the bug class impossible, in place of a check.
+8. **Hosted installations.** The static layer locks `false` in OpenDustpan Cloud (outside this change, per "Out of scope" in the proposal). A self-hosted installation that sets `false` ends the access of each installation person in a namespace, except the grants on that namespace (ADR 215 decision 11). The effective value and its source show in `GET /api/dustpan/v1/settings` like any setting, so a person can ask why a namespace action was denied (No magic).
+
+## Contract
+
+New names in `pkg/access` (each is NEW on main):
+
+- `SettingInstallationGrantsReachNamespaces = "access.installationGrantsReachNamespaces"`, a constant in `pkg/access/settings.go`.
+- `InstallationGrantsReachNamespaces(ctx context.Context, settings Settings) (bool, error)`, in `pkg/access/settings.go`. It returns `true` for a nil `settings`, and an error for a failed read or a value that is not `true` or `false`.
+- `(*Authorizer).WithSettingsPort(Settings) *Authorizer`. It returns a copy.
+- `ReachConfig.Settings Settings`, a required field (decision 7). A nil value makes `ReachOf`, `GroupReachOf`, `Protected` and `ProtectedGroups` return `ErrMissingDependency`.
+- `FixedSettings(reaches bool) Settings`, in `pkg/access/settings.go`: a fixed value of the setting for a test and for a fixed deployment.
+- `chainObjects(..., reachesNamespaces bool)`: one new argument.
+
+Endpoints: none new. The setting uses `GET /api/dustpan/v1/settings` and `PATCH /api/dustpan/v1/settings`, which main has. A refused read of the setting is an error that the decision returns as a denial. A denial in a namespace answers 403 with the action and the namespace. A `PATCH` from `false` to `true` with an access token answers 403 `mfa.fresh-step-required`.
+
+Tables, schema and CLI output: no change.
+
+## Structure
+
+- One function decides the chain, one function reads the value. No second rule in the review, the reach or the service.
+- The setting is read through the port that the Service already has. No new dependency and no new tool.
+
+## Layers
+
+Security code: each layer has its own table of hostile cases, and each guard has a test that fails when the guard is removed.
+
+| Layer | Hostile case | Expected |
+| --- | --- | --- |
+| Port adapter (`pkg/access/accesstest`, both dialects) | A grant on `@server` of a role with a namespace action, setting `false`, `Authorize` on a namespace, a collection, a unit, and a principal of a namespace | denied |
+| Port adapter | The same grant, setting `true` | allowed |
+| Port adapter | A grant on `@server` of an operator role, setting `false`, `Authorize` on `@server` and on a principal of the installation | allowed |
+| Port adapter | A grant on the namespace of the same role, setting `false` | allowed on that namespace, denied on another |
+| Service (`pkg/access`) | The settings read fails, or the value is `maybe` | denied, error returned, one audit entry |
+| Port adapter | A `ReachConfig` with a nil `Settings`, for `ReachOf`, `GroupReachOf`, `Protected` and `ProtectedGroups` | `ErrMissingDependency`, no reach, no default `true` |
+| Service | No settings port on the `Authorizer` | the default `true` applies |
+| Service (`pkg/accesstoken`) | Setting `false`, a caller with a grant on `@server` of a role with a namespace action, a change of the token of a service principal in a namespace through `missingActions` and `reachOf` | the reach of the caller has no namespace action through `@server`, so the change is refused with `ErrReachExceeded` |
+| Service | `ListObjects` and discovery, setting `false`, grant on `@server` | the scope has no namespace, so `namespaces/-` lists only the granted namespaces |
+| Service | A change of the setting between two requests | the second request reads the new value |
+| Service | Access review of a namespace, setting `false` | no row "inherited from `@server`" for a namespace action |
+| HTTP handler (`internal/api/server`) | A caller with only a grant on `@server`, setting `false`, any namespace route | 403 that names the action and the namespace |
+| HTTP handler | `PATCH` of the setting to `true` with no fresh authentication | refused as for any `ReducesSecurity` change |
+
+## Files that the code touches
+
+Each file is named only when the design needs it.
+
+- `pkg/access/settings.go`: the declaration (decision 1) and the reader (decision 2).
+- `pkg/access/authorizer.go`: the NEW field `settings` and the NEW method `Authorizer.WithSettingsPort` (decision 7), `chainObjects` (decision 3), `grantInScope` (decision 4), and the one read of the value for each decision.
+- `pkg/access/reach.go`: the NEW field `ReachConfig.Settings`, the check of it in `checkReachConfig`, the NEW unexported field `Reach.settings` that `emptyReach` and the walker set from the config, and `Reach.chain` (decisions 3 and 7). `Reach.Has` and `ActsAs` change through the chain only.
+- `pkg/access/check.go`: `Service.within` builds an `Authorizer` literal (`pkg/access/check.go:123`); it takes the settings port of the `Service` authorizer (decision 7). `roleCheck` (the escalation check on `@server`) stays: it compares the roles of a grant on the installation and is not a reach decision.
+- `pkg/access/protected_batch.go`: `reachCache.config` (line 207) builds a `ReachConfig`; it copies `Settings` into it, so that the protected flags of a list match `Protected`.
+- `pkg/access/authorizer_test.go` and `pkg/access/settings_test.go`: the new cases. `pkg/access/protected_internal_test.go`: its two `Reach` literals (lines 186 and 204) name the new field `settings`.
+- `pkg/access/accesstest/reach.go`: the new conformance cases (task 1.2). Each case builds its authorizer with the NEW method `Authorizer.WithSettingsPort` and its reach with the NEW field `ReachConfig.Settings`, both with the NEW function `FixedSettings`. The file `pkg/access/accesstest/bench.go` needs no edit. The `ReachConfig` literals of `pkg/access/accesstest/bench_caller.go`, `pkg/access/accesstest/bench_protected.go`, `pkg/access/accesstest/moves.go` and `pkg/access/accesstest/reach.go` name `Settings` (task 2.4).
+- `pkg/dustpan/dustpan.go`: the settings reader is built before the authorizer and given to it (decision 7). `pkg/dustpan/localusers.go` builds two `ReachConfig` values (lines 287 and 299); the first stays all-nil on purpose (a store with no grants fails closed), and the second sets `Settings` with the same reader. `cmd/opendustpan/host.go` (line 425), `e2e/coverage_server.go` (line 102) and `e2e/coverage_signin.go` (line 163) set `Settings` in the same way.
+- The 47 other files with a `ReachConfig` literal (task 2.4): each literal names `Settings`, as exhaustruct requires. No behavior changes in them.
+- `pkg/accesstoken/installation_reach_test.go` (NEW): the hostile test of the scope layer (task 1.6).
+- `internal/cli/settings_api_guard_test.go`: the key goes in `databaseKeys`.
+- `e2e/installation_grants_reach_test.go` (NEW): the e2e scenario of task 3.1.
+- `pkg/access/reach_namespaces_setting_test.go` (NEW) and `pkg/job/reach_namespaces_setting_test.go` (NEW): the probe tests of task 1.5. Main has neither file. The housekeeping changes keep their own test files; this change writes into none of them.
+- `docs/reference/settings-api.md`, `docs/guides/roles-and-grants.md`, `docs/guides/access-review.md`: the pages of task 3.2.
+
+Files that this change leaves out, and why:
+
+- `pkg/access/review_service.go`: it reads the chain with `s.authz.chain` (lines 586 and 630), so it follows decision 3 with no edit. Line 735 sets the containers of the installation object itself, which stays on `@server` in both modes.
+- `pkg/access/service.go`: its chain calls (lines 377 and 1023) go through `s.authz.chain` and its `Authorize` calls on `@server` are operator-scope checks. No edit.
+- `pkg/access/discovery.go`: it reads `reachGrants`, which decision 4 changes. No edit.
+- `pkg/access/cache.go`: the request cache keeps the value through the existing context key pattern; the key is added in `pkg/access/settings.go` with the reader, so no edit.
