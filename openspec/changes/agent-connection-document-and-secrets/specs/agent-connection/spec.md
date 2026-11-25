@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: The connection document is validated at the boundary
-The server SHALL accept a model connection document only when it is valid JSON of at most 32 KiB, has `version` 1, has no unknown field, and has no control character in a string. The server SHALL refuse the format `responses` with the error `ErrFormatNotSupported`.
+The server SHALL accept a model connection document only when it is valid JSON of at most 32 KiB, has `version` 1, has no unknown field, and has no control character in a string. The server SHALL refuse the format `responses` with the NEW error `ErrFormatNotSupported`.
 
 #### Scenario: A document with an unknown field
 - **WHEN** a document has a field that the table does not list
@@ -55,7 +55,7 @@ The server SHALL check each model URL with `egress.CheckModelURL` against the al
 - **THEN** no document and no reference row remains
 
 ### Requirement: Each route checks its action
-Each route under `/api/agent/` SHALL check the action `server:manage-agent` on `@server`. The allowlist routes SHALL check `server:manage-settings`. A denial SHALL write an audit entry.
+Each route under the NEW path prefix `/api/agent/` SHALL check the action `server:manage-agent` on `@server`. The allowlist routes SHALL check `server:manage-settings`. A denial SHALL write an audit entry.
 
 #### Scenario: A principal without the grant
 - **WHEN** a principal without the grant calls any of the routes

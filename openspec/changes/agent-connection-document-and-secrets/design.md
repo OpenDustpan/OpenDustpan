@@ -4,17 +4,17 @@ ADR 129 defines the model connection as one document that the operator writes, a
 
 ## Decisions
 
-1. `agent.ConnectionSpec` is a new type in `internal/agent`. It has `version: 1` and the 18 fields of ADR 129 decision 3. The decoder uses `DisallowUnknownFields`, a size limit of 32 KiB before the parse, and a check for control characters in each string. The older `Connection` type is removed in the same change, with its port method `PutConnection`, because no caller uses them (rule: no code for a shape that no tag shipped).
-2. `ConnectionSpec` has unexported fields and a constructor `agent.ParseConnectionSpec(raw []byte) (ConnectionSpec, error)`. A value of the type exists only after validation. The type is immutable. `Marshal` writes the canonical form.
-3. A secret reference is the type `agent.SecretRef`, a stable ID `itm-...`. The document stores references only. `ParseConnectionSpec` checks the form of the reference. The check that the item exists is in the store transaction (layer table).
-4. `headers` and `query` use the name rules of ADR 129 decision 11. A name that holds `token`, `key`, `secret`, `auth`, `session`, `cookie`, `password` or `signature` must be a reference to a secret item, else `ErrPlainSecret`. The value half of the check needs `agent.SecretFilter`. Main has no such type, so this change does not do it.
-5. `agent.SecretItems` is a NEW port with `Create`, `List`, `Get` (metadata only), `Replace` and `Delete`. It stores the sealed value with `secret.InstallationSecrets`. No method returns a value to a route. A separate method `Open(ctx, ref)` returns the value to the adapter code of a later change and is not on the route layer.
-6. `agent.ConnectionStore` is a NEW port: `Current`, `Pending(probeID)`, `PutPending`, `Promote`, `Delete`. This change builds `Current`, `Delete` and the tables. `PutPending` and `Promote` are built here and tested by their conformance suite, and the later changes call them. `Delete` removes the current document, each pending document and the reference rows in one transaction.
-7. `egress.CheckModelURL(ctx, rawURL, allow Allowlist)` checks the scheme, the host and the resolved addresses against the always-denied list and the allowlist. `egress.Allowlist` holds host names and CIDR rules. The setting is stored in the installation settings and read with `GET` and `PUT /api/server/egress-allowlist`. The action is `server:manage-settings`.
+1. `agent.ConnectionSpec` is a new type in `internal/agent`. It has `version: 1` and the 18 fields of ADR 129 decision 3. The decoder uses a NEW call of `DisallowUnknownFields` of `encoding/json`, a size limit of 32 KiB before the parse, and a check for control characters in each string. The older `Connection` type is removed in the same change, with the three methods of the port `SettingsStore` that use it (`Connection`, `PutConnection` and `DeleteConnection`), because no caller uses them (rule: no code for a shape that no tag shipped).
+2. `ConnectionSpec` has unexported fields and a NEW constructor `agent.ParseConnectionSpec(raw []byte) (ConnectionSpec, error)`. A value of the type exists only after validation. The type is immutable. `Marshal` writes the canonical form.
+3. A secret reference is the NEW type `agent.SecretRef`, a stable ID `itm-...`. The document stores references only. `ParseConnectionSpec` checks the form of the reference. The check that the item exists is in the store transaction (layer table).
+4. `headers` and `query` use the name rules of ADR 129 decision 11. A name that holds `token`, `key`, `secret`, `auth`, `session`, `cookie`, `password` or `signature` must be a reference to a secret item, else the NEW error `ErrPlainSecret`. The value half of the check needs the NEW type `agent.SecretFilter`, which no change has built yet. Main has no such type, so this change does not do it.
+5. The NEW port `agent.SecretItems` has `Create`, `List`, `Get` (metadata only), `Replace` and `Delete`. It stores the sealed value with `secret.InstallationSecrets`. No method returns a value to a route. A separate method `Open(ctx, ref)` returns the value to the adapter code of a later change and is not on the route layer.
+6. The NEW port `agent.ConnectionStore` has the methods `Current` (it returns `ErrDisabled` when no document exists, as the removed read `SettingsStore.Connection` did), `Pending(probeID)`, `PutPending`, `Promote`, `Delete`. This change builds `Current`, `Delete` and the tables. `PutPending` and `Promote` are built here and tested by their conformance suite, and the later changes call them. `Delete` removes the current document, each pending document and the reference rows in one transaction.
+7. The NEW function `egress.CheckModelURL(ctx, rawURL, allow Allowlist)` checks the scheme, the host and the resolved addresses against the always-denied list and the allowlist. The NEW type `egress.Allowlist` holds host names and CIDR rules. The setting is stored in the installation settings and read with the NEW routes `GET /api/server/egress-allowlist` and `PUT /api/server/egress-allowlist`. The action is `server:manage-settings`.
 8. The flag `--egress-public-only` makes the always-denied list stricter: private ranges are denied even when the allowlist has a rule for them. The flag is in `cmd/opendustpan`.
 9. The routes carry the action `server:manage-agent` on `@server` (decision 32), except the allowlist routes. Each handler checks the action at the point of use.
 10. Audit entries: kind `change` on `@server` for a disconnect, a secret item (create, replace, delete) and an allowlist change. An entry never holds a value.
-11. This change checks names only. The check of the value of decision 11 (a field that holds the value of a secret item) arrives with the change `agent-secret-filter`, as `CheckNoSecretValue`.
+11. This change checks names only. The check of the value of decision 11 (a field that holds the value of a secret item) arrives with the change `agent-secret-filter`, as the NEW function `CheckNoSecretValue`.
 
 ## Structure
 
@@ -45,7 +45,7 @@ type SecretItems interface {
 }
 ```
 
-Packages: `internal/agent` (types, ports, `agenttest` conformance suites), `internal/agentsvc` (service), `internal/store/{sqlite,postgres}` (adapters and tables in the one schema file of each dialect), `internal/api/server` (routes), `pkg/egress` (`CheckModelURL`, `Allowlist`).
+Packages: `internal/agent` (the NEW types and ports, the NEW `agenttest` conformance suites), `internal/agentsvc` (service), `internal/store/{sqlite,postgres}` (adapters and tables in the one schema file of each dialect), `internal/api/server` (routes), `pkg/egress` (`CheckModelURL`, `Allowlist`).
 
 ## Contract
 
