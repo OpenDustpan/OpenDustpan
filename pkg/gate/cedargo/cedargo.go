@@ -33,7 +33,7 @@ import (
 
 // cedarGoVersion is the version of the cedar-go module that go.mod pins.
 // A test compares it with the build information.
-const cedarGoVersion = "1.9.0"
+const cedarGoVersion = "1.9.1"
 
 // maxPolicies bounds the compiled policies that the engine keeps.
 const maxPolicies = 8192

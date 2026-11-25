@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 11
 ---
 
 Issue: #623, #627, #633.
@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | A disable or delete removes the last enabled break-glass account. | 409 with code principal.no-working-break-glass. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A restore leaves fewer than two working paths. | 409 with code principal.no-working-break-glass before the swap. | `GET /api/dustpan/v1/break-glass/accounts` |
-| A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names the page that enrolls a factor. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names `/api/dustpan/v1/me/passkeys/register/begin`, the route that enrolls a passkey (docs/guides/passkeys.md). | `POST /api/dustpan/v1/me/passkeys/register/begin` |
 | A rotation names an account that is not a break-glass account or does not exist. | 404 with code break-glass.not-found. | `GET /api/dustpan/v1/break-glass/accounts` |
 
 Evidence for the claims above:
@@ -37,14 +37,15 @@ Evidence for the claims above:
 ## What Changes
 
 - New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The route computes the count from the live rows at read time, so a write that disables an account, suspends its passkey or ends its grant shows in the next read. A break-glass account has no expiry field on main (`pkg/principal` has none), so no time-only case exists. Its action is server:read-principals and its object is @server (ServerObject). No new action exists.
-- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. Its action is server:manage-principals and its object is @server (ServerObject). The guard never refuses it, because it raises the count, also when the count is zero.
-- A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. The guard covers disable, delete and restore only. A revoke of that grant, a membership change and a move of a principal go to the change break-glass-floor-other-writes.
+- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. It stores the account, its first passkey and the audit entry in one transaction, so a failed passkey insert leaves no account. Its action is server:manage-principals and its object is @server (ServerObject). The guard never refuses it, because it raises the count, also when the count is zero.
+- A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. The count has one NEW port method for a namespace, `CountWorkingBreakGlassInNamespace(ctx, ns namespace.Name, at time.Time) (int64, error)` on `WorkingBreakGlassCounter` in pkg/principal/breakglass_count.go, next to `CountWorkingBreakGlass` that keeps the installation scope. The namespace method counts the principals of that namespace with the role admin on it and no other namespace. The adapters are internal/store/sqlite/breakglass_floor.go and internal/store/postgres/breakglass_floor.go, and the conformance cases are in pkg/principal/principaltest/breakglass_count.go. The guard covers disable, delete and restore only. A revoke of that grant, a membership change and a move of a principal go to the change break-glass-floor-other-writes.
 - A guard in the write transaction of disable, delete and restore. Disable and delete refuse when no enabled account would stay. The restore refuses when fewer than two working paths would stay. The three refusals use the one error code principal.no-working-break-glass. Each refusal writes an audit entry. Re-enable stays checked and a disable works in maintenance mode.
 - The sweep stays exempt in SQL, as on main. For each break-glass account that the sweep skips, it writes one audit record: kind change, outcome success, scope @server, object the principal reference of the account, reason "break-glass account is exempt", and the caller fields of the sweep entry (the same entry shape that the sweep writes for a disabled account in pkg/accesstoken/service.go).
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
 - The restore check reads the same count on staged data, and the swap runs in a transaction that counts again.
 - The guard uses the conditional SQL update of the disable and the delete: the statement changes the row only when another enabled account stays.
 - Rotation is one new method of the passkey port, RotatePasskey in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that two parallel rotations leave exactly one working credential.
+- The add of a break-glass account is one new method of the passkey port, NEW `AddBreakGlassPerson` in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that a failed passkey insert leaves no account.
 - A guide section for the break-glass accounts, the guard and the floor.
 
 Out of scope:
@@ -70,7 +71,7 @@ Where the path still costs the person time or surprises them:
 
 - A refused change costs one round trip. The 409 text names the live count and the route that lists the accounts.
 - An installation with one account sees the missing count in the list route, and the add route names the passkey enrollment step.
-- A person with no factor gets a refusal that names the enrollment page.
+- A person with no factor gets a 403 with mfa.fresh-step-required. The text names `/api/dustpan/v1/me/passkeys/register/begin`, so the person enrolls a passkey and repeats the request.
 
 ## What main already does
 
@@ -82,6 +83,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1248 (func TestSweepDisablesInactiveTokensAndAccounts)`)
 - A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:85 (func TestExpiredTempAdminStaysDenied)`)
 - Restore error codes exist on main. (`internal/errcode/catalog_restore.go:7 (error code restore.blobs-missing)`)
+- The PostgreSQL restore swap counts the working break-glass accounts of the installation before and after the swap and checks the floor in one transaction. (`internal/store/postgres/restore.go:247 (function swapInWithBreakGlassFloor)`)
 
 ## Owner decisions that apply
 
@@ -151,7 +153,8 @@ Questions considered and answered:
 - Does ADR 70 decision 25, no job disables a break-glass account, conflict with the sweep? ADR 306 decision 6 says the sweep may disable a break-glass principal. It is permission, not a duty. The sweep stays exempt, as on main, and writes one audit record for each account that it skips.
 - What counts as a working account? ADR 70 decision 24 gives enabled, not expired, not blocked by a policy, not dependent on the identity provider. The count on main (`pkg/principal/breakglass_count.go:30 (func CountWorkingBreakGlass)`) has no expiry term, and the change adds none. ADR 70 decision 23 and ADR 320 decision 23 give the passkey or hardware key.
 - Which source is authoritative for the count? The live rows are the only source. No stored setup list exists. The list route computes the count from the live rows at read time, so it never shows a stored number. An account has no expiry field, so time alone does not lower the count.
-- What does a person with no enrolled factor do? ADR 301 decision 4 and ADR 227 decision 2 apply: 403 with mfa.fresh-step-required and a text that names the enrollment page.
+- What does a person with no enrolled factor do? ADR 301 decision 4 and ADR 227 decision 2 apply: 403 with mfa.fresh-step-required and a text that names `/api/dustpan/v1/me/passkeys/register/begin`, the existing route that starts the passkey enrollment (docs/guides/passkeys.md).
+- What if the insert of the first passkey fails after the account is stored? It cannot leave an account with no credential: the account, the first passkey and the audit entry go in one transaction (design decision 5a), not in a compensating delete.
 - Which scope does the count use? ADR 216 decision 13: the namespace on the hosted service, the installation when self-hosted.
 - Can an installation below the floor add an account? Yes. A change that raises the count or does not lower it is never refused, also at zero accounts.
 - Does the guide cover protected groups and reach? No. Other changes own that text. Owner decision, 13 Nov 2026 (queue P21) belongs to let-group-trust-identity-provider.
