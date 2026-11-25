@@ -6,7 +6,7 @@ The server SHALL have the installation setting `access.installationGrantsReachNa
 
 #### Scenario: Setting false denies a namespace action
 - **WHEN** the setting is `false` and a caller that holds only a grant on `@server` of a role with a namespace action does that action in a namespace
-- **THEN** the server answers 403 that names the action and the namespace, and changes nothing
+- **THEN** the server answers 403 that names the action and the kind of the object ("on this namespace"), does not name the namespace, and changes nothing
 
 #### Scenario: Operator action stays allowed
 - **WHEN** the setting is `false` and the same caller does an action of the operator scope
