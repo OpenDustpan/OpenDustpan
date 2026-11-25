@@ -52,6 +52,7 @@ docs/guides/soak.md
 docs/guides/state-versions.md
 docs/guides/state-write-gates.md
 docs/guides/terragrunt.md
+docs/guides/unmanaged-sweep-store.md
 docs/reference/api-description.md
 docs/reference/blob-write-benchmark-record.md
 docs/reference/configuration.md

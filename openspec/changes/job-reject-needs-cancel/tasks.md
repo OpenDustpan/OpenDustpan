@@ -26,14 +26,14 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Update the docs page `docs/guides/approval-rules.md`: a rejection by another person needs `job:cancel`, the requester is the exception, the error and the command that helps. A test runs each command.
-  - Check: `make docs-lint` and the docs command test
+- [ ] 3.1 Update the docs page `docs/guides/approval-rules.md`: a rejection by another person needs `job:cancel`, the requester is the exception, the error and the command that helps. The page stays on the pending list: this task does not edit a list of docs commands. The e2e step of 3.2 checks the call that the page shows.
+  - Check: `make docs-lint`
   - Confirmed by: CI
   - OpenDustpan: `docs/guides/approval-rules.md`
-- [ ] 3.2 Run the route of the approval in the e2e suite with a person that has `job:approve` only.
-  - Check: `make e2e` step for the approvals route
+- [ ] 3.2 Add the e2e step `approvalsRejectNeedsCancel` in `e2e/jobs_api_test.go`, with a person that has `job:approve` only, against a real server. It lists the grants of the unit (`GET /api/dustpan/v1/namespaces/{namespace}/access/grants`) and checks that the person holds `job:approve` and not `job:cancel`. It posts the verdict `reject` to `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` for a job that another person started and checks the answer 403 `access.denied` that names `job:cancel`, the action that this change adds to the route. This is the call that the docs page of 3.1 shows.
+  - Check: `make e2e` step `approvalsRejectNeedsCancel`
   - Confirmed by: CI
-  - OpenDustpan: `e2e/`
+  - OpenDustpan: `e2e/jobs_api_test.go`
 
 ## 4. Definition of done
 

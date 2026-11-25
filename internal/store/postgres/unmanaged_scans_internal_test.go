@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/internal/store/unmanagedstore"
 	"opendustpan.org/opendustpan/internal/unmanaged"
+	"opendustpan.org/opendustpan/internal/unmanaged/unmanagedtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -401,5 +402,56 @@ func TestSweepPoolOfRefusesAJobPool(t *testing.T) {
 		unmanagedEntry("acme", "namespace:start-sweep"))
 	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
 		t.Fatalf("start = %v, want ErrInvalidTarget", err)
+	}
+}
+
+// TestSweepPoolIDKeepsSQLTextAsData reaches GetRunnerPoolByName with names
+// that hold SQL text. The port refuses such a name before SQL, so the test
+// calls sweepPoolID in a transaction. A pool planted with the first name, as a
+// restore of another version could bring it in, is the one row that this
+// name finds. Each other name finds no pool, so no name runs as SQL.
+func TestSweepPoolIDKeepsSQLTextAsData(t *testing.T) {
+	t.Parallel()
+
+	s := openUnmanagedScansInternalStore(t)
+	seedUnmanaged(t, s)
+
+	texts := unmanagedtest.HostileSQLText()
+	planted := texts[0]
+
+	const plant = `INSERT INTO runner_pools
+(id, namespace_id, name, purpose, lease_ms, concurrency, isolation, git_mode, git_helper, created_at_ms, updated_at_ms)
+SELECT 'rpl-planted', namespace_id, $1, purpose, lease_ms, concurrency, isolation, git_mode, git_helper,
+created_at_ms, updated_at_ms FROM runner_pools WHERE name = 'sweepers'`
+	if _, err := s.pool.Exec(t.Context(), plant, planted); err != nil {
+		t.Fatalf("plant the pool: %v", err)
+	}
+
+	acme, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace acme: %v", err)
+	}
+
+	for _, text := range texts {
+		var id string
+
+		err = s.inTx(t.Context(), func(q *db.Queries) error {
+			var poolErr error
+			id, poolErr = sweepPoolID(t.Context(), q, acme.ID.String(), text)
+
+			return poolErr
+		})
+
+		if text == planted {
+			if err != nil || id != "rpl-planted" {
+				t.Errorf("%q: pool = %q, %v; want rpl-planted", text, id, err)
+			}
+
+			continue
+		}
+
+		if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+			t.Errorf("%q: pool = %q, %v; want ErrInvalidTarget", text, id, err)
+		}
 	}
 }

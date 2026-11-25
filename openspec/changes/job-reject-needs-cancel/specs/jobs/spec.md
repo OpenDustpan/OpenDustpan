@@ -26,3 +26,9 @@ The server SHALL accept a verdict `reject` on an approval gate only from a princ
 #### Scenario: An approval is not affected
 - **WHEN** a person with `job:approve` and without `job:cancel` approves a job that another person started
 - **THEN** the approval follows the rules of the approval gate and needs no `job:cancel`
+
+#### Scenario: The call that the docs page shows works against a real server
+- **GIVEN** a running server, a job that a person started, and a second person with `job:approve` and without `job:cancel` on its unit
+- **WHEN** the e2e suite lists the grants of the unit and the second person rejects the job
+- **THEN** the grant list shows `job:approve` and not `job:cancel` for the second person
+- **AND** the rejection answers 403 `access.denied` and names `job:cancel`, as the docs page `docs/guides/approval-rules.md` shows

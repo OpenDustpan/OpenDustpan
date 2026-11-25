@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 11
 ---
 
 Issue: #3257.
@@ -34,7 +34,7 @@ The path after this change:
 ## Fix boundary
 
 - Declare the installation setting `freshAuthEnabled`: boolean, effective default `false`, reduces security when it goes from on to off. Its settings API shows the effective value and its source. A flag, an environment variable or the configuration file may set it.
-- One decision point, the NEW `freshstep.Policy` (in the NEW package `pkg/freshstep`), that every fresh-step call site asks. With the setting off it answers "no step". The handler, the service and the store each read the same effective value. None keeps its own rule.
+- One decision point, the NEW `freshstep.Policy` (in the existing package `pkg/freshstep`, extended: main has only the type `Guard`), that every fresh-step call site asks. With the setting off it answers "no step". The handler, the service and the store each read the same effective value. None keeps its own rule.
 - Gate each call site that the `rg` of task 1.1 finds, except the sites that ADR 385 decision 5 keeps.
 - The refusal of the approval route (`internal/api/jobs/approve.go`, "no session MFA proof yet") is not the answer with the setting off. With the setting on, the fresh fact of #3257 is a separate change that depends on this one.
 - A stored `freshAuthSeconds` of an approval rule and `freshAuthForApprovals` of a namespace keep their values with the setting off. The settings API and the rule API show `"enforced": false` for them.
@@ -53,7 +53,7 @@ Out of scope:
 
 New:
 
-- pkg/freshstep/freshstep.go, pkg/freshstep/freshstep_test.go, pkg/freshstep/leak_test.go: `Policy`, `Guard`, `NewGuard`.
+- pkg/freshstep/freshstep.go (existing, extended: main has only the type `Guard`; add the NEW `Policy` and `NewGuard`, and give `Guard` its methods), pkg/freshstep/freshstep_test.go (NEW), pkg/freshstep/leak_test.go (NEW).
 - pkg/job/freshstep_policy_test.go, internal/api/server/freshstep_policy_test.go, internal/store/jobstore/events_freshstep_test.go, pkg/profile/profiletest/freshstep_policy_test.go: the table of each layer with the setting off and on.
 
 Edited (each from the `rg` list of "Evidence"; task 1.1 confirms the list on current main):
