@@ -30,10 +30,10 @@
   - Check: `make docs-lint` and the docs command test
   - Confirmed by: CI
   - OpenDustpan: `docs/guides/approval-rules.md`
-- [ ] 3.2 Run the route of the approval in the e2e suite with a person that has `job:approve` only.
+- [ ] 3.2 Add a step to the e2e suite for the approvals route (`approvalsRoute`). A member has `namespace:read`, `unit:read`, `job:approve` and `job:read`, and no `job:cancel`. The member rejects the job of an administrator. The step expects 403.
   - Check: `make e2e` step for the approvals route
   - Confirmed by: CI
-  - OpenDustpan: `e2e/`
+  - OpenDustpan: `e2e/jobs_api_test.go`
 
 ## 4. Definition of done
 
