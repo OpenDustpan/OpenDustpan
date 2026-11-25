@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #3683. This change builds ADR 210 decision 10 for the audit list.
