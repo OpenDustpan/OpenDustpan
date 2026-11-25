@@ -1,10 +1,16 @@
 package job
 
 import (
+	"errors"
 	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// ErrAuthorizerFailed marks a denial that comes from a failure of the
+// authorizer, not from a decision of the policy. The error also wraps
+// identity.ErrDenied, so the caller is refused (fail closed).
+var ErrAuthorizerFailed = errors.New("the authorizer failed")
 
 // DeniedError is the refusal of a start by the authorizer: it names the
 // action and the object that the authorizer refused. Err is the error of the

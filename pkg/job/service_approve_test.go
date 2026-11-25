@@ -189,7 +189,6 @@ func TestApproveRecordsTheVerdict(t *testing.T) {
 		},
 		{"a rejection ends the job", nil, actorOf("carol"), job.VerdictReject, job.EventRejected},
 		{"the starter may reject", nil, actorOf("alice"), job.VerdictReject, job.EventRejected},
-		{"an agent may reject", nil, agentActor("carol", "dusty"), job.VerdictReject, job.EventRejected},
 		{
 			"the starter counts when the gate allows it", func(j *job.Job) {
 				j.Phases[1].Gates[0].AllowSelf = true
@@ -209,27 +208,49 @@ func TestApproveRecordsTheVerdict(t *testing.T) {
 
 			r := approveRig(t, openPolicy())
 			seeded := r.seed(tc.mod)
+			if tc.verdict == job.VerdictReject && tc.actor.Principal.Subject != seeded.StartedBy {
+				r.authz.allow[string(job.ActionJobCancel)+" "+r.unit.String()] = true
+			}
 
 			_, err := r.svc.Approve(t.Context(), tc.actor, approveID, tc.verdict, r.binding(), "looks right")
 			if err != nil {
 				t.Fatalf("Approve = %v", err)
 			}
 
-			if len(r.store.applies) != 1 || len(r.store.applyEntries) != 1 || len(r.store.applyEntries[0]) != 1 {
-				t.Fatalf("applies = %d, entries = %v, want one change with one entry", len(r.store.applies),
-					r.store.applyEntries)
-			}
-
-			c := r.store.applies[0]
-			if c.Event != tc.wantEvent || c.Job != approveID || c.Version != seeded.Version {
-				t.Errorf("change = %s of %s at %d, want %s of %s at %d", c.Event, c.Job, c.Version, tc.wantEvent,
-					approveID, seeded.Version)
-			}
-
-			checkApproval(t, &c, &tc.actor, tc.verdict, r.now)
-			checkEntry(t, &r.store.applyEntries[0][0], &tc.actor, tc.verdict)
+			checkRecordedVerdict(t, r, recordedChange{
+				actor: tc.actor, verdict: tc.verdict, event: tc.wantEvent, version: seeded.Version,
+			})
 		})
 	}
+}
+
+// recordedChange is the change that TestApproveRecordsTheVerdict expects the
+// store to hold.
+type recordedChange struct {
+	actor   job.Actor
+	verdict job.Verdict
+	event   job.Event
+	version int64
+}
+
+// checkRecordedVerdict fails t when the store holds no change with the verdict
+// of want, or when the change is not the one the case expects.
+func checkRecordedVerdict(t *testing.T, r *rig, want recordedChange) {
+	t.Helper()
+
+	if len(r.store.applies) != 1 || len(r.store.applyEntries) != 1 || len(r.store.applyEntries[0]) != 1 {
+		t.Fatalf("applies = %d, entries = %v, want one change with one entry", len(r.store.applies),
+			r.store.applyEntries)
+	}
+
+	c := r.store.applies[0]
+	if c.Event != want.event || c.Job != approveID || c.Version != want.version {
+		t.Errorf("change = %s of %s at %d, want %s of %s at %d", c.Event, c.Job, c.Version, want.event,
+			approveID, want.version)
+	}
+
+	checkApproval(t, &c, &want.actor, want.verdict, r.now)
+	checkEntry(t, &r.store.applyEntries[0][0], &want.actor, want.verdict)
 }
 
 // checkApproval fails t when the approval of c is not the verdict of actor.
@@ -334,7 +355,7 @@ func refusalCases() []refusalCase {
 			refuse("job in queued", job.ErrTransition, withMod(func(j *job.Job) { j.State = job.StateQueued })),
 			refuse("job that ended", job.ErrFinished, withMod(func(j *job.Job) { j.State = job.StateSucceeded })),
 			refuse("rejection of a job that ended", job.ErrFinished, withVerdict(job.VerdictReject),
-				withMod(func(j *job.Job) { j.State = job.StateCanceled })),
+				withActor(actorOf("alice")), withMod(func(j *job.Job) { j.State = job.StateCanceled })),
 			refuse(
 				"phase with no approval gate",
 				job.ErrTransition,
@@ -491,6 +512,7 @@ func TestApproveRejectionOfADestroyNeedsNoMFAStep(t *testing.T) {
 
 	r := approveRig(t, openPolicy())
 	r.seed(func(j *job.Job) { j.Spec.Operation = job.OperationDestroy })
+	r.authz.allow[string(job.ActionJobCancel)+" "+r.unit.String()] = true
 
 	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictReject, noBinding(), "")
 	if err != nil {
@@ -596,5 +618,138 @@ func TestApproveStopsOnACanceledContext(t *testing.T) {
 	_, err := r.svc.Approve(ctx, actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
 	if !errors.Is(err, context.Canceled) || len(r.store.applies) != 0 {
 		t.Fatalf("Approve = %v with %d changes, want context.Canceled and none", err, len(r.store.applies))
+	}
+}
+
+// rejectCancelCase is one case of TestApproveRejectNeedsCancel.
+type rejectCancelCase struct {
+	name    string
+	mod     func(*job.Job)
+	actor   job.Actor
+	verdict job.Verdict
+	setup   func(*rig)
+	wantErr bool
+}
+
+func TestApproveRejectNeedsCancel(t *testing.T) {
+	t.Parallel()
+
+	cancelKey := func(r *rig) string {
+		return string(job.ActionJobCancel) + " " + r.unit.String()
+	}
+
+	tests := []rejectCancelCase{
+		{
+			name:    "another person with job:approve and without job:cancel",
+			mod:     nil,
+			actor:   actorOf("carol"),
+			verdict: job.VerdictReject,
+			setup:   nil,
+			wantErr: true,
+		},
+		{
+			name:    "another person with both actions",
+			mod:     nil,
+			actor:   actorOf("carol"),
+			verdict: job.VerdictReject,
+			setup: func(r *rig) {
+				r.authz.allow[cancelKey(r)] = true
+			},
+			wantErr: false,
+		},
+		{
+			name:    "the requester without job:cancel",
+			mod:     nil,
+			actor:   actorOf("alice"),
+			verdict: job.VerdictReject,
+			setup:   nil,
+			wantErr: false,
+		},
+		{
+			name:    "a failing authorizer for job:cancel",
+			mod:     nil,
+			actor:   actorOf("carol"),
+			verdict: job.VerdictReject,
+			setup: func(r *rig) {
+				r.authz.fail[cancelKey(r)] = errApproveGrants
+			},
+			wantErr: true,
+		},
+		{
+			name: "a user who started the job through an agent",
+			mod: func(j *job.Job) {
+				j.Agent, j.AgentMode = "dusty", job.AgentModeApproveFirst
+			},
+			actor:   actorOf("alice"),
+			verdict: job.VerdictReject,
+			setup:   nil,
+			wantErr: false,
+		},
+		{
+			name:    "an approval by a person without job:cancel",
+			mod:     nil,
+			actor:   actorOf("carol"),
+			verdict: job.VerdictApprove,
+			setup:   nil,
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRejectCancel(t, tc)
+		})
+	}
+}
+
+// checkRejectCancel runs one case of TestApproveRejectNeedsCancel.
+func checkRejectCancel(t *testing.T, tc rejectCancelCase) {
+	t.Helper()
+
+	r := approveRig(t, openPolicy())
+	seeded := r.seed(tc.mod)
+
+	if tc.setup != nil {
+		tc.setup(r)
+	}
+
+	bound := r.binding()
+	if tc.verdict == job.VerdictReject {
+		bound = noBinding()
+	}
+
+	_, err := r.svc.Approve(t.Context(), tc.actor, approveID, tc.verdict, bound, "looks right")
+	if !tc.wantErr {
+		if err != nil {
+			t.Fatalf("Approve = %v", err)
+		}
+
+		return
+	}
+
+	checkRejectCancelDenial(t, err, r, &seeded)
+}
+
+// checkRejectCancelDenial fails t when err is not the denial of job:cancel, or
+// when the denial changed the job.
+func checkRejectCancelDenial(t *testing.T, err error, r *rig, seeded *job.Job) {
+	t.Helper()
+
+	denied, ok := errors.AsType[*job.DeniedError](err)
+	if !ok || !errors.Is(err, identity.ErrDenied) || denied.Action != job.ActionJobCancel {
+		t.Fatalf("Approve = %v, want a denial of job:cancel", err)
+	}
+
+	got := r.store.jobs[approveID]
+	if got.State != seeded.State || got.Version != seeded.Version ||
+		len(got.Phases[1].Approvals) != len(seeded.Phases[1].Approvals) {
+		t.Errorf("job changed on denial: got state %s version %d approvals %d", got.State, got.Version,
+			len(got.Phases[1].Approvals))
+	}
+
+	if len(r.store.applies) != 0 {
+		t.Errorf("denial wrote %d changes", len(r.store.applies))
 	}
 }

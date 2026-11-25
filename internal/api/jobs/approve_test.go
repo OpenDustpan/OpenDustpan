@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -78,6 +79,8 @@ func holdsApprove() []string {
 
 const goodApprove = `{"verdict":"approve","planBinding":{"plan":"pln-1","displaySha256":"d1",` +
 	`"applySha256":"a1","stateVersion":"sv-1"},"comment":"checked the plan"}`
+
+const rejectNo = `{"verdict":"reject","comment":"no"}`
 
 // The service deliberately allows the request. The handler must refuse a
 // destroy without session proof without help from the service.
@@ -662,5 +665,221 @@ func TestApproveRefusesAJobOfAnotherNamespace(t *testing.T) {
 	rec := r.send(t, testJob, goodApprove)
 	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "other") {
 		t.Fatalf("status = %d %s, want 500 with no job", rec.Code, rec.Body.String())
+	}
+}
+
+// rejectRouteCase is one case of TestApproveRouteRejectNeedsCancel.
+type rejectRouteCase struct {
+	name       string
+	holds      []string
+	jobMod     func(*job.Job)
+	body       string
+	failCancel error
+	wantStatus int
+	wantCalls  int
+	wantDenied bool
+}
+
+// startedByAlice makes alice the starter of the job.
+func startedByAlice(j *job.Job) { j.StartedBy = "alice" }
+
+// startedByAda makes ada the starter of the job.
+func startedByAda(j *job.Job) { j.StartedBy = "ada" }
+
+// startedByAdaThroughAgent makes ada the starter of a job that the agent
+// dusty started.
+func startedByAdaThroughAgent(j *job.Job) {
+	j.StartedBy = "ada"
+	j.Agent = "dusty"
+}
+
+func TestApproveRouteRejectNeedsCancel(t *testing.T) {
+	t.Parallel()
+
+	cancelHold := string(job.ActionJobCancel) + " opentofu:acme/net"
+
+	tests := []rejectRouteCase{
+		{
+			name:       "another person with job:approve and without job:cancel",
+			holds:      holdsApprove(),
+			jobMod:     startedByAlice,
+			body:       rejectNo,
+			failCancel: nil,
+			wantStatus: http.StatusForbidden,
+			wantCalls:  0,
+			wantDenied: true,
+		},
+		{
+			name:       "another person with both actions",
+			holds:      append(holdsApprove(), cancelHold),
+			jobMod:     startedByAlice,
+			body:       rejectNo,
+			failCancel: nil,
+			wantStatus: http.StatusCreated,
+			wantCalls:  1,
+			wantDenied: false,
+		},
+		{
+			name:       "the requester without job:cancel",
+			holds:      holdsApprove(),
+			jobMod:     startedByAda,
+			body:       rejectNo,
+			failCancel: nil,
+			wantStatus: http.StatusCreated,
+			wantCalls:  1,
+			wantDenied: false,
+		},
+		{
+			name:       "a failing authorizer for job:cancel",
+			holds:      holdsApprove(),
+			jobMod:     startedByAlice,
+			body:       rejectNo,
+			failCancel: errDriver,
+			wantStatus: http.StatusForbidden,
+			wantCalls:  0,
+			wantDenied: true,
+		},
+		{
+			name:       "a user who started the job through an agent",
+			holds:      holdsApprove(),
+			jobMod:     startedByAdaThroughAgent,
+			body:       rejectNo,
+			failCancel: nil,
+			wantStatus: http.StatusCreated,
+			wantCalls:  1,
+			wantDenied: false,
+		},
+		{
+			name:       "an approval by a person without job:cancel",
+			holds:      holdsApprove(),
+			jobMod:     nil,
+			body:       goodApprove,
+			failCancel: nil,
+			wantStatus: http.StatusCreated,
+			wantCalls:  1,
+			wantDenied: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := rejectRouteRig(t, tc, cancelHold)
+
+			rec := r.send(t, testJob, tc.body)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d %s, want %d", rec.Code, rec.Body.String(), tc.wantStatus)
+			}
+
+			if got := len(r.svc.called()); got != tc.wantCalls {
+				t.Errorf("service calls = %d, want %d", got, tc.wantCalls)
+			}
+
+			if tc.wantDenied {
+				checkRejectDenial(t, r, rec)
+			}
+		})
+	}
+}
+
+// TestApproveAuditsTheCancelDenialOfTheService proves that a denial of
+// job:cancel that comes from the service, after the check of the handler
+// passed, answers 403 and writes one entry that names job:cancel and the unit.
+// A failure of the authorizer in the service is recorded as a failure, not as
+// a denial of policy.
+func TestApproveAuditsTheCancelDenialOfTheService(t *testing.T) {
+	t.Parallel()
+
+	unit := unitOf(t, "acme", testUnit)
+	cancelHold := string(job.ActionJobCancel) + " opentofu:acme/net"
+
+	tests := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{
+			"a denial of policy",
+			&job.DeniedError{Action: identity.ActionJobCancel, Object: unit, Err: identity.ErrDenied},
+			refusal.ReasonPolicy,
+		},
+		{
+			"a failing authorizer",
+			&job.DeniedError{
+				Action: identity.ActionJobCancel, Object: unit,
+				Err: fmt.Errorf("%w: %w: %w", identity.ErrDenied, job.ErrAuthorizerFailed, errDriver),
+			},
+			refusal.ReasonFailed,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := rejectRouteRig(t, rejectRouteCase{
+				name: tc.name, holds: append(holdsApprove(), cancelHold), jobMod: startedByAlice, body: rejectNo,
+				failCancel: nil, wantStatus: http.StatusForbidden, wantCalls: 1, wantDenied: true,
+			}, cancelHold)
+			r.svc.err = tc.err
+
+			rec := r.send(t, testJob, rejectNo)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d %s, want 403", rec.Code, rec.Body.String())
+			}
+
+			if len(r.entries.entries) != 1 {
+				t.Fatalf("audit entries = %+v, want one refusal", r.entries.entries)
+			}
+
+			e := r.entries.entries[0]
+			if e.Action != string(job.ActionJobCancel) || e.Object != "opentofu:acme/net" ||
+				e.Outcome != audit.OutcomeDenied || !strings.HasPrefix(e.Reason, tc.reason) {
+				t.Fatalf("entry = %+v, want a refusal of job:cancel on the unit with reason %q", e, tc.reason)
+			}
+		})
+	}
+}
+
+// rejectRouteRig builds the handler of one case of
+// TestApproveRouteRejectNeedsCancel.
+func rejectRouteRig(t *testing.T, tc rejectRouteCase, cancelHold string) *approveRig {
+	t.Helper()
+
+	r := newApproveRig(t, tc.holds...)
+
+	if tc.jobMod != nil {
+		j := runningJob(t, testJob)
+		tc.jobMod(&j)
+		r = &approveRig{
+			h: newStartHandler(t, r.authz, newFakeJobs(j), r.svc, r.entries), svc: r.svc, entries: r.entries,
+			authz: r.authz,
+		}
+	}
+
+	if tc.failCancel != nil {
+		r.authz.fail[cancelHold] = tc.failCancel
+	}
+
+	return r
+}
+
+// checkRejectDenial fails t when rec is not the refusal of job:cancel on the
+// unit of the route.
+func checkRejectDenial(t *testing.T, r *approveRig, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, rec.Code, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.AccessDenied, Args: nil, RequestBody: nil})
+
+	if len(r.entries.entries) != 1 {
+		t.Fatalf("audit entries = %+v, want one refusal", r.entries.entries)
+	}
+
+	e := r.entries.entries[0]
+	if e.Action != string(job.ActionJobCancel) || e.Object != "opentofu:acme/net" ||
+		e.Outcome != audit.OutcomeDenied {
+		t.Fatalf("entry = %+v, want denial of job:cancel on the unit", e)
 	}
 }
