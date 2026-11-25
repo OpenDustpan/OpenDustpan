@@ -10,8 +10,6 @@
 ## 2. Build
 
 - [ ] 2.1 Build the runner loop in NEW pkg/runner/client/loop.go. It polls, renews after `runner.RenewEvery` of the pool lease, heartbeats every 15 s and stops on a lost claim. Check: `go test ./pkg/runner/client` passes.
-- [ ] 2.2 Add the command `opendustpan runner poll` in internal/cli that runs the loop. Check: `opendustpan runner poll --help` lists the flags and a test runs the command against the test server.
-- [ ] 2.3 Write the runner claims docs page in NEW docs/guides/runner-claims.md with the poll loop and the error table. Check: the test e2e/130_138_runner_protocol_claims_docs_test.go runs each command of the docs page against the e2e test server, and `make docs-lint` passes on the page.
 - [ ] 2.4 SECURITY. Add the constructor `New` with its checks in pkg/runner/client/loop.go. Check: `go build ./pkg/runner/client` passes and no code holds an expiry that the server did not send.
 - [ ] 2.5 SECURITY. Add the hostile test `TestNewRejectsHostileConfig` in pkg/runner/client/loop_test.go that calls `New` with an empty key, a lease below `runner.MinLease` and a URL with another scheme. Check: the test passes and each call returns an error.
 - [ ] 2.6 SECURITY. Add the hostile test `TestRunnerOfAnotherPoolGetsNoWork` in NEW internal/servertest/runner_claims_test.go. A runner of pool B polls while work waits in pool A. Check: the runner token of pool B (its runner key) polls `POST /runner/v1/poll` and the answer is 204 and the work stays queued.
@@ -23,6 +21,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step in NEW e2e/130_138_runner_protocol_claims_docs_test.go: a real runner joins, polls, renews and heartbeats until the work ends. Check: the step passes against the e2e test server with the runner token (the runner key) on `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`.
-- [ ] 4.2 Agent pre-run (human run-through in person-steps (130-138-runner-protocol-claims 4.2)): Run the usability check of the runner operator path. Check: the operator runs the poll loop from the docs page alone. Record the transcript in the pull request body.
+- [ ] 4.1 Add the e2e step in NEW e2e/130_138_runner_protocol_claims_test.go: a test runner built on `pkg/runner/client` joins, polls, renews and heartbeats until the work ends. Check: the step passes against the e2e test server with the runner token (the runner key) on `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`.
+- [ ] 4.2 Run the usability check of the loop library. Check: a Go program of fewer than 40 lines polls, renews and heartbeats through `client.New` and `Run`. Record the program and its output in the pull request body.
 - [ ] 4.3 Run full checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

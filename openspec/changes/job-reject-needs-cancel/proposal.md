@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 8
 ---
 
 Issue: #4090. The owner decided the rule on 2026-11-15 (option b, relayed by the lead) after a review of #3251 found that a rejection stops a job like a cancel does, with a weaker action.

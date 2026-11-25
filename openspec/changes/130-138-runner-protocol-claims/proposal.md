@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #4056
@@ -10,19 +10,19 @@ Issue: #4056
 
 The user path this change must make work:
 
-1. **Server start.** Install and join a runner to a pool, then start the runner binary against the server.
-2. **API.** The runner polls the existing route `POST /runner/v1/poll` with its runner key. On failure, run `opendustpan status`.
+1. **Server start.** Install and join a runner to a pool, then start the separate runner binary against the server.
+2. **API.** The runner polls the existing route `POST /runner/v1/poll` with its runner key. On failure, run `opendustpan runner pools list`.
 3. **API.** The runner renews the claim through the existing route `POST /runner/v1/claims/{operation}/renew` after a third of the pool lease, and sends the existing heartbeat `POST /runner/v1/heartbeat` every 15 s.
-4. **Docs page.** Read the runner claims docs page and run its poll loop as written.
+4. **Runner repository.** The runner binary in `OpenDustpan/dustpan-runner` calls the loop library `pkg/runner/client`. The command and the docs page for the runner operator are follow-up work in that repository.
 
 Errors the person may hit, and the one command that helps. The codes are the short protocol codes of `/runner/v1` that main already returns (`pkg/runner/protocol/protocol.go:198-214`). The change adds no second error shape.
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Poll with a bad runner proof fails. | Server answers 401 with `bad-proof`, with no key echo in body or logs. Check the key, the clock and the pool, then run `opendustpan status`. | `opendustpan status` |
-| Poll with a retired runner fails. | Server answers 403 with `retired`. Join a new runner, then run `opendustpan status`. | `opendustpan status` |
-| Poll comes too often. | Server answers 429 with `rate-limited` and `Retry-After`. Wait for the delay. | `opendustpan status` |
-| Renew after the lease ended. | Server answers 409 with `claim-lost`. The runner stops the work. | `opendustpan status` |
+| Poll with a bad runner proof fails. | Server answers 401 with `bad-proof`, with no key echo in body or logs. Check the key, the clock and the pool, then run `opendustpan runner pools list`. | `opendustpan runner pools list` |
+| Poll with a retired runner fails. | Server answers 403 with `retired`. Join a new runner, then run `opendustpan runner pools list`. | `opendustpan runner pools list` |
+| Poll comes too often. | Server answers 429 with `rate-limited` and `Retry-After`. Wait for the delay. | `opendustpan runner pools list` |
+| Renew after the lease ended. | Server answers 409 with `claim-lost`. The runner stops the work. | `opendustpan runner pools list` |
 
 Evidence for the claims above:
 
@@ -38,8 +38,7 @@ Evidence for the claims above:
 
 - Add the runner-side poll, renew and heartbeat loop. It calls only the routes that main has: `POST /runner/v1/poll`, `POST /runner/v1/heartbeat` and `POST /runner/v1/claims/{operation}/renew`. The server routes, the error codes and the lease do not change.
 - The lease of a claim is the lease of its pool, `Pool.EffectiveLease` (default 90 s, from `runner.MinLease` to `runner.MaxLease`). The loop renews after `runner.RenewEvery` of that lease. The change sets no fixed lease.
-- Ship the NEW command `opendustpan runner poll` that runs the loop.
-- Write the runner claims docs page.
+- Add no command to the `opendustpan` binary. The runner is a separate binary in its own repository, not a role of `opendustpan`. The command that runs the loop and the runner claims docs page are follow-up work for `OpenDustpan/dustpan-runner`.
 
 Out of scope:
 
@@ -57,8 +56,8 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- Runner operator must learn two new paths at once: poll and heartbeat; the docs page shows one copy-paste loop.
-- Empty poll answer (204 after the wait) can look like a fault; the docs page says that 204 is normal and the loop polls again.
+- Runner operator must learn two new paths at once: poll and heartbeat. The loop library handles both; the operator docs come with the runner command in the runner repository.
+- Empty poll answer (204 after the wait) can look like a fault; the loop polls again and logs that 204 is normal.
 
 ## What main already does
 
@@ -100,12 +99,22 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 343: Runner work: tool imports, sweeps and the runner repository** (owner-tagged (all decisions)).
 
-- Decisions that apply: 3 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Decisions that apply: 3 (current), 6 (owner).
+- Changed by: ADR 396 extends decision 3. Chain to the end: ADR 396.
+- Current rule: this ADR, with ADR 396.
 - Quote: "Sweeps run on a runner (owner, 2026-11-07). ADR 164 decision 1 stays."
+- Quote: "The runner lives in its own repository, as ADR 282 decision 4 says. No other component gets a repository of its own from this exception."
 - Effect: Sweeps run on a runner. Claim polling and heartbeat therefore serve sweep work on the same path as job work.
 - Conflict: none.
+
+**ADR 282: Runners and remote runs** (owner-tagged for decision 4).
+
+- Decisions that apply: 4 (owner).
+- Changed by: ADR 343 extends decision 4. Chain to the end: ADR 343.
+- Current rule: this ADR, with ADR 343.
+- Quote: "The runner is a separate binary, not a role of the `opendustpan` binary, as ADR 139 decision 4 says."
+- Effect: The change adds no `opendustpan runner poll` command. The loop is a library; the binary that calls it lives in `OpenDustpan/dustpan-runner`.
+- Conflict: none. The earlier draft with the command `opendustpan runner poll` conflicted with decision 4. This version removes it.
 
 ## Open questions
 

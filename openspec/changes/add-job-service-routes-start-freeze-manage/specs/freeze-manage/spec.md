@@ -98,7 +98,7 @@ When a principal with the namespace read action on the namespace lists the freez
 
 #### Scenario: List without read is refused
 - **WHEN** a principal without the namespace read action on the namespace lists the freezes
-- **THEN** the server answers 403 and returns no freeze
+- **THEN** the server answers 404, the same answer as for an unknown namespace, and returns no freeze, so that the answer does not show whether the namespace exists
 
 ### Requirement: Break-freeze is an installation action
 The server SHALL give the break-freeze action only through a grant on the installation, and the manage-freezes action through a grant on a namespace. A holder of one action SHALL NOT hold the other through it.
@@ -109,7 +109,7 @@ The server SHALL give the break-freeze action only through a grant on the instal
 
 #### Scenario: Manage-freezes without break-freeze
 - **WHEN** a principal with the manage-freezes action and without the break-freeze action starts a job during an active freeze with breakFreezeReason
-- **THEN** the server answers 403 and starts no job
+- **THEN** the server answers 409 with code job.frozen and starts no job, the same answer as in the scenario "Namespace grant does not give break-freeze"
 
 #### Scenario: Break-freeze without manage-freezes
 - **WHEN** a principal with the break-freeze action and without the manage-freezes action creates or ends a freeze
