@@ -74,7 +74,7 @@ func serviceWithLimits(tb testing.TB, f *fixture, limits access.LimitGroups) *ac
 		Now: func() time.Time { return time.UnixMilli(1_760_000_000_000) }, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: limits,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
 		},
 	})
 	if err != nil {
@@ -479,7 +479,7 @@ func TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: &failingGrantsStore{Store: f.store}, Callers: f.store, Collections: nil, Units: f.store,
-		Principals: f.store,
+		Principals: f.store, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -490,7 +490,7 @@ func TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision(t *testing.T) {
 		Now: func() time.Time { return time.UnixMilli(1_760_000_000_000) }, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
 		},
 		LimitGroups: fakeLimits{
 			lifted: map[limitKey]bool{

@@ -168,18 +168,21 @@ func TestNewAuthorizerRequiresPrincipals(t *testing.T) {
 			name: "a store",
 			cfg: access.AuthorizerConfig{
 				Store: nil, Callers: f.store, Collections: nil, Units: nil, Principals: f.store,
+				Settings: nil,
 			},
 		},
 		{
 			name: "callers",
 			cfg: access.AuthorizerConfig{
 				Store: f.store, Callers: nil, Collections: nil, Units: nil, Principals: f.store,
+				Settings: nil,
 			},
 		},
 		{
 			name: "principals",
 			cfg: access.AuthorizerConfig{
 				Store: f.store, Callers: f.store, Collections: nil, Units: nil, Principals: nil,
+				Settings: nil,
 			},
 		},
 	} {
@@ -249,7 +252,7 @@ func TestNamespacePrincipalGroupGrants(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: groupCallers{Callers: f.store, subject: "ci-acme", group: team.ID},
-		Collections: f.units, Units: f.store, Principals: f.store,
+		Collections: f.units, Units: f.store, Principals: f.store, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -288,7 +291,7 @@ func TestNamespacePrincipalGroupReadFailsClosed(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: groupCallers{Callers: f.store, subject: "ci-acme", group: team.ID},
-		Collections: f.units, Units: f.store, Principals: failingPrincipals{},
+		Collections: f.units, Units: f.store, Principals: failingPrincipals{}, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -352,7 +355,7 @@ func TestNamespacePrincipalGrantReadFailsClosed(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: f.store, Collections: f.units, Units: f.store,
-		Principals: failingPrincipals{},
+		Principals: failingPrincipals{}, Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)

@@ -116,7 +116,7 @@ func newFixtureWithSettings(tb testing.TB, units access.UnitCollections, setting
 	})
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: st, Callers: st, Collections: units, Units: st, Principals: st,
+		Store: st, Callers: st, Collections: units, Units: st, Principals: st, Settings: settings,
 	})
 	if err != nil {
 		tb.Fatalf("new authorizer: %v", err)
@@ -124,8 +124,10 @@ func newFixtureWithSettings(tb testing.TB, units access.UnitCollections, setting
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
-		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st},
-		Now:   nil, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st, Settings: settings,
+		},
+		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: settings, LimitGroups: nil,
 	})
 	if err != nil {
@@ -269,8 +271,10 @@ func (f *fixture) serviceOverGrantStore(tb testing.TB, store access.Store) *acce
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: store, Directory: st, Namespaces: st, Authorizer: f.authz,
-		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st},
-		Now:   nil, NewID: nil,
+		Reach: access.ReachConfig{
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st, Settings: nil,
+		},
+		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
@@ -996,7 +1000,9 @@ func TestExplainListsOnlyGrantsThatGive(t *testing.T) {
 	lost := &lostRoleStore{Store: f.store, role: gone.ID}
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost},
+		access.AuthorizerConfig{
+			Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost, Settings: nil,
+		},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -1348,6 +1354,7 @@ func TestRequestCache(t *testing.T) {
 			Collections: nil,
 			Units:       counted,
 			Principals:  counted,
+			Settings:    nil,
 		},
 	)
 	if err != nil {

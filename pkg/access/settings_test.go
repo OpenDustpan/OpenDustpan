@@ -182,6 +182,174 @@ func TestBoundCollectionUnitCap(t *testing.T) {
 	}
 }
 
+// reachSettingDeclaration returns the declaration of the setting that decides
+// whether a grant on the installation reaches a namespace.
+func reachSettingDeclaration(t *testing.T) setting.Declaration {
+	t.Helper()
+
+	for _, d := range access.SettingDeclarations() {
+		if d.Key == access.SettingInstallationGrantsReachNamespaces {
+			return d
+		}
+	}
+
+	t.Fatalf("no declaration of %s", access.SettingInstallationGrantsReachNamespaces)
+
+	return setting.Declaration{
+		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false, StaticCredentialHost: false,
+		Apply: "", Check: nil, ReducesSecurity: nil, Doc: "",
+	}
+}
+
+// TestInstallationGrantsReachNamespacesDeclaration proves the shape of the
+// declaration: an installation setting that the database layer holds, applied
+// live, `true` by default, with a check that refuses each value that is not
+// true or false, and a change to `false` that reduces security.
+func TestInstallationGrantsReachNamespacesDeclaration(t *testing.T) {
+	t.Parallel()
+
+	d := reachSettingDeclaration(t)
+	if d.Level != setting.LevelInstallation || d.Kind != setting.KindBool ||
+		d.Default != access.DefaultInstallationGrantsReachNamespaces || !d.Database || d.Secret ||
+		d.Apply != setting.ApplyLive || d.Doc == "" {
+		t.Fatalf("declaration = %+v, want the installation setting of the reach of an installation grant", d)
+	}
+
+	if access.DefaultInstallationGrantsReachNamespaces != "true" {
+		t.Fatalf("default = %q, want \"true\"", access.DefaultInstallationGrantsReachNamespaces)
+	}
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "true is allowed", value: "true", want: true},
+		{name: "false is allowed", value: "false", want: true},
+		{name: "the default is allowed", value: access.DefaultInstallationGrantsReachNamespaces, want: true},
+		{name: "a word is refused", value: "many", want: false},
+		{name: "an empty value is refused", value: "", want: false},
+		{name: "a number is refused", value: "1", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := d.CheckValue(tc.value)
+			if (err == nil) != tc.want {
+				t.Fatalf("check %q = %v, want an error: %t", tc.value, err, !tc.want)
+			}
+		})
+	}
+}
+
+// TestInstallationGrantsReachNamespacesReducesSecurity checks that a change
+// from `true` to `false` counts as a change that reduces security, and that
+// no other change does.
+func TestInstallationGrantsReachNamespacesReducesSecurity(t *testing.T) {
+	t.Parallel()
+
+	d := reachSettingDeclaration(t)
+	if d.ReducesSecurity == nil {
+		t.Fatalf("the declaration of %s has no ReducesSecurity function",
+			access.SettingInstallationGrantsReachNamespaces)
+	}
+
+	tests := []struct {
+		name string
+		old  string
+		next string
+		want bool
+	}{
+		{name: "from true to false reduces security", old: "true", next: "false", want: true},
+		{name: "the same value does not", old: "true", next: "true", want: false},
+		{name: "from false to true does not", old: "false", next: "true", want: false},
+		{name: "from false to false does not", old: "false", next: "false", want: false},
+		{name: "an unknown old value to false reduces security", old: "many", next: "false", want: true},
+		{name: "a next value that is not a boolean does not reduce security", old: "true", next: "many", want: false},
+		{name: "a next value that is empty does not reduce security", old: "true", next: "", want: false},
+		{name: "a false old value to an unknown value does not", old: "false", next: "many", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := d.ReducesSecurity(tc.old, tc.next); got != tc.want {
+				t.Fatalf("ReducesSecurity(%q, %q) = %v, want %v", tc.old, tc.next, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestInstallationGrantsReachNamespacesDefaultTrue proves that the resolution
+// of the reach fails toward `true`: no reader, a reader that fails, and a
+// value that is not a boolean give `true`, so an installation that keeps no
+// settings reaches namespaces as before.
+func TestInstallationGrantsReachNamespacesDefaultTrue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		settings reachReader
+		want     bool
+	}{
+		{name: "no reader", settings: reachReader{value: nil, err: nil}, want: true},
+		{
+			name: "a reader that fails", settings: reachReader{value: new("false"), err: errSettingsGone},
+			want: true,
+		},
+		{name: "a reader with no value", settings: reachReader{value: nil, err: nil}, want: true},
+		{name: "a value of false", settings: reachReader{value: new("false"), err: nil}, want: false},
+		{name: "a value of true", settings: reachReader{value: new("true"), err: nil}, want: true},
+		{name: "a value that is not a boolean", settings: reachReader{value: new("many"), err: nil}, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := access.InstallationGrantsReachNamespaces(t.Context(), tc.settings); got != tc.want {
+				t.Fatalf("reach = %t, want %t", got, tc.want)
+			}
+		})
+	}
+
+	if got := access.InstallationGrantsReachNamespaces(t.Context(), nil); !got {
+		t.Fatalf("reach with no reader = %t, want true", got)
+	}
+}
+
+// reachReader answers the value of the reach setting that a test sets. A nil
+// value answers the default, and err answers a read that fails.
+type reachReader struct {
+	value *string
+	err   error
+}
+
+func (r reachReader) Effective(context.Context, setting.Scope, string) (setting.Item, error) {
+	return setting.Effective(reachDeclaration(), r.value, nil), r.err
+}
+
+// reachDeclaration returns the declaration of the reach setting of the
+// registry, or a declaration of the same shape when the registry does not hold
+// it yet.
+func reachDeclaration() setting.Declaration {
+	for _, d := range access.SettingDeclarations() {
+		if d.Key == access.SettingInstallationGrantsReachNamespaces {
+			return d
+		}
+	}
+
+	return setting.Declaration{
+		Key: access.SettingInstallationGrantsReachNamespaces, Level: setting.LevelInstallation,
+		Kind: setting.KindBool, Default: access.DefaultInstallationGrantsReachNamespaces,
+		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
+		Check: nil, ReducesSecurity: nil, Doc: "",
+	}
+}
+
 // TestCollectionUnitCapDeclaration proves the shape of the declaration of the
 // cap: an installation setting that the database layer holds, applied live,
 // with the default cap, and a check that refuses each value outside the
@@ -190,8 +358,8 @@ func TestCollectionUnitCapDeclaration(t *testing.T) {
 	t.Parallel()
 
 	decls := access.SettingDeclarations()
-	if len(decls) != 1 {
-		t.Fatalf("declarations = %d, want 1", len(decls))
+	if len(decls) != 2 {
+		t.Fatalf("declarations = %d, want 2", len(decls))
 	}
 
 	d := decls[0]

@@ -60,6 +60,10 @@ type AuthorizerConfig struct {
 	// Authorizer confines the grants and the groups of a principal of a
 	// namespace.
 	Principals PrincipalNamespaces
+	// Settings reads the installation settings, for the reach of a grant on
+	// the installation. Nil means that a grant on the installation reaches
+	// each namespace, as the default of the setting says.
+	Settings Settings
 }
 
 // Authorizer decides with grants (ADR 52). It implements identity.Authorizer
@@ -77,6 +81,7 @@ type Authorizer struct {
 	collections UnitCollections
 	units       Units
 	principals  PrincipalNamespaces
+	settings    Settings
 	// chains holds the chain of an object by its wire form, read before
 	// the transaction of a write: the copy of an Authorizer that checks in
 	// that transaction reads no other port. Nil reads each chain.
@@ -99,7 +104,7 @@ func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 
 	return &Authorizer{
 		store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units,
-		principals: cfg.Principals, chains: nil,
+		principals: cfg.Principals, settings: cfg.Settings, chains: nil,
 	}, nil
 }
 
@@ -328,6 +333,12 @@ func (a *Authorizer) reachGrants(ctx context.Context, subjects []Subject, action
 		return nil, err
 	}
 
+	// A grant on the installation reaches a namespace only while the setting
+	// says so, so the scope of an action inside a namespace holds none of
+	// them. The scope of an action on the installation itself is decided on
+	// the installation object, which this check leaves alone.
+	grants = a.confineInstallationGrants(ctx, grants, scopeObject(action))
+
 	live, err := a.currentUnits(ctx, grants)
 	if err != nil {
 		return nil, err
@@ -347,6 +358,19 @@ func (a *Authorizer) reachGrants(ctx context.Context, subjects []Subject, action
 	}
 
 	return out, nil
+}
+
+// scopeObject returns the object that decides whether a grant on the
+// installation belongs in the scope of action: the installation for an action
+// of the operator, administration and delegation families, and a namespace for
+// an action inside a namespace. A grant on the installation reaches the
+// namespace of a data action only while the setting says so.
+func scopeObject(action identity.Action) identity.Object {
+	if family, known := FamilyOf(action); known && family == FamilyData {
+		return identity.NamespaceObject("")
+	}
+
+	return identity.ServerObject()
 }
 
 // grantInScope reports whether a grant on obj with action belongs in a
@@ -573,6 +597,8 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 		return none, err
 	}
 
+	grants = a.confineInstallationGrants(ctx, grants, obj)
+
 	roles, err := a.rolesOf(ctx, grants)
 	if err != nil {
 		return none, err
@@ -581,6 +607,40 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 	targetNS := namespaceOfChain(chain, obj)
 
 	return heldFromGrants(grants, roles, targetNS), nil
+}
+
+// confineInstallationGrants drops every grant on the installation when
+// SettingInstallationGrantsReachNamespaces is `false` and obj is inside a
+// namespace. Such a grant then gives only the actions of the operator scope,
+// which Authorize decides on the installation object itself. A grant on the
+// namespace, a collection or a unit of the namespace stays, so the setting
+// confines a grant on the installation alone.
+//
+// Defense in depth: the store keeps the grant row, so a later change of the
+// setting back to `true` gives it again with no new write. This check stays
+// so that a caller that reads the grants in another way cannot skip it.
+func (a *Authorizer) confineInstallationGrants(
+	ctx context.Context, grants []Grant, obj identity.Object,
+) []Grant {
+	if obj.IsServer() || len(grants) == 0 {
+		return grants
+	}
+
+	if InstallationGrantsReachNamespaces(ctx, a.settings) {
+		return grants
+	}
+
+	out := make([]Grant, 0, len(grants))
+
+	for i := range grants {
+		if grants[i].Object.IsServer() {
+			continue
+		}
+
+		out = append(out, grants[i])
+	}
+
+	return out
 }
 
 // confineGrants drops every grant whose subject may not hold it: a grant of

@@ -365,7 +365,7 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
 		},
 		Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: nil,
 		Guard: freshstep.Guard{},

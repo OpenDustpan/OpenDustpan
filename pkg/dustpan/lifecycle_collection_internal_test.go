@@ -27,6 +27,7 @@ func collectionScope(t *testing.T) (scopeFixture, *collection.Service, deletedRe
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: f.store, Collections: svc, Units: f.store, Principals: f.store,
+		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)

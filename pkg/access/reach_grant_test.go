@@ -73,6 +73,7 @@ func (f *fixture) serviceOverStore(
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: store, Callers: f.store, Collections: f.units, Units: f.store, Principals: f.store,
+		Settings: nil,
 	})
 	if err != nil {
 		tb.Fatalf("authorizer: %v", err)
@@ -123,7 +124,7 @@ func (namelessDirectory) GetPrincipalBySubject(context.Context, string) (princip
 func (f *fixture) reach() access.ReachConfig {
 	return access.ReachConfig{
 		Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store,
-		Collections: f.units, Units: f.store,
+		Collections: f.units, Units: f.store, Settings: nil,
 	}
 }
 
@@ -132,7 +133,7 @@ func (f *fixture) reach() access.ReachConfig {
 func (f *fixture) failingReach() access.ReachConfig {
 	return access.ReachConfig{
 		Grants: failingGrants{}, Roles: f.store, Callers: f.store, Principals: f.store,
-		Collections: f.units, Units: f.store,
+		Collections: f.units, Units: f.store, Settings: nil,
 	}
 }
 
@@ -140,7 +141,7 @@ func (f *fixture) failingReach() access.ReachConfig {
 // a reach, so the compare refuses the change.
 func portlessReach() access.ReachConfig {
 	return access.ReachConfig{
-		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
 	}
 }
 

@@ -192,7 +192,7 @@ func TestRestoredDevPeopleAreRefusedOnProduction(t *testing.T) {
 		Makers: nil,
 		Store:  prod, Principals: prod, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
-			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil, Settings: nil,
 		},
 		TempAdmins: nil, Logger: nil,
 		Now: nil, NewID: nil,
