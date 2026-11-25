@@ -123,7 +123,12 @@ func groupCases() []groupCase {
 			identity.ErrDenied, 0,
 		},
 		{"a gate with no groups and no reader", nil, nil, nil, nil, true, job.VerdictApprove, nil, 0},
-		{"a rejection by a non-member", platform, oneID, map[string][]string{}, nil, false, job.VerdictReject, nil, 0},
+		{
+			"a rejection by a non-member", platform, oneID,
+			map[string][]string{},
+			nil, false, job.VerdictReject,
+			identity.ErrDenied, 0,
+		},
 	}
 }
 

@@ -162,6 +162,10 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
+	if !h.authorizeReject(w, r, p, t, verdict) {
+		return
+	}
+
 	actor := job.Actor{Principal: p, Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{}}
 
 	j, err := h.starter.Approve(ctx, actor, t.job.ID, verdict, bound, body.Comment)
@@ -239,6 +243,42 @@ func newDestroyFreshGuard(p freshstep.Policy) freshstep.Guard {
 	return g
 }
 
+// authorizeReject checks job:cancel for a rejection by a person who is not the
+// starter of the job. It writes the refusal and returns false when the action
+// is not allowed.
+//
+// Defense in depth: the job service checks job:cancel for a rejection by a
+// person that is not the starter. This check stays so that a service with a
+// wrong authorizer cannot widen the route.
+func (h *Handler) authorizeReject(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, verdict job.Verdict,
+) bool {
+	if verdict != job.VerdictReject || p.Subject == t.job.StartedBy {
+		return true
+	}
+
+	ctx := r.Context()
+
+	err := h.authz.Authorize(ctx, p, identity.ActionJobCancel, t.obj)
+	if err == nil {
+		return true
+	}
+
+	denied := &job.DeniedError{Action: identity.ActionJobCancel, Object: t.obj, Err: err}
+
+	if errors.Is(err, identity.ErrDenied) {
+		h.recordApprovalRefusal(r, p, t, denied)
+	} else {
+		denied.Err = fmt.Errorf("%w: %w: %w", identity.ErrDenied, job.ErrAuthorizerFailed, err)
+		// A failed authorizer is not a refusal of policy. The entry says so.
+		h.recordApprovalRefusal(r, p, t, denied)
+	}
+
+	h.writeError(ctx, w, denied)
+
+	return false
+}
+
 // The refusal names the sign-in path and the ways to enroll a first factor.
 // It contains no request data or authentication detail.
 const destroyFreshMessage = "Destroy approval needs a fresh step. Sign in at /api/server/sign-in/{provider}?fresh=1. " +
@@ -284,19 +324,24 @@ func checkApproveBody(b *approveBody) (job.Verdict, job.PlanBinding, error) {
 }
 
 // recordApprovalRefusal writes one audit entry for a refusal of an approval
-// that is a decision of security: a denial of job:approve, an agent, the
-// starter, a stale MFA step, and a plan that is not the stored one. A request
-// that is not valid, a job that does not wait, and a version conflict write
-// none. The entry names job:approve on the unit that the route found, whatever
-// the error names.
+// that is a decision of security: a denial of job:approve or job:cancel, an
+// agent, the starter, a stale MFA step, and a plan that is not the stored one.
+// A request that is not valid, a job that does not wait, and a version conflict
+// write none. The entry names the denied action on the unit that the route found.
 func (h *Handler) recordApprovalRefusal(r *http.Request, p identity.Principal, t *target, err error) {
 	reason, ok := approvalRefusalReason(err)
 	if !ok {
 		return
 	}
 
+	action := identity.ActionJobApprove
+	var denied *job.DeniedError
+	if errors.As(err, &denied) && denied.Action != "" {
+		action = denied.Action
+	}
+
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: identity.ActionJobApprove, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
+		Action: action, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
 	})
 }
 
@@ -307,6 +352,10 @@ func approvalRefusalReason(err error) (string, bool) {
 	case errors.Is(err, job.ErrNoRequirement):
 		// Before identity.ErrDenied: the error wraps both.
 		return reasonNoRequirement, true
+	case errors.Is(err, job.ErrAuthorizerFailed):
+		// Before identity.ErrDenied: the error wraps both. A failed authorizer
+		// is not a refusal of policy.
+		return refusal.ReasonFailed, true
 	case errors.Is(err, identity.ErrDenied):
 		return refusal.ReasonPolicy, true
 	case errors.Is(err, job.ErrAgentDenied):

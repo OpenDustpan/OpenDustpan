@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -19,16 +20,17 @@ import (
 //  1. The verdict and the comment, at the boundary.
 //  2. The job, then job:read (a denial is ErrNotFound, as Get does), then
 //     job:approve on the unit of the job.
-//  3. The state: a job that ended, a job that does not wait for approval,
+//  3. A rejection by a person that is not the starter: job:cancel on the unit.
+//  4. The state: a job that ended, a job that does not wait for approval,
 //     and a phase with no approval gate that waits.
-//  4. The fresh MFA step of the approval of a destroy.
-//  5. An approval by an agent, by a subject that may not fill a slot, and by
+//  5. The fresh MFA step of the approval of a destroy.
+//  6. An approval by an agent, by a subject that may not fill a slot, and by
 //     the starter when no approval gate allows it.
-//  6. The binding to the plan of the phase before, when there is one.
+//  7. The binding to the plan of the phase before, when there is one.
 //
-// A rejection needs checks 1 to 3 only. A rejection by an agent is allowed,
-// and a rejection never needs the plan or a fresh authentication: it only
-// stops the change.
+// A rejection by the starter needs checks 1, 2 and 4 only. A rejection by an
+// agent is allowed, and a rejection never needs the plan or a fresh
+// authentication: it only stops the change.
 //
 // The store records the verdict, and the event that follows from it, in one
 // transaction with the audit entry. A second approval by one subject is
@@ -51,6 +53,13 @@ func (s *service) Approve(
 	j, err := s.authorizedJob(ctx, a, id)
 	if err != nil {
 		return Job{}, err
+	}
+
+	if v == VerdictReject {
+		err = s.checkRejector(ctx, &j, a)
+		if err != nil {
+			return Job{}, err
+		}
 	}
 
 	gates, err := waitingGates(&j, s.approvers)
@@ -236,9 +245,10 @@ func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Ga
 		}
 	}
 
-	// A user who started the job through an agent is the starter too, so the
-	// subject is the one test.
-	starter := a.Principal.Subject == j.StartedBy
+	// The subject is the one test for the starter: a user who started the job
+	// through an agent is the starter by subject. Without a gate that allows
+	// it, the starter cannot approve.
+	starter := isStarter(j, a)
 	if starter && !slices.ContainsFunc(gates, func(g Gate) bool { return g.AllowSelf }) {
 		return fmt.Errorf("%w: ask another approver", ErrSelfApproval)
 	}
@@ -278,6 +288,40 @@ func approvedAlready(p *Phase, subject string) bool {
 	})
 }
 
+// isStarter reports whether a is the principal that started j. A user who
+// started the job through an agent is the starter by subject.
+func isStarter(j *Job, a Actor) bool {
+	return a.Principal.Subject == j.StartedBy
+}
+
+// checkRejector refuses a rejection by a person that is not the starter when
+// that person cannot cancel the job. The starter may reject with job:approve
+// only. A failure of the authorizer is a denial (fail closed).
+//
+// Defense in depth: the HTTP handler also authorizes job:cancel for this
+// case. This check stays so that a caller of the service cannot skip it.
+func (s *service) checkRejector(ctx context.Context, j *Job, a Actor) error {
+	if isStarter(j, a) {
+		return nil
+	}
+
+	err := s.authorizer.Authorize(ctx, a.Principal, ActionJobCancel, j.Spec.Unit)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, identity.ErrDenied):
+		return &DeniedError{Action: ActionJobCancel, Object: j.Spec.Unit, Err: err}
+	default:
+		// The authorizer failed. A failure allows no one, and the caller gets
+		// a denial that the audit log records.
+		return &DeniedError{
+			Action: ActionJobCancel, Object: j.Spec.Unit,
+			Err: fmt.Errorf("%w: %w: %w", identity.ErrDenied, ErrAuthorizerFailed, err),
+		}
+	}
+}
+
 // checkGroups returns the names of the gates that hold subject: the gates
 // with no groups, and the gates whose groups have subject as an enabled
 // member. The gate names its groups by ID, so a group that someone renamed
@@ -287,8 +331,9 @@ func approvedAlready(p *Phase, subject string) bool {
 // no IDs (fail closed). The text of a refusal that holds no gate names the
 // requirements of the phase. A gate with no groups needs no reader.
 //
-// A rejection does not come here: any holder of job:approve can reject, because
-// a rejection only stops the change.
+// A rejection does not come here. Any holder of job:approve can start a
+// rejection; Approve checks job:cancel for a rejection by a person that is
+// not the starter.
 func (s *service) checkGroups(ctx context.Context, j *Job, subject string, gates []Gate) ([]string, error) {
 	denied := func(reason string, cause error) error {
 		err := fmt.Errorf("%w: %s", identity.ErrDenied, reason)
