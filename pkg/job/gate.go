@@ -60,9 +60,10 @@ const (
 	// person. Its time is the authentication time that the provider gives.
 	ConfirmAuthSSO ConfirmAuth = "sso"
 	// ConfirmAuthNone is the record of an approval of a destroy that needed no
-	// fresh step, because the installation setting freshAuthEnabled is off. It
-	// is not a fresh authentication: Valid is false for it, so a confirmation
-	// gate never accepts it and still needs a real step.
+	// fresh step, because the installation setting freshAuthEnabled is off and
+	// the service recorded it for a person. It is not a fresh authentication:
+	// Valid is false for it, but the gate accepts it, because the service wrote
+	// it after the policy answered no.
 	ConfirmAuthNone ConfirmAuth = "none"
 )
 
@@ -318,8 +319,14 @@ func (g Gate) counts(a *Approval, startedBy string, policy gate.ApproverPolicy) 
 }
 
 // freshAuth reports whether a has a valid fresh authentication at most
-// ConfirmFreshness before a, and not after it.
+// ConfirmFreshness before a, and not after it. An approval that the service
+// recorded with the authentication none needs no fresh step, and the gate
+// accepts it.
 func freshAuth(a *Approval) bool {
+	if a.Auth == ConfirmAuthNone {
+		return true
+	}
+
 	return a.Auth.Valid() && !a.AuthAt.IsZero() && !a.AuthAt.After(a.At) &&
 		a.At.Sub(a.AuthAt) <= ConfirmFreshness
 }

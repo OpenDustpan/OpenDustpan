@@ -132,6 +132,11 @@ func TestConfirmationGateStatus(t *testing.T) {
 		},
 		{"the requester with no MFA step", []job.Approval{noAuth(confirmation("al", 0))}, job.GateWaiting},
 		{
+			"the requester with the authentication none of a destroy",
+			[]job.Approval{withAuth(confirmation("al", 0), job.ConfirmAuthNone)},
+			job.GateOpen,
+		},
+		{
 			"the requester with a fresh SSO sign-in",
 			[]job.Approval{withAuth(confirmation("al", time.Minute), job.ConfirmAuthSSO)},
 			job.GateOpen,
