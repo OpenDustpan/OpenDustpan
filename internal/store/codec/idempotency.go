@@ -107,6 +107,32 @@ func IdempotencyOutcome(outcome idempotency.Outcome) idempotency.Result {
 	return idempotency.Result{Answer: none, Token: "", Outcome: outcome}
 }
 
+// ErrIdempotencyRecordExpired reports a record that stayed past its expiry
+// after the second delete of the record, which a clock that moves backwards
+// can cause. The store answers an error rather than a replay of an expired
+// record.
+var ErrIdempotencyRecordExpired = errors.New("idempotency record is past its retention after the delete")
+
+// IdempotencyReadAttempts is how many times a Start deletes an expired record
+// again and writes its pending record. The second read finds the pending
+// record of this request, or the live record of another writer.
+const IdempotencyReadAttempts = 2
+
+// IdempotencyExpiryMillis returns the time at which a record created at
+// createdMs expires, as Unix milliseconds: the creation plus the retention of
+// the store. The store keeps the creation time, and the expiry follows from
+// the fixed retention, so a read after the expiry gives no record.
+func IdempotencyExpiryMillis(createdMs int64, retention idempotency.Retention) int64 {
+	return createdMs + retention.Period().Milliseconds()
+}
+
+// IdempotencyExpired reports whether a record created at createdMs is past its
+// expiry at nowMs. Such a record counts as absent: the caller deletes it and
+// starts the request again. A record at its expiry is still live.
+func IdempotencyExpired(createdMs, nowMs int64, retention idempotency.Retention) bool {
+	return nowMs > IdempotencyExpiryMillis(createdMs, retention)
+}
+
 // ClassifyIdempotency returns what a request with the fingerprint fp finds in
 // the live record row.
 func ClassifyIdempotency(row IdempotencyRow, fp []byte) (idempotency.Result, error) {
