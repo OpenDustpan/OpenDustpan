@@ -202,6 +202,7 @@ const (
 	reasonPolicyDenied = "policy denied the job"
 	reasonAgentDenied  = "an agent cannot do this"
 	reasonFrozen       = "a change freeze is active"
+	reasonNoFreeze     = "the server cannot read the freezes"
 	// reasonBreakGlassReason is the reason of the entry of a break-glass start
 	// whose reason is not valid.
 	reasonBreakGlassReason = "the break-glass reason is not valid"
@@ -215,18 +216,13 @@ const (
 // an error that is not a refusal of the server: a request that is not valid,
 // a failure of the server and a replay conflict write no denial entry.
 func refusalReason(err error) (string, bool) {
-	var gates *job.GateError
+	if reason, ok := enforcedGateReason(err); ok {
+		return reason, true
+	}
 
 	switch {
 	case errors.Is(err, identity.ErrDenied):
 		return refusal.ReasonPolicy, true
-	case errors.As(err, &gates):
-		ids := make([]string, 0, len(gates.Gates))
-		for _, g := range gates.Gates {
-			ids = append(ids, g.ID)
-		}
-
-		return reasonGate + ": " + strings.Join(ids, ", "), true
 	case errors.Is(err, job.ErrGateEnforced):
 		return reasonGate, true
 	case errors.Is(err, job.ErrPolicyDenied):
@@ -235,6 +231,10 @@ func refusalReason(err error) (string, bool) {
 		return reasonAgentDenied, true
 	case errors.Is(err, job.ErrFrozen):
 		return reasonFrozen, true
+	case errors.Is(err, job.ErrNoFreezeStore):
+		// The gate fails closed, so the refusal of the start is in the audit
+		// log.
+		return reasonNoFreeze, true
 	case errors.Is(err, job.ErrLimit):
 		return reasonLimit, true
 	case errors.Is(err, job.ErrUnsupported):
@@ -245,6 +245,22 @@ func refusalReason(err error) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// enforcedGateReason returns the reason for the audit entry of an enforced
+// gate, with the IDs of its gates, and false for an error that names none.
+func enforcedGateReason(err error) (string, bool) {
+	var gates *job.GateError
+	if !errors.As(err, &gates) {
+		return "", false
+	}
+
+	ids := make([]string, 0, len(gates.Gates))
+	for _, g := range gates.Gates {
+		ids = append(ids, g.ID)
+	}
+
+	return reasonGate + ": " + strings.Join(ids, ", "), true
 }
 
 // idempotencyKey returns the key of the request, or "" for a request with no

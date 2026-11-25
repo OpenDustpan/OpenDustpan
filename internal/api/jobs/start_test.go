@@ -670,6 +670,11 @@ func TestStartDeniedWritesTheAuditEntry(t *testing.T) {
 			"an agent cannot do this",
 		},
 		{"a freeze", job.ErrFrozen, http.StatusConflict, "a change freeze is active"},
+		{
+			"a start with no freeze store fails closed",
+			fmt.Errorf("check freeze gate: %w", job.ErrNoFreezeStore),
+			http.StatusInternalServerError, "the server cannot read the freezes",
+		},
 		{"the limit", job.ErrLimit, http.StatusTooManyRequests, "too many open jobs"},
 		{"an enforced gate", enforced, http.StatusForbidden, "an enforced gate covers the unit: no-plans"},
 		{
