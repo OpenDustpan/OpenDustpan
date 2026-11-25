@@ -307,9 +307,10 @@ func (h *Handler) auditScope(ctx context.Context, obj identity.Object) (namespac
 
 // listEntries answers GET /api/audit/entries with one page of the entries
 // of the scope, newest first. The route wrapper already allowed the action
-// on the object. An unknown namespace answers 404.
+// on the object. An unknown namespace answers 404. A refused page token is
+// recorded as a denial and does not reach the store.
 func (h *Handler) listEntries(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -322,6 +323,24 @@ func (h *Handler) listEntries(
 
 	page, err := parsePage(r, ns)
 	if err != nil {
+		if errors.Is(err, errPageToken) {
+			action := identity.ActionNamespaceReadAudit
+			if obj.IsServer() {
+				action = identity.ActionServerReadAudit
+			}
+
+			// Defense in depth: the route wrapper already checked the action
+			// before the handler read the token; this record stays so that a
+			// refused token is counted and bounded by the denial limiter.
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action:       action,
+				Object:       obj,
+				Reason:       errcode.RequestPageTokenInvalid,
+				ReasonWithin: nil,
+				Window:       0,
+			})
+		}
+
 		h.writeError(ctx, w, err)
 
 		return

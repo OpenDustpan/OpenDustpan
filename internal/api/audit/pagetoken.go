@@ -48,6 +48,10 @@ func scopeFingerprint(scope namespace.Name) string {
 func decodePageCursor(token string, scope namespace.Name) (pageCursor, error) {
 	var wire pageTokenWire
 
+	// Defense in depth: pagetoken.Decode already refuses a non-canonical token
+	// and a case-variant or repeated member name; this check stays so that the
+	// audit page token accepts only the exact wire member names even if the
+	// shared decoder is changed.
 	if err := pagetoken.Decode(token, &wire); err != nil {
 		return pageCursor{}, errPageToken
 	}
