@@ -63,6 +63,50 @@ negotiated version of decision 2.1.
    #3207. The first tag waits for each item of that list.
 10. **The load harness.** `load/harness.go` drops its build tag check, and
    `docs/guides/load.md` drops the `-tags journalrecording` command.
+11. **The CLI version is stored at start and used at complete.** With the
+    release build on, the replayer gets `cliVersion` "" at
+    `pkg/dustpan/dustpan.go:2074`, so the manifest magic of a built checkpoint
+    does not name the CLI that ran the update. The handler reads the version
+    once, at start: `cliVersionOf(userAgent)` in
+    `internal/api/pulumi/journal.go`, which accepts only
+    three dot-separated numbers (`parseCLIVersion`). The handler passes it in the NEW
+    field `StartedBy.CLIVersion`; `StartBy` keeps its signature. `StartBy`
+    checks the value again with the NEW function `stack.ValidCLIVersion`
+    (digits and dots, three parts, at most 32 bytes) and answers the NEW
+    sentinel `stack.ErrInvalidCLIVersion` for any other non-empty value. The
+    row of the update stores it in the NEW column `cli_version` of `updates`
+    (`NOT NULL DEFAULT ''`). The column is added to the one baseline
+    migration of each dialect, because no tag shipped (one schema file per
+    dialect). A start without a version, or with a `User-Agent` that
+    `parseCLIVersion` refuses, stores "" and the manifest then carries the
+    version "" as it does on main. This rule is stated in the Contract, not a
+    hidden fallback.
+12. **The replayer gets the version through an optional method.** The
+    signature `Replay(ctx, openBase, batches, out)` of
+    `stack.JournalReplayer` does not change, because about 30 test files and
+    `pkg/stack/replayertest/replayertest.go` call it. The NEW method
+    `(*pulumijournal.Replayer).WithCLIVersion(version string) *Replayer`
+    returns a copy that writes `version` in the manifest. The NEW interface
+    `stack.CLIVersionedReplayer` has the method `WithCLIVersion(string)
+    JournalReplayer`; `pkg/stack/journal_build.go` calls it with `Update.CLIVersion`
+    when the replayer implements it. A replayer that does not implement it
+    writes the version it was built with. `NewReplayer(now, cliVersion)`
+    keeps its signature. Alternative that was rejected: a fifth argument of
+    `Replay`, with the fallout above.
+13. **The e2e suite checks the route that the CLI really uses.** With
+    journaling on, a verified CLI saves state through
+    `PATCH .../journalentries` and sends no `PATCH .../checkpoint`. The e2e
+    steps that asserted a checkpoint PATCH therefore assert the state save by
+    CLI: the NEW helper `checkStateSaved(env, cli, stepName)` in
+    `e2e/e2e_test.go` asserts a `journalentries` PATCH with status 200 for a
+    CLI inside `VerifiedJournalCLIRange()`, and a `checkpoint` PATCH with
+    status 200 for a CLI outside it (v3.200.0). The four uses of
+    `checkCheckpointSaved` call it. `checkDeltaCheckpoints` and the masked
+    delta check assert, for a CLI inside the range, the journal route in both
+    environments and no delta PATCH; the delta and verbatim checkpoint routes
+    stay covered by the run of v3.200.0 in the default matrix. The contract
+    files of v3.250.0 and v3.262.0 get the journal route (regenerated with
+    `E2E_CONTRACT_UPDATE`). The default matrix does not turn journaling off.
 
 ## Structure
 
@@ -78,6 +122,17 @@ it.
 - `func (s *Updates) StartBy(ctx context.Context, ref Ref, id UpdateID, by StartedBy, journalVersion int64) (Started, error)`:
   signature unchanged. New postcondition: `Started.Update.JournalVersion == 0`
   when `!Started.Update.Mutates()`. Errors unchanged.
+- `StartedBy.CLIVersion string` (NEW) and `Update.CLIVersion string` (NEW):
+  the CLI release without the leading `v`, or "" when the start offered none
+  or the `User-Agent` failed `parseCLIVersion`. `StartBy` answers
+  `stack.ErrInvalidCLIVersion` (NEW) for a non-empty value that fails
+  `stack.ValidCLIVersion` (NEW): not three dot-separated numbers of digits, or longer
+  than 32 bytes. The store keeps the value in the column `cli_version` and
+  returns it in `StartUpdate` and `GetUpdate`.
+- `func (r *Replayer) WithCLIVersion(version string) *Replayer` (NEW) in
+  `internal/pulumijournal`: returns a copy that writes `version` in the
+  manifest. No error. A complete build of an update with `CLIVersion` "" gives
+  the same manifest as main.
 - `func VerifiedJournalCLIRange() (oldest, newest string)` in
   `internal/api/pulumi`: returns the release versions without the leading
   `v`, for example `"3.250.0"` and `"3.268.0"`. No error.
@@ -134,6 +189,7 @@ flowchart LR
 | start | T | A preview start gets a non-zero version. | domain rule in `StartBy` | `u.Mutates()` check | new `TestStartByPreviewStoresJournalVersionZero` |
 | journal route | T, D | A batch with an unknown kind, a bad sequence ID or a reference to a missing entry. | decode, verify on arrival, fenced store | strict reject 400, 409 on retry with other content, 413 bounds | existing route, store and verifier tests, now in the default build |
 | journal route | E | A caller without the lease or without `unit:write` sends a batch. | route action and lease check | `unit:write` and lease digest | existing route tests, now in the default build |
+| start | T | A `User-Agent` carries a CLI version with a long, odd or pre-release text that goes into the stored row and the manifest. | handler allowlist (`parseCLIVersion`), domain check (`stack.ValidCLIVersion` in `StartBy`), store conformance, replayer | each layer refuses or stores "" without help from the others | NEW `TestStartDropsUnacceptableCLIVersion` in `internal/api/pulumi`, NEW `TestStartByRejectsInvalidCLIVersion` in `pkg/stack`, NEW case `testCLIVersionRoundTrip` in `pkg/store/storetest/updates.go`, NEW `TestReplayerWithCLIVersionKeepsManifestMagicFixed` in `internal/pulumijournal` |
 | complete | T | A gap or a refused batch ends as `succeeded`. | `Complete` check | 409 `journal.incomplete` | existing `TestCompleteJournalGapAnswersConflict`, now in the default build |
 
 This change adds no new guard to the journal route. It makes the guards and
