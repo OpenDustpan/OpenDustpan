@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // The refusals of the adapter, so the external tests check their codes
@@ -25,6 +27,14 @@ var (
 
 // ServeRoute returns the enforcement wrapper of route.
 func (h *Handler) ServeRoute(rt Route) http.HandlerFunc { return h.enforce(rt) }
+
+// PageCursorBefore returns the sequence of token for scope, so the external
+// tests send a token directly to the decoder.
+func PageCursorBefore(token string, scope namespace.Name) (int64, error) {
+	cursor, err := decodePageCursor(token, scope)
+
+	return cursor.before, err
+}
 
 // WriteError writes the answer of err as a handler of the API does, so the
 // external tests check the code of an error that no request of the test

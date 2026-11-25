@@ -71,14 +71,14 @@ func Decode(token string, wire any) error {
 		return ErrInvalid
 	}
 
-	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	raw, err := strictDecode(token)
 	if err != nil || len(raw) == 0 || raw[0] != '{' {
 		return ErrInvalid
 	}
 
 	// Defense in depth: Strict() refuses unused bits; this check stays so that
 	// only the exact encoder form is accepted even if a decoder is swapped.
-	if base64.RawURLEncoding.EncodeToString(raw) != token {
+	if !isCanonicalText(raw, token) {
 		return ErrInvalid
 	}
 
@@ -105,7 +105,8 @@ func Decode(token string, wire any) error {
 }
 
 // checkExactMemberNames refuses raw when it is not one JSON object whose
-// member names are exactly the JSON names of the wire struct, each once.
+// member names are a subset of the JSON names of the wire struct, with no
+// name twice.
 // Defense in depth: DisallowUnknownFields rejects unknown names and the wire
 // decode reads the typed values; this check stays so that a repeated name or
 // a case-variant name cannot be read by one decoder and ignored by another.
@@ -254,4 +255,20 @@ func isCanonicalBase64URL(token string) bool {
 	}
 
 	return true
+}
+
+// strictDecode decodes the unpadded base64url text of token. Strict() refuses
+// unused bits in the final character.
+func strictDecode(token string) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	if err != nil {
+		return nil, fmt.Errorf("decode the page token text: %w", err)
+	}
+
+	return raw, nil
+}
+
+// isCanonicalText reports whether raw encodes to token.
+func isCanonicalText(raw []byte, token string) bool {
+	return base64.RawURLEncoding.EncodeToString(raw) == token
 }

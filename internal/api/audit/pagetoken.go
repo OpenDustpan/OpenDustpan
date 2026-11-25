@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -48,11 +50,15 @@ func scopeFingerprint(scope namespace.Name) string {
 func decodePageCursor(token string, scope namespace.Name) (pageCursor, error) {
 	var wire pageTokenWire
 
+	if err := pagetoken.Decode(token, &wire); err != nil {
+		return pageCursor{}, errPageToken
+	}
+
 	// Defense in depth: pagetoken.Decode already refuses a non-canonical token
 	// and a case-variant or repeated member name; this check stays so that the
 	// audit page token accepts only the exact wire member names even if the
 	// shared decoder is changed.
-	if err := pagetoken.Decode(token, &wire); err != nil {
+	if err := checkPageTokenMemberNames(token); err != nil {
 		return pageCursor{}, errPageToken
 	}
 
@@ -61,6 +67,37 @@ func decodePageCursor(token string, scope namespace.Name) (pageCursor, error) {
 	}
 
 	return pageCursor{before: wire.Before}, nil
+}
+
+// pageTokenMemberCount is the number of members of pageTokenWire.
+const pageTokenMemberCount = 2
+
+// checkPageTokenMemberNames refuses a token whose JSON object does not hold
+// exactly the members f and b.
+func checkPageTokenMemberNames(token string) error {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	if err != nil {
+		return errPageToken
+	}
+
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return errPageToken
+	}
+
+	if len(members) != pageTokenMemberCount {
+		return errPageToken
+	}
+
+	if _, ok := members["f"]; !ok {
+		return errPageToken
+	}
+
+	if _, ok := members["b"]; !ok {
+		return errPageToken
+	}
+
+	return nil
 }
 
 // encodePageToken returns the token of the page that starts below before.

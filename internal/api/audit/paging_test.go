@@ -3,6 +3,7 @@ package audit_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -450,6 +451,58 @@ func TestPageTokenHostileRows(t *testing.T) {
 	})
 }
 
+// TestDecodePageCursorRefusesNamesOutsideTheWire proves that the audit page
+// token accepts only the member names f and b: a token with another name,
+// another case or a missing name answers errPageToken, and a token of the
+// exact wire shape decodes.
+func TestDecodePageCursorRefusesNamesOutsideTheWire(t *testing.T) {
+	t.Parallel()
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	h, e := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	seedMany(t, e, 3)
+
+	token := firstToken(t, h, "acme")
+
+	_, err = apiaudit.PageCursorBefore(token, ns)
+	if err != nil {
+		t.Fatalf("PageCursorBefore of a valid token = %v, want no error", err)
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode the valid token: %v", err)
+	}
+
+	var wire struct {
+		F string `json:"f"`
+		B int64  `json:"b"`
+	}
+
+	err = json.Unmarshal(raw, &wire)
+	if err != nil {
+		t.Fatalf("decode the valid token body: %v", err)
+	}
+
+	for _, tc := range []struct{ name, token string }{
+		{"another case", forgeToken(fmt.Sprintf(`{"F":%q,"b":1}`, wire.F))},
+		{"an unknown member", forgeToken(fmt.Sprintf(`{"f":%q,"b":1,"x":1}`, wire.F))},
+		{"a missing member", forgeToken(fmt.Sprintf(`{"f":%q}`, wire.F))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := apiaudit.PageCursorBefore(tc.token, ns); !errors.Is(err, apiaudit.ErrPageToken) {
+				t.Fatalf("PageCursorBefore = %v, want ErrPageToken", err)
+			}
+		})
+	}
+}
+
 // TestRefusedPageTokenIsRecorded proves that each refused page token writes
 // one audit entry with the outcome denied, the caller, the action on the
 // scope and the reason request.page-token-invalid. The entry holds no token
@@ -478,6 +531,25 @@ func TestRefusedPageTokenIsRecorded(t *testing.T) {
 			checkRefusedTokenEntry(t, rec, entries, ns, tc.token)
 		})
 	}
+
+	t.Run("server scope records the server action", func(t *testing.T) {
+		t.Parallel()
+
+		handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+		rec := getList(t, handler, "/api/audit/entries?organization="+url.QueryEscape("@server")+
+			"&pageToken="+url.QueryEscape("***"))
+		checkRefusal(t, rec, errcode.RequestPageTokenInvalid)
+
+		got := deniedEntriesOf(entries, audit.ServerScope)
+		if len(got) != 1 {
+			t.Fatalf("denied entries = %d, want 1", len(got))
+		}
+
+		if got[0].Action != string(identity.ActionServerReadAudit) {
+			t.Errorf("action = %q, want %s", got[0].Action, identity.ActionServerReadAudit)
+		}
+	})
 }
 
 // checkRefusedTokenEntry proves that the refusal of token wrote one entry
