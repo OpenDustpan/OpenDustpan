@@ -156,6 +156,7 @@ type Answer struct {
 const (
 	methodPost            = "POST"
 	statusNoContent       = 204
+	statusOK              = 200
 	statusBadRequest      = 400
 	statusTooManyRequests = 429
 	statusServerError     = 500
@@ -582,13 +583,11 @@ func (l *Loop) refused(ctx context.Context, path, reason string, attrs ...slog.A
 	l.log.LogAttrs(ctx, slog.LevelWarn, "the runner refused an answer of the server", all...)
 }
 
-// answerError returns nil when resp has a status below 400 and an *Error
-// otherwise.
+// answerError returns nil when resp is an answer that the loop accepts, and
+// an *Error otherwise. A poll accepts a 200 with work and a 204 with no work;
+// a renewal and a heartbeat accept a 200. Any other status is an error, and
+// the loop fails closed.
 func answerError(resp session.Response) error {
-	if resp.Status < statusBadRequest {
-		return nil
-	}
-
 	var body protocol.Error
 
 	e := &Error{
@@ -596,18 +595,36 @@ func answerError(resp session.Response) error {
 		RetryAfter: resp.RetryAfter,
 	}
 
+	if json.Unmarshal(resp.Body, &body) == nil && body.Code != "" {
+		e.Code, e.Message = logText(body.Code), logText(body.Message)
+	}
+
 	switch {
-	case json.Unmarshal(resp.Body, &body) == nil && body.Code != "":
-		e.Code, e.Message = body.Code, body.Message
+	case resp.Status == statusNoContent:
+		// A poll with a 204 has no work.
+		return nil
+	case resp.Status == statusOK:
+		// A 200 is a success: with a code, a refusal; without, the answer.
+		if e.Code == "" {
+			return nil
+		}
+
+		return e
 	case resp.Status == statusTooManyRequests:
 		// A proxy in front of the server answers 429 with no protocol body.
 		e.Code = protocol.ErrorRateLimited
+
+		return e
 	case resp.Status >= statusServerError:
 		e.Code = protocol.ErrorUnavailable
-	default:
-	}
 
-	return e
+		return e
+	case resp.Status < statusBadRequest:
+		// A status below 400 that is not a success of the loop: fail closed.
+		return e
+	default:
+		return e
+	}
 }
 
 // poll asks for one phase or sweep. It returns false and no error for an

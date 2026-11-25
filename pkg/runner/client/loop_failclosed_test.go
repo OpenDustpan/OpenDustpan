@@ -54,7 +54,7 @@ func loggedLoop(t *testing.T, srv *fakeServer, ticks *fakeTicks) (*client.Loop, 
 func checkWorkStops(t *testing.T, l *client.Loop, ticks *fakeTicks, lease time.Duration, want error) {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	go ticks.fire(ctx, t, runner.RenewEvery(lease))
@@ -93,6 +93,23 @@ func TestLoopRefusesWorkWithNoExpiry(t *testing.T) {
 	if !logs.has(slog.LevelWarn, refusedMessage, "the work has no expiry") {
 		t.Error("no log record of the work with no expiry")
 	}
+}
+
+func TestLoopStopsTheWorkOnARenewalCanceled(t *testing.T) {
+	t.Parallel()
+
+	lease := runner.DefaultLease
+	ticks := newFakeTicks()
+	// Hostile case: a renewal that cancels the work.
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll: {ok(work(lease)), noWork()},
+		protocol.PathClaimRenew: {
+			ok(protocol.RenewResponse{ExpiresAt: testNow().Add(lease), Canceled: true, SessionOpen: false}),
+		},
+	})
+	l, _ := loggedLoop(t, srv, ticks)
+
+	checkWorkStops(t, l, ticks, lease, client.ErrCanceled)
 }
 
 func TestLoopStopsTheWorkOnARenewalWithNoExpiry(t *testing.T) {
@@ -157,6 +174,35 @@ func TestLoopFailsClosedOnAnUnknownCode(t *testing.T) {
 
 			if !logs.has(slog.LevelWarn, refusedMessage, unknownCodeMessage) {
 				t.Error("no log record of the unknown code")
+			}
+		})
+	}
+}
+
+func TestLoopRefusesANon200Success(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"202 with a JSON body", http.StatusAccepted},
+		{"302", http.StatusFound},
+		{"299", 299},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := answer{status: tc.status, body: work(runner.DefaultLease), retryAfter: 0, raw: nil}
+
+			_, err := runRefused(t, newFakeServer(map[string][]answer{protocol.PathPoll: {a}}))
+			if err == nil {
+				t.Error("Run = nil, want an error: only a 200 and a 204 are a success")
+			}
+
+			_, found := errors.AsType[*client.Error](err)
+			if !found {
+				t.Errorf("Run = %v, want a *client.Error", err)
 			}
 		})
 	}

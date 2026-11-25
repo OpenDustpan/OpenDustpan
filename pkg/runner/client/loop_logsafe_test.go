@@ -66,7 +66,9 @@ func TestLoopLogsAnUnknownCodeAsUnknown(t *testing.T) {
 		t.Errorf("Run = %v, want ErrRefused", res.run)
 	}
 
-	want := map[string]string{"error.code": "unknown", "error.code_length": strconv.Itoa(1 << 20)}
+	// The code is cut to the limit of the log before the error holds it, so
+	// the record names the length of the cut code.
+	want := map[string]string{"error.code": "unknown", "error.code_length": strconv.Itoa(256)}
 	if !logs.hasAttrs(refusedMessage, want) {
 		t.Error("no refusal record with the code unknown and its length")
 	}
@@ -145,6 +147,48 @@ func TestLoopStripsControlCharactersFromLoggedMessages(t *testing.T) {
 
 		checkSafeRecords(t, logs)
 	})
+}
+
+func TestRunReturnsASanitizedServerMessage(t *testing.T) {
+	t.Parallel()
+
+	// Hostile case: a message with a CR, an LF, a hidden rune and more text
+	// than a log record may hold.
+	hostile := "ab\r\ncd\u0085ef" + strings.Repeat("x", 10_000)
+	want := "abcdef" + strings.Repeat("x", 250)
+
+	srv := newFakeServer(map[string][]answer{
+		protocol.PathPoll: {{
+			status:     http.StatusBadRequest,
+			body:       protocol.Error{Code: protocol.ErrorBadProof, Message: hostile, Supported: ""},
+			retryAfter: 0,
+			raw:        nil,
+		}},
+	})
+
+	l, _ := loggedLoop(t, srv, newFakeTicks())
+
+	err := l.Run(t.Context(), func(context.Context, protocol.Work) error {
+		t.Error("the handler ran for a refused answer")
+
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Run = nil, want the error of the refused answer")
+	}
+
+	ce, found := errors.AsType[*client.Error](err)
+	if !found {
+		t.Fatalf("Run = %v, want a *client.Error", err)
+	}
+
+	if got := ce.Message; got != want {
+		t.Errorf("the returned error message = %q, want %q", got, want)
+	}
+
+	if got := ce.Code; got != protocol.ErrorBadProof {
+		t.Errorf("the returned error code = %q, want %q", got, protocol.ErrorBadProof)
+	}
 }
 
 // errorTransport fails each call with err.

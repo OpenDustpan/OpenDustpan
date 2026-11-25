@@ -132,7 +132,10 @@ func runRefused(t *testing.T, srv *fakeServer) (logCapture, error) {
 		t.Fatalf("New: %v", err)
 	}
 
-	err = l.Run(t.Context(), func(context.Context, protocol.Work) error {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	err = l.Run(ctx, func(context.Context, protocol.Work) error {
 		t.Error("the handler ran for a refused answer")
 
 		return nil
@@ -402,7 +405,7 @@ func checkClaimLeaseOutOfRange(t *testing.T, lease time.Duration) {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	var stopped error

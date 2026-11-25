@@ -47,10 +47,12 @@ const (
 
 var errRunnerLoop = errors.New("the runner loop step did not end as expected")
 
-// loopRunner is the runner of the step: its ID and its runner key.
+// loopRunner is the runner of the step: its ID, its key and the lease of the
+// pool that the join answer gave.
 type loopRunner struct {
-	id  string
-	key ed25519.PrivateKey
+	id    string
+	key   ed25519.PrivateKey
+	lease time.Duration
 }
 
 // TestRunnerLoopPollsRenewsAndHeartbeats runs the runner loop of
@@ -105,7 +107,7 @@ func runClaimLoop(t *testing.T, env *e2e.Env, rn loopRunner, rec *loopRecorder) 
 
 	loop, err := client.New(client.Config{
 		Server: env.URL, Transport: rec, RunnerID: rn.id, Key: rn.key,
-		Release: loopRelease, Lease: runner.MinLease, Wait: loopPollWait,
+		Release: loopRelease, Lease: rn.lease, Wait: loopPollWait,
 		Ticker: loopTicker, Now: nil, Random: nil,
 		Logger: slog.New(slog.NewTextHandler(loopLogWriter{t: t}, nil)),
 	})
@@ -172,7 +174,7 @@ func joinLoopRunner(t *testing.T, env *e2e.Env, rec *loopRecorder, poolID string
 		t.Fatalf("decode the join answer: %v", err)
 	}
 
-	return loopRunner{id: joined.Runner, key: priv}
+	return loopRunner{id: joined.Runner, key: priv, lease: joined.Lease.Std()}
 }
 
 // decodeJoinToken puts the token field of the JSON body in token. The error
