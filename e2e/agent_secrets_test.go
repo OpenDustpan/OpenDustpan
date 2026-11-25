@@ -137,6 +137,7 @@ func agentCheckFreshConnection(caller agentCaller) {
 	body = caller.want(
 		"read the formats", http.MethodGet, "/api/agent/formats", "", http.StatusOK,
 	)
+	caller.wantHas("read the formats", body, `{"formats":`)
 	caller.wantHas("read the formats", body, `"chat-completions"`)
 	caller.wantHas("read the formats", body, `"messages"`)
 }

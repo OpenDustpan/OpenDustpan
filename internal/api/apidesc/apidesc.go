@@ -20,19 +20,19 @@ import (
 // covers a path under this prefix and no other path.
 const Prefix = "/api/dustpan/v1/"
 
-// allowedOutsidePrefixes lists the path prefixes outside Prefix that the
+// allowedOutsidePrefixes returns the path prefixes outside Prefix that the
 // description still holds: the model connection routes and the egress
 // allowlist of the installation. Any other path outside Prefix stays outside
 // the description.
-//
-//nolint:gochecknoglobals // A fixed table; Go has no constant slices.
-var allowedOutsidePrefixes = []string{"/api/agent/", "/api/server/egress-allowlist"}
+func allowedOutsidePrefixes() []string {
+	return []string{"/api/agent/", "/api/server/egress-allowlist"}
+}
 
 // isAllowedOutside reports whether path is under one of the allowed prefixes
 // outside Prefix. A prefix that ends in a slash matches by prefix. Another
 // entry matches itself and any path below it.
 func isAllowedOutside(path string) bool {
-	for _, prefix := range allowedOutsidePrefixes {
+	for _, prefix := range allowedOutsidePrefixes() {
 		if strings.HasSuffix(prefix, "/") {
 			if strings.HasPrefix(path, prefix) {
 				return true

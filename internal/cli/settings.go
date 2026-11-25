@@ -299,10 +299,10 @@ var Settings = []*Setting{
 		"egress-public-only", "DUSTPAN_EGRESS_PUBLIC_ONLY",
 		"refuse private addresses for a model URL, also when the egress allowlist has a rule for them "+
 			"(DUSTPAN_EGRESS_PUBLIC_ONLY)",
-		"(none: off). Set `true` to refuse a model URL with an address that is not public, for example an "+
-			"RFC 1918 or a unique local address. The server then refuses such an address also when a CIDR entry "+
-			"of the egress allowlist has it. This version stores the flag only. The check of a model URL runs "+
-			"with the capability probe of the model connection, which a later version adds.",
+		"(none: off). This version stores the flag and has no effect yet. A later version adds the capability "+
+			"probe of the model connection. With the flag set to `true`, that probe will refuse a model URL with "+
+			"an address that is not public, for example an RFC 1918 or a unique local address. It will refuse "+
+			"such an address also when a CIDR entry of the egress allowlist has it.",
 	).WithFile("egress-public-only"),
 	stringSetting(
 		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",

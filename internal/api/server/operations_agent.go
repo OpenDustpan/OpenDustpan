@@ -13,11 +13,11 @@ const tagAgent = "agent"
 // agentDocumentSchema declares the schema of the connection document on the
 // wire. The declaration matches the one of the same type in the other
 // adapters: a declaration of one type must be equal everywhere.
-//
-//nolint:gochecknoglobals // A fixed value; Go has no constant structs.
-var agentDocumentSchema = apidesc.Declare[json.RawMessage](map[string]any{
-	"description": "Any JSON value.",
-})
+func agentDocumentSchema() apidesc.Declaration {
+	return apidesc.Declare[json.RawMessage](map[string]any{
+		schemaDescription: "Any JSON value.",
+	})
+}
 
 // agentOperationLabels names the model connection routes in the description:
 // the secret items, the current document, the formats and the egress
@@ -53,14 +53,14 @@ func agentOperationLabels() map[string]apidesc.Label {
 			On(apidesc.KindServer).
 			WithBodies(
 				apidesc.NoBody,
-				apidesc.Typed[agentConnectionResponse]("AgentConnection", agentDocumentSchema),
+				apidesc.Typed[agentConnectionResponse]("AgentConnection", agentDocumentSchema()),
 			),
 		apidesc.Pattern(http.MethodDelete, agentConnectionPath): apidesc.Name("deleteAgentConnection", tagAgent).
 			On(apidesc.KindServer).
 			WithBodies(apidesc.NoBody, apidesc.NoBody),
 		apidesc.Pattern(http.MethodGet, agentFormatsPath): apidesc.Name("listAgentFormats", tagAgent).
 			On(apidesc.KindServer).
-			WithBodies(apidesc.NoBody, apidesc.Typed[[]string]("AgentFormats")),
+			WithBodies(apidesc.NoBody, apidesc.Typed[agentFormatsResponse]("AgentFormats")),
 		apidesc.Pattern(http.MethodGet, egressAllowlistPath): apidesc.Name("getEgressAllowlist", tagSettings).
 			On(apidesc.KindServer).
 			WithBodies(

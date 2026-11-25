@@ -24,6 +24,13 @@ type agentConnectionResponse struct {
 	Version  int64           `json:"version"`
 }
 
+// agentFormatsResponse is the answer of GET /api/agent/formats: the wire
+// formats that a connection document can name. It is an object, not a bare
+// array, because the API description names each response schema.
+type agentFormatsResponse struct {
+	Formats []string `json:"formats"`
+}
+
 // agentConnectionRoutes returns the connection rows of the route table:
 // the read and the disconnect of the current document and the
 // list of the supported wire formats. Nil service means no agent store is
@@ -98,5 +105,5 @@ func (h *Handler) listAgentFormats(w http.ResponseWriter, r *http.Request, p ide
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, formats)
+	h.writeJSON(ctx, w, http.StatusOK, agentFormatsResponse{Formats: formats})
 }

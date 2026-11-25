@@ -394,9 +394,21 @@ func TestConnectionRoutes_Formats(t *testing.T) {
 		t.Fatalf("GET formats answers %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 
-	var formats []string
-	if err := json.Unmarshal(rec.Body.Bytes(), &formats); err != nil {
+	// The answer is an object with one key, not a bare array: the API
+	// description names each response schema, and the client generator
+	// accepts a named object only.
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode formats %q: %v", rec.Body.String(), err)
+	}
+
+	if len(body) != 1 {
+		t.Fatalf("formats answer has %d keys, want one key formats: %s", len(body), rec.Body.String())
+	}
+
+	var formats []string
+	if err := json.Unmarshal(body["formats"], &formats); err != nil {
+		t.Fatalf("decode formats key %q: %v", rec.Body.String(), err)
 	}
 
 	if strings.Join(formats, ",") != "chat-completions,messages" {

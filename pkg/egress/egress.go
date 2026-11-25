@@ -458,7 +458,8 @@ func CheckPort(raw string, p Ports) error {
 }
 
 // alwaysDeniedList returns the addresses that no allowlist entry may
-// open. ADR 129 decision 25.
+// open: loopback, link-local, cloud metadata, unspecified, broadcast and
+// multicast addresses, whatever the allowlist says.
 func alwaysDeniedList() []netip.Prefix {
 	return []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),
@@ -485,7 +486,8 @@ func alwaysDeniedList() []netip.Prefix {
 }
 
 // Allowlist holds the host names and CIDR rules that a model call may
-// reach. ADR 129 decisions 25 and 26.
+// reach. A host that matches no entry is denied, and no entry opens an
+// address of the always-denied list.
 type Allowlist struct {
 	// Hosts are the host names that pass. A name may start with "*." to
 	// match subdomains.
@@ -509,7 +511,10 @@ type CIDRRule struct {
 type PublicOnly bool
 
 // CheckModelURL checks rawURL against the always-denied list and the
-// allowlist. ADR 129 decisions 25 and 26.
+// allowlist. A host name must match a host entry and use https. An IP
+// address must not be in the always-denied list and must be in a CIDR entry
+// with the port of the URL. With publicOnly, it refuses also an address that
+// is not public, although a CIDR entry has it.
 func CheckModelURL(rawURL string, a Allowlist, publicOnly PublicOnly) error {
 	u, err := parseModelURL(rawURL)
 	if err != nil {

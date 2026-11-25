@@ -211,10 +211,18 @@
         "type": "object"
       },
       "AgentFormats": {
-        "items": {
-          "type": "string"
+        "properties": {
+          "formats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
         },
-        "type": "array"
+        "required": [
+          "formats"
+        ],
+        "type": "object"
       },
       "AgentSecret": {
         "properties": {

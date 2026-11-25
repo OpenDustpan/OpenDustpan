@@ -81,8 +81,12 @@ credential exists.
 curl -H "Authorization: Bearer $TOKEN" "$SERVER/api/agent/formats"
 ```
 
-The answer is the list of the wire formats that a document can name, for
-example `["chat-completions","messages"]`.
+The answer is an object with one key, `formats`, that holds the list of the
+wire formats that a document can name:
+
+```
+{"formats":["chat-completions","messages"]}
+```
 
 ## Replace the egress allowlist
 
