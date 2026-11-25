@@ -43,7 +43,8 @@ server does not store them, and an operator cannot change them.
 | `writer` | Everything in `viewer`, plus write, encrypt and decrypt state, read secrets and set the context of a unit. |
 | `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. It manages runner pools and runners (`namespace:manage-runners`), and defines custom steps (`unit:define-steps`). |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
-| `installation-operator` | Every action of the operator family for the installation. |
+| `installation-operator` | Every action of the operator family for the installation, except `namespace:break-freeze`. |
+| `freeze-breaker` | The action `namespace:break-freeze`, granted on the installation. It lets the holder start a job through an active freeze with a `breakFreezeReason`. It holds no other action. Grant it with `POST /api/server/grants` and the body `{"subject":"principal:<id>","role":"freeze-breaker"}`. See the [freeze guide](freeze.md). |
 | `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. It makes the tokens of each service principal whose reach is inside its own reach. |
 | `site-administrator` | The operator, administration, data and delegation families. It holds every action except the actions of the caller's own access. |
 | `token-manager` | The action `principal:manage-tokens`, which issues service tokens. |

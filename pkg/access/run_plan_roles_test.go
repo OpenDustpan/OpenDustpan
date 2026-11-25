@@ -28,6 +28,7 @@ func TestUnitRunPlanBuiltInRoles(t *testing.T) {
 		{role: access.RoleAccountAdministrator, want: true},
 		{role: access.RoleSiteAdministrator, want: true},
 		{role: access.RoleTokenManager, want: false},
+		{role: access.RoleFreezeBreaker, want: false},
 	}
 
 	if got, want := len(cases), len(access.BuiltInRoles()); got != want {

@@ -34,8 +34,9 @@ type freezeList struct {
 // freeze, and a start is accepted again. A start through a new freeze with a
 // breakFreezeReason is accepted.
 //
-// The person is a site administrator: the freeze actions are not classified
-// in the access families yet, so only an administrator holds them.
+// The manager holds the admin role on the namespace, which holds the manage-freezes
+// action. The breaker holds the freeze-breaker role on the installation and the
+// planner role on the namespace, so it holds the break-freeze action and can start.
 func TestFreezeManageThroughJobs(t *testing.T) {
 	t.Parallel()
 
@@ -85,7 +86,7 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 	// the cancel of it.
 	started := startsAJob(ctx, t, env)
 
-	token := freezeAdminToken(ctx, t, env)
+	token, breakToken := freezePeople(ctx, t, env)
 
 	created := createFreeze(ctx, t, env, token, "release freeze")
 
@@ -126,7 +127,7 @@ func freezeScenario(t *testing.T, env *e2e.Env) {
 	// breakFreezeReason, and the start with the reason is accepted.
 	createFreeze(ctx, t, env, token, "break-glass freeze")
 
-	answer = freezeStep(ctx, t, env, token, http.MethodPost, jobsRoute, breakGlassBody("incident fix"),
+	answer = freezeStep(ctx, t, env, breakToken, http.MethodPost, jobsRoute, breakGlassBody("incident fix"),
 		http.StatusCreated)
 	if _, err := checkStarted(answer); err != nil {
 		t.Fatalf("break-glass start during the freeze: %v", err)
@@ -200,23 +201,47 @@ func freezeStep(
 	return answer
 }
 
-// freezeAdminToken makes a person with the site-administrator role and returns
-// the personal token of the person.
-func freezeAdminToken(ctx context.Context, t *testing.T, env *e2e.Env) string {
+// freezePeople makes the manager and the breaker and returns the personal token
+// of each. The manager holds the admin role on the namespace. The breaker holds
+// the freeze-breaker role on the installation and the planner role on the
+// namespace.
+func freezePeople(ctx context.Context, t *testing.T, env *e2e.Env) (string, string) {
 	t.Helper()
 
-	var person e2ePrincipal
+	var manager e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/principals",
-		`{"subject":"` + e2e.SignInSubject("freeze-admin") + `","kind":"person"}`,
+		`{"subject":"` + e2e.SignInSubject("freeze-manager") + `","kind":"person"}`,
 		http.StatusCreated,
-	}, &person)
+	}, &manager)
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/grants",
-		`{"subject":"principal:` + person.ID + `","role":"site-administrator"}`,
+		http.MethodPost, "/api/server/namespaces/" + e2e.Namespace + "/grants",
+		`{"subject":"principal:` + manager.ID + `","role":"admin"}`,
 		http.StatusCreated,
 	}, nil)
 
-	return env.PersonalToken(ctx, t, person.ID, "freeze-admin-token").Secret
+	var breaker e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("freeze-breaker") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &breaker)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:` + breaker.ID + `","role":"freeze-breaker"}`,
+		http.StatusCreated,
+	}, nil)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + e2e.Namespace + "/grants",
+		`{"subject":"principal:` + breaker.ID + `","role":"planner"}`,
+		http.StatusCreated,
+	}, nil)
+
+	managerToken := env.PersonalToken(ctx, t, manager.ID, "freeze-manager-token").Secret
+	breakerToken := env.PersonalToken(ctx, t, breaker.ID, "freeze-breaker-token").Secret
+
+	return managerToken, breakerToken
 }

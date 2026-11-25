@@ -149,6 +149,9 @@ var families = map[identity.Action]Family{
 	// The marker of the first administrator and the open offer. The offer
 	// action has no family on purpose: only Admin passes the authorizer.
 	identity.ActionServerReadFirstAdministrator: FamilyOperator,
+	// The break-freeze action is held through a grant on the installation only
+	// (RoleFreezeBreaker). It is not a data action of a namespace.
+	identity.ActionNamespaceBreakFreeze: FamilyOperator,
 
 	identity.ActionServerReadPrincipals:    FamilyAdministration,
 	identity.ActionServerManagePrincipals:  FamilyAdministration,
@@ -240,6 +243,7 @@ var families = map[identity.Action]Family{
 	identity.ActionRegistryPublish:                   FamilyData,
 	identity.ActionRegistryManageKeys:                FamilyData,
 	identity.ActionNamespaceManageIssuer:             FamilyData,
+	identity.ActionNamespaceManageFreezes:            FamilyData,
 
 	identity.ActionCallerRead:               FamilySelf,
 	identity.ActionRoleRead:                 FamilySelf,

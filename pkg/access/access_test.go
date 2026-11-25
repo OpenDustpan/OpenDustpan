@@ -521,8 +521,6 @@ func unclassifiedActions() []identity.Action {
 		identity.ActionUnitRunApply,
 		identity.ActionUnitRunDestroy,
 		identity.ActionUnitWriteBack,
-		identity.ActionNamespaceManageFreezes,
-		identity.ActionNamespaceBreakFreeze,
 		identity.ActionRunnerClaim,
 		identity.ActionAgentUse,
 		identity.ActionAgentStartRun,
