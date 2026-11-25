@@ -23,7 +23,7 @@
 
 ## 3. Side effects
 
-- [ ] 3.1 `make generate`, then `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`, then `make clients-generate`. Never edit the generated files by hand.
+- [ ] 3.1 The nine routes of the contract table go into the API description through the generator. Add no row to `outsideByDesign` in `pkg/dustpan/apidesc_classes_test.go` for `/api/agent/` or `/api/server/egress-allowlist`: no accepted ADR names these paths as a path that an outside client stores. Check: that file is not in the diff. Run `make generate`, then `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`, then `make clients-generate`. Never edit the generated files by hand.
 - [ ] 3.2 Add the new file `docs/guides/agent-connection.md` with the generic worked examples: store a key, write the document, read it, delete it. Every command in the page is run by a test.
 
 ## 4. Definition of done
