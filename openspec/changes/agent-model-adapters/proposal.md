@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -51,4 +51,6 @@ The persona is the administrator who uses a model server that the project does n
 - ADR 23: the HMAC key is sealed in the scope `@server`.
 - ADR 250 and ADR 364: the layers table in design.md, no new lint rule.
 
-Open questions: none
+## Open questions
+
+none
