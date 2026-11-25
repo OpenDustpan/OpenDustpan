@@ -20,6 +20,9 @@ The record is in the durable store of the installation.
 A restart or a failover of the server does not remove the record. A retry
 within the 24 hours finds it.
 
+When a key expires, the server writes an audit entry with the action
+`job:key-expired` that names the old job.
+
 The key belongs to the caller. The same key from another caller starts another
 job.
 

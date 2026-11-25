@@ -8,7 +8,20 @@ import (
 	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// startEntry returns the audit entry of a start of a job of unit, as the
+// service gives it to Create.
+func startEntry(unit identity.Object, at time.Time) audit.Entry {
+	return audit.Entry{
+		At: at, Namespace: testNamespace, Subject: "alice", IDPSubject: "", TokenID: "", Action: "job:start",
+		Object: unit.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "",
+		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
+		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
+		JobID: "", Reason: "", Origin: nil,
+	}
+}
 
 // TestCreateKeyRetentionAtTheAge proves that a job of exactly the retention
 // age still answers the replay, and stores no second job.
@@ -61,7 +74,7 @@ func TestCreateKeyRetentionPastTheAge(t *testing.T) {
 	j.ID = "job-new"
 	j.IdempotencyKey = "start-1"
 
-	got, created, err := s.Create(t.Context(), j, nil, testFence(), nil)
+	got, created, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{startEntry(unit, clock)})
 	if err != nil || !created || got.ID != j.ID {
 		t.Fatalf("Create past the retention = %s, created %v, error %v; want the job %s", got.ID, created,
 			err, j.ID)
@@ -98,13 +111,7 @@ func TestCreateKeyRetentionClearIsAudited(t *testing.T) {
 	j.ID = "job-new"
 	j.IdempotencyKey = "start-1"
 
-	start := audit.Entry{
-		At: clock, Namespace: testNamespace, Subject: "alice", IDPSubject: "", TokenID: "", Action: "job:start",
-		Object: unit.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "",
-		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
-		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
-		JobID: "", Reason: "", Origin: nil,
-	}
+	start := startEntry(unit, clock)
 
 	if _, _, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{start}); err != nil {
 		t.Fatalf("Create past the retention: %v", err)
@@ -123,6 +130,50 @@ func TestCreateKeyRetentionClearIsAudited(t *testing.T) {
 
 	if err := got.Validate(); err != nil {
 		t.Errorf("clear entry is not valid: %v", err)
+	}
+}
+
+// TestCreateKeyRetentionClearNeedsAudit proves that a start that gives no
+// audit entry cannot clear an expired key: it gets ErrInvalidEntry, the old
+// job keeps the key and no job is stored.
+func TestCreateKeyRetentionClearNeedsAudit(t *testing.T) {
+	t.Parallel()
+
+	clock := time.UnixMilli(testClockMs).UTC()
+	unit := testUnit(t)
+	tx := newFakeTx(clock)
+	s := jobstore.New(fakeRunner{tx: tx}, idempotency.JobStartRetention())
+
+	old := testJob(unit, clock)
+	old.ID = "job-old"
+	old.IdempotencyKey = "start-1"
+	old.CreatedAt = clock.Add(-idempotency.MinRetention - time.Millisecond)
+	tx.put(t, &old)
+
+	j := testJob(unit, clock)
+	j.ID = "job-new"
+	j.IdempotencyKey = "start-1"
+
+	_, _, err := s.Create(t.Context(), j, nil, testFence(), nil)
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("Create with an expired key and no audit entry = %v, want ErrInvalidEntry", err)
+	}
+
+	row, ok, getErr := tx.Job(t.Context(), old.ID)
+	if getErr != nil || !ok {
+		t.Fatalf("get the old job: ok %t, error %v", ok, getErr)
+	}
+
+	if row.Key != old.IdempotencyKey {
+		t.Errorf("the old job key = %q, want %q", row.Key, old.IdempotencyKey)
+	}
+
+	if len(tx.audits) != 0 {
+		t.Errorf("Create appended %d audit entries, want 0", len(tx.audits))
+	}
+
+	if _, ok, getErr := tx.Job(t.Context(), j.ID); getErr != nil || ok {
+		t.Fatalf("Create stored job %s: ok %t, error %v; want no job", j.ID, ok, getErr)
 	}
 }
 
@@ -192,7 +243,7 @@ func TestCreateKeyRetentionLostClear(t *testing.T) {
 	j.ID = "job-later"
 	j.IdempotencyKey = "start-1"
 
-	got, created, err := s.Create(t.Context(), j, nil, testFence(), nil)
+	got, created, err := s.Create(t.Context(), j, nil, testFence(), []audit.Entry{startEntry(unit, clock)})
 	if err != nil || created || got.ID != next.ID {
 		t.Fatalf("Create after the lost clear = %s, created %v, error %v; want the job %s", got.ID, created,
 			err, next.ID)

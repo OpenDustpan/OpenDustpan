@@ -10,6 +10,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
+// keyExpiredAction is the action of the audit entry of a clear of an expired
+// job-start key.
+const keyExpiredAction = "job:key-expired"
+
 // keyRetentionCases returns the cases of the retention of a job-start key: a
 // key names its job for MinRetention from the creation of the job. Each case
 // needs a harness with AgeJob.
@@ -20,9 +24,10 @@ func keyRetentionCases() []suiteCase {
 			"a key of a job older than the retention starts a new job that holds the key",
 			testKeyPastRetentionStartsNewJob,
 		},
+		{"a key clear writes a job:key-expired entry that names the old job", testKeyClearAudits},
 		{"another request under an expired key starts a new job", testExpiredKeyWithAnotherRequestStarts},
 		{"a retry after the new job replays the new job", testRetryAfterNewJobReplays},
-		{"a failed start under an expired key keeps the old key", testFailedExpiredStartKeepsKey},
+		{"a failed start under an expired key keeps the old key and writes no entry", testFailedExpiredStartKeepsKey},
 	}
 }
 
@@ -85,6 +90,43 @@ func testKeyPastRetentionStartsNewJob(t *testing.T, h Harness) {
 
 	if got.IdempotencyKey != "" {
 		t.Fatalf("the old job holds key %q, want no key", got.IdempotencyKey)
+	}
+}
+
+// testKeyClearAudits proves that the clear of an expired key appends a
+// job:key-expired entry that names the old job, in the transaction of the
+// start.
+func testKeyClearAudits(t *testing.T, h Harness) {
+	t.Helper()
+
+	requireAgeJob(t, h)
+	f := setUp(t, h)
+	old := create(t, h, f, newJob(f.unit, job.OperationPlan, "start-entry"), nil)
+
+	h.AgeJob(t, old.ID, idempotency.MinRetention+time.Millisecond)
+
+	next := create(t, h, f, newJob(f.unit, job.OperationPlan, "start-entry"), nil)
+	if next.ID == old.ID {
+		t.Fatal("the expired start answered the old job")
+	}
+
+	var cleared *audit.Entry
+
+	entries := allEntries(t, h, f)
+	for i := range entries {
+		if entries[i].Action == keyExpiredAction {
+			cleared = &entries[i]
+
+			break
+		}
+	}
+
+	if cleared == nil {
+		t.Fatalf("the clear of the key of job %s wrote no job:key-expired entry", old.ID)
+	}
+
+	if cleared.JobID != string(old.ID) {
+		t.Fatalf("the job:key-expired entry names job %q, want %q", cleared.JobID, old.ID)
 	}
 }
 
@@ -159,5 +201,12 @@ func testFailedExpiredStartKeepsKey(t *testing.T, h Harness) {
 
 	if got.IdempotencyKey != "start-busy" {
 		t.Fatalf("the old job holds key %q after the rollback, want start-busy", got.IdempotencyKey)
+	}
+
+	entries := allEntries(t, h, f)
+	for i := range entries {
+		if entries[i].Action == keyExpiredAction {
+			t.Fatal("the failed start left a job:key-expired entry")
+		}
 	}
 }

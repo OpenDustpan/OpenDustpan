@@ -581,21 +581,7 @@ func (s *Store) sameKey(ctx context.Context, tx Tx, j *job.Job, now time.Time,
 	}
 
 	if expired {
-		old := first
-		old.IdempotencyKey, old.Version = "", first.Version+1
-		old.UpdatedAt = nextUpdateAt(now, first.UpdatedAt)
-
-		if clearErr := update(ctx, tx, &old, first.Version); clearErr != nil {
-			// The clear found a newer version of the old row: another start
-			// took the key. Create runs again and reads the new job.
-			if errors.Is(clearErr, job.ErrConflict) {
-				return noJob(), false, ErrKeyIndex
-			}
-
-			return noJob(), false, clearErr
-		}
-
-		return noJob(), false, tx.AppendAudit(ctx, keyExpiredEntries(e, &first, now))
+		return noJob(), false, clearExpiredKey(ctx, tx, &first, now, e)
 	}
 
 	same, err := sameSpec(&first.Spec, &j.Spec)
@@ -613,14 +599,38 @@ func (s *Store) sameKey(ctx context.Context, tx Tx, j *job.Job, now time.Time,
 	return first, true, nil
 }
 
-// keyExpiredEntries returns the audit entry of the clear of the key of the
-// expired job old: it has the actor of the entry of the new start, the ID of
-// old and the reason for the clear. It returns no entry when e is empty.
-func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Entry {
+// clearExpiredKey clears the key of the expired job old in the transaction tx
+// and appends the audit entry of the clear. It returns ErrKeyIndex when the
+// clear found a newer version of the old row: another start took the key, and
+// Create runs again and reads the new job.
+func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e []audit.Entry) error {
+	// Defense in depth: the caller gives the entries too; this check stays so
+	// that a new caller cannot clear a key without a record.
 	if len(e) == 0 {
-		return nil
+		return fmt.Errorf("%w: the start gives no audit entry for the clear of key %s", audit.ErrInvalidEntry,
+			old.ID)
 	}
 
+	prev := old.Version
+	old.IdempotencyKey, old.Version = "", prev+1
+	old.UpdatedAt = nextUpdateAt(now, old.UpdatedAt)
+
+	if err := update(ctx, tx, old, prev); err != nil {
+		if errors.Is(err, job.ErrConflict) {
+			return ErrKeyIndex
+		}
+
+		return err
+	}
+
+	return tx.AppendAudit(ctx, keyExpiredEntries(e, old, now))
+}
+
+// keyExpiredEntries returns the audit entry of the clear of the key of the
+// expired job old: it has the actor of the entry of the new start, the ID of
+// old and the reason for the clear. clearExpiredKey refuses a start with no
+// entry, so e holds at least one.
+func keyExpiredEntries(e []audit.Entry, old *job.Job, now time.Time) []audit.Entry {
 	entry := e[0]
 	entry.At, entry.Action, entry.Changes = now.UTC(), KeyExpiredAction, nil
 	entry.JobID, entry.Version, entry.PrevHash, entry.Hash, entry.Sequence = string(old.ID), "", "", "", 0
