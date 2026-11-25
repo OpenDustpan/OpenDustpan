@@ -14,14 +14,14 @@ The user path this change must make work:
 2. **API.** The site administrator lists the break-glass accounts with the new read route and adds accounts with a passkey or a hardware key. The console and the CLI use the same routes.
 3. **API.** The site administrator tries to disable or delete the last enabled break-glass account and gets 409 with the count.
 4. **CLI.** The site administrator rotates a break-glass credential in one call. The new credential works before the old one stops.
-5. **Server start.** The operator restores a backup. A restore that leaves fewer than two working paths is refused before the swap.
+5. **Server start.** The operator restores a backup. A restore that leaves fewer than two working paths ends failed in the swap transaction, and the live data stays.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | A disable or delete removes the last enabled break-glass account. | 409 with code principal.no-working-break-glass. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
-| A restore leaves fewer than two working paths. | 409 with code principal.no-working-break-glass before the swap. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A restore leaves fewer than two working paths. | The start route answers 202. The restore ends failed with code principal.no-working-break-glass, and the live data stays. | `GET /api/dustpan/v1/break-glass/accounts` |
 | A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names `/api/dustpan/v1/me/passkeys/register/begin`, the route that enrolls a passkey (docs/guides/passkeys.md). | `POST /api/dustpan/v1/me/passkeys/register/begin` |
 | A rotation names an account that is not a break-glass account or does not exist. | 404 with code break-glass.not-found. | `GET /api/dustpan/v1/break-glass/accounts` |
 
@@ -42,7 +42,7 @@ Evidence for the claims above:
 - A guard in the write transaction of disable, delete and restore. Disable and delete refuse when no enabled account would stay. The restore refuses when fewer than two working paths would stay. The three refusals use the one error code principal.no-working-break-glass. Each refusal writes an audit entry. Re-enable stays checked and a disable works in maintenance mode.
 - The sweep stays exempt in SQL, as on main. For each break-glass account that the sweep skips, it writes one audit record: kind change, outcome success, scope @server, object the principal reference of the account, reason "break-glass account is exempt", and the caller fields of the sweep entry (the same entry shape that the sweep writes for a disabled account in pkg/accesstoken/service.go).
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
-- The restore check reads the same count on staged data, and the swap runs in a transaction that counts again.
+- The restore check reads the count on staged data inside the swap transaction, and no count runs before the swap.
 - The guard uses the conditional SQL update of the disable and the delete: the statement changes the row only when another enabled account stays.
 - Rotation is one new method of the passkey port, RotatePasskey in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that two parallel rotations leave exactly one working credential.
 - The add of a break-glass account is one new method of the passkey port, NEW `AddBreakGlassPerson` in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that a failed passkey insert leaves no account.
