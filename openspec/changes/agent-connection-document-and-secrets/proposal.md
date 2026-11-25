@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -49,4 +49,6 @@ The persona is the administrator who sets up Dusty. The administrator stores a k
 - ADR 17: each route declares its action and object. ADR 250 and ADR 364: the layers table in design.md, no new lint rule.
 - ADR 362: the references to secret items are stable IDs.
 
-Open questions: none
+## Open questions
+
+none
