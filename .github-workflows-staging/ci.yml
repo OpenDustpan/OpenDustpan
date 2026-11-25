@@ -392,15 +392,20 @@ jobs:
         image: rustfs/rustfs@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
         env:
           RUSTFS_ROOT_USER: dustpan-test
-          RUSTFS_ROOT_PASSWORD: dustpan-test-secret
+          RUSTFS_ROOT_PASSWORD: dustpan-test-secret  # trufflehog:ignore fixed test credential; the container holds only test objects
         ports: [ "9000:9000" ]
+        # The image has curl. The steps start only after /health/ready
+        # answers 200.
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9000/health/ready"
+          --health-interval 2s --health-timeout 5s --health-retries 30
     # The four variables turn on TestConformance of pkg/blob/s3. Without them,
     # the suite skips.
     env:
       DUSTPAN_TEST_S3_ENDPOINT: http://localhost:9000
       DUSTPAN_TEST_S3_BUCKET: dustpan-ci-s3
       DUSTPAN_TEST_S3_ACCESS_KEY: dustpan-test
-      DUSTPAN_TEST_S3_SECRET_KEY: dustpan-test-secret
+      DUSTPAN_TEST_S3_SECRET_KEY: dustpan-test-secret  # trufflehog:ignore fixed test credential; the suite uses it only against the job container
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -408,17 +413,20 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
-      # The service container has no health command, so wait for the S3 API by
-      # retrying list-buckets with the endpoint URL until it answers or times
-      # out.
+      # The service waits for /health/ready before the steps start. This step
+      # also waits for the S3 API itself, so that a health answer that comes
+      # before the API is ready cannot fail the bucket step. Each call has a
+      # connect and a read timeout, and the step has a limit, so a server that
+      # stops answering fails the job fast.
       - name: Wait for the S3 API
+        timeout-minutes: 10
         env:
           AWS_ACCESS_KEY_ID: ${{ env.DUSTPAN_TEST_S3_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ env.DUSTPAN_TEST_S3_SECRET_KEY }}
           AWS_DEFAULT_REGION: us-east-1
         run: |
           for _ in $(seq 60); do
-            if aws s3api list-buckets --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" >/dev/null 2>&1; then
+            if aws s3api list-buckets --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" --cli-connect-timeout 2 --cli-read-timeout 5 >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2
@@ -435,7 +443,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ env.DUSTPAN_TEST_S3_SECRET_KEY }}
           AWS_DEFAULT_REGION: us-east-1
         run: |
-          if ! out=$(aws s3api create-bucket --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" --region us-east-1 --bucket "$DUSTPAN_TEST_S3_BUCKET" 2>&1); then
+          if ! out=$(aws s3api create-bucket --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" --region us-east-1 --cli-connect-timeout 2 --cli-read-timeout 5 --bucket "$DUSTPAN_TEST_S3_BUCKET" 2>&1); then
             case "$out" in
               *BucketAlreadyOwnedByYou*|*BucketAlreadyExists*) echo "bucket $DUSTPAN_TEST_S3_BUCKET exists" ;;
               *) echo "$out" >&2; exit 1 ;;
@@ -450,8 +458,8 @@ jobs:
         run: make test-ci-other ${{ github.event_name == 'schedule' && 'GO_TEST_COUNT=-count=1' || '' }}
       # A skipped TestConformance passes the step above. This step runs the
       # suite again against the server of this job (no test cache) and fails
-      # unless the top test passed. The pending cases of blobtest skip inside
-      # the suite and do not fail it.
+      # unless the top test passed, the package result is ok, and each SKIP
+      # line is one of the pending cases that no adapter implements yet.
       - name: The S3 suite ran and passed
         shell: bash
         run: |
@@ -463,12 +471,20 @@ jobs:
             echo "pkg/blob/s3 TestConformance failed" >&2
             exit 1
           fi
-          if grep -qE -- '--- SKIP: TestConformance( |$)' "$RUNNER_TEMP/s3-suite.log"; then
-            echo "pkg/blob/s3 TestConformance skipped" >&2
+          if ! grep -qE -x -- '--- PASS: TestConformance \([0-9.]+s\)' "$RUNNER_TEMP/s3-suite.log"; then
+            echo "pkg/blob/s3 TestConformance did not pass" >&2
             exit 1
           fi
           if ! grep -qE -- '^ok[[:space:]]' "$RUNNER_TEMP/s3-suite.log"; then
             echo "pkg/blob/s3 package result is not ok" >&2
+            exit 1
+          fi
+          # The five cases of blobtest.runPending skip by design until their
+          # adapter work lands. Each one that lands drops out of this list. A
+          # SKIP line of any other test fails this step.
+          pending='TestConformance/(second_put_on_one_key_replaces_it_or_fails_with_ErrExists|parallel_put_on_one_key_leaves_one_whole_object|get_during_a_replace_returns_the_whole_old_or_the_whole_new_object|failed_replace_leaves_the_old_object|delete_many_removes_every_key_and_backs_off_on_ErrThrottled)'
+          if grep -E -- '^[[:space:]]*--- SKIP: ' "$RUNNER_TEMP/s3-suite.log" | grep -vE -- "^[[:space:]]*--- SKIP: ${pending} \([0-9.]+s\)$"; then
+            echo "pkg/blob/s3 holds a SKIP line outside the pending cases" >&2
             exit 1
           fi
       - name: Build
