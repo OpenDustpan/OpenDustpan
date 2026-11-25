@@ -4,8 +4,8 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add the failing test `TestLoopPollsAndRenewsAfterAThirdOfTheLease` in NEW pkg/runner/client/loop_test.go against a fake server of the routes of main. Check: the test fails on main because the NEW function `client.Run` does not exist, and `pkg/runner/runner.go:228` (func RenewEvery) has no caller that renews.
-- [ ] 1.2 Add the failing test `TestLoopMapsProtocolCodes` in pkg/runner/client/loop_test.go: `claim-lost`, `retired` and `bad-proof` stop the work, `rate-limited` waits for `Retry-After`. Check: the test fails on main because the NEW function `client.Run` does not exist, and `pkg/runner/protocol/protocol.go:206` (const ErrorClaimLost) has no runner side reader.
+- [x] 1.1 Add the failing test `TestLoopPollsAndRenewsAfterAThirdOfTheLease` in NEW pkg/runner/client/loop_test.go against a fake server of the routes of main. Check: the test fails on main because the NEW function `client.Run` does not exist, and `pkg/runner/runner.go:228` (func RenewEvery) has no caller that renews.
+- [x] 1.2 Add the failing test `TestLoopMapsProtocolCodes` in pkg/runner/client/loop_test.go: `claim-lost`, `retired` and `bad-proof` stop the work, `rate-limited` waits for `Retry-After`. Check: the test fails on main because the NEW function `client.Run` does not exist, and `pkg/runner/protocol/protocol.go:206` (const ErrorClaimLost) has no runner side reader.
 
 ## 2. Build
 
