@@ -218,11 +218,15 @@ func (h *Handler) endFreeze(w http.ResponseWriter, r *http.Request, p identity.P
 // listFreezes answers GET /api/dustpan/v1/namespaces/{namespace}/freezes with
 // the freezes of the namespace in the order of their start. The route wrapper
 // allowed namespace:read on the namespace.
-func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, _ identity.Principal, t *target) {
+func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, p identity.Principal, t *target) {
 	ctx := r.Context()
 
 	page, err := parseFreezePageQuery(r, t.ns.Name)
 	if err != nil {
+		if errors.Is(err, errPageToken) {
+			h.recordFreezeRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
+		}
+
 		h.writeError(ctx, w, err)
 
 		return
@@ -239,6 +243,7 @@ func (h *Handler) listFreezes(w http.ResponseWriter, r *http.Request, _ identity
 	if page.after != "" {
 		start = slices.IndexFunc(freezes, func(f job.Freeze) bool { return f.ID == page.after }) + 1
 		if start == 0 {
+			h.recordFreezeRefusal(ctx, r, p, t.ns.Name, reasonPageToken)
 			h.writeError(ctx, w, errPageToken)
 
 			return
@@ -320,6 +325,7 @@ func (h *Handler) refuseFreezeKey(
 const (
 	reasonFreezeActive   = "a change freeze is active"
 	reasonNoActiveFreeze = "no change freeze is active"
+	reasonPageToken      = "the page token of the freeze list is not valid"
 )
 
 func (h *Handler) recordFreezeRefusal(

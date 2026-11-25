@@ -805,11 +805,11 @@ func (s *service) persist(ctx context.Context, j *Job, fence namespace.Fence, e 
 // Defense in depth: the store refuses a change dispatch in a freeze in the
 // transaction of the create. This check stays so that a store that misses the
 // rule never starts a job in a freeze. It does not rely on the store. A service
-// with no freeze store has no freeze to read, and only the store check applies
-// to it.
+// with no freeze store cannot read a freeze, so it fails closed with
+// ErrNoFreezeStore instead of starting the job.
 func (s *service) checkFreezeGate(ctx context.Context, j *Job, ns namespace.Name) error {
 	if s.freezes == nil {
-		return nil
+		return fmt.Errorf("check freeze gate: %w", ErrNoFreezeStore)
 	}
 
 	freezeGate, err := NewFreezeGate(ctx, s.freezes, ns, s.now())

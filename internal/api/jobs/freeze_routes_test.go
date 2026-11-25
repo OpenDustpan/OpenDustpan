@@ -40,6 +40,9 @@ type fakeFreezes struct {
 	mu      sync.Mutex
 	freezes []job.Freeze
 	entries []audit.Entry
+	// hideEnded makes ListFreezes omit the ended freezes, as a store does when it
+	// loses a write. Only a test sets it.
+	hideEnded bool
 }
 
 var _ job.FreezeStore = (*fakeFreezes)(nil)
@@ -94,6 +97,10 @@ func (f *fakeFreezes) ListFreezes(_ context.Context, ns namespace.Name, since ti
 
 	for i := range f.freezes {
 		fr := &f.freezes[i]
+		if f.hideEnded && !fr.EndsAt.IsZero() {
+			continue
+		}
+
 		if fr.Namespace == ns && (fr.EndsAt.IsZero() || fr.EndsAt.After(since)) {
 			out = append(out, *fr)
 		}
@@ -201,7 +208,7 @@ func newFreezeFixture(t *testing.T, holds ...string) freezeFixture {
 	}
 
 	authz := newAuthorizer(kept...)
-	freezes := &fakeFreezes{mu: sync.Mutex{}, freezes: nil, entries: nil}
+	freezes := &fakeFreezes{mu: sync.Mutex{}, freezes: nil, entries: nil, hideEnded: false}
 	starter := newFakeStarter(t)
 	entries := newTestAudit()
 
@@ -677,8 +684,62 @@ func encodeFreezeToken(t *testing.T, after, fingerprintInput string) string {
 func TestFreezeListRefusesHostilePageTokens(t *testing.T) {
 	t.Parallel()
 
-	f := newFreezeFixture(t, string(identity.ActionNamespaceRead)+" acme",
-		string(identity.ActionNamespaceManageFreezes)+" acme")
+	tests := []struct {
+		name      string
+		raw       string // sent as it is, when set
+		after     string
+		input     string
+		afterIsID bool // after is the ID of the first freeze
+	}{
+		{name: "malformed token", raw: "not-a-token", after: "", input: "", afterIsID: false},
+		{name: "token of another namespace", raw: "", after: "", input: "ns=other", afterIsID: true},
+		{name: "token with an unknown freeze ID", raw: "", after: "frz-unknown", input: "ns=acme", afterIsID: false},
+		{name: "token with SQL text as the ID", raw: "", after: "frz-1' OR 1=1 --", input: "ns=acme", afterIsID: false},
+		{name: "token with no freeze ID", raw: "", after: "", input: "ns=acme", afterIsID: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Each case has its own fixture: the denial limiter keeps one entry for
+			// repeated refusals of one principal, so a shared audit log would hide
+			// the entry of the later cases.
+			f := newFreezeFixture(t, string(identity.ActionNamespaceRead)+" acme",
+				string(identity.ActionNamespaceManageFreezes)+" acme")
+			firstID := seedEndedFreezes(t, f)
+
+			token := tt.raw
+			if token == "" {
+				after := tt.after
+				if tt.afterIsID {
+					after = firstID
+				}
+
+				token = encodeFreezeToken(t, after, tt.input)
+			}
+
+			// A page token is base64url, so the URL needs no escape.
+			rec := freezeRequest(t, f.h, http.MethodGet, freezesURL+"?pageSize=1&pageToken="+token, "")
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("list = %d %s, want 400", rec.Code, rec.Body.String())
+			}
+
+			checkErrorBody(t, rec.Body.String(), "request.page-token-invalid", "")
+
+			if body := rec.Body.String(); strings.Contains(body, "first") || strings.Contains(body, "second") {
+				t.Fatalf("the refused list holds a freeze: %s", body)
+			}
+
+			checkPageTokenDenial(t, f)
+		})
+	}
+}
+
+// seedEndedFreezes opens and ends two freezes, "first" and "second", and
+// returns the ID of the first.
+func seedEndedFreezes(t *testing.T, f freezeFixture) string {
+	t.Helper()
 
 	for _, reason := range []string{"first", "second"} {
 		rec := freezeRequest(t, f.h, http.MethodPost, freezesURL, `{"reason":"`+reason+`"}`)
@@ -691,35 +752,23 @@ func TestFreezeListRefusesHostilePageTokens(t *testing.T) {
 		}
 	}
 
-	firstID := decodeList(t, freezeRequest(t, f.h, http.MethodGet, freezesURL, "").Body.String())[0].ID
+	return decodeList(t, freezeRequest(t, f.h, http.MethodGet, freezesURL, "").Body.String())[0].ID
+}
 
-	tests := []struct {
-		name  string
-		token string
-	}{
-		{name: "malformed token", token: "not-a-token"},
-		{name: "token of another namespace", token: encodeFreezeToken(t, firstID, "ns=other")},
-		{name: "token with an unknown freeze ID", token: encodeFreezeToken(t, "frz-unknown", "ns=acme")},
-		{name: "token with SQL text as the ID", token: encodeFreezeToken(t, "frz-1' OR 1=1 --", "ns=acme")},
-		{name: "token with no freeze ID", token: encodeFreezeToken(t, "", "ns=acme")},
+func checkPageTokenDenial(t *testing.T, f freezeFixture) {
+	t.Helper()
+
+	entries, err := f.audit.List(t.Context(), namespace.Name("acme"), audit.Page{Size: 0, Before: 0})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	if len(entries.Entries) != 1 {
+		t.Fatalf("audit entries = %+v, want one named denial", entries.Entries)
+	}
 
-			// A page token is base64url, so the URL needs no escape.
-			rec := freezeRequest(t, f.h, http.MethodGet, freezesURL+"?pageSize=1&pageToken="+tt.token, "")
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("list = %d %s, want 400", rec.Code, rec.Body.String())
-			}
-
-			checkErrorBody(t, rec.Body.String(), "request.page-token-invalid", "")
-
-			if body := rec.Body.String(); strings.Contains(body, "first") || strings.Contains(body, "second") {
-				t.Fatalf("the refused list holds a freeze: %s", body)
-			}
-		})
+	if e := entries.Entries[0]; e.Outcome != audit.OutcomeDenied || e.Reason == "" {
+		t.Fatalf("audit entry = %+v, want a named denial", e)
 	}
 }
 
@@ -797,6 +846,27 @@ func TestFreezeUnknownNamespaceIsRefused(t *testing.T) {
 
 	if len(f.freezes.freezes) != 0 {
 		t.Fatalf("freezes after the refused create = %d, want 0", len(f.freezes.freezes))
+	}
+}
+
+// TestFreezeEndAnswers500WhenTheStoreOmitsTheEndedFreeze checks the guard after
+// the end: a store that does not list the freeze it just ended is a failure of
+// the store, and the route answers 500 instead of an empty freeze.
+func TestFreezeEndAnswers500WhenTheStoreOmitsTheEndedFreeze(t *testing.T) {
+	t.Parallel()
+
+	f := newFreezeFixture(t, string(identity.ActionNamespaceRead)+" acme",
+		string(identity.ActionNamespaceManageFreezes)+" acme")
+	f.openFreeze(t)
+	f.freezes.hideEnded = true
+
+	rec := freezeRequest(t, f.h, http.MethodPost, freezeEndURL, "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("end with an unlisted freeze = %d %s, want 500", rec.Code, rec.Body.String())
+	}
+
+	if len(f.freezes.freezes) != 1 || f.freezes.freezes[0].EndsAt.IsZero() {
+		t.Fatalf("store after the end = %+v, want the one freeze, ended", f.freezes.freezes)
 	}
 }
 

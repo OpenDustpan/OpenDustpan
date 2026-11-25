@@ -160,7 +160,8 @@ func (h *Handler) buildRoutes() []Route {
 			Method: http.MethodPost, Path: jobsPath, Scope: ScopeAuthorized, Reads: nil, Actions: nil, Filters: nil,
 			Writes: []identity.Action{identity.ActionUnitRunPlan, identity.ActionNamespaceBreakFreeze},
 			// The service checks namespace:break-freeze only for a break-glass
-			// start, which names the freeze that it passes.
+			// start. The service resolves the ID of the active freeze that the
+			// start passes.
 			IdempotencyKey: true, ETag: true, ServesDamaged: false, Resolve: h.resolveNamespace, Serve: h.startJob,
 		}, Route{
 			// The service checks job:read and job:approve on the unit again, and

@@ -484,7 +484,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Authorizer: r.authz,
 		Gates:      r.gates,
 		Fences:     svcFences{err: nil},
-		Freezes:    nil, Switches: nil,
+		Freezes:    svcFreezes{list: nil, err: nil}, Switches: nil,
 		Now:       func() time.Time { return r.now },
 		NewID:     func() job.ID { return job.ID("job-fixed") },
 		Log:       slog.New(slog.DiscardHandler),
@@ -1362,6 +1362,12 @@ func allowApply(_ *job.ServiceConfig, r *rig) {
 	r.authz.allow[string(job.ActionUnitRunApply)+" "+r.unit.String()] = true
 }
 
+// noFreezeStore removes the freeze store of the service, so that the service
+// has no freeze to read.
+func noFreezeStore(cfg *job.ServiceConfig, _ *rig) {
+	cfg.Freezes = nil
+}
+
 // Layer: the freeze gate of the service. The fake store has no freeze rule, so
 // only the gate of the service can refuse the start of a changing phase. Remove
 // the gate and the first case starts the job.
@@ -1386,23 +1392,22 @@ func TestStartInFreezeIsRefusedByTheServiceGate(t *testing.T) {
 	}
 }
 
-// A service with no freeze store has no freeze to read: the gate does not
-// refuse, and the create with its dispatch goes to the store, whose freeze rule
-// is then the only layer.
-func TestStartWithoutFreezeStoreSkipsTheServiceGate(t *testing.T) {
+// A service with no freeze store cannot read a freeze, so a start with a
+// dispatch is refused with ErrNoFreezeStore and nothing reaches the store.
+func TestStartWithoutFreezeStoreRefusesTheDispatch(t *testing.T) {
 	t.Parallel()
 
-	r := newRig(t, allowApply)
+	r := newRig(t, allowApply, noFreezeStore)
 
 	req := r.plan("")
 	req.Operation = job.OperationRefresh
 
-	if _, err := r.svc.Start(t.Context(), actorOf("ada"), req); err != nil {
-		t.Fatalf("Start with no freeze store = %v, want nil", err)
+	if _, err := r.svc.Start(t.Context(), actorOf("ada"), req); !errors.Is(err, job.ErrNoFreezeStore) {
+		t.Fatalf("Start with no freeze store = %v, want ErrNoFreezeStore", err)
 	}
 
-	if len(r.store.creates) != 1 || r.store.creates[0].dispatch == nil {
-		t.Fatalf("Create calls = %+v, want one create with a dispatch for the store to check", r.store.creates)
+	if len(r.store.creates) != 0 {
+		t.Fatalf("Create calls = %d, want none", len(r.store.creates))
 	}
 }
 

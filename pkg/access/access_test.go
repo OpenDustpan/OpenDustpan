@@ -640,6 +640,32 @@ func TestOperatorHoldsNoAdministrationOrData(t *testing.T) {
 	}
 }
 
+// TestBreakFreezeIsDeniedOnANamespaceRole proves that the break-freeze action is
+// an installation action: a role that holds it and is granted on a namespace
+// does not let its holder break a freeze, on the namespace or on the
+// installation.
+func TestBreakFreezeIsDeniedOnANamespaceRole(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	r, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
+		Name: "ns-breaker", Description: "",
+		Actions: []identity.Action{identity.ActionNamespaceBreakFreeze},
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() = %v", err)
+	}
+
+	holder := f.person(t, "holder")
+	f.grant(t, prn("holder"), r.ID, identity.NamespaceObject("acme"))
+
+	assertChecks(t, f.authz, holder, []check{
+		{identity.NamespaceObject("acme"), identity.ActionNamespaceBreakFreeze, false},
+		{identity.ServerObject(), identity.ActionNamespaceBreakFreeze, false},
+	})
+}
+
 // familiesOf returns the sorted families of the actions of r.
 func familiesOf(r access.Role) []access.Family {
 	var out []access.Family
