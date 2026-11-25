@@ -232,13 +232,13 @@ func New(cfg Config) (*Loop, error) {
 		cfg.Ticker = realTicker
 	}
 
-	if cfg.Random == nil {
-		cfg.Random = cryptoRandom
-	}
-
 	log := cfg.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
+	}
+
+	if cfg.Random == nil {
+		cfg.Random = CryptoRandom(rand.Reader, log)
 	}
 
 	return &Loop{
@@ -299,20 +299,28 @@ func realTicker(d time.Duration) (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
-// cryptoRandom returns a number from 0 to n-1 from crypto/rand. It returns 0
-// for n below 1, or when crypto/rand fails: the backoff then has no random
-// part, and its upper bound stays.
-func cryptoRandom(n int64) int64 {
-	if n < 1 {
-		return 0
-	}
+// CryptoRandom returns the random source of a backoff that reads r: a
+// function that returns a number from 0 to n-1. New takes it with
+// crypto/rand.Reader when Config.Random is nil. The function returns 0 for n
+// below 1. When r fails, it returns the upper bound n-1, so that the backoff
+// takes its longest wait and does not poll faster, and writes a log record to
+// log that names the error.
+func CryptoRandom(r io.Reader, log *slog.Logger) func(n int64) int64 {
+	return func(n int64) int64 {
+		if n < 1 {
+			return 0
+		}
 
-	v, err := rand.Int(rand.Reader, big.NewInt(n))
-	if err != nil {
-		return 0
-	}
+		v, err := rand.Int(r, big.NewInt(n))
+		if err != nil {
+			log.Warn("the random source failed: the backoff takes its upper bound",
+				slog.String("error", err.Error()), slog.Int64("upper", n-1))
 
-	return v.Int64()
+			return n - 1
+		}
+
+		return v.Int64()
+	}
 }
 
 // Run polls for work and calls handle for each claim until ctx ends, the
