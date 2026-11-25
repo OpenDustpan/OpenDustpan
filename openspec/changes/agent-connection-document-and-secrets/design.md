@@ -14,6 +14,7 @@ ADR 129 defines the model connection as one document that the operator writes, a
 8. The flag `--egress-public-only` makes the always-denied list stricter: private ranges are denied even when the allowlist has a rule for them. The flag is in `cmd/opendustpan`.
 9. The routes carry the action `server:manage-agent` on `@server` (decision 32), except the allowlist routes. Each handler checks the action at the point of use.
 10. Audit entries: kind `change` on `@server` for a disconnect, a secret item (create, replace, delete) and an allowlist change. An entry never holds a value.
+11. This change checks names only. The check of the value of decision 11 (a field that holds the value of a secret item) arrives with the change `agent-secret-filter`, as `CheckNoSecretValue`.
 
 ## Structure
 
