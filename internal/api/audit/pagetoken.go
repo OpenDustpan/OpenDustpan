@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -73,31 +74,91 @@ func decodePageCursor(token string, scope namespace.Name) (pageCursor, error) {
 const pageTokenMemberCount = 2
 
 // checkPageTokenMemberNames refuses a token whose JSON object does not hold
-// exactly the members f and b.
+// exactly the members f and b, each once.
 func checkPageTokenMemberNames(token string) error {
-	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	names, err := pageTokenMemberNames(token)
 	if err != nil {
 		return errPageToken
 	}
 
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &members); err != nil {
-		return errPageToken
+	seen := make(map[string]struct{}, pageTokenMemberCount)
+
+	for _, name := range names {
+		if name != "f" && name != "b" {
+			return errPageToken
+		}
+
+		if _, exists := seen[name]; exists {
+			return errPageToken
+		}
+
+		seen[name] = struct{}{}
 	}
 
-	if len(members) != pageTokenMemberCount {
-		return errPageToken
-	}
-
-	if _, ok := members["f"]; !ok {
-		return errPageToken
-	}
-
-	if _, ok := members["b"]; !ok {
+	if len(seen) != pageTokenMemberCount {
 		return errPageToken
 	}
 
 	return nil
+}
+
+// pageTokenMemberNames returns the member names of the JSON object in token,
+// in the order of the text. It walks the tokens instead of decoding into a
+// map, because a map drops a repeated name.
+func pageTokenMemberNames(token string) ([]string, error) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	if err != nil {
+		return nil, errPageToken
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, errPageToken
+	}
+
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return nil, errPageToken
+	}
+
+	var names []string
+
+	for dec.More() {
+		name, readErr := pageTokenMemberName(dec)
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		names = append(names, name)
+	}
+
+	if _, err = dec.Token(); err != nil {
+		return nil, errPageToken
+	}
+
+	return names, nil
+}
+
+// pageTokenMemberName reads one member name of the object and reads past its
+// value.
+func pageTokenMemberName(dec *json.Decoder) (string, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return "", errPageToken
+	}
+
+	name, ok := tok.(string)
+	if !ok {
+		return "", errPageToken
+	}
+
+	var drop json.RawMessage
+	if err := dec.Decode(&drop); err != nil {
+		return "", errPageToken
+	}
+
+	return name, nil
 }
 
 // encodePageToken returns the token of the page that starts below before.

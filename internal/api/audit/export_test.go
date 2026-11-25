@@ -36,6 +36,13 @@ func PageCursorBefore(token string, scope namespace.Name) (int64, error) {
 	return cursor.before, err
 }
 
+// ValidatePageTokenMemberNames returns the answer of the page-token
+// member-name check, so the external tests send a token body to the check
+// directly.
+func ValidatePageTokenMemberNames(token string) error {
+	return checkPageTokenMemberNames(token)
+}
+
 // WriteError writes the answer of err as a handler of the API does, so the
 // external tests check the code of an error that no request of the test
 // reaches.

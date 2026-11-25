@@ -451,6 +451,46 @@ func TestPageTokenHostileRows(t *testing.T) {
 	})
 }
 
+// TestPageTokenMemberNames proves that the member-name check of the page
+// token accepts exactly the names f and b, each once. The check reads the
+// token text itself, so the rows reach it before the shared decoder or the
+// sequence check can refuse them.
+func TestPageTokenMemberNames(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"a name in another case", `{"F":"x","b":1}`, true},
+		{"an extra name", `{"f":"x","b":1,"x":1}`, true},
+		{"only f", `{"f":"x"}`, true},
+		{"only b", `{"b":1}`, true},
+		{"an extra name and no b", `{"f":"x","x":1}`, true},
+		{"an extra name and no f", `{"x":1,"b":1}`, true},
+		{"a repeated name", `{"f":"x","b":1,"b":2}`, true},
+		{"the exact wire names", `{"f":"x","b":1}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := apiaudit.ValidatePageTokenMemberNames(forgeToken(tc.body))
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidatePageTokenMemberNames = %v, want no error", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, apiaudit.ErrPageToken) {
+				t.Fatalf("ValidatePageTokenMemberNames = %v, want ErrPageToken", err)
+			}
+		})
+	}
+}
+
 // TestDecodePageCursorRefusesNamesOutsideTheWire proves that the audit page
 // token accepts only the member names f and b: a token with another name,
 // another case or a missing name answers errPageToken, and a token of the
