@@ -28,7 +28,7 @@ type freezeList struct {
 	Freezes []freezeDoc `json:"freezes"`
 }
 
-// TestFreezeManageThroughJobs drives a change freeze with a personal access
+// TestJobFreezeRoutes drives a change freeze with a personal access
 // token over TLS, on each store. The person creates a freeze. A plan start and a
 // cancel are accepted during the freeze, because the freeze check applies only
 // to a start of a phase that changes a unit. The person ends the freeze, and a
@@ -39,7 +39,7 @@ type freezeList struct {
 // action. The breaker holds the freeze-breaker role on the installation, which holds
 // the break-freeze action, and the admin role on the namespace, which holds the
 // manage-freezes action and the actions of a start that names a pool.
-func TestFreezeManageThroughJobs(t *testing.T) {
+func TestJobFreezeRoutes(t *testing.T) {
 	t.Parallel()
 
 	stores, err := e2e.Databases()

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -27,6 +28,8 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Cursors:        nil,
 		Approvers:      gate.ApproverPolicy{Production: false, IsDev: nil},
 		Starter:        struct{ job.Starter }{nil},
+		Freezes:        struct{ job.FreezeStore }{nil},
+		Now:            func() time.Time { return time.Unix(0, 0) },
 		Pools:          nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
@@ -67,6 +70,11 @@ func jobAllowEntries() []AllowEntry {
 		actionsWhy  = "Console and client route: no CLI calls it. The steps of TestJobActions call it through the API."
 	)
 
+	const (
+		freezeTest = "TestJobFreezeRoutes"
+		freezeWhy  = "Console and client route: no CLI calls it. The steps of TestJobFreezeRoutes call it through the API."
+	)
+
 	return []AllowEntry{
 		{Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
@@ -95,6 +103,18 @@ func jobAllowEntries() []AllowEntry {
 		{
 			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions",
 			CoveringTest: actionsTest, Reason: actionsWhy,
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/freezes",
+			CoveringTest: freezeTest, Reason: freezeWhy,
+		},
+		{
+			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/freezes",
+			CoveringTest: freezeTest, Reason: freezeWhy,
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/freezes/current/end",
+			CoveringTest: freezeTest, Reason: freezeWhy,
 		},
 	}
 }
