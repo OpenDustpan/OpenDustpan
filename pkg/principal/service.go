@@ -245,14 +245,17 @@ type Change struct {
 
 // UpdatePrincipal applies c to the principal with the ID id, with the entry
 // e, and returns the stored principal. A principal of a namespace is refused
-// when a grant on the installation does not reach namespaces.
-func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string, c Change) (Principal, error) {
+// when a grant on the installation does not reach namespaces. The setting does
+// not limit the bootstrap administrator token.
+func (s *Service) UpdatePrincipal(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string, c Change,
+) (Principal, error) {
 	p, err := s.store.GetPrincipal(ctx, id)
 	if err != nil {
 		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
 	}
 
-	if p.Namespace != "" {
+	if p.Namespace != "" && !caller.Admin {
 		reaches, reachErr := s.grantsReachNamespaces(ctx)
 		if reachErr != nil || !reaches {
 			return Principal{}, fmt.Errorf("update principal %q: %w", id, identity.ErrDenied)
@@ -1069,7 +1072,8 @@ func (s *Service) loadGuardedPrincipal(
 		return Principal{}, fmt.Errorf("%s %q: %w", op, id, err)
 	}
 
-	if p.Namespace != "" {
+	// The setting does not limit the bootstrap administrator token.
+	if p.Namespace != "" && !caller.Admin {
 		reaches, reachErr := s.grantsReachNamespaces(ctx)
 		if reachErr != nil || !reaches {
 			return Principal{}, fmt.Errorf("%s %q: %w", op, id, identity.ErrDenied)

@@ -195,6 +195,31 @@ func TestInstallationReachPrincipalRoutes(t *testing.T) {
 	}
 }
 
+// TestInstallationReachAdminToken checks that the setting false does not limit
+// the bootstrap administrator token: each route of a principal of a namespace
+// answers as with the setting true.
+func TestInstallationReachAdminToken(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range reachRoutes() {
+		t.Run(rt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixturePorts(t, accessPorts{
+				collections:   nil,
+				settings:      nil,
+				authzSettings: reachSettingFixed{value: "false", fail: false, unavailable: false},
+			})
+			seedReachBot(t, f.store)
+
+			status, body := callAs(t, f, "admin", rt.call)
+			if status != rt.wantStatus {
+				t.Fatalf("%s as admin = %d %s, want %d", rt.name, status, body, rt.wantStatus)
+			}
+		})
+	}
+}
+
 // reachRoute is one route of the principal of a namespace. wantStatus is the
 // answer with the setting true, and action is the action that a refusal
 // names.

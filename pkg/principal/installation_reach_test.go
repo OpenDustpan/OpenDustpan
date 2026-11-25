@@ -113,7 +113,9 @@ func updateOp() func(t *testing.T, svc principal.Service, pid string) error {
 	return func(t *testing.T, svc principal.Service, pid string) error {
 		t.Helper()
 
-		_, err := svc.UpdatePrincipal(t.Context(), testEntry(), pid, principal.Change{DisplayName: nil})
+		_, err := svc.UpdatePrincipal(
+			t.Context(), testEntry(), adminCaller(), pid, principal.Change{DisplayName: nil},
+		)
 
 		return err
 	}
@@ -168,6 +170,28 @@ func reachCases() []reachOp {
 			name: "namespace principal update still works", reach: falseReach{}, id: "p8",
 			wantDenied: false, run: namespaceUpdateOp(),
 		},
+	}
+}
+
+// TestInstallationReachPrincipalServiceAdmin checks that the setting false
+// does not limit the bootstrap administrator token.
+func TestInstallationReachPrincipalServiceAdmin(t *testing.T) {
+	t.Parallel()
+
+	svc, st := openPrincipalService(t, falseReach{})
+	putNamespacePrincipal(t, st, "p9")
+
+	caller := adminCaller()
+	caller.Admin = true
+
+	_, err := svc.UpdatePrincipal(t.Context(), testEntry(), caller, "p9", principal.Change{DisplayName: nil})
+	if err != nil {
+		t.Fatalf("update as admin = %v, want nil", err)
+	}
+
+	err = svc.DisablePrincipal(t.Context(), testEntry(), caller, "p9")
+	if err != nil {
+		t.Fatalf("disable as admin = %v, want nil", err)
 	}
 }
 

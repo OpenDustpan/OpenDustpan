@@ -825,14 +825,14 @@ func (h *Handler) listPrincipals(
 // getPrincipal serves GET /api/server/principals/{id}. An unknown ID
 // answers 404.
 func (h *Handler) getPrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	p, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
 	if err != nil {
 		return failed(""), err
 	}
 
-	if err := h.refuseInstallationReach(r.Context(), identity.ActionServerReadPrincipals, p); err != nil {
+	if err := h.refuseInstallationReach(r.Context(), caller, identity.ActionServerReadPrincipals, p); err != nil {
 		return failed(""), err
 	}
 
@@ -843,7 +843,7 @@ func (h *Handler) getPrincipal(
 // display name and answers 200 with the stored principal. A body that sets
 // no field answers 400.
 func (h *Handler) changePrincipal(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	object := principal.Ref(r.PathValue("id"))
 
@@ -863,12 +863,14 @@ func (h *Handler) changePrincipal(
 		return failed(object), err
 	}
 
-	err = h.refuseInstallationReach(r.Context(), identity.ActionServerManagePrincipals, target)
+	err = h.refuseInstallationReach(r.Context(), caller, identity.ActionServerManagePrincipals, target)
 	if err != nil {
 		return failed(object), err
 	}
 
-	p, err := svc.UpdatePrincipal(r.Context(), e, r.PathValue("id"), principal.Change{DisplayName: req.DisplayName})
+	change := principal.Change{DisplayName: req.DisplayName}
+
+	p, err := svc.UpdatePrincipal(r.Context(), e, caller, r.PathValue("id"), change)
 	if err != nil {
 		return failed(object), err
 	}
@@ -889,7 +891,7 @@ func (h *Handler) deletePrincipal(
 		return failed(object), err
 	}
 
-	err = h.refuseInstallationReach(r.Context(), identity.ActionServerManagePrincipals, target)
+	err = h.refuseInstallationReach(r.Context(), caller, identity.ActionServerManagePrincipals, target)
 	if err != nil {
 		return failed(object), err
 	}
@@ -928,7 +930,7 @@ func (h *Handler) switchPrincipal(
 		return failed(object), err
 	}
 
-	err = h.refuseInstallationReach(r.Context(), identity.ActionServerManagePrincipals, target)
+	err = h.refuseInstallationReach(r.Context(), caller, identity.ActionServerManagePrincipals, target)
 	if err != nil {
 		return failed(object), err
 	}
@@ -977,9 +979,15 @@ func (e *installationReachError) Unwrap() error { return &e.denied }
 // refuseInstallationReach refuses a principal of a namespace when a grant on
 // the installation does not reach namespaces. It returns nil for a principal
 // of the installation or when the setting holds. A failed read denies, and
-// so does a handler with no access service (fail closed).
-func (h *Handler) refuseInstallationReach(ctx context.Context, action identity.Action, p principal.Principal) error {
-	if p.Namespace == "" {
+// so does a handler with no access service (fail closed). The setting does not
+// limit the bootstrap administrator token.
+func (h *Handler) refuseInstallationReach(
+	ctx context.Context, caller identity.Principal, action identity.Action, p principal.Principal,
+) error {
+	// Defense in depth: the authorizer and the route gate decide the access of
+	// the administrator token too; this check stays so that the refusal never
+	// limits that token, whatever the other layers do.
+	if caller.Admin || p.Namespace == "" {
 		return nil
 	}
 
@@ -1022,14 +1030,14 @@ func (h *Handler) appendInstallationReachRefusal(r *http.Request, p identity.Pri
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
 // page, ordered by name, with the protected flag of each group.
 func (h *Handler) listGroupsOfPrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	target, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
 	if err != nil {
 		return failed(""), err
 	}
 
-	err = h.refuseInstallationReach(r.Context(), identity.ActionServerReadPrincipals, target)
+	err = h.refuseInstallationReach(r.Context(), caller, identity.ActionServerReadPrincipals, target)
 	if err != nil {
 		return failed(""), err
 	}
