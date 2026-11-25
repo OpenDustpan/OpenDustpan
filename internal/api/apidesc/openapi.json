@@ -194,6 +194,47 @@
         ],
         "type": "object"
       },
+      "AgentConnection": {
+        "properties": {
+          "document": {
+            "description": "Any JSON value."
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document",
+          "version"
+        ],
+        "type": "object"
+      },
+      "AgentFormats": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "AgentSecret": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "name",
+          "ref"
+        ],
+        "type": "object"
+      },
       "ApiDescription": {
         "additionalProperties": true,
         "type": "object"
@@ -1339,6 +1380,21 @@
         ],
         "type": "string"
       },
+      "CreateAgentSecretRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
       "CreateCollectionRequest": {
         "properties": {
           "name": {
@@ -2379,6 +2435,67 @@
         "required": [
           "lateSeconds",
           "name"
+        ],
+        "type": "object"
+      },
+      "EgressAllowlist": {
+        "properties": {
+          "cidrs": {
+            "items": {
+              "$ref": "#/components/schemas/EgressAllowlistRule"
+            },
+            "type": "array"
+          },
+          "hosts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cidrs",
+          "hosts"
+        ],
+        "type": "object"
+      },
+      "EgressAllowlistRule": {
+        "properties": {
+          "cidr": {
+            "type": "string"
+          },
+          "http": {
+            "type": "boolean"
+          },
+          "port": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cidr",
+          "http",
+          "port"
+        ],
+        "type": "object"
+      },
+      "EgressAllowlistRuleRequest": {
+        "properties": {
+          "cidr": {
+            "type": "string"
+          },
+          "http": {
+            "type": "boolean"
+          },
+          "port": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cidr",
+          "http",
+          "port"
         ],
         "type": "object"
       },
@@ -4316,6 +4433,20 @@
         },
         "required": [
           "accessLimits"
+        ],
+        "type": "object"
+      },
+      "ListAgentSecretsResponse": {
+        "properties": {
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSecret"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "secrets"
         ],
         "type": "object"
       },
@@ -7061,6 +7192,17 @@
         "required": [
           "operation",
           "rules"
+        ],
+        "type": "object"
+      },
+      "ReplaceAgentSecretRequest": {
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
         ],
         "type": "object"
       },
@@ -10538,6 +10680,33 @@
         },
         "type": "object"
       },
+      "UpdateEgressAllowlistRequest": {
+        "properties": {
+          "cidrs": {
+            "items": {
+              "$ref": "#/components/schemas/EgressAllowlistRuleRequest"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "hosts": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cidrs",
+          "hosts"
+        ],
+        "type": "object"
+      },
       "UpdateNamespaceIssuerRequest": {
         "properties": {
           "allowBlockSubjects": {
@@ -11004,6 +11173,278 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/agent/connection": {
+      "delete": {
+        "operationId": "deleteAgentConnection",
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getAgentConnection",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConnection"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/agent/formats": {
+      "get": {
+        "operationId": "listAgentFormats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentFormats"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/agent/secrets": {
+      "get": {
+        "operationId": "listAgentSecrets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAgentSecretsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createAgentSecret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSecret"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/agent/secrets/{ref}": {
+      "delete": {
+        "operationId": "deleteAgentSecret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "replaceAgentSecret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceAgentSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSecret"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "agent"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-agent",
+            "object": "server"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/access-limits": {
       "get": {
         "operationId": "listInstallationAccessLimits",
@@ -25876,6 +26317,86 @@
           }
         ]
       }
+    },
+    "/api/server/egress-allowlist": {
+      "get": {
+        "operationId": "getEgressAllowlist",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EgressAllowlist"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "settings"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-settings",
+            "object": "server"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "updateEgressAllowlist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEgressAllowlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EgressAllowlist"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "settings"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-settings",
+            "object": "server"
+          }
+        ]
+      }
     }
   },
   "security": [
@@ -25895,6 +26416,9 @@
   "tags": [
     {
       "name": "access-limits"
+    },
+    {
+      "name": "agent"
     },
     {
       "name": "approvals"

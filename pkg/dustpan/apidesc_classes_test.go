@@ -36,9 +36,6 @@ var outsideByDesign = []string{
 	"/v1/providers/", "/v1/modules/", "/v1/mirror/",
 	// The runner protocol.
 	"/runner/v1/",
-	// The document of the model connection: its secret items, the connection
-	// itself, the formats, and the egress allowlist of the installation.
-	"/api/agent/", "/api/server/egress-allowlist",
 	// The paths that an identity provider, a cloud trust policy, an MCP
 	// client, a scrape configuration or a chat app stores.
 	"/sign-in/{id}/callback",
@@ -210,8 +207,8 @@ func keyOfPattern(pattern string) string {
 // classesOf returns every class that the pattern ("METHOD /path") belongs to.
 // A route that belongs to one class only is in order. A route that belongs to
 // none or to two or more fails the check that calls this function. A route
-// is described only when its key is in both lists of in.described. A path
-// under the prefix is not enough.
+// is described when its key is in both lists of in.described, wherever it is
+// served. A path under the prefix is not enough.
 func classesOf(pattern string, in classInput) []routeClass {
 	_, path, found := strings.Cut(pattern, " ")
 	if !found {
@@ -220,7 +217,7 @@ func classesOf(pattern string, in classInput) []routeClass {
 
 	var out []routeClass
 
-	if strings.HasPrefix(path, apidesc.Prefix) && in.described[keyOfPattern(pattern)] {
+	if in.described[keyOfPattern(pattern)] {
 		out = append(out, classDescribed)
 	}
 
