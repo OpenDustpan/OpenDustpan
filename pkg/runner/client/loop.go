@@ -12,9 +12,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net/url"
@@ -120,14 +122,32 @@ const (
 	minRenewEvery = time.Second
 	// maxOperation is the longest operation ID that the loop puts in a path.
 	maxOperation = 128
-	// maxAnswer is the largest answer body that the loop decodes. The answers
+	// maxAnswer is the largest answer body that the loop reads. The answers
 	// of poll, renew and heartbeat are small JSON documents, at most
 	// protocol.MaxBody. A larger body comes from a hostile or broken server
-	// or proxy: the loop refuses it before it decodes it, so that one answer
-	// cannot use up the memory of the runner. The transport must also bound
-	// its read (at most maxAnswer+1 bytes); this check does not rely on it.
+	// or proxy. The loop reads the body stream itself, at most maxAnswer+1
+	// bytes, and refuses a body above maxAnswer before it decodes it, so that
+	// one answer cannot use up the memory of the runner. A transport cannot
+	// skip this bound: it gives a stream, not the read body.
 	maxAnswer = protocol.MaxBody
 )
+
+// Transport sends one request of the runner protocol and returns the answer.
+// It returns an error only when it got no answer. It follows no redirect: the
+// proof of a request is for one path of one server.
+type Transport interface {
+	Do(ctx context.Context, req *session.Request) (*Answer, error)
+}
+
+// Answer is the answer of the server to one request. The loop reads at most
+// maxAnswer+1 bytes of Body and closes it.
+type Answer struct {
+	Status int
+	// RetryAfter is the value of the header Retry-After, or 0.
+	RetryAfter time.Duration
+	// Body is the body stream of the answer. Nil is an empty body.
+	Body io.ReadCloser
+}
 
 // The method and the statuses of the protocol that the loop reads. The
 // domain imports no HTTP code; the transport is an adapter.
@@ -151,9 +171,8 @@ type Handler func(ctx context.Context, work protocol.Work) error
 type Config struct {
 	// Server is the base URL of the server: http or https, with a host.
 	Server string
-	// Transport sends the requests to Server. It is required. It follows no
-	// redirect: the proof of a request is for one path of one server.
-	Transport session.Transport
+	// Transport sends the requests to Server. It is required.
+	Transport Transport
 	// RunnerID is the ID of the runner, the subject of its proofs.
 	RunnerID string
 	// Key is the key of the runner.
@@ -183,9 +202,8 @@ type Config struct {
 // Loop is the poll loop of one runner. It runs one phase or sweep at a time.
 // Make it with New and call Run once.
 type Loop struct {
-	cfg    Config
-	client *session.Client
-	log    *slog.Logger
+	cfg Config
+	log *slog.Logger
 
 	mu       sync.Mutex
 	current  string
@@ -225,8 +243,7 @@ func New(cfg Config) (*Loop, error) {
 
 	return &Loop{
 		cfg: cfg, log: log,
-		client: &session.Client{Server: cfg.Server, Transport: cfg.Transport, Release: cfg.Release, Now: cfg.Now},
-		mu:     sync.Mutex{}, current: "", stopWork: nil, draining: false,
+		mu: sync.Mutex{}, current: "", stopWork: nil, draining: false,
 	}, nil
 }
 
@@ -304,6 +321,11 @@ func cryptoRandom(n int64) int64 {
 // drains. When the deadline of ctx passes, it returns an error that wraps
 // context.DeadlineExceeded. It returns the error that ends the loop
 // otherwise. A claim that is lost stops its work and the loop goes on.
+//
+// Each wait of the loop is at most runner.MinLease (30 s), so that one wait
+// never outlasts the shortest claim lease. A Retry-After above that cap
+// writes a log record with the asked wait and the cap, and the loop waits for
+// the cap.
 func (l *Loop) Run(ctx context.Context, handle Handler) error {
 	ctx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
@@ -333,6 +355,17 @@ func (l *Loop) pollLoop(ctx context.Context, stop context.CancelCauseFunc, handl
 			return err
 		}
 
+		// Each turn checks the drain first, also after a poll with no work.
+		l.mu.Lock()
+		draining := l.draining
+		l.mu.Unlock()
+
+		if draining {
+			l.log.InfoContext(ctx, "the runner drains: the loop ends")
+
+			return nil
+		}
+
 		w, found, err := l.poll(ctx)
 
 		switch {
@@ -344,22 +377,10 @@ func (l *Loop) pollLoop(ctx context.Context, stop context.CancelCauseFunc, handl
 			failures = 0
 
 			l.log.InfoContext(ctx, "the poll found no work: the loop polls again")
-
-			continue
 		default:
 			failures = 0
 
 			l.runWork(ctx, stop, w, handle)
-		}
-
-		l.mu.Lock()
-		draining := l.draining
-		l.mu.Unlock()
-
-		if draining {
-			l.log.InfoContext(ctx, "the runner drains: the loop ends")
-
-			return nil
 		}
 	}
 }
@@ -369,6 +390,10 @@ func (l *Loop) pollLoop(ctx context.Context, stop context.CancelCauseFunc, handl
 // that got no answer or a status of 500 or more.
 func (l *Loop) pollFailed(ctx context.Context, err error, failures *int) error {
 	switch {
+	case ctx.Err() != nil:
+		// The poll failed because ctx ended: the end of ctx ends the loop,
+		// with no warning and no backoff.
+		return l.ended(ctx)
 	case errors.Is(err, ErrRateLimited):
 		*failures = 0
 
@@ -383,9 +408,6 @@ func (l *Loop) pollFailed(ctx context.Context, err error, failures *int) error {
 			slog.Any("error", err), slog.Duration("wait", d))
 
 		l.wait(ctx, d)
-	case ctx.Err() != nil:
-		// The poll failed because ctx ended: the end of ctx ends the loop.
-		return l.ended(ctx)
 	default:
 		return fmt.Errorf("poll: %w", err)
 	}
@@ -411,8 +433,14 @@ func (l *Loop) ended(ctx context.Context) error {
 // errStopped is the end of the loop by the caller. Run returns nil for it.
 var errStopped = errors.New("the loop is stopped")
 
-// wait waits for d, or until ctx ends. d is capped.
+// wait waits for d, or until ctx ends. d is from 1 s to maxWait. A d above
+// maxWait writes a log record with both values.
 func (l *Loop) wait(ctx context.Context, d time.Duration) {
+	if d > maxWait {
+		l.log.WarnContext(ctx, "the wait that the server asks for is above the cap: the loop waits for the cap",
+			slog.Duration("asked", d), slog.Duration("cap", maxWait))
+	}
+
 	d = min(max(d, time.Second), maxWait)
 
 	c, stopTicker := l.cfg.Ticker(d)
@@ -466,20 +494,66 @@ func (l *Loop) post(ctx context.Context, path string, body any) (*session.Respon
 		}
 	}
 
-	resp, err := l.client.Signed(ctx, l.cfg.Key, l.cfg.RunnerID, &session.Request{
-		Method: methodPost, Path: path, Body: raw, Header: map[string]string{"Content-Type": "application/json"},
-	}, nil)
+	sum := sha256.Sum256(raw)
+
+	proof, err := session.Sign(l.cfg.Key, l.cfg.RunnerID,
+		runner.Signed{Method: methodPost, PathQuery: path, BodySHA256: sum[:]}, l.now())
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return nil, fmt.Errorf("sign %s: %w", path, err)
 	}
 
-	if len(resp.Body) > maxAnswer {
-		l.refused(ctx, path, "the answer body is above the limit", slog.Int("bytes", len(resp.Body)))
-
-		return nil, fmt.Errorf("%w: %s: %d bytes, at most %d", ErrAnswerTooLarge, path, len(resp.Body), maxAnswer)
+	ans, err := l.cfg.Transport.Do(ctx, &session.Request{
+		Method: methodPost, Path: path, Body: raw, Header: map[string]string{
+			"Content-Type": "application/json", protocol.HeaderProof: proof, protocol.HeaderRelease: l.cfg.Release,
+		},
+	})
+	if err != nil {
+		return nil, l.noAnswer(ctx, path, err)
 	}
 
-	return resp, nil
+	if ans == nil {
+		return nil, fmt.Errorf("%w: %s: the transport gave no answer and no error", ErrInvalid, path)
+	}
+
+	data, err := l.readBody(ctx, path, ans.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &session.Response{Status: ans.Status, Body: data, RetryAfter: ans.RetryAfter}, nil
+}
+
+// noAnswer returns the error of a call to path that got no answer. A call
+// that the end of ctx cut short is not a fault of the server: it returns the
+// cause of the end of ctx, not ErrUnavailable, so that the loop neither warns
+// nor backs off.
+func (l *Loop) noAnswer(ctx context.Context, path string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s: %w", path, context.Cause(ctx))
+	}
+
+	return fmt.Errorf("%w: %s: %w", ErrUnavailable, path, err)
+}
+
+// readBody reads at most maxAnswer+1 bytes of the answer body of path, closes
+// it, and refuses a body above maxAnswer.
+func (l *Loop) readBody(ctx context.Context, path string, rc io.ReadCloser) ([]byte, error) {
+	if rc == nil {
+		return nil, nil
+	}
+
+	body, readErr := io.ReadAll(io.LimitReader(rc, maxAnswer+1))
+	if err := errors.Join(readErr, rc.Close()); err != nil {
+		return nil, l.noAnswer(ctx, path, err)
+	}
+
+	if len(body) > maxAnswer {
+		l.refused(ctx, path, "the answer body is above the limit", slog.Int("limit", maxAnswer))
+
+		return nil, fmt.Errorf("%w: %s: more than %d bytes", ErrAnswerTooLarge, path, maxAnswer)
+	}
+
+	return body, nil
 }
 
 // refused writes the log record of an answer that the loop refuses, with its
@@ -552,6 +626,14 @@ func (l *Loop) poll(ctx context.Context) (protocol.Work, bool, error) {
 			slog.Int("length", len(w.Operation)))
 
 		return none, false, fmt.Errorf("%w: the operation ID of the work is not valid", ErrInvalid)
+	}
+
+	// The loop holds no expiry that the server did not send: work with no
+	// expiry is refused.
+	if w.ExpiresAt.IsZero() {
+		l.refused(ctx, protocol.PathPoll, "the work has no expiry", slog.String("operation", w.Operation))
+
+		return none, false, fmt.Errorf("%w: the work has no expiry", ErrInvalid)
 	}
 
 	return w, true, nil
@@ -652,23 +734,8 @@ func (l *Loop) renew(
 
 	switch {
 	case err == nil:
-		var rr protocol.RenewResponse
-		if json.Unmarshal(resp.Body, &rr) == nil {
-			if rr.Canceled {
-				stopWork(ErrCanceled)
-			}
-
-			// With an open session, the launcher renews its own claim now.
-			return rr.ExpiresAt, rr.Canceled || rr.SessionOpen
-		}
-
-		l.refused(ctx, path, "the answer is not a renewal")
-
-		err = fmt.Errorf("%w: the answer to the renewal is not valid", ErrInvalid)
-
-		stop(err)
-		stopWork(err)
-
+		return l.renewed(ctx, stops{loop: stop, work: stopWork}, op, resp.Body, expires)
+	case ctx.Err() != nil:
 		return expires, true
 	case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
 		stop(err)
@@ -677,6 +744,13 @@ func (l *Loop) renew(
 		return expires, true
 	case errors.Is(err, ErrClaimLost), errors.Is(err, ErrNotFound):
 		stopWork(fmt.Errorf("%w: %w", ErrClaimLost, err))
+
+		return expires, true
+	case !errors.Is(err, ErrUnavailable):
+		// Fail closed: a code that the loop does not know stops the work.
+		l.refused(ctx, path, "the code of the answer is not known",
+			slog.String("operation", op), slog.String("code", codeOf(err)))
+		stopWork(err)
 
 		return expires, true
 	default:
@@ -693,6 +767,63 @@ func (l *Loop) renew(
 	}
 
 	return expires, false
+}
+
+// stops holds the functions that end the loop and the work of one claim.
+type stops struct {
+	loop context.CancelCauseFunc
+	work context.CancelCauseFunc
+}
+
+// renewed reads the body of a renewal answer of 200 for the claim of op. It
+// returns the expiry that the server sent, and true when the renewals end.
+func (l *Loop) renewed(ctx context.Context, s stops, op string, body []byte, expires time.Time) (time.Time, bool) {
+	path := strings.NewReplacer("{operation}", op).Replace(protocol.PathClaimRenew)
+
+	var rr protocol.RenewResponse
+	if json.Unmarshal(body, &rr) != nil {
+		l.refused(ctx, path, "the answer is not a renewal", slog.String("operation", op))
+
+		err := fmt.Errorf("%w: the answer to the renewal is not valid", ErrInvalid)
+
+		s.loop(err)
+		s.work(err)
+
+		return expires, true
+	}
+
+	// The loop holds no expiry that the server did not send.
+	if rr.ExpiresAt.IsZero() {
+		l.refused(ctx, path, "the renewal has no expiry", slog.String("operation", op))
+		s.work(fmt.Errorf("%w: the renewal of the claim has no expiry", ErrInvalid))
+
+		return expires, true
+	}
+
+	if rr.Canceled {
+		s.work(ErrCanceled)
+
+		return rr.ExpiresAt, true
+	}
+
+	if rr.SessionOpen {
+		// With an open session, the launcher renews its own claim now.
+		l.log.InfoContext(ctx, "the runner stops the renewals of the claim",
+			slog.String("operation", op), slog.String("reason", "the launcher opened the job session"))
+
+		return rr.ExpiresAt, true
+	}
+
+	return rr.ExpiresAt, false
+}
+
+// codeOf returns the protocol code of err, or an empty string.
+func codeOf(err error) string {
+	if e, found := errors.AsType[*Error](err); found {
+		return e.Code
+	}
+
+	return ""
 }
 
 func (l *Loop) now() time.Time {
@@ -729,16 +860,25 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 			err = answerError(resp)
 		}
 
-		if errors.Is(err, ErrRetired) || errors.Is(err, ErrBadProof) || errors.Is(err, ErrInvalid) {
-			stop(err)
-
+		switch {
+		case err == nil:
+		case ctx.Err() != nil:
 			return
-		}
-
-		if err != nil {
+		case errors.Is(err, ErrUnavailable):
 			l.log.WarnContext(ctx, "the heartbeat failed", slog.Any("error", err))
 
 			continue
+		case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
+			stop(err)
+
+			return
+		default:
+			// Fail closed: a code that the loop does not know ends the loop.
+			l.refused(ctx, protocol.PathHeartbeat, "the code of the answer is not known",
+				slog.String("code", codeOf(err)))
+			stop(err)
+
+			return
 		}
 
 		var hr protocol.HeartbeatResponse

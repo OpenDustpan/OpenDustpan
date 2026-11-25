@@ -1,12 +1,14 @@
 package client_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -82,8 +84,8 @@ func newFakeServer(script map[string][]answer) *fakeServer {
 	return &fakeServer{mu: sync.Mutex{}, script: script, seen: nil, proofs: map[string][]string{}}
 }
 
-// Do implements session.Transport.
-func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Response, error) {
+// Do implements client.Transport.
+func (f *fakeServer) Do(_ context.Context, req *session.Request) (*client.Answer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -97,7 +99,7 @@ func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Respo
 
 	queue := f.script[path]
 	if len(queue) == 0 {
-		return &session.Response{Status: http.StatusNoContent, Body: nil, RetryAfter: 0}, nil
+		return &client.Answer{Status: http.StatusNoContent, RetryAfter: 0, Body: nil}, nil
 	}
 
 	a := queue[0]
@@ -118,7 +120,7 @@ func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Respo
 		}
 	}
 
-	return &session.Response{Status: a.status, Body: raw, RetryAfter: a.retryAfter}, nil
+	return &client.Answer{Status: a.status, RetryAfter: a.retryAfter, Body: io.NopCloser(bytes.NewReader(raw))}, nil
 }
 
 func (f *fakeServer) count(path string) int {

@@ -18,12 +18,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
-// logRecord is one record that the loop wrote: its level, its message and
-// its reason, if it has one.
+// logRecord is one record that the loop wrote: its level, its message, its
+// reason, if it has one, and the text of each attribute.
 type logRecord struct {
 	level   slog.Level
 	message string
 	reason  string
+	attrs   map[string]string
 }
 
 // logCapture is a slog handler that keeps each record.
@@ -41,12 +42,14 @@ func (logCapture) Enabled(context.Context, slog.Level) bool { return true }
 
 // Handle implements slog.Handler.
 func (c logCapture) Handle(_ context.Context, r slog.Record) error {
-	rec := logRecord{level: r.Level, message: r.Message, reason: ""}
+	rec := logRecord{level: r.Level, message: r.Message, reason: "", attrs: map[string]string{}}
 
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "reason" {
 			rec.reason = a.Value.String()
 		}
+
+		rec.attrs[a.Key] = a.Value.String()
 
 		return true
 	})
@@ -73,6 +76,27 @@ func (c logCapture) has(level slog.Level, message, reason string) bool {
 
 	return slices.ContainsFunc(*c.records, func(r logRecord) bool {
 		return r.level == level && strings.Contains(r.message, message) && strings.Contains(r.reason, reason)
+	})
+}
+
+// hasAttrs reports whether a record has a message that holds message and
+// each attribute of want with its text.
+func (c logCapture) hasAttrs(message string, want map[string]string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return slices.ContainsFunc(*c.records, func(r logRecord) bool {
+		if !strings.Contains(r.message, message) {
+			return false
+		}
+
+		for k, v := range want {
+			if r.attrs[k] != v {
+				return false
+			}
+		}
+
+		return true
 	})
 }
 

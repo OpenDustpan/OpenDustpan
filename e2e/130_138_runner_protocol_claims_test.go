@@ -274,7 +274,7 @@ func newLoopRecorder(t *testing.T, env *e2e.Env) *loopRecorder {
 }
 
 // Do implements session.Transport.
-func (r *loopRecorder) Do(ctx context.Context, req *session.Request) (*session.Response, error) {
+func (r *loopRecorder) Do(ctx context.Context, req *session.Request) (*client.Answer, error) {
 	resp, err := r.inner.Do(ctx, req)
 	if err != nil {
 		return nil, err
@@ -291,13 +291,13 @@ func (r *loopRecorder) Do(ctx context.Context, req *session.Request) (*session.R
 	if resp.Status >= http.StatusBadRequest {
 		r.refused = append(r.refused, fmt.Sprintf("%s answered %d %s", req.Path, resp.Status, resp.Body))
 		r.t.Logf("server: %s %s answered %d", req.Method, req.Path, resp.Status)
-
-		return resp, nil
+	} else {
+		r.record(req, resp)
 	}
 
-	r.record(req, resp)
-
-	return resp, nil
+	return &client.Answer{
+		Status: resp.Status, RetryAfter: resp.RetryAfter, Body: io.NopCloser(bytes.NewReader(resp.Body)),
+	}, nil
 }
 
 // record logs and counts one answer with a status below 400. The caller holds
