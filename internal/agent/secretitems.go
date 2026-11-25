@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -41,7 +42,7 @@ func NewSecretRef() SecretRef {
 }
 
 // CheckSecretItem returns ErrInvalid unless name is 1 to 128 bytes of
-// printable UTF-8 and value is 1 byte to 16 KiB.
+// printable UTF-8 and value is 1 byte to 16 KiB with no CR or LF.
 func CheckSecretItem(name string, value []byte) error {
 	switch {
 	case name == "", len(name) > maxSecretNameBytes:
@@ -52,6 +53,8 @@ func CheckSecretItem(name string, value []byte) error {
 		return fmt.Errorf("%w: the value of a secret item is empty", ErrInvalid)
 	case len(value) > maxSecretValueBytes:
 		return fmt.Errorf("%w: the value of a secret item is larger than %d bytes", ErrInvalid, maxSecretValueBytes)
+	case bytes.ContainsAny(value, "\r\n"):
+		return fmt.Errorf("%w: the value of a secret item holds CR or LF", ErrInvalid)
 	}
 
 	return nil

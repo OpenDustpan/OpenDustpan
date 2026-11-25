@@ -64,9 +64,13 @@ const (
 	// maxRateLimitWaitHeaders is the largest count of the entries of
 	// rateLimit.waitHeaders.
 	maxRateLimitWaitHeaders = 8
+	// maxUserAgentBytes is the largest length of userAgent, in bytes.
+	maxUserAgentBytes = 200
 	// firstPrintableRune is the first rune above the ASCII control
 	// characters. A rune below it is a control character.
 	firstPrintableRune = 0x20
+	// lastPrintableASCII is the last byte of the printable ASCII range.
+	lastPrintableASCII = 0x7e
 )
 
 // ErrFormatNotSupported reports a format the connection document names that
@@ -399,6 +403,10 @@ func setBodyFields(c *ConnectionSpec, doc connectionDoc) error {
 		}
 
 		c.query = q
+	}
+
+	if err := checkUserAgent(doc.UserAgent); err != nil {
+		return err
 	}
 
 	c.userAgent = doc.UserAgent
@@ -824,7 +832,7 @@ func (c ConnectionSpec) SecretRefs() ([]SecretRef, error) {
 		// check stays so that a reference of headers or query cannot reach
 		// the store in another form.
 		if !IsSecretRef(string(r)) {
-			return nil, fmt.Errorf("%w: %q is not a secret reference", ErrConnectionInvalid, r)
+			return nil, fmt.Errorf("%w: a secret reference is not valid", ErrConnectionInvalid)
 		}
 	}
 
@@ -918,28 +926,28 @@ func parseAuth(raw json.RawMessage) (authSpec, error) {
 		return a, fmt.Errorf("%w: auth is required", ErrConnectionInvalid)
 	}
 
-	var none struct {
-		None bool `json:"none"`
-	}
-
-	if err := json.Unmarshal(raw, &none); err != nil {
-		return a, fmt.Errorf("%w: auth does not parse: %w", ErrConnectionInvalid, err)
-	}
-
-	if none.None {
-		a.none = true
-
-		return a, nil
-	}
-
 	var formed struct {
+		None   bool   `json:"none"`
 		Header string `json:"header"`
 		Prefix string `json:"prefix"`
 		Secret string `json:"secret"`
 	}
 
-	if err := json.Unmarshal(raw, &formed); err != nil {
+	if err := decodeEntry(raw, &formed); err != nil {
 		return a, fmt.Errorf("%w: auth does not parse: %w", ErrConnectionInvalid, err)
+	}
+
+	if formed.None {
+		if formed.Header != "" || formed.Prefix != "" || formed.Secret != "" {
+			return a, fmt.Errorf(
+				"%w: auth.none cannot be set with header, prefix or secret",
+				ErrConnectionInvalid,
+			)
+		}
+
+		a.none = true
+
+		return a, nil
 	}
 
 	if formed.Header == "" {
@@ -954,19 +962,20 @@ func parseAuth(raw json.RawMessage) (authSpec, error) {
 		)
 	}
 
+	if formed.Secret == "" {
+		return a, fmt.Errorf("%w: auth needs a secret or none: true", ErrConnectionInvalid)
+	}
+
+	if !IsSecretRef(formed.Secret) {
+		return a, fmt.Errorf(
+			"%w: auth.secret is not a reference: store the value with POST /api/agent/secrets and send the reference",
+			ErrPlainSecret,
+		)
+	}
+
 	a.header = formed.Header
 	a.prefix = formed.Prefix
-
-	if formed.Secret != "" {
-		if !IsSecretRef(formed.Secret) {
-			return a, fmt.Errorf(
-				"%w: auth.secret is not a reference: store the value with POST /api/agent/secrets and send the reference",
-				ErrPlainSecret,
-			)
-		}
-
-		a.secret = SecretRef(formed.Secret)
-	}
+	a.secret = SecretRef(formed.Secret)
 
 	return a, nil
 }
@@ -1021,6 +1030,19 @@ func parseQuery(raw map[string]json.RawMessage) (map[string]queryEntry, error) {
 	return out, nil
 }
 
+// decodeEntry decodes one entry of auth, headers or query with no unknown
+// field.
+func decodeEntry(raw json.RawMessage, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("decode entry: %w", err)
+	}
+
+	return nil
+}
+
 // headerQueryEntry parses the value of one entry of headers or of query: an
 // object with a plain value, or with a secret reference when the name is
 // secret-like. kind names the field in the error text.
@@ -1030,9 +1052,18 @@ func headerQueryEntry(name string, value json.RawMessage, kind string) (*string,
 			Secret string `json:"secret"`
 		}
 
-		if err := json.Unmarshal(value, &entry); err != nil || entry.Secret == "" {
+		if err := decodeEntry(value, &entry); err != nil || entry.Secret == "" {
 			return nil, "", fmt.Errorf(
 				"%w: the %s %q has a plain value: store the value with POST /api/agent/secrets and send the reference",
+				ErrPlainSecret,
+				kind,
+				name,
+			)
+		}
+
+		if !IsSecretRef(entry.Secret) {
+			return nil, "", fmt.Errorf(
+				"%w: the %s %q does not hold a secret reference: store the value with POST /api/agent/secrets and send the reference",
 				ErrPlainSecret,
 				kind,
 				name,
@@ -1046,7 +1077,7 @@ func headerQueryEntry(name string, value json.RawMessage, kind string) (*string,
 		Value string `json:"value"`
 	}
 
-	if err := json.Unmarshal(value, &plain); err != nil || plain.Value == "" {
+	if err := decodeEntry(value, &plain); err != nil || plain.Value == "" {
 		return nil, "", fmt.Errorf("%w: the %s %q needs a value", ErrConnectionInvalid, kind, name)
 	}
 
@@ -1302,48 +1333,109 @@ func (c ConnectionSpec) validateNames() error {
 	// transport-owned name or User-Agent.
 	seen := make(map[string]string)
 
-	for name := range c.headers {
-		lower := strings.ToLower(name)
-		if other, ok := seen[lower]; ok {
-			return fmt.Errorf("%w: the header %q and %q differ only in case", ErrConnectionInvalid, name, other)
-		}
-
-		seen[lower] = name
+	if err := addHeaderNames(seen, c.headers); err != nil {
+		return err
 	}
 
-	for name := range c.query {
-		lower := strings.ToLower(name)
-		if other, ok := seen[lower]; ok {
-			return fmt.Errorf("%w: the query %q and %q differ only in case", ErrConnectionInvalid, name, other)
-		}
-
-		seen[lower] = name
+	if err := addQueryNames(seen, c.query); err != nil {
+		return err
 	}
 
-	if !c.auth.none {
-		lower := strings.ToLower(c.auth.header)
-		if other, ok := seen[lower]; ok {
-			return fmt.Errorf(
-				"%w: the header of auth %q and %q differ only in case",
-				ErrConnectionInvalid,
-				c.auth.header,
-				other,
-			)
-		}
-
-		seen[lower] = c.auth.header
+	if err := addAuthName(seen, c.auth); err != nil {
+		return err
 	}
 
-	for _, h := range c.conversationKey.headers {
-		lower := strings.ToLower(h)
-		if other, ok := seen[lower]; ok {
-			return fmt.Errorf("%w: the header %q and %q differ only in case", ErrConnectionInvalid, h, other)
+	return addConversationKeyNames(seen, c.conversationKey.headers)
+}
+
+func addHeaderNames(seen map[string]string, headers map[string]headerEntry) error {
+	for name := range headers {
+		if isForbiddenHeaderName(strings.ToLower(name)) {
+			return fmt.Errorf("%w: the header %q is set by the transport", ErrConnectionInvalid, name)
 		}
 
-		seen[lower] = h
+		if err := addSeenName(seen, name, "header"); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func addQueryNames(seen map[string]string, query map[string]queryEntry) error {
+	for name := range query {
+		if err := addSeenName(seen, name, "query"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func addAuthName(seen map[string]string, auth authSpec) error {
+	if auth.none {
+		return nil
+	}
+
+	if isForbiddenHeaderName(strings.ToLower(auth.header)) {
+		return fmt.Errorf("%w: auth.header %q is set by the transport", ErrConnectionInvalid, auth.header)
+	}
+
+	if other, ok := seen[strings.ToLower(auth.header)]; ok {
+		return fmt.Errorf(
+			"%w: the header of auth %q and %q differ only in case",
+			ErrConnectionInvalid,
+			auth.header,
+			other,
+		)
+	}
+
+	seen[strings.ToLower(auth.header)] = auth.header
+
+	return nil
+}
+
+func addConversationKeyNames(seen map[string]string, headers []string) error {
+	for _, h := range headers {
+		if isForbiddenHeaderName(strings.ToLower(h)) {
+			return fmt.Errorf(
+				"%w: the conversationKey header %q is set by the transport",
+				ErrConnectionInvalid,
+				h,
+			)
+		}
+
+		if err := addSeenName(seen, h, "header"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func addSeenName(seen map[string]string, name, kind string) error {
+	lower := strings.ToLower(name)
+
+	other, ok := seen[lower]
+	if !ok {
+		seen[lower] = name
+
+		return nil
+	}
+
+	return fmt.Errorf("%w: the %s %q and %q differ only in case", ErrConnectionInvalid, kind, name, other)
+}
+
+// isForbiddenHeaderName reports whether the lower-case header name is set by
+// the transport or by the server, not by a connection document.
+func isForbiddenHeaderName(lower string) bool {
+	switch lower {
+	case "host", "content-length", "content-type", "transfer-encoding",
+		"connection", "te", "upgrade", "cookie", "user-agent":
+		return true
+	}
+
+	return strings.HasPrefix(lower, "proxy-")
 }
 
 func isHeaderName(name string) bool {
@@ -1451,6 +1543,26 @@ func checkRawControl(doc connectionDoc) error {
 	for _, r := range raw {
 		if err := walkRawForControl(r); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// checkUserAgent refuses a userAgent above maxUserAgentBytes or with a byte
+// outside printable ASCII.
+func checkUserAgent(v string) error {
+	if len(v) > maxUserAgentBytes {
+		return fmt.Errorf(
+			"%w: userAgent is longer than %d bytes",
+			ErrConnectionInvalid,
+			maxUserAgentBytes,
+		)
+	}
+
+	for i := range len(v) {
+		if v[i] < firstPrintableRune || v[i] > lastPrintableASCII {
+			return fmt.Errorf("%w: userAgent holds a byte that is not printable ASCII", ErrConnectionInvalid)
 		}
 	}
 

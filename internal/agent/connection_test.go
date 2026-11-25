@@ -88,6 +88,58 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 }`,
 			want: agent.ErrFormatNotSupported,
 		},
+		{
+			name: "unknown field in auth",
+			raw: strings.Replace(
+				validDocument(),
+				`"secret": "itm-abc1" }`,
+				`"secret": "itm-abc1", "extra": true }`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "auth without a secret",
+			raw: strings.Replace(
+				validDocument(),
+				`, "secret": "itm-abc1" }`,
+				` }`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "auth none with a header",
+			raw: strings.Replace(
+				validDocument(),
+				`"auth": { "header": "Authorization", "prefix": "Bearer ", "secret": "itm-abc1" }`,
+				`"auth": { "none": true, "header": "Authorization" }`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "unknown field in a header entry",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"headers": { "x-example": { "value": "1", "extra": true } },
+  "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
+		{
+			name: "unknown field in a query entry",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"query": { "api-version": { "value": "2026-01-01", "extra": true } },
+  "outputTokens"`,
+				1,
+			),
+			want: agent.ErrConnectionInvalid,
+		},
 	}
 
 	for _, c := range cases {
@@ -97,6 +149,118 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 			_, err := agent.ParseConnectionSpec([]byte(c.raw))
 			if !errors.Is(err, c.want) {
 				t.Fatalf("ParseConnectionSpec() = %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+func TestForbiddenHeaderNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"host", documentWithHeaderEntry("Host", `{ "value": "example.local" }`)},
+		{"content-length", documentWithHeaderEntry("Content-Length", `{ "value": "1" }`)},
+		{"content-type", documentWithHeaderEntry("Content-Type", `{ "value": "application/json" }`)},
+		{"transfer-encoding", documentWithHeaderEntry("Transfer-Encoding", `{ "value": "chunked" }`)},
+		{"connection", documentWithHeaderEntry("Connection", `{ "value": "keep-alive" }`)},
+		{"te", documentWithHeaderEntry("TE", `{ "value": "trailers" }`)},
+		{"upgrade", documentWithHeaderEntry("Upgrade", `{ "value": "h2c" }`)},
+		{"cookie", documentWithHeaderEntry("Cookie", `{ "secret": "itm-abc1" }`)},
+		{"proxy", documentWithHeaderEntry("Proxy-Authorization", `{ "secret": "itm-abc1" }`)},
+		{"user-agent", documentWithHeaderEntry("User-Agent", `{ "value": "example-agent/1" }`)},
+		{
+			name: "auth header",
+			raw: strings.Replace(
+				validDocument(),
+				`"header": "Authorization"`,
+				`"header": "Host"`,
+				1,
+			),
+		},
+		{
+			name: "conversation key header",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"conversationKey": { "headers": ["Host"] },
+  "outputTokens"`,
+				1,
+			),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := agent.ParseConnectionSpec([]byte(c.raw))
+			if !errors.Is(err, agent.ErrConnectionInvalid) {
+				t.Fatalf("ParseConnectionSpec() = %v, want ErrConnectionInvalid", err)
+			}
+		})
+	}
+}
+
+// documentWithHeaderEntry returns validDocument with one entry in headers.
+func documentWithHeaderEntry(name, entry string) string {
+	return strings.Replace(
+		validDocument(),
+		`"outputTokens"`,
+		`"headers": { "`+name+`": `+entry+` },
+  "outputTokens"`,
+		1,
+	)
+}
+
+func TestUserAgent_Hostile(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "above 200 bytes",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"userAgent": "`+strings.Repeat("a", 201)+`",
+  "outputTokens"`,
+				1,
+			),
+		},
+		{
+			name: "not printable ASCII",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"userAgent": "example-agent/1\u00e9",
+  "outputTokens"`,
+				1,
+			),
+		},
+		{
+			name: "control character",
+			raw: strings.Replace(
+				validDocument(),
+				`"outputTokens"`,
+				`"userAgent": "example-agent/1\u0007",
+  "outputTokens"`,
+				1,
+			),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := agent.ParseConnectionSpec([]byte(c.raw))
+			if !errors.Is(err, agent.ErrConnectionInvalid) {
+				t.Fatalf("ParseConnectionSpec() = %v, want ErrConnectionInvalid", err)
 			}
 		})
 	}
@@ -355,11 +519,13 @@ func TestHeaders_PlainSecretByName(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		raw  string
+		name  string
+		raw   string
+		field string
 	}{
 		{
-			name: "header named x-api-key holds a plain value",
+			name:  "header named x-api-key holds a plain value",
+			field: `header "x-api-key"`,
 			raw: `{
   "version": 1,
   "format": "chat-completions",
@@ -372,7 +538,8 @@ func TestHeaders_PlainSecretByName(t *testing.T) {
 }`,
 		},
 		{
-			name: "header named authorization holds a plain value",
+			name:  "header named authorization holds a plain value",
+			field: `header "Authorization"`,
 			raw: `{
   "version": 1,
   "format": "chat-completions",
@@ -380,6 +547,34 @@ func TestHeaders_PlainSecretByName(t *testing.T) {
   "model": "example-model",
   "auth": { "none": true },
   "headers": { "Authorization": { "value": "Bearer sk-123" } },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`,
+		},
+		{
+			name:  "header named x-api-key holds a plain value under secret",
+			field: `header "x-api-key"`,
+			raw: `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "headers": { "x-api-key": { "secret": "sk-123" } },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`,
+		},
+		{
+			name:  "query named api_key holds a plain value under secret",
+			field: `query "api_key"`,
+			raw: `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "query": { "api_key": { "secret": "sk-123" } },
   "outputTokens": { "field": "max_tokens", "max": 8192 },
   "tools": { "choice": "auto", "parallel": "omit" }
 }`,
@@ -393,6 +588,14 @@ func TestHeaders_PlainSecretByName(t *testing.T) {
 			_, err := agent.ParseConnectionSpec([]byte(c.raw))
 			if !errors.Is(err, agent.ErrPlainSecret) {
 				t.Fatalf("ParseConnectionSpec() = %v, want ErrPlainSecret", err)
+			}
+
+			if !strings.Contains(err.Error(), c.field) {
+				t.Fatalf("ParseConnectionSpec() error = %q, want it to name %s", err, c.field)
+			}
+
+			if strings.Contains(err.Error(), "sk-123") {
+				t.Fatalf("ParseConnectionSpec() error = %q, holds the value", err)
 			}
 		})
 	}
