@@ -161,7 +161,9 @@ func checkGuardAuditEntry(t *testing.T, svc breakGlassService, tc breakGlassGuar
 
 // TestBreakGlassGuardRace proves that two disables of the last two enabled
 // accounts cannot both pass: the store counts in the transaction of the
-// write, so exactly one request is refused and one account stays enabled.
+// write, so exactly one request is refused and one account stays enabled. The
+// sign-in during a disable is TestPasskeySignInBreakGlassDuringDisable in
+// internal/api/server: the sign-in path is in that package, not here.
 func TestBreakGlassGuardRace(t *testing.T) {
 	t.Parallel()
 

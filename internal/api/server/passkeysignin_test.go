@@ -860,6 +860,58 @@ func TestPasskeySignInBreakGlass(t *testing.T) {
 	checkBreakGlassEntry(t, serverEntries(t, e.f.store))
 }
 
+// TestPasskeySignInBreakGlassDuringDisable checks that a break-glass sign-in
+// that runs while a disable of another break-glass account runs takes no guard
+// step: the sign-in ends with a session, the alert and the entry of the use,
+// and the disable leaves the signed-in account enabled.
+func TestPasskeySignInBreakGlassDuringDisable(t *testing.T) {
+	t.Parallel()
+
+	e := newPasskeySignInEnv(t)
+	e.seedPerson(t, "prn-bo", "break-glass:bo", true)
+	e.register(t, "prn-bo")
+
+	entry := audit.Entry{
+		At: time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC), Namespace: audit.ServerScope,
+		Subject: "test", IDPSubject: "", TokenID: "", Action: "server:manage-principals",
+		Object: principal.Ref("prn-bo"), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+	}
+
+	var (
+		wg         sync.WaitGroup
+		disableErr error
+		rec        *httptest.ResponseRecorder
+	)
+
+	wg.Go(func() {
+		disableErr = e.f.store.DisablePrincipal(t.Context(), "prn-bo", entry)
+	})
+	wg.Go(func() {
+		rec = e.signIn(t, e.ana, breakGlassReasonText, nil, nil)
+	})
+	wg.Wait()
+
+	if disableErr != nil {
+		t.Fatalf("disable of prn-bo: %v", disableErr)
+	}
+
+	signedIn(t, "break-glass sign-in during a disable", rec)
+	checkBreakGlassAlert(t, e.alerts(t))
+	checkBreakGlassEntry(t, serverEntries(t, e.f.store))
+
+	got, err := e.f.store.GetPrincipal(t.Context(), "prn-ana")
+	if err != nil {
+		t.Fatalf("read prn-ana: %v", err)
+	}
+
+	if !got.DisabledAt.IsZero() {
+		t.Fatalf("prn-ana disabled at %v, want enabled", got.DisabledAt)
+	}
+}
+
 // breakGlassReasonText is the reason that the break-glass tests type.
 const breakGlassReasonText = "the identity provider is down"
 
