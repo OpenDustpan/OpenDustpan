@@ -22,7 +22,8 @@ import (
 // the fixture.
 func (f *fixture) storeReach() access.ReachConfig {
 	return access.ReachConfig{
-		Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: f.store,
+		Settings: access.FixedSettings(true),
+		Grants:   f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: nil, Units: f.store,
 	}
 }
 

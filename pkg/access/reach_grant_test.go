@@ -73,7 +73,6 @@ func (f *fixture) serviceOverStore(
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: store, Callers: f.store, Collections: f.units, Units: f.store, Principals: f.store,
-		Settings: nil,
 	})
 	if err != nil {
 		tb.Fatalf("authorizer: %v", err)
@@ -124,7 +123,7 @@ func (namelessDirectory) GetPrincipalBySubject(context.Context, string) (princip
 func (f *fixture) reach() access.ReachConfig {
 	return access.ReachConfig{
 		Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store,
-		Collections: f.units, Units: f.store, Settings: nil,
+		Collections: f.units, Units: f.store, Settings: access.FixedSettings(true),
 	}
 }
 
@@ -133,7 +132,7 @@ func (f *fixture) reach() access.ReachConfig {
 func (f *fixture) failingReach() access.ReachConfig {
 	return access.ReachConfig{
 		Grants: failingGrants{}, Roles: f.store, Callers: f.store, Principals: f.store,
-		Collections: f.units, Units: f.store, Settings: nil,
+		Collections: f.units, Units: f.store, Settings: access.FixedSettings(true),
 	}
 }
 

@@ -101,6 +101,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 func coverageReach() access.ReachConfig {
 	return access.ReachConfig{
 		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		Settings: access.FixedSettings(true),
 	}
 }
 

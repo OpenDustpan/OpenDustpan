@@ -41,6 +41,7 @@ func BenchProtectedGroups(b *testing.B, s BenchStore) {
 	reads := &readCount{n: 0}
 	cfg := countingReach(access.ReachConfig{
 		Grants: s, Roles: s, Callers: s, Principals: s, Collections: collections, Units: s,
+		Settings: access.FixedSettings(true),
 	}, reads)
 
 	perGroup := func(ctx context.Context) map[string]bool {
@@ -172,6 +173,7 @@ func countingReach(cfg access.ReachConfig, reads *readCount) access.ReachConfig 
 		Principals:  countingPrincipals{next: cfg.Principals, reads: reads},
 		Collections: countingCollections{UnitCollections: cfg.Collections, reads: reads},
 		Units:       countingUnits{Units: cfg.Units, reads: reads},
+		Settings:    cfg.Settings,
 	}
 }
 

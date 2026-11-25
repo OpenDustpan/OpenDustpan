@@ -110,6 +110,12 @@ A row holds these fields:
 | `via` | For a member row, the group, the member and the period of the membership. |
 | `canGrantAccess` | Whether the caller can give this access to another principal. |
 
+With `access.installationGrantsReachNamespaces` set to `false`, a grant on the
+installation gives no action inside a namespace. The review of a namespace then
+shows no row with `inheritedFrom` set to `@server` for a namespace action. An
+empty row set for that action is the setting at work, not a fault. To see the
+value and its source, read `GET /api/dustpan/v1/settings`.
+
 A bootstrap row is the bootstrap administrator token. Every review lists it when
 the request has no `subject` filter. On the installation review it has no
 `inheritedFrom`. On any other review, `inheritedFrom` is `@server`, the

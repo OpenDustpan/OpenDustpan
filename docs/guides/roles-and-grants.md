@@ -211,6 +211,40 @@ response header `X-Dustpan-Grant-Id`, with the stable ID of the grant, never
 a name. An answer that no grant allowed, for example an administrator's,
 carries no such header.
 
+## Grants on the installation and namespaces
+
+The setting `access.installationGrantsReachNamespaces` decides if a grant on
+the installation (`@server`) gives its role actions inside a namespace. The
+default is `true`. With `true`, the role of a grant on `@server` works in every
+namespace.
+
+With `false`:
+
+- A grant on `@server` gives only the actions of the operator scope, for
+  example `server:read-settings`. It gives no action inside a namespace, and
+  no action on a collection, a unit or a service principal of a namespace.
+- A grant on a namespace gives the actions of its role on that namespace only.
+  The setting does not change this grant.
+- Support access is a grant on the namespace. It is not a grant on `@server`,
+  so the setting does not limit it.
+- The bootstrap administrator token is not a grant. The setting does not limit
+  it.
+
+A request that needs an action inside a namespace, and that holds only a grant
+on `@server`, gets `403`. The body names the action and the namespace. To find
+the grant on `@server`, read the access review of the installation:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/server/access-review
+```
+
+To read the value and its source, use `GET /api/dustpan/v1/settings`. To restore
+the effect of the grant on `@server`, set the value back to `true` with
+`PATCH /api/dustpan/v1/settings`. A change from `false` to `true` needs a fresh
+sign-in. A stored access token gets `403` with `mfa.fresh-step-required`, so
+make the change in the console.
+
 ## Ask why an action is allowed or denied
 
 `GET /api/dustpan/v1/me/access?object=...` answers for the caller. It lists the

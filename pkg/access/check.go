@@ -121,7 +121,7 @@ func (s *Service) within(
 	}
 
 	authz := &Authorizer{
-		store: st, callers: reads, collections: nil, units: nil, principals: principals,
+		store: st, callers: reads, collections: nil, units: nil, principals: principals, settings: s.authz.settings,
 		chains: map[string][]identity.Object{obj.String(): chain},
 	}
 

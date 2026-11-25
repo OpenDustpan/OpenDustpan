@@ -42,7 +42,7 @@ func TestGrantChecksSubjectNamespace(t *testing.T) {
 		Authorizer: f.authz,
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store,
-			Collections: f.units, Units: f.store, Settings: nil,
+			Collections: f.units, Units: f.store, Settings: access.FixedSettings(true),
 		},
 		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 	})

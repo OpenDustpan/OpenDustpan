@@ -13,6 +13,17 @@ import (
 // shows the effective value and its source.
 const SettingCollectionUnitCap = "accessReview.collectionUnitCap"
 
+// SettingInstallationGrantsReachNamespaces is the key of the installation
+// setting that decides whether a grant on the installation reaches the
+// actions inside each namespace. The settings resource shows the effective
+// value and its source.
+const SettingInstallationGrantsReachNamespaces = "access.installationGrantsReachNamespaces"
+
+// DefaultInstallationGrantsReachNamespaces is the value of
+// SettingInstallationGrantsReachNamespaces when no administrator set another
+// one. A grant on the installation then reaches each namespace.
+const DefaultInstallationGrantsReachNamespaces = "true"
+
 // Bounds of the cap of the export of a collection.
 const (
 	// DefaultCollectionUnitCap is the cap of the export of a collection when
@@ -45,6 +56,12 @@ func ParseCollectionUnitCap(value string) (int, error) {
 // review, for the settings resource of the installation. The database layer
 // holds the cap, and the static layer can lock it.
 func SettingDeclarations() []setting.Declaration {
+	return append(accessReviewDeclarations(), installationReachDeclaration())
+}
+
+// accessReviewDeclarations returns the declarations of the access review: the
+// cap of the export of a collection.
+func accessReviewDeclarations() []setting.Declaration {
 	return []setting.Declaration{
 		{
 			Key: SettingCollectionUnitCap, Level: setting.LevelInstallation, Kind: setting.KindInt,
@@ -69,6 +86,76 @@ func SettingDeclarations() []setting.Declaration {
 			),
 		},
 	}
+}
+
+// installationReachDeclaration returns the declaration of
+// SettingInstallationGrantsReachNamespaces. The database layer holds the value,
+// and the static layer can lock it. A change to true lets a grant on the
+// installation reach each namespace again, so it reduces security.
+func installationReachDeclaration() setting.Declaration {
+	return setting.Declaration{
+		Key: SettingInstallationGrantsReachNamespaces, Level: setting.LevelInstallation, Kind: setting.KindBool,
+		Default: DefaultInstallationGrantsReachNamespaces, Secret: false, Database: true,
+		StaticCredentialHost: false,
+		Apply:                setting.ApplyLive,
+		Check:                nil,
+		ReducesSecurity: func(old, next string) bool {
+			return old == "false" && next == "true"
+		},
+		Doc: "Whether a grant on the installation reaches the actions inside each namespace. " +
+			"The default is true. With false, a grant on the installation gives only the operator " +
+			"actions, and no action inside a namespace. A grant on a namespace is not affected.",
+	}
+}
+
+// InstallationGrantsReachNamespaces returns the effective value of
+// SettingInstallationGrantsReachNamespaces: true when a grant on the
+// installation reaches the actions inside each namespace. A nil settings port
+// answers the default, true. A failed read, and a value that is not "true" or
+// "false", return an error, and the caller must deny the decision.
+func InstallationGrantsReachNamespaces(ctx context.Context, settings Settings) (bool, error) {
+	if settings == nil {
+		return true, nil
+	}
+
+	item, err := settings.Effective(ctx, setting.InstallationScope(), SettingInstallationGrantsReachNamespaces)
+	if err != nil {
+		return false, fmt.Errorf("read setting %s: %w", SettingInstallationGrantsReachNamespaces, err)
+	}
+
+	switch item.Value {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: setting %s is neither true nor false", ErrInvalid,
+			SettingInstallationGrantsReachNamespaces)
+	}
+}
+
+// FixedSettings returns a settings port that answers the value of
+// SettingInstallationGrantsReachNamespaces for reaches, for a test or for a
+// fixed deployment. Any other key is refused with the not-found error of the
+// settings port.
+func FixedSettings(reaches bool) FixedSettingsPort {
+	return FixedSettingsPort{reaches: reaches}
+}
+
+// FixedSettingsPort is the settings port that FixedSettings returns.
+type FixedSettingsPort struct {
+	reaches bool
+}
+
+// Effective answers the value of the reach setting, and refuses any other key.
+func (f FixedSettingsPort) Effective(_ context.Context, _ setting.Scope, key string) (setting.Item, error) {
+	if key != SettingInstallationGrantsReachNamespaces {
+		return setting.Item{}, fmt.Errorf("%w: setting %s", ErrNotFound, key)
+	}
+
+	value := strconv.FormatBool(f.reaches)
+
+	return setting.Effective(installationReachDeclaration(), &value, nil), nil
 }
 
 // collectionUnitCap returns the cap of the export of a collection: the

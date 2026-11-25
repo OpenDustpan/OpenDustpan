@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -168,5 +169,119 @@ func TestExplainNamesNoGrantWhenTheSettingIsFalse(t *testing.T) {
 
 	if len(got.Actions) != 0 || len(got.Grants) != 0 {
 		t.Fatalf("explain = %+v, want no action and no grant", got)
+	}
+}
+
+// TestInstallationReachFailedReadDenies proves the fail-closed rule of the
+// reach setting: a failed read and a value that is not a boolean deny the
+// decision inside a namespace, with an error.
+func TestInstallationReachFailedReadDenies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		settings reachReader
+	}{
+		{name: "a failed read", settings: reachReader{value: new("false"), err: errSettingsGone}},
+		{name: "a value that is not a boolean", settings: reachReader{value: new("maybe"), err: nil}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixtureWithSettings(t, nil, tc.settings)
+			holder := f.person(t, "holder")
+
+			f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
+
+			acme := identity.NamespaceObject("acme")
+
+			err := f.authz.Authorize(t.Context(), holder, identity.ActionNamespaceRead, acme)
+			if err == nil {
+				t.Fatal("authorize on a namespace = nil, want a denial with an error")
+			}
+		})
+	}
+}
+
+// TestInstallationReachNilPortKeepsTheDefault proves that an authorizer with no
+// settings port reads the default `true`, so the grant on the installation
+// reaches the namespace.
+func TestInstallationReachNilPortKeepsTheDefault(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithSettings(t, nil, nil)
+	holder := f.person(t, "holder")
+
+	f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
+
+	err := f.authz.Authorize(t.Context(), holder, identity.ActionNamespaceRead, identity.NamespaceObject("acme"))
+	if err != nil {
+		t.Fatalf("authorize on a namespace with no settings port = %v, want nil", err)
+	}
+}
+
+// TestInstallationReachReadsTheNewValueOnTheNextRequest proves that a change of
+// the setting takes effect on the next decision: the first decision reads
+// `true` and allows, and the second reads `false` and denies.
+func TestInstallationReachReadsTheNewValueOnTheNextRequest(t *testing.T) {
+	t.Parallel()
+
+	value := access.DefaultInstallationGrantsReachNamespaces
+	f := newFixtureWithSettings(t, nil, reachReader{value: &value, err: nil})
+	holder := f.person(t, "holder")
+	acme := identity.NamespaceObject("acme")
+
+	f.grant(t, prn("holder"), access.RoleViewer, identity.ServerObject())
+
+	first := f.authz.Authorize(t.Context(), holder, identity.ActionNamespaceRead, acme)
+	if first != nil {
+		t.Fatalf("first decision with true = %v, want nil", first)
+	}
+
+	value = "false"
+
+	second := f.authz.Authorize(t.Context(), holder, identity.ActionNamespaceRead, acme)
+	if second == nil {
+		t.Fatal("second decision with false = nil, want a denial")
+	}
+}
+
+// TestInstallationReachActionScopes proves that each action of the families
+// has one scope: the operator scope holds each operator action and the
+// administration actions that ADR 216 decision 3 puts in it, and no other
+// action. The list below is the table of that decision. An action that moves
+// to the other side fails this test.
+func TestInstallationReachActionScopes(t *testing.T) {
+	t.Parallel()
+
+	operatorAdministration := []identity.Action{
+		identity.ActionServerReadPrincipals, identity.ActionServerManagePrincipals,
+		identity.ActionServerManageAccess, identity.ActionServerReadAccess,
+		identity.ActionServerCreateNamespace, identity.ActionServerDisableAuditChain,
+		identity.ActionServerReadTokens, identity.ActionServerManageTokens,
+		identity.Action("server:manage-service-tokens"),
+		identity.ActionServerRestoreAccess,
+	}
+
+	families := []access.Family{
+		access.FamilyOperator, access.FamilyAdministration, access.FamilyData, access.FamilyDelegation,
+	}
+
+	for _, family := range families {
+		for _, action := range access.Actions(family) {
+			want := family == access.FamilyOperator || slices.Contains(operatorAdministration, action)
+
+			if got := access.OperatorScope(action); got != want {
+				t.Errorf("OperatorScope(%s) = %t, want %t (family %s)", action, got, want, family)
+			}
+		}
+	}
+
+	for _, action := range operatorAdministration {
+		if family, known := access.FamilyOf(action); !known || family != access.FamilyAdministration {
+			t.Errorf("%s is listed as operator scope, but its family is %q, %t", action, family, known)
+		}
 	}
 }

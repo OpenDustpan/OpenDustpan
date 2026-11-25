@@ -89,7 +89,6 @@ func serviceOver(t *testing.T, f *fixture, st access.Store) *access.Service {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: st, Callers: f.store, Collections: f.units, Units: f.store, Principals: f.store,
-		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)

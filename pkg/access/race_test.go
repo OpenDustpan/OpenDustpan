@@ -66,7 +66,6 @@ func racingServiceWith(
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: st, Callers: f.store, Collections: port, Units: f.store, Principals: f.store,
-		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -76,7 +75,7 @@ func racingServiceWith(
 		Store: st, Directory: f.store, Namespaces: f.store, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: port,
-			Units: f.store, Settings: nil,
+			Units: f.store, Settings: access.FixedSettings(true),
 		},
 		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,

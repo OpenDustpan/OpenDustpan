@@ -191,6 +191,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerLostThePath(t *testing.T) {
 		Freshness:  nil,
 		Authorizer: nil,
 		Reach: access.ReachConfig{
+			Settings:    nil,
 			Grants:      nil,
 			Roles:       nil,
 			Callers:     nil,

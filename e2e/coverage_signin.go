@@ -162,6 +162,7 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 		SSO:         nil,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+			Settings: access.FixedSettings(true),
 		},
 		Subjects: st,
 		Kind:     installation.KindDev,

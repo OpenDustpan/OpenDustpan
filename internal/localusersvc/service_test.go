@@ -117,7 +117,8 @@ func newFixture(t *testing.T) *fixture {
 	}
 
 	f.svc = f.serviceWith(t, access.ReachConfig{
-		Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+		Settings: access.FixedSettings(true),
+		Grants:   st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 	})
 
 	return f

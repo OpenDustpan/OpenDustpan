@@ -23,7 +23,13 @@ type capReader struct {
 	err   error
 }
 
-func (r capReader) Effective(context.Context, setting.Scope, string) (setting.Item, error) {
+// Effective answers the cap for its own key. Any other key is the reach setting
+// of the installation, which the double answers as the default, true.
+func (r capReader) Effective(ctx context.Context, scope setting.Scope, key string) (setting.Item, error) {
+	if key != access.SettingCollectionUnitCap {
+		return access.FixedSettings(true).Effective(ctx, scope, key)
+	}
+
 	return setting.Effective(access.SettingDeclarations()[0], r.value, nil), r.err
 }
 
@@ -245,8 +251,9 @@ func TestInstallationGrantsReachNamespacesDeclaration(t *testing.T) {
 }
 
 // TestInstallationGrantsReachNamespacesReducesSecurity checks that a change
-// from `true` to `false` counts as a change that reduces security, and that
-// no other change does.
+// from `false` to `true` counts as a change that reduces security, because it
+// lets a grant on the installation reach namespaces again, and that no other
+// change does.
 func TestInstallationGrantsReachNamespacesReducesSecurity(t *testing.T) {
 	t.Parallel()
 
@@ -262,11 +269,11 @@ func TestInstallationGrantsReachNamespacesReducesSecurity(t *testing.T) {
 		next string
 		want bool
 	}{
-		{name: "from true to false reduces security", old: "true", next: "false", want: true},
+		{name: "from true to false does not reduce security", old: "true", next: "false", want: false},
 		{name: "the same value does not", old: "true", next: "true", want: false},
-		{name: "from false to true does not", old: "false", next: "true", want: false},
+		{name: "from false to true reduces security", old: "false", next: "true", want: true},
 		{name: "from false to false does not", old: "false", next: "false", want: false},
-		{name: "an unknown old value to false reduces security", old: "many", next: "false", want: true},
+		{name: "an unknown old value to false does not", old: "many", next: "false", want: false},
 		{name: "a next value that is not a boolean does not reduce security", old: "true", next: "many", want: false},
 		{name: "a next value that is empty does not reduce security", old: "true", next: "", want: false},
 		{name: "a false old value to an unknown value does not", old: "false", next: "many", want: false},
@@ -283,41 +290,71 @@ func TestInstallationGrantsReachNamespacesReducesSecurity(t *testing.T) {
 	}
 }
 
-// TestInstallationGrantsReachNamespacesDefaultTrue proves that the resolution
-// of the reach fails toward `true`: no reader, a reader that fails, and a
-// value that is not a boolean give `true`, so an installation that keeps no
-// settings reaches namespaces as before.
-func TestInstallationGrantsReachNamespacesDefaultTrue(t *testing.T) {
+// TestInstallationReachesNamespaces proves the reader of the reach setting: a
+// nil port answers the default `true`, a failed read and a value that is not a
+// boolean return an error, and the two booleans answer themselves. The error
+// lets the caller deny the decision.
+func TestInstallationReachesNamespaces(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
 		settings reachReader
 		want     bool
+		wantErr  bool
 	}{
-		{name: "no reader", settings: reachReader{value: nil, err: nil}, want: true},
+		{name: "a value of false", settings: reachReader{value: new("false"), err: nil}, want: false, wantErr: false},
+		{name: "a value of true", settings: reachReader{value: new("true"), err: nil}, want: true, wantErr: false},
+		{name: "the default value", settings: reachReader{value: nil, err: nil}, want: true, wantErr: false},
 		{
 			name: "a reader that fails", settings: reachReader{value: new("false"), err: errSettingsGone},
-			want: true,
+			want: false, wantErr: true,
 		},
-		{name: "a reader with no value", settings: reachReader{value: nil, err: nil}, want: true},
-		{name: "a value of false", settings: reachReader{value: new("false"), err: nil}, want: false},
-		{name: "a value of true", settings: reachReader{value: new("true"), err: nil}, want: true},
-		{name: "a value that is not a boolean", settings: reachReader{value: new("many"), err: nil}, want: true},
+		{
+			name: "a value that is not a boolean", settings: reachReader{value: new("maybe"), err: nil},
+			want: false, wantErr: true,
+		},
+		{name: "an empty value", settings: reachReader{value: new(""), err: nil}, want: false, wantErr: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := access.InstallationGrantsReachNamespaces(t.Context(), tc.settings); got != tc.want {
+			got, err := access.InstallationGrantsReachNamespaces(t.Context(), tc.settings)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, want an error: %t", err, tc.wantErr)
+			}
+
+			if got != tc.want {
 				t.Fatalf("reach = %t, want %t", got, tc.want)
 			}
 		})
 	}
 
-	if got := access.InstallationGrantsReachNamespaces(t.Context(), nil); !got {
-		t.Fatalf("reach with no reader = %t, want true", got)
+	got, err := access.InstallationGrantsReachNamespaces(t.Context(), nil)
+	if err != nil || !got {
+		t.Fatalf("reach with no port = %t, %v, want true and no error", got, err)
+	}
+}
+
+// TestFixedSettingsAnswersTheReachSetting proves that FixedSettings answers the
+// reach setting with its value, and refuses any other key with ErrNotFound.
+func TestFixedSettingsAnswersTheReachSetting(t *testing.T) {
+	t.Parallel()
+
+	for _, reaches := range []bool{true, false} {
+		got, err := access.InstallationGrantsReachNamespaces(t.Context(), access.FixedSettings(reaches))
+		if err != nil || got != reaches {
+			t.Fatalf("FixedSettings(%t) reach = %t, %v, want %t", reaches, got, err, reaches)
+		}
+	}
+
+	other := "accessReview.collectionUnitCap"
+
+	_, err := access.FixedSettings(true).Effective(t.Context(), setting.InstallationScope(), other)
+	if !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("other key error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -333,8 +370,8 @@ func (r reachReader) Effective(context.Context, setting.Scope, string) (setting.
 }
 
 // reachDeclaration returns the declaration of the reach setting of the
-// registry, or a declaration of the same shape when the registry does not hold
-// it yet.
+// registry. An empty declaration is returned when the registry does not hold
+// it, and the declaration tests fail then.
 func reachDeclaration() setting.Declaration {
 	for _, d := range access.SettingDeclarations() {
 		if d.Key == access.SettingInstallationGrantsReachNamespaces {
@@ -343,10 +380,8 @@ func reachDeclaration() setting.Declaration {
 	}
 
 	return setting.Declaration{
-		Key: access.SettingInstallationGrantsReachNamespaces, Level: setting.LevelInstallation,
-		Kind: setting.KindBool, Default: access.DefaultInstallationGrantsReachNamespaces,
-		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
-		Check: nil, ReducesSecurity: nil, Doc: "",
+		Key: "", Level: "", Kind: "", Default: "", Secret: false, Database: false,
+		StaticCredentialHost: false, Apply: "", Check: nil, ReducesSecurity: nil, Doc: "",
 	}
 }
 

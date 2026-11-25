@@ -170,7 +170,6 @@ func TestReachMatchesAuthorizerOnHostileFixture(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: callers, Collections: f.units, Units: f.store, Principals: f.store,
-		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -324,7 +323,6 @@ func TestAuthorizerFailsClosedOnAStuckNamespacePage(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: f.store, Collections: f.units, Units: f.store, Principals: stuck,
-		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -373,7 +371,6 @@ func TestEmptyPrincipalSubjectIsRefusedOnItsOwn(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: callers, Collections: f.units, Units: f.store, Principals: f.store,
-		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -463,7 +460,6 @@ func assertAuthorizerRefuses(t *testing.T, f *fixture, callers access.Callers) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: f.store, Callers: callers, Collections: f.units, Units: f.store, Principals: f.store,
-		Settings: nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)

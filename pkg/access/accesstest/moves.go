@@ -94,6 +94,7 @@ func authorizerOver(t *testing.T, s moveStore, port access.UnitCollections) (*ac
 		Store: s, Directory: s, Namespaces: s, Authorizer: authz,
 		Reach: access.ReachConfig{
 			Grants: s, Roles: s, Callers: s, Principals: s, Collections: port, Units: s,
+			Settings: access.FixedSettings(true),
 		},
 		Now: nil, NewID: nil, BootstrapAdmins: nil,
 		Settings:    nil,

@@ -60,10 +60,6 @@ type AuthorizerConfig struct {
 	// Authorizer confines the grants and the groups of a principal of a
 	// namespace.
 	Principals PrincipalNamespaces
-	// Settings reads the installation settings, for the reach of a grant on
-	// the installation. Nil means that a grant on the installation reaches
-	// each namespace, as the default of the setting says.
-	Settings Settings
 }
 
 // Authorizer decides with grants (ADR 52). It implements identity.Authorizer
@@ -104,8 +100,45 @@ func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 
 	return &Authorizer{
 		store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units,
-		principals: cfg.Principals, settings: cfg.Settings, chains: nil,
+		principals: cfg.Principals, settings: nil, chains: nil,
 	}, nil
+}
+
+// WithSettingsPort returns a copy of a that reads SettingInstallationGrantsReachNamespaces
+// through settings. A nil settings port reads the default, true. The copy shares
+// every other port with a.
+func (a *Authorizer) WithSettingsPort(settings Settings) *Authorizer {
+	out := *a
+	out.settings = settings
+
+	return &out
+}
+
+// OperatorScope reports whether action has operator scope (ADR 216 decision 3):
+// each action of the operator family, and the administration actions that act
+// on the installation as a whole. A grant on the installation gives an action
+// inside a namespace only when the setting of the reach allows it, and it always
+// gives an action of the operator scope.
+func OperatorScope(action identity.Action) bool {
+	if family, known := FamilyOf(action); known && family == FamilyOperator {
+		return true
+	}
+
+	return slices.Contains(operatorAdministrationActions(), action)
+}
+
+// operatorAdministrationActions are the administration actions that have
+// operator scope in the table of ADR 216 decision 3.
+func operatorAdministrationActions() []identity.Action {
+	return []identity.Action{
+		identity.ActionServerReadPrincipals, identity.ActionServerManagePrincipals,
+		identity.ActionServerManageAccess, identity.ActionServerReadAccess,
+		identity.ActionServerCreateNamespace, identity.ActionServerDisableAuditChain,
+		identity.ActionServerReadTokens, identity.ActionServerManageTokens,
+		// The wire value of a retired action: stored roles keep it.
+		identity.Action("server:manage-service-tokens"),
+		identity.ActionServerRestoreAccess,
+	}
 }
 
 // Authorize allows action on obj when a grant of one of the subjects of p,
@@ -333,11 +366,18 @@ func (a *Authorizer) reachGrants(ctx context.Context, subjects []Subject, action
 		return nil, err
 	}
 
-	// A grant on the installation reaches a namespace only while the setting
-	// says so, so the scope of an action inside a namespace holds none of
-	// them. The scope of an action on the installation itself is decided on
-	// the installation object, which this check leaves alone.
-	grants = a.confineInstallationGrants(ctx, grants, scopeObject(action))
+	reaches, err := InstallationGrantsReachNamespaces(ctx, a.settings)
+	if err != nil {
+		return nil, err
+	}
+
+	// A grant on the installation gives no namespace to a list while the setting
+	// is false, unless its action has operator scope: such a grant gives no
+	// action inside a namespace. The lists read grants without the chain, so
+	// this check decides here.
+	if !reaches && !OperatorScope(action) {
+		grants = withoutServerGrants(grants)
+	}
 
 	live, err := a.currentUnits(ctx, grants)
 	if err != nil {
@@ -360,17 +400,17 @@ func (a *Authorizer) reachGrants(ctx context.Context, subjects []Subject, action
 	return out, nil
 }
 
-// scopeObject returns the object that decides whether a grant on the
-// installation belongs in the scope of action: the installation for an action
-// of the operator, administration and delegation families, and a namespace for
-// an action inside a namespace. A grant on the installation reaches the
-// namespace of a data action only while the setting says so.
-func scopeObject(action identity.Action) identity.Object {
-	if family, known := FamilyOf(action); known && family == FamilyData {
-		return identity.NamespaceObject("")
+// withoutServerGrants returns the grants that are not on the installation.
+func withoutServerGrants(grants []Grant) []Grant {
+	out := make([]Grant, 0, len(grants))
+
+	for i := range grants {
+		if !grants[i].Object.IsServer() {
+			out = append(out, grants[i])
+		}
 	}
 
-	return identity.ServerObject()
+	return out
 }
 
 // grantInScope reports whether a grant on obj with action belongs in a
@@ -597,7 +637,7 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 		return none, err
 	}
 
-	grants = a.confineInstallationGrants(ctx, grants, obj)
+	grants = confineInstallationGrants(grants, chain)
 
 	roles, err := a.rolesOf(ctx, grants)
 	if err != nil {
@@ -609,24 +649,18 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 	return heldFromGrants(grants, roles, targetNS), nil
 }
 
-// confineInstallationGrants drops every grant on the installation when
-// SettingInstallationGrantsReachNamespaces is `false` and obj is inside a
-// namespace. Such a grant then gives only the actions of the operator scope,
-// which Authorize decides on the installation object itself. A grant on the
-// namespace, a collection or a unit of the namespace stays, so the setting
-// confines a grant on the installation alone.
+// confineInstallationGrants drops every grant on the installation when chain
+// does not hold the installation: chainObjects leaves the installation out of
+// the chain of a namespace object while SettingInstallationGrantsReachNamespaces
+// is `false`. The chain then decides the grants, so the setting is read once
+// for each decision.
 //
-// Defense in depth: the store keeps the grant row, so a later change of the
-// setting back to `true` gives it again with no new write. This check stays
-// so that a caller that reads the grants in another way cannot skip it.
-func (a *Authorizer) confineInstallationGrants(
-	ctx context.Context, grants []Grant, obj identity.Object,
-) []Grant {
-	if obj.IsServer() || len(grants) == 0 {
-		return grants
-	}
-
-	if InstallationGrantsReachNamespaces(ctx, a.settings) {
+// Defense in depth: the store reads only the chain, and chainObjects drops the
+// installation from it; this check stays so that a caller that reads the grants
+// in another way cannot skip the rule. It does not rely on the value of the
+// setting.
+func confineInstallationGrants(grants []Grant, chain []identity.Object) []Grant {
+	if slices.ContainsFunc(chain, func(o identity.Object) bool { return o.IsServer() }) {
 		return grants
 	}
 
@@ -969,7 +1003,16 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 		return chain, nil
 	}
 
-	return chainObjects(ctx, obj, a.collections, a.withUnitID, a.principals)
+	reaches, err := InstallationGrantsReachNamespaces(ctx, a.settings)
+	if err != nil {
+		return nil, err
+	}
+
+	ports := chainPorts{
+		collections: a.collections, resolveUnit: a.withUnitID, principals: a.principals, reachesNamespaces: reaches,
+	}
+
+	return chainObjects(ctx, obj, ports)
 }
 
 // chainObjects returns obj and every object that holds it, innermost first,
@@ -977,14 +1020,19 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 // unit, resolveUnit answers the stable ID of a unit, and principals answers
 // the namespace of a principal of a namespace. collections and resolveUnit
 // answer nothing when they are nil, as in the configs; principals is
-// required.
+// required. ports.reachesNamespaces is the value of
+// SettingInstallationGrantsReachNamespaces: when it is false, the chain of a
+// namespace object, of a collection, of a unit and of a principal of a
+// namespace has no installation. The chain of the installation and of a
+// principal of the installation keeps it.
 func chainObjects(
 	ctx context.Context,
 	obj identity.Object,
-	collections UnitCollections,
-	resolveUnit func(context.Context, identity.Object) (identity.Object, error),
-	principals PrincipalNamespaces,
+	ports chainPorts,
 ) ([]identity.Object, error) {
+	collections, resolveUnit, principals := ports.collections, ports.resolveUnit, ports.principals
+	reachesNamespaces := ports.reachesNamespaces
+
 	kind, ok := KindOf(obj)
 	if !ok {
 		return nil, nil
@@ -996,16 +1044,7 @@ func chainObjects(
 	}
 
 	if kind == ObjectPrincipal {
-		ns, found, nsErr := principalNamespaceOf(ctx, obj.PrincipalID(), principals)
-		if nsErr != nil {
-			return nil, nsErr
-		}
-
-		if found {
-			return []identity.Object{obj, identity.NamespaceObject(ns), identity.ServerObject()}, nil
-		}
-
-		return []identity.Object{obj, identity.ServerObject()}, nil
+		return principalChain(ctx, obj, principals, reachesNamespaces)
 	}
 
 	out := []identity.Object{obj}
@@ -1023,11 +1062,45 @@ func chainObjects(
 		out = append(out, identity.NamespaceObject(obj.Namespace()))
 	}
 
-	if kind != ObjectInstallation {
+	// A namespace, a collection and a unit get the installation only while the
+	// setting lets a grant on the installation reach a namespace.
+	if kind != ObjectInstallation && reachesNamespaces {
 		out = append(out, identity.ServerObject())
 	}
 
 	return out, nil
+}
+
+// chainPorts are the ports that chainObjects reads: the collection of a unit,
+// the stable ID of a unit, and the namespace of a principal. It holds the
+// value of the reach setting too.
+type chainPorts struct {
+	collections       UnitCollections
+	resolveUnit       func(context.Context, identity.Object) (identity.Object, error)
+	principals        PrincipalNamespaces
+	reachesNamespaces bool
+}
+
+// principalChain returns the chain of the principal obj: the principal, its
+// namespace and the installation. A principal of a namespace has no
+// installation while reachesNamespaces is false. A principal that belongs to no
+// namespace keeps the installation.
+func principalChain(
+	ctx context.Context, obj identity.Object, principals PrincipalNamespaces, reachesNamespaces bool,
+) ([]identity.Object, error) {
+	ns, found, err := principalNamespaceOf(ctx, obj.PrincipalID(), principals)
+	if err != nil {
+		return nil, err
+	}
+
+	switch {
+	case found && reachesNamespaces:
+		return []identity.Object{obj, identity.NamespaceObject(ns), identity.ServerObject()}, nil
+	case found:
+		return []identity.Object{obj, identity.NamespaceObject(ns)}, nil
+	default:
+		return []identity.Object{obj, identity.ServerObject()}, nil
+	}
 }
 
 // stableIDOf returns obj with the stable ID of its unit or its collection,

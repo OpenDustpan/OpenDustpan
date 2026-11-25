@@ -81,7 +81,7 @@ func newScopeFixture(t *testing.T) scopeFixture {
 	}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: st, Callers: st, Collections: nil, Units: st, Principals: st, Settings: nil,
+		Store: st, Callers: st, Collections: nil, Units: st, Principals: st,
 	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)

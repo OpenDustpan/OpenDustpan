@@ -116,16 +116,25 @@ func newFixtureWithSettings(tb testing.TB, units access.UnitCollections, setting
 	})
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: st, Callers: st, Collections: units, Units: st, Principals: st, Settings: settings,
+		Store: st, Callers: st, Collections: units, Units: st, Principals: st,
 	})
 	if err != nil {
 		tb.Fatalf("new authorizer: %v", err)
 	}
 
+	authz = authz.WithSettingsPort(settings)
+
+	// A fixture with no settings port reads the default, true, in its reach too.
+	reachSettings := settings
+	if reachSettings == nil {
+		reachSettings = access.FixedSettings(true)
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st, Settings: settings,
+			Grants: st, Roles: st, Callers: st, Principals: st,
+			Collections: units, Units: st, Settings: reachSettings,
 		},
 		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: settings, LimitGroups: nil,
@@ -272,7 +281,8 @@ func (f *fixture) serviceOverGrantStore(tb testing.TB, store access.Store) *acce
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: store, Directory: st, Namespaces: st, Authorizer: f.authz,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st, Settings: nil,
+			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+			Settings: access.FixedSettings(true),
 		},
 		Now: nil, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
@@ -1001,7 +1011,7 @@ func TestExplainListsOnlyGrantsThatGive(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(
 		access.AuthorizerConfig{
-			Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost, Settings: nil,
+			Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost,
 		},
 	)
 	if err != nil {
@@ -1354,7 +1364,6 @@ func TestRequestCache(t *testing.T) {
 			Collections: nil,
 			Units:       counted,
 			Principals:  counted,
-			Settings:    nil,
 		},
 	)
 	if err != nil {

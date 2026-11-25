@@ -181,7 +181,8 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers: nil,
 		Reach: access.ReachConfig{
-			Grants: e.store, Roles: e.store, Callers: e.store, Principals: e.store,
+			Settings: access.FixedSettings(true),
+			Grants:   e.store, Roles: e.store, Callers: e.store, Principals: e.store,
 			Collections: nil, Units: e.store,
 		},
 		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,

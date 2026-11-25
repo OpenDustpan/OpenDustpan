@@ -420,28 +420,9 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 		return hostMade{}, fmt.Errorf("read principal %q: %w", in.person, readErr)
 	}
 
-	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Makers: nil,
-		Reach: access.ReachConfig{
-			Grants:      nil,
-			Roles:       nil,
-			Callers:     nil,
-			Principals:  nil,
-			Collections: nil,
-			Units:       nil,
-		},
-		Store:      st,
-		Principals: st,
-		TempAdmins: st,
-		Freshness:  nil,
-		Authorizer: nil,
-		Logger:     nil,
-		Now:        nil,
-		NewID:      nil,
-		Guard:      freshstep.Guard{},
-	})
+	tokens, err := hostTokenService(st)
 	if err != nil {
-		return hostMade{}, fmt.Errorf("access token service: %w", err)
+		return hostMade{}, err
 	}
 
 	issuer, err := accesstoken.NewHostIssuer(tokens, st)
@@ -470,6 +451,37 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	}
 
 	return hostMade{subject: in.person, secret: got.Secret.Reveal(), expires: got.Token.ExpiresAt}, nil
+}
+
+// hostTokenService returns the access token service of a host command. It has
+// no reach config: a host command makes a token and reads no reach.
+func hostTokenService(st store) (*accesstoken.Service, error) {
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Makers: nil,
+		Reach: access.ReachConfig{
+			Grants:      nil,
+			Roles:       nil,
+			Callers:     nil,
+			Principals:  nil,
+			Collections: nil,
+			Units:       nil,
+			Settings:    nil,
+		},
+		Store:      st,
+		Principals: st,
+		TempAdmins: st,
+		Freshness:  nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
+		Guard:      freshstep.Guard{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access token service: %w", err)
+	}
+
+	return tokens, nil
 }
 
 // personExists returns the refusal of a person name that a principal

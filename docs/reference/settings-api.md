@@ -212,6 +212,7 @@ server sets it itself.
 
 | Key | Kind | Default | Apply | Meaning |
 | --- | --- | --- | --- | --- |
+| `access.installationGrantsReachNamespaces` | `bool` | `true` | `live` | Let a grant on the installation (`@server`) give its role actions inside each namespace. With `false`, a grant on `@server` gives only the operator actions, and an action inside a namespace needs a grant on that namespace. A change from `false` to `true` counts as a change that reduces security. See [Roles and grants](../guides/roles-and-grants.md#grants-on-the-installation-and-namespaces). |
 | `accessReview.collectionUnitCap` | `int` | 10000 | `live` | The largest count of units that the export of a collection reads. The server refuses an export over it, and refuses a value outside 1 to 100000. A raise counts as a change that reduces security. |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
 | `decisionRecords.retentionHours` | `int` | `0` | `live` | The hours that the server keeps decision records: `0` keeps them forever, or a whole number from 24 to 87600. The setting never deletes an audit entry. No job deletes decision records yet. A change to a shorter period, or from `0` to a period, counts as a change that reduces security. See [Decision record retention](../guides/decision-record-retention.md). |

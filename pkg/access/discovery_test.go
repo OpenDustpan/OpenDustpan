@@ -213,7 +213,6 @@ func TestDiscoveryGrantIDFailsClosedOnAReadError(t *testing.T) {
 
 	base := access.AuthorizerConfig{
 		Store: f.store, Callers: f.store, Collections: f.units, Units: f.store, Principals: f.store,
-		Settings: nil,
 	}
 
 	tests := []struct {
@@ -274,7 +273,6 @@ func TestDiscoveryGrantIDOfNoSubjects(t *testing.T) {
 		Collections: f.units,
 		Units:       f.store,
 		Principals:  f.store,
-		Settings:    nil,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)

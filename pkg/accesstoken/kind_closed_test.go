@@ -70,6 +70,7 @@ func serviceOver(t *testing.T, f *fixture, st accesstoken.Store) *accesstoken.Se
 		TempAdmins: nil,
 		Store:      st, Principals: f.store, Freshness: nil, Authorizer: nil,
 		Reach: access.ReachConfig{
+			Settings:    access.FixedSettings(true),
 			Grants:      f.store,
 			Roles:       f.store,
 			Callers:     f.store,

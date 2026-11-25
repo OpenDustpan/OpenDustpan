@@ -479,7 +479,7 @@ func TestCheckGroupGrantsRefusesAFailedSiteAdministratorDecision(t *testing.T) {
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
 		Store: &failingGrantsStore{Store: f.store}, Callers: f.store, Collections: nil, Units: f.store,
-		Principals: f.store, Settings: nil,
+		Principals: f.store,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)

@@ -109,7 +109,8 @@ func makerChecker(t *testing.T, st *sqlite.Store) *access.Service {
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
 		Reach: access.ReachConfig{
-			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
+			Settings: access.FixedSettings(true),
+			Grants:   st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
 		Now: nil, NewID: nil, BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 	})
@@ -175,7 +176,8 @@ func TestLeaseRequestsRefuseATokenWhoseMakerRowIsGone(t *testing.T) {
 				Makers: makerChecker(t, st), TempAdmins: nil, Store: st, Principals: st, Freshness: nil,
 				Authorizer: nil, Logger: nil, Now: makerAt, NewID: nil,
 				Reach: access.ReachConfig{
-					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+					Settings: nil,
+					Grants:   nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 				},
 				Guard: freshstep.Guard{},
 			})

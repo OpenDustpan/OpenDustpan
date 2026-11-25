@@ -260,7 +260,8 @@ func newMtlsEnv(t *testing.T) *mtlsEnv {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Makers: nil,
 		Reach: access.ReachConfig{
-			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
+			Settings: access.FixedSettings(true),
+			Grants:   s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
 		},
 		Store: s, Principals: s, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,
 		Now: e.now, NewID: nil,
