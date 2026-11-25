@@ -9,6 +9,7 @@ Main has the server side of the runner protocol: poll, heartbeat and claim renew
 3. **Short protocol codes.** `/runner/v1` keeps `bad-proof` 401, `retired` 403, `rate-limited` 429, `not-found` 404 and `claim-lost` 409. The loop maps each code to the action of the table in ADR 131 decision 12. There is no second error shape.
 4. **A runner of another pool gets no work of this pool.** The claim query uses the pool of the runner. The test polls with a runner of pool B while work waits in pool A and gets 204.
 5. **No upload here.** The report upload and the end of a claim by report are not in this change. The change `130-138-runner-staged-report-port` owns them.
+6. **The loop has no audit log.** The runner loop is a client library and has no audit log. The server audits each call that reaches it. When the loop refuses a server answer, it writes a slog record through the injected logger, with the reason. That record is the record of the refusal. The loop has no audit sink.
 
 ## ADR check
 
