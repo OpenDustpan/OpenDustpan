@@ -196,7 +196,9 @@ func newFreshGuard(
 ) (freshstep.Guard, error) {
 	o := options{freshPolicy: nil}
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
 	policy := o.freshPolicy

@@ -95,6 +95,40 @@ func TestStoredRulesShowNotEnforced(t *testing.T) {
 	}
 }
 
+// TestNullWindowShowsNotEnforced checks that a rule and an approval default
+// with a null freshAuthSeconds show "enforced": false even while the setting
+// freshAuthEnabled is on, because the gate never enforces a null window.
+func TestNullWindowShowsNotEnforced(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+
+	rule := gateBase + testNamespace + gateRulesURL + "/ops"
+	def := gateBase + testNamespace + gateDefault
+
+	for _, put := range []struct{ path, body string }{
+		{rule, `{"count":1,"approvers":{"groups":["ops"]}}`},
+		{def, `{"count":1,"approvers":{}}`},
+	} {
+		rec := e.sendWithSession(t, http.MethodPut, e.freshSignIn(t), put.path, put.body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s, want 200", put.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	e.freshOn.Store(true)
+
+	doc := e.getEnforced(t, rule)
+	if doc.Enforced == nil || *doc.Enforced {
+		t.Errorf("rule with a null window: enforced = %v, want false", doc.Enforced)
+	}
+
+	doc = e.getEnforced(t, def)
+	if doc.Enforced == nil || *doc.Enforced {
+		t.Errorf("approval default with a null window: enforced = %v, want false", doc.Enforced)
+	}
+}
+
 // listedRule returns the one rule of the list route.
 func (e providerEnv) listedRule(t *testing.T) enforcedDoc {
 	t.Helper()

@@ -48,10 +48,12 @@ func TestFreshPolicyGatesTheWriteStep(t *testing.T) {
 		opts    []trustrulesvc.Option
 		wantErr error
 	}{
-		"off":        {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(off)}, wantErr: nil},
-		"on":         {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(on)}, wantErr: trustrulesvc.ErrFreshRequired},
-		"no policy":  {opts: nil, wantErr: trustrulesvc.ErrFreshRequired},
-		"nil policy": {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(nil)}, wantErr: trustrulesvc.ErrFreshRequired},
+		"off":                 {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(off)}, wantErr: nil},
+		"on":                  {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(on)}, wantErr: trustrulesvc.ErrFreshRequired},
+		"no policy":           {opts: nil, wantErr: trustrulesvc.ErrFreshRequired},
+		"nil policy":          {opts: []trustrulesvc.Option{trustrulesvc.WithFreshPolicy(nil)}, wantErr: trustrulesvc.ErrFreshRequired},
+		"nil option":          {opts: []trustrulesvc.Option{nil}, wantErr: trustrulesvc.ErrFreshRequired},
+		"nil option then off": {opts: []trustrulesvc.Option{nil, trustrulesvc.WithFreshPolicy(off)}, wantErr: nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

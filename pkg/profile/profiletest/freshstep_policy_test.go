@@ -51,11 +51,13 @@ func TestRevealFollowsFreshPolicy(t *testing.T) {
 		want     error
 		failures int
 	}{
-		"setting off":     {opts: []profile.Option{profile.WithFreshPolicy(off)}, want: nil, failures: 0},
-		"setting on":      {opts: []profile.Option{profile.WithFreshPolicy(on)}, want: profile.ErrFreshRequired, failures: 1},
-		"no policy":       {opts: nil, want: profile.ErrFreshRequired, failures: 1},
-		"nil policy":      {opts: []profile.Option{profile.WithFreshPolicy(nil)}, want: profile.ErrFreshRequired, failures: 1},
-		"nil policy func": {opts: []profile.Option{profile.WithFreshPolicy(freshstep.PolicyFunc(nil))}, want: profile.ErrFreshRequired, failures: 1},
+		"setting off":         {opts: []profile.Option{profile.WithFreshPolicy(off)}, want: nil, failures: 0},
+		"setting on":          {opts: []profile.Option{profile.WithFreshPolicy(on)}, want: profile.ErrFreshRequired, failures: 1},
+		"no policy":           {opts: nil, want: profile.ErrFreshRequired, failures: 1},
+		"nil policy":          {opts: []profile.Option{profile.WithFreshPolicy(nil)}, want: profile.ErrFreshRequired, failures: 1},
+		"nil policy func":     {opts: []profile.Option{profile.WithFreshPolicy(freshstep.PolicyFunc(nil))}, want: profile.ErrFreshRequired, failures: 1},
+		"nil option":          {opts: []profile.Option{nil}, want: profile.ErrFreshRequired, failures: 1},
+		"nil option then off": {opts: []profile.Option{nil, profile.WithFreshPolicy(off)}, want: nil, failures: 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

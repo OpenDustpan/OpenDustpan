@@ -207,16 +207,20 @@ func freshBody(f gate.FreshAuth) *int {
 }
 
 // approvalDefaultOf returns the wire form of d. enforced is the answer of the
-// fresh step policy for the request.
+// fresh step policy for the request. A null window is never enforced, so
+// enforced is false for it whatever the policy says.
 func approvalDefaultOf(d gate.ApprovalDefault, enforced bool) approvalDefaultBody {
+	window := freshBody(d.FreshAuth)
+
 	return approvalDefaultBody{
-		Count: d.Count, Approvers: approversOf(d.Approvers), FreshAuthSeconds: freshBody(d.FreshAuth),
-		FreshAuthEnforced: enforced, Version: d.Version,
+		Count: d.Count, Approvers: approversOf(d.Approvers), FreshAuthSeconds: window,
+		FreshAuthEnforced: enforced && window != nil, Version: d.Version,
 	}
 }
 
 // approvalRuleOf returns the wire form of r. enforced is the answer of the
-// fresh step policy for the request.
+// fresh step policy for the request. A null window is never enforced, so
+// enforced is false for it whatever the policy says.
 func approvalRuleOf(r gate.ApprovalRule, enforced bool) approvalRuleBody {
 	var timeout *int64
 
@@ -225,10 +229,12 @@ func approvalRuleOf(r gate.ApprovalRule, enforced bool) approvalRuleBody {
 		timeout = &seconds
 	}
 
+	window := freshBody(r.FreshAuth)
+
 	return approvalRuleBody{
 		ID: string(r.ID), Count: r.Count, Approvers: approversOf(r.Approvers),
-		AuthorMayApprove: r.AuthorMayApprove, FreshAuthSeconds: freshBody(r.FreshAuth),
-		FreshAuthEnforced: enforced, TimeoutSeconds: timeout, Version: r.Version,
+		AuthorMayApprove: r.AuthorMayApprove, FreshAuthSeconds: window,
+		FreshAuthEnforced: enforced && window != nil, TimeoutSeconds: timeout, Version: r.Version,
 	}
 }
 

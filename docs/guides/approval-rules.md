@@ -320,10 +320,9 @@ the value and its source with `GET /api/dustpan/v1/settings`. Change it with
 - A change from on to off needs a fresh step, because it makes the installation
   weaker. A change from off to on needs none. Each change writes an audit entry
   with the old and the new value.
-- A rule keeps its stored `freshAuthSeconds`, and a namespace keeps its stored
-  `freshAuthForApprovals`, while the setting is off. The rule API and the
-  namespace API show `"enforced": false` for each stored value that is not in
-  force.
+- A rule and an approval default keep their stored `freshAuthSeconds` while the
+  setting is off. The rule API and the approval-default API show
+  `"enforced": false` for each stored window that is not in force.
 - The first-administrator code, the change or reset of a factor, the enrollment
   code and the break-glass proof ask as before, with the setting on or off.
 

@@ -561,6 +561,9 @@ func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) 
 		return err
 	}
 
+	// Production sets no freshness port (see newAuditChain), so the early return
+	// below ends the check there and this guard does not run in production. The
+	// guard runs only when a test sets the port.
 	if c.freshness == nil {
 		return nil
 	}
