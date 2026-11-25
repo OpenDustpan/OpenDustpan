@@ -2,6 +2,8 @@
 version: 4
 ---
 
+Issue: #4287
+
 ## Why
 
 ADR 129 (accepted 2026-10-18, owner) says: "The operator sets every field of the model connection." The model connection is one JSON document, `agent.ConnectionSpec` (decision 2), and its credential is a secret item of the scope `@server` (decisions 9 and 10). Main has none of this. `internal/agent/settings.go:15` has an older `Connection` type with the fields `Adapter`, `BaseURL` and `Model` and a bound on the output tokens, and `SettingsStore.PutConnection` (`internal/agent/settings.go:115`) has no caller and no SQL adapter. No route reads, writes or deletes a connection. The later changes of the connect chain (model adapters, probe, connect route) need the document, its validation, the secret items and the URL check first.
