@@ -171,10 +171,10 @@ func (h *Handler) breakGlassRoutes() []Route {
 	}
 }
 
-// listBreakGlass serves GET /api/server/break-glass/accounts: the accounts,
+// listBreakGlass serves GET /api/dustpan/v1/break-glass/accounts: the accounts,
 // each with its passkeys, and the live working and missing counts. The count
-// is the one of the store at the request time, so an account that expires by
-// time leaves it without a write.
+// is the one of the store at the request time, so a change of a passkey or a
+// grant shows in the next list without a write to the account.
 func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -222,7 +222,7 @@ func (h *Handler) listBreakGlass(w http.ResponseWriter, r *http.Request, p ident
 	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
-// addBreakGlass serves POST /api/server/break-glass/accounts: it stores a
+// addBreakGlass serves POST /api/dustpan/v1/break-glass/accounts: it stores a
 // new break-glass person and its first passkey, and answers 201 with the
 // account. It accepts the add whatever the current count. A stale fresh
 // step answers 403 before this handler runs.
@@ -268,7 +268,7 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 	h.writeJSON(ctx, w, http.StatusCreated, breakGlassAccountOf(account, []mfa.Passkey{stored}))
 }
 
-// rotateBreakGlass serves POST /api/server/break-glass/accounts/{id}/rotate:
+// rotateBreakGlass serves POST /api/dustpan/v1/break-glass/accounts/{id}/rotate:
 // it replaces one passkey of the account with a new one in one transaction,
 // and answers 204. An ID that names no break-glass account, or a passkey
 // that the account does not hold, answers 404 with break-glass.not-found. A

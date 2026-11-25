@@ -40,7 +40,7 @@ stored text.
 ## Add an account
 
 A site administrator adds a break-glass account, its first passkey and its
-grant in three requests. Each needs a recent sign-in.
+grant in two requests. Each needs a recent sign-in.
 
 1. Make the passkey with an authenticator. Send `POST
    /api/dustpan/v1/break-glass/accounts` with the person and the passkey:
@@ -121,15 +121,15 @@ passkey that the account does not hold, answers `404` with the error code
 ## The lock timeout
 
 The setting `principal.breakGlassLockSeconds` holds the number of whole
-seconds that a guarded change may wait for the lock of the break-glass rows.
-Its default is `5`, and it takes `1` to `60`. `GET /api/dustpan/v1/settings`
-shows its effective value and the layer that gave it.
+seconds for a lock wait of a guarded change. Its default is `5`, and it takes
+`1` to `60`. `GET /api/dustpan/v1/settings` shows its effective value and the
+layer that gave it.
 
-The guard of a change takes the lock of the server audit scope, so the
-changes that count the break-glass accounts run one after the other. A change
-that the guard refuses answers `409` with the error code
-`principal.no-working-break-glass` and writes nothing. A sign-in takes no such
-lock, so a break-glass sign-in works while a guarded change holds it.
+The server does not use this setting yet. A disable or a delete of a
+break-glass account counts the enabled accounts in the database transaction
+of the write, and does not wait for a separate lock. A change that this count
+refuses answers `409` with the error code `principal.no-working-break-glass`
+and writes nothing.
 
 ## The session limit
 
@@ -216,8 +216,8 @@ this entry after a restore, then disable the account again when a second
 account exists.
 
 A restore also counts the working break-glass accounts before and after it.
-A working account is a local person of the installation that stays enabled
-and stays in the store, has a passkey that is not suspended, and holds a current grant
+A working account is a local person of the installation that is enabled and
+not deleted, has a passkey that is not suspended, and holds a current grant
 without a condition of `site-administrator` or `account-administrator` on the
 installation, directly or through a group. The restore stops with the code
 `principal.no-working-break-glass` when it lowers this count and leaves fewer

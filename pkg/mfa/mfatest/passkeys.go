@@ -96,6 +96,11 @@ func passkeyCases() []passkeyCase {
 			test: testRotateUnknown,
 		},
 		{
+			name: "a rotation of a passkey of a person that is not a break-glass account fails with ErrNotFound " +
+				"and keeps the old passkey",
+			test: testRotateNotBreakGlass,
+		},
+		{
 			name: "two rotations of one passkey at the same time: one wins and one working credential stays",
 			test: testRotateRace,
 		},
@@ -234,6 +239,18 @@ func mustPerson(t *testing.T, s PasskeyStore, n int) string {
 
 	id := "prn-" + strconv.Itoa(n)
 	mustPrincipal(t, s, principalOf(id, "person"+strconv.Itoa(n), principal.KindPerson))
+
+	return id
+}
+
+// mustBreakGlass creates the person prn-<n> as a break-glass account.
+func mustBreakGlass(t *testing.T, s PasskeyStore, n int) string {
+	t.Helper()
+
+	id := "prn-" + strconv.Itoa(n)
+	p := principalOf(id, "break-glass-"+strconv.Itoa(n), principal.KindPerson)
+	p.BreakGlass = true
+	mustPrincipal(t, s, p)
 
 	return id
 }
@@ -1009,7 +1026,7 @@ func testRemoveRace(t *testing.T, s PasskeyStore) {
 func testRotate(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
-	pid := mustPerson(t, s, 1)
+	pid := mustBreakGlass(t, s, 1)
 	mustAdd(t, s, 1, pid)
 
 	next := passkeyOf(2, pid)
@@ -1044,7 +1061,7 @@ func testRotate(t *testing.T, s PasskeyStore) {
 func testRotateInsertFails(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
-	pid := mustPerson(t, s, 1)
+	pid := mustBreakGlass(t, s, 1)
 	mustAdd(t, s, 1, pid)
 	mustAdd(t, s, 2, pid)
 
@@ -1070,8 +1087,8 @@ func testRotateInsertFails(t *testing.T, s PasskeyStore) {
 func testRotateUnknown(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
-	first := mustPerson(t, s, 1)
-	second := mustPerson(t, s, 2)
+	first := mustBreakGlass(t, s, 1)
+	second := mustBreakGlass(t, s, 2)
 	mustAdd(t, s, 1, first)
 	mustAdd(t, s, 2, second)
 
@@ -1092,13 +1109,40 @@ func testRotateUnknown(t *testing.T, s PasskeyStore) {
 	wantEntries(t, s, passkeyObject(3), 0)
 }
 
+// testRotateNotBreakGlass proves that a rotation of a passkey of a person
+// that is not a break-glass account fails with ErrNotFound, keeps the old
+// passkey, stores no new one and appends no entry.
+func testRotateNotBreakGlass(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustPerson(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", passkeyOf(2, pid), entry(passkeyObject(2), at(60)))
+	wantErr(t, "rotate a passkey of a person that is not a break-glass account", err, mfa.ErrNotFound)
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the refused rotation: %v", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(2)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("new passkey after the refused rotation: err = %v, want ErrNotFound", err)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 0)
+}
+
 // testRotateRace proves that two rotations of one passkey at the same time
 // leave exactly one working credential, and that the credential of the
 // rotation that won is the one that stays.
 func testRotateRace(t *testing.T, s PasskeyStore) {
 	t.Helper()
 
-	pid := mustPerson(t, s, 1)
+	pid := mustBreakGlass(t, s, 1)
 	mustAdd(t, s, 1, pid)
 
 	first := passkeyOf(2, pid)

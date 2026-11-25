@@ -232,8 +232,9 @@ type PasskeyStore interface {
 	// run one after the other. It returns ErrInvalid for next that
 	// Validate refuses or that belongs to another person, ErrAlreadyExists
 	// for a passkey ID or a credential ID that any person holds, ErrNotFound
-	// for oldID that is not a passkey of personID, and localuser.ErrDemoFixed
-	// for the demo person. A failed insert changes nothing.
+	// for oldID that is not a passkey of personID and for a person that is
+	// not a break-glass account, and localuser.ErrDemoFixed for the demo
+	// person. A failed insert changes nothing.
 	RotatePasskey(ctx context.Context, personID, oldID string, next Passkey, e audit.Entry) error
 	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
 	// stores c keyed by d. It returns ErrInvalid for a value that

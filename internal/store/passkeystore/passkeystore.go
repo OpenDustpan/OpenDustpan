@@ -427,7 +427,8 @@ func RemovePasskey(ctx context.Context, tx Tx, personID, id string) error {
 // RotatePasskey ends the passkey oldID of the person personID and stores
 // next in its place. The adapter runs it in one transaction, so a failure
 // of any step keeps the old passkey. It returns mfa.ErrNotFound for an
-// unknown passkey or the passkey of another person.
+// unknown passkey, the passkey of another person, or a person that is not a
+// break-glass account.
 func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.Passkey) error {
 	// Defense in depth: the service passes the person of the request. This
 	// check stays so that a new caller cannot rotate into another person.
@@ -435,7 +436,8 @@ func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.
 		return fmt.Errorf("%w: the new passkey belongs to another person", mfa.ErrInvalid)
 	}
 
-	if _, err := person(ctx, tx, personID); err != nil {
+	p, err := person(ctx, tx, personID)
+	if err != nil {
 		if errors.Is(err, principal.ErrNotFound) {
 			return mfa.ErrNotFound
 		}
@@ -443,7 +445,15 @@ func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.
 		return err
 	}
 
-	if _, err := owned(ctx, tx, personID, oldID); err != nil {
+	// Defense in depth: the HTTP handler and the service check that the
+	// person is a break-glass account too. This check reads the locked row in
+	// this transaction and does not rely on them. It stays so that a new
+	// caller cannot skip it and rotate the passkey of another person.
+	if !p.BreakGlass {
+		return fmt.Errorf("%w: the person is not a break-glass account", mfa.ErrNotFound)
+	}
+
+	if _, err = owned(ctx, tx, personID, oldID); err != nil {
 		return err
 	}
 

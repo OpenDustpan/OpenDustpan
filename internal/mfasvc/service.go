@@ -600,7 +600,7 @@ func (s *Service) AddPasskey(
 	// Defense in depth: the HTTP adapter makes the person a break-glass
 	// account before it calls this method. This check stays so that no other
 	// caller adds a passkey to a person without a ceremony.
-	if err := s.checkBreakGlassPerson(ctx, a, personID); err != nil {
+	if err := s.checkBreakGlassPerson(ctx, a, ActionAddRefused, personID); err != nil {
 		return mfa.Passkey{}, err
 	}
 
@@ -635,8 +635,9 @@ func (s *Service) AddPasskey(
 // in one transaction: the new passkey is stored before the old one ends, so
 // no commit leaves the person without a working credential. It calls the
 // rotation method of the store, never an add and then a remove. The caller
-// names the person in its authorization; the service only checks the IDs and
-// the passkey.
+// names the person in its authorization; the service checks the IDs, that
+// the person is a break-glass account, and the passkey. It returns
+// mfa.ErrNotFound for a person that is not a break-glass account.
 func (s *Service) RotatePasskey(ctx context.Context, a Actor, personID, oldID string, next mfa.Passkey) error {
 	object := Object(oldID)
 
@@ -649,6 +650,14 @@ func (s *Service) RotatePasskey(ctx context.Context, a Actor, personID, oldID st
 	// audit object.
 	if !ident.Valid(personID, mfa.MaxIDLength) || !ident.Valid(oldID, mfa.MaxIDLength) {
 		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, unknownObject), "ID not valid", mfa.ErrNotFound)
+	}
+
+	// Defense in depth: the HTTP handler rotates only the passkey of a
+	// break-glass account, and the store checks the locked principal row
+	// again. This check does not rely on them. It stays so that a new caller
+	// cannot skip it and rotate the passkey of another person.
+	if err := s.checkBreakGlassPerson(ctx, a, ActionRotateRefused, personID); err != nil {
+		return err
 	}
 
 	next.PersonID = personID
@@ -847,28 +856,28 @@ func (s *Service) usable(ctx context.Context, personID string) ([]mfa.Passkey, e
 	return out, nil
 }
 
-// checkBreakGlassPerson refuses a person that the add of another account's
-// passkey must not change: an unknown principal, a principal that is not a
-// person of the installation, and a person that is not a break-glass
-// account. It answers mfa.ErrUnavailable when the store cannot read the
-// principal.
-func (s *Service) checkBreakGlassPerson(ctx context.Context, a Actor, personID string) error {
+// checkBreakGlassPerson refuses a person that the add or the rotation of
+// another account's passkey must not change: an unknown principal, a
+// principal that is not a person of the installation, and a person that is
+// not a break-glass account. It answers mfa.ErrUnavailable when the store
+// cannot read the principal. The refusal entry has the action refusal.
+func (s *Service) checkBreakGlassPerson(ctx context.Context, a Actor, refusal, personID string) error {
 	object := Object(personID)
 
 	reader, ok := s.store.(PrincipalReader)
 	if !ok {
-		return s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the store cannot read the principal",
+		return s.refuse(ctx, a.Entry, on(refusal, object), "the store cannot read the principal",
 			mfa.ErrUnavailable)
 	}
 
 	person, err := reader.GetPrincipal(ctx, personID)
 	if err != nil && !errors.Is(err, principal.ErrNotFound) {
-		return s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the principal cannot be read",
+		return s.refuse(ctx, a.Entry, on(refusal, object), "the principal cannot be read",
 			mfa.ErrUnavailable)
 	}
 
 	if err != nil || !person.BreakGlass || person.Kind != principal.KindPerson || person.Namespace != "" {
-		return s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the person is not a break-glass account",
+		return s.refuse(ctx, a.Entry, on(refusal, object), "the person is not a break-glass account",
 			mfa.ErrNotFound)
 	}
 
