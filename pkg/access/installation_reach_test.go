@@ -287,10 +287,9 @@ func TestInstallationReachDiscoveryGrantID(t *testing.T) {
 
 // TestInstallationReachFailedReadDenies proves the fail-closed rule of the
 // reach setting: a failed read and a value that is not a boolean deny the
-// decision inside a namespace, with an error. The Authorizer has no audit port:
-// the caller of Authorize writes the denial entry. The handler test
-// TestInstallationReachFailedReadWritesOneAuditEntry in internal/api/server
-// checks that one entry.
+// decision inside a namespace, with an error. The service-layer test checks
+// the denial and the error only; the audit entry is checked in task 1.4, by
+// TestInstallationReachFailedReadWritesOneAuditEntry in internal/api/server.
 func TestInstallationReachFailedReadDenies(t *testing.T) {
 	t.Parallel()
 
