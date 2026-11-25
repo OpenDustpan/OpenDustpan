@@ -234,7 +234,7 @@ func (c *waitClock) ticker(d time.Duration) (<-chan time.Time, func()) {
 	c.waits = append(c.waits, d)
 
 	tick := make(chan time.Time, 1)
-	tick <- time.Now()
+	tick <- testNow()
 
 	return tick, func() {}
 }

@@ -198,7 +198,7 @@ func (f *fakeTicks) send(d time.Duration) bool {
 	}
 
 	select {
-	case c <- time.Now():
+	case c <- testNow():
 		return true
 	default:
 		return false
@@ -234,13 +234,19 @@ func testConfig(t *testing.T, srv *fakeServer, ticks *fakeTicks) client.Config {
 
 	return client.Config{
 		Server: testServer, Transport: srv, RunnerID: testRunner, Key: priv, Release: "0.0.1",
-		Lease: runner.DefaultLease, Wait: time.Second, Ticker: ticks.ticker, Now: nil, Random: nil, Logger: nil,
+		Lease: runner.DefaultLease, Wait: time.Second, Ticker: ticks.ticker, Now: testNow, Random: nil, Logger: nil,
 	}
+}
+
+// testNow is the fixed clock of the tests: the loop and the fake answers
+// read it, never the wall clock.
+func testNow() time.Time {
+	return time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
 }
 
 func work(lease time.Duration) protocol.Work {
 	return protocol.Work{
-		Operation: testOp, Token: 1, ExpiresAt: time.Now().Add(lease), Lease: protocol.FromStd(lease),
+		Operation: testOp, Token: 1, ExpiresAt: testNow().Add(lease), Lease: protocol.FromStd(lease),
 		Job: "job-1", Phase: 1, Sweep: "", Image: "", ServiceAccount: "",
 		Deadline: protocol.FromStd(time.Hour), Grace: protocol.FromStd(time.Minute),
 	}
@@ -253,7 +259,7 @@ func TestLoopPollsAndRenewsAfterAThirdOfTheLease(t *testing.T) {
 	srv := newFakeServer(map[string][]answer{
 		protocol.PathPoll: {ok(work(lease))},
 		protocol.PathClaimRenew: {ok(protocol.RenewResponse{
-			ExpiresAt: time.Now().Add(lease), Canceled: false, SessionOpen: false,
+			ExpiresAt: testNow().Add(lease), Canceled: false, SessionOpen: false,
 		})},
 	})
 	ticks := newFakeTicks()
@@ -388,7 +394,9 @@ func checkRenewCase(t *testing.T, tc renewCase) {
 	})
 	ticks := newFakeTicks()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	// The deadline bounds a loop that never stops the work: the work then
+	// stops with context.DeadlineExceeded, and the check below fails.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	l, err := client.New(testConfig(t, srv, ticks))
@@ -400,12 +408,9 @@ func checkRenewCase(t *testing.T, tc renewCase) {
 
 	var stopped error
 
-	err = l.Run(ctx, func(ctx context.Context, _ protocol.Work) error {
-		select {
-		case <-ctx.Done():
-			stopped = context.Cause(ctx)
-		case <-time.After(5 * time.Second):
-		}
+	err = l.Run(ctx, func(wctx context.Context, _ protocol.Work) error {
+		<-wctx.Done()
+		stopped = context.Cause(wctx)
 
 		if tc.wantFail == nil {
 			cancel()

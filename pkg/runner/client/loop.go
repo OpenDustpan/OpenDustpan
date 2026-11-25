@@ -493,14 +493,19 @@ func retryAfter(err error) time.Duration {
 	return retryWait
 }
 
-// post sends a signed POST with a JSON body (nil sends none).
-func (l *Loop) post(ctx context.Context, path string, body any) (*session.Response, error) {
-	var raw []byte
+// post sends a signed POST with a JSON body (nil sends none). It returns the
+// answer as a value, so that no caller can read a nil answer: each call of
+// the poll, the renewal and the heartbeat reads its body with no nil check.
+func (l *Loop) post(ctx context.Context, path string, body any) (session.Response, error) {
+	var (
+		raw  []byte
+		none session.Response
+	)
 
 	if body != nil {
 		var err error
 		if raw, err = json.Marshal(body); err != nil {
-			return nil, fmt.Errorf("encode the body of %s: %w", path, err)
+			return none, fmt.Errorf("encode the body of %s: %w", path, err)
 		}
 	}
 
@@ -509,7 +514,7 @@ func (l *Loop) post(ctx context.Context, path string, body any) (*session.Respon
 	proof, err := session.Sign(l.cfg.Key, l.cfg.RunnerID,
 		runner.Signed{Method: methodPost, PathQuery: path, BodySHA256: sum[:]}, l.now())
 	if err != nil {
-		return nil, fmt.Errorf("sign %s: %w", path, err)
+		return none, fmt.Errorf("sign %s: %w", path, err)
 	}
 
 	ans, err := l.cfg.Transport.Do(ctx, &session.Request{
@@ -518,19 +523,22 @@ func (l *Loop) post(ctx context.Context, path string, body any) (*session.Respon
 		},
 	})
 	if err != nil {
-		return nil, l.noAnswer(ctx, path, err)
+		return none, l.noAnswer(ctx, path, err)
 	}
 
+	// The one guard of a transport that breaks its contract, for each call.
 	if ans == nil {
-		return nil, fmt.Errorf("%w: %s: the transport gave no answer and no error", ErrInvalid, path)
+		l.refused(ctx, path, "the transport gave no answer and no error")
+
+		return none, fmt.Errorf("%w: %s: the transport gave no answer and no error", ErrInvalid, path)
 	}
 
 	data, err := l.readBody(ctx, path, ans.Body)
 	if err != nil {
-		return nil, err
+		return none, err
 	}
 
-	return &session.Response{Status: ans.Status, Body: data, RetryAfter: ans.RetryAfter}, nil
+	return session.Response{Status: ans.Status, Body: data, RetryAfter: ans.RetryAfter}, nil
 }
 
 // noAnswer returns the error of a call to path that got no answer. A call
@@ -576,7 +584,7 @@ func (l *Loop) refused(ctx context.Context, path, reason string, attrs ...slog.A
 
 // answerError returns nil when resp has a status below 400 and an *Error
 // otherwise.
-func answerError(resp *session.Response) error {
+func answerError(resp session.Response) error {
 	if resp.Status < statusBadRequest {
 		return nil
 	}
@@ -942,6 +950,7 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 
 			continue
 		case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
+			l.log.WarnContext(ctx, "the server does not accept the runner: the loop ends", errorAttr("error", err))
 			stop(err)
 
 			return

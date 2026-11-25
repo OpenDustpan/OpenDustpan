@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/launcher/session"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -154,6 +155,43 @@ func wantProtocolError(h *rtHarness, what string, resp *session.Response, status
 	}
 }
 
+// expireClaim shortens the claim of work by rn to 1 ms and returns when the
+// clock of the database is past its expiry.
+func expireClaim(h *rtHarness, rn poolRunner, work protocol.Work) {
+	h.t.Helper()
+
+	claim := durable.Claim{
+		Operation: durable.ID(work.Operation), Owner: rn.id, Token: work.Token, ExpiresAt: work.ExpiresAt,
+	}
+
+	short, err := h.cluster.Operations(h.t, 0).Extend(h.t.Context(), claim, time.Millisecond)
+	if err != nil {
+		h.t.Fatalf("shorten the claim of %s: %v", work.Operation, err)
+	}
+
+	st := h.cluster.Store(h.t, 0)
+	tick := time.NewTicker(time.Millisecond)
+
+	defer tick.Stop()
+
+	for {
+		now, err := st.DatabaseNow(h.t.Context())
+		if err != nil {
+			h.t.Fatalf("read the clock of the database: %v", err)
+		}
+
+		if now.After(short.ExpiresAt) {
+			return
+		}
+
+		select {
+		case <-h.t.Context().Done():
+			h.t.Fatal("the test ended before the claim expired")
+		case <-tick.C:
+		}
+	}
+}
+
 // TestRunnerOfAnotherPoolGetsNoWork checks that a runner of pool B gets no
 // work while a job waits in pool A, and that the job stays queued for a
 // runner of pool A.
@@ -209,9 +247,8 @@ func TestLoopStopsOnRetiredAndLostClaim(t *testing.T) {
 
 	client := &session.Client{Server: publicURL, Transport: httpTransport{h: h}, Release: "0.0.1", Now: nil}
 
-	// The shortest lease of a pool. The claim expires at the clock of the
-	// database, which a test cannot move, so the test waits for the lease.
-	poolID := createJobPool(h, "short-lease", runner.MinLease.Milliseconds())
+	// The pool takes the default lease; expireClaim shortens the claim.
+	poolID := createJobPool(h, "short-lease", 0)
 	retired := joinPoolRunner(h, client, poolID, "builder-retired")
 	live := joinPoolRunner(h, client, poolID, "builder-live")
 
@@ -239,15 +276,10 @@ func TestLoopStopsOnRetiredAndLostClaim(t *testing.T) {
 		t.Fatalf("work of the live runner = %+v, want the job %s", work, jobID)
 	}
 
-	// Wait until the lease of the claim expired, with a margin for the clock
-	// of the database.
-	wait := time.Until(work.ExpiresAt) + 2*time.Second
-
-	select {
-	case <-t.Context().Done():
-		t.Fatal("the test ended before the claim expired")
-	case <-time.After(wait):
-	}
+	// The claim expires at the clock of the database. The test shortens its
+	// lease to 1 ms and then reads the clock of the database until it is past
+	// the expiry: no wall clock and no wait for the lease of the pool.
+	expireClaim(h, live, work)
 
 	// Hostile case: the runner renews a claim whose lease expired.
 	path := strings.NewReplacer("{operation}", work.Operation).Replace(protocol.PathClaimRenew)

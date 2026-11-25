@@ -275,7 +275,7 @@ func TestLoopRecordsTheEndOfRenewalsOnAnOpenSession(t *testing.T) {
 	srv := newFakeServer(map[string][]answer{
 		protocol.PathPoll: {ok(work(lease)), noWork()},
 		protocol.PathClaimRenew: {ok(protocol.RenewResponse{
-			ExpiresAt: time.Now().Add(lease), Canceled: false, SessionOpen: true,
+			ExpiresAt: testNow().Add(lease), Canceled: false, SessionOpen: true,
 		})},
 	})
 	l, logs := loggedLoop(t, srv, ticks)
