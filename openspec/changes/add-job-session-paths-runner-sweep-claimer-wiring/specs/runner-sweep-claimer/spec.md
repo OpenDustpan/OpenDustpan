@@ -16,6 +16,46 @@ When a runner of a pool polls, the server SHALL claim only a durable operation w
 - **WHEN** the purpose of a pool changes while a claim runs
 - **THEN** the server reads the new purpose in the claim transaction and answers 204 for a kind that no longer matches.
 
+### Requirement: claim-advances-the-sweep
+
+When the server claims a sweep for a runner, the server SHALL move the sweep to running before it gives the work, or give no work.
+
+#### Scenario: Queued sweep claimed
+- **WHEN** a runner polls and claims the operation of a sweep that is queued
+- **THEN** the server applies the event dispatch and then the event claim, the sweep is running, and the poll answers 200 with the work.
+
+#### Scenario: Dispatched sweep claimed
+- **WHEN** a runner claims the operation of a sweep that is dispatched, after a claim that lapsed between the two events
+- **THEN** the server applies the event claim, the sweep is running, and the poll answers 200.
+
+#### Scenario: Takeover of a running sweep
+- **WHEN** a runner claims the operation of a sweep that is running, after its claim lapsed
+- **THEN** the sweep stays running with the new claim, and the poll answers 200.
+
+#### Scenario: Cancel wins the race
+- **WHEN** a person cancels the sweep after the durable claim and before the state move
+- **THEN** the state move returns ErrTransition, the server releases the durable claim, the poll answers 204, and the sweep stays canceled.
+
+#### Scenario: State move fails
+- **WHEN** the store fails to apply the event dispatch or the event claim
+- **THEN** the server releases the durable claim, gives no work, answers 204, and keeps the status of the last event that succeeded.
+
+#### Scenario: Sweep takes no claim event
+- **WHEN** a runner claims the operation of a sweep that is in matching, succeeded, failed, canceled or expired
+- **THEN** the server gives no work, releases the claim and changes no status.
+
+#### Scenario: Release moves the sweep back
+- **WHEN** the runner releases a live claim of a running sweep
+- **THEN** the server ends the durable claim, applies the event release after it, and the sweep is dispatched.
+
+#### Scenario: Release with a lost claim
+- **WHEN** a caller releases with a stale claim token or the token of another operation
+- **THEN** the server answers 409 and applies no event.
+
+#### Scenario: Release of a sweep that ended
+- **WHEN** the runner releases a claim and the sweep is canceled or ended
+- **THEN** the release succeeds and the sweep keeps its status.
+
 ### Requirement: sweep-report-auth
 
 If a sweep report request lacks a valid session proof, an open session or ownership of the claim, then the server SHALL refuse the request.
