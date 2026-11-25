@@ -63,7 +63,7 @@ Each file is named only when the design needs it.
 - `pkg/dustpan/dustpan.go`: the settings reader is built before the authorizer and given to it (decision 7). `pkg/dustpan/localusers.go` builds `Reach` values (lines 287 and 299) and calls the NEW method `WithSettingsPort` with the same reader.
 - `internal/cli/settings_api_guard_test.go`: the key goes in `databaseKeys`.
 - `e2e/installation_grants_reach_test.go` (NEW): the e2e scenario of task 3.1.
-- `pkg/access/namespace_housekeeping_grants_test.go` (NEW) and `pkg/job/housekeeping_reach_test.go` (NEW): the probe tests of task 1.5. Main has neither file.
+- `pkg/access/reach_namespaces_setting_test.go` (NEW) and `pkg/job/reach_namespaces_setting_test.go` (NEW): the probe tests of task 1.5. Main has neither file. The housekeeping changes keep their own test files; this change writes into none of them.
 - `docs/reference/settings-api.md`, `docs/guides/roles-and-grants.md`, `docs/guides/access-review.md`: the pages of task 3.2.
 
 Files that this change leaves out, and why:
