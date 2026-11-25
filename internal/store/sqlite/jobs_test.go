@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/store/jobstore"
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -23,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/job/jobtest"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -51,6 +53,33 @@ func (d *jobDomain) CreateNamespace(ctx context.Context, name namespace.Name) (n
 	}
 
 	return ns.Fence(), nil
+}
+
+func (d *jobDomain) CreatePrincipal(ctx context.Context, subject string, kind identity.Kind) error {
+	at := time.UnixMilli(1_700_000_000_000).UTC()
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: ident.NewID(principal.IDPrefix),
+		Subject: subject, DisplayName: subject, Kind: principal.Kind(kind), Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if err := d.s.CreatePrincipal(ctx, p, jobDomainPrincipalEntry(p.ID, at)); err != nil {
+		return fmt.Errorf("create principal: %w", err)
+	}
+
+	return nil
+}
+
+// jobDomainPrincipalEntry returns a valid audit entry of a principal create.
+func jobDomainPrincipalEntry(id string, at time.Time) audit.Entry {
+	return audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "tester", IDPSubject: "", TokenID: "",
+		Action: "server:manage-principals", Object: principal.Ref(id), Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
+	}
 }
 
 func (d *jobDomain) CreateUnit(
@@ -437,6 +466,7 @@ func TestJobConformance(t *testing.T) {
 
 		s := open(t)
 		j := s.Jobs()
+		setFreshSettingOff(t, j)
 
 		ops := s.DurableOperationsPort()
 		d := &jobDomain{s: s}
@@ -458,6 +488,22 @@ BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`
 			},
 		}
 	})
+}
+
+// setFreshSettingOff makes the job store read the setting freshAuthEnabled as
+// off, which is its default. The store fails closed with no resolver, so the
+// suite sets one that answers that no fresh step is required.
+func setFreshSettingOff(t *testing.T, j sqlite.JobStore) {
+	t.Helper()
+
+	r, ok := j.(interface {
+		SetFreshResolver(r jobstore.FreshResolver)
+	})
+	if !ok {
+		t.Fatalf("the job store %T has no fresh resolver", j)
+	}
+
+	r.SetFreshResolver(func(*string) (bool, error) { return false, nil })
 }
 
 func TestRecorderConformance(t *testing.T) {

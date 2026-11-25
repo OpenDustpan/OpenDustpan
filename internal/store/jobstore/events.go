@@ -7,15 +7,19 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
 // writeRules holds what a change checks besides its own fields: the database
-// clock of the transaction, and whether the installation requires a fresh
-// step.
+// clock of the transaction, whether the installation requires a fresh step,
+// and the principal of the approval subject. The principal is read in the
+// transaction, and only for an approval with the authentication none.
 type writeRules struct {
 	now           time.Time
 	freshRequired bool
+	approverFound bool
+	approverKind  identity.Kind
 }
 
 // change makes the fields of c on next, and checks the rules of its event.
@@ -57,13 +61,20 @@ func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, rules writ
 // signature write. A rejection needs no fresh step. When the installation
 // requires no fresh step (the setting freshAuthEnabled is off), an approval
 // of a person that records the authentication none needs no proof. An agent
-// is refused in each case.
+// is refused in each case, and so is an approval of the authentication none
+// by a principal that is not a person.
 func checkDestroyProof(j *job.Job, ap *job.Approval, rules writeRules) error {
 	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
 		return nil
 	}
 
 	if ap.Verdict != job.VerdictApprove || ap.Agent != "" {
+		return job.ErrAuthStale
+	}
+
+	// Defense in depth: the handler and the service check the same kind; this
+	// check stays so that a new caller of the store cannot skip it.
+	if ap.Auth == job.ConfirmAuthNone && (!rules.approverFound || rules.approverKind != identity.KindPerson) {
 		return job.ErrAuthStale
 	}
 

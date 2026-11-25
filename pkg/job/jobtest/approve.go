@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/history"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -30,6 +31,14 @@ func approveCases() []suiteCase {
 		{"approval: a dispatch refuses an approval bound to another plan", testApprovalOtherPlan},
 		{"approval: a destroy needs fresh proof in the write transaction", testDestroyApprovalFresh},
 		{"approval: a destroy records fresh proof and permits rejection without it", testDestroyApprovalProofStored},
+		{
+			"approval: a person may approve a destroy with auth none while the setting is off",
+			testDestroyApprovalAuthNonePerson,
+		},
+		{
+			"approval: a service, a workload and an agent may not approve a destroy with auth none",
+			testDestroyApprovalAuthNoneNonPerson,
+		},
 	}
 }
 
@@ -153,6 +162,69 @@ func testDestroyApprovalProofStored(t *testing.T, h Harness) {
 	rejected := apply(t, h, f, verdict(&stored, "di", job.VerdictReject, job.EventRejected))
 	if rejected.State != job.StateRejected {
 		t.Fatalf("state = %s, want rejected", rejected.State)
+	}
+}
+
+// testDestroyApprovalAuthNonePerson checks that a person approves a destroy
+// with the authentication none, because the setting is off and the store
+// reads the kind of the approver from its principal row.
+func testDestroyApprovalAuthNonePerson(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := awaitingApprovalFor(t, h, f, job.OperationDestroy)
+	if err := h.Domain.CreatePrincipal(t.Context(), "cy", identity.KindPerson); err != nil {
+		t.Fatalf("create the approver: %v", err)
+	}
+
+	c := verdict(&j, "cy", job.VerdictApprove, job.EventApprovalRecorded)
+	c.Approval.Auth, c.Approval.AuthAt = job.ConfirmAuthNone, time.Time{}
+	stored := apply(t, h, f, c)
+	if len(stored.Phases[1].Approvals) != 1 || stored.Phases[1].Approvals[0].Auth != job.ConfirmAuthNone {
+		t.Fatal("the store did not retain the approval of the person")
+	}
+}
+
+// testDestroyApprovalAuthNoneNonPerson checks that a principal that is not a
+// person cannot approve a destroy with the authentication none. The store
+// reads the kind of the approver from its principal row, so each kind gets
+// its own row.
+func testDestroyApprovalAuthNoneNonPerson(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	j := awaitingApprovalFor(t, h, f, job.OperationDestroy)
+	tests := []struct {
+		name string
+		kind identity.Kind
+	}{
+		{"service", identity.KindService},
+		{"workload", identity.KindWorkload},
+		{"agent", identity.KindAgent},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			subject := "approver-" + tc.name
+			if err := h.Domain.CreatePrincipal(t.Context(), subject, tc.kind); err != nil {
+				t.Fatalf("create the approver: %v", err)
+			}
+
+			c := verdict(&j, subject, job.VerdictApprove, job.EventApprovalRecorded)
+			c.Approval.Auth, c.Approval.AuthAt = job.ConfirmAuthNone, time.Time{}
+
+			_, err := h.Jobs.Apply(t.Context(), c, f.fence, nil)
+			if !errors.Is(err, job.ErrAuthStale) {
+				t.Fatalf("Apply = %v, want ErrAuthStale", err)
+			}
+
+			got, err := h.Jobs.Get(t.Context(), j.ID)
+			if err != nil || got.Version != j.Version || len(got.Phases[1].Approvals) != 0 {
+				t.Fatal("the refused approval changed the job")
+			}
+		})
 	}
 }
 

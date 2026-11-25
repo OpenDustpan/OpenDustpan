@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -125,6 +126,21 @@ func (t *jobTx) SettingValue(ctx context.Context, key string) (string, bool, err
 	}
 
 	return value, true, nil
+}
+
+// PrincipalKind implements jobstore.Tx. It reads the principal of the subject
+// in this transaction, and returns its stored kind as it is.
+func (t *jobTx) PrincipalKind(ctx context.Context, subject string) (identity.Kind, bool, error) {
+	p, err := t.q.GetPrincipalBySubject(ctx, subject)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("select principal kind: %w", err)
+	}
+
+	return identity.Kind(p.Kind), true, nil
 }
 
 // Job implements jobstore.Tx.

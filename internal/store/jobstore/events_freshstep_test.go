@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -73,7 +74,7 @@ func TestDestroyProofFollowsTheSetting(t *testing.T) {
 				check = jobstore.CheckDestroyProofStepOn
 			}
 
-			err := check(j, ap, now)
+			err := check(j, ap, now, identity.KindPerson, true)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("CheckDestroyProof = %v, want %v", err, tc.wantErr)
 			}

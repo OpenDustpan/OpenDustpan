@@ -85,7 +85,8 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh
 
 	next := cloneJob(&cur)
 
-	if err := change(ctx, tx, &next, c, writeRules{now: now, freshRequired: fresh}); err != nil {
+	rules := writeRules{now: now, freshRequired: fresh, approverFound: false, approverKind: ""}
+	if err := changeIn(ctx, tx, &next, c, rules); err != nil {
 		return job.Job{}, err
 	}
 
@@ -116,6 +117,22 @@ func applyIn(ctx context.Context, tx Tx, c *job.Change, ns namespace.Name, fresh
 	}
 
 	return next, nil
+}
+
+// changeIn makes the change c on next in the transaction tx with the rules
+// of the write. The principal of an approval is read in tx, and only for an
+// approval with the authentication none, so no other write reads it.
+func changeIn(ctx context.Context, tx Tx, next *job.Job, c *job.Change, rules writeRules) error {
+	if c.Approval != nil && c.Approval.Auth == job.ConfirmAuthNone {
+		kind, found, err := tx.PrincipalKind(ctx, c.Approval.Subject)
+		if err != nil {
+			return fmt.Errorf("read the kind of the approver: %w", err)
+		}
+
+		rules.approverFound, rules.approverKind = found, kind
+	}
+
+	return change(ctx, tx, next, c, rules)
 }
 
 // endOperation ends the durable operation of c.End, in the transaction tx of

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
@@ -24,19 +25,25 @@ func CheckReservedPlan(
 }
 
 // CheckDestroyProofStepOn exposes checkDestroyProof with the setting
-// freshAuthEnabled on to the black-box tests.
-func CheckDestroyProofStepOn(j *job.Job, ap *job.Approval, now time.Time) error {
-	return checkDestroyProof(j, ap, writeRules{now: now, freshRequired: true})
+// freshAuthEnabled on to the black-box tests. approver is the principal of the
+// approval subject, and found tells whether that principal row exists.
+func CheckDestroyProofStepOn(j *job.Job, ap *job.Approval, now time.Time, approver identity.Kind, found bool) error {
+	rules := writeRules{now: now, freshRequired: true, approverFound: found, approverKind: approver}
+
+	return checkDestroyProof(j, ap, rules)
 }
 
 // CheckDestroyProofStepOff exposes checkDestroyProof with the setting
-// freshAuthEnabled off to the black-box tests.
-func CheckDestroyProofStepOff(j *job.Job, ap *job.Approval, now time.Time) error {
-	return checkDestroyProof(j, ap, writeRules{now: now, freshRequired: false})
+// freshAuthEnabled off to the black-box tests. approver is the principal of the
+// approval subject, and found tells whether that principal row exists.
+func CheckDestroyProofStepOff(j *job.Job, ap *job.Approval, now time.Time, approver identity.Kind, found bool) error {
+	rules := writeRules{now: now, freshRequired: false, approverFound: found, approverKind: approver}
+
+	return checkDestroyProof(j, ap, rules)
 }
 
-// FreshRequired exposes freshRequired of s, read in the transaction tx, to the
-// black-box tests.
+// ReadFreshRequired exposes freshRequired of s, read in the transaction tx, to
+// the black-box tests.
 func ReadFreshRequired(ctx context.Context, s *Store, tx Tx) (bool, error) {
 	return freshRequired(ctx, s.fresh, tx)
 }

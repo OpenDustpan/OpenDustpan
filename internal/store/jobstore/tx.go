@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -128,6 +129,11 @@ type Tx interface {
 	// from the settings table, and false when no row holds the key. It reads
 	// the rows of the installation scope only.
 	SettingValue(ctx context.Context, key string) (value string, found bool, err error)
+
+	// PrincipalKind returns the kind of the principal with the subject, and
+	// false when no principal holds the subject. An unknown stored kind is
+	// returned as it is, so a rule that allows only a known kind refuses it.
+	PrincipalKind(ctx context.Context, subject string) (kind identity.Kind, found bool, err error)
 
 	// Job returns the job id, and false when none exists.
 	Job(ctx context.Context, id job.ID) (Row, bool, error)

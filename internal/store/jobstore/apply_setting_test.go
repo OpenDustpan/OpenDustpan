@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/store/jobstore"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -82,7 +83,12 @@ func TestApplyReadsTheSettingInItsWriteTransaction(t *testing.T) {
 	fake.put(t, &j)
 
 	stored := map[string]string{"freshAuthEnabled": "true"}
-	tx := settingTx{fakeTx: fake, settings: stored, err: nil}
+	// The approver is a person, so only the setting decides the approval.
+	base := settingTx{fakeTx: fake, settings: stored, err: nil}
+	tx := kindTx{
+		settingTx:  base,
+		principals: map[string]identity.Kind{"ada": identity.KindPerson},
+	}
 
 	s := jobstore.New(changingRunner{
 		tx:          tx,
