@@ -408,3 +408,101 @@ func TestBreakGlassAddPersonRefusesKind(t *testing.T) {
 		t.Fatalf("passkey add entries = %d, want 0", len(got))
 	}
 }
+
+// newPersonInput returns the input of a new break-glass person with subject.
+func newPersonInput(subject string) principal.Input {
+	return principal.Input{Subject: subject, DisplayName: "Break glass two", Kind: principal.KindPerson}
+}
+
+// listPersons returns the persons of the store of f.
+func listPersons(t *testing.T, f *fixture) []principal.Principal {
+	t.Helper()
+
+	persons, _, err := f.store.ListPrincipals(t.Context(),
+		principal.Query{After: "", Low: "", High: "", Limit: 100}, principal.KindPerson)
+	if err != nil {
+		t.Fatalf("list the persons: %v", err)
+	}
+
+	return persons
+}
+
+// wantOneAddRefusal proves that the add of a break-glass person was refused
+// with one denial entry whose cause is cause, and that the store holds no new
+// person, no passkey of the new credential and no passkey success entry.
+func wantOneAddRefusal(t *testing.T, f *fixture, before int, cause string) {
+	t.Helper()
+
+	refusals := f.entries(t, mfasvc.ActionAddRefused)
+	if len(refusals) != 1 {
+		t.Fatalf("refusal entries = %d, want 1", len(refusals))
+	}
+
+	if changes := refusals[0].Changes; len(changes) != 1 || changes[0].New != cause {
+		t.Fatalf("refusal changes = %+v, want the cause %q", changes, cause)
+	}
+
+	if after := listPersons(t, f); len(after) != before {
+		t.Fatalf("persons = %d, want %d: the refused add stored a person", len(after), before)
+	}
+
+	_, keyErr := f.store.PasskeyByCredentialID(t.Context(), []byte("credential-new"))
+	if !errors.Is(keyErr, mfa.ErrNotFound) {
+		t.Fatalf("passkey after the refused add: err = %v, want ErrNotFound", keyErr)
+	}
+
+	if got := f.entries(t, mfasvc.ActionPasskeyAdded); len(got) != 0 {
+		t.Fatalf("passkey add entries = %d, want 0", len(got))
+	}
+}
+
+// TestBreakGlassAddPersonGuards proves that AddBreakGlassPerson refuses a call
+// with no caller, a person that is not valid and a first passkey that is not
+// valid. Each refusal writes one denial entry and stores no person and no
+// passkey. Each case uses its own fixture, so the entry count is exact.
+func TestBreakGlassAddPersonGuards(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no caller", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBreakGlassFixture(t)
+		before := len(listPersons(t, f))
+		in := newPersonInput("break-glass-two")
+
+		_, _, err := f.svc.AddBreakGlassPerson(t.Context(), actor("", ""), in, newPasskey("new"))
+		f.wantRefusal(t, "add a person with no caller", err, mfa.ErrWrongPerson, mfasvc.ActionAddRefused)
+		wantOneAddRefusal(t, f, before, "no caller")
+	})
+
+	t.Run("person not valid", func(t *testing.T) {
+		t.Parallel()
+
+		for _, subject := range []string{"", "break glass two", "break-glass\nlf"} {
+			f := newBreakGlassFixture(t)
+			before := len(listPersons(t, f))
+			in := principal.Input{Subject: subject, DisplayName: "Break glass two", Kind: principal.KindPerson}
+
+			_, _, err := f.svc.AddBreakGlassPerson(t.Context(), actor(glass, "ses-glass"), in, newPasskey("new"))
+			f.wantRefusal(t, "add a person with subject "+subject, err, principal.ErrInvalid, mfasvc.ActionAddRefused)
+			wantOneAddRefusal(t, f, before, "the person is not valid")
+		}
+	})
+
+	t.Run("first passkey not valid", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range invalidPasskeys() {
+			f := newBreakGlassFixture(t)
+			before := len(listPersons(t, f))
+			in := newPersonInput("break-glass-two")
+
+			next := newPasskey("new")
+			tc.mutate(&next)
+
+			_, _, err := f.svc.AddBreakGlassPerson(t.Context(), actor(glass, "ses-glass"), in, next)
+			f.wantRefusal(t, "add a person with "+tc.name, err, mfa.ErrInvalid, mfasvc.ActionAddRefused)
+			wantOneAddRefusal(t, f, before, "the passkey is not valid")
+		}
+	})
+}

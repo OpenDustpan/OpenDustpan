@@ -254,25 +254,41 @@ func (s *Store) swapInWithBreakGlassFloor(
 
 	at := codec.FromMillis(nowMs)
 
-	before, beforeErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
+	q := s.queries.WithTx(tx)
+
+	before, beforeErr := countWorkingBreakGlass(ctx, q, at)
 	if beforeErr != nil {
 		return beforeErr
+	}
+
+	beforeScopes, beforeScopesErr := breakGlassScopeCounts(ctx, q, at)
+	if beforeScopesErr != nil {
+		return beforeScopesErr
 	}
 
 	if err := s.swapIn(ctx, tx, srv, in, kept); err != nil {
 		return err
 	}
 
-	after, afterErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
+	after, afterErr := countWorkingBreakGlass(ctx, q, at)
 	if afterErr != nil {
 		return afterErr
 	}
 
-	if err := checkBreakGlassPasswords(ctx, s.queries.WithTx(tx)); err != nil {
+	afterScopes, afterScopesErr := breakGlassScopeCounts(ctx, q, at)
+	if afterScopesErr != nil {
+		return afterScopesErr
+	}
+
+	if err := checkBreakGlassPasswords(ctx, q); err != nil {
 		return err
 	}
 
-	return checkWorkingBreakGlassFloor(before, after)
+	if err := checkWorkingBreakGlassFloor(before, after); err != nil {
+		return err
+	}
+
+	return checkNamespaceFloors(beforeScopes, afterScopes)
 }
 
 // swapInTarget is the target of swapIn: the plan of the swap and the live
