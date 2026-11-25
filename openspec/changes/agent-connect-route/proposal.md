@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -46,4 +46,6 @@ The persona is the administrator who connects a model. The administrator sends t
 - ADR 354 and RFC 121 decision 7: the connect transaction makes Dusty. This change gives the transaction its caller.
 - ADR 17: the route declares its action and object. ADR 250 and ADR 364: the layers table in design.md.
 
-Open questions: none
+## Open questions
+
+none
