@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #3683. This change builds ADR 210 decision 10 for the audit list.
@@ -33,7 +33,7 @@ What the person loses: the total count and the jump to page N. Both need a count
 
 - The cost is the count and the offset. Prototype run on this repository's layout (not the Postgres run of the issue): SQLite 3, table `audit_entries(namespace, sequence, subject, at_ms, hash, PRIMARY KEY (namespace, sequence))`, 1,000,000 rows of one namespace, one cold run each. `COUNT(*)` of the namespace: 29.4 ms. `ORDER BY sequence DESC LIMIT 50 OFFSET 900000`: 30.0 ms. `WHERE sequence < 100000 ORDER BY sequence DESC LIMIT 51`: 1.3 ms. The same without a `WHERE` on sequence: 0.07 ms. The rows are narrower than the real table, so the times are lower bounds for the first two. The keyset read uses the primary key `(namespace, sequence)` of each dialect (`internal/store/postgres/migrations/0168_baseline.sql:1687`, `internal/store/sqlite/migrations/0168_baseline.sql:265`) and needs no new index and no schema edit. Task 1.9 puts the plan of the query in a test.
 - The audit list is the only list that still uses `page[number]` among the tool-neutral routes. Run on main (f7a35d59e, 19 Nov 2026): `rg -n "page\[(number|size)\]" internal/api --glob '!*_test.go' --glob '!internal/api/tfe/**'` prints only the lines of `internal/api/audit/audit.go` (417 to 475). The TFE-compatible API uses `page[number]` because its tool does, and it stays as it is.
-- No other client reads the list. `rg -n "api/audit|/audit" /home/user/console/src` prints nothing (the console repository at its main `06e3b79`). `rg -n "audit/entries" internal/cli internal/clientgen cmd clients load` prints nothing. The generated description has no route of the list: `rg -n '"/api/audit/entries' internal/api/apidesc/openapi.json` prints nothing, because `Operations` in `internal/api/audit/operations.go:27` describes only the routes under `apidesc.Prefix`. The callers are the e2e suite, tests and the docs page (see "Files").
+- No other client reads the list. `rg -n "api/audit|/audit" /home/user/console/src` prints nothing (the console repository at its main `06e3b79`). `rg -n "audit/entries" cmd load` and the same search over the CLI and client generator packages print nothing. The generated description has no route of the list: `rg -n '"/api/audit/entries' internal/api/apidesc/openapi.json` prints nothing, because `Operations` in `internal/api/audit/operations.go:27` describes only the routes under `apidesc.Prefix`. The callers are the e2e suite, tests and the docs page (see "Files").
 
 ## What main already does
 
@@ -41,14 +41,14 @@ Each fact names its file, line and function on main (f7a35d59e). The change spec
 
 - `listEntries` answers `GET /api/audit/entries` after the route wrapper allowed the action, resolves the scope, reads the page and answers entries and a total (`internal/api/audit/audit.go:307 (func listEntries)`)
 - `auditScope` resolves the scope from the path object (`internal/api/audit/audit.go:290 (func auditScope)`)
-- `listEntriesResponse` holds `Entries` and `Total` (`internal/api/audit/audit.go:270 (type listEntriesResponse)`)
+- `listEntriesResponse` holds `Entries` and `Total` (`internal/api/audit/audit.go:273 (type listEntriesResponse)`)
 - `parsePage` reads `page[number]` and `page[size]` with `strconv.Atoi`; a value below 1 answers `errInvalidPage`, missing values read as page 1 and the default size, a size above the maximum is cut to it, and any other query value is ignored (`internal/api/audit/audit.go:454 (func parsePage)`)
 - `requestErrors` maps `errInvalidPage` to `400` `request.invalid-query` (`internal/api/audit/audit.go:488 (func requestErrors)`)
 - The default page size is 50 (`pkg/audit/audit.go:157 (const DefaultPageSize)`)
 - The largest page size is 200 (`pkg/audit/audit.go:160 (const MaxPageSize)`)
-- `Page{Number, Size}` has `Normalized` and `Offset` (`pkg/audit/audit.go:717 (type Page)`)
-- `Listing{Entries, Total}` carries the total (`pkg/audit/audit.go:749 (type Listing)`)
-- `Store.List` promises the total count in its comment (`pkg/audit/audit.go:775 (type Store)`)
+- `Page{Number, Size}` has `Normalized` and `Offset` (`pkg/audit/audit.go:720 (type Page)`)
+- `Listing{Entries, Total}` carries the total (`pkg/audit/audit.go:748 (type Listing)`)
+- `Store.List` promises the total count in its comment (`pkg/audit/audit.go:774 (type Store)`)
 - The Postgres store counts and lists in one snapshot transaction (`inSnapshotTx`), so the page and the total agree (`internal/store/postgres/audit.go:580 (func List)`)
 - The SQLite store runs `CountAuditEntries` and then `ListAuditEntries` as two statements with no shared transaction; this corrects the premise of the issue, because only Postgres reads both in one snapshot (`internal/store/sqlite/audit.go:393 (func List)`)
 - `ListAuditEntries` is `WHERE namespace = $1 ORDER BY sequence DESC LIMIT $2 OFFSET $3` in Postgres (`internal/store/postgres/queries.sql:1469`)
@@ -58,7 +58,7 @@ Each fact names its file, line and function on main (f7a35d59e). The change spec
 - `ListAuditChainPage` is a keyset query but reads oldest first: `WHERE namespace = $1 AND sequence > $2 ORDER BY sequence ASC LIMIT $3`; this corrects the premise, because the list needs a new query with `<` and `DESC` (`internal/store/postgres/queries.sql:1485`)
 - The SQLite copy of `ListAuditChainPage` is ascending too (`internal/store/sqlite/queries.sql:1283`)
 - The sink feed uses the ascending chain query (`internal/store/postgres/audit_feed.go:21 (func After)`)
-- `Check` treats a gap in the sequence as a broken chain, so the list can meet a gap and must not assume none (`pkg/audit/audit.go:762 (type CheckResult)`)
+- `Check` treats a gap in the sequence as a broken chain, so the list can meet a gap and must not assume none (`pkg/audit/audit.go:761 (type CheckResult)`)
 - The shared page-token module encodes with `Encode` (`internal/pagetoken/pagetoken.go:44 (func Encode)`)
 - `Decode` refuses a token over 4096 bytes, unknown members and trailing JSON (`internal/pagetoken/pagetoken.go:58 (func Decode)`)
 - `Fingerprint` and `SameFingerprint` bind a token to a query (`internal/pagetoken/pagetoken.go:30 (func Fingerprint)`)
@@ -70,12 +70,12 @@ Each fact names its file, line and function on main (f7a35d59e). The change spec
 This change makes the audit list follow ADR 210 decision 10. It touches:
 
 - The port `audit.Store.List` and the types `Page` and `Listing` in `pkg/audit/audit.go`: `Page{Size, Before}`, `Listing{Entries, More}`, a new sentinel `ErrInvalidPage`. `Number`, `Offset` and `Total` go. No count, no offset.
-- The two store adapters (`internal/store/postgres/audit.go`, `internal/store/sqlite/audit.go`) and their queries: `ListAuditEntries` becomes a keyset query, and `CountAuditEntries` is removed. The generated query code is regenerated.
+- The two store adapters (`internal/store/postgres/audit.go`, `internal/store/sqlite/audit.go`) and their queries: `ListAuditEntries` (the query name on main) becomes the keyset query NEW `ListAuditEntriesBefore`, and `CountAuditEntries` (the query name on main) is removed. The generated query code is regenerated.
 - The handler `internal/api/audit/audit.go`: `parsePage`, the token, the answer, the error mapping. The Contract comment on `listEntriesResponse` ("never remove or rename these fields") is changed: the console does not read this route (see "Evidence").
 - The conformance suite `pkg/audit/audittest` and every caller of `Page` and `Total` (see "Files" and the tasks).
 - The docs page `docs/guides/audit-log.md`, the error-code page, the unreleased release notes, and the e2e helpers.
 
-- New names that this change adds: NEW `audit.ErrInvalidPage`, NEW `ListAuditEntriesBefore`, NEW `NextPageToken`, NEW `TestListEntriesHostileQueryRows`, NEW `TestPageTokenHostileRows`, NEW file `internal/api/audit/pagetoken_test.go`, NEW `Page.Before`, NEW `Listing.More`.
+- New names that this change adds: NEW `audit.ErrInvalidPage`, NEW `ListAuditEntriesBefore`, NEW `NextPageToken`, NEW `TestListEntriesHostileQueryRows`, NEW `TestPageTokenHostileRows`, NEW `Page.Before`, NEW `Listing.More`.
 
 Not decided here, behavior stays as today:
 
@@ -97,9 +97,9 @@ New: none in production code. Edited:
 - pkg/audit/audit.go: `Page`, `Listing`, `ErrInvalidPage`, the comment of `Store.List`, the pure check `Page.Normalized`.
 - pkg/audit/audit_test.go: the test of `Normalized` (lines 404 and 408) and the new table.
 - pkg/audit/audittest/audittest.go, pkg/audit/audittest/chain.go, pkg/audit/audittest/entries.go: the paging cases, the new hostile table, a helper `All` that reads every entry of a scope, and the delete hook for a gap.
-- internal/store/postgres/audit.go, internal/store/sqlite/audit.go, internal/store/postgres/queries.sql, internal/store/sqlite/queries.sql: the keyset read. The generated code in `internal/store/postgres/internal/db` and `internal/store/sqlite/internal/db` is regenerated, never edited.
+- internal/store/postgres/audit.go, internal/store/sqlite/audit.go, internal/store/postgres/queries.sql, internal/store/sqlite/queries.sql: the keyset read. The generated query code of each store (its `db` package) is regenerated, never edited.
 - internal/store/postgres/audit_test.go, internal/store/sqlite/audit_test.go (or the file that runs `audittest` in each adapter): the plan test.
-- internal/api/audit/audit.go, internal/api/audit/audit_test.go: the handler and its tests, with a new file internal/api/audit/pagetoken.go and internal/api/audit/pagetoken_test.go for the wire struct of the token.
+- internal/api/audit/audit.go, internal/api/audit/audit_test.go: the handler and its tests, with a new file internal/api/audit/pagetoken.go and internal/api/audit/paging_test.go for the wire struct of the token.
 - The 127 files that use `audit.Page{` and the files that read `.Total` of an audit listing: the list in task 2.7.
 - pkg/dustpan/denial_audit_test.go:40, pkg/dustpan/state_refusal_audit_test.go:111: the query `page[size]=100` becomes `pageSize=100`.
 - e2e/e2e_test.go (`fetchAuditEntries`, line 2960), e2e/signin_test.go (`checkProviderAuditHoldsNoSecret`, line 750): the loops use the token.
