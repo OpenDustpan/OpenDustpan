@@ -11,6 +11,10 @@ var ErrVerification = errors.New("passkey ceremony check failed")
 // person or of another session than the caller of the step.
 var ErrWrongPerson = errors.New("the passkey ceremony is of another person or session")
 
+// ErrFreshStep reports a change of a passkey by a caller that has no fresh
+// step. The step check of the adapter is one layer; the service checks again.
+var ErrFreshStep = errors.New("the passkey change needs a fresh authentication step")
+
 // UserVerification is the user verification that a ceremony asks for.
 type UserVerification string
 
