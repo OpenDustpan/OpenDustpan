@@ -43,6 +43,9 @@ type fakeFreezes struct {
 	// hideEnded makes ListFreezes omit the ended freezes, as a store does when it
 	// loses a write. Only a test sets it.
 	hideEnded bool
+	// beforeEnd, when set, ends the freeze of the ID before the end of the
+	// caller, as another caller of the end does. Only a test sets it.
+	beforeEnd func(ctx context.Context, id string) error
 }
 
 var _ job.FreezeStore = (*fakeFreezes)(nil)
@@ -65,7 +68,13 @@ func (f *fakeFreezes) CreateFreeze(_ context.Context, fr job.Freeze, _ namespace
 	return nil
 }
 
-func (f *fakeFreezes) EndFreeze(_ context.Context, id, by string, _ namespace.Fence, e audit.Entry) error {
+func (f *fakeFreezes) EndFreeze(ctx context.Context, id, by string, _ namespace.Fence, e audit.Entry) error {
+	if f.beforeEnd != nil {
+		if err := f.beforeEnd(ctx, id); err != nil {
+			return err
+		}
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -208,7 +217,7 @@ func newFreezeFixture(t *testing.T, holds ...string) freezeFixture {
 	}
 
 	authz := newAuthorizer(kept...)
-	freezes := &fakeFreezes{mu: sync.Mutex{}, freezes: nil, entries: nil, hideEnded: false}
+	freezes := &fakeFreezes{mu: sync.Mutex{}, freezes: nil, entries: nil, hideEnded: false, beforeEnd: nil}
 	starter := newFakeStarter(t)
 	entries := newTestAudit()
 
@@ -868,6 +877,45 @@ func TestFreezeEndAnswers500WhenTheStoreOmitsTheEndedFreeze(t *testing.T) {
 	if len(f.freezes.freezes) != 1 || f.freezes.freezes[0].EndsAt.IsZero() {
 		t.Fatalf("store after the end = %+v, want the one freeze, ended", f.freezes.freezes)
 	}
+}
+
+// TestFreezeEndAfterAnotherCallerEndedTheFreeze checks the end of a freeze that
+// another caller ended after the read of the handler: the end answers 404, no
+// state change, and one denial entry.
+func TestFreezeEndAfterAnotherCallerEndedTheFreeze(t *testing.T) {
+	t.Parallel()
+
+	f := newFreezeFixture(t, string(identity.ActionNamespaceRead)+" acme",
+		string(identity.ActionNamespaceManageFreezes)+" acme")
+	f.openFreeze(t)
+
+	f.freezes.beforeEnd = func(_ context.Context, id string) error {
+		f.freezes.mu.Lock()
+		defer f.freezes.mu.Unlock()
+
+		for i := range f.freezes.freezes {
+			fr := &f.freezes.freezes[i]
+			if fr.ID == id && fr.EndsAt.IsZero() {
+				fr.EndsAt = time.Now()
+				fr.EndedBy = "ada"
+			}
+		}
+
+		return nil
+	}
+
+	rec := freezeRequest(t, f.h, http.MethodPost, freezeEndURL, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("end of a freeze that another caller ended = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+
+	checkErrorBody(t, rec.Body.String(), "job.not-found", "no change freeze")
+
+	if len(f.freezes.entries) != 1 {
+		t.Fatalf("freeze entries after the refused end = %d, want 1", len(f.freezes.entries))
+	}
+
+	checkFreezeDenial(t, f)
 }
 
 func TestFreezeSQLNamespaceMatchesNoRow(t *testing.T) {
