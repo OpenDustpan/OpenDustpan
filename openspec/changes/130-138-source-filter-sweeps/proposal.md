@@ -18,16 +18,16 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Job create names a code source outside the source filter. | The server answers 403 `source.filter-invalid`: the source is not allowed. Read the filter. | `GET /api/dustpan/v1/namespaces/{namespace}/source-filter` |
-| A sweep target names a pool without the sweep purpose, or a pool of another namespace. | The server answers 409 `runner.invalid`: a sweep runs only on a pool of the namespace with the sweep purpose. Read the pools. | `GET /api/runners/{namespace}/pools` |
-| A report header lists a scope or a region outside the target. | The server answers 422 `runner.invalid`: the scope is not in the target. The sweep ends failed and closes no finding. | `GET /api/runners/{namespace}/pools` |
-| A report is over a bound. | The server answers 413 `runner.limit`: the report is over the bound. The sweep ends failed. Narrow the regions and start again. | `GET /api/runners/{namespace}/pools` |
+| A sweep target names a pool without the sweep purpose, or a pool of another namespace. | The server answers 409 `runner.invalid`: a sweep runs only on a pool of the namespace with the sweep purpose. Read the pools. | `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools` |
+| A report header lists a scope or a region outside the target. | The server answers 422 `runner.invalid`: the scope is not in the target. The sweep ends failed and closes no finding. | `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools` |
+| A report is over a bound. | The server answers 413 `runner.limit`: the report is over the bound. The sweep ends failed. Narrow the regions and start again. | `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools` |
 
 Evidence for the claims above:
 
 - The source filter route exists on main. Proof: ANY/GET/PUT /api/dustpan/v1/namespaces/{}/source-filter in the route table
 - The source filter error codes exist. Proof: internal/errcode/catalog_source.go:8 source.filter-invalid
-- The sweep claim type and the report header type exist. Proof: pkg/runner/store.go:269 SweepClaim and internal/unmanaged/report.go:43 ReportHeader
-- The runner pool route exists on main. Proof: ANY /api/runners/{}/pools in the route table
+- The sweep claim type and the report header type exist. Proof: pkg/runner/store.go:276 SweepClaim and internal/unmanaged/report.go:43 ReportHeader
+- The runner pool route exists on main. Proof: ANY /api/dustpan/v1/namespaces/{}/runner-pools in the route table
 
 ## What Changes
 
@@ -64,8 +64,8 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The store lists source filters. (`internal/store/postgres/sourcefilter.go:21 (func Store.SourceFilters)`)
 - The server wires source filters through an option. (`pkg/dustpan/sourcefilter.go:15 (func WithSourceFilters)`)
-- The runner package defines the sweep claim type. (`pkg/runner/store.go:269 (type SweepClaim)`)
-- The runner package defines the sweep claimer port. (`pkg/runner/store.go:244 (type SweepClaimer)`)
+- The runner package defines the sweep claim type. (`pkg/runner/store.go:276 (type SweepClaim)`)
+- The runner package defines the sweep claimer port. (`pkg/runner/store.go:251 (type SweepClaimer)`)
 - The unmanaged package defines the report header. (`internal/unmanaged/report.go:43 (type ReportHeader)`)
 - The source filter error codes exist. (`internal/errcode/catalog_source.go:8 (code source.filter-invalid)`)
 
