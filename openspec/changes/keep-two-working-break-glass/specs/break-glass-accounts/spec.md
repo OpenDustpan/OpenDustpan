@@ -93,7 +93,7 @@ If a restore leaves fewer than two working break-glass paths in the staged data 
 - **THEN** the transaction rolls back and the live data stays
 
 #### Scenario: Count of one namespace
-- **WHEN** the count runs for a namespace scope and the break-glass principals of that namespace are fewer than two, while another namespace has more
+- **WHEN** the NEW count `CountWorkingBreakGlassInNamespace` runs for a namespace and the break-glass principals of that namespace are fewer than two, while another namespace has more
 - **THEN** the count gives only the principals of the given namespace and the restore check refuses
 
 ### Requirement: fresh-step
