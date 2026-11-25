@@ -58,7 +58,7 @@ Packages: `internal/agent` (the NEW types and ports, the NEW `agenttest` conform
 | `DELETE /api/agent/secrets/{ref}` | `server:manage-agent` | `@server` | 204, or 409 `secret_in_use` |
 | `GET /api/agent/connection` | `server:manage-agent` | `@server` | 200, document with references, `version`, pending document, last probe result; 404 when none |
 | `DELETE /api/agent/connection` | `server:manage-agent` | `@server` | 204 |
-| `GET /api/agent/formats` | `server:manage-agent` | `@server` | 200, `["chat-completions","messages"]` |
+| `GET /api/agent/formats` | `server:manage-agent` | `@server` | 200, `{"formats":["chat-completions","messages"]}` (an object, not a bare array: the API description names each response schema, and the client generator accepts a named object only) |
 | `GET /api/server/egress-allowlist` | `server:manage-settings` | `@server` | 200 |
 | `PUT /api/server/egress-allowlist` | `server:manage-settings` | `@server` | 200 |
 

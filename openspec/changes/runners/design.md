@@ -53,7 +53,7 @@ P3 --> P2
 New imports of this change (each one allowed by the module rules):
 
 - `internal/api/runnerapi` imports `pkg/runner`
-- `pkg/runner` imports `pkg/job`
+- `pkg/runner` imports the job package
 
 States on main in the touched packages:
 
