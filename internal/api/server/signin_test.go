@@ -1789,7 +1789,7 @@ func TestSignInJoinsNoGroup(t *testing.T) {
 	groups, total, err := e.store.ListGroupsOf(
 		t.Context(),
 		p.ID,
-		principal.Query{After: "", Low: "", High: "", Limit: 10},
+		principal.Query{After: "", Low: "", High: "", Limit: 10, InstallationOnly: false},
 	)
 	if err != nil || total != 0 || len(groups) != 0 {
 		t.Fatalf("groups of the person = %v (%d), %v, want none", groups, total, err)

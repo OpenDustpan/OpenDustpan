@@ -8,6 +8,22 @@ The SQLite and the PostgreSQL store SHALL implement `mfa.PendingStore`, `mfa.Rec
 - **WHEN** a test reads each row of the three ports
 - **THEN** no row holds a plain code or a plain pending secret
 
+### Requirement: completion-value-rejects-incomplete-parts
+
+The pending sign-in port SHALL take the session, the digest of its secret and the audit entry of a completion as one value, and the only constructor of that value SHALL return `ErrInvalid` for a zero session ID, a zero digest or an entry with no action.
+
+#### Scenario: Zero session ID
+- **WHEN** a caller builds a completion with a session that has no ID
+- **THEN** the constructor returns `ErrInvalid`
+
+#### Scenario: Zero digest
+- **WHEN** a caller builds a completion with a zero digest
+- **THEN** the constructor returns `ErrInvalid`
+
+#### Scenario: Entry with no action
+- **WHEN** a caller builds a completion with an audit entry that has no action
+- **THEN** the constructor returns `ErrInvalid`
+
 ### Requirement: sign-in-step-use-keeps-step-up-counters
 
 The TOTP port SHALL have one method that accepts a time step for a sign-in with the single-use rule of the step-up, and the method SHALL change no step-up counter, lock or disable.
