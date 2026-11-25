@@ -1,5 +1,5 @@
 ---
-version: 9
+version: 10
 ---
 
 Issue: #623, #627, #633.
@@ -38,12 +38,12 @@ Evidence for the claims above:
 
 - New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. The count also drops by time alone when an account expires, and the route shows it. Its action is server:read-principals and its object is @server (ServerObject). No new action exists.
 - New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade. It needs a fresh authentication. Its action is server:manage-principals and its object is @server (ServerObject). The guard never refuses it, because it raises the count, also when the count is zero.
-- A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. A revoke of that grant, a membership change or a move of a principal runs the guard.
+- A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24, and the passkey or hardware key of decision 23. On the hosted service it counts principals with the role admin on the namespace. The guard covers disable, delete and restore only. A revoke of that grant, a membership change and a move of a principal go to the change break-glass-floor-other-writes.
 - A guard in the write transaction of disable, delete and restore. Disable and delete refuse when no enabled account would stay. The restore refuses when fewer than two working paths would stay. The three refusals use the one error code principal.no-working-break-glass. Each refusal writes an audit entry. Re-enable stays checked and a disable works in maintenance mode.
 - The sweep stays exempt in SQL, as on main. For each break-glass account that the sweep skips, it writes one audit record: kind change, outcome success, scope @server, object the principal reference of the account, reason "break-glass account is exempt", and the caller fields of the sweep entry (the same entry shape that the sweep writes for a disabled account in pkg/accesstoken/service.go).
 - New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
 - The restore check reads the same count on staged data, and the swap runs in a transaction that counts again.
-- The guard uses the conditional SQL update of the disable and the delete: the statement changes the row only when another enabled account stays. No lock timeout, no installation setting and no busy answer exist.
+- The guard uses the conditional SQL update of the disable and the delete: the statement changes the row only when another enabled account stays.
 - Rotation is one new method of the passkey port, RotatePasskey in pkg/mfa/mfa.go, with the adapters in internal/store/sqlite/passkeys.go and internal/store/postgres/passkeys.go and a conformance case that two parallel rotations leave exactly one working credential.
 - A guide section for the break-glass accounts, the guard and the floor.
 
