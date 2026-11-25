@@ -192,6 +192,12 @@ func TestFreshPolicyDoesNotChangeOtherApprovals(t *testing.T) {
 			r := freshRig(t, off)
 			r.seed(func(j *job.Job) { j.Spec.Operation = tc.op })
 
+			// A rejection of a job that another principal started needs
+			// job:cancel on the unit.
+			if tc.verdict == job.VerdictReject {
+				r.authz.allow[string(job.ActionJobCancel)+" "+r.unit.String()] = true
+			}
+
 			_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, tc.verdict, r.binding(), "")
 			if err != nil {
 				t.Fatalf("Approve = %v, want nil", err)
