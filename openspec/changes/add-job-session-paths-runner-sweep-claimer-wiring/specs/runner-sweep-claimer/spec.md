@@ -16,6 +16,46 @@ When a runner of a pool polls, the server SHALL claim only a durable operation w
 - **WHEN** the purpose of a pool changes while a claim runs
 - **THEN** the server reads the new purpose in the claim transaction and answers 204 for a kind that no longer matches.
 
+### Requirement: claim-advances-the-sweep
+
+When the server claims a sweep for a runner, the server SHALL move the sweep to running before it gives the work, or give no work.
+
+#### Scenario: Queued sweep claimed
+- **WHEN** a runner polls and claims the operation of a sweep that is queued
+- **THEN** the server applies the event dispatch and then the event claim, the sweep is running, and the poll answers 200 with the work.
+
+#### Scenario: Dispatched sweep claimed
+- **WHEN** a runner claims the operation of a sweep that is dispatched, after a claim that lapsed between the two events
+- **THEN** the server applies the event claim, the sweep is running, and the poll answers 200.
+
+#### Scenario: Takeover of a running sweep
+- **WHEN** a runner claims the operation of a sweep that is running, after its claim lapsed
+- **THEN** the sweep stays running with the new claim, and the poll answers 200.
+
+#### Scenario: Cancel wins the race
+- **WHEN** a person cancels the sweep after the durable claim and before the state move
+- **THEN** the state move returns ErrTransition, the server releases the durable claim, the poll answers 204, and the sweep stays canceled.
+
+#### Scenario: State move fails
+- **WHEN** the store fails to apply the event dispatch or the event claim
+- **THEN** the server releases the durable claim, gives no work, answers 204, and keeps the status of the last event that succeeded.
+
+#### Scenario: Sweep takes no claim event
+- **WHEN** a runner claims the operation of a sweep that is in matching, succeeded, failed, canceled or expired
+- **THEN** the server gives no work, releases the claim and changes no status.
+
+#### Scenario: Release moves the sweep back
+- **WHEN** the runner releases a live claim of a running sweep
+- **THEN** the server ends the durable claim, applies the event release after it, and the sweep is dispatched.
+
+#### Scenario: Release with a lost claim
+- **WHEN** a caller releases with a stale claim token or the token of another operation
+- **THEN** the server answers 409 and applies no event.
+
+#### Scenario: Release of a sweep that ended
+- **WHEN** the runner releases a claim and the sweep is canceled or ended
+- **THEN** the release succeeds and the sweep keeps its status.
+
 ### Requirement: sweep-report-auth
 
 If a sweep report request lacks a valid session proof, an open session or ownership of the claim, then the server SHALL refuse the request.
@@ -42,15 +82,15 @@ While a sweep session uploads its report, the server SHALL enforce the bounds of
 
 #### Scenario: Valid report stored encrypted
 - **WHEN** the launcher uploads a bounded report under its sweep session
-- **THEN** the server stores the stream under the data key of the namespace.
+- **THEN** the server stores the stream under the data key of the namespace, under a blob key that the server builds for this attempt.
 
 #### Scenario: Cut stream
 - **WHEN** the connection drops before the end of the upload
-- **THEN** the server drops the staged report and fails the sweep when the claim ends.
+- **THEN** the server deletes the staged blob and fails the sweep through `CompleteScan` with the event fail, or leaves the claim to lapse when the connection stays down.
 
 #### Scenario: Second upload
 - **WHEN** the launcher uploads a second report for the same sweep session
-- **THEN** the server answers 409 and keeps the first staged report.
+- **THEN** the server answers 409, deletes the blob of the second attempt and keeps the report that the sweep row names.
 
 #### Scenario: Scope outside the target
 - **WHEN** the header of the report names a scope that the target does not name
@@ -74,19 +114,51 @@ If a sweep report has no header line, a wrong format or version, or a malformed 
 
 ### Requirement: sweep-report-ends-sweep
 
-When the launcher uploads the sweep report, the server SHALL end the claim and the sweep in the same transaction as the stored report. A sweep has no finish route.
+When the launcher uploads the sweep report, the server SHALL write the encrypted blob first and then end the claim, advance the sweep and store the blob key in one database transaction. A sweep has no finish route.
 
 #### Scenario: Upload ends the sweep
 - **WHEN** the launcher uploads a complete bounded report under its open sweep session
-- **THEN** the server answers 204, stores the report, closes the session and advances the sweep from running to matching in one transaction.
+- **THEN** the server answers 204, writes the blob, and in one transaction (`CompleteScan`) ends the claim, advances the sweep from running to matching and stores the key of the blob.
 
 #### Scenario: Upload with a lost claim
 - **WHEN** the launcher uploads a report after its claim expired
-- **THEN** the server answers 409, stores nothing and keeps the sweep state.
+- **THEN** the server answers 409, deletes the blob that it wrote, and keeps the sweep state and an empty report key.
 
 #### Scenario: No finish route
 - **WHEN** a caller sends a finish request for a sweep session
 - **THEN** the server answers 400 invalid ("a sweep has no finish") and changes nothing.
+
+### Requirement: complete-scan-is-atomic
+
+When the sweep store completes a sweep, the store SHALL end the durable claim, advance the sweep, store the report key and append the audit entry in one transaction, or change nothing.
+
+#### Scenario: Uploaded
+- **WHEN** `CompleteScan` runs with the event uploaded, a valid claim token of a running sweep and a valid report key
+- **THEN** the sweep is in the status matching, `ScanReportKey` returns the key, the claim of the operation is ended as completed, and the entry is appended.
+
+#### Scenario: Fail
+- **WHEN** `CompleteScan` runs with the event fail and no key
+- **THEN** the sweep is in the status failed, the claim of the operation is ended as failed, and `ScanReportKey` returns the empty string.
+
+#### Scenario: Lost claim
+- **WHEN** `CompleteScan` runs with a stale claim token or a token of another operation
+- **THEN** the store returns `durable.ErrClaimLost` and the sweep, the claim and the key stay as they were.
+
+#### Scenario: Invalid completion
+- **WHEN** `CompleteScan` runs with an event other than uploaded and fail, an empty key for uploaded, a key for fail, or a key that is not a valid blob key
+- **THEN** the store returns `ErrInvalidScan` and changes nothing.
+
+#### Scenario: Wrong state
+- **WHEN** `CompleteScan` runs for a sweep that is not running
+- **THEN** the store returns `ErrTransition` and changes nothing.
+
+#### Scenario: Fenced
+- **WHEN** `CompleteScan` runs with the fence of another namespace or a stale fence
+- **THEN** the store returns `namespace.ErrFenced` and changes nothing.
+
+#### Scenario: Failure rolls back
+- **WHEN** a step of the transaction fails after the claim check
+- **THEN** the claim stays open, the sweep state stays, and the key stays empty.
 
 ### Requirement: sweep-purpose-on-team-pool
 
