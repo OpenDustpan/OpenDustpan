@@ -34,6 +34,7 @@ import (
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -547,6 +548,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 		Logger: nil,
 		Now:    nil,
 		NewID:  nil,
+		Guard:  freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

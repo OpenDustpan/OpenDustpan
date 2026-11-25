@@ -3,17 +3,18 @@
 package e2e_test
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
 )
 
 // TestInstallPageListsBothPullCommands reads the install guide as text and
-// checks that it lists the pull command for the forge container registry
-// and the pull command for Docker Hub. It also checks the digest form of
-// the reference and the two places that name the digest of a release, and
-// that the page does not name the release notes, which hold no digest. It
-// names no route and no credential kind.
+// checks that it holds the section "Pull by digest", the pull command for
+// the forge container registry and the pull command for Docker Hub. It also
+// checks the digest form of the reference and the two places that name the
+// digest of a release, and that the page does not name the release notes,
+// which hold no digest. It names no route and no credential kind.
 func TestInstallPageListsBothPullCommands(t *testing.T) {
 	t.Parallel()
 
@@ -29,11 +30,12 @@ func TestInstallPageListsBothPullCommands(t *testing.T) {
 	page := string(raw)
 
 	for _, want := range []string{
+		"### Pull by digest",
 		"docker pull ghcr.io/opendustpan/opendustpan:",
 		"docker pull docker.io/opendustpan/opendustpan:",
 		"ghcr.io/opendustpan/opendustpan@sha256:<digest>",
 		"docker buildx imagetools inspect",
-		"workflow run",
+		"summary of the release workflow run",
 		"DOCKERHUB_USERNAME",
 		"DOCKERHUB_TOKEN",
 		"gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan",
@@ -49,5 +51,31 @@ func TestInstallPageListsBothPullCommands(t *testing.T) {
 
 	if strings.Contains(page, "release notes") {
 		t.Error("the install guide names the release notes, which hold no digest")
+	}
+}
+
+// TestInstallGuideLinkedFromReadme checks the scenario "Operator finds the
+// page": README.md holds a link to docs/guides/install.md, and the page is
+// not also at the path that it moved from. It reads text only and names no
+// route and no credential kind.
+func TestInstallGuideLinkedFromReadme(t *testing.T) {
+	t.Parallel()
+
+	root, err := os.OpenRoot("..")
+	if err != nil {
+		t.Fatalf("open the repository: %v", err)
+	}
+
+	raw, readErr := root.ReadFile("README.md")
+	_, statErr := root.Stat("docs/install.md")
+	if closeErr := root.Close(); readErr != nil || closeErr != nil {
+		t.Fatalf("read README.md: %v %v", readErr, closeErr)
+	}
+
+	if !strings.Contains(string(raw), "](docs/guides/install.md)") {
+		t.Error("README.md holds no link to docs/guides/install.md")
+	}
+	if !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("docs/install.md exists, want only docs/guides/install.md: %v", statErr)
 	}
 }
