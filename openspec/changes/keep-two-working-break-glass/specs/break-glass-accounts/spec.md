@@ -78,11 +78,11 @@ If two requests disable the last two enabled break-glass accounts together, then
 
 ### Requirement: restore-guard
 
-If a restore leaves fewer than two working break-glass paths in the staged data of a scope, then the server SHALL refuse the restore before the swap.
+If a restore leaves fewer than two working break-glass paths in the staged data of a scope, then the server SHALL end the restore as failed in the swap transaction, with the code principal.no-working-break-glass, and keep the live data.
 
 #### Scenario: Old backup with one account
 - **WHEN** an operator restores a backup with one working account
-- **THEN** the server answers 409 with principal.no-working-break-glass and the data stays unchanged
+- **THEN** the start route still answers 202, the restore ends failed with the code principal.no-working-break-glass, and the data stays unchanged
 
 #### Scenario: Backup with two accounts
 - **WHEN** an operator restores a backup with two working accounts

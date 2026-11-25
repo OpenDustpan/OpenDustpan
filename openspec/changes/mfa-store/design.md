@@ -8,6 +8,9 @@ The storage half of built-in MFA: the adapters of the pending sign-in, the recov
 2. **The sign-in counts apart from the step-up.** The new method `AcceptSignInStep` of `stepup.TOTPStore` accepts a time step with the single-use rule of `AcceptStep` and touches no step-up counter, so a step-up lockout never blocks a sign-in. It gets conformance tests before any adapter implements it.
 3. **Each new table has one backup rule, each after an existing rule.** The pending sign-in table is an emptied table: its rows live for minutes and a restore cancels the pending sign-ins. The lock is on the factor row, so a restore that replaces access copies the live lock state of each factor into the restored factor row and takes the stricter value of each field, so that a restore cannot end a lock; the attempts table is a control table (a backup leaves it out and a restore keeps its live rows), and the same step deletes the live attempts rows of a factor that the restored data does not have and writes one audit entry with the count. The factor table is an access table, as `passkeys` is.
 
+4. **No revoke yet, and the promise stays.** No step-up credential type, table or issuer exists, so `ConfirmTOTP` and `ResetTOTP` revoke nothing in this change, and their port comments say so. The change that adds the step-up credential table must implement the revoke in `ConfirmTOTP` and `ResetTOTP` in the same transaction as the delete of the factor, in that same change, and must move the two revoke cases into `stepuptest.RunTOTP`. No route may issue a step-up credential before then.
+5. **The TOTP cases run in their own runner.** `stepuptest.Run` needs one store with each step-up port. The NEW runner `stepuptest.RunTOTP` runs the TOTPStore cases and the `AcceptSignInStep` cases against a harness of the TOTP store, `audit.Store` and `principal.RecordStore`. `stepuptest.Run` stays unwired until the adapters of `KeyStore`, `ChallengeStore` and `ResetStore` exist. Each case creates its persons first.
+
 ## Structure
 
 The pending sign-in is `mfa.Pending`, kept in `mfa.PendingStore`. This change adds no second pending type.
@@ -22,6 +25,7 @@ The pending sign-in is `mfa.Pending`, kept in `mfa.PendingStore`. This change ad
 | --- | --- | --- |
 | Store adapter | Keep digests and the sealed secret, never a plain code. | Read each row; no plain code. |
 | Store adapter | Accept a time step once. | Reuse a step; the second call fails. |
+| Store adapter | Delete the earlier factor in the transaction of a confirm or a reset. | Confirm a new factor or reset, and an accept with the earlier factor fails with `stepup.ErrNotFound`. |
 | Restore | Keep the live lock and the used recovery codes. | Restore an older backup; the lock and the used codes stay. |
 
 ## Quality attributes

@@ -38,14 +38,14 @@ Part A (several group requirements on one job, with distinct people) is on main 
 
 **Part B: users, unit owners, fresh windows and the refusal of `unless` (decided).** Each item follows an owner decision.
 
-- Users by stable ID. In `pkg/gate/rules.go`, `Approvers` (line 147) gets the NEW field `UserIDs`, parallel to `Users`. An approver entry in `users` is the stable principal ID, with the name kept for display only, as the groups and their IDs are. A job gate gets the NEW fields `UserIDs` and `Users`. A user entry with no ID counts no one (fail closed).
+- Users by stable ID. In `pkg/gate/rules.go`, `Approvers` (line 147) gets the field `UserIDs`, parallel to `Users`. An approver entry in `users` is the stable principal ID, with the name kept for display only, as the groups and their IDs are. A job gate gets the NEW fields `UserIDs` and `Users`. A user entry with no ID counts no one (fail closed).
 - Unit owners resolve at each approval. `Approve` in `pkg/job/service_approve.go` reads the owners of the unit from the context at the scope of the rule or wider, through the NEW port `UnitOwnerReader`, and only `group:` and `principal:` entries count. A read error refuses the approval.
 - An approval counts as of the approval time. The field `For` of the approval is the only record of eligibility. Nothing checks the approver again at dispatch.
 - Each requirement keeps its own fresh window. A requirement with `freshAuthSeconds` becomes a gate with its own window, and an approval fills only the gates whose window its fresh step meets. This task waits for other changes (see "Depends on").
 - No `unless` on a job for now. `DefaultRequirements` keeps its refusal ((read only) `pkg/gate/requirements.go`, line 44), and a test and the guide fix it.
 - Rejection stays open to every holder of `job:approve`, as on main.
 - `pkg/gate/jobgate/jobgate.go`: `gatesOf` stops refusing users, unit owners and `freshAuthSeconds`, one task at a time.
-- The readers and the wiring of Part B (design decision 16). A struct-field preflight adds the NEW fields of `Approvers` and `Gate` first, because their literals are in more than 10 files (task 5.0). The config service resolves a user name to its ID at save through the NEW port `gate.UserResolver`, with its adapter in `pkg/dustpan/gateconfig.go`. `Approve` reads unit owners through the NEW port `UnitOwnerReader` and resolves a `group:<name>` owner through the NEW port `job.GroupNames`. Their adapters are in `pkg/dustpan/jobgroups.go` and the NEW file `pkg/dustpan/jobowners.go`. A gate with unit owners holds the NEW field `Scope`. Each port is optional, and a nil port fails closed.
+- The readers and the wiring of Part B (design decision 16). The approver fields for users and the unit-owner and scope fields of the gate are on main already. The config service resolves a user name to its ID at save through the NEW port `gate.UserResolver`, with its adapter in `pkg/dustpan/gateconfig.go`. `Approve` reads unit owners through the NEW port `UnitOwnerReader` and resolves a `group:<name>` owner through the NEW port `job.GroupNames`. Their adapters are in `pkg/dustpan/jobgroups.go` and the NEW file `pkg/dustpan/jobowners.go`. A gate with unit owners holds the NEW field `Scope`. Each port is optional, and a nil port fails closed.
 - A user that does not exist fails the save with the NEW code `gate.approvers-user-missing`. A caller without `server:read-principals` gets the general answer, as for a missing group.
 - `docs/guides/approval-rules.md` and `docs/guides/jobs.md`: show the users, the unit owners and the fresh window on a job.
 
@@ -74,7 +74,7 @@ The owner answered four of the five first questions and decided that the fifth s
 
 | First question | Owner decision (2026-11-20) | Effect in this change |
 | --- | --- | --- |
-| 1. Who may approve and reject, and how a user is named | Name approvers by stable ID. Any `job:approve` holder may reject. | Option C of the first draft. A NEW field `UserIDs` on the gate. Rejection stays as on main. |
+| 1. Who may approve and reject, and how a user is named | Name approvers by stable ID. Any `job:approve` holder may reject. | Option C of the first draft. A field `UserIDs` on the gate. Rejection stays as on main. |
 | 2. When unit owners resolve | Resolve unit owners at each approval, and fail closed. Only `group:` and `principal:` entries count. | Option B. `Approve` reads the context. A text owner counts no one. |
 | 3. A recheck before dispatch | An approval counts as of the approval time. A recheck at dispatch is a separate, later change. | Option A. `For` is written once, at the approval. |
 | 4. A fresh window with several requirements | Each requirement keeps its own fresh window. | Option B. Task 5.4. |
@@ -172,7 +172,7 @@ Each quote is copied from the file in (read only) `docs/adr/` on main at `65b843
 **ADR 362: Owner decisions of 8 November 2026** (owner-tagged: decision 1, "Stable IDs").
 
 - Changed by: ADR 363 extends decision 2. Current rule: this ADR, with ADR 363.
-- Effect: a gate names groups by their IDs and users by the NEW field `UserIDs`, and the matching keys its slots by the gate name, not by a display string. The owner applied the same rule to users (2026-11-20).
+- Effect: a gate names groups by their IDs and users by the field `UserIDs`, and the matching keys its slots by the gate name, not by a display string. The owner applied the same rule to users (2026-11-20).
 
 **ADR 391: A stored reference to a unit or a collection is its stable ID** (owner-tagged: decisions 1 and 2, "(owner, 2026-11-20)").
 
