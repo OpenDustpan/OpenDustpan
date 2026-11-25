@@ -1,7 +1,7 @@
 # database-outage-probe Specification
 
 ## Purpose
-TBD - created by archiving change database-outage-e2e-probe. Update Purpose after archive.
+The outage probe shows that each server instance answers 503 with Retry-After while the database is down, that Pulumi and OpenTofu commands end clean after the database returns, and how long each CLI version retries a write.
 
 ## Requirements
 
