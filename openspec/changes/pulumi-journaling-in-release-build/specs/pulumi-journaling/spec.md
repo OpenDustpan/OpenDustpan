@@ -47,3 +47,15 @@ The oldest and the newest verified CLI version of the journal gate SHALL each be
 #### Scenario: Newest verified version moves without an e2e run
 - **WHEN** the newest verified CLI version of the gate is set to a version that is not in the verified journal list of `e2e/tool.go`
 - **THEN** the e2e matrix test fails and names the missing version
+
+### Requirement: CLIVersionStoredAtStart
+
+The server SHALL store the Pulumi CLI release of an update at start, and the manifest of a checkpoint that the server builds at complete SHALL name that release. The server SHALL store an empty value when the start offers no release or the `User-Agent` release is not three dot-separated numbers of at most 32 bytes.
+
+#### Scenario: Verified CLI
+- **WHEN** a Pulumi CLI v3.268.0 starts an update and the update completes
+- **THEN** the update row stores `3.268.0` and the built manifest names version 3.268.0
+
+#### Scenario: Hostile User-Agent
+- **WHEN** a start carries a release of `3.268.0-rc1`, a 200-byte release or a release with a CR character
+- **THEN** the update row stores an empty value
