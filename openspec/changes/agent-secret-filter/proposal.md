@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -41,4 +41,6 @@ The administrator sees `[removed: secret-like text]` in a transcript where a mod
 - ADR 129 decision 24 (owner, 2026-10-18): the filter, its pattern list and "no off switch". Decision 11: the value check. This change builds both and changes none of their words.
 - ADR 250 and ADR 364: layers table in design.md, no new lint rule.
 
-Open questions: none
+## Open questions
+
+none
