@@ -106,7 +106,7 @@ func runClaimLoop(t *testing.T, env *e2e.Env, rn loopRunner, rec *loopRecorder) 
 	loop, err := client.New(client.Config{
 		Server: env.URL, Transport: rec, RunnerID: rn.id, Key: rn.key,
 		Release: loopRelease, Lease: runner.MinLease, Wait: loopPollWait,
-		Ticker: loopTicker, Now: nil,
+		Ticker: loopTicker, Now: nil, Random: nil,
 		Logger: slog.New(slog.NewTextHandler(loopLogWriter{t: t}, nil)),
 	})
 	if err != nil {
@@ -234,7 +234,9 @@ func (h httpTransport) Do(ctx context.Context, req *session.Request) (*session.R
 		return nil, fmt.Errorf("%s %s: %w", req.Method, req.Path, err)
 	}
 
-	body, readErr := io.ReadAll(resp.Body)
+	// The read is bounded: one byte above the limit of the loop is enough
+	// for the loop to refuse the answer.
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxBody+1))
 	if err = errors.Join(readErr, resp.Body.Close()); err != nil {
 		return nil, fmt.Errorf("read %s %s: %w", req.Method, req.Path, err)
 	}

@@ -26,21 +26,37 @@ const (
 	testRunner = "rnr-1"
 )
 
-// answer is one scripted answer of the fake server.
+// answer is one scripted answer of the fake server. A status of 0 is a call
+// with no answer: the transport returns an error. raw, when it is not nil, is
+// the body as it is.
 type answer struct {
 	status     int
 	body       any
 	retryAfter time.Duration
+	raw        []byte
+}
+
+// errNoAnswer is the error of the fake transport for a call with no answer.
+var errNoAnswer = errors.New("connection refused")
+
+// noAnswer is a call with no answer.
+func noAnswer() answer {
+	return answer{status: 0, body: nil, retryAfter: 0, raw: nil}
+}
+
+// rawAnswer is an answer of status with the body raw.
+func rawAnswer(status int, raw []byte) answer {
+	return answer{status: status, body: nil, retryAfter: 0, raw: raw}
 }
 
 // ok is an answer of 200 with body.
 func ok(body any) answer {
-	return answer{status: http.StatusOK, body: body, retryAfter: 0}
+	return answer{status: http.StatusOK, body: body, retryAfter: 0, raw: nil}
 }
 
 // noWork is an answer of 204.
 func noWork() answer {
-	return answer{status: http.StatusNoContent, body: nil, retryAfter: 0}
+	return answer{status: http.StatusNoContent, body: nil, retryAfter: 0, raw: nil}
 }
 
 // refusal is an error answer with the protocol code.
@@ -49,19 +65,21 @@ func refusal(status int, code string, retryAfter time.Duration) answer {
 		status:     status,
 		body:       protocol.Error{Code: code, Message: "refused", Supported: ""},
 		retryAfter: retryAfter,
+		raw:        nil,
 	}
 }
 
 // fakeServer answers the routes of the runner protocol from a script for each
-// path, and records each request.
+// path, and records each request and its proof header.
 type fakeServer struct {
 	mu     sync.Mutex
 	script map[string][]answer
 	seen   []string
+	proofs map[string][]string
 }
 
 func newFakeServer(script map[string][]answer) *fakeServer {
-	return &fakeServer{mu: sync.Mutex{}, script: script, seen: nil}
+	return &fakeServer{mu: sync.Mutex{}, script: script, seen: nil, proofs: map[string][]string{}}
 }
 
 // Do implements session.Transport.
@@ -75,6 +93,7 @@ func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Respo
 	}
 
 	f.seen = append(f.seen, path)
+	f.proofs[path] = append(f.proofs[path], req.Header[protocol.HeaderProof])
 
 	queue := f.script[path]
 	if len(queue) == 0 {
@@ -86,7 +105,11 @@ func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Respo
 		f.script[path] = queue[1:]
 	}
 
-	var raw []byte
+	if a.status == 0 {
+		return nil, errNoAnswer
+	}
+
+	raw := a.raw
 
 	if a.body != nil {
 		var err error
@@ -111,6 +134,14 @@ func (f *fakeServer) count(path string) int {
 	}
 
 	return n
+}
+
+// proofsOf returns the proof headers of the requests to path.
+func (f *fakeServer) proofsOf(path string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.proofs[path])
 }
 
 // waitFor checks cond every millisecond until it is true or ctx ends. It
@@ -201,7 +232,7 @@ func testConfig(t *testing.T, srv *fakeServer, ticks *fakeTicks) client.Config {
 
 	return client.Config{
 		Server: testServer, Transport: srv, RunnerID: testRunner, Key: priv, Release: "0.0.1",
-		Lease: runner.DefaultLease, Wait: time.Second, Ticker: ticks.ticker, Now: nil, Logger: nil,
+		Lease: runner.DefaultLease, Wait: time.Second, Ticker: ticks.ticker, Now: nil, Random: nil, Logger: nil,
 	}
 }
 
@@ -462,6 +493,10 @@ func TestNewRejectsHostileConfig(t *testing.T) {
 		"empty runner":        func(c *client.Config) { c.RunnerID = "" },
 		"empty release":       func(c *client.Config) { c.Release = "" },
 		"no transport":        func(c *client.Config) { c.Transport = nil },
+		"negative poll wait":  func(c *client.Config) { c.Wait = -time.Second },
+		"poll wait above maximum": func(c *client.Config) {
+			c.Wait = protocol.MaxPollWait + time.Millisecond
+		},
 	}
 
 	for name, mutate := range cases {

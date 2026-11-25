@@ -11,10 +11,12 @@ package client
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -53,6 +55,9 @@ var (
 	ErrCanceled = errors.New("the work is canceled")
 	// ErrInvalid reports a configuration or an answer that the client refuses.
 	ErrInvalid = errors.New("the runner client input is not valid")
+	// ErrAnswerTooLarge reports an answer body above maxAnswer. It wraps
+	// ErrInvalid.
+	ErrAnswerTooLarge = fmt.Errorf("%w: the answer body is too large", ErrInvalid)
 )
 
 // Error is the error body of an answer, with its status.
@@ -70,6 +75,12 @@ func (e *Error) Error() string {
 
 // Is matches the sentinel of the code of e.
 func (e *Error) Is(target error) bool {
+	// A status of 500 or more is a fault of the server: the loop polls again
+	// after a backoff, whatever the code.
+	if e.Status >= statusServerError && target == ErrUnavailable {
+		return true
+	}
+
 	switch e.Code {
 	case protocol.ErrorClaimLost:
 		return target == ErrClaimLost
@@ -93,12 +104,29 @@ const (
 	// maxWait caps each wait of the loop that the server asks for, the
 	// shortest claim lease.
 	maxWait = runner.MinLease
-	// retryWait is the wait after a call that got no answer.
+	// retryWait is the wait after a rate limit with no Retry-After.
 	retryWait = 5 * time.Second
+	// minBackoff and maxBackoff bound the wait after a poll that got no
+	// answer or a status of 500 or more. The wait doubles after each failure
+	// and has a random part, so that many runners do not poll again at the
+	// same time.
+	minBackoff = time.Second
+	maxBackoff = 30 * time.Second
+	// maxDoublings is the count of failures after which the upper bound of
+	// the backoff is maxBackoff: minBackoff doubled 5 times is above it. The
+	// bound keeps the shift small.
+	maxDoublings = 5
 	// minRenewEvery is the shortest time between two renewals.
 	minRenewEvery = time.Second
 	// maxOperation is the longest operation ID that the loop puts in a path.
 	maxOperation = 128
+	// maxAnswer is the largest answer body that the loop decodes. The answers
+	// of poll, renew and heartbeat are small JSON documents, at most
+	// protocol.MaxBody. A larger body comes from a hostile or broken server
+	// or proxy: the loop refuses it before it decodes it, so that one answer
+	// cannot use up the memory of the runner. The transport must also bound
+	// its read (at most maxAnswer+1 bytes); this check does not rely on it.
+	maxAnswer = protocol.MaxBody
 )
 
 // The method and the statuses of the protocol that the loop reads. The
@@ -132,9 +160,10 @@ type Config struct {
 	Key ed25519.PrivateKey
 	// Release is the release of the runner, as major.minor.patch.
 	Release string
-	// Lease is the lease of the pool of the runner, from runner.MinLease to
-	// runner.MaxLease. The renewal of a claim uses the lease that the work
-	// carries, and this value when the work carries none.
+	// Lease is the lease of the pool of the runner, from the join answer,
+	// from runner.MinLease to runner.MaxLease. The renewal of a claim uses
+	// only the lease that the claim carries. A claim with another lease
+	// writes a log record.
 	Lease time.Duration
 	// Wait is the longest wait of one poll, at most protocol.MaxPollWait.
 	// Zero takes protocol.MaxPollWait.
@@ -144,6 +173,9 @@ type Config struct {
 	Ticker func(d time.Duration) (<-chan time.Time, func())
 	// Now returns the time of a proof. Nil takes time.Now.
 	Now func() time.Time
+	// Random returns a number from 0 to n-1, for the random part of a
+	// backoff. Nil takes crypto/rand.
+	Random func(n int64) int64
 	// Logger receives one record for each event of the loop. Nil discards.
 	Logger *slog.Logger
 }
@@ -180,6 +212,10 @@ func New(cfg Config) (*Loop, error) {
 
 	if cfg.Ticker == nil {
 		cfg.Ticker = realTicker
+	}
+
+	if cfg.Random == nil {
+		cfg.Random = cryptoRandom
 	}
 
 	log := cfg.Logger
@@ -246,9 +282,27 @@ func realTicker(d time.Duration) (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
+// cryptoRandom returns a number from 0 to n-1 from crypto/rand. It returns 0
+// for n below 1, or when crypto/rand fails: the backoff then has no random
+// part, and its upper bound stays.
+func cryptoRandom(n int64) int64 {
+	if n < 1 {
+		return 0
+	}
+
+	v, err := rand.Int(rand.Reader, big.NewInt(n))
+	if err != nil {
+		return 0
+	}
+
+	return v.Int64()
+}
+
 // Run polls for work and calls handle for each claim until ctx ends, the
-// server retires the runner, the server refuses the key, or the runner
-// drains. It returns nil when ctx ends or the runner drains, and the error
+// server retires the runner, the server refuses the key or an answer, or the
+// runner drains. It returns nil when the caller cancels ctx or the runner
+// drains. When the deadline of ctx passes, it returns an error that wraps
+// context.DeadlineExceeded. It returns the error that ends the loop
 // otherwise. A claim that is lost stops its work and the loop goes on.
 func (l *Loop) Run(ctx context.Context, handle Handler) error {
 	ctx, stop := context.WithCancelCause(ctx)
@@ -272,6 +326,8 @@ func (l *Loop) Run(ctx context.Context, handle Handler) error {
 
 // pollLoop is the main loop. It returns the error that ends the loop.
 func (l *Loop) pollLoop(ctx context.Context, stop context.CancelCauseFunc, handle Handler) error {
+	failures := 0
+
 	for {
 		if err := l.ended(ctx); err != nil {
 			return err
@@ -280,24 +336,20 @@ func (l *Loop) pollLoop(ctx context.Context, stop context.CancelCauseFunc, handl
 		w, found, err := l.poll(ctx)
 
 		switch {
-		case err == nil && !found:
-			continue
-		case err == nil:
-			l.runWork(ctx, stop, w, handle)
-		case errors.Is(err, ErrRateLimited):
-			l.log.WarnContext(ctx, "the server limits the polls of the runner", slog.Any("error", err))
-
-			l.wait(ctx, retryAfter(err))
-		case errors.Is(err, ErrUnavailable):
-			l.log.WarnContext(ctx, "the poll got no answer", slog.Any("error", err))
-
-			l.wait(ctx, retryWait)
-		default:
-			if ctx.Err() != nil {
-				continue
+		case err != nil:
+			if end := l.pollFailed(ctx, err, &failures); end != nil {
+				return end
 			}
+		case !found:
+			failures = 0
 
-			return fmt.Errorf("poll: %w", err)
+			l.log.InfoContext(ctx, "the poll found no work: the loop polls again")
+
+			continue
+		default:
+			failures = 0
+
+			l.runWork(ctx, stop, w, handle)
 		}
 
 		l.mu.Lock()
@@ -310,6 +362,35 @@ func (l *Loop) pollLoop(ctx context.Context, stop context.CancelCauseFunc, handl
 			return nil
 		}
 	}
+}
+
+// pollFailed waits after a poll that failed with err and returns nil, or
+// returns the error that ends the loop. failures counts the polls in a row
+// that got no answer or a status of 500 or more.
+func (l *Loop) pollFailed(ctx context.Context, err error, failures *int) error {
+	switch {
+	case errors.Is(err, ErrRateLimited):
+		*failures = 0
+
+		l.log.WarnContext(ctx, "the server limits the polls of the runner", slog.Any("error", err))
+
+		l.wait(ctx, retryAfter(err))
+	case errors.Is(err, ErrUnavailable):
+		d := l.backoff(*failures)
+		*failures++
+
+		l.log.WarnContext(ctx, "the poll failed: the loop waits and polls again",
+			slog.Any("error", err), slog.Duration("wait", d))
+
+		l.wait(ctx, d)
+	case ctx.Err() != nil:
+		// The poll failed because ctx ended: the end of ctx ends the loop.
+		return l.ended(ctx)
+	default:
+		return fmt.Errorf("poll: %w", err)
+	}
+
+	return nil
 }
 
 // ended returns the error that ended ctx, or nil when ctx is live. A cancel
@@ -343,6 +424,27 @@ func (l *Loop) wait(ctx context.Context, d time.Duration) {
 	}
 }
 
+// backoff returns the wait after failures earlier failed polls in a row: a
+// random time from minBackoff to an upper bound that doubles with each
+// failure, from minBackoff to maxBackoff.
+func (l *Loop) backoff(failures int) time.Duration {
+	upper := maxBackoff
+	if failures < maxDoublings {
+		upper = min(minBackoff<<failures, maxBackoff)
+	}
+
+	spread := int64(upper - minBackoff)
+
+	r := l.cfg.Random(spread + 1)
+	// Defense in depth: Random is a caller hook; this check stays so that a
+	// bad value never makes the wait leave the bounds.
+	if r < 0 || r > spread {
+		r = spread
+	}
+
+	return minBackoff + time.Duration(r)
+}
+
 // retryAfter returns the Retry-After of err, or retryWait.
 func retryAfter(err error) time.Duration {
 	var e *Error
@@ -371,7 +473,21 @@ func (l *Loop) post(ctx context.Context, path string, body any) (*session.Respon
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 
+	if len(resp.Body) > maxAnswer {
+		l.refused(ctx, path, "the answer body is above the limit", slog.Int("bytes", len(resp.Body)))
+
+		return nil, fmt.Errorf("%w: %s: %d bytes, at most %d", ErrAnswerTooLarge, path, len(resp.Body), maxAnswer)
+	}
+
 	return resp, nil
+}
+
+// refused writes the log record of an answer that the loop refuses, with its
+// reason.
+func (l *Loop) refused(ctx context.Context, path, reason string, attrs ...slog.Attr) {
+	all := append([]slog.Attr{slog.String("path", path), slog.String("reason", reason)}, attrs...)
+
+	l.log.LogAttrs(ctx, slog.LevelWarn, "the runner refused an answer of the server", all...)
 }
 
 // answerError returns nil when resp has a status below 400 and an *Error
@@ -424,12 +540,17 @@ func (l *Loop) poll(ctx context.Context) (protocol.Work, bool, error) {
 
 	var w protocol.Work
 	if json.Unmarshal(resp.Body, &w) != nil {
+		l.refused(ctx, protocol.PathPoll, "the answer is not work")
+
 		return none, false, fmt.Errorf("%w: the answer to the poll is not work", ErrInvalid)
 	}
 
 	// Defense in depth: the server makes the operation ID; this check stays
 	// so that a hostile answer never changes the path of a renewal.
 	if len(w.Operation) > maxOperation || !operationPattern.MatchString(w.Operation) {
+		l.refused(ctx, protocol.PathPoll, "the operation ID of the work is not valid",
+			slog.Int("length", len(w.Operation)))
+
 		return none, false, fmt.Errorf("%w: the operation ID of the work is not valid", ErrInvalid)
 	}
 
@@ -465,7 +586,7 @@ func (l *Loop) runWork(ctx context.Context, stop context.CancelCauseFunc, w prot
 	wg.Wait()
 
 	switch {
-	case errors.Is(cause, ErrClaimLost), errors.Is(cause, ErrCanceled):
+	case cause != nil && !errors.Is(cause, context.Canceled):
 		l.log.WarnContext(ctx, "the work stopped", slog.String("operation", w.Operation), slog.Any("cause", cause))
 	case err != nil:
 		l.log.WarnContext(ctx, "the work failed", slog.String("operation", w.Operation), slog.Any("error", err))
@@ -477,9 +598,23 @@ func (l *Loop) runWork(ctx context.Context, stop context.CancelCauseFunc, w prot
 func (l *Loop) renewals(
 	wctx context.Context, stop, stopWork context.CancelCauseFunc, w protocol.Work,
 ) {
+	// The renewals use the lease of the claim only, as the server sent it.
+	// A lease outside the bounds of a pool is a hostile or broken answer: the
+	// work stops, with no lease of another source.
 	lease := w.Lease.Std()
 	if lease < runner.MinLease || lease > runner.MaxLease {
-		lease = l.cfg.Lease
+		l.refused(wctx, protocol.PathPoll, "the lease of the claim is out of range",
+			slog.String("operation", w.Operation), slog.Duration("lease", lease))
+		stopWork(fmt.Errorf("%w: the lease %v of the claim is not from %v to %v",
+			ErrInvalid, lease, runner.MinLease, runner.MaxLease))
+
+		return
+	}
+
+	if lease != l.cfg.Lease {
+		l.log.InfoContext(wctx, "the lease of the claim is not the lease of the pool from the join",
+			slog.String("operation", w.Operation), slog.Duration("lease", lease),
+			slog.Duration("pool_lease", l.cfg.Lease))
 	}
 
 	every := max(runner.RenewEvery(lease), minRenewEvery)
@@ -527,8 +662,15 @@ func (l *Loop) renew(
 			return rr.ExpiresAt, rr.Canceled || rr.SessionOpen
 		}
 
+		l.refused(ctx, path, "the answer is not a renewal")
+
 		err = fmt.Errorf("%w: the answer to the renewal is not valid", ErrInvalid)
-	case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof):
+
+		stop(err)
+		stopWork(err)
+
+		return expires, true
+	case errors.Is(err, ErrRetired), errors.Is(err, ErrBadProof), errors.Is(err, ErrInvalid):
 		stop(err)
 		stopWork(err)
 
@@ -587,7 +729,7 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 			err = answerError(resp)
 		}
 
-		if errors.Is(err, ErrRetired) || errors.Is(err, ErrBadProof) {
+		if errors.Is(err, ErrRetired) || errors.Is(err, ErrBadProof) || errors.Is(err, ErrInvalid) {
 			stop(err)
 
 			return
@@ -601,9 +743,10 @@ func (l *Loop) heartbeats(ctx context.Context, stop context.CancelCauseFunc) {
 
 		var hr protocol.HeartbeatResponse
 		if json.Unmarshal(resp.Body, &hr) != nil {
-			l.log.WarnContext(ctx, "the answer to the heartbeat is not valid")
+			l.refused(ctx, protocol.PathHeartbeat, "the answer is not a heartbeat answer")
+			stop(fmt.Errorf("%w: the answer to the heartbeat is not valid", ErrInvalid))
 
-			continue
+			return
 		}
 
 		l.applyHeartbeat(hr)
