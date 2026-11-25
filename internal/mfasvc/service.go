@@ -34,9 +34,11 @@ import (
 const (
 	ActionPasskeyAdded     = "passkey.added"
 	ActionPasskeyRemoved   = "passkey.removed"
+	ActionPasskeyRotated   = "passkey.rotated"
 	ActionPasskeySuspended = "passkey.suspended"
 	ActionAddRefused       = "passkey.add-refused"
 	ActionRemoveRefused    = "passkey.remove-refused"
+	ActionRotateRefused    = "passkey.rotate-refused"
 	ActionListRefused      = "passkey.list-refused"
 	ActionCeremonyRefused  = "passkey.ceremony-refused"
 )
@@ -573,6 +575,112 @@ func (s *Service) RemovePasskey(ctx context.Context, a Actor, id string) error {
 	return nil
 }
 
+// AddPasskey stores the passkey next for the person personID, for a caller
+// that acts on another account, as the break-glass add does. The caller names
+// the person in its authorization; the service only checks the IDs and the
+// passkey.
+func (s *Service) AddPasskey(
+	ctx context.Context, a Actor, personID string, next mfa.Passkey,
+) (mfa.Passkey, error) {
+	object := Object(personID)
+
+	if a.PrincipalID == "" {
+		return mfa.Passkey{}, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the HTTP adapter checks the ID of the path and the
+	// body. These checks stay so that no invalid ID reaches the store or the
+	// audit object.
+	if !ident.Valid(personID, mfa.MaxIDLength) {
+		return mfa.Passkey{}, s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, unknownObject), "ID not valid", mfa.ErrNotFound,
+		)
+	}
+
+	// Defense in depth: the HTTP adapter makes the person a break-glass
+	// account before it calls this method. This check stays so that no other
+	// caller adds a passkey to a person without a ceremony.
+	if err := s.checkBreakGlassPerson(ctx, a, personID); err != nil {
+		return mfa.Passkey{}, err
+	}
+
+	next.PersonID = personID
+	next.CreatedAt = s.now()
+	next.LastUsedAt = time.Time{}
+	next.SuspendedAt = time.Time{}
+
+	if next.ID == "" {
+		next.ID = ident.NewID(mfa.PasskeyIDPrefix)
+	}
+
+	// Defense in depth: the store checks the passkey again before it inserts
+	// it. This check stays so that a value that no store must hold never
+	// reaches the store or the audit entry.
+	if err := next.Validate(); err != nil {
+		return mfa.Passkey{}, s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the passkey is not valid", err)
+	}
+
+	e := s.entry(a.Entry, ActionPasskeyAdded, Object(next.ID), audit.KindChange, audit.OutcomeSuccess)
+
+	if err := s.store.AddPasskey(ctx, next, e); err != nil {
+		return mfa.Passkey{}, s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, Object(next.ID)), "store refused the add", err,
+		)
+	}
+
+	return next, nil
+}
+
+// RotatePasskey replaces the passkey oldID of the person personID with next,
+// in one transaction: the new passkey is stored before the old one ends, so
+// no commit leaves the person without a working credential. It calls the
+// rotation method of the store, never an add and then a remove. The caller
+// names the person in its authorization; the service only checks the IDs and
+// the passkey.
+func (s *Service) RotatePasskey(ctx context.Context, a Actor, personID, oldID string, next mfa.Passkey) error {
+	object := Object(oldID)
+
+	if a.PrincipalID == "" {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the HTTP adapter checks the IDs of the path and the
+	// body. These checks stay so that no invalid ID reaches the store or the
+	// audit object.
+	if !ident.Valid(personID, mfa.MaxIDLength) || !ident.Valid(oldID, mfa.MaxIDLength) {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, unknownObject), "ID not valid", mfa.ErrNotFound)
+	}
+
+	next.PersonID = personID
+	next.CreatedAt = s.now()
+	next.LastUsedAt = time.Time{}
+	next.SuspendedAt = time.Time{}
+
+	if next.ID == "" {
+		next.ID = ident.NewID(mfa.PasskeyIDPrefix)
+	}
+
+	// Defense in depth: the store checks the passkey again before it inserts
+	// it. This check stays so that a value that no store must hold never
+	// reaches the store or the audit entry.
+	if err := next.Validate(); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "the new passkey is not valid", err)
+	}
+
+	old, newID := oldID, next.ID
+	e := s.entry(a.Entry, ActionPasskeyRotated, Object(next.ID), audit.KindChange, audit.OutcomeSuccess)
+	e.Changes = []audit.Change{
+		{Key: "oldPasskey", Old: &old, New: "", Layer: "", TakesEffect: ""},
+		{Key: "newPasskey", Old: nil, New: newID, Layer: "", TakesEffect: ""},
+	}
+
+	if err := s.store.RotatePasskey(ctx, personID, oldID, next, e); err != nil {
+		return s.refuse(ctx, a.Entry, on(ActionRotateRefused, object), "store refused the rotation", err)
+	}
+
+	return nil
+}
+
 // entry returns the entry of base of the action on object at the time of the
 // service, with the kind and the outcome.
 func (s *Service) entry(base audit.Entry, action, object string, kind audit.Kind, outcome audit.Outcome) audit.Entry {
@@ -737,4 +845,32 @@ func (s *Service) usable(ctx context.Context, personID string) ([]mfa.Passkey, e
 	}
 
 	return out, nil
+}
+
+// checkBreakGlassPerson refuses a person that the add of another account's
+// passkey must not change: an unknown principal, a principal that is not a
+// person of the installation, and a person that is not a break-glass
+// account. It answers mfa.ErrUnavailable when the store cannot read the
+// principal.
+func (s *Service) checkBreakGlassPerson(ctx context.Context, a Actor, personID string) error {
+	object := Object(personID)
+
+	reader, ok := s.store.(PrincipalReader)
+	if !ok {
+		return s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the store cannot read the principal",
+			mfa.ErrUnavailable)
+	}
+
+	person, err := reader.GetPrincipal(ctx, personID)
+	if err != nil && !errors.Is(err, principal.ErrNotFound) {
+		return s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the principal cannot be read",
+			mfa.ErrUnavailable)
+	}
+
+	if err != nil || !person.BreakGlass || person.Kind != principal.KindPerson || person.Namespace != "" {
+		return s.refuse(ctx, a.Entry, on(ActionAddRefused, object), "the person is not a break-glass account",
+			mfa.ErrNotFound)
+	}
+
+	return nil
 }

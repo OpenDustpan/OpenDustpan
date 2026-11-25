@@ -118,6 +118,17 @@ func (s *Store) RemovePasskey(ctx context.Context, personID, id string, e audit.
 	})
 }
 
+// RotatePasskey implements mfa.PasskeyStore.
+func (s *Store) RotatePasskey(ctx context.Context, personID, oldID string, next mfa.Passkey, e audit.Entry) error {
+	if err := next.Validate(); err != nil {
+		return err
+	}
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		return passkeystore.RotatePasskey(ctx, passkeyTx{q: q}, personID, oldID, next)
+	})
+}
+
 // CreateChallenge implements mfa.PasskeyStore.
 func (s *Store) CreateChallenge(ctx context.Context, c mfa.Challenge, d mfa.Digest) error {
 	if err := c.Validate(); err != nil {

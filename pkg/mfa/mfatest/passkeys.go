@@ -86,6 +86,19 @@ func passkeyCases() []passkeyCase {
 				"keeps a credential",
 			test: testRemoveRace,
 		},
+		{name: "a rotation ends the old passkey and stores the new one", test: testRotate},
+		{
+			name: "a rotation whose insert fails keeps the old passkey",
+			test: testRotateInsertFails,
+		},
+		{
+			name: "a rotation of an unknown passkey or of a passkey of another person fails with ErrNotFound",
+			test: testRotateUnknown,
+		},
+		{
+			name: "two rotations of one passkey at the same time: one wins and one working credential stays",
+			test: testRotateRace,
+		},
 		{name: "a challenge works once", test: testChallengeOnce},
 		{
 			name: "a sign-in challenge over the cap of open ones stores no row, and the cap counts sign-ins only",
@@ -988,6 +1001,154 @@ func testRemoveRace(t *testing.T, s PasskeyStore) {
 
 	if !keeps && c.Hash == "" {
 		t.Fatalf("the person has no credential after the removals (passkey: %v, password: %v)", passkeyErr, pwdErr)
+	}
+}
+
+// testRotate proves that one rotation ends the old passkey and stores the
+// new one, with one entry for the new passkey.
+func testRotate(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustPerson(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	next := passkeyOf(2, pid)
+	next.CreatedAt = at(60)
+
+	if err := s.RotatePasskey(t.Context(), pid, "pky-1", next, entry(passkeyObject(2), at(60))); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); !errors.Is(err, mfa.ErrNotFound) {
+		t.Fatalf("old passkey: err = %v, want ErrNotFound", err)
+	}
+
+	got, err := s.PasskeyByCredentialID(t.Context(), credential(2))
+	if err != nil {
+		t.Fatalf("new passkey: %v", err)
+	}
+
+	if got.ID != next.ID || got.PersonID != pid {
+		t.Fatalf("new passkey = %+v, want %q of %q", got, next.ID, pid)
+	}
+
+	if n := count(t, s, pid); n != 1 {
+		t.Fatalf("passkeys = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(2), 1)
+}
+
+// testRotateInsertFails proves that a rotation whose insert fails changes
+// nothing, so the old passkey stays.
+func testRotateInsertFails(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustPerson(t, s, 1)
+	mustAdd(t, s, 1, pid)
+	mustAdd(t, s, 2, pid)
+
+	next := passkeyOf(3, pid)
+	next.CredentialID = credential(2)
+
+	err := s.RotatePasskey(t.Context(), pid, "pky-1", next, entry(passkeyObject(3), at(60)))
+	wantErr(t, "rotate onto a credential ID that another passkey holds", err, mfa.ErrAlreadyExists)
+
+	if n := count(t, s, pid); n != 2 {
+		t.Fatalf("passkeys = %d, want 2", n)
+	}
+
+	if _, err := s.PasskeyByCredentialID(t.Context(), credential(1)); err != nil {
+		t.Fatalf("old passkey after the failed insert: %v", err)
+	}
+
+	wantEntries(t, s, passkeyObject(3), 0)
+}
+
+// testRotateUnknown proves that a rotation of an unknown passkey, or of a
+// passkey of another person, fails with ErrNotFound and changes nothing.
+func testRotateUnknown(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	first := mustPerson(t, s, 1)
+	second := mustPerson(t, s, 2)
+	mustAdd(t, s, 1, first)
+	mustAdd(t, s, 2, second)
+
+	err := s.RotatePasskey(t.Context(), second, "pky-1", passkeyOf(3, second), entry(passkeyObject(3), at(60)))
+	wantErr(t, "rotate a passkey of another person", err, mfa.ErrNotFound)
+
+	err = s.RotatePasskey(t.Context(), first, "pky-missing", passkeyOf(3, first), entry(passkeyObject(3), at(61)))
+	wantErr(t, "rotate an unknown passkey", err, mfa.ErrNotFound)
+
+	if n := count(t, s, first); n != 1 {
+		t.Fatalf("passkeys of the first person = %d, want 1", n)
+	}
+
+	if n := count(t, s, second); n != 1 {
+		t.Fatalf("passkeys of the second person = %d, want 1", n)
+	}
+
+	wantEntries(t, s, passkeyObject(3), 0)
+}
+
+// testRotateRace proves that two rotations of one passkey at the same time
+// leave exactly one working credential, and that the credential of the
+// rotation that won is the one that stays.
+func testRotateRace(t *testing.T, s PasskeyStore) {
+	t.Helper()
+
+	pid := mustPerson(t, s, 1)
+	mustAdd(t, s, 1, pid)
+
+	first := passkeyOf(2, pid)
+	second := passkeyOf(3, pid)
+	results := make([]error, 2)
+
+	ctx := context.WithoutCancel(t.Context())
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		results[0] = s.RotatePasskey(ctx, pid, "pky-1", first, entry(passkeyObject(2), at(60)))
+	})
+	wg.Go(func() {
+		results[1] = s.RotatePasskey(ctx, pid, "pky-1", second, entry(passkeyObject(3), at(61)))
+	})
+	wg.Wait()
+
+	passed := 0
+
+	for _, err := range results {
+		switch {
+		case err == nil:
+			passed++
+		case errors.Is(err, mfa.ErrNotFound):
+		default:
+			t.Fatalf("rotation = %v, want nil or ErrNotFound", err)
+		}
+	}
+
+	if passed != 1 {
+		t.Fatalf("rotations that passed = %d, want 1", passed)
+	}
+
+	keys, err := s.Passkeys(t.Context(), pid)
+	if err != nil {
+		t.Fatalf("list passkeys: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("passkeys = %d, want 1", len(keys))
+	}
+
+	want := first.ID
+	if results[1] == nil {
+		want = second.ID
+	}
+
+	if keys[0].ID != want {
+		t.Fatalf("passkey that stays = %q, want %q of the rotation that won", keys[0].ID, want)
 	}
 }
 

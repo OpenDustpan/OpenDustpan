@@ -37,6 +37,100 @@ override) or U+200B (zero-width space), because the administrators read the
 reason in the alert and a hidden character could show other text than the
 stored text.
 
+## Add an account
+
+A site administrator adds a break-glass account, its first passkey and its
+grant in three requests. Each needs a recent sign-in.
+
+1. Make the passkey with an authenticator. Send `POST
+   /api/server/break-glass/accounts` with the person and the passkey:
+
+   ```json
+   {
+     "subject": "break-glass:recovery",
+     "displayName": "Recovery",
+     "name": "recovery-key",
+     "credentialID": "<base64url>",
+     "publicKey": "<base64url>",
+     "transports": ["usb"]
+   }
+   ```
+
+   The credential ID and the public key are base64url without padding. The
+   answer is `201` with the account and its passkeys. The route accepts the
+   add when no working account exists, and it does not lower any count.
+
+2. Give the account the role `site-administrator` on the installation with
+   `POST /api/server/grants`. A break-glass account with a passkey but no
+   administration grant signs in, but it cannot change anything. The working
+   count includes only an account with a grant.
+
+If the add route fails after it writes the account, the account has no
+passkey and the count does not include it. List the accounts, delete the
+account with `DELETE /api/server/principals/{id}`, and add it again. If the
+grant request fails, retry it: the account has a passkey but no grant, and the
+count does not include it.
+
+The action `server:manage-break-glass` allows the add and the rotation. The
+action `server:read-break-glass` allows the list. Only a site administrator
+holds the two actions.
+
+## List the accounts and the count
+
+`GET /api/server/break-glass/accounts` returns each break-glass account with
+its passkeys, and the live count:
+
+```json
+{
+  "accounts": [{"id": "prn-...", "subject": "break-glass:recovery", "enabled": true, "passkeys": []}],
+  "working": 1,
+  "missing": 1,
+  "floor": 2
+}
+```
+
+`working` is the count of the working paths at the request time. `missing` is
+the count that the installation needs to reach `floor`, and `0` at or above
+it. The count reads the rows at the request time, so an account that stops
+working, by a suspended passkey or a revoked grant, leaves the count without
+a write.
+
+## Rotate a passkey
+
+`POST /api/server/break-glass/accounts/{id}/rotate` replaces one passkey of
+an account with a new one. The rotation needs a recent sign-in. The body names
+the old passkey and the new one:
+
+```json
+{
+  "oldPasskeyID": "pky-...",
+  "name": "next-key",
+  "credentialID": "<base64url>",
+  "publicKey": "<base64url>",
+  "transports": ["usb"]
+}
+```
+
+The server writes the new passkey, removes the old one and writes the audit
+entry in one database transaction. A failed write keeps the old passkey. Two
+rotations of one account run one after the other, and the second rotation
+sees the new passkey. An account that is not a break-glass account, or a
+passkey that the account does not hold, answers `404` with the error code
+`break-glass.not-found`. The answer of a change is `204`.
+
+## The lock timeout
+
+The setting `principal.breakGlassLockSeconds` holds the number of whole
+seconds that a guarded change may wait for the lock of the break-glass rows.
+Its default is `5`, and it takes `1` to `60`. `GET /api/dustpan/v1/settings`
+shows its effective value and the layer that gave it.
+
+The guard of a change takes the lock of the server audit scope, so the
+changes that count the break-glass accounts run one after the other. A change
+that the guard refuses answers `409` with the error code
+`principal.no-working-break-glass` and writes nothing. A sign-in takes no such
+lock, so a break-glass sign-in works while a guarded change holds it.
+
 ## The session limit
 
 A session of a break-glass account ends 1 hour after the sign-in. The limit is

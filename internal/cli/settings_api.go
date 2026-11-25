@@ -48,6 +48,7 @@ func SettingDeclarations() []setting.Declaration {
 	held = append(held, access.SettingDeclarations()...)
 	held = append(held, plainconn.SettingDeclarations()...)
 	held = append(held, principal.RemovalAlertSettingDeclarations()...)
+	held = append(held, principal.BreakGlassSettingDeclarations()...)
 	held = append(held, tempadmin.SessionLimitSettingDeclarations()...)
 	held = append(held, backup.RestoreAccessSettingDeclarations()...)
 	held = append(held, brandingPresetDeclaration())

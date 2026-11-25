@@ -225,6 +225,16 @@ type PasskeyStore interface {
 	// passkey of another person, and localuser.ErrDemoFixed for the demo
 	// person.
 	RemovePasskey(ctx context.Context, personID, id string, e audit.Entry) error
+	// RotatePasskey inserts next and ends the passkey oldID of the person
+	// personID, and appends e, in one transaction: the new passkey exists
+	// before the old one ends, and no commit leaves the person without one.
+	// It locks the row of the person first, so two rotations of one account
+	// run one after the other. It returns ErrInvalid for next that
+	// Validate refuses or that belongs to another person, ErrAlreadyExists
+	// for a passkey ID or a credential ID that any person holds, ErrNotFound
+	// for oldID that is not a passkey of personID, and localuser.ErrDemoFixed
+	// for the demo person. A failed insert changes nothing.
+	RotatePasskey(ctx context.Context, personID, oldID string, next Passkey, e audit.Entry) error
 	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
 	// stores c keyed by d. It returns ErrInvalid for a value that
 	// Challenge.Validate refuses, and ErrAlreadyExists when d is taken. For a

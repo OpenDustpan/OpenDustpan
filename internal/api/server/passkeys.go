@@ -84,6 +84,12 @@ type PasskeyService interface {
 	Passkeys(ctx context.Context, a mfasvc.Actor) ([]mfa.Passkey, error)
 	// RemovePasskey removes the passkey id of the caller.
 	RemovePasskey(ctx context.Context, a mfasvc.Actor, id string) error
+	// AddPasskey stores the passkey of a person for a caller that acts on
+	// another account, as the break-glass add does.
+	AddPasskey(ctx context.Context, a mfasvc.Actor, personID string, next mfa.Passkey) (mfa.Passkey, error)
+	// RotatePasskey replaces the passkey oldID of the person personID with
+	// next, in one transaction.
+	RotatePasskey(ctx context.Context, a mfasvc.Actor, personID, oldID string, next mfa.Passkey) error
 }
 
 // finishPasskeyRequest is the body of the end of a register ceremony.

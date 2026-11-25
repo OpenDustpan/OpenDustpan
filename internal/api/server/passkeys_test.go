@@ -514,6 +514,23 @@ func (p *fakePasskeys) RemovePasskey(_ context.Context, a mfasvc.Actor, id strin
 	return p.record(a, nobody)
 }
 
+func (p *fakePasskeys) AddPasskey(
+	_ context.Context, a mfasvc.Actor, personID string, next mfa.Passkey,
+) (mfa.Passkey, error) {
+	next.PersonID = personID
+	if next.ID == "" {
+		next.ID = "pky-fake"
+	}
+
+	return next, p.record(a, mfa.Person{ID: personID, Name: "", DisplayName: ""})
+}
+
+func (p *fakePasskeys) RotatePasskey(
+	_ context.Context, a mfasvc.Actor, personID, _ string, _ mfa.Passkey,
+) error {
+	return p.record(a, mfa.Person{ID: personID, Name: "", DisplayName: ""})
+}
+
 // record counts one call and keeps its actor and person.
 func (p *fakePasskeys) record(a mfasvc.Actor, person mfa.Person) error {
 	p.mu.Lock()

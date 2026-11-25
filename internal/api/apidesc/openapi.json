@@ -2547,6 +2547,8 @@
           "backup.registry-files-too-large",
           "backup.still-running",
           "backup.too-many-unverified",
+          "break-glass.busy",
+          "break-glass.not-found",
           "break-glass.self-review",
           "collection.already-exists",
           "collection.changed",
