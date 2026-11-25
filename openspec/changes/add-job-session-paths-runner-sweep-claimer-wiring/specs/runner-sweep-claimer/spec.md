@@ -18,10 +18,10 @@ When a runner of a pool polls, the server SHALL claim only a durable operation w
 
 ### Requirement: sweep-report-auth
 
-If a sweep report or finish request lacks a valid session proof, an open session or ownership of the claim, then the server SHALL refuse the request.
+If a sweep report request lacks a valid session proof, an open session or ownership of the claim, then the server SHALL refuse the request.
 
 #### Scenario: Runner key proof
-- **WHEN** a caller uploads a report chunk with a runner key proof and no session proof
+- **WHEN** a caller uploads a report with a runner key proof and no session proof
 - **THEN** the server answers 401 bad-proof and stores nothing.
 
 #### Scenario: No open session
@@ -34,7 +34,7 @@ While a sweep session uploads its report, the server SHALL enforce the bounds of
 
 #### Scenario: Over-bound line refused
 - **WHEN** the launcher uploads a line above 64 KiB, or a report above 1 GiB or 5,000,000 records
-- **THEN** the server answers 413, drops the staged report and fails the sweep.
+- **THEN** the report store returns the NEW port sentinel runner.ErrReportTooLarge, and the server answers 413 with the protocol error shape, drops the staged report and fails the sweep.
 
 #### Scenario: Tag and scope limits
 - **WHEN** a record has more than 50 tags, a key above 128 bytes or a value above 256 bytes, or the header has more than 1,000 scopes
@@ -45,7 +45,7 @@ While a sweep session uploads its report, the server SHALL enforce the bounds of
 - **THEN** the server stores the stream under the data key of the namespace.
 
 #### Scenario: Cut stream
-- **WHEN** the connection drops before finish
+- **WHEN** the connection drops before the end of the upload
 - **THEN** the server drops the staged report and fails the sweep when the claim ends.
 
 #### Scenario: Second upload
@@ -72,25 +72,21 @@ If a sweep report has no header line, a wrong format or version, or a malformed 
 - **WHEN** the header marks a scope with complete false
 - **THEN** the server accepts the report and closes no finding of that scope.
 
-### Requirement: sweep-finish-session
+### Requirement: sweep-report-ends-sweep
 
-When the launcher calls the sweep finish route, the server SHALL close the session and advance the sweep only after a complete bounded report is stored.
+When the launcher uploads the sweep report, the server SHALL end the claim and the sweep in the same transaction as the stored report. A sweep has no finish route.
 
-#### Scenario: Finish closes the session
-- **WHEN** the launcher calls finish after a complete bounded upload
-- **THEN** the server closes the session and advances the sweep from running to matching.
+#### Scenario: Upload ends the sweep
+- **WHEN** the launcher uploads a complete bounded report under its open sweep session
+- **THEN** the server answers 204, stores the report, closes the session and advances the sweep from running to matching in one transaction.
 
-#### Scenario: Finish with no report
-- **WHEN** the launcher calls finish with no stored report
-- **THEN** the server answers 400 and fails the sweep.
+#### Scenario: Upload with a lost claim
+- **WHEN** the launcher uploads a report after its claim expired
+- **THEN** the server answers 409, stores nothing and keeps the sweep state.
 
-#### Scenario: Finish twice
-- **WHEN** the launcher calls finish a second time, or two finish calls arrive at once
-- **THEN** the server answers the stored result and changes nothing.
-
-#### Scenario: Finish with a lost claim
-- **WHEN** the launcher calls finish after its claim expired
-- **THEN** the server answers 409 and keeps the sweep state.
+#### Scenario: No finish route
+- **WHEN** a caller sends a finish request for a sweep session
+- **THEN** the server answers 400 invalid ("a sweep has no finish") and changes nothing.
 
 ### Requirement: sweep-purpose-on-team-pool
 
