@@ -21,7 +21,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main revokes access tokens in the local-user store. Proof: pkg/store/postgres/localusers.go:366 (func localUserTx.RevokeAccessTokens)
+- Main revokes access tokens in the local-user store. Proof: internal/store/postgres/localusers.go:366 (func localUserTx.RevokeAccessTokens)
 - Main defines the tool-operation audit kind. Proof: pkg/audit/audit.go:44
 
 ## What Changes
@@ -55,8 +55,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main revokes access tokens in the local-user store. (`pkg/store/postgres/localusers.go:366 (func localUserTx.RevokeAccessTokens)`)
-- Main revokes access tokens through the local-user store port. (`pkg/store/internal/localuserstore/localuserstore.go:129`)
+- Main revokes access tokens in the local-user store. (`internal/store/postgres/localusers.go:366 (func localUserTx.RevokeAccessTokens)`)
+- Main revokes access tokens through the local-user store port. (`internal/store/localuserstore/localuserstore.go:129`)
 - Main keeps namespace principal token checks in access tests. (`pkg/access/access_test.go:1473 (func TestNamespacePrincipalTokens)`)
 
 ## ADR check

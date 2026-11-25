@@ -99,7 +99,7 @@ func newGroupService(t *testing.T, dir gate.ApproverDirectory) (*gate.ConfigServ
 
 // approversOf returns approvers that name groups and hold ids.
 func approversOf(groups, ids []string) gate.Approvers {
-	return gate.Approvers{Groups: groups, GroupIDs: ids, Users: nil, UnitOwners: false}
+	return gate.Approvers{Groups: groups, GroupIDs: ids, Users: nil, UnitOwners: false, UserIDs: nil}
 }
 
 // ruleOf returns a rule that names groups.
@@ -135,7 +135,7 @@ func TestConfigServiceStoresGroupIDs(t *testing.T) {
 		},
 		{
 			"no group",
-			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"alice"}, UnitOwners: false},
+			gate.Approvers{Groups: nil, GroupIDs: nil, Users: []string{"alice"}, UnitOwners: false, UserIDs: nil},
 			[]string{},
 			[]string{},
 		},

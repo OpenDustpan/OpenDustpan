@@ -93,7 +93,7 @@ type guardRefusal struct {
 
 func guardRefusals() []guardRefusal {
 	refusal := func(err error, record string) *gate.RefusalError {
-		return &gate.RefusalError{Err: err, Record: gate.RecordID(record), Messages: []string{"No restores."}}
+		return &gate.RefusalError{Err: err, Record: gate.RecordID(record), Messages: []string{"No restores."}, Job: nil}
 	}
 
 	return []guardRefusal{
@@ -301,6 +301,7 @@ func TestStateGuardOnALostStoreAnswers503WithRetryAfter(t *testing.T) {
 		{"busy", fmt.Errorf("%w: database is busy", namespace.ErrUnavailable)},
 		{"in a refusal", &gate.RefusalError{
 			Err: fmt.Errorf("%w: %w", gate.ErrUnavailable, namespace.ErrUnavailable), Record: "", Messages: nil,
+			Job: nil,
 		}},
 	}
 
@@ -342,6 +343,7 @@ func storeFaultCases() []storeFaultCase {
 			Err:      fmt.Errorf("%w: write the decision record: %w", gate.ErrUnavailable, cause),
 			Record:   "gdr-1",
 			Messages: []string{"The decision record could not be written, so the write is refused."},
+			Job:      nil,
 		}
 	}
 

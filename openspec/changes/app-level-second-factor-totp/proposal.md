@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #728.
@@ -26,7 +26,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Plain OAuth providers return no auth_time and the pending sign-in request carries no max_age. Proof: internal/oauth/plain.go:162:// no max_age: a plain OAuth provider returns no auth_time to check it
-- The server stores session rows with provider and auth_time for freshness checks. Proof: pkg/store/sqlite/internal/db/queries.sql.go:2438:INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
+- The server stores session rows with provider and auth_time for freshness checks. Proof: internal/store/sqlite/internal/db/queries.sql.go:2438:INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
 - No server code path names select_account. Proof: rg -n -F --glob '!*_test.go' 'select_account' pkg internal cmd matches 0
 - Main has passkey routes for a person. Proof: route GET /api/dustpan/v1/me/passkeys and POST /api/dustpan/v1/me/passkeys/register/begin in the route table
 
@@ -40,6 +40,7 @@ Evidence for the claims above:
 - New route `POST /api/dustpan/v1/principals/{id}/enrollment-code` issues a 128-bit single-use one-hour enrollment code with action server:manage-sign-in
 - Installation setting `require-second-factor-for-plain-oauth` off by default through `PATCH /api/dustpan/v1/settings` with action server:manage-sign-in
 - First enrollment only with an administrator enrollment code or a one-time email code; existing /me/passkeys routes stay and share one code path
+- Start state: after the mfa change, a local or LDAP person with a required factor and no factor enrolled gets no session, because `NeedsSecondFactor` in `internal/mfasvc/policy.go` fails closed and that includes a person inside `mfa.enrollmentGraceDays`. This change replaces that closed failure. After `mfa.enrollmentGraceDays` the person gets an enroll-only session (cookie restriction `enroll-only`) that can only enroll a factor, read the session, refresh and sign out. Inside the grace the person gets a session from the password alone, which is not a fresh authentication (ADR 285 decision 21)
 
 Out of scope:
 
@@ -47,6 +48,7 @@ Out of scope:
 - The factor store, admin reset and recovery-code rotation paths, owned by the mfa change
 - The zero-window behavior, owned by the fresh-authentication-window-0-turns change
 - Trusted-header proxy allowlist management, owned by the sign-in-methods change
+- The gate rule `NeedsSecondFactor`, the three `mfa.*` settings and the pending sign-in, owned by the mfa change
 - Signed-request recovery, and the issue of an enrollment code by a temporary administrator of a recovery with no fresh step (ADR 372 decision 6), owned by the signed-request-recovery change
 
 Depends on:
@@ -102,6 +104,25 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: The installation setting and the enrollment-code issue action use the sign-in settings action; per-person factor routes use a self action on the caller.
 - Conflict: none.
 
+**ADR 285: Local users sign in with a password and with a passkey** (owner-tagged: decisions 1 and 21; the ADR is decided by the project owner).
+
+- Decisions that apply: 21.
+- Changed by: ADR 297 changes decisions 5, 17, 19, 20 and 21; ADR 301 extends decision 1; ADR 312 changes decision 29; ADR 320 extends decision 21; ADR 333 changes decision 16 and extends decisions 20 and 23; ADR 372 changes decision 17.
+- Current rule: this ADR, with ADR 297, 320.
+- Quote (decision 21): "A person with no factor receives a session that can only enroll a factor and sign out, after the grace of `mfa.enrollmentGraceDays`."
+- Quote (decision 21): "A password alone is never a fresh authentication when `mfa.requireForAll` is on, while an SSO provider exists, or when the person has a factor."
+- Effect: The mfa change gives such a person no session at all. This change adds the enroll-only session after the grace and keeps the password-only session inside the grace.
+- Conflict: none.
+
+**ADR 297: Console sessions are sealed cookies, not stored sessions** (not owner-tagged).
+
+- Decisions that apply: the change of ADR 285 decision 21.
+- Quote: "An enroll-only session is a claim of the cookies."
+- Quote: "A cookie with the restriction `enroll-only` authenticates only the routes that enroll a factor, read the session, refresh and sign out. Each other route answers `403` with the error code `mfa.enrollment-required`."
+- Quote: "The enrollment of a factor bumps the generation (decision 12) and sets new cookies with no restriction, with the same sign-in ID and thumbprint."
+- Effect: The restriction is a cookie claim (`RestrictionEnrollOnly` at pkg/session/cookie.go:220 on main). This change issues it and ends it at the first enrollment.
+- Conflict: none.
+
 **ADR 301: A passkey, TOTP or SSH signature gives the fresh step to a person who signed in with OAuth or a trusted header** (owner-tagged (all decisions)).
 
 - Decisions that apply: 1 (current), 3 (current), 4 (current), 5 (current), 6 (current), 8 (current), 11 (current), 12 (current), 13 (current), 14 (current), 15 (current).
@@ -125,6 +146,9 @@ Questions considered and answered:
 - Does step-up happen at sign-in or later? Later. ADR 301 decisions 1, 3 and 4 keep sign-in without a second factor and add the fresh step later from an app factor.
 - Does this reuse the local-user MFA code and need a new WebAuthn library? Yes. ADR 301 decision 5 says the passkey and TOTP code is the code of the local-user MFA. No new dependency.
 - Is an RFC needed before code for storage and library choices? No. ADR 301 decisions 5, 6, 14 and 15 already decide one code path and the enrollment proof.
+- Who issues the enroll-only session? This change, after the mfa change. The mfa change keeps `NeedsSecondFactor` closed and says that the enroll-only session belongs here.
+- What does the grace do? Inside `mfa.enrollmentGraceDays` a person with no factor gets a session from the password alone. After it, the person gets the enroll-only session (RFC 21: the grace counts "days after the setting changes").
+- Does the enroll-only session replace the first-enrollment proof? No. The enroll-only session lets the person reach the enroll routes, and the first enrollment still needs an enrollment code or a one-time email code (ADR 301 decision 14).
 - Where does the trusted-header factor requirement live? Here. The sign-in-methods change owns the proxy allowlist.
 - Who owns admin reset, recovery codes and the zero window? The mfa change and the fresh-authentication-window-0-turns change.
 

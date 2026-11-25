@@ -54,7 +54,7 @@ While a namespace has an active freeze, the server SHALL refuse a job start with
 
 #### Scenario: Start during freeze is refused
 - **WHEN** a principal without the break-freeze action on the namespace starts a job in a namespace with an active freeze
-- **THEN** the server answers 403 and starts no job
+- **THEN** the server answers 409 with code job.frozen and starts no job
 
 #### Scenario: Running jobs keep running at freeze start
 - **WHEN** a freeze starts while jobs are queued or running
@@ -66,22 +66,22 @@ While a namespace has an active freeze, the server SHALL refuse each cancel and 
 
 #### Scenario: Cancel during freeze is refused
 - **WHEN** a principal without the break-freeze action on the namespace cancels a job in a namespace with an active freeze
-- **THEN** the server answers 403 and changes no job
+- **THEN** the server answers 409 with code job.frozen and changes no job
 
 ### Requirement: Permit break-glass start
 
-When a principal with the break-freeze action on the namespace starts a job during an active freeze with break_freeze_reason of 1 to 500 characters, the server SHALL start the job.
+When a principal with the break-freeze action on the namespace starts a job during an active freeze with breakFreezeReason of 1 to 500 characters, the server SHALL start the job.
 
 #### Scenario: Break-glass start is recorded
-- **WHEN** a principal with the break-freeze action on the namespace starts a job in a namespace with an active freeze with break_freeze_reason of 1 to 500 characters
+- **WHEN** a principal with the break-freeze action on the namespace starts a job in a namespace with an active freeze with breakFreezeReason of 1 to 500 characters
 - **THEN** the server starts the job and writes an audit entry that names the freeze, the starter subject, and the reason
 
 #### Scenario: Break-glass start without reason is refused
-- **WHEN** a principal with the break-freeze action on the namespace starts a job during an active freeze with an empty break_freeze_reason
+- **WHEN** a principal with the break-freeze action on the namespace starts a job during an active freeze with an empty breakFreezeReason
 - **THEN** the server answers 400 and starts no job
 
 #### Scenario: Non-freeze start needs no reason
-- **WHEN** a principal starts a job in a namespace with no active freeze with no break_freeze_reason
+- **WHEN** a principal starts a job in a namespace with no active freeze with no breakFreezeReason
 - **THEN** the server starts the job and ignores the missing reason
 
 ### Requirement: List freezes
@@ -95,3 +95,18 @@ When a principal with the namespace read action on the namespace lists the freez
 #### Scenario: List without read is refused
 - **WHEN** a principal without the namespace read action on the namespace lists the freezes
 - **THEN** the server answers 403 and returns no freeze
+
+### Requirement: Break-freeze is an installation action
+The server SHALL give the break-freeze action only through a grant on the installation, and the manage-freezes action through a grant on a namespace. A holder of one action SHALL NOT hold the other through it.
+
+#### Scenario: Namespace grant does not give break-freeze
+- **WHEN** a role with the break-freeze action is granted on a namespace and its holder starts a job during an active freeze with breakFreezeReason
+- **THEN** the server answers 409 with code job.frozen and starts no job
+
+#### Scenario: Manage-freezes without break-freeze
+- **WHEN** a principal with the manage-freezes action and without the break-freeze action starts a job during an active freeze with breakFreezeReason
+- **THEN** the server answers 403 and starts no job
+
+#### Scenario: Break-freeze without manage-freezes
+- **WHEN** a principal with the break-freeze action and without the manage-freezes action creates or ends a freeze
+- **THEN** the server answers 403 and changes no freeze

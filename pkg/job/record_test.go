@@ -273,7 +273,7 @@ func TestEndStepRecord(t *testing.T) {
 
 // chunkOf returns the reserve of chunk seq with the content.
 func chunkOf(seq int, content string) job.ChunkReserve {
-	return job.ChunkReserve{Seq: seq, SHA256: sum(content), Size: int64(len(content))}
+	return job.ChunkReserve{Seq: seq, SHA256: sum(content), Size: int64(len(content)), Caps: nil}
 }
 
 // newLogRef returns the log version that a chunk 0 creates.
@@ -297,8 +297,8 @@ func TestPlanChunk(t *testing.T) {
 		return withSteps(openRec(token, openLog(chunks)))
 	}
 
-	tooBig := job.ChunkReserve{Seq: 0, SHA256: sum("a"), Size: job.MaxLogChunk + 1}
-	noHash := job.ChunkReserve{Seq: 0, SHA256: "", Size: 1}
+	tooBig := job.ChunkReserve{Seq: 0, SHA256: sum("a"), Size: job.MaxLogChunk + 1, Caps: nil}
+	noHash := job.ChunkReserve{Seq: 0, SHA256: "", Size: 1, Caps: nil}
 	none := job.ChunkPlan{Version: "", CreateLog: false, Insert: false, Duplicate: false}
 
 	tests := []struct {
@@ -360,6 +360,284 @@ func TestPlanChunk(t *testing.T) {
 				t.Fatalf("PlanChunk = %+v, %v; want %+v, %v", got, err, tt.plan, tt.want)
 			}
 		})
+	}
+}
+
+// TestPlanChunkCaps proves the caps of the log in the reserve of a chunk: a
+// new chunk that passes the cap of its step or of the phase is ErrInvalid and
+// keeps nothing, and a retry of a counted chunk changes nothing.
+func TestPlanChunkCaps(t *testing.T) {
+	t.Parallel()
+
+	const (
+		stepCap  = 3
+		phaseCap = 6
+		roomy    = 100
+	)
+
+	// A step with no log, and a step of an earlier claim of the phase with a
+	// log of the size of the phase cap.
+	targetEmpty := withSteps(openRec(token, nil), openRec(token+1, openLog(phaseCap)))
+	targetStepCap := withSteps(openRec(token, openLog(stepCap)))
+	targetByteCap := withSteps(openRec(token, openLog(1)))
+
+	tests := []struct {
+		name    string
+		prepare func(j *job.Job)
+		c       job.ChunkReserve
+		newLog  *job.LogRef
+		caps    *job.LogCaps
+		want    error
+		// wantCap is the cap that a LogCapError names, or empty for none.
+		wantCap job.LogCap
+	}{
+		{
+			"a first chunk above the phase chunk cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
+			&job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: phaseCap, BytesPerPhase: roomy},
+			job.ErrInvalid, job.LogCapPhaseChunks,
+		},
+		{
+			"a first chunk above the phase byte cap", targetEmpty, chunkOf(0, "a"), newLogRef(),
+			&job.LogCaps{ChunksPerStep: roomy, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: phaseCap},
+			job.ErrInvalid, job.LogCapPhaseBytes,
+		},
+		{
+			"a chunk above the step chunk cap", targetStepCap, chunkOf(stepCap, "a"), nil,
+			&job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
+			job.ErrInvalid, job.LogCapStepChunks,
+		},
+		{
+			"a chunk above the step byte cap", targetByteCap, chunkOf(1, "a"), nil,
+			&job.LogCaps{ChunksPerStep: roomy, BytesPerStep: 1, ChunksPerPhase: roomy, BytesPerPhase: roomy},
+			job.ErrInvalid, job.LogCapStepBytes,
+		},
+		{
+			"caps that are not positive", targetEmpty, chunkOf(0, "a"), newLogRef(),
+			&job.LogCaps{ChunksPerStep: 0, BytesPerStep: 0, ChunksPerPhase: 0, BytesPerPhase: 0},
+			job.ErrInvalid, "",
+		},
+		{
+			"a retry of a counted chunk at the step cap", targetStepCap, chunkOf(0, "a"), nil,
+			&job.LogCaps{ChunksPerStep: stepCap, BytesPerStep: roomy, ChunksPerPhase: roomy, BytesPerPhase: roomy},
+			nil, "",
+		},
+		{
+			"no caps: the phase above every cap of a session takes a chunk", targetEmpty, chunkOf(0, "a"),
+			newLogRef(), nil, nil, "",
+		},
+	}
+
+	rows := map[int]job.ChunkRow{
+		0: {SHA256: sum("a"), Size: 1, Confirmed: true, BlobKey: ""},
+	}
+
+	lookup := func(_ string, seq int) (job.ChunkRow, bool, error) {
+		if seq < 0 {
+			return job.ChunkRow{}, false, job.ErrInvalid
+		}
+
+		r, ok := rows[seq]
+
+		return r, ok, nil
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := recordJob()
+			tt.prepare(j)
+
+			key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
+
+			got, err := tt.caps.PlanChunk(j, key, tt.c, tt.newLog, lookup)
+			if !expect(err, tt.want) {
+				t.Fatalf("PlanChunk = %+v, %v; want %v", got, err, tt.want)
+			}
+
+			gotCap := job.LogCap("")
+			if capErr, ok := errors.AsType[*job.LogCapError](err); ok {
+				gotCap = capErr.Cap
+			}
+
+			if gotCap != tt.wantCap {
+				t.Fatalf("PlanChunk refused with the cap %q, want %q", gotCap, tt.wantCap)
+			}
+		})
+	}
+}
+
+// TestPlanChunkCapsFailsClosedOnAClosedLog proves that LogCaps.PlanChunk reads
+// the log of the step again before it counts the caps, and refuses the chunk
+// when that read fails: here the lookup closes the log after the plan without
+// caps accepted the chunk.
+func TestPlanChunkCapsFailsClosedOnAClosedLog(t *testing.T) {
+	t.Parallel()
+
+	j := recordJob()
+	withSteps(openRec(token, openLog(1)))(j)
+
+	lookup := func(string, int) (job.ChunkRow, bool, error) {
+		j.Phases[0].Steps[0].Log.ClosedAt = epoch()
+
+		var none job.ChunkRow
+
+		return none, false, nil
+	}
+
+	caps := &job.LogCaps{ChunksPerStep: 100, BytesPerStep: 100, ChunksPerPhase: 100, BytesPerPhase: 100}
+	key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
+
+	got, err := caps.PlanChunk(j, key, chunkOf(1, "a"), nil, lookup)
+	if !errors.Is(err, job.ErrInvalid) || !strings.Contains(err.Error(), "is closed") {
+		t.Fatalf("PlanChunk = %+v, %v; want ErrInvalid for the closed log", got, err)
+	}
+
+	if got != (job.ChunkPlan{Version: "", CreateLog: false, Insert: false, Duplicate: false}) {
+		t.Fatalf("PlanChunk = %+v, want the zero plan", got)
+	}
+}
+
+// errLookup is the error of a lookup of a reserved chunk that fails.
+var errLookup = errors.New("lookup of the reserved chunk failed")
+
+// TestPlanChunkCapsCountsTheReservedChunksFailsClosed proves that the count of
+// the reserved chunks of a phase fails closed: a lookup that gives an error for
+// the log of another step is an error of the reserve, and a missing lookup is
+// ErrInvalid. Both give the zero plan.
+func TestPlanChunkCapsCountsTheReservedChunksFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	caps := &job.LogCaps{ChunksPerStep: 100, BytesPerStep: 100, ChunksPerPhase: 100, BytesPerPhase: 100}
+	key := job.StepKey{Phase: 0, Token: token, Name: stepRun}
+
+	tests := []struct {
+		name   string
+		lookup func(version string, seq int) (job.ChunkRow, bool, error)
+		want   error
+	}{
+		{
+			"a lookup error on the log of another step",
+			func(string, int) (job.ChunkRow, bool, error) { return job.ChunkRow{}, false, errLookup },
+			errLookup,
+		},
+		{"no lookup", nil, job.ErrInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The step of this call has no log, and another step of the phase has one.
+			j := recordJob()
+			withSteps(openRec(token, nil), openRec(token+1, openLog(1)))(j)
+
+			got, err := caps.PlanChunk(j, key, chunkOf(0, "a"), newLogRef(), tt.lookup)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("PlanChunk = %+v, %v; want %v", got, err, tt.want)
+			}
+
+			if got != (job.ChunkPlan{Version: "", CreateLog: false, Insert: false, Duplicate: false}) {
+				t.Fatalf("PlanChunk = %+v, want the zero plan", got)
+			}
+		})
+	}
+}
+
+// TestPlanChunkNamesTheRule proves that a chunk out of order and a chunk with
+// another hash name their rule in a ChunkError, and keep their sentinel.
+func TestPlanChunkNamesTheRule(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		log  *job.LogRef
+		c    job.ChunkReserve
+		rule job.ChunkRule
+		next int
+		want error
+	}{
+		{"a first chunk that is not 0", nil, chunkOf(2, "a"), job.ChunkOutOfOrder, 0, job.ErrInvalid},
+		{"a chunk after the next one", openLog(1), chunkOf(3, "a"), job.ChunkOutOfOrder, 1, job.ErrInvalid},
+		{"a stored chunk with another hash", openLog(1), chunkOf(0, "z"), job.ChunkHashMismatch, 0, job.ErrConflict},
+	}
+
+	lookup := func(_ string, seq int) (job.ChunkRow, bool, error) {
+		if seq != 0 {
+			var none job.ChunkRow
+
+			return none, false, nil
+		}
+
+		return job.ChunkRow{SHA256: sum("a"), Size: 1, Confirmed: true, BlobKey: ""}, true, nil
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := recordJob()
+			withSteps(openRec(token, tt.log))(j)
+
+			_, err := job.PlanChunk(j, job.StepKey{Phase: 0, Token: token, Name: stepRun}, tt.c, newLogRef(), lookup)
+
+			chunkErr, ok := errors.AsType[*job.ChunkError](err)
+			if !ok || chunkErr.Rule != tt.rule || chunkErr.Next != tt.next || !errors.Is(err, tt.want) {
+				t.Fatalf("PlanChunk = %v, want a ChunkError of the rule %s, next %d, that is %v", err, tt.rule,
+					tt.next, tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckChunkKeyNamesTheRule proves that a step name that is not valid and a
+// chunk number out of range are a ChunkError of the rule
+// ChunkNameOrNumberInvalid, are ErrInvalid, and never hold the name.
+func TestCheckChunkKeyNamesTheRule(t *testing.T) {
+	t.Parallel()
+
+	for _, seq := range []int{0, job.MaxLogChunks - 1} {
+		if err := job.CheckChunkKey("init", seq); err != nil {
+			t.Fatalf("CheckChunkKey(init, %d) = %v, want nil", seq, err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		step string
+		seq  int
+	}{
+		{"an empty name", "", 0},
+		{"a name with capitals", "Init-SECRET", 0},
+		{"a name that is too long", strings.Repeat("a", job.MaxStepName+1), 0},
+		{"a negative number", "init", -1},
+		{"a number at the cap", "init", job.MaxLogChunks},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkChunkKeyRefused(t, tt.step, tt.seq)
+		})
+	}
+}
+
+// checkChunkKeyRefused checks that CheckChunkKey refuses step and seq with the
+// rule ChunkNameOrNumberInvalid, and that the error holds no name.
+func checkChunkKeyRefused(t *testing.T, step string, seq int) {
+	t.Helper()
+
+	err := job.CheckChunkKey(step, seq)
+
+	chunkErr, isChunk := errors.AsType[*job.ChunkError](err)
+	if !isChunk || chunkErr.Rule != job.ChunkNameOrNumberInvalid || !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("CheckChunkKey(%q, %d) = %v, want a ChunkError of the rule %s", step, seq, err,
+			job.ChunkNameOrNumberInvalid)
+	}
+
+	if step != "" && err != nil && strings.Contains(err.Error(), step) {
+		t.Fatalf("CheckChunkKey(%q, %d) = %v, holds the name", step, seq, err)
 	}
 }
 

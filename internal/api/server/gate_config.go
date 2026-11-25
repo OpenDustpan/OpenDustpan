@@ -146,7 +146,13 @@ type approvalRuleListBody struct {
 }
 
 func (b approversBody) domain() gate.Approvers {
-	return gate.Approvers{Groups: nonNil(b.Groups), GroupIDs: nil, Users: nonNil(b.Users), UnitOwners: b.UnitOwners}
+	return gate.Approvers{
+		Groups:     nonNil(b.Groups),
+		GroupIDs:   nil,
+		Users:      nonNil(b.Users),
+		UnitOwners: b.UnitOwners,
+		UserIDs:    nil,
+	}
 }
 
 // errHiddenApprover reports an approver user name with a hidden character.

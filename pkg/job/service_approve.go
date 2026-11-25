@@ -198,9 +198,10 @@ func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
 
 	var gates []Gate
 
-	for _, g := range phase.Gates {
+	for i := range phase.Gates {
+		g := &phase.Gates[i]
 		if typeOf(g.Type) == GateApproval {
-			gates = append(gates, g)
+			gates = append(gates, *g)
 		}
 	}
 

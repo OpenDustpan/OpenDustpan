@@ -150,7 +150,7 @@ func testKeyCommitsWithLog(t *testing.T, h RecorderHarness) {
 	mustBegin(t, h, a, stepPrepare)
 
 	nl := newLogFor(t, h, a, recordingKey(nil))
-	reserve := job.ChunkReserve{Seq: 0, SHA256: emptySHA256, Size: 0}
+	reserve := job.ChunkReserve{Seq: 0, SHA256: emptySHA256, Size: 0, Caps: nil}
 
 	plan, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, reserve, nl)
 	if err != nil || plan.Version != nl.Log.ID {
@@ -176,7 +176,7 @@ func testKeyRollsBackWithLog(t *testing.T, h RecorderHarness) {
 	mustBegin(t, h, a, stepPrepare)
 
 	nl := newLogFor(t, h, a, recordingKey(errKeyFunc))
-	reserve := job.ChunkReserve{Seq: 0, SHA256: emptySHA256, Size: 0}
+	reserve := job.ChunkReserve{Seq: 0, SHA256: emptySHA256, Size: 0, Caps: nil}
 
 	_, err := h.Records.ReserveLogChunk(t.Context(), a.Claim, stepPrepare, reserve, nl)
 	if !errors.Is(err, errKeyFunc) {

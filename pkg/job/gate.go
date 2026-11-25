@@ -112,6 +112,17 @@ type Gate struct {
 	// that someone made again with the same name has another ID. Groups is for
 	// display only.
 	GroupIDs []string
+	// Users holds the names of the approver users of the gate, for display
+	// only.
+	Users []string
+	// UserIDs holds the stable principal ID of each user in Users, at the
+	// same index.
+	UserIDs []string
+	// UnitOwners names the owners of the unit in its context as approvers.
+	UnitOwners bool
+	// Scope is the scope of the requirement of the gate. A gate with
+	// UnitOwners reads the owners at this scope and at the wider scopes.
+	Scope gate.Scope
 	// AllowSelf lets the principal that started the job approve it. It has
 	// no effect on a confirmation gate.
 	AllowSelf bool
@@ -129,7 +140,11 @@ type Gate struct {
 func ConfirmationGate(bindPlan bool) Gate {
 	return Gate{
 		Type: GateConfirmation, Name: "", Approvals: 1, Groups: nil, GroupIDs: nil, AllowSelf: false, Timeout: 0,
-		BindPlan: bindPlan,
+		BindPlan:   bindPlan,
+		Users:      nil,
+		UserIDs:    nil,
+		UnitOwners: false,
+		Scope:      gate.Scope{},
 	}
 }
 
@@ -145,7 +160,8 @@ func PolicyGates(kinds []PhaseKind, d Decision) [][]Gate {
 	out := make([][]Gate, len(kinds))
 
 	for i, k := range kinds {
-		for _, g := range d.Gates[k] {
+		for j := range d.Gates[k] {
+			g := d.Gates[k][j]
 			g.Type = GateApproval
 			out[i] = append(out[i], g)
 		}

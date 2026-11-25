@@ -401,7 +401,7 @@ func (m *memDB) ReserveLogChunk(
 		template = &newLog.Log
 	}
 
-	plan, err := job.PlanChunk(&next, memKey(&pc, step), c, template, lookup)
+	plan, err := c.Caps.PlanChunk(&next, memKey(&pc, step), c, template, lookup)
 	if err != nil {
 		return job.ChunkPlan{}, fmt.Errorf("reserve log chunk: %w", err)
 	}

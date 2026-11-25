@@ -68,6 +68,10 @@ When a site administrator reads the list of break-glass accounts, the server SHA
 - **WHEN** an account expires with no write and an administrator reads the list
 - **THEN** the count excludes the account and the missing count rises
 
+#### Scenario: Upgrade reports missing accounts
+- **WHEN** an existing installation holds fewer than two working accounts
+- **THEN** the list route reports the missing count and an administrator adds accounts without a new setup
+
 ### Requirement: guard-race
 
 If a concurrent write holds the lock on the break-glass set past the lock timeout, then the server SHALL answer 409 with the code break-glass.busy and write nothing.
@@ -135,19 +139,3 @@ When a site administrator rotates the credential of a break-glass account, the s
 #### Scenario: Parallel rotations
 - **WHEN** two rotations of the same account run together
 - **THEN** the second waits and then rotates the new credential
-
-### Requirement: setup-needs-two
-
-When first setup finishes, the server SHALL refuse completion until two break-glass accounts with a passkey or a hardware key exist.
-
-#### Scenario: Finish with one account is refused
-- **WHEN** first setup finishes with one account
-- **THEN** the server answers 409 and names the missing count
-
-#### Scenario: Hardware key counts
-- **WHEN** first setup finishes with two accounts that each hold a hardware key
-- **THEN** the server completes the setup
-
-#### Scenario: Upgrade reports missing accounts
-- **WHEN** an existing installation holds fewer than two working accounts
-- **THEN** the list route reports the missing count and an administrator adds accounts without a new setup

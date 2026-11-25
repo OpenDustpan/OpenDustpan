@@ -87,7 +87,7 @@ ORDER BY sequence DESC
 LIMIT $3;
 ```
 
-`CountAuditEntries` is removed. Index: the primary key `(namespace, sequence)` (`pkg/store/postgres/migrations/0168_baseline.sql:1687`, `pkg/store/sqlite/migrations/0168_baseline.sql:265`).
+`CountAuditEntries` is removed. Index: the primary key `(namespace, sequence)` (`internal/store/postgres/migrations/0168_baseline.sql:1687`, `internal/store/sqlite/migrations/0168_baseline.sql:265`).
 
 ### The endpoint
 

@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/freshstep"
+	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -985,12 +986,16 @@ func TestStartGateOnFirstPhase(t *testing.T) {
 			Gates: map[job.PhaseKind][]job.Gate{
 				job.PhasePlan: {{
 					Type: "", Name: "",
-					Approvals: 1,
-					Groups:    nil,
-					GroupIDs:  nil,
-					AllowSelf: false,
-					Timeout:   0,
-					BindPlan:  false,
+					Approvals:  1,
+					Groups:     nil,
+					GroupIDs:   nil,
+					AllowSelf:  false,
+					Timeout:    0,
+					BindPlan:   false,
+					Users:      nil,
+					UserIDs:    nil,
+					UnitOwners: false,
+					Scope:      gate.Scope{},
 				}},
 			},
 		}
@@ -1657,12 +1662,16 @@ func TestStartIsAtomicAtTheFirstGate(t *testing.T) {
 			Gates: map[job.PhaseKind][]job.Gate{
 				job.PhasePlan: {{
 					Type: "", Name: "",
-					Approvals: 1,
-					Groups:    nil,
-					GroupIDs:  nil,
-					AllowSelf: false,
-					Timeout:   0,
-					BindPlan:  false,
+					Approvals:  1,
+					Groups:     nil,
+					GroupIDs:   nil,
+					AllowSelf:  false,
+					Timeout:    0,
+					BindPlan:   false,
+					Users:      nil,
+					UserIDs:    nil,
+					UnitOwners: false,
+					Scope:      gate.Scope{},
 				}},
 			},
 		}

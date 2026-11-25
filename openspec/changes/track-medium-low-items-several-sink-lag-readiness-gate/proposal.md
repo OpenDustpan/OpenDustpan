@@ -25,7 +25,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Old live DROP must leave swap into its own step with lock_timeout Proof: Issue #718 body: The `DROP SCHEMA` of the old live data runs inside the swap. It must be its own step with a `lock_timeout`.
-- Main sets lock_timeout in restore and revocation paths Proof: pkg/store/postgres/restore_operation.go:971: if _, err := tx.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", wait); err != nil {
+- Main sets lock_timeout in restore and revocation paths Proof: internal/store/postgres/restore_operation.go:971: if _, err := tx.Exec(ctx, "SELECT set_config('lock_timeout', $1, true)", wait); err != nil {
 - Main has readiness and audit chain gate plumbing Proof: pkg/dustpan/health.go:36 (readinessCheck) and pkg/dustpan/maintenance.go:181 (func withAuditChainGate)
 
 ## What Changes
@@ -60,7 +60,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Audit chain interval check exists (`pkg/dustpan/auditchain.go:76 (func checkAuditChainInterval)`)
 - Audit chain gate wrapper exists (`pkg/dustpan/maintenance.go:181 (func withAuditChainGate)`)
 - Restore steps list exists (`pkg/backup/restore_operation.go:272 (func RestoreSteps)`)
-- Lock timeout helpers exist (`pkg/store/postgres/maintenance.go:138 (func lockTimeoutError)`)
+- Lock timeout helpers exist (`internal/store/postgres/maintenance.go:138 (func lockTimeoutError)`)
 
 ## ADR check
 

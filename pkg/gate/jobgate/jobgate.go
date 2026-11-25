@@ -189,14 +189,18 @@ func gatesOf(reqs []gate.Requirement) ([]job.Gate, error) {
 		}
 
 		out = append(out, job.Gate{
-			Type:      job.GateApproval,
-			Name:      string(r.Name),
-			Approvals: r.Count,
-			Groups:    slices.Clone(r.Approvers.Groups),
-			GroupIDs:  slices.Clone(r.Approvers.GroupIDs),
-			AllowSelf: r.AuthorMayApprove,
-			Timeout:   time.Duration(r.TimeoutSeconds) * time.Second,
-			BindPlan:  false,
+			Type:       job.GateApproval,
+			Name:       string(r.Name),
+			Approvals:  r.Count,
+			Groups:     slices.Clone(r.Approvers.Groups),
+			GroupIDs:   slices.Clone(r.Approvers.GroupIDs),
+			AllowSelf:  r.AuthorMayApprove,
+			Timeout:    time.Duration(r.TimeoutSeconds) * time.Second,
+			BindPlan:   false,
+			Users:      nil,
+			UserIDs:    nil,
+			UnitOwners: false,
+			Scope:      gate.Scope{},
 		})
 	}
 

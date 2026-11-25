@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #3257.
@@ -8,21 +8,21 @@ Issue: #3257.
 
 Persona: a developer who approves a `destroy`, or who confirms their own job, in an installation that turned `freshAuthEnabled` on.
 
-With the setting on, ADR 385 keeps the rules of ADR 227 decision 2: a destroy approval needs an MFA step in the last window, and a confirmation needs an MFA step or an SSO authentication in the last window. No route supplies that fact today. `approveJob` (`internal/api/jobs/approve.go:161`) and `confirmJob` (`internal/api/jobs/confirm.go:73`) build `job.Actor` with an empty `ConfirmAuth` and a zero `AuthAt`. So with the setting on, each destroy approval and each confirmation of an approve verdict fails closed with `ErrAuthStale`, for every person (issue 3257). The change of `fresh-auth-enabled-setting` removes the refusal with the setting off. This change removes it with the setting on.
+With the setting on, ADR 385 keeps the rules of ADR 227 decision 2: a destroy approval needs an MFA step in the last window, and a confirmation needs an MFA step or an SSO authentication in the last window. No route supplies that fact today. `approveJob` (internal/api/jobs/approve.go:172) and `confirmJob` (internal/api/jobs/confirm.go:77) build `job.Actor` with an empty `ConfirmAuth` and a zero AuthAt. So with the setting on, each destroy approval and each confirmation of an approve verdict fails closed with `ErrAuthStale`, for every person (issue 3257). The change of `fresh-auth-enabled-setting` removes the refusal with the setting off. This change removes it with the setting on.
 
 The path after this change (setting on):
 
 1. A person signs in. For a destroy approval the person gives a fresh step in the console (a passkey or TOTP, `/api/server/sign-in/{provider}?fresh=1` for an SSO person).
-2. The person calls `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` (or `/confirmations`) with the session cookie. The server reads the fresh step from the sealed session cookie and passes it to the job service.
+2. The person calls `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` (or `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations`) with the session cookie. The server reads the fresh step from the sealed session cookie and passes it to the job service.
 3. The job service accepts the approval inside the window, and the audit entry names the kind and the time of the step.
 4. Errors: no step, a step older than the window, an access token, an agent, or a step of a kind that the rule does not accept gets 403 with the existing `mfa.fresh-step-required` message and the sign-in path. It is the same refusal as today. No new code.
 
-## Evidence
+### Evidence
 
-- Both handlers send an empty proof. Proof: `rg -n 'ConfirmAuth: ""' internal/api/jobs` shows `approve.go:161` and `confirm.go:73` on main (16 Nov 2026).
-- The type of the fact exists, its source does not. `session.Claims` has `MFAAt`, `FreshAt` and `FreshKind` (pkg/session/cookie.go:224-247), and `Sealer` (cookie.go:378) and `KeyStore` (cookie.go:435) are ports. On main no code issues a sealed access cookie: `rg -n 'SealAccess\(' --glob '*.go'` finds only the interface line. `sessionauth.Checker.Authenticate` (internal/sessionauth/sessionauth.go:109) reads a stored session (`c.sessions.Authenticate`), and the stored `session.Session` has no factor kind. So no request carries the fact today.
+- Both handlers send an empty proof. Proof: `rg -n 'ConfirmAuth: ""' internal/api/jobs` shows internal/api/jobs/approve.go:172 and internal/api/jobs/confirm.go:77 on main (24 Nov 2026).
+- The type of the fact exists, its source does not. `session.Claims` (pkg/session/cookie.go:226) has the time fields MFAAt and FreshAt and the field FreshKind, and `Sealer` (pkg/session/cookie.go:378) and `KeyStore` (pkg/session/cookie.go:444) are ports. On main no code issues a sealed access cookie: `rg -n 'SealAccess\(' --glob '*.go'` finds only the interface line. `Checker.Authenticate` (internal/sessionauth/sessionauth.go:109) reads a stored session (`c.sessions.Authenticate`), and the stored `session.Session` has no factor kind. So no request carries the fact today.
 - The owner chose a sealed session cookie as the source of the fresh-auth fact (issue 3257, question 2; ADR 297). This change therefore depends on the change `session-fresh-cookie`, which issues the cookie at sign-in and at each step and reads it in `sessionauth`. That change is planned next. This change starts only when it is on main.
-- The job service checks the proof three times and needs no change in its rules: `newDestroyFresh` (pkg/job/service_approve.go:325), `checkConfirmation` (pkg/job/service_confirm.go:140) and `checkDestroyProof` on the store clock (pkg/store/internal/jobstore/events.go:52).
+- The job service checks the proof three times and needs no change in its rules: `newDestroyFresh` (pkg/job/service_approve.go:380), `checkConfirmation` (pkg/job/service_confirm.go:126) and `checkDestroyProof` on the store clock (internal/store/jobstore/events.go:46).
 - No session store is shared between instances. The fact is read from the cookie of the request, so it works behind any instance.
 
 ## Order of work
@@ -34,7 +34,7 @@ The path after this change (setting on):
 ## Fix boundary
 
 - A pure function in `pkg/session` maps the claims of a request to the proof of the job service. The jobs handlers call it. The job service and the store keep their checks.
-- The map follows ADR 227 decision 1 and ADR 301: `passkey` and `mfa` give `ConfirmAuthMFA` with the time `FreshAt`; `sso` gives `ConfirmAuthSSO` with `FreshAt`; `password` and no kind give no proof.
+- The map follows ADR 227 decision 1 and ADR 301: `passkey` and `mfa` give `ConfirmAuthMFA` with the time FreshAt; `sso` gives `ConfirmAuthSSO` with FreshAt; `password` and no kind give no proof.
 - A request with an access token, with an agent, or with no session gives no proof. The service keeps its own refusal for each of them.
 - With `freshAuthEnabled` off the handlers pass the proof too. The policy of `fresh-auth-enabled-setting` decides whether the service asks for it.
 
@@ -54,10 +54,12 @@ The path after this change (setting on):
 
 ## What main already does
 
-- The service refuses a destroy approval with no MFA proof (`newDestroyFresh`, pkg/job/service_approve.go:325) and a confirmation with no valid proof (pkg/job/service_confirm.go:140).
-- The store checks the age again on its own clock (`checkDestroyProof`, pkg/store/internal/jobstore/events.go:52).
-- The handler refuses every destroy approval with an approve verdict, with no regard to the session (`approveJob`, internal/api/jobs/approve.go:143-165): it answers `ErrAuthStale` in a job that awaits approval. After task 2.4 of `fresh-auth-enabled-setting` it refuses only when the policy asks for the step.
-- The two handlers send an empty proof (approve.go:161, confirm.go:73).
+- The service refuses a destroy approval with no MFA proof (`pkg/job/service_approve.go:380 (func newDestroyFresh)`)
+- The service refuses a confirmation with no valid proof (`pkg/job/service_confirm.go:126 (func checkConfirmation)`)
+- The store checks the age of the proof again on its own clock (`internal/store/jobstore/events.go:46 (func checkDestroyProof)`)
+- The handler refuses every destroy approval with an approve verdict, with no regard to the session: it answers `ErrAuthStale` in a job that awaits approval. After task 2.4 of `fresh-auth-enabled-setting` it refuses only when the policy asks for the step (`internal/api/jobs/approve.go:116 (func approveJob)`)
+- The confirmation handler sends an empty proof (`internal/api/jobs/confirm.go:45 (func confirmJob)`)
+- The session checker resolves the stored session of the cookie and returns no factor kind (`internal/sessionauth/sessionauth.go:109 (func Authenticate)`)
 
 ## ADR check
 

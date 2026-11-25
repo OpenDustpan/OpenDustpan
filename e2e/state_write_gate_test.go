@@ -329,6 +329,7 @@ func (g *gateRun) approvalGate() {
 			GroupIDs:   nil,
 			Users:      []string{"e2e-reviewer"},
 			UnitOwners: false,
+			UserIDs:    nil,
 		},
 		Count:            1,
 		AuthorMayApprove: false,

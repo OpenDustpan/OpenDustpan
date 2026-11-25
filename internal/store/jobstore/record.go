@@ -131,7 +131,12 @@ func (s *Store) ReserveLogChunk(
 			template = &newLog.Log
 		}
 
-		plan, err = job.PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
+		// The caps of the log are checked here, against the job row of this
+		// transaction, so a refused chunk keeps no row and no counter.
+		// Defense in depth: the session handler refuses a chunk number at the
+		// step chunk cap too; this check stays so that it does not rely on the
+		// handler, and it is the only check of the byte and phase caps.
+		plan, err = c.Caps.PlanChunk(&j, stepKey(&pc, step), c, template, lookup)
 		if err != nil {
 			return err
 		}

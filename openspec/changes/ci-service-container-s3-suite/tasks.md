@@ -9,7 +9,7 @@
 
 ## 2. Bucket and readiness
 
-- [ ] 2.1 In the staged file `.github-workflows-staging/ci.yml` (the go job), add the RustFS service container to the go job and set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY. Check: `rg -n rustfs .github-workflows-staging/ci.yml` shows the digest, ports 9000:9000 and the fixed test-only RUSTFS_ROOT_PASSWORD. A human moves the staged file into `.github/workflows/ci.yml` later.
+- [ ] 2.1 Write the NEW staged file `.github-workflows-staging/ci.yml` as a full copy of `.github/workflows/ci.yml`, as `.github-workflows-staging/README.md` tells. In the go job of the staged file, add the RustFS service container and set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY. Check: `rg -n rustfs .github-workflows-staging/ci.yml` shows the digest, ports 9000:9000 and the fixed test-only RUSTFS_ROOT_PASSWORD. A human moves the staged file into `.github/workflows/ci.yml` later.
 - [ ] 2.2 In the staged file `.github-workflows-staging/ci.yml` (the go job, before the go test step), add steps that wait for the S3 API and then make the bucket with aws cli so an existing bucket passes. Check: CI log shows list-buckets readiness retries then create-bucket exits 0, and a rerun with an existing bucket still exits 0 (scenario Existing bucket passes), after the staged file is moved into `.github/workflows/ci.yml`. A human moves the staged file into place later.
 
 ## 3. Definition of done

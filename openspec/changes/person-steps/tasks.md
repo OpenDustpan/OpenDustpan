@@ -26,6 +26,7 @@ only if the transcript leaves doubt; most need no second pass. Tick each task wh
 - [ ] 2.3 Run usability check of full run page path and record the result in NEW file docs/console/run-page-usability.md. Check: Developer completes timeline, log, diff and approval from docs page alone. A person's step.
 - [ ] 4.2 Usability check of the full create path Check: Developer completes catalog to unit path from the docs page alone. A person's step.
 - [ ] 4.3 Run usability check of the rule list and refusal path. Check: Namespace administrator completes the path from the docs page alone. A person's step.
+- [ ] 3.2 Add `make docs-commands-check` to a job of `.github/workflows/e2e-nightly.yml` (docs-commands-run-in-tests 3.2). Check: a nightly run shows the target and passes. A person's step. Workflow patch: in the `e2e-binary` job, after the step `End-to-end suite with the server binary`, add a step `- name: Docs commands` with `run: make docs-commands-check`. The target sets `E2E_DOCS_COMMANDS=1` itself, so the step needs no `env`.
 - [ ] 3.3 Run the usability check of the copied commands from a clean work directory. Check: Operator completes the install path from the docs page alone and each error names `make docs-commands-check`. A person's step.
 - [ ] 4.3 Run usability check of full path Check: Developer completes compare and promote from docs page alone. A person's step.
 - [ ] 4.4 Run the usability check of the user path. Check: A Developer completes create, warning, approval, and destroy from the docs page alone with each error naming one command. A person's step.
@@ -94,6 +95,7 @@ only if the transcript leaves doubt; most need no second pass. Tick each task wh
 - [ ] 4.3 Run usability check from the docs page alone Check: an Operator completes the matrix from docs/guides/backup-restore-upgrade.md alone and each error names the one helping command. A person's step.
 - [ ] 3.5 Usability check from the docs draft. Check: The persona completes the path and each error names one command. A person's step.
 - [ ] 4.3 Usability check from the docs page of backup-fence-target-writes-attempt. Check: an Operator completes the path from docs/guides/several-instances.md alone (start a backup, check it, read the target layout and the cleanup step) and each error names the one command that helps. A person's step.
+- [ ] 4.3 Usability check from the docs page of add-job-session-paths-runner-2 (docs/reference/runner-api.md) Check: Each error names one command that helps. A person's step.
 - [ ] 3.3 Usability check from the docs page of 130-138-runner-pools-management. Check: the persona lists the pools with one command and each error names one command. Known gap from the agent pre-run: the second half fails for 403 and 404: the CLI prints only the server message; the CLI adds a hint only for 5xx, internal/cli/collection.go:440 / :307. A person's step.
 
 ## Move staged workflows into place

@@ -69,7 +69,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Access test covers unit read without outputs. (`pkg/access/access_test.go:1788 (TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs)`)
 - Webhook sink refuses blocked URL. (`pkg/logsink/webhook/webhook_test.go:52 (TestWebhookSinkRefusesBlockedURL)`)
 - Scheduler waits first delay before first claim. (`pkg/durable/scheduler_test.go:175 (TestSchedulerWaitsTheFirstDelayBeforeItsFirstClaim)`)
-- Blueprint read refuses hostile rows. (`pkg/store/postgres/self_service_blueprints_internal_test.go:94 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
+- Blueprint read refuses hostile rows. (`internal/store/postgres/self_service_blueprints_internal_test.go:94 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
 
 ## ADR check
 

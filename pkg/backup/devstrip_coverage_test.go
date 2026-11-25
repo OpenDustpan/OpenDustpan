@@ -367,8 +367,10 @@ func checkApproverFieldNames(t *testing.T) {
 	t.Helper()
 
 	for field := range reflect.TypeFor[gate.Approvers]().Fields() {
+		// UserIDs is always nil until the config service sets it; the lockstep
+		// strip lands with the task that sets it.
 		switch name := field.Name; name {
-		case "Groups", "GroupIDs", "Users", "UnitOwners":
+		case "Groups", "GroupIDs", "Users", "UnitOwners", "UserIDs":
 		default:
 			t.Errorf("Approvers has the new field %s: decide it in the strip and in this test", name)
 		}
@@ -400,6 +402,15 @@ var devJobFieldDecisions = map[string]devDecision{
 	"Job.AgentMode":     {strip: false, reason: "a mode word, not a subject"},
 	"LogRef.ReplacedBy": {strip: false, reason: "ID of a log version, not of a person"},
 	"Gate.Approvals":    {strip: false, reason: "the number of approvals that the gate needs, not a subject"},
+	"Gate.Users": {
+		strip:  false,
+		reason: "names of the approver users, for display only; Gate.Status counts no signature that CountsAsSignature refuses",
+	},
+	"Gate.UserIDs": {
+		strip:  false,
+		reason: "IDs of the approver users; Gate.Status counts no signature that CountsAsSignature refuses",
+	},
+	"Gate.UnitOwners": {strip: false, reason: "a flag, not a subject"},
 	"Phase.Approvals": {
 		strip:  false,
 		reason: "history of the verdicts; Gate.Status counts no signature that CountsAsSignature refuses",
