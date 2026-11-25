@@ -9,7 +9,7 @@ version: 4
 The user path this change must make work:
 
 1. **API.** Create a sweep target with the NEW route `POST /api/dustpan/v1/namespaces/{namespace}/sweep-targets`, with a pool of the namespace, scopes and a command, using an access token.
-2. **API.** Start, list and cancel sweeps with the NEW routes under `/api/dustpan/v1/namespaces/{namespace}/sweeps`.
+2. **API.** Start, list and cancel sweeps with the NEW routes `POST /api/dustpan/v1/namespaces/{namespace}/sweeps`, `GET /api/dustpan/v1/namespaces/{namespace}/sweeps` and `POST /api/dustpan/v1/namespaces/{namespace}/sweeps/{id}/cancel`.
 3. **CLI.** Run the same calls with the generated CLI of the API description.
 4. **Docs page.** Read the target guide: command rules, read-only identity note and the error list.
 
@@ -33,7 +33,8 @@ Evidence for the claims above:
 ## What Changes
 
 - NEW SQL tables for sweep targets and sweeps in the baseline of each dialect, with the ScanStore methods and the fence
-- NEW routes `/api/dustpan/v1/namespaces/{namespace}/sweep-targets`, `/sweep-targets/{id}`, `/sweeps`, `/sweeps/{id}` and `/sweeps/{id}/cancel`
+- NEW routes `GET /api/dustpan/v1/namespaces/{namespace}/sweeps`, `GET /api/dustpan/v1/namespaces/{namespace}/sweeps/{id}` and `POST /api/dustpan/v1/namespaces/{namespace}/sweeps/{id}/cancel`
+- NEW routes `/api/dustpan/v1/namespaces/{namespace}/sweep-targets` and `/api/dustpan/v1/namespaces/{namespace}/sweep-targets/{id}`
 - NEW actions `namespace:manage-sweeps` and `namespace:start-sweep`
 - NEW audit entries for target create, change and delete, with the command
 - NEW errors `unmanaged.target-not-found`, `unmanaged.scan-busy`, `unmanaged.pool-not-sweeps`, `unmanaged.command-invalid`, `unmanaged.target-disabled`, `unmanaged.scan-not-cancelable`
@@ -65,7 +66,6 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - A helper for the state check offset exists. No target or sweep store exists. (`internal/unmanaged/scan.go:50 (func StateCheckOffset)`)
-- The focus view exists in pkg/graph and belongs to the first part. (`pkg/graph/focus.go:48 (type FocusView)`)
 - Context error codes exist. They are not changed here. (`internal/errcode/catalog_context.go:7 (func context.field-from-code)`)
 
 ## Owner decisions that apply
