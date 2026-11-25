@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 ## Why
@@ -8,7 +8,7 @@ version: 4
 
 The user path this change must make work:
 
-1. **API.** The launcher streams a version 1 JSON Lines report to the NEW runner protocol path `POST /runner/v1/session/sweep-report` with a signed session proof and the header `Dustpan-Content-SHA256`.
+1. **API.** The launcher streams a version 1 JSON Lines report to the existing runner protocol path `PUT /runner/v1/session/sweep-report` (`PathSessionSweepReport`) with a signed session proof and the header `Dustpan-Content-SHA256`.
 2. **API.** A namespace administrator lists and reads findings with the NEW routes under `/api/dustpan/v1/namespaces/{namespace}/findings` and an access token.
 3. **API.** The administrator sets triage on a finding with a reason through the NEW PATCH route `/api/dustpan/v1/namespaces/{namespace}/findings/{id}`.
 4. **Docs page.** The administrator reads the NEW guide page for the report format, the bounds, the subset rule and triage.
@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Report with a bad header, a bad line or a scope outside the target. | 400 with the NEW error code `unmanaged.bad-report` or `unmanaged.scope-not-in-target`. The message names the line number and stores nothing. | `GET /api/dustpan/v1/namespaces/{namespace}/findings` |
-| Report above a bound. | 413 with the NEW error code `unmanaged.report-too-large`. The message names the bound. The sweep ends failed and the staged blob is deleted. | `GET /api/dustpan/v1/namespaces/{namespace}/findings` |
+| Report above a bound. | 413 with the NEW error code `unmanaged.report-too-large`, the code of `runner.ErrReportTooLarge`. The message names the bound. The sweep ends failed and the staged blob is deleted. | `GET /api/dustpan/v1/namespaces/{namespace}/findings` |
 | Caller without the grant tries to triage. | 403 with the NEW error code `unmanaged.forbidden`. Nothing changes. | `GET /api/dustpan/v1/namespaces/{namespace}/findings` |
 
 Evidence for the claims above:
@@ -28,7 +28,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- The NEW runner protocol path `POST /runner/v1/session/sweep-report` streams a report, checks it, and stores it encrypted.
+- The existing runner protocol path `PUT /runner/v1/session/sweep-report` streams a report, checks it, and stores it encrypted. This change adds no second handler: it adds the report format checks, the findings record and the authorize and fail-closed layers to the handler of the change add-job-session-paths-runner-sweep-claimer-wiring, which calls `SweepClaimer.Report` and ends the claim. A sweep has no finish route.
 - The NEW findings routes list, get and triage findings.
 - The NEW error codes `unmanaged.bad-report`, `unmanaged.report-too-large`, `unmanaged.scope-not-in-target`, `unmanaged.forbidden` and `unmanaged.finding-not-found`.
 

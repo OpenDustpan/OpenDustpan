@@ -4,8 +4,8 @@ ADR 385 makes the fresh step opt-in with one installation setting, `freshAuthEna
 
 ## Decisions
 
-1. **One decision point.** A NEW package `pkg/freshstep` holds the NEW type `Policy`. Each call site asks the NEW `Policy.Required(ctx)` before it asks for a step. With the setting off, `Required` answers false and the site skips its check. With the setting on, or when the setting cannot be read, it answers true (fail closed).
-2. **The step check is reachable only through the policy.** The existing freshness ports (`accesstoken.Freshness.RequireFresh`, the freshness handlers of the four tool adapters (internal/api/tfe/freshness.go, internal/api/pulumi/freshness.go, internal/api/profile/freshness.go, internal/api/issuer/freshness.go), `profile.requireFresh`, `setting` weaker-change check, the job destroy check) become methods of the NEW unexported-field type `freshstep.Guard`, made only by the NEW `freshstep.NewGuard(policy, check)`. The NEW `Guard.Require` returns nil when `Required` is false, else it runs `check`. A site holds a `Guard`, never the bare `check`. A new site that takes a bare check does not compile against the constructors of the services.
+1. **One decision point.** The existing package `pkg/freshstep` (main has only the type `Guard`) is extended with the NEW type `Policy`. Each call site asks the NEW `Policy.Required(ctx)` before it asks for a step. With the setting off, `Required` answers false and the site skips its check. With the setting on, or when the setting cannot be read, it answers true (fail closed).
+2. **The step check is reachable only through the policy.** The existing freshness ports (`accesstoken.Freshness.RequireFresh`, the freshness handlers of the four tool adapters (internal/api/tfe/freshness.go, internal/api/pulumi/freshness.go, internal/api/profile/freshness.go, internal/api/issuer/freshness.go), `profile.requireFresh`, `setting` weaker-change check, the job destroy check) become methods of the existing unexported-field type `freshstep.Guard` (extended with these methods), made only by the NEW `freshstep.NewGuard(policy, check)`. The NEW `Guard.Require` returns nil when `Required` is false, else it runs `check`. A site holds a `Guard`, never the bare `check`. A new site that takes a bare check does not compile against the constructors of the services.
 3. **Same value in each layer.** The handler, the service and the store each hold the same `Policy` value, made once in the server wiring. None keeps its own rule (ADR 385 decision 2).
 4. **Setting declaration.** `freshAuthEnabled` is a boolean declaration of the installation scope in the settings registry (`pkg/setting`), effective default false, with the mark "reduces security when it goes from on to off". The static layer (flag, environment variable, configuration file) may set it, and that needs no step. `pkg/setting/change.go` treats the change from true to false as a weaker change (it asks for a step while the setting is on), and the change from false to true as no weaker change.
 5. **Stored rules show they are not enforced.** The rule API and the namespace settings API add the boolean field `enforced` next to `freshAuthSeconds` and `freshAuthForApprovals`. It is `false` when the policy says the step is not required. The server never rewrites a stored rule.
@@ -14,7 +14,7 @@ ADR 385 makes the fresh step opt-in with one installation setting, `freshAuthEna
 
 ## Structure
 
-The NEW type `freshstep.Guard` has unexported fields. Only `NewGuard` makes one. A call site gets a `Guard` by injection, so the setting cannot be skipped or forgotten. No lint rule and no new tool is added. A task checks with `rg` that no file outside `pkg/freshstep` and the wiring calls a bare freshness check.
+The existing type `freshstep.Guard` has unexported fields (it is on main with no method). Only `NewGuard` makes one. A call site gets a `Guard` by injection, so the setting cannot be skipped or forgotten. No lint rule and no new tool is added. A task checks with `rg` that no file outside `pkg/freshstep` and the wiring calls a bare freshness check.
 
 ## Contract
 
@@ -38,6 +38,11 @@ func NewGuard(p Policy, check func(ctx context.Context, subject string) error) (
 // Require returns nil when the policy does not require a step, else the
 // result of the check (ErrFreshStepRequired of the domain package).
 func (g Guard) Require(ctx context.Context, subject string) error
+
+// Required returns the answer of the policy of g. A Guard with no policy
+// (the zero value) returns true (fail closed). The confirmation gate of
+// pkg/job gets this answer as its parameter freshRequired.
+func (g Guard) Required(ctx context.Context) bool
 ```
 
 Settings API: `GET /api/dustpan/v1/settings` lists `freshAuthEnabled` with `value`, `default` and `source` as for each setting (ADR 212 decision 9). `PATCH /api/dustpan/v1/settings` changes it, with the authorization action of the settings write. The rule and namespace APIs add `enforced` (boolean) to each of `freshAuthSeconds` and `freshAuthForApprovals`. Error: 403 `mfa.fresh-step-required` as before.
@@ -49,6 +54,8 @@ Settings API: `GET /api/dustpan/v1/settings` lists `freshAuthEnabled` with `valu
 | Port adapter (store) | `checkDestroyProof` reads the same `Policy`. With the setting on, an approval of a `destroy` with no proof is refused. | A store call with no proof and the setting on is refused, and the guard removed makes the test fail. |
 | Service | `pkg/job`, `pkg/accesstoken`, `pkg/profile`, `pkg/setting` hold a `Guard`. | A service call with an access token subject and the setting on is refused. |
 | HTTP handler | Each adapter handler holds the same `Guard`. | A request with an access token and the setting on gets 403 `mfa.fresh-step-required`. |
+| Kind of the approver (handler, service, store) | `checkDestroyFresh`, `newDestroyFresh` and `checkDestroyProof` allow `auth: none` for the kind person only. | A service, a workload and an agent principal with `job:approve` and the setting off are refused at each layer, and the layer removed makes its own test fail. |
+| Confirmation gate | `GatesStatus`, `GatesProgress` and `Gate.Status` take `freshRequired`. A confirmation with `auth: none` counts only when it is false. The gate does not rely on the three write layers. | A confirmation with `auth: none` and the setting on does not open the gate, and a gate that ignores the parameter makes the test fail. |
 | Setting read | `Required` fails closed. | A setting store that returns an error gives `Required` true. |
 
 Each guard keeps a comment that says it is a defense-in-depth layer and names the layers that it does not rely on.
@@ -57,4 +64,4 @@ Each guard keeps a comment that says it is a defense-in-depth layer and names th
 
 - The call-site list of the proposal is a snapshot. Task 1.1 runs `rg` again on the current main and gates each site it finds.
 - Code that lands before this change (#3283, #3286) adds sites. Their lanes add them to the list when this change merges.
-- With the setting off, the grant and the audit entry are the only checks of a `destroy` approval (ADR 385 consequences). The guide says it.
+- With the setting off, the grant and the audit entry are the only checks for a person; a non-person never approves a destroy. The handler, the service and the store each allow the kind person for `auth: none` and refuse every other kind. The guide says it (ADR 385 consequences).

@@ -21,7 +21,7 @@ func (s *Store) ListServicePrincipals(ctx context.Context) ([]string, error) {
 	for {
 		rows, _, err := s.ListPrincipals(
 			ctx,
-			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit, InstallationOnly: false},
 			principal.KindService,
 			"",
 		)

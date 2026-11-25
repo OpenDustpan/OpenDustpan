@@ -42,6 +42,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -437,6 +438,7 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		return hostMade{}, fmt.Errorf("access token service: %w", err)

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -359,4 +360,77 @@ type Scan struct {
 	Reason    string
 	Scopes    []ReportScope
 	Counts    ScanCounts
+}
+
+// maxSubjectLength bounds the principal subject that starts a sweep.
+const maxSubjectLength = 255
+
+// Valid reports whether k is a kind of sweep: ScanCloud or ScanState.
+func (k ScanKind) Valid() bool {
+	return k == ScanCloud || k == ScanState
+}
+
+// CheckTargetName reports whether ns is a valid namespace name and name a
+// valid target name, as Target.Validate checks them. It returns
+// ErrInvalidTarget.
+func CheckTargetName(ns namespace.Name, name string) error {
+	if _, err := namespace.ParseName(ns.String()); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidTarget, err)
+	}
+
+	if !ident.Valid(name, maxNameLength) {
+		return fmt.Errorf("%w: name %q", ErrInvalidTarget, name)
+	}
+
+	return nil
+}
+
+// CheckStart reports whether s is a valid sweep to start. The namespace name
+// is valid, the kind is ScanCloud or ScanState, a cloud sweep names a valid
+// target, a state check names none, and StartedBy is empty or a subject of 1
+// to 255 bytes of valid UTF-8 with no hidden character. It returns
+// ErrInvalidTarget for the target name and ErrInvalidScan for the rest.
+func (s Scan) CheckStart() error {
+	if _, err := namespace.ParseName(s.Namespace.String()); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidScan, err)
+	}
+
+	switch {
+	case !s.Kind.Valid():
+		return fmt.Errorf("%w: kind %q", ErrInvalidScan, s.Kind)
+	case s.Kind == ScanCloud && !ident.Valid(s.Target, maxNameLength):
+		return fmt.Errorf("%w: name %q", ErrInvalidTarget, s.Target)
+	case s.Kind == ScanState && s.Target != "":
+		return fmt.Errorf("%w: a state check names no target", ErrInvalidScan)
+	case s.StartedBy != "" && !validSubject(s.StartedBy):
+		return fmt.Errorf("%w: the subject that starts the sweep", ErrInvalidScan)
+	default:
+		return nil
+	}
+}
+
+// CheckAdvance reports whether a names a valid namespace, a valid sweep ID
+// and an event of the state table. It returns ErrInvalidScan.
+func CheckAdvance(a ScanAdvance) error {
+	if _, err := namespace.ParseName(a.Namespace.String()); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidScan, err)
+	}
+
+	if !ident.Valid(a.ID, maxNameLength) {
+		return fmt.Errorf("%w: sweep ID %q", ErrInvalidScan, a.ID)
+	}
+
+	switch a.Event {
+	case ScanEventDispatch, ScanEventClaim, ScanEventRelease, ScanEventUploaded, ScanEventMatched,
+		ScanEventFail, ScanEventCancel, ScanEventExpire:
+		return nil
+	default:
+		return fmt.Errorf("%w: event %q", ErrInvalidScan, a.Event)
+	}
+}
+
+// validSubject reports whether s is 1 to maxSubjectLength bytes of valid
+// UTF-8 with no hidden character.
+func validSubject(s string) bool {
+	return len(s) <= maxSubjectLength && utf8.ValidString(s) && !ident.HasHidden(s)
 }

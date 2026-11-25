@@ -11,6 +11,7 @@ A rejection stops a job, as a cancel does. Today the route needs `job:approve` f
 5. **The check order.** Boundary check of the verdict, then `job:read` (a caller that cannot read gets 404), then `job:approve`, then, for a rejection, the rejector check, then the state and the gates. A refusal writes an audit entry and no job change.
 
 Why no structure removes the need for the check: the verdict is data of one route, and the action set of a route is fixed by the route table. A second route for rejection would split one decision in two and need its own gates. The guard and its mutation test take the place of a structure.
+6. **The e2e step checks the documented call.** The docs page stays on the pending list of docs commands. The docs runner has no server and no access token, so a page on the checked list would only carry skip markers and run nothing. The e2e step `approvalsRejectNeedsCancel` in `e2e/jobs_api_test.go` runs the grant list and the refused rejection against a real server. This is what the page shows. The change edits no list of docs commands.
 
 ## Test plan
 
@@ -22,4 +23,5 @@ Why no structure removes the need for the check: the verdict is data of one rout
 | Service | A person that holds both actions rejects. | No guard is involved. The test pins the pass. |
 | Handler | The same four cases through `POST .../jobs/{job_id}/approvals` with a service that has no rejector check. | Yes. |
 | Audit | A refusal writes one entry that names `job:cancel` and the unit, and no job event. | Yes. |
-| Role | `planner` rejects its own job with `job:approve` by a custom grant. `pkg/access/planner_role_test.go:37` still asserts `job:cancel` is false. | No guard is involved. |
+| Role | `planner` rejects its own job with `job:approve` by a custom grant. (read only) `pkg/access/planner_role_test.go` (line 37) still asserts `job:cancel` is false. | No guard is involved. |
+| E2E | A person with `job:approve` only lists the grants and rejects the job of another person, on a real server. | Yes, the rejection succeeds without the guard. |

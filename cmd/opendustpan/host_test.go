@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -246,6 +247,7 @@ func checkHostToken(ctx context.Context, t *testing.T, st *sqlite.Store, token, 
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -376,6 +378,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		st.close()
@@ -426,6 +429,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -540,6 +544,7 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)
@@ -836,6 +841,7 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("access token service: %v", err)

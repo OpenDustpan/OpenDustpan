@@ -10,6 +10,7 @@ docs/guides/collections-and-placement.md
 docs/guides/connect-github.md
 docs/guides/console-sign-in.md
 docs/guides/context.md
+docs/guides/database-outage-probe.md
 docs/guides/database-outage-recovery.md
 docs/guides/decision-record-retention.md
 docs/guides/decision-records.md
@@ -51,6 +52,7 @@ docs/guides/soak.md
 docs/guides/state-versions.md
 docs/guides/state-write-gates.md
 docs/guides/terragrunt.md
+docs/guides/unmanaged-sweep-store.md
 docs/reference/api-description.md
 docs/reference/blob-write-benchmark-record.md
 docs/reference/configuration.md

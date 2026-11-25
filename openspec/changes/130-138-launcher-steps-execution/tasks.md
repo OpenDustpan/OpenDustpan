@@ -25,4 +25,4 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Write the docs page for step rules and the validate command in the NEW file docs/guides/launcher-steps.md. Check: Docs page for step rules and the validate command runs each command as written. `make docs-lint` passes on each edited guide.
-- [ ] 4.2 Run e2e step with real launcher, usability check, and full checks. Check: E2E job on route ANY /runner/v1 with credential kind handoff token runs a real launcher step with no shell, streams logs, and reports one exit; persona completes path from docs page; `make check` reports zero findings.
+- [ ] 4.2 Run e2e step with real launcher, usability check, and full checks. Check: E2E job on route ANY /runner/v1 with credential kind handoff token runs a real launcher step with no shell, streams logs, and reports one exit; persona completes path from docs page; `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

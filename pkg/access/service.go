@@ -1232,7 +1232,7 @@ func (s *Service) servicePrincipalsOfGroup(ctx context.Context, groupID string) 
 		members, _, err := s.directory.ListMembers(
 			ctx,
 			groupID,
-			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit, InstallationOnly: false},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("list members of group %q: %w", groupID, err)

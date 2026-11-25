@@ -54,7 +54,7 @@ Modules that the change touches, and their imports on main:
 
 ```mermaid
 flowchart LR
-P1[pkg/graph]
+P1[internal/unmanaged]
 ```
 
 New imports of this change (each one allowed by the module rules):
@@ -126,6 +126,7 @@ D-.->R
 | Server to storage | R | A target change happens with no record of the command. | limit | the entry holds the changed fields only | TestAuditEntrySizeBound |
 | Server to storage | R | A target change happens with no record of the command. | authorize at point of use | the fence is checked in the transaction | TestStaleFenceRefusesWrite |
 | Server to storage | R | A target change happens with no record of the command. | fail closed | a failed audit append rolls back the write | TestAuditFailureRollsBack |
+| Server to storage | R | A write with a stale fence is refused and leaves no record. | fail closed | the service audits a refusal where the store returns namespace.ErrFenced: one denied entry; the SQL adapters write no audit entry | TestFencedRefusalAudited |
 
 ## Contracts
 
