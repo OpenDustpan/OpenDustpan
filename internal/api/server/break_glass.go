@@ -231,6 +231,10 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 
 	var req addBreakGlassRequest
 	if err := readBreakGlassBody(w, r, &req); err != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
+			outcome: audit.OutcomeDenied,
+		}, err.Error())
 		h.writeError(ctx, w, err)
 
 		return
@@ -238,6 +242,10 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
+			outcome: audit.OutcomeDenied,
+		}, err.Error())
 		h.writeError(ctx, w, passkeyError(err))
 
 		return
@@ -250,7 +258,7 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 	})
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
-			at: h.now(), action: identity.ActionServerManagePrincipals, object: "break-glass",
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
 			outcome: audit.OutcomeFailure,
 		}, refusalReason(err))
 		h.writeError(ctx, w, err)
@@ -279,6 +287,10 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 
 	var req rotateBreakGlassRequest
 	if err := readBreakGlassBody(w, r, &req); err != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
+			outcome: audit.OutcomeDenied,
+		}, err.Error())
 		h.writeError(ctx, w, err)
 
 		return
@@ -292,7 +304,7 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 	// layer, and it does not rely on them.
 	if !ident.Valid(id, maxBreakGlassIDLength) {
 		h.appendServerChangeReason(r, p, serverChange{
-			at: h.now(), action: identity.ActionServerManagePrincipals, object: "break-glass",
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
 			outcome: audit.OutcomeDenied,
 		}, "the ID has a form that no break-glass account has")
 		h.writeError(ctx, w, errBreakGlassNotFound)
@@ -313,6 +325,10 @@ func (h *Handler) rotateBreakGlass(w http.ResponseWriter, r *http.Request, p ide
 
 	key, err := passkeyOf(req.passkey())
 	if err != nil {
+		h.appendServerChangeReason(r, p, serverChange{
+			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
+			outcome: audit.OutcomeDenied,
+		}, err.Error())
 		h.writeError(ctx, w, passkeyError(err))
 
 		return

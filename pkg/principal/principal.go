@@ -74,9 +74,6 @@ var (
 	// still knows the refusal.
 	ErrLastBreakGlass = fmt.Errorf("%w: no enabled break-glass account remains",
 		ErrNoWorkingBreakGlass)
-	// ErrBreakGlassFloor reports a change that would leave fewer than the
-	// floor of working break-glass paths.
-	ErrBreakGlassFloor = errors.New("the change leaves too few working break-glass paths")
 
 	// ErrBreakGlassUnavailable reports that the store cannot count the
 	// working break-glass accounts. A caller that cannot count refuses the

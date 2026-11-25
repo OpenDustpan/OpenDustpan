@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/mfa"
@@ -244,9 +245,12 @@ func breakGlassHostileCases() []breakGlassHostileCase {
 
 // expectBreakGlassRefusal marks the test failed unless rec answers 413 with
 // request.body-too-large for the size row, and 400 with mfa.passkey-invalid
-// for each other row. It does not stop the test, so the caller still checks
-// that the refusal changed nothing.
-func expectBreakGlassRefusal(t *testing.T, rec *httptest.ResponseRecorder, c breakGlassHostileCase) {
+// for each other row. It also asserts one denied audit entry on the
+// "break-glass" object for the body refusal. It does not stop the test, so
+// the caller still checks that the refusal changed nothing.
+func expectBreakGlassRefusal(
+	t *testing.T, rec *httptest.ResponseRecorder, c breakGlassHostileCase, st *sqlite.Store,
+) {
 	t.Helper()
 
 	status, code := http.StatusBadRequest, errcode.MFAKeyInvalid
@@ -256,6 +260,11 @@ func expectBreakGlassRefusal(t *testing.T, rec *httptest.ResponseRecorder, c bre
 
 	if got := decodeErrorBody(t, rec); rec.Code != status || got.ErrorCode != code {
 		t.Errorf("answer = %d %s, want %d with errorCode %s", rec.Code, rec.Body.String(), status, code)
+	}
+
+	denied := floorEntries(t, st, identity.ActionServerManagePrincipals, audit.OutcomeDenied, "break-glass")
+	if len(denied) == 0 || denied[len(denied)-1].Reason == "" {
+		t.Errorf("denied entries on break-glass = %+v, want at least one with a reason", denied)
 	}
 }
 
@@ -295,7 +304,7 @@ func TestBreakGlassAddRefusesHostileBody(t *testing.T) {
 
 			body := c.body(t, map[string]any{"subject": "break-glass:recovery", "displayName": "Recovery"})
 			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost, breakGlassPath, body)
-			expectBreakGlassRefusal(t, rec, c)
+			expectBreakGlassRefusal(t, rec, c, f.store)
 
 			if accounts := breakGlassAccounts(t, f); len(accounts) != 0 {
 				t.Fatalf("accounts = %+v, want none after a refused add", accounts)
@@ -320,7 +329,7 @@ func TestBreakGlassRotateRefusesHostileBody(t *testing.T) {
 			body := c.body(t, map[string]any{"oldPasskey": account.Passkeys[0].ID, "name": "next-key"})
 			rec := f.freshPasskeyClient(t, "admin").do(http.MethodPost,
 				breakGlassPath+"/"+account.ID+"/rotate", body)
-			expectBreakGlassRefusal(t, rec, c)
+			expectBreakGlassRefusal(t, rec, c, f.store)
 
 			accounts := breakGlassAccounts(t, f)
 			if len(accounts) != 1 || len(accounts[0].Passkeys) != 1 ||
