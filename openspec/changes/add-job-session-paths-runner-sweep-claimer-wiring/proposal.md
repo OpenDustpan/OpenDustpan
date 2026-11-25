@@ -2,6 +2,8 @@
 version: 5
 ---
 
+Issue: #1028
+
 ## Why
 
 **Persona: runner operator.** Runner operator runs cloud sweeps on the runners of the team. The operator needs three things. A sweep poll claims only sweep work. A report upload stays bounded and encrypted. The pool API accepts a team pool with the sweep purpose.
@@ -9,17 +11,17 @@ version: 5
 The user path this change must make work:
 
 1. **API.** Create a pool of the namespace with the sweep purpose, join a runner, and poll for sweep work under /runner/v1.
-2. **API.** Open a job session for the sweep claim, upload the sweep report, then call finish under /runner/v1.
+2. **API.** Open a job session for the sweep claim, then upload the sweep report with `PUT /runner/v1/session/sweep-report`. The upload ends the sweep.
 3. **Docs page.** Read the sweep entries in docs/reference/runner-api.md.
-4. **E2e.** Drive a real runner poll, report upload and finish against the TLS server.
+4. **E2e.** Drive a real runner poll and report upload against the TLS server.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | A caller changes the purpose of a pool. | 409 with the immutable error of the pool routes. The purpose stays. | Create a new pool with the other purpose through the runner pool routes of the namespace. |
-| The report is above the bound, or a line is above 64 KiB. | 413 with a body of the runner protocol error shape; the sweep ends failed and the staged report is dropped. | Upload a smaller report to the new route `POST /runner/v1/session/sweep/report`. |
-| The launcher calls finish with no stored report. | 400 {"code": "invalid", "message": "no complete sweep report"}; the sweep ends failed. | Upload the report to the new route `POST /runner/v1/session/sweep/report`, then call the new route `POST /runner/v1/session/sweep/finish`. |
+| The report is above the bound, or a line is above 64 KiB. | 413 with a body of the runner protocol error shape; the sweep ends failed and the staged report is dropped. | Upload a smaller report to `PUT /runner/v1/session/sweep-report`. |
+| The launcher calls finish for a sweep session. | 400 {"code": "invalid", "message": "a sweep has no finish"}. The sweep state stays. | Upload the report to `PUT /runner/v1/session/sweep-report`; the upload ends the sweep. |
 
 Evidence for the claims above:
 
@@ -28,7 +30,8 @@ Evidence for the claims above:
 ## What Changes
 
 - Add the sweep claimer on durable operations of kind runner.SweepKind(pool), chosen by the stored purpose of the pool.
-- Add two new routes under /runner/v1: `POST /runner/v1/session/sweep/report` and `POST /runner/v1/session/sweep/finish`. They stream a bounded report and close the sweep. The launcher opens its session on the existing session route under /runner/v1 with the handoff of the sweep claim.
+- The report route `PUT /runner/v1/session/sweep-report` already has its path constant in pkg/runner/protocol/protocol.go. Add its handler in the NEW file internal/api/runnerapi/sweep_report.go. It streams a bounded report, stores it encrypted, and ends the claim and the sweep through `runner.SweepClaimer.Report`. The change adds no finish route: a sweep has no finish (ADR 131 and ADR 164 decision 12, and the code in internal/api/runnerapi/session.go refuses it). The launcher opens its session on the existing session route with the handoff of the sweep claim.
+- Add two NEW small interfaces that the claimer consumes, `runner.SweepReportStore` (encrypted staged blob write with the bounds) and `runner.SweepScopeReader` (the scopes of the target of the sweep), and the NEW sentinel `runner.ErrReportTooLarge` for a size breach. All three live in the NEW file pkg/runner/sweep_claimer.go. The sentinel wraps `runner.ErrInvalid`, so the documented contract of `SweepClaimer.Report` in pkg/runner/store.go stays true. The handler maps the sentinel to 413 in internal/api/runnerapi/errors.go. Each interface has one implementation, in the NEW file pkg/dustpan/sweep_report.go, over the existing blob, data key and sweep store ports. It is not a store port: no SQL adapter, no schema change and no storetest case.
 - The existing poll route under /runner/v1 calls the sweep claimer for a pool with the sweep purpose.
 - The pool routes accept the sweep purpose on a namespace pool at create, with the same rules as for the jobs purpose. The change adds no refusal of the sweep purpose and no installation pool. The host identity of a sweep pool stays read-only.
 - The purpose of a pool never changes on main, so the change adds no purpose-change guard.
@@ -137,6 +140,6 @@ Questions considered and answered:
 - What bound applies to the report? ADR 131 decision 14 and ADR 164 decision 11: 1 GiB, 5,000,000 records, 64 KiB a line, 50 tags, 1,000 scopes, and the session caps.
 - Which error codes does the report use? ADR 131 decision 12 gives the table: invalid is 400, and a body above a cap is refused with the protocol error shape. A pool refusal uses runner.invalid.
 - Who moves a sweep to failed after a bad report or a lost claim? The service of the sweep store does it through its advance call under the claim that the session holds. A call under a lost claim changes nothing and answers 409.
-- How is a race of two uploads or two finishes handled? A unique staged key for each sweep session and a state check in one store transaction let one request win. The other answers 409 for an upload, or the stored result for a finish.
+- How is a race of two uploads handled? A unique staged key for each sweep session and a state check in one store transaction let one request win. The other answers 409 for the second upload.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
