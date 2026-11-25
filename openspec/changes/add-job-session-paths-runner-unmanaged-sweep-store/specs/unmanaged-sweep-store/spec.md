@@ -58,7 +58,7 @@ If the pool of a target is deleted, then the server SHALL refuse the start of a 
 
 ### Requirement: Finding bounds
 
-If a call to Record holds more than 1,000 observations, then the server SHALL refuse the call.
+If a call to Record holds more than 1,000 observations, then the server SHALL refuse the call. In this change the memory adapter enforces the limit. The SQL adapters meet it in the change 160-165-report-intake-findings (task 2.1), where they hold real findings.
 
 #### Scenario: Oversize batch
 - **WHEN** a caller sends 1,001 observations to Record
