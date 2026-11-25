@@ -153,7 +153,7 @@ func refused() audit.Entry {
 
 // all is a query for every row.
 func all() principal.Query {
-	return principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1}
+	return principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1, InstallationOnly: false}
 }
 
 func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
@@ -427,24 +427,24 @@ func testListPrincipalsOfKind(t *testing.T, s principal.Store) {
 		{"services", principal.KindService, all(), []string{"ci-build", "ci-deploy"}, 2},
 		{
 			"services after a key", principal.KindService,
-			principal.Query{After: "ci-build", Low: "", High: "", Limit: 10},
+			principal.Query{After: "ci-build", Low: "", High: "", Limit: 10, InstallationOnly: false},
 			[]string{"ci-deploy"},
 			2,
 		},
 		{
 			"workloads with a prefix", principal.KindWorkload,
-			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10},
+			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
 			[]string{"ci-runner"},
 			1,
 		},
 		{
 			"persons with a prefix", principal.KindPerson,
-			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10},
+			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10, InstallationOnly: false},
 			nil, 0,
 		},
 		{
 			"every kind with a prefix", "",
-			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 2},
+			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 2, InstallationOnly: false},
 			[]string{"ci-build", "ci-deploy"},
 			3,
 		},
@@ -1075,11 +1075,11 @@ func testPagePrincipals(t *testing.T, s principal.Store) {
 		q    principal.Query
 		want []string
 	}{
-		{"first page", principal.Query{After: "", Low: "", High: "", Limit: 2}, []string{"A1", "a1"}},
-		{"after a key", principal.Query{After: "a1", Low: "", High: "", Limit: 3}, []string{"a2", "a3", "ab"}},
-		{"a prefix", principal.Query{After: "", Low: "a", High: "b", Limit: 10}, []string{"a1", "a2", "a3", "ab"}},
-		{"a prefix after a key", principal.Query{After: "a2", Low: "a", High: "b", Limit: 10}, []string{"a3", "ab"}},
-		{"an exact prefix", principal.Query{After: "", Low: "A", High: "B", Limit: 10}, []string{"A1"}},
+		{"first page", principal.Query{After: "", Low: "", High: "", Limit: 2, InstallationOnly: false}, []string{"A1", "a1"}},
+		{"after a key", principal.Query{After: "a1", Low: "", High: "", Limit: 3, InstallationOnly: false}, []string{"a2", "a3", "ab"}},
+		{"a prefix", principal.Query{After: "", Low: "a", High: "b", Limit: 10, InstallationOnly: false}, []string{"a1", "a2", "a3", "ab"}},
+		{"a prefix after a key", principal.Query{After: "a2", Low: "a", High: "b", Limit: 10, InstallationOnly: false}, []string{"a3", "ab"}},
+		{"an exact prefix", principal.Query{After: "", Low: "A", High: "B", Limit: 10, InstallationOnly: false}, []string{"A1"}},
 	}
 
 	for _, tc := range cases {
@@ -1099,14 +1099,14 @@ func testPageGroups(t *testing.T, s principal.Store) {
 		mustCreateGroup(t, s, newGroup(fmt.Sprintf("grp-%d", i), name))
 	}
 
-	got, _, err := s.ListGroups(t.Context(), principal.Query{After: "", Low: "op", High: "oq", Limit: 2})
+	got, _, err := s.ListGroups(t.Context(), principal.Query{After: "", Low: "op", High: "oq", Limit: 2, InstallationOnly: false})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 
 	equalStrings(t, "first page of op", groupNames(got), []string{"OPERATIONS", "Ops"})
 
-	got, _, err = s.ListGroups(t.Context(), principal.Query{After: "ops", Low: "op", High: "oq", Limit: 2})
+	got, _, err = s.ListGroups(t.Context(), principal.Query{After: "ops", Low: "op", High: "oq", Limit: 2, InstallationOnly: false})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -1131,14 +1131,14 @@ func testPageMembers(t *testing.T, s principal.Store) {
 		mustAddMember(t, s, g, "prn-1")
 	}
 
-	members, _, err := s.ListMembers(t.Context(), "grp-a", principal.Query{After: "alice", Low: "", High: "", Limit: 1})
+	members, _, err := s.ListMembers(t.Context(), "grp-a", principal.Query{After: "alice", Low: "", High: "", Limit: 1, InstallationOnly: false})
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
 
 	equalStrings(t, "members after alice", memberSubjects(members), []string{"bob"})
 
-	groups, _, err := s.ListGroupsOf(t.Context(), "prn-1", principal.Query{After: "", Low: "be", High: "bf", Limit: 10})
+	groups, _, err := s.ListGroupsOf(t.Context(), "prn-1", principal.Query{After: "", Low: "be", High: "bf", Limit: 10, InstallationOnly: false})
 	if err != nil {
 		t.Fatalf("list groups of: %v", err)
 	}
@@ -1317,7 +1317,7 @@ func testTotalsAndCounts(t *testing.T, s principal.Store) {
 
 // onePerPage asks for the first row of a list.
 func onePerPage() principal.Query {
-	return principal.Query{After: "", Low: "", High: "", Limit: 1}
+	return principal.Query{After: "", Low: "", High: "", Limit: 1, InstallationOnly: false}
 }
 
 // checkPrincipalTotals reads the principal lists of testTotalsAndCounts.
@@ -1331,7 +1331,7 @@ func checkPrincipalTotals(t *testing.T, s principal.Store) {
 		t.Fatalf("first principal = %+v, total %d, %v; want alice in 2 groups of 3 principals", ps, total, err)
 	}
 
-	_, total, err = s.ListPrincipals(ctx, principal.Query{After: "alice", Low: "b", High: "c", Limit: 10}, "")
+	_, total, err = s.ListPrincipals(ctx, principal.Query{After: "alice", Low: "b", High: "c", Limit: 10, InstallationOnly: false}, "")
 	if err != nil || total != 1 {
 		t.Fatalf("total of prefix b = %d, %v; want 1 with no regard to the cursor", total, err)
 	}

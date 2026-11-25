@@ -425,7 +425,7 @@ func (a *Authorizer) addNamespacePrincipals(ctx context.Context, ns namespace.Na
 
 	for {
 		rows, _, err := a.principals.ListNamespacePrincipals(
-			ctx, ns, principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+			ctx, ns, principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit, InstallationOnly: false},
 		)
 		if err != nil {
 			return out, fmt.Errorf("list principals of namespace %q: %w", ns.String(), err)
