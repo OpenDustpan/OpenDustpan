@@ -136,6 +136,9 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.gitHostRoutes()...)
 	routes = append(routes, h.gitHostLinkRoutes()...)
 	routes = append(routes, h.proxyRuleRoutes()...)
+	routes = append(routes, h.agentSecretRoutes()...)
+	routes = append(routes, h.agentConnectionRoutes()...)
+	routes = append(routes, h.egressAllowlistRoutes()...)
 
 	return routes
 }

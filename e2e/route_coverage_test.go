@@ -134,6 +134,7 @@ func adapterOf(route e2e.RouteRef) string {
 	case strings.HasPrefix(route.Path, "/api/inventory/") ||
 		strings.HasPrefix(route.Path, "/api/dustpan/v1/") ||
 		strings.HasPrefix(route.Path, "/api/server/") ||
+		strings.HasPrefix(route.Path, "/api/agent/") ||
 		strings.HasPrefix(route.Path, "/health/"):
 		return ""
 	case strings.HasPrefix(route.Path, "/api/"):

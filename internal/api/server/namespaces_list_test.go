@@ -400,6 +400,7 @@ func newListHandlerWith(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            cursors,
@@ -762,6 +763,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

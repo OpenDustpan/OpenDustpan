@@ -182,6 +182,7 @@ func newRestoreFixtureWorkers(
 	aud := newTestAudit()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -657,6 +658,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -909,6 +911,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -1155,6 +1158,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, sett
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -1303,6 +1307,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

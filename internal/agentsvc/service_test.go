@@ -18,8 +18,12 @@ import (
 )
 
 // secretMark is the value of each secret item of the tests. No audit entry
-// may hold it.
-const secretMark = "sk-test-value-7f3a"
+// may hold it. It is clearly fake and holds no credential text.
+const secretMark = "test-value-1"
+
+// errPolicyStoreDown is the failure of the authorizer of the tests that
+// refuses with an error instead of a denial.
+var errPolicyStoreDown = errors.New("policy store down")
 
 // testRef is a secret reference of the right form.
 const testRef = agent.SecretRef("itm-abc123")
@@ -30,19 +34,6 @@ type fakeSecrets struct {
 	calls   int
 	entries []audit.Entry
 	err     error
-}
-
-func (f *fakeSecrets) record(e *audit.Entry) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.calls++
-
-	if e != nil {
-		f.entries = append(f.entries, *e)
-	}
-
-	return f.err
 }
 
 func (f *fakeSecrets) Create(_ context.Context, name string, _ []byte, e audit.Entry) (agent.SecretItem, error) {
@@ -65,7 +56,12 @@ func (f *fakeSecrets) Get(context.Context, agent.SecretRef) (agent.SecretItem, e
 	return agent.SecretItem{}, f.record(nil)
 }
 
-func (f *fakeSecrets) Replace(_ context.Context, ref agent.SecretRef, _ []byte, e audit.Entry) (agent.SecretItem, error) {
+func (f *fakeSecrets) Replace(
+	_ context.Context,
+	ref agent.SecretRef,
+	_ []byte,
+	e audit.Entry,
+) (agent.SecretItem, error) {
 	if err := f.record(&e); err != nil {
 		return agent.SecretItem{}, err
 	}
@@ -81,16 +77,7 @@ func (f *fakeSecrets) Open(context.Context, agent.SecretRef) ([]byte, error) {
 	return nil, f.record(nil)
 }
 
-// fakeConnections is an agent.ConnectionStore that records each call.
-type fakeConnections struct {
-	mu      sync.Mutex
-	calls   int
-	entries []audit.Entry
-	spec    agent.ConnectionSpec
-	err     error
-}
-
-func (f *fakeConnections) record(e *audit.Entry) error {
+func (f *fakeSecrets) record(e *audit.Entry) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -101,6 +88,15 @@ func (f *fakeConnections) record(e *audit.Entry) error {
 	}
 
 	return f.err
+}
+
+// fakeConnections is an agent.ConnectionStore that records each call.
+type fakeConnections struct {
+	mu      sync.Mutex
+	calls   int
+	entries []audit.Entry
+	spec    agent.ConnectionSpec
+	err     error
 }
 
 func (f *fakeConnections) Current(context.Context) (agent.ConnectionSpec, int64, error) {
@@ -125,6 +121,19 @@ func (f *fakeConnections) Promote(_ context.Context, _ agent.ProbeRef, e audit.E
 
 func (f *fakeConnections) Delete(_ context.Context, e audit.Entry) error {
 	return f.record(&e)
+}
+
+func (f *fakeConnections) record(e *audit.Entry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls++
+
+	if e != nil {
+		f.entries = append(f.entries, *e)
+	}
+
+	return f.err
 }
 
 // fakeAllowlist is an agent.EgressAllowlistStore that records each call.
@@ -162,7 +171,12 @@ type authorizer struct {
 	fail  error
 }
 
-func (a authorizer) Authorize(_ context.Context, p identity.Principal, action identity.Action, obj identity.Object) error {
+func (a authorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
 	if a.fail != nil {
 		return a.fail
 	}
@@ -205,10 +219,15 @@ func newEnv(t *testing.T, authz identity.Authorizer) env {
 	}
 
 	e := env{
-		svc:       nil,
-		secrets:   &fakeSecrets{mu: sync.Mutex{}, calls: 0, entries: nil, err: nil},
-		conns:     &fakeConnections{mu: sync.Mutex{}, calls: 0, entries: nil, spec: spec, err: nil},
-		allowlist: &fakeAllowlist{mu: sync.Mutex{}, calls: 0, entries: nil, stored: egress.Allowlist{Hosts: nil, CIDRs: nil}},
+		svc:     nil,
+		secrets: &fakeSecrets{mu: sync.Mutex{}, calls: 0, entries: nil, err: nil},
+		conns:   &fakeConnections{mu: sync.Mutex{}, calls: 0, entries: nil, spec: spec, err: nil},
+		allowlist: &fakeAllowlist{
+			mu:      sync.Mutex{},
+			calls:   0,
+			entries: nil,
+			stored:  egress.Allowlist{Hosts: nil, CIDRs: nil},
+		},
 	}
 
 	svc, err := agentsvc.New(agentsvc.Config{
@@ -265,10 +284,32 @@ func principal() identity.Principal {
 // baseEntry is the entry of the caller that a handler gives the service.
 func baseEntry() audit.Entry {
 	return audit.Entry{
-		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "", Action: "", Object: "",
-		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
-		Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
-		Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
+		At:            time.Time{},
+		Namespace:     "",
+		Subject:       "admin",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        "",
+		Object:        "",
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          "",
+		Outcome:       "",
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -340,10 +381,34 @@ func TestNew_MissingDependency(t *testing.T) {
 		name string
 		cfg  agentsvc.Config
 	}{
-		{"no secrets", agentsvc.Config{Secrets: nil, Connection: e.conns, Allowlist: e.allowlist, Authorizer: allowAll(), Now: nil}},
-		{"no connection", agentsvc.Config{Secrets: e.secrets, Connection: nil, Allowlist: e.allowlist, Authorizer: allowAll(), Now: nil}},
-		{"no allowlist", agentsvc.Config{Secrets: e.secrets, Connection: e.conns, Allowlist: nil, Authorizer: allowAll(), Now: nil}},
-		{"no authorizer", agentsvc.Config{Secrets: e.secrets, Connection: e.conns, Allowlist: e.allowlist, Authorizer: nil, Now: nil}},
+		{
+			"no secrets",
+			agentsvc.Config{
+				Secrets:    nil,
+				Connection: e.conns,
+				Allowlist:  e.allowlist,
+				Authorizer: allowAll(),
+				Now:        nil,
+			},
+		},
+		{
+			"no connection",
+			agentsvc.Config{
+				Secrets:    e.secrets,
+				Connection: nil,
+				Allowlist:  e.allowlist,
+				Authorizer: allowAll(),
+				Now:        nil,
+			},
+		},
+		{
+			"no allowlist",
+			agentsvc.Config{Secrets: e.secrets, Connection: e.conns, Allowlist: nil, Authorizer: allowAll(), Now: nil},
+		},
+		{
+			"no authorizer",
+			agentsvc.Config{Secrets: e.secrets, Connection: e.conns, Allowlist: e.allowlist, Authorizer: nil, Now: nil},
+		},
 	}
 
 	for _, tc := range tests {
@@ -385,7 +450,7 @@ func TestService_DeniedNeverReachesStore(t *testing.T) {
 		want  error
 	}{
 		{"no grant", authorizer{allow: nil, fail: nil}, identity.ErrDenied},
-		{"authorizer error", authorizer{allow: nil, fail: errors.New("policy store down")}, nil},
+		{"authorizer error", authorizer{allow: nil, fail: errPolicyStoreDown}, nil},
 		{"only the other action", authorizer{allow: map[identity.Action]bool{
 			identity.ActionServerReadSettings: true, identity.ActionServerManageSignIn: true,
 		}, fail: nil}, identity.ErrDenied},
@@ -396,22 +461,30 @@ func TestService_DeniedNeverReachesStore(t *testing.T) {
 			t.Run(a.name+"/"+c.name, func(t *testing.T) {
 				t.Parallel()
 
-				e := newEnv(t, a.authz)
-
-				err := c.run(t.Context(), e.svc)
-				if err == nil {
-					t.Fatalf("%s = nil, want a refusal", c.name)
-				}
-
-				if a.want != nil && !errors.Is(err, a.want) {
-					t.Fatalf("%s = %v, want %v", c.name, err, a.want)
-				}
-
-				if n := e.storeCalls(); n != 0 {
-					t.Fatalf("%d store calls after a refusal, want 0", n)
-				}
+				checkDeniedCall(t, a.authz, c, a.want)
 			})
 		}
+	}
+}
+
+// checkDeniedCall runs one service method with an authorizer that refuses or
+// fails, and checks that the call fails before a store call.
+func checkDeniedCall(t *testing.T, authz authorizer, c call, want error) {
+	t.Helper()
+
+	e := newEnv(t, authz)
+
+	err := c.run(t.Context(), e.svc)
+	if err == nil {
+		t.Fatalf("%s = nil, want a refusal", c.name)
+	}
+
+	if want != nil && !errors.Is(err, want) {
+		t.Fatalf("%s = %v, want %v", c.name, err, want)
+	}
+
+	if n := e.storeCalls(); n != 0 {
+		t.Fatalf("%d store calls after a refusal, want 0", n)
 	}
 }
 
@@ -532,10 +605,10 @@ func TestService_Entries(t *testing.T) {
 	}
 
 	want := map[string]identity.Action{
-		agentsvc.ObjectSecretItems:              identity.ActionServerManageAgent,
-		agentsvc.SecretItemObject(testRef):      identity.ActionServerManageAgent,
-		agentsvc.ObjectConnection:               identity.ActionServerManageAgent,
-		agentsvc.ObjectEgressAllowlist:          identity.ActionServerManageSettings,
+		agentsvc.ObjectSecretItems:         identity.ActionServerManageAgent,
+		agentsvc.SecretItemObject(testRef): identity.ActionServerManageAgent,
+		agentsvc.ObjectConnection:          identity.ActionServerManageAgent,
+		agentsvc.ObjectEgressAllowlist:     identity.ActionServerManageSettings,
 	}
 
 	entries := e.allEntries()
@@ -544,28 +617,34 @@ func TestService_Entries(t *testing.T) {
 	}
 
 	for i := range entries {
-		got := entries[i]
+		checkServiceEntry(t, i, entries[i], want)
+	}
+}
 
-		action, ok := want[got.Object]
-		if !ok || got.Action != string(action) {
-			t.Errorf("entry %d object %q action %q, want one of %v", i, got.Object, got.Action, want)
-		}
+// checkServiceEntry checks one audit entry of a change: the kind change on
+// @server, the action, the object, and no secret value.
+func checkServiceEntry(t *testing.T, i int, got audit.Entry, want map[string]identity.Action) {
+	t.Helper()
 
-		if got.Namespace != audit.ServerScope || got.Kind != audit.KindChange || got.Outcome != audit.OutcomeSuccess {
-			t.Errorf("entry %d = %s %s %s, want @server change success", i, got.Namespace, got.Kind, got.Outcome)
-		}
+	action, ok := want[got.Object]
+	if !ok || got.Action != string(action) {
+		t.Errorf("entry %d object %q action %q, want one of %v", i, got.Object, got.Action, want)
+	}
 
-		if got.At.IsZero() || got.Subject != "admin" {
-			t.Errorf("entry %d has no time or no subject: %+v", i, got)
-		}
+	if got.Namespace != audit.ServerScope || got.Kind != audit.KindChange || got.Outcome != audit.OutcomeSuccess {
+		t.Errorf("entry %d = %s %s %s, want @server change success", i, got.Namespace, got.Kind, got.Outcome)
+	}
 
-		if err := got.Validate(); err != nil {
-			t.Errorf("entry %d is not valid: %v", i, err)
-		}
+	if got.At.IsZero() || got.Subject != "admin" {
+		t.Errorf("entry %d has no time or no subject: %+v", i, got)
+	}
 
-		if strings.Contains(fmt.Sprintf("%+v", got), secretMark) {
-			t.Errorf("entry %d holds the secret value: %+v", i, got)
-		}
+	if err := got.Validate(); err != nil {
+		t.Errorf("entry %d is not valid: %v", i, err)
+	}
+
+	if strings.Contains(fmt.Sprintf("%+v", got), secretMark) {
+		t.Errorf("entry %d holds the secret value: %+v", i, got)
 	}
 }
 
@@ -578,7 +657,8 @@ func TestService_StoreErrorsPass(t *testing.T) {
 	e.secrets.err = agent.ErrSecretInUse
 	e.conns.err = agent.ErrDisabled
 
-	if err := e.svc.DeleteSecret(t.Context(), principal(), baseEntry(), testRef); !errors.Is(err, agent.ErrSecretInUse) {
+	err := e.svc.DeleteSecret(t.Context(), principal(), baseEntry(), testRef)
+	if !errors.Is(err, agent.ErrSecretInUse) {
 		t.Fatalf("DeleteSecret = %v, want ErrSecretInUse", err)
 	}
 

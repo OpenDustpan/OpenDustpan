@@ -570,7 +570,7 @@ func pgProfileOpenSessionColumns() []string {
 // backup.EmptiedTables. CheckCoverage compares each list with the live
 // columns.
 func pgEmptiedTables() []pgCopyTable {
-	return append(pgEmptiedBaseTables(), pgCopyClaimTables()...)
+	return slices.Concat(pgEmptiedBaseTables(), pgEmptiedAgentTables(), pgCopyClaimTables())
 }
 
 // pgEmptiedBaseTables lists the emptied tables that are not claim tables.
@@ -643,6 +643,12 @@ func pgEmptiedBaseTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColUnitID},
 		},
+	}
+}
+
+// pgEmptiedAgentTables lists the emptied tables of the agent connection.
+func pgEmptiedAgentTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table:   "agent_connection_pending",
 			columns: []string{"probe_id", pgColProxyDocument, pgColVersion, pgColCreatedAtMs},

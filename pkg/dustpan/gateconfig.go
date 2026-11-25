@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/agentsvc"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -161,4 +163,52 @@ func (d groupDirectory) group(ctx context.Context, name string) (principal.Group
 	}
 
 	return principal.Group{}, fmt.Errorf("%w: group %q", gate.ErrNotFound, name)
+}
+
+// installationServices holds the services of the installation API that the
+// server handler needs next to the stores and the chain.
+type installationServices struct {
+	gates      *gate.ConfigService
+	proxyRules *jobproxysvc.Service
+	gitHost    gitHostParts
+	agent      *agentsvc.Service
+	extras     serverExtras
+}
+
+// newInstallationServices builds the gate config, the proxy rules, the Git
+// host parts, the agent service and the extras of the server handler. A
+// missing optional service stays nil, and its routes stay unmounted.
+func newInstallationServices(
+	cfg *settings, deps installationDeps, principals *principal.Service,
+) (installationServices, error) {
+	var none installationServices
+
+	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
+	if err != nil {
+		return none, err
+	}
+
+	proxyRules, _, err := newProxyRuleService(cfg, deps.services.namespaces)
+	if err != nil {
+		return none, err
+	}
+
+	gitHost, err := newGitHostParts(cfg, deps)
+	if err != nil {
+		return none, err
+	}
+
+	agentSvc, _, err := newAgentService(cfg, cfg.authorizer)
+	if err != nil {
+		return none, err
+	}
+
+	extras, err := newServerExtras(cfg, deps, principals)
+	if err != nil {
+		return none, err
+	}
+
+	return installationServices{
+		gates: gates, proxyRules: proxyRules, gitHost: gitHost, agent: agentSvc, extras: extras,
+	}, nil
 }

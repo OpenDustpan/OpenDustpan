@@ -157,6 +157,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -230,6 +231,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -297,6 +299,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -389,6 +392,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -464,6 +468,7 @@ func newJournalHandler(t *testing.T, journaled int64) testHandler {
 	t.Helper()
 
 	cfg := &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

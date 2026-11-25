@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/agentsvc"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -202,6 +203,11 @@ type Config struct {
 	// Nil means the store keeps none: the proxy rule routes are not mounted.
 	// Both SQL adapters keep them.
 	ProxyRules *jobproxysvc.Service
+	// Agent is the service of the model connection, its secret items and the
+	// egress allowlist. Nil means the store keeps none: the routes under
+	// /api/agent/ and the egress allowlist route are not mounted. Both SQL
+	// adapters keep them.
+	Agent *agentsvc.Service
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -274,6 +280,7 @@ type Handler struct {
 	storeChecks   *storecheck.Service
 	cursors       secret.Wrapper
 	proxyRules    *jobproxysvc.Service
+	agent         *agentsvc.Service
 	mux           *patternMux
 	routes        []Route
 }
@@ -358,6 +365,7 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		idem:      cfg.Idempotency,
 		instances: cfg.Instances, storeChecks: cfg.StoreChecks, cursors: cfg.Cursors,
 		proxyRules: cfg.ProxyRules,
+		agent:      cfg.Agent,
 		mux:        newPatternMux(),
 		routes:     nil,
 	}
@@ -719,7 +727,7 @@ func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
 		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyReview, classifyIdentity, classifyPrincipalState, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifyProxyRules, classifySessionPolicy, classifySignIn, classifyProviders,
-		classifyGitHost, classifyInstance, classifyRequest,
+		classifyGitHost, classifyInstance, classifyAgent, classifyRequest,
 	} {
 		if f, ok := try(err); ok {
 			return f

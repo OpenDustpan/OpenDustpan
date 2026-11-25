@@ -312,6 +312,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	accessTokens := newAccessTokens(t, st, clock)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		Cursors:            testCursors(t),
 		LocalUsers:         nil,
@@ -1251,6 +1252,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

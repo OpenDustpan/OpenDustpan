@@ -161,6 +161,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

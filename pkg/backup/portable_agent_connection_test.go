@@ -94,7 +94,8 @@ func TestBackupConformance_NoPlainSecret(t *testing.T) {
 		CIDRs: []egress.CIDRRule{{CIDR: netip.MustParsePrefix("192.0.2.0/24"), Port: 443, HTTP: true}},
 	}
 
-	err = src.AgentEgressAllowlist().Set(ctx, allowlist, agenttest.TestEntry(audit.ServerScope, "alice", "agent:allowlist"))
+	entry := agenttest.TestEntry(audit.ServerScope, "alice", "agent:allowlist")
+	err = src.AgentEgressAllowlist().Set(ctx, allowlist, entry)
 	if err != nil {
 		t.Fatalf("set allowlist: %v", err)
 	}
@@ -112,7 +113,9 @@ func TestBackupConformance_NoPlainSecret(t *testing.T) {
 
 	dst, dstSecrets := openAgentBackupStore(t)
 
-	if _, stageErr := dst.StagePortable(ctx, storetest.PortableOpener(files), sum, descs, storetest.StageAs(t, dst)); stageErr != nil {
+	opener := storetest.PortableOpener(files)
+
+	if _, stageErr := dst.StagePortable(ctx, opener, sum, descs, storetest.StageAs(t, dst)); stageErr != nil {
 		t.Fatalf("stage portable backup: %v", stageErr)
 	}
 
@@ -252,7 +255,8 @@ func decodeAgentRows(t *testing.T, path string, text []byte, plain string) []map
 				continue
 			}
 
-			if decoded, err := base64.StdEncoding.DecodeString(s); err == nil && bytes.Contains(decoded, []byte(plain)) {
+			decoded, err := base64.StdEncoding.DecodeString(s)
+			if err == nil && bytes.Contains(decoded, []byte(plain)) {
 				t.Fatalf("the column %q of %q holds the plain secret in base64", column, path)
 			}
 		}

@@ -3131,22 +3131,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	gates, err := newGateConfigService(cfg, deps.services.namespaces, principals)
-	if err != nil {
-		return none, err
-	}
-
-	proxyRules, _, err := newProxyRuleService(cfg, deps.services.namespaces)
-	if err != nil {
-		return none, err
-	}
-
-	gitHost, err := newGitHostParts(cfg, deps)
-	if err != nil {
-		return none, err
-	}
-
-	extras, err := newServerExtras(cfg, deps, principals)
+	svc, err := newInstallationServices(cfg, deps, principals)
 	if err != nil {
 		return none, err
 	}
@@ -3164,8 +3149,9 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
-		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost.service,
-		idempotency: gitHost.idem, extras: extras,
+		principals: principals, gates: svc.gates, proxyRules: svc.proxyRules, forgeService: svc.gitHost.service,
+		agent:       svc.agent,
+		idempotency: svc.gitHost.idem, extras: svc.extras,
 		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
 		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
 		version: cfg.version, logger: cfg.logger, now: cfg.now,
@@ -3174,7 +3160,9 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	return installationParts{handler: serverAPI, restores: restores, storeChecks: checks, webhook: gitHost.webhook}, nil
+	return installationParts{
+		handler: serverAPI, restores: restores, storeChecks: checks, webhook: svc.gitHost.webhook,
+	}, nil
 }
 
 // installationParts holds what newInstallationAPI builds: the installation API
@@ -3962,6 +3950,21 @@ func mountV1(mux *rootMux, h http.Handler, wrap func(http.Handler) http.Handler)
 	}
 }
 
+// mountOpenTofuAPI mounts the TFE-compatible API and the OpenTofu http
+// backend. Both are refused in maintenance mode like the other tool adapters.
+func mountOpenTofuAPI(mux *rootMux, a adapters, cfg *settings) {
+	mux.Handle(
+		"/api/v2/", metrics.AdapterOpenTofu,
+		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),
+	)
+	// The OpenTofu http backend (ADR 49) answers tool calls under its own
+	// prefix.
+	mux.Handle(
+		"/tofu/state/", metrics.AdapterOpenTofu,
+		withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger),
+	)
+}
+
 // mountAPI mounts the handlers of the api component on mux: the tool APIs,
 // the installation API, the runner protocol, service discovery and the
 // console files.
@@ -4021,17 +4024,9 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// of the tool-neutral API. Without this row, the console files or the
 	// Pulumi adapter would answer for it.
 	mux.Handle(v1Prefix, metrics.AdapterServer, withCORS(http.HandlerFunc(v1NotFound), cfg.allowedOrigins))
-	mux.Handle(
-		"/api/v2/", metrics.AdapterOpenTofu,
-		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),
-	)
-	// The OpenTofu http backend (ADR 49) answers tool calls under its own
-	// prefix. It is refused in maintenance mode like the other tool adapters.
-	mux.Handle(
-		"/tofu/state/", metrics.AdapterOpenTofu,
-		withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger),
-	)
+	mountOpenTofuAPI(mux, a, cfg)
 	mux.Handle("/api/server/", metrics.AdapterServer, withCORS(withJSONMethodNotAllowed(a.server), cfg.allowedOrigins))
+	mountAgentAPI(mux, a, cfg)
 	mux.Handle(
 		"/api/", metrics.AdapterPulumi,
 		withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins),
@@ -4080,6 +4075,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	}
 
 	return nil
+}
+
+// mountAgentAPI mounts the routes of the model connection. They live on the
+// installation API, under their own prefix next to /api/server/, and they
+// stay available in maintenance mode like the rest of it.
+func mountAgentAPI(mux *rootMux, a adapters, cfg *settings) {
+	mux.Handle("/api/agent/", metrics.AdapterServer, withCORS(withJSONMethodNotAllowed(a.server), cfg.allowedOrigins))
 }
 
 // mountTofuRegistry mounts the OpenTofu registry protocol routes on mux.

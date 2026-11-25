@@ -366,6 +366,7 @@ func newServiceBackedHandlerAt(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:            nil,
 		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Workers:          nil,
@@ -1723,6 +1724,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -1909,6 +1911,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -1961,6 +1964,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

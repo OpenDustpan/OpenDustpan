@@ -197,7 +197,9 @@ func (s *Service) ReplaceSecret(
 		return agent.SecretItem{}, err
 	}
 
-	item, err := s.secrets.Replace(ctx, ref, value, s.entry(base, identity.ActionServerManageAgent, SecretItemObject(ref)))
+	item, err := s.secrets.Replace(
+		ctx, ref, value, s.entry(base, identity.ActionServerManageAgent, SecretItemObject(ref)),
+	)
 	if err != nil {
 		return agent.SecretItem{}, fmt.Errorf("replace secret item: %w", err)
 	}
@@ -218,7 +220,8 @@ func (s *Service) DeleteSecret(ctx context.Context, p identity.Principal, base a
 		return err
 	}
 
-	if err := s.secrets.Delete(ctx, ref, s.entry(base, identity.ActionServerManageAgent, SecretItemObject(ref))); err != nil {
+	entry := s.entry(base, identity.ActionServerManageAgent, SecretItemObject(ref))
+	if err := s.secrets.Delete(ctx, ref, entry); err != nil {
 		return fmt.Errorf("delete secret item: %w", err)
 	}
 

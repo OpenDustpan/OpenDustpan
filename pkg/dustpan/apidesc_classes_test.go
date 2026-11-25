@@ -36,6 +36,9 @@ var outsideByDesign = []string{
 	"/v1/providers/", "/v1/modules/", "/v1/mirror/",
 	// The runner protocol.
 	"/runner/v1/",
+	// The document of the model connection: its secret items, the connection
+	// itself, the formats, and the egress allowlist of the installation.
+	"/api/agent/", "/api/server/egress-allowlist",
 	// The paths that an identity provider, a cloud trust policy, an MCP
 	// client, a scrape configuration or a chat app stores.
 	"/sign-in/{id}/callback",
@@ -304,7 +307,7 @@ var rootMounts = []string{
 	apidesc.Prefix,
 	// The tool APIs, the installation APIs and the runner protocol.
 	"/api/inventory/", "/api/audit/", "/runner/v1/",
-	"/api/v2/", "/api/server/", "/api/", "/tofu/state/",
+	"/api/v2/", "/api/server/", "/api/agent/", "/api/", "/tofu/state/",
 	// The provider registry protocol of OpenTofu. Service discovery names its
 	// path, and the client cannot move it under the prefix of the REST API. The
 	// TFE adapter serves it and lists the route table in its own tests. The

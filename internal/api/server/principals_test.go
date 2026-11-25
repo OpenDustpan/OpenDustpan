@@ -303,6 +303,7 @@ func newReachPrincipalHandlerWith(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -1480,6 +1481,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),
@@ -1579,6 +1581,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Agent:              nil,
 		FirstAdministrator: nil,
 		ProxyRules:         nil,
 		Cursors:            testCursors(t),

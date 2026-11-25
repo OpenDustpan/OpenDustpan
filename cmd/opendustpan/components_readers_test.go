@@ -89,7 +89,10 @@ var settingFields = map[string]string{ //nolint:gochecknoglobals // A fixed decl
 var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals // A fixed declaration table.
 	"consoleDir":     {"mountAPI": "api"},
 	"consoleHeaders": {"checkSettings": "api", "mountAPI": "api"},
-	"allowedOrigins": {"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "newSignIn": "api"},
+	"allowedOrigins": {
+		"buildMux": "all", "checkSettings": "api", "mountAPI": "api", "mountAgentAPI": "api",
+		"mountOpenTofuAPI": "api", "newSignIn": "api",
+	},
 	"publicURL": {
 		"checkSettings":         "api",
 		"newExchanger":          "api",
@@ -109,7 +112,10 @@ var readerComponent = map[string]map[string]string{ //nolint:gochecknoglobals //
 		"newAuthPorts": "api", "newTFEHandler": "api",
 	},
 	// The ranges apply to the connections that the routes of a namespace make.
-	"gitHost": {"newGitHostService": "api", "newJobPlanner": "api", "newUnitSettingsHandler": "api"},
+	"gitHost": {
+		"newGitHostService": "api", "newInstallationAPI": "api", "newJobPlanner": "api",
+		"newUnitSettingsHandler": "api",
+	},
 	"oidcProviders": {
 		"bindingOf":             "api",
 		"hasStaticSignIn":       "api",
