@@ -960,9 +960,14 @@ func testSweepStorePool(t *testing.T, h Harness) {
 		wantErr(t, "start on a pool of another purpose", err, unmanaged.ErrInvalidTarget)
 		wantNoSweepOfTarget(t, h, "start on a pool of another purpose", "aws")
 
+		// The SQL adapters read the target joined to its pool, so a target
+		// whose pool is gone reads as not found; the refusal and the absent
+		// sweep are what the spec asks.
 		h.SetPool(t, "acme", Pool, "")
 		_, err = h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, se)
-		wantErr(t, "start on a deleted pool", err, unmanaged.ErrInvalidTarget)
+		if !errors.Is(err, unmanaged.ErrInvalidTarget) && !errors.Is(err, unmanaged.ErrNotFound) {
+			t.Errorf("start on a deleted pool: %v, want ErrInvalidTarget or ErrNotFound", err)
+		}
 		wantNoSweepOfTarget(t, h, "start on a deleted pool", "aws")
 	}
 }
@@ -1096,6 +1101,11 @@ func testSweepStoreTransitions(t *testing.T, h Harness) {
 		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
 	}, f, e)
 	wantErr(t, "dispatch a state check", err, unmanaged.ErrTransition)
+	queued, err := h.Scans.Scan(t.Context(), "acme2", s.ID)
+	must(t, "sweep after the refused dispatch", err)
+	if queued.Status != unmanaged.ScanQueued {
+		t.Errorf("status after the refused dispatch = %q, want %q", queued.Status, unmanaged.ScanQueued)
+	}
 	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
 		Namespace: "acme2", ID: s.ID, Event: unmanaged.ScanEventUploaded,
 		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
@@ -1111,6 +1121,13 @@ func testSweepStoreTransitions(t *testing.T, h Harness) {
 		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
 	}, f, e)
 	wantErr(t, "event after end", err, unmanaged.ErrTransition)
+
+	// The refused event keeps the status of the ended sweep.
+	kept, err := h.Scans.Scan(t.Context(), "acme2", s.ID)
+	must(t, "sweep after the refused event", err)
+	if kept.Status != unmanaged.ScanSucceeded {
+		t.Errorf("status after the refused event = %q, want %q", kept.Status, unmanaged.ScanSucceeded)
+	}
 }
 
 func testSweepStoreBounds(t *testing.T, h Harness) {

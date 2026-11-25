@@ -88,6 +88,67 @@ BEGIN SELECT RAISE(ABORT, 'forced error'); END`)
 	}
 }
 
+// PurgeNamespace implements unmanagedtest.Harness.PurgeNamespace: it deletes
+// the runner pools of the namespace name, which hold its ID, and then the
+// namespace row, as the purge of a namespace does.
+func (d unmanagedDomain) PurgeNamespace(t *testing.T, name string) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(),
+		`DELETE FROM runner_pools WHERE namespace_id = (SELECT id FROM namespaces WHERE name = ?)`, name)
+	if err != nil {
+		t.Fatalf("delete the runner pools of %s: %v", name, err)
+	}
+
+	if err := d.s.PurgeNamespace(t.Context(), namespace.Name(name)); err != nil {
+		t.Fatalf("purge namespace %s: %v", name, err)
+	}
+}
+
+// SetPool implements unmanagedtest.Harness.SetPool. A change of purpose is a
+// direct update, as a restore of another version can bring in. A delete
+// passes the foreign key from targets to pools, so it runs on one connection
+// with the foreign key checks off, and turns them on again before it releases
+// the connection.
+func (d unmanagedDomain) SetPool(t *testing.T, ns, name, purpose string) {
+	t.Helper()
+
+	const where = `name = ? AND namespace_id = (SELECT id FROM namespaces WHERE name = ?)`
+
+	if purpose != "" {
+		err := d.s.ExecForTest(t.Context(), `UPDATE runner_pools SET purpose = ? WHERE `+where, purpose, name, ns)
+		if err != nil {
+			t.Fatalf("change the purpose of pool %s: %v", name, err)
+		}
+
+		return
+	}
+
+	pinned, err := sqlite.DB(d.s).Conn(t.Context())
+	if err != nil {
+		t.Fatalf("take a connection: %v", err)
+	}
+
+	defer func() {
+		if closeErr := pinned.Close(); closeErr != nil {
+			t.Errorf("release the connection: %v", closeErr)
+		}
+	}()
+
+	for _, stmt := range []struct {
+		query string
+		args  []any
+	}{
+		{`PRAGMA foreign_keys = OFF`, nil},
+		{`DELETE FROM runner_pools WHERE ` + where, []any{name, ns}},
+		{`PRAGMA foreign_keys = ON`, nil},
+	} {
+		if _, err := pinned.ExecContext(t.Context(), stmt.query, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.query, err)
+		}
+	}
+}
+
 // ensurePool makes the runner pool name in the namespace of fence when it is
 // not there.
 func ensurePool(t *testing.T, s *sqlite.Store, fence namespace.Fence, name string, purpose runner.Purpose) {
@@ -164,10 +225,10 @@ func newUnmanagedHarness(t *testing.T) unmanagedtest.Harness {
 		Findings:        nil,
 		Scans:           s.UnmanagedScans(),
 		Namespace:       unmanagedDomain{s: s}.Namespace,
-		PurgeNamespace:  nil,
+		PurgeNamespace:  unmanagedDomain{s: s}.PurgeNamespace,
 		Pool:            unmanagedDomain{s: s}.Pool,
 		Failover:        unmanagedDomain{s: s}.Failover,
-		SetPool:         nil,
+		SetPool:         unmanagedDomain{s: s}.SetPool,
 		RenameNamespace: unmanagedDomain{s: s}.RenameNamespace,
 		FailAudit:       unmanagedDomain{s: s}.FailAudit,
 	}

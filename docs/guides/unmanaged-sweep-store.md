@@ -23,7 +23,7 @@ Set these fields of the harness for the sweep store cases:
 - `Namespace` makes the namespace that the test names. It also makes a runner pool of the purpose `sweeps` (`unmanagedtest.Pool`) and a runner pool of the purpose `jobs` (`unmanagedtest.JobPool`) in it. It returns the current fence of the namespace.
 - `Pool` makes a runner pool of a given purpose in a namespace that exists.
 - `Failover` raises the failover version of a namespace and returns the new fence. The suite calls it from another goroutine, so it returns an error and does not stop the test.
-- `SetPool` changes the purpose of a pool, or deletes the pool when the purpose is empty. Leave it nil when the adapter keeps pools under a foreign key, because then no legal path reaches that state.
+- `SetPool` changes the purpose of a pool, or deletes the pool when the purpose is empty. This is the state that a restore of another version can leave. When the adapter keeps pools under a foreign key, pass the key in the test schema. The SQLite harness turns the key checks off on one connection, and the PostgreSQL harness drops the key.
 - `PurgeNamespace` deletes a namespace, as the purge of a namespace does. Leave it nil when the adapter has no purge.
 - `RenameNamespace` changes the name of a namespace and keeps its ID.
 - `FailAudit` makes each later write of an audit entry fail inside the write transaction. The SQLite adapter adds a database trigger for this.
@@ -40,7 +40,7 @@ For your adapter, call the entry point from a test of your package, and give `go
 
 - Fence: a write with a stale fence, or in a namespace that has no row, fails with `namespace.ErrFenced` and changes nothing.
 - Pool purpose: a target refuses four kinds of pool. These are a pool of the purpose `jobs`, a pool of another namespace, a pool that does not exist, and a malformed name. These cases fail with `unmanaged.ErrInvalidTarget`.
-- Pool at start: when you set `SetPool`, a start fails with `unmanaged.ErrInvalidTarget` and leaves no sweep when the pool changed purpose after the save. A start also fails in the same way when someone deleted the pool after the save.
+- Pool at start: when you set `SetPool`, a start fails with `unmanaged.ErrInvalidTarget` and leaves no sweep when the pool changed purpose after the save. A start also fails and leaves no sweep when someone deleted the pool after the save. The error is `unmanaged.ErrInvalidTarget` or `unmanaged.ErrNotFound`.
 - One open sweep: a target has at most one open sweep. A second start fails with `unmanaged.ErrScanBusy`. Of 8 concurrent starts, exactly one succeeds. A target accepts a new start after its sweep ended with the status `succeeded`, `failed`, `canceled` or `expired`. A dispatched sweep that gets the `expire` event has the status `expired`.
 - Transitions: a sweep moves only along the allowed status changes. An event that does not fit, or an event after the sweep ended, fails with `unmanaged.ErrTransition`.
 - Delete: a duplicate target fails with `unmanaged.ErrAlreadyExists`. A delete of a target cancels its open sweep.

@@ -41,8 +41,8 @@ const (
 // version of the namespace name and returns its new fence; the suite calls it
 // from another goroutine, so it returns its error and never stops the test.
 // SetPool changes the purpose of the pool name of ns, or deletes the pool when
-// purpose is empty; it is nil for an adapter that keeps pools under a foreign
-// key, where no legal path reaches that state.
+// purpose is empty, as a restore of another version can leave it. An adapter
+// that keeps pools under a foreign key passes the key in its test schema.
 //
 // RenameNamespace changes the name of the namespace ns to newName and keeps
 // its ID. FailAudit makes each later append of an audit entry fail inside the

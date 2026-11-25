@@ -92,6 +92,52 @@ FOR EACH ROW EXECUTE FUNCTION unmanaged_forced_error()`)
 	}
 }
 
+// PurgeNamespace implements unmanagedtest.Harness.PurgeNamespace: it deletes
+// the runner pools of the namespace name, which hold its ID, and then the
+// namespace row, as the purge of a namespace does.
+func (d unmanagedDomain) PurgeNamespace(t *testing.T, name string) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(),
+		`DELETE FROM runner_pools WHERE namespace_id = (SELECT id FROM namespaces WHERE name = $1)`, name)
+	if err != nil {
+		t.Fatalf("delete the runner pools of %s: %v", name, err)
+	}
+
+	if err := d.s.PurgeNamespace(t.Context(), namespace.Name(name)); err != nil {
+		t.Fatalf("purge namespace %s: %v", name, err)
+	}
+}
+
+// SetPool implements unmanagedtest.Harness.SetPool. A change of purpose is a
+// direct update, as a restore of another version can bring in. A delete
+// passes the foreign key from targets to pools, so it drops that key in the
+// fresh schema of the case first.
+func (d unmanagedDomain) SetPool(t *testing.T, ns, name, purpose string) {
+	t.Helper()
+
+	if purpose != "" {
+		err := d.s.ExecForTest(t.Context(), `UPDATE runner_pools SET purpose = $1
+WHERE name = $2 AND namespace_id = (SELECT id FROM namespaces WHERE name = $3)`, purpose, name, ns)
+		if err != nil {
+			t.Fatalf("change the purpose of pool %s: %v", name, err)
+		}
+
+		return
+	}
+
+	err := d.s.ExecForTest(t.Context(), `ALTER TABLE unmanaged_targets DROP CONSTRAINT unmanaged_targets_pool_id_fkey`)
+	if err != nil {
+		t.Fatalf("drop the pool key of the targets: %v", err)
+	}
+
+	err = d.s.ExecForTest(t.Context(), `DELETE FROM runner_pools
+WHERE name = $1 AND namespace_id = (SELECT id FROM namespaces WHERE name = $2)`, name, ns)
+	if err != nil {
+		t.Fatalf("delete pool %s: %v", name, err)
+	}
+}
+
 // ensurePool makes the runner pool name in the namespace of fence when it is
 // not there.
 func ensurePool(t *testing.T, s *postgres.Store, fence namespace.Fence, name string, purpose runner.Purpose) {
@@ -170,10 +216,10 @@ func unmanagedBackend(base string) unmanagedtest.Factory {
 			Findings:        nil,
 			Scans:           s.UnmanagedScans(),
 			Namespace:       unmanagedDomain{s: s}.Namespace,
-			PurgeNamespace:  nil,
+			PurgeNamespace:  unmanagedDomain{s: s}.PurgeNamespace,
 			Pool:            unmanagedDomain{s: s}.Pool,
 			Failover:        unmanagedDomain{s: s}.Failover,
-			SetPool:         nil,
+			SetPool:         unmanagedDomain{s: s}.SetPool,
 			RenameNamespace: unmanagedDomain{s: s}.RenameNamespace,
 			FailAudit:       unmanagedDomain{s: s}.FailAudit,
 		}
