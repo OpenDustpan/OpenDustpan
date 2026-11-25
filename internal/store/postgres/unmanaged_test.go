@@ -409,6 +409,149 @@ func TestUnmanagedDeletePoolOfATarget(t *testing.T) {
 	}
 }
 
+// TestUnmanagedSQLTextStaysData sends SQL text as a namespace name, a target
+// name and a pool name to the sweep store, and checks that the store binds
+// each one as data. The rows with SQL text in their names are planted with
+// placeholders, as a restore of another version could bring them in, so the
+// test reaches the queries even when the name checks of the port would refuse
+// the text first.
+func TestUnmanagedSQLTextStaysData(t *testing.T) {
+	t.Parallel()
+
+	for i, text := range unmanagedtest.HostileSQLText() {
+		c := newSQLTextCase(t, openUnmanaged(t), text)
+
+		c.namespaceName(t)
+		c.targetName(t)
+		c.poolName(t, fmt.Sprintf("rpl-hostile-%d", i))
+
+		tables := c.count(t, "tables", `SELECT COUNT(*) FROM information_schema.tables `+
+			`WHERE table_schema = current_schema() `+
+			`AND table_name IN ('namespaces', 'runner_pools', 'unmanaged_targets', 'unmanaged_scans')`)
+		if tables != 4 {
+			t.Errorf("%q: %d of the 4 tables are there", text, tables)
+		}
+	}
+}
+
+// sqlTextAcmeID selects the ID of the namespace acme.
+const sqlTextAcmeID = `(SELECT id FROM namespaces WHERE name = 'acme')`
+
+// sqlTextCase is one store with the namespace acme and its target aws, and
+// one name that holds SQL text.
+type sqlTextCase struct {
+	s     *postgres.Store
+	fence namespace.Fence
+	e     audit.Entry
+	text  string
+}
+
+// newSQLTextCase makes the namespace acme and its target aws in s.
+func newSQLTextCase(t *testing.T, s *postgres.Store, text string) sqlTextCase {
+	t.Helper()
+
+	c := sqlTextCase{
+		s:     s,
+		fence: unmanagedDomain{s: s}.Namespace(t, "acme"),
+		e:     sweepEntry("acme", "namespace:manage-sweeps", unmanagedAt()),
+		text:  text,
+	}
+
+	if err := s.UnmanagedScans().CreateTarget(t.Context(), unmanagedTargetOf("acme", "aws"), c.fence, c.e); err != nil {
+		t.Fatalf("create the target: %v", err)
+	}
+
+	return c
+}
+
+// count returns the count that query gives.
+func (c sqlTextCase) count(t *testing.T, what, query string, args ...any) int {
+	t.Helper()
+
+	var n int
+	if err := postgres.Pool(c.s).QueryRow(t.Context(), query, args...).Scan(&n); err != nil {
+		t.Fatalf("%s: count: %v", what, err)
+	}
+
+	return n
+}
+
+// namespaceName sends the text as a namespace name: the read finds no
+// namespace, and the fence refuses the write.
+func (c sqlTextCase) namespaceName(t *testing.T) {
+	t.Helper()
+
+	ns := namespace.Name(c.text)
+
+	got, err := c.s.UnmanagedScans().Targets(t.Context(), ns)
+	if err != nil || len(got) != 0 {
+		t.Errorf("%q: targets of the namespace = %+v, %v; want none", c.text, got, err)
+	}
+
+	err = c.s.UnmanagedScans().DeleteTarget(t.Context(), ns, "aws", namespace.Fence{Namespace: ns, FailoverVersion: 1},
+		sweepEntry(ns, "namespace:manage-sweeps", unmanagedAt()))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Errorf("%q: delete in the namespace = %v, want ErrFenced", c.text, err)
+	}
+}
+
+// targetName plants a target with the text as its name. The delete of that
+// name deletes that one row and keeps the target aws.
+func (c sqlTextCase) targetName(t *testing.T) {
+	t.Helper()
+
+	plant := `INSERT INTO unmanaged_targets
+(namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled)
+SELECT namespace_id, $1, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+FROM unmanaged_targets WHERE name = 'aws' AND namespace_id = ` + sqlTextAcmeID
+
+	err := c.s.ExecForTest(t.Context(), plant, c.text)
+	if err != nil {
+		t.Fatalf("%q: plant the target: %v", c.text, err)
+	}
+
+	err = c.s.UnmanagedScans().DeleteTarget(t.Context(), "acme", c.text, c.fence, c.e)
+	if err != nil {
+		t.Errorf("%q: delete the planted target: %v", c.text, err)
+	}
+
+	if n := c.count(t, "planted target", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = $1`, c.text); n != 0 {
+		t.Errorf("%q: %d planted targets after the delete, want 0", c.text, n)
+	}
+
+	if n := c.count(t, "target aws", `SELECT COUNT(*) FROM unmanaged_targets WHERE name = 'aws'`); n != 1 {
+		t.Errorf("%q: %d targets aws, want 1", c.text, n)
+	}
+}
+
+// poolName plants a pool with the text as its name. The port refuses a
+// target on that pool, and the pool stays one row.
+func (c sqlTextCase) poolName(t *testing.T, id string) {
+	t.Helper()
+
+	plant := `INSERT INTO runner_pools
+(id, namespace_id, name, purpose, lease_ms, concurrency, isolation, git_mode, git_helper, created_at_ms, updated_at_ms)
+SELECT $1, namespace_id, $2, purpose, lease_ms, concurrency, isolation, git_mode, git_helper, created_at_ms, updated_at_ms
+FROM runner_pools WHERE name = $3 AND namespace_id = ` + sqlTextAcmeID
+
+	err := c.s.ExecForTest(t.Context(), plant, id, c.text, unmanagedtest.Pool)
+	if err != nil {
+		t.Fatalf("%q: plant the pool: %v", c.text, err)
+	}
+
+	onText := unmanagedTargetOf("acme", "on-text")
+	onText.Pool = c.text
+
+	err = c.s.UnmanagedScans().CreateTarget(t.Context(), onText, c.fence, c.e)
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Errorf("%q: create on the pool = %v, want ErrInvalidTarget", c.text, err)
+	}
+
+	if n := c.count(t, "planted pool", `SELECT COUNT(*) FROM runner_pools WHERE name = $1`, c.text); n != 1 {
+		t.Errorf("%q: %d planted pools, want 1", c.text, n)
+	}
+}
+
 // TestUnmanagedStartScanStartsTheSweepOperation proves that StartScan starts
 // the durable operation of a cloud sweep of the pool of its target, in the
 // same store.

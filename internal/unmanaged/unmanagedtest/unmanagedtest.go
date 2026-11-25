@@ -117,6 +117,18 @@ func Unit(ns, id string) graph.Unit {
 	return graph.Unit{Namespace: namespace.Name(ns), Tool: "opentofu", ID: id}
 }
 
+// HostileSQLText returns names that hold SQL text. An adapter test sends each
+// one as a namespace name, a target name and a pool name, and checks that the
+// store binds it as data and never runs it.
+func HostileSQLText() []string {
+	return []string{
+		`acme'; DROP TABLE unmanaged_targets; --`,
+		`x' OR '1'='1`,
+		`"); DELETE FROM unmanaged_scans; --`,
+		`aws' UNION SELECT name FROM namespaces --`,
+	}
+}
+
 // AWSKey returns the key of an S3 bucket named name.
 func AWSKey(name string) unmanaged.ResourceKey {
 	return unmanaged.ResourceKey{Provider: unmanaged.ProviderAWS, ID: "arn:aws:s3:::" + name}

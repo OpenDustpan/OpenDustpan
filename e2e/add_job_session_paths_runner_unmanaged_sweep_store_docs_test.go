@@ -13,7 +13,11 @@ import (
 const unmanagedSweepStoreDocsPage = "docs/guides/unmanaged-sweep-store.md"
 
 // unmanagedSweepStoreDocsCommand is the command of the page.
-const unmanagedSweepStoreDocsCommand = "go test -count=1 -run TestUnmanagedScanStoreConformance ./internal/store/sqlite/"
+const unmanagedSweepStoreDocsCommand = "go test -count=1 -v -run TestUnmanagedScanStoreConformance ./internal/store/sqlite/"
+
+// unmanagedSweepStoreDocsResult is the line that go test -v prints when the
+// conformance suite passes.
+const unmanagedSweepStoreDocsResult = "--- PASS: TestUnmanagedScanStoreConformance"
 
 // TestE2EUnmanagedSweepStoreDocsPage runs each command of the guide as
 // written, from the root of the repository. The sweep store has no route in
@@ -33,8 +37,8 @@ func TestE2EUnmanagedSweepStoreDocsPage(t *testing.T) {
 			t.Fatalf("the page holds the command %q, want %q", command, unmanagedSweepStoreDocsCommand)
 		}
 
-		cmd := exec.CommandContext(t.Context(), "go", "test", "-count=1", "-run", "TestUnmanagedScanStoreConformance",
-			"./internal/store/sqlite/")
+		cmd := exec.CommandContext(t.Context(), "go", "test", "-count=1", "-v", "-run",
+			"TestUnmanagedScanStoreConformance", "./internal/store/sqlite/")
 		cmd.Dir = ".."
 
 		out, err := cmd.CombinedOutput()
@@ -42,10 +46,21 @@ func TestE2EUnmanagedSweepStoreDocsPage(t *testing.T) {
 			t.Fatalf("the command %q failed: %v: %s", command, err, out)
 		}
 
-		if !strings.Contains(string(out), "ok") {
-			t.Fatalf("the command %q did not report a passing package: %s", command, out)
+		if !hasLinePrefix(string(out), unmanagedSweepStoreDocsResult) {
+			t.Fatalf("the command %q printed no line %q: %s", command, unmanagedSweepStoreDocsResult, out)
 		}
 	}
+}
+
+// hasLinePrefix reports whether a line of out starts with prefix.
+func hasLinePrefix(out, prefix string) bool {
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // unmanagedSweepStoreDocsCommands returns the lines of the sh blocks of the

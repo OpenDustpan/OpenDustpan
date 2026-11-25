@@ -31,8 +31,10 @@ Set these fields of the harness for the sweep store cases:
 The SQLite adapter shows a complete harness in `internal/store/sqlite/unmanaged_test.go`. Run its suite with this command from the root of the repository:
 
 ```sh
-go test -count=1 -run TestUnmanagedScanStoreConformance ./internal/store/sqlite/
+go test -count=1 -v -run TestUnmanagedScanStoreConformance ./internal/store/sqlite/
 ```
+
+When the suite passes, the output holds the line `--- PASS: TestUnmanagedScanStoreConformance`.
 
 For your adapter, call the entry point from a test of your package, and give `go test` the path of that package. A run of a SQL adapter can take more than the default time limit of 10 minutes, so add `-timeout 60m`.
 
@@ -48,3 +50,12 @@ For your adapter, call the entry point from a test of your package, and give `go
 - Concurrent fence bump: when you set `Failover`, a failover runs at the same time as 8 writes. Each write succeeds or fails with `namespace.ErrFenced`. After the bump, a write with the old fence fails, a write with the new fence succeeds, and a refused write leaves no row.
 - Rollback: a write that the store refuses leaves no row and no sweep. When you set `FailAudit`, a delete and a create fail after they changed rows, and the target and its open sweep stay as before.
 - Rename: when you set `RenameNamespace`, the case renames a namespace. Its targets and sweeps stay readable under the new name, because the rows keep the namespace ID.
+
+The SQLite and PostgreSQL packages also have the test `TestUnmanagedSQLTextStaysData`. It sends SQL text as a namespace name, a target name and a pool name to the adapter. It checks that the adapter keeps each name as data: a delete deletes only the row with that exact name, and no table changes. Write the same test for a new SQL adapter. Use the names of `unmanagedtest.HostileSQLText`.
+
+## What the SQL adapters do not cover
+
+- Soft-deleted namespace: the store has no soft delete of a namespace. The fence case covers a namespace with no row and a purged namespace only.
+- Finding bounds: `RunScanStore` does not run the cases of the findings, and the SQLite and PostgreSQL adapters have no finding store yet. The 1,000-observation bound of `Record` runs only on the memory adapter of the suite. The change `160-165-report-intake-findings` (task 2.1) adds the SQL finding store and runs `RunSweepStore` with this case on SQLite and PostgreSQL.
+- Finding action: the cases of `ErrStatusChanged` and of the audit entry in the transaction of an action are finding cases. They do not run on the SQL adapters for the same reason.
+- Audit of a refused write: the store returns `namespace.ErrFenced` and writes no audit entry. The service audits the refusal. The change `160-165-sweep-targets-lifecycle` adds that service.
