@@ -65,9 +65,9 @@ func (p SettingPolicy) Required(ctx context.Context) bool {
 	return on
 }
 
-// Guard asks for a fresh step only when the policy requires one. Only
-// NewGuard makes a Guard that holds a policy and a check. The zero value runs
-// its check, so it fails closed.
+// Guard asks for a fresh step only when the policy requires one. It has no
+// exported field, so code outside this package cannot set its state. Its
+// zero value requires a fresh step.
 type Guard struct {
 	policy Policy
 	check  func(ctx context.Context, subject string) error

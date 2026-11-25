@@ -55,6 +55,9 @@ type Config struct {
 	// It is required: NewService refuses a Guard that freshstep.NewGuard did
 	// not make.
 	Freshness freshstep.Guard
+	// Guard asks for a fresh step when the fresh step policy requires one.
+	// The zero value requires a fresh step.
+	Guard freshstep.Guard
 	// Authorizer decides principal:manage-tokens on the service principal
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).

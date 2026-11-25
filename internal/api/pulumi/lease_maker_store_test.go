@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -176,6 +177,7 @@ func TestLeaseRequestsRefuseATokenWhoseMakerRowIsGone(t *testing.T) {
 				Reach: access.ReachConfig{
 					Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 				},
+				Guard: freshstep.Guard{},
 			})
 			if err != nil {
 				t.Fatalf("token service: %v", err)

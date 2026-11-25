@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -77,6 +78,7 @@ func serviceOver(t *testing.T, f *fixture, st accesstoken.Store) *accesstoken.Se
 			Units:       nil,
 		},
 		Logger: nil, Now: f.clock.Now, NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

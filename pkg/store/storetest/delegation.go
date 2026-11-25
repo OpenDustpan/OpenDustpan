@@ -165,6 +165,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
 		Logger: nil, Now: nil, NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

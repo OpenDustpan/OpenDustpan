@@ -126,6 +126,7 @@ func hostTokenService(st store) (*accesstoken.Service, error) {
 		Logger:     nil,
 		Now:        nil,
 		NewID:      nil,
+		Guard:      freshstep.Guard{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

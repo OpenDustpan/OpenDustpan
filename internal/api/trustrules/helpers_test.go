@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -185,6 +186,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 		},
 		Store: e.store, Principals: e.store, Freshness: noFreshStepGuard(e.t), Authorizer: nil, TempAdmins: nil,
 		Logger: nil, Now: testNow, NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		e.t.Fatalf("token service: %v", err)

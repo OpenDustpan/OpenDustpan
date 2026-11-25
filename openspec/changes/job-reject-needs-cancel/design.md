@@ -22,4 +22,4 @@ Why no structure removes the need for the check: the verdict is data of one rout
 | Service | A person that holds both actions rejects. | No guard is involved. The test pins the pass. |
 | Handler | The same four cases through `POST .../jobs/{job_id}/approvals` with a service that has no rejector check. | Yes. |
 | Audit | A refusal writes one entry that names `job:cancel` and the unit, and no job event. | Yes. |
-| Role | `planner` rejects its own job with `job:approve` by a custom grant. `pkg/access/planner_role_test.go:37` still asserts `job:cancel` is false. | No guard is involved. |
+| Role | `planner` rejects its own job with `job:approve` by a custom grant. (read only) `pkg/access/planner_role_test.go` (line 37) still asserts `job:cancel` is false. | No guard is involved. |

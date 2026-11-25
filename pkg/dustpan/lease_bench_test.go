@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/freshstep"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -237,6 +238,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 		},
 		Logger: nil, Now: now,
 		NewID: nil,
+		Guard: freshstep.Guard{},
 	})
 	if err != nil {
 		b.Fatalf("token service: %v", err)
