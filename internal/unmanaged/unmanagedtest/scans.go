@@ -3,6 +3,7 @@ package unmanagedtest
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -897,12 +898,28 @@ func testSweepStoreFence(t *testing.T, h Harness) {
 			namespace.ErrFenced)
 	}
 
-	// A write in one namespace leaves the rows of another.
-	h.Namespace(t, "other")
-	other, err := h.Scans.Targets(t.Context(), "other")
-	must(t, "targets of other", err)
-	if len(other) != 0 {
-		t.Errorf("targets of other after writes to acme: %+v", other)
+	// A write in one namespace leaves the rows of another. The namespace other
+	// holds a target of the same name as the target of acme that the writes
+	// below change and delete.
+	of := h.Namespace(t, "other")
+	oe := auditOf("other", "namespace:manage-sweeps")
+	must(t, "create in other", h.Scans.CreateTarget(t.Context(), targetOf("other", "aws"), of, oe))
+	must(t, "create gcp in other", h.Scans.CreateTarget(t.Context(), targetOf("other", "gcp"), of, oe))
+	before, err := h.Scans.Targets(t.Context(), "other")
+	must(t, "targets of other before", err)
+	if len(before) != 2 {
+		t.Fatalf("targets of other before the writes to acme: %+v, want 2", before)
+	}
+
+	changed := targetOf("acme", "aws")
+	changed.Enabled = false
+	must(t, "update in acme", h.Scans.UpdateTarget(t.Context(), changed, f, e))
+	must(t, "delete in acme", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e))
+
+	after, err := h.Scans.Targets(t.Context(), "other")
+	must(t, "targets of other after", err)
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("targets of other after writes to acme: %+v, want %+v", after, before)
 	}
 }
 
