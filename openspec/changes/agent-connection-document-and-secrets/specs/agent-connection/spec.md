@@ -41,11 +41,11 @@ The server SHALL answer 409 to `DELETE /api/agent/secrets/{ref}` while a stored 
 - **THEN** the answer is 409 and the item stays
 
 ### Requirement: The base URL is checked where it is used
-The function `egress.CheckModelURL` SHALL check a model URL against the always-denied list and the allowlist. A rule of the allowlist SHALL NOT allow an always-denied range. This change adds no production caller of the function and the function writes no audit entry; the first caller and its audit entry are in the change `agent-connection-probe`.
+The function `egress.CheckModelURL(rawURL, a, publicOnly)` SHALL check the scheme and the host of a model URL against the always-denied list and the allowlist, with no I/O. The function `egress.CheckModelAddrs(rawURL, addrs, allow, publicOnly)` SHALL check the addresses that the caller resolved. The caller resolves the host and checks again at connect time. A rule of the allowlist SHALL NOT allow an always-denied range. This change adds no production caller of the functions and the functions write no audit entry; the first caller and its audit entry are in the change `agent-connection-probe`.
 
 #### Scenario: A metadata address
-- **WHEN** a URL resolves to a link-local address
-- **THEN** the function returns the refusal error and the check of the allowlist does not change it
+- **WHEN** a URL has a link-local address, or the addresses that the caller resolved for it hold a link-local address
+- **THEN** the function (`CheckModelURL` or `CheckModelAddrs`) returns the refusal error and the check of the allowlist does not change it
 
 ### Requirement: A disconnect removes everything in one transaction
 `DELETE /api/agent/connection` SHALL remove the current document, each pending document and the reference rows in one transaction.

@@ -10,8 +10,8 @@ ADR 129 defines the model connection as one document that the operator writes, a
 4. `headers` and `query` use the name rules of ADR 129 decision 11. A name that holds `token`, `key`, `secret`, `auth`, `session`, `cookie`, `password` or `signature` must be a reference to a secret item, else the NEW error `ErrPlainSecret`. The value half of the check needs the NEW type `agent.SecretFilter`, which no change has built yet. Main has no such type, so this change does not do it.
 5. The NEW port `agent.SecretItems` has `Create`, `List`, `Get` (metadata only), `Replace` and `Delete`. It stores the sealed value with `secret.InstallationSecrets`. No method returns a value to a route. A separate method `Open(ctx, ref)` returns the value to the adapter code of a later change and is not on the route layer.
 6. The NEW port `agent.ConnectionStore` has the methods `Current` (it returns `ErrDisabled` when no document exists, as the removed read `SettingsStore.Connection` did), `Pending(probeID)`, `PutPending`, `Promote`, `Delete`. This change builds `Current`, `Delete` and the tables. `PutPending` and `Promote` are built here and tested by their conformance suite, and the later changes call them. `Delete` removes the current document, each pending document and the reference rows in one transaction.
-7. The NEW function `egress.CheckModelURL(ctx, rawURL, allow Allowlist)` checks the scheme, the host and the resolved addresses against the always-denied list and the allowlist. The NEW type `egress.Allowlist` holds host names and CIDR rules. The setting is stored in the installation settings and read with the NEW routes `GET /api/server/egress-allowlist` and `PUT /api/server/egress-allowlist`. The action is `server:manage-settings`.
-8. The flag `--egress-public-only` makes the always-denied list stricter: private ranges are denied even when the allowlist has a rule for them. The flag is in `cmd/opendustpan`.
+7. The NEW function `egress.CheckModelURL(rawURL string, a Allowlist, publicOnly PublicOnly) error` checks the scheme and the host of the URL against the always-denied list and the allowlist. It does no I/O and takes no context. The NEW function `egress.CheckModelAddrs(rawURL, addrs, allow, publicOnly)` checks the addresses that the caller resolved. The caller (the change `agent-connection-probe`) resolves the host with its own context, and checks again at connect time, so that a changed DNS answer (DNS rebinding) cannot pass. The NEW type `egress.Allowlist` holds host names and CIDR rules. The setting is stored in the installation settings and read with the NEW routes `GET /api/server/egress-allowlist` and `PUT /api/server/egress-allowlist`. The action is `server:manage-settings`.
+8. The flag `--egress-public-only` makes the always-denied list stricter: private ranges are denied even when the allowlist has a rule for them. The flag is in `cmd/opendustpan`. It reaches the check as the third parameter `publicOnly` (type `egress.PublicOnly`), not as a field of `Allowlist`.
 9. The routes carry the action `server:manage-agent` on `@server` (decision 32), except the allowlist routes. Each handler checks the action at the point of use.
 10. Audit entries: kind `change` on `@server` for a disconnect, a secret item (create, replace, delete) and an allowlist change. An entry never holds a value.
 11. This change checks names only. The check of the value of decision 11 (a field that holds the value of a secret item) arrives with the change `agent-secret-filter`, as the NEW function `CheckNoSecretValue`.
@@ -46,7 +46,7 @@ type SecretItems interface {
 }
 ```
 
-Packages: `internal/agent` (the NEW types and ports, the NEW `agenttest` conformance suites), `internal/agentsvc` (service), `internal/store/{sqlite,postgres}` (adapters and tables in the one schema file of each dialect), `internal/api/server` (routes), `pkg/egress` (`CheckModelURL`, `Allowlist`).
+Packages: `internal/agent` (the NEW types and ports, the NEW `agenttest` conformance suites), `internal/agentsvc` (service), `internal/store/{sqlite,postgres}` (adapters and tables in the one schema file of each dialect), `internal/api/server` (routes), `pkg/egress` (`CheckModelURL`, `CheckModelAddrs`, `Allowlist`, `PublicOnly`).
 
 ## Contract
 
@@ -55,7 +55,7 @@ Packages: `internal/agent` (the NEW types and ports, the NEW `agenttest` conform
 | `POST /api/agent/secrets` | `server:manage-agent` | `@server` | 201, `{ref, name, createdAt}` |
 | `GET /api/agent/secrets` | `server:manage-agent` | `@server` | 200, list with metadata, no value |
 | `PUT /api/agent/secrets/{ref}` | `server:manage-agent` | `@server` | 200, metadata |
-| `DELETE /api/agent/secrets/{ref}` | `server:manage-agent` | `@server` | 204, or 409 `secret_in_use` |
+| `DELETE /api/agent/secrets/{ref}` | `server:manage-agent` | `@server` | 204, or 409 `agent-connection.secret-in-use` |
 | `GET /api/agent/connection` | `server:manage-agent` | `@server` | 200, document with references, `version`, pending document, last probe result; 404 when none |
 | `DELETE /api/agent/connection` | `server:manage-agent` | `@server` | 204 |
 | `GET /api/agent/formats` | `server:manage-agent` | `@server` | 200, `{"formats":["chat-completions","messages"]}` (an object, not a bare array: the API description names each response schema, and the client generator accepts a named object only) |
@@ -77,7 +77,7 @@ The error codes are in the catalog file `internal/errcode/testdata/catalog/agent
 | connection document | Boundary | Size limit 32 KiB before parse; unknown field; control character; `responses` | `TestParseConnectionSpec_Hostile` (oversize, unknown field, `\u0000` in `model`, `format: responses`) |
 | connection document | Handler | The handler reads the body with `textbody` and the same limit | `TestConnectionRoutes_OversizeBody` |
 | `baseURL` | Boundary | Absolute, ≤2048 bytes, no userinfo, query, fragment, no format path suffix | `TestBaseURL_Hostile` |
-| `baseURL` | Use | `egress.CheckModelURL` checks the scheme, host and resolved addresses; the always-denied list holds loopback, link-local, metadata | `TestCheckModelURL_DeniedRanges` |
+| `baseURL` | Use | `egress.CheckModelURL` checks the scheme and host, and `egress.CheckModelAddrs` checks the addresses that the caller resolved; the always-denied list holds loopback, link-local, metadata | `TestCheckModelURL_DeniedRanges` |
 | header and query names | Boundary | Token rules, refused names, ≤16 entries, ≤1 KiB; `ErrPlainSecret` for secret-like names | `TestHeaders_PlainSecretByName` |
 | secret reference | Store | Foreign key from the reference row to the item; a missing item makes the write fail | `TestConnectionStore_MissingSecretRef` |
 | secret value | Store | Sealed with `InstallationSecrets`; the row never holds a plain value | `TestSecretItems_SealedAtRest` |
