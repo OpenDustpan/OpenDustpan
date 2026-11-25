@@ -150,22 +150,11 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	// Defense in depth: the service checks the proof and the credential too.
-	// This handler has no session MFA proof yet. Refuse a destroy here even
-	// when an implementation of the service would allow it.
-	if verdict == job.VerdictApprove && t.job.Spec.Operation == job.OperationDestroy {
-		freshErr := job.ErrAuthStale
-		switch {
-		case t.job.State.Terminal():
-			freshErr = job.ErrFinished
-		case t.job.State != job.StateAwaitingApproval:
-			freshErr = job.ErrTransition
-		default:
-		}
+	if h.refuseDestroyWithoutProof(w, r, p, t, verdict) {
+		return
+	}
 
-		h.recordApprovalRefusal(r, p, t, freshErr)
-		h.writeError(ctx, w, freshErr)
-
+	if !h.authorizeReject(w, r, p, t, verdict) {
 		return
 	}
 
@@ -190,6 +179,71 @@ func (h *Handler) approveVerdict(w http.ResponseWriter, r *http.Request, p ident
 
 	setETag(w, &j)
 	h.answerStartedJob(ctx, w, http.StatusCreated, &j)
+}
+
+// refuseDestroyWithoutProof refuses an approval of a destroy at this route.
+// The handler has no session MFA proof yet, so the approval fails closed. It
+// returns true when it wrote the refusal.
+//
+// Defense in depth: the job service checks the proof and the credential too.
+// This check stays so that the handler refuses even when an implementation of
+// the service would allow the approval.
+func (h *Handler) refuseDestroyWithoutProof(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, verdict job.Verdict,
+) bool {
+	if verdict != job.VerdictApprove || t.job.Spec.Operation != job.OperationDestroy {
+		return false
+	}
+
+	freshErr := job.ErrAuthStale
+	switch {
+	case t.job.State.Terminal():
+		freshErr = job.ErrFinished
+	case t.job.State != job.StateAwaitingApproval:
+		freshErr = job.ErrTransition
+	default:
+	}
+
+	h.recordApprovalRefusal(r, p, t, freshErr)
+	h.writeError(r.Context(), w, freshErr)
+
+	return true
+}
+
+// authorizeReject checks job:cancel for a rejection by a person who is not the
+// starter of the job. It writes the refusal and returns false when the action
+// is not allowed.
+//
+// Defense in depth: the job service checks job:cancel for a rejection by a
+// person that is not the starter. This check stays so that a service with a
+// wrong authorizer cannot widen the route.
+func (h *Handler) authorizeReject(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, t *target, verdict job.Verdict,
+) bool {
+	if verdict != job.VerdictReject || p.Subject == t.job.StartedBy {
+		return true
+	}
+
+	ctx := r.Context()
+
+	err := h.authz.Authorize(ctx, p, identity.ActionJobCancel, t.obj)
+	if err == nil {
+		return true
+	}
+
+	denied := &job.DeniedError{Action: identity.ActionJobCancel, Object: t.obj, Err: err}
+
+	if errors.Is(err, identity.ErrDenied) {
+		h.recordApprovalRefusal(r, p, t, denied)
+	} else {
+		denied.Err = fmt.Errorf("%w: %w: %w", identity.ErrDenied, job.ErrAuthorizerFailed, err)
+		// A failed authorizer is not a refusal of policy. The entry says so.
+		h.recordApprovalRefusal(r, p, t, denied)
+	}
+
+	h.writeError(ctx, w, denied)
+
+	return false
 }
 
 // The refusal names the sign-in path and the ways to enroll a first factor.
@@ -237,19 +291,24 @@ func checkApproveBody(b *approveBody) (job.Verdict, job.PlanBinding, error) {
 }
 
 // recordApprovalRefusal writes one audit entry for a refusal of an approval
-// that is a decision of security: a denial of job:approve, an agent, the
-// starter, a stale MFA step, and a plan that is not the stored one. A request
-// that is not valid, a job that does not wait, and a version conflict write
-// none. The entry names job:approve on the unit that the route found, whatever
-// the error names.
+// that is a decision of security: a denial of job:approve or job:cancel, an
+// agent, the starter, a stale MFA step, and a plan that is not the stored one.
+// A request that is not valid, a job that does not wait, and a version conflict
+// write none. The entry names the denied action on the unit that the route found.
 func (h *Handler) recordApprovalRefusal(r *http.Request, p identity.Principal, t *target, err error) {
 	reason, ok := approvalRefusalReason(err)
 	if !ok {
 		return
 	}
 
+	action := identity.ActionJobApprove
+	var denied *job.DeniedError
+	if errors.As(err, &denied) && denied.Action != "" {
+		action = denied.Action
+	}
+
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: identity.ActionJobApprove, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
+		Action: action, Object: t.obj, Reason: reason, ReasonWithin: nil, Window: 0,
 	})
 }
 
@@ -260,6 +319,10 @@ func approvalRefusalReason(err error) (string, bool) {
 	case errors.Is(err, job.ErrNoRequirement):
 		// Before identity.ErrDenied: the error wraps both.
 		return reasonNoRequirement, true
+	case errors.Is(err, job.ErrAuthorizerFailed):
+		// Before identity.ErrDenied: the error wraps both. A failed authorizer
+		// is not a refusal of policy.
+		return refusal.ReasonFailed, true
 	case errors.Is(err, identity.ErrDenied):
 		return refusal.ReasonPolicy, true
 	case errors.Is(err, job.ErrAgentDenied):
