@@ -24,7 +24,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [x] 3.1 Set the round-trip budget of the NEW request flow "break-glass list" (the list route of task 2.3) in `internal/servertest/roundtrips_test.go`. Measured with PostgreSQL: 5 round trips. The change adds no other flow, so no other roundtrips file changes. Check: `internal/servertest/roundtrips_test.go` changes in the same pull request.
+- [ ] 3.1 Set the round-trip budget of the NEW request flow "break-glass list" (the list route of task 2.3) in `internal/servertest/roundtrips_test.go`. Measured with PostgreSQL: 5 round trips. The change adds no other flow, so no other roundtrips file changes. Check: `internal/servertest/roundtrips_test.go` changes in the same pull request.
 - [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
