@@ -607,8 +607,11 @@ func clearExpiredKey(ctx context.Context, tx Tx, old *job.Job, now time.Time, e 
 	// Defense in depth: the caller gives the entries too; this check stays so
 	// that a new caller cannot clear a key without a record.
 	if len(e) == 0 {
-		return fmt.Errorf("%w: the start gives no audit entry for the clear of key %s", audit.ErrInvalidEntry,
-			old.ID)
+		return fmt.Errorf(
+			"%w: the start gives no audit entry for the clear of the key of job %s",
+			audit.ErrInvalidEntry,
+			old.ID,
+		)
 	}
 
 	prev := old.Version
