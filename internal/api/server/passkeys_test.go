@@ -525,6 +525,24 @@ func (p *fakePasskeys) AddPasskey(
 	return next, p.record(a, mfa.Person{ID: personID, Name: "", DisplayName: ""})
 }
 
+func (p *fakePasskeys) AddBreakGlassPerson(
+	_ context.Context, a mfasvc.Actor, in principal.Input, first mfa.Passkey,
+) (principal.Principal, mfa.Passkey, error) {
+	first.PersonID = "prn-fake"
+	if first.ID == "" {
+		first.ID = "pky-fake"
+	}
+
+	account := principal.Principal{
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{},
+		ID: "prn-fake", Subject: in.Subject, DisplayName: in.DisplayName,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "",
+		GroupCount: 0, BreakGlass: true,
+	}
+
+	return account, first, p.record(a, mfa.Person{ID: "prn-fake", Name: "", DisplayName: ""})
+}
+
 func (p *fakePasskeys) RotatePasskey(
 	_ context.Context, a mfasvc.Actor, personID, _ string, _ mfa.Passkey,
 ) error {

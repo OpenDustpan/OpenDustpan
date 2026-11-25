@@ -631,6 +631,84 @@ func (s *Service) AddPasskey(
 	return next, nil
 }
 
+// AddBreakGlassPerson stores a new break-glass person and its first passkey in
+// one store transaction. It accepts the add whatever the current count. The
+// caller names the new person in its authorization. The service makes the ID
+// of the person, checks its input and the passkey, and writes two entries: one
+// for the person and one for the passkey. It calls the store once and never
+// adds the passkey on its own, so a failed passkey write leaves no person.
+func (s *Service) AddBreakGlassPerson(
+	ctx context.Context, a Actor, in principal.Input, first mfa.Passkey,
+) (principal.Principal, mfa.Passkey, error) {
+	if a.PrincipalID == "" {
+		return principal.Principal{}, mfa.Passkey{},
+			s.refuse(ctx, a.Entry, on(ActionAddRefused, unknownObject), "no caller", mfa.ErrWrongPerson)
+	}
+
+	// Defense in depth: the HTTP adapter sends a person only. This check stays
+	// so that no caller makes another kind of principal a break-glass account.
+	if in.Kind != "" && in.Kind != principal.KindPerson {
+		return principal.Principal{}, mfa.Passkey{}, s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, unknownObject), "a break-glass account is a person",
+			fmt.Errorf("%w: a break-glass account is a person, not a %s", principal.ErrBreakGlassKind, in.Kind),
+		)
+	}
+
+	displayName := in.DisplayName
+	if displayName == "" {
+		displayName = in.Subject
+	}
+
+	at := s.now()
+	id := ident.NewID(principal.IDPrefix)
+	p := principal.Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     in.Subject,
+		DisplayName: displayName,
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  true,
+	}
+
+	if err := p.Validate(); err != nil {
+		return principal.Principal{}, mfa.Passkey{},
+			s.refuse(ctx, a.Entry, on(ActionAddRefused, principal.Ref(id)), "the person is not valid", err)
+	}
+
+	first.PersonID = id
+	first.CreatedAt = s.now()
+	first.LastUsedAt = time.Time{}
+	first.SuspendedAt = time.Time{}
+
+	if first.ID == "" {
+		first.ID = ident.NewID(mfa.PasskeyIDPrefix)
+	}
+
+	// Defense in depth: the store checks the passkey again before it inserts
+	// it. This check stays so that a value that no store must hold never
+	// reaches the store or an audit entry.
+	if err := first.Validate(); err != nil {
+		return principal.Principal{}, mfa.Passkey{},
+			s.refuse(ctx, a.Entry, on(ActionAddRefused, principal.Ref(id)), "the passkey is not valid", err)
+	}
+
+	principalEntry := s.entry(a.Entry, a.Entry.Action, principal.Ref(id), audit.KindChange, audit.OutcomeSuccess)
+	passkeyEntry := s.entry(a.Entry, ActionPasskeyAdded, Object(first.ID), audit.KindChange, audit.OutcomeSuccess)
+
+	if err := s.store.AddBreakGlassPerson(ctx, p, first, principalEntry, passkeyEntry); err != nil {
+		return principal.Principal{}, mfa.Passkey{}, s.refuse(
+			ctx, a.Entry, on(ActionAddRefused, principal.Ref(id)), "store refused the add", err,
+		)
+	}
+
+	return p, first, nil
+}
+
 // RotatePasskey replaces the passkey oldID of the person personID with next,
 // in one transaction: the new passkey is stored before the old one ends, so
 // no commit leaves the person without a working credential. It calls the

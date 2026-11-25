@@ -127,3 +127,44 @@ func TestBreakGlassSweepWritesNoExemptRecordWithoutSkip(t *testing.T) {
 		t.Fatalf("exemption records = %d, want none without a skipped account", len(records))
 	}
 }
+
+// TestSweepWithNoBreakGlassAccountWritesNoExemptRecord proves that a sweep
+// with no break-glass account in the store disables the inactive ordinary
+// account and writes no audit record with the exemption reason.
+func TestSweepWithNoBreakGlassAccountWritesNoExemptRecord(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	if _, err := f.svc.SetPolicy(ctx, caller(), accountsOnly()); err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	res, err := f.svc.SweepInactive(ctx, accesstoken.SweepEntry())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	// The sweep must run. Without this check the case could pass on an empty run.
+	if !slices.Contains(res.Principals, f.person.ID) {
+		t.Fatalf("sweep = %+v, want the inactive account %q disabled", res, f.person.ID)
+	}
+
+	listing, err := f.store.List(ctx, audit.ServerScope, audit.Page{Size: audit.DefaultPageSize, Before: 0})
+	if err != nil {
+		t.Fatalf("list @server entries: %v", err)
+	}
+
+	exempt := 0
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Reason == exemptReason {
+			exempt++
+		}
+	}
+
+	if exempt != 0 {
+		t.Fatalf("exemption records = %d, want none without a break-glass account", exempt)
+	}
+}

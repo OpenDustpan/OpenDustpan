@@ -25,6 +25,11 @@ func TestBreakGlassAddAndReport(t *testing.T) {
 		checkBreakGlassAddAtZero(t)
 	})
 
+	t.Run("namespace scope counts only its own principals", func(t *testing.T) {
+		t.Parallel()
+		checkBreakGlassNamespaceScope(t)
+	})
+
 	t.Run("report names the missing accounts", func(t *testing.T) {
 		t.Parallel()
 		checkBreakGlassReport(t)
@@ -148,6 +153,122 @@ func storeWorkingBreakGlass(t *testing.T, svc breakGlassService, id string) {
 	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
 	err := svc.store.CreateGrant(ctx, grant, fence, storetest.ServerChange(at, "grant:"+grant.ID), nil)
 	if err != nil {
+		t.Fatalf("create grant of %q: %v", id, err)
+	}
+}
+
+// checkBreakGlassNamespaceScope proves that the count of a namespace scope holds
+// only the working accounts of that namespace. The team namespace has one
+// working account, which is below the floor, while the other namespace has two.
+// The installation count does not change.
+func checkBreakGlassNamespaceScope(t *testing.T) {
+	t.Helper()
+
+	svc := newBreakGlassService(t)
+	ctx := t.Context()
+
+	const team = namespace.Name("team-scope")
+
+	const other = namespace.Name("other-scope")
+
+	createTestNamespace(t, svc, team)
+	createTestNamespace(t, svc, other)
+
+	installBefore, err := svc.service.CountWorkingBreakGlass(ctx, svc.service.Now())
+	if err != nil {
+		t.Fatalf("installation count before the namespace accounts: %v", err)
+	}
+
+	storeNamespaceWorkingBreakGlass(t, svc, team, "prn-team-1")
+	storeNamespaceWorkingBreakGlass(t, svc, other, "prn-other-1")
+	storeNamespaceWorkingBreakGlass(t, svc, other, "prn-other-2")
+
+	count, err := svc.store.CountWorkingBreakGlassInNamespace(ctx, team, svc.service.Now())
+	if err != nil || count != 1 {
+		t.Fatalf("working count of namespace %q = %d, %v; want 1", team, count, err)
+	}
+
+	if missing := principal.FloorWorkingPaths - count; missing != 1 {
+		t.Fatalf("missing count of namespace %q = %d, want 1", team, missing)
+	}
+
+	otherCount, err := svc.store.CountWorkingBreakGlassInNamespace(ctx, other, svc.service.Now())
+	if err != nil || otherCount != 2 {
+		t.Fatalf("working count of namespace %q = %d, %v; want 2", other, otherCount, err)
+	}
+
+	installAfter, err := svc.service.CountWorkingBreakGlass(ctx, svc.service.Now())
+	if err != nil || installAfter != installBefore {
+		t.Fatalf("installation count = %d, %v; want %d, the count before the namespace accounts",
+			installAfter, err, installBefore)
+	}
+}
+
+// createTestNamespace stores a namespace named name for the break-glass tests.
+func createTestNamespace(t *testing.T, svc breakGlassService, name namespace.Name) {
+	t.Helper()
+
+	ns := namespace.Namespace{
+		ID:                  namespace.NewID(),
+		CreatedAt:           time.Unix(0, 0),
+		Name:                name,
+		PrimaryInstallation: "",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := svc.store.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace %q: %v", name, err)
+	}
+}
+
+// storeNamespaceWorkingBreakGlass stores an enabled local break-glass person of
+// the namespace name, with a passkey and a site-administrator grant on that
+// namespace, so that the count of the namespace includes it.
+func storeNamespaceWorkingBreakGlass(t *testing.T, svc breakGlassService, name namespace.Name, id string) {
+	t.Helper()
+
+	ctx := t.Context()
+	at := time.Now().Add(-time.Hour)
+	fence := namespace.Fence{Namespace: name, FailoverVersion: 1}
+
+	p := principal.Principal{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), DisabledAt: time.Time{},
+		ID: id, Subject: id + "@example.com", DisplayName: id, Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: name, GroupCount: 0, BreakGlass: true,
+	}
+
+	personEntry := storetest.ServerChange(at, "principal:"+id)
+	personEntry.Namespace = name
+
+	if err := svc.store.CreateNamespacePrincipal(ctx, p, fence, personEntry); err != nil {
+		t.Fatalf("create namespace principal %q: %v", id, err)
+	}
+
+	key := mfa.Passkey{
+		CreatedAt: at, LastUsedAt: time.Time{}, SuspendedAt: time.Time{},
+		ID: "pky-" + id, PersonID: id, Name: "recovery-key",
+		CredentialID: []byte("credential-" + id), PublicKey: []byte("cose-key"),
+		Transports: nil, AAGUID: [16]byte{}, SignCount: 0, BackupEligible: false,
+	}
+	if err := key.Validate(); err != nil {
+		t.Fatalf("validate passkey of %q: %v", id, err)
+	}
+
+	if err := svc.store.AddPasskey(ctx, key, storetest.ServerChange(at, "passkey:"+key.ID)); err != nil {
+		t.Fatalf("add passkey of %q: %v", id, err)
+	}
+
+	grant := access.Grant{
+		CreatedAt: at, Condition: nil, Object: identity.NamespaceObject(name), ID: "grt-" + id,
+		Role: access.RoleSiteAdministrator, CreatedBy: "test",
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: id},
+	}
+
+	grantEntry := storetest.ServerChange(at, "grant:"+grant.ID)
+	grantEntry.Namespace = name
+
+	if err := svc.store.CreateGrant(ctx, grant, fence, grantEntry, nil); err != nil {
 		t.Fatalf("create grant of %q: %v", id, err)
 	}
 }

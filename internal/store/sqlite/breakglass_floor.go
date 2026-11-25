@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -20,6 +21,15 @@ func (s *Store) CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64
 	defer s.mu.RUnlock()
 
 	return countWorkingBreakGlass(ctx, s.conn, breakGlassSchemaMain, at)
+}
+
+// CountWorkingBreakGlassInNamespace implements
+// principal.WorkingBreakGlassCounter. An empty ns is the installation scope.
+func (s *Store) CountWorkingBreakGlassInNamespace(ctx context.Context, ns namespace.Name, at time.Time) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return countWorkingBreakGlassInNamespace(ctx, s.conn, breakGlassSchemaMain, ns, at)
 }
 
 // checkWorkingBreakGlassFloor refuses a change that lowers the working
@@ -96,11 +106,21 @@ const (
 	breakGlassSchemaLive breakGlassSchema = "live"
 )
 
+// The object kinds that the count reads. The installation scope reads the
+// grants on the installation object. A namespace scope reads the grants on
+// the namespace object of its own name.
+const (
+	grantObjectKindInstallation = "installation"
+	grantObjectKindNamespace    = "namespace"
+)
+
 // workingBreakGlassQueryTemplate holds the text of the count for one schema.
+// ?1 is the time in milliseconds, ?2 is the namespace of the scope (empty for
+// the installation) and ?3 is the object kind of the grants of the scope.
 const workingBreakGlassQueryTemplate = `SELECT COUNT(*) FROM %[1]s.principals p
 WHERE p.break_glass = 1
   AND p.kind = 'person'
-  AND p.namespace = ''
+  AND p.namespace = ?2
   AND p.deleted_at_ms IS NULL
   AND p.disabled_at_ms IS NULL
   AND p.source = 'local'
@@ -112,7 +132,8 @@ WHERE p.break_glass = 1
   )
   AND EXISTS (
     SELECT 1 FROM %[1]s.grants g
-    WHERE g.object_kind = 'installation'
+    WHERE g.object_kind = ?3
+      AND g.namespace = ?2
       AND g.role IN ('site-administrator', 'account-administrator')
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL
@@ -136,13 +157,15 @@ WHERE p.break_glass = 1
 // workingBreakGlassQuery returns the count query for a schema. The schema is
 // one of the fixed constants, so no input reaches the text.
 //
-// The working break-glass accounts of the installation: an enabled local
-// person of the installation with a passkey that is not suspended, and a
-// current grant without a condition of an administration role on the
-// installation, directly or through an active membership of a group that
-// exists. An installation-level IP allowlist must join this count when one
-// exists; the current allowlists are per namespace and do not apply to
-// installation sign-in.
+// The working break-glass accounts of one scope: an enabled local person of
+// the scope with a passkey that is not suspended, and a current grant without
+// a condition of an administration role on the scope, directly or through an
+// active membership of a group that exists. The scope is the installation
+// (empty namespace, grants on the installation) or one namespace (its
+// principals, grants on its namespace object). The values come in as
+// placeholders. An installation-level IP allowlist must join the installation
+// count when one exists; the current allowlists are per namespace and do not
+// apply to installation sign-in.
 func workingBreakGlassQuery(schema breakGlassSchema) (string, error) {
 	switch schema {
 	case breakGlassSchemaMain, breakGlassSchemaLive:
@@ -153,17 +176,30 @@ func workingBreakGlassQuery(schema breakGlassSchema) (string, error) {
 	}
 }
 
-// countWorkingBreakGlass counts the working break-glass accounts at the
-// time at in the schema.
+// countWorkingBreakGlass counts the working break-glass accounts of the
+// installation at the time at in the schema.
 func countWorkingBreakGlass(ctx context.Context, q sqlQueryer, schema breakGlassSchema, at time.Time) (int64, error) {
+	return countWorkingBreakGlassInNamespace(ctx, q, schema, "", at)
+}
+
+// countWorkingBreakGlassInNamespace counts the working break-glass accounts of
+// the scope ns at the time at in the schema. An empty ns is the installation.
+func countWorkingBreakGlassInNamespace(
+	ctx context.Context, q sqlQueryer, schema breakGlassSchema, ns namespace.Name, at time.Time,
+) (int64, error) {
 	query, queryErr := workingBreakGlassQuery(schema)
 	if queryErr != nil {
 		return 0, queryErr
 	}
 
+	objectKind := grantObjectKindInstallation
+	if ns != "" {
+		objectKind = grantObjectKindNamespace
+	}
+
 	var n int64
 
-	err := q.QueryRowContext(ctx, query, codec.Millis(at)).Scan(&n)
+	err := q.QueryRowContext(ctx, query, codec.Millis(at), string(ns), objectKind).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count working break-glass accounts: %w: %w", principal.ErrBreakGlassUnavailable, err)
 	}

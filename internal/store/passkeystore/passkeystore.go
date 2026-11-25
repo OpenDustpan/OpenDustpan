@@ -102,6 +102,9 @@ type Reads interface {
 // Writes are the writes of a Tx to the passkey table.
 type Writes interface {
 	CreatePasskey(ctx context.Context, r Row) (int64, error)
+	// CreatePrincipal inserts the principal p and returns the count of rows
+	// that it inserted: 0 when its ID or its subject is taken.
+	CreatePrincipal(ctx context.Context, p principal.Principal) (int64, error)
 	DeletePasskey(ctx context.Context, id, principalID string) (int64, error)
 	// RecordUse sets the counter and the last use of the passkey id when it
 	// is not suspended and the counter does not go back.
@@ -471,6 +474,48 @@ func RotatePasskey(ctx context.Context, tx Tx, personID, oldID string, next mfa.
 	}
 
 	return AddPasskey(ctx, tx, next)
+}
+
+// AddBreakGlassPerson stores the break-glass person p and its first passkey
+// in tx. The adapter runs it in one transaction that also appends the entries,
+// so a failed passkey insert rolls back the person too. It returns
+// principal.ErrAlreadyExists when the ID or the subject of p is taken.
+func AddBreakGlassPerson(ctx context.Context, tx Tx, p principal.Principal, first mfa.Passkey) error {
+	// Defense in depth: the service makes the person as a break-glass account
+	// of the installation. This check stays so that a new caller cannot store
+	// another kind of principal as a break-glass account.
+	if !p.BreakGlass || p.Kind != principal.KindPerson || p.Namespace != "" {
+		return fmt.Errorf("%w: the principal is not a break-glass person of the installation", mfa.ErrInvalid)
+	}
+
+	// Defense in depth: the service names the person of the first passkey too.
+	// This check stays so that a new caller cannot store a passkey of another
+	// person with the new person.
+	if first.PersonID != p.ID {
+		return fmt.Errorf("%w: the passkey belongs to another person", mfa.ErrInvalid)
+	}
+
+	// Defense in depth: the service validates the person and the passkey before
+	// it calls the store. These checks stay so that a value that no store must
+	// hold never reaches a row.
+	if err := p.Validate(); err != nil {
+		return err
+	}
+
+	if err := first.Validate(); err != nil {
+		return err
+	}
+
+	n, err := tx.CreatePrincipal(ctx, p)
+	if err != nil {
+		return fmt.Errorf("insert principal: %w", err)
+	}
+
+	if n != 1 {
+		return fmt.Errorf("create principal: %w", principal.ErrAlreadyExists)
+	}
+
+	return AddPasskey(ctx, tx, first)
 }
 
 // owned returns the row of the passkey id, or mfa.ErrNotFound unless it

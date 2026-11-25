@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/store/codec"
 	"opendustpan.org/opendustpan/internal/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -16,6 +17,12 @@ var _ principal.WorkingBreakGlassCounter = (*Store)(nil)
 // count reads the rows of the account at the time at.
 func (s *Store) CountWorkingBreakGlass(ctx context.Context, at time.Time) (int64, error) {
 	return countWorkingBreakGlass(ctx, s.queries, at)
+}
+
+// CountWorkingBreakGlassInNamespace implements
+// principal.WorkingBreakGlassCounter. An empty ns is the installation scope.
+func (s *Store) CountWorkingBreakGlassInNamespace(ctx context.Context, ns namespace.Name, at time.Time) (int64, error) {
+	return countWorkingBreakGlassInNamespace(ctx, s.queries, ns, at)
 }
 
 // checkWorkingBreakGlassFloor refuses a change that lowers the working
@@ -49,13 +56,38 @@ func checkBreakGlassPasswords(ctx context.Context, q *db.Queries) error {
 	return nil
 }
 
-// countWorkingBreakGlass counts the working break-glass accounts at the
-// time at with the queries of one transaction.
+// countWorkingBreakGlass counts the working break-glass accounts of the
+// installation at the time at with the queries of one transaction.
 func countWorkingBreakGlass(ctx context.Context, q *db.Queries, at time.Time) (int64, error) {
-	n, err := q.CountWorkingBreakGlassPrincipals(ctx, codec.Millis(at))
+	return countWorkingBreakGlassInNamespace(ctx, q, "", at)
+}
+
+// countWorkingBreakGlassInNamespace counts the working break-glass accounts of
+// the scope ns at the time at. An empty ns is the installation scope, which
+// reads the grants on the installation object; a namespace reads the grants on
+// its namespace object.
+func countWorkingBreakGlassInNamespace(
+	ctx context.Context, q *db.Queries, ns namespace.Name, at time.Time,
+) (int64, error) {
+	objectKind := grantObjectKindInstallation
+	if ns != "" {
+		objectKind = grantObjectKindNamespace
+	}
+
+	n, err := q.CountWorkingBreakGlassPrincipals(ctx, db.CountWorkingBreakGlassPrincipalsParams{
+		Namespace:  string(ns),
+		AtMs:       codec.Millis(at),
+		ObjectKind: objectKind,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("count working break-glass accounts: %w: %w", principal.ErrBreakGlassUnavailable, err)
 	}
 
 	return n, nil
 }
+
+// The object kinds that the count reads, as the grants store them.
+const (
+	grantObjectKindInstallation = "installation"
+	grantObjectKindNamespace    = "namespace"
+)

@@ -1760,17 +1760,18 @@ WHERE deleted_at_ms IS NULL
   AND (@namespace::text = '' OR namespace = @namespace::text);
 
 -- name: CountWorkingBreakGlassPrincipals :one
--- The working break-glass accounts of the installation: an enabled local
--- person of the installation with a passkey that is not suspended, and a
--- current grant without a condition of an administration role on the
--- installation, directly or through an active membership of a group that
--- exists. An installation-level IP allowlist must join this count when one
--- exists; the current allowlists are per namespace and do not apply to
--- installation sign-in.
+-- The working break-glass accounts of one scope: the installation (an empty
+-- namespace, with grants on the installation) or one namespace (its
+-- principals, with grants on its namespace object). An enabled local person
+-- of the scope with a passkey that is not suspended, and a current grant
+-- without a condition of an administration role on the scope, directly or
+-- through an active membership of a group that exists. An installation-level
+-- IP allowlist must join the installation count when one exists; the current
+-- allowlists are per namespace and do not apply to installation sign-in.
 SELECT COUNT(*) FROM principals p
 WHERE p.break_glass
   AND p.kind = 'person'
-  AND p.namespace = ''
+  AND p.namespace = @namespace::text
   AND p.deleted_at_ms IS NULL
   AND p.disabled_at_ms IS NULL
   AND p.source = 'local'
@@ -1782,7 +1783,8 @@ WHERE p.break_glass
   )
   AND EXISTS (
     SELECT 1 FROM grants g
-    WHERE g.object_kind = 'installation'
+    WHERE g.object_kind = @object_kind::text
+      AND g.namespace = @namespace::text
       AND g.role IN ('site-administrator', 'account-administrator')
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL

@@ -31,6 +31,7 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/mfasvc"
@@ -165,10 +166,79 @@ func (h *Handler) breakGlassRoutes() []Route {
 	return []Route{
 		authorizedRoute(http.MethodGet, breakGlassPath, read, resolveServer, h.listBreakGlass),
 		authorizedRoute(http.MethodPost, breakGlassPath, manage, resolveServer,
-			h.fresh(identity.ActionServerManagePrincipals, h.addBreakGlass)),
+			h.breakGlassFresh(identity.ActionServerManagePrincipals, h.addBreakGlass)),
 		authorizedRoute(http.MethodPost, breakGlassAccountPath+"/rotate", manage, resolveServer,
-			h.fresh(identity.ActionServerManagePrincipals, h.rotateBreakGlass)),
+			h.breakGlassFresh(identity.ActionServerManagePrincipals, h.rotateBreakGlass)),
 	}
+}
+
+// breakGlassFresh wraps a break-glass write as h.fresh does: the check runs
+// for each write, and a refusal writes one failure entry for action on the
+// object. The refusal of a console session with an old sign-in also names the
+// enrollment path when the person holds no passkey; see breakGlassRefusal.
+func (h *Handler) breakGlassFresh(action identity.Action, serve RouteHandler) RouteHandler {
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+		ctx := context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness)
+
+		r = r.WithContext(ctx)
+
+		// Defense in depth: the handlers behind this wrapper do not check the
+		// session themselves. This check runs for each write, so a new route
+		// cannot answer a token by default.
+		if err := requireFresh(r); err != nil {
+			h.appendObjectChange(r, p, obj, serverChange{
+				at: h.now(), action: action, object: obj.String(), outcome: audit.OutcomeFailure,
+			})
+			h.breakGlassRefusal(ctx, w, r, p, err)
+
+			return
+		}
+
+		serve(w, r, p, obj)
+	}
+}
+
+// breakGlassRefusal answers a refused fresh check of a break-glass write. A
+// console session whose sign-in is too old, and whose person holds no passkey,
+// gets the same code and the same path of a new sign-in as h.fresh gives, and
+// a message that also names the path that enrolls a passkey. A person with a
+// passkey, an access token and every other refusal get the answer of
+// writeError.
+func (h *Handler) breakGlassRefusal(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, p identity.Principal, err error,
+) {
+	stale, isStale := errors.AsType[reauthenticateError](err)
+	caller, hasSession := sessionFromRequest(r)
+
+	if !isStale || !hasSession {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	keys, keyErr := h.passkeys.Passkeys(ctx, mfasvc.Actor{
+		Entry:       callerEntry(r, p, identity.ActionServerManagePrincipals),
+		PrincipalID: caller.Match.Owner.ID,
+		SessionID:   "",
+	})
+	if keyErr != nil {
+		h.writeError(ctx, w, keyErr)
+
+		return
+	}
+
+	if len(keys) > 0 {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	answer := problem.New(http.StatusForbidden, freshStepRequiredCode, fmt.Sprintf(
+		"%s. This person has no enrolled passkey, so enroll one first at POST %s.", stale.Error(), passkeyBeginPath,
+	))
+	answer.Reauthenticate = stale.url
+
+	problemWriter(h.logger).WriteProblem(ctx, w, answer)
 }
 
 // listBreakGlass serves GET /api/dustpan/v1/break-glass/accounts: the accounts,
@@ -253,21 +323,16 @@ func (h *Handler) addBreakGlass(w http.ResponseWriter, r *http.Request, p identi
 
 	entry := callerEntry(r, p, identity.ActionServerManagePrincipals)
 
-	account, err := h.principals.CreateBreakGlassAccount(ctx, entry, principal.Input{
+	// One call stores the person and its passkey in one transaction, so a
+	// failed passkey write leaves no person and needs no compensating delete.
+	account, stored, err := h.passkeys.AddBreakGlassPerson(ctx, breakGlassActor(r, entry), principal.Input{
 		Subject: req.Subject, DisplayName: req.DisplayName, Kind: principal.KindPerson,
-	})
+	}, key)
 	if err != nil {
 		h.appendServerChangeReason(r, p, serverChange{
 			at: h.now(), action: identity.ActionServerManagePrincipals, object: tagBreakGlass,
 			outcome: audit.OutcomeFailure,
 		}, refusalReason(err))
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	stored, err := h.passkeys.AddPasskey(ctx, breakGlassActor(r, entry), account.ID, key)
-	if err != nil {
 		h.writeError(ctx, w, passkeyError(err))
 
 		return

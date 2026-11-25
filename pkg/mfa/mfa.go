@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -236,6 +237,24 @@ type PasskeyStore interface {
 	// not a break-glass account, and localuser.ErrDemoFixed for the demo
 	// person. A failed insert changes nothing.
 	RotatePasskey(ctx context.Context, personID, oldID string, next Passkey, e audit.Entry) error
+	// AddBreakGlassPerson stores the break-glass person p and its first
+	// passkey, and appends principalEntry for the person and passkeyEntry for
+	// the passkey, in one transaction. The person and the passkey are stored
+	// together or not at all: a failed passkey insert leaves no person and no
+	// entry. It returns ErrInvalid for a person that is not a break-glass
+	// person of the installation, and for a passkey that Passkey.Validate
+	// refuses or that belongs to another person. It returns
+	// principal.ErrAlreadyExists for a person ID or a subject that a principal
+	// holds, and the errors of AddPasskey for the passkey.
+	AddBreakGlassPerson(
+		ctx context.Context, p principal.Principal, first Passkey, principalEntry, passkeyEntry audit.Entry,
+	) error
+	// SignInChallengeStore holds the challenges of the ceremonies.
+	SignInChallengeStore
+}
+
+// SignInChallengeStore is the persistence port of the ceremony challenges.
+type SignInChallengeStore interface {
 	// CreateChallenge deletes the challenges that expired at c.CreatedAt and
 	// stores c keyed by d. It returns ErrInvalid for a value that
 	// Challenge.Validate refuses, and ErrAlreadyExists when d is taken. For a

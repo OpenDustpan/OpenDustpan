@@ -157,6 +157,48 @@ func checkBreakGlassList(t *testing.T, f accessFixture) {
 	}
 }
 
+// TestBreakGlassNoFactorNamesEnrollmentPath sends a console session with an old
+// sign-in and no enrolled passkey to the add and the rotation. Each refusal
+// answers 403 with mfa.fresh-step-required, and its message names the path that
+// enrolls a passkey. The admin of the fixture holds no passkey. Removing the
+// enrollment text from the refusal of break_glass.go fails this test.
+func TestBreakGlassNoFactorNamesEnrollmentPath(t *testing.T) {
+	t.Parallel()
+
+	const enrollPath = "/api/dustpan/v1/me/passkeys/register/begin"
+
+	f := newAccessFixture(t)
+	f.seedSessionAdmin(t, "admin")
+
+	stale := f.passkeyClientOf(t, "admin", f.sessions.Now().Add(-48*time.Hour))
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   []byte
+	}{
+		{"add", http.MethodPost, breakGlassPath, []byte(breakGlassAddBody)},
+		{
+			"rotate", http.MethodPost, breakGlassPath + "/prn-none/rotate",
+			breakGlassBody(t, map[string]any{"oldPasskey": "pky-none", "name": "next-key"}),
+		},
+	}
+
+	for _, c := range cases {
+		rec := stale.do(c.method, c.path, c.body)
+
+		got := decodeErrorBody(t, rec)
+		if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode {
+			t.Fatalf("%s = %d %s, want 403 with errorCode %s", c.name, rec.Code, rec.Body.String(), freshErrorCode)
+		}
+
+		if !strings.Contains(got.Message, enrollPath) {
+			t.Fatalf("%s message = %q, want the enrollment path %s", c.name, got.Message, enrollPath)
+		}
+	}
+}
+
 // breakGlassBody returns the JSON body of an add or a rotation with the
 // passkey fields. A rotation sets oldPasskey, an add sets subject.
 func breakGlassBody(t *testing.T, fields map[string]any) []byte {

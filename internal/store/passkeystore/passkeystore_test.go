@@ -140,6 +140,8 @@ func (looseTx) ListPasskeys(context.Context, string) ([]passkeystore.Row, error)
 
 func (looseTx) CreatePasskey(context.Context, passkeystore.Row) (int64, error) { return 0, nil }
 
+func (looseTx) CreatePrincipal(context.Context, principal.Principal) (int64, error) { return 0, nil }
+
 func (t looseTx) DeletePasskey(context.Context, string, string) (int64, error) {
 	*t.deleted++
 

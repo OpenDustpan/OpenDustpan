@@ -87,6 +87,11 @@ type PasskeyService interface {
 	// AddPasskey stores the passkey of a person for a caller that acts on
 	// another account, as the break-glass add does.
 	AddPasskey(ctx context.Context, a mfasvc.Actor, personID string, next mfa.Passkey) (mfa.Passkey, error)
+	// AddBreakGlassPerson stores a new break-glass person and its first
+	// passkey in one transaction, and returns both.
+	AddBreakGlassPerson(
+		ctx context.Context, a mfasvc.Actor, in principal.Input, first mfa.Passkey,
+	) (principal.Principal, mfa.Passkey, error)
 	// RotatePasskey replaces the passkey oldID of the person personID with
 	// next, in one transaction.
 	RotatePasskey(ctx context.Context, a mfasvc.Actor, personID, oldID string, next mfa.Passkey) error

@@ -2534,23 +2534,24 @@ const countWorkingBreakGlassPrincipals = `-- name: CountWorkingBreakGlassPrincip
 SELECT COUNT(*) FROM principals p
 WHERE p.break_glass
   AND p.kind = 'person'
-  AND p.namespace = ''
+  AND p.namespace = $1::text
   AND p.deleted_at_ms IS NULL
   AND p.disabled_at_ms IS NULL
   AND p.source = 'local'
-  AND p.created_at_ms <= $1::bigint
+  AND p.created_at_ms <= $2::bigint
   AND EXISTS (
     SELECT 1 FROM passkeys pk
     WHERE pk.principal_id = p.id AND pk.suspended_at_ms = 0
-      AND pk.created_at_ms <= $1::bigint
+      AND pk.created_at_ms <= $2::bigint
   )
   AND EXISTS (
     SELECT 1 FROM grants g
-    WHERE g.object_kind = 'installation'
+    WHERE g.object_kind = $3::text
+      AND g.namespace = $1::text
       AND g.role IN ('site-administrator', 'account-administrator')
       AND g.revoked_at_ms IS NULL
       AND g.condition IS NULL
-      AND g.created_at_ms <= $1::bigint
+      AND g.created_at_ms <= $2::bigint
       AND (
         (g.subject_kind = 'principal' AND g.subject_id = p.id)
         OR (g.subject_kind = 'group' AND EXISTS (
@@ -2561,22 +2562,29 @@ WHERE p.break_glass
             AND m.removed_at_ms IS NULL
             AND m.state = 'active'
             AND pg.deleted_at_ms IS NULL
-            AND m.added_at_ms <= $1::bigint
-            AND pg.created_at_ms <= $1::bigint
+            AND m.added_at_ms <= $2::bigint
+            AND pg.created_at_ms <= $2::bigint
         ))
       )
   )
 `
 
-// The working break-glass accounts of the installation: an enabled local
-// person of the installation with a passkey that is not suspended, and a
-// current grant without a condition of an administration role on the
-// installation, directly or through an active membership of a group that
-// exists. An installation-level IP allowlist must join this count when one
-// exists; the current allowlists are per namespace and do not apply to
-// installation sign-in.
-func (q *Queries) CountWorkingBreakGlassPrincipals(ctx context.Context, atMs int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countWorkingBreakGlassPrincipals, atMs)
+type CountWorkingBreakGlassPrincipalsParams struct {
+	Namespace  string
+	AtMs       int64
+	ObjectKind string
+}
+
+// The working break-glass accounts of one scope: the installation (an empty
+// namespace, with grants on the installation) or one namespace (its
+// principals, with grants on its namespace object). An enabled local person
+// of the scope with a passkey that is not suspended, and a current grant
+// without a condition of an administration role on the scope, directly or
+// through an active membership of a group that exists. An installation-level
+// IP allowlist must join the installation count when one exists; the current
+// allowlists are per namespace and do not apply to installation sign-in.
+func (q *Queries) CountWorkingBreakGlassPrincipals(ctx context.Context, arg CountWorkingBreakGlassPrincipalsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkingBreakGlassPrincipals, arg.Namespace, arg.AtMs, arg.ObjectKind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
