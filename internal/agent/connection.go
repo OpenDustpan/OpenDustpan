@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
-	"unicode"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/textbody"
@@ -18,15 +18,14 @@ import (
 )
 
 // The largest connection document the server accepts, before the JSON
-// decoder reads it. ADR 129 decision 2.
+// decoder reads it.
 const maxConnectionBytes = 32 * 1024
 
 // maxURLBytes bounds baseURL. It matches the URL bound of pkg/egress so the
 // URL check and the document check agree.
 const maxURLBytes = 2048
 
-// The wire formats of a connection document of version 1. ADR 129
-// decision 5.
+// The wire formats of a connection document of version 1.
 const (
 	formatChatCompletions = "chat-completions"
 	formatMessages        = "messages"
@@ -37,7 +36,7 @@ const (
 // auth, headers and query.
 const jsonKeySecret = "secret"
 
-// The bounds of the fields of a connection document. ADR 129 decision 12.
+// The bounds of the fields of a connection document.
 const (
 	// maxRequestIDHeaders is the largest count of requestIDHeaders.
 	maxRequestIDHeaders = 4
@@ -45,6 +44,9 @@ const (
 	maxHeadersEntries = 16
 	// maxQueryEntries is the largest count of the entries of query.
 	maxQueryEntries = 16
+	// maxEntryValueBytes is the largest length of the plain value of one
+	// header or query entry, in bytes.
+	maxEntryValueBytes = 1024
 	// maxReasoningKeep is the largest count of the entries of
 	// reasoning.keep.
 	maxReasoningKeep = 8
@@ -68,19 +70,18 @@ const (
 )
 
 // ErrFormatNotSupported reports a format the connection document names that
-// no adapter implements yet. ADR 129 decisions 2 and 5.
+// no adapter implements yet.
 var ErrFormatNotSupported = errors.New("agent: format not supported")
 
 // ErrPlainSecret reports a header or query parameter that holds a plain
-// value with a secret-like name. ADR 129 decisions 11 and 4.
+// value with a secret-like name.
 var ErrPlainSecret = errors.New("agent: plain secret in header or query")
 
 // ErrConnectionInvalid reports a connection document that fails validation.
-// ADR 129 decisions 2 to 23.
 var ErrConnectionInvalid = errors.New("agent: connection document invalid")
 
 // SecretRef is a stable reference to a secret item of the scope @server. The
-// form is itm-.... ADR 129 decisions 3, 9 and 10.
+// form is itm- and then lowercase ASCII letters, digits, "-" and "_".
 type SecretRef string
 
 // IsSecretRef reports whether s has the form of a secret reference.
@@ -90,7 +91,7 @@ func IsSecretRef(s string) bool {
 
 func secretRefOK(s string) bool {
 	for _, r := range s {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_' {
 			return false
 		}
 	}
@@ -100,10 +101,9 @@ func secretRefOK(s string) bool {
 
 // ConnectionSpec is one model connection of an installation. Every field is
 // unexported: a value exists only after ParseConnectionSpec validated it,
-// and the type is immutable. ADR 129 decision 2.
+// and the type is immutable.
 //
-// The wire form is one JSON object with version 1 and the fields of ADR 129
-// decision 3. Marshal writes the canonical form, which the store keeps.
+// The wire form is one JSON object with version 1. Marshal writes the canonical form, which the store keeps.
 type ConnectionSpec struct {
 	// version is the wire version of the document. Only version 1 exists.
 	version int
@@ -239,8 +239,7 @@ type rateLimitSpec struct {
 
 // ParseConnectionSpec parses and validates raw as a connection document. It
 // refuses a document above maxConnectionBytes, an unknown field, a control
-// character in a string, and the format responses. ADR 129 decisions 2, 4,
-// 5, 9, 11 and 12.
+// character in a string, and the format responses.
 func ParseConnectionSpec(raw []byte) (ConnectionSpec, error) {
 	doc, err := decodeConnectionDoc(raw)
 	if err != nil {
@@ -655,10 +654,10 @@ func (c ConnectionSpec) Model() string { return c.model }
 func (c ConnectionSpec) Auth() authSpec { return c.auth }
 
 // Headers returns the extra headers of each call.
-func (c ConnectionSpec) Headers() map[string]headerEntry { return c.headers }
+func (c ConnectionSpec) Headers() map[string]headerEntry { return maps.Clone(c.headers) }
 
 // Query returns the extra query parameters of each call.
-func (c ConnectionSpec) Query() map[string]queryEntry { return c.query }
+func (c ConnectionSpec) Query() map[string]queryEntry { return maps.Clone(c.query) }
 
 // UserAgent returns the User-Agent header of each call.
 func (c ConnectionSpec) UserAgent() string { return c.userAgent }
@@ -676,23 +675,71 @@ func (c ConnectionSpec) Tools() toolsSpec { return c.tools }
 func (c ConnectionSpec) Transport() string { return c.transport }
 
 // Reasoning returns the reasoning parts to keep.
-func (c ConnectionSpec) Reasoning() reasoningSpec { return c.reasoning }
+func (c ConnectionSpec) Reasoning() reasoningSpec {
+	return reasoningSpec{keep: slicesClone(c.reasoning.keep)}
+}
 
 // Cache returns the caching mode.
 func (c ConnectionSpec) Cache() cacheSpec { return c.cache }
 
 // ConversationKey returns where the conversation key goes.
-func (c ConnectionSpec) ConversationKey() conversationKeySpec { return c.conversationKey }
+func (c ConnectionSpec) ConversationKey() conversationKeySpec {
+	k := c.conversationKey
+	k.headers = slicesClone(k.headers)
+
+	return k
+}
 
 // ProviderFields returns the extra fields of each request body.
-func (c ConnectionSpec) ProviderFields() map[string]any { return c.providerFields }
+func (c ConnectionSpec) ProviderFields() map[string]any {
+	if c.providerFields == nil {
+		return nil
+	}
+
+	out := make(map[string]any, len(c.providerFields))
+	for k, v := range c.providerFields {
+		out[k] = cloneJSONValue(v)
+	}
+
+	return out
+}
+
+// cloneJSONValue copies a decoded JSON value, so that a caller cannot change
+// the value that a parsed document holds.
+func cloneJSONValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			out[k] = cloneJSONValue(e)
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = cloneJSONValue(e)
+		}
+
+		return out
+	default:
+		return v
+	}
+}
 
 // Errors returns the error types and codes for a quota and for a long
 // context.
-func (c ConnectionSpec) Errors() errorsSpec { return c.errors }
+func (c ConnectionSpec) Errors() errorsSpec {
+	return errorsSpec{
+		quota:          slicesClone(c.errors.quota),
+		contextTooLong: slicesClone(c.errors.contextTooLong),
+	}
+}
 
 // RateLimit returns the headers that hold a wait.
-func (c ConnectionSpec) RateLimit() rateLimitSpec { return c.rateLimit }
+func (c ConnectionSpec) RateLimit() rateLimitSpec {
+	return rateLimitSpec{waitHeaders: slicesClone(c.rateLimit.waitHeaders)}
+}
 
 // RequestIDHeaders returns the headers that hold the request ID of the
 // server.
@@ -949,6 +996,16 @@ func headerQueryEntry(name string, value json.RawMessage, kind string) (*string,
 
 	if err := json.Unmarshal(value, &plain); err != nil || plain.Value == "" {
 		return nil, "", fmt.Errorf("%w: the %s %q needs a value", ErrConnectionInvalid, kind, name)
+	}
+
+	if len(plain.Value) > maxEntryValueBytes {
+		return nil, "", fmt.Errorf(
+			"%w: the %s %q holds a value above %d bytes",
+			ErrConnectionInvalid,
+			kind,
+			name,
+			maxEntryValueBytes,
+		)
 	}
 
 	return &plain.Value, "", nil
@@ -1424,7 +1481,7 @@ func isSecretLikeName(lower string) bool {
 	return false
 }
 
-// ProbeRef is the stable ID of a capability probe. ADR 129 decision 29.
+// ProbeRef is the stable ID of a capability probe.
 type ProbeRef string
 
 // maxProbeRefBytes is the largest length of a probe reference.
@@ -1452,7 +1509,6 @@ func (p ProbeRef) DocumentRef() string {
 
 // ConnectionStore is the persistence port for the stored connection of an
 // installation. Current returns ErrDisabled when no document exists.
-// ADR 129 decisions 6 and 29.
 type ConnectionStore interface {
 	// Current returns the connection document and its version, or
 	// ErrDisabled when no document exists. The answer holds references

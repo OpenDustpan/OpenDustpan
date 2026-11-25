@@ -47,6 +47,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	handler, err := serverapi.NewHandler(&serverapi.Config{
 		FirstAdministrator: coverageFirstAdministrator{},
 		ProxyRules:         coverageProxyRules(tb),
+		Agent:              nil,
 		LocalUsers:         nil,
 		Preferences:        nil,
 		GitHostLinks:       nil,

@@ -301,7 +301,8 @@ var Settings = []*Setting{
 			"(DUSTPAN_EGRESS_PUBLIC_ONLY)",
 		"(none: off). Set `true` to refuse a model URL with an address that is not public, for example an "+
 			"RFC 1918 or a unique local address. The server then refuses such an address also when a CIDR entry "+
-			"of the egress allowlist has it.",
+			"of the egress allowlist has it. This version stores the flag only. The check of a model URL runs "+
+			"with the capability probe of the model connection, which a later version adds.",
 	).WithFile("egress-public-only"),
 	stringSetting(
 		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",

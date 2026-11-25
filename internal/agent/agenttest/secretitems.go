@@ -1,6 +1,7 @@
 package agenttest
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -11,6 +12,12 @@ import (
 // SecretItemsHarness is one fresh store of secret items for one case.
 type SecretItemsHarness struct {
 	Items agent.SecretItems
+
+	// CiphertextAtRest reads the stored ciphertext of the item with the
+	// reference ref straight from its row. No method of the port answers a
+	// ciphertext, so the sealed-at-rest case reads the row through it. Both
+	// SQL adapters set it.
+	CiphertextAtRest func(t *testing.T, ref agent.SecretRef) []byte
 }
 
 // SecretItemsFactory returns a fresh harness for one case.
@@ -178,7 +185,9 @@ func caseSecretItemsSealedAtRest(t *testing.T, h SecretItemsHarness) {
 
 	entry := TestEntry(audit.ServerScope, "admin", "server:manage-agent")
 
-	_, err := h.Items.Create(t.Context(), "example-key", []byte("secret-value"), entry)
+	value := []byte("secret-value")
+
+	_, err := h.Items.Create(t.Context(), "example-key", value, entry)
 	if err != nil {
 		t.Fatalf("Create() = %v", err)
 	}
@@ -192,6 +201,12 @@ func caseSecretItemsSealedAtRest(t *testing.T, h SecretItemsHarness) {
 	for _, it := range list {
 		if string(it.Ref) == "" {
 			t.Fatal("List() returned an item with an empty reference")
+		}
+
+		// The row holds the sealed value only: it never holds the plain
+		// value.
+		if stored := h.CiphertextAtRest(t, it.Ref); bytes.Contains(stored, value) {
+			t.Fatalf("the row of the item %s holds the value in plain text", it.Ref)
 		}
 	}
 }

@@ -108,7 +108,9 @@ The answer holds the stored list.
 ## Disconnect and delete
 
 Disconnect first. It deletes the current document, each pending document
-and the reference rows in one transaction.
+and the reference rows in one transaction. It answers 204. When the server
+holds no document, it answers 404 with the code
+`agent-connection.not-connected`, and the item has no reference to delete.
 
 ```
 curl -X DELETE -H "Authorization: Bearer $TOKEN" "$SERVER/api/agent/connection"

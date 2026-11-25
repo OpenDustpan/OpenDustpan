@@ -24,8 +24,8 @@ type agentConnectionResponse struct {
 	Version  int64           `json:"version"`
 }
 
-// agentConnectionRoutes returns the connection rows of the route table
-// (ADR 17): the read and the disconnect of the current document and the
+// agentConnectionRoutes returns the connection rows of the route table:
+// the read and the disconnect of the current document and the
 // list of the supported wire formats. Nil service means no agent store is
 // configured: no route is mounted. Every route needs server:manage-agent on
 // @server.

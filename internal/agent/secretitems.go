@@ -84,7 +84,7 @@ type SecretItem struct {
 // SecretItems is the persistence port for the secret items of the scope
 // @server. Each write appends its audit entry in its own transaction.
 // No method returns a value to a route: the value never crosses the HTTP
-// boundary. ADR 129 decision 10.
+// boundary.
 type SecretItems interface {
 	// Create stores value under name and returns the item with its
 	// reference. It returns ErrInvalid for an empty name or an empty value.

@@ -49,7 +49,16 @@ func TestParseConnectionSpec_Hostile(t *testing.T) {
 		},
 		{
 			name: "document above 32 KiB",
-			raw:  strings.Repeat(" ", 33*1024),
+			// A valid document with a pad value long enough to cross the
+			// size limit: only the size limit refuses it, so the case
+			// fails when the limit is removed.
+			raw: strings.Replace(
+				validDocument(),
+				`"tools": { "choice": "auto", "parallel": "on" }`,
+				`"tools": { "choice": "auto", "parallel": "on" },
+  "providerFields": { "options": { "pad": "`+strings.Repeat(" ", 33*1024)+`" } }`,
+				1,
+			),
 			want: agent.ErrConnectionInvalid,
 		},
 		{
@@ -244,6 +253,48 @@ func TestBaseURL_Hostile(t *testing.T) {
 				t.Fatal("ParseConnectionSpec() = nil, want an error")
 			}
 		})
+	}
+}
+
+func TestHeadersQuery_ValueTooLong(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a", 1025)
+
+	for _, field := range []string{"headers", "query"} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+
+			raw := `{
+  "version": 1,
+  "format": "chat-completions",
+  "baseURL": "https://example.local/v1",
+  "model": "example-model",
+  "auth": { "none": true },
+  "` + field + `": { "x-extra": { "value": "` + long + `" } },
+  "outputTokens": { "field": "max_tokens", "max": 8192 },
+  "tools": { "choice": "auto", "parallel": "omit" }
+}`
+
+			_, err := agent.ParseConnectionSpec([]byte(raw))
+			if !errors.Is(err, agent.ErrConnectionInvalid) {
+				t.Fatalf("err = %v, want ErrConnectionInvalid", err)
+			}
+		})
+	}
+}
+
+func TestSecretRef_ASCIIOnly(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []string{"itm-é", "itm-日本", "itm-ABC", "itm-", "itm-a b"} {
+		if agent.IsSecretRef(s) {
+			t.Errorf("IsSecretRef(%q) = true, want false", s)
+		}
+	}
+
+	if !agent.IsSecretRef("itm-ab_1-z") {
+		t.Error("IsSecretRef(valid) = false, want true")
 	}
 }
 
