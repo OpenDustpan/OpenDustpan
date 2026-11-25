@@ -22,6 +22,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 e2e step: with an access token, call the NEW routes `POST /api/dustpan/v1/namespaces/{namespace}/sweep-targets`, `POST .../sweeps`, `GET .../sweeps` and `POST .../sweeps/{id}/cancel`, which pass the gates of namespace:manage-sweeps and namespace:start-sweep, against the real directory. BLOCKED by 130-138-runner-protocol-claims for any step after queued. Check: make e2e step sweep-targets.
-- [ ] 4.2 Docs page for targets and sweeps. Check: docs page commands run as written in a test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Docs page for targets and sweeps. Check: e2e/docs_commands_test.go runs each command of the docs page against the e2e test server.
 - [ ] 4.3 Usability check from the docs page alone, including the busy and pool errors. Check: Namespace administrator completes the path from the docs.
-- [ ] 4.4 Run the full gate with the route test. Check: `make check` with zero findings.
+- [ ] 4.4 Run the full gate with the route test. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only)
