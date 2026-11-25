@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -51,4 +51,6 @@ The persona is the administrator who connects a model. The administrator reads t
 - ADR 17: each route declares its action and object (`server:manage-agent` on `@server`).
 - ADR 250 and ADR 364: the layers table in design.md, no new lint rule.
 
-Open questions: none
+## Open questions
+
+none
