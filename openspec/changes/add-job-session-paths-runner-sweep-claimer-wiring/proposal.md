@@ -31,11 +31,12 @@ Evidence for the claims above:
 
 - Add the sweep claimer on durable operations of kind runner.SweepKind(pool), chosen by the stored purpose of the pool.
 - The report route `PUT /runner/v1/session/sweep-report` already has its path constant in pkg/runner/protocol/protocol.go. Add its handler in the NEW file internal/api/runnerapi/sweep_report.go. It streams a bounded report, stores it encrypted, and ends the claim and the sweep through `runner.SweepClaimer.Report`. The change adds no finish route: a sweep has no finish (ADR 131 and ADR 164 decision 12, and the code in internal/api/runnerapi/session.go refuses it). The launcher opens its session on the existing session route with the handoff of the sweep claim.
-- Add two NEW small interfaces that the claimer consumes, `runner.SweepReportStore` (encrypted staged blob write with the bounds) and `runner.SweepScopeReader` (the scopes of the target of the sweep), and the NEW sentinel `runner.ErrReportTooLarge` for a size breach. All three live in the NEW file pkg/runner/sweep_claimer.go. The sentinel wraps `runner.ErrInvalid`, so the documented contract of `SweepClaimer.Report` in pkg/runner/store.go stays true. The handler maps the sentinel to 413 in internal/api/runnerapi/errors.go. Each interface has one implementation, in the NEW file pkg/dustpan/sweep_report.go, over the existing blob, data key and sweep store ports. It is not a store port: no SQL adapter, no schema change and no storetest case.
+- Add two NEW small interfaces that the claimer consumes, `runner.SweepReportStore` (encrypted staged blob write with the bounds) and `runner.SweepScopeReader` (the scopes of the target of the sweep), and the NEW sentinel `runner.ErrReportTooLarge` for a size breach. All three live in the NEW file pkg/runner/sweep_claimer.go. The sentinel wraps `runner.ErrInvalid`, so the documented contract of `SweepClaimer.Report` in pkg/runner/store.go stays true. The handler maps the sentinel to 413 in internal/api/runnerapi/errors.go. Each interface has one implementation, in the NEW file pkg/dustpan/sweep_report.go, over the existing blob and data key ports and the sweep store port `unmanaged.ScanStore`.
+- Add the NEW method `ScanStore.CompleteScan` and the NEW read `ScanStore.ScanReportKey` to the sweep store port in internal/unmanaged/ports.go. The three stores that the report touches (the blob store, the durable claim and the sweep row) cannot share a transaction, and `ScanStore` has no method that ends the claim. `CompleteScan` ends the durable claim, advances the sweep (uploaded to matching, or fail to failed), stores the key of the staged report and appends the audit entry, all in ONE transaction. The report store writes the encrypted blob first, under a key that the server builds for this attempt, and then calls `CompleteScan`. A failure before the call leaves only an unnamed blob, and a failure of the call rolls back all of it; the report store then deletes its own blob. Add the conformance cases of both methods in internal/unmanaged/unmanagedtest, and add the NEW column `report_key` to the table `unmanaged_scans` in the one schema file of each dialect. The sqlite and postgres adapters implement the method. No migration file is added, because no tag shipped the table.
 - The existing poll route under /runner/v1 calls the sweep claimer for a pool with the sweep purpose.
 - The pool routes accept the sweep purpose on a namespace pool at create, with the same rules as for the jobs purpose. The change adds no refusal of the sweep purpose and no installation pool. The host identity of a sweep pool stays read-only.
 - The purpose of a pool never changes on main, so the change adds no purpose-change guard.
-- Wire the sweep claimer into the handler in pkg/dustpan/runners.go, where `Sweeps` is nil today.
+- Wire the sweep claimer into the handler in pkg/dustpan/runners.go, where `Sweeps` is nil today. pkg/dustpan gets the NEW setting `scanStore` and the NEW option `WithScanStore`, which the built-in stores set from `UnmanagedScans()`.
 - Add the sweep entries to docs/reference/runner-api.md.
 
 Out of scope:
@@ -45,6 +46,7 @@ Out of scope:
 - Job claim path for unit jobs
 - Console sweep views
 - Converter commands of a sweep target
+- A reaper for unnamed sweep report blobs after a crash between the blob write and `CompleteScan`. The blob port rule makes such a blob garbage for a reaper; the reaper belongs to the change that reads and purges sweep reports.
 
 Depends on:
 
@@ -56,7 +58,7 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - The runner operator creates a sweep pool through the same routes as a jobs pool, and the pool list shows its purpose.
-- A failed report drops its staged blob, so a retry starts clean with no manual cleanup.
+- A failed report drops its staged blob, so a retry starts clean with no manual cleanup. A crash between the blob write and the completion leaves one unnamed blob of the sweep. No cleanup covers it yet (see Out of scope). The sweep itself stays correct: the claim lapses and the sweep fails.
 
 ## What main already does
 
@@ -67,6 +69,10 @@ Each fact names its file, line and function on main. The change specifies only t
 - The error code runner.invalid exists for a bad pool setting. (`internal/errcode/catalog_runner.go:10 (runner.invalid)`)
 - The poll already calls a sweep claimer for a pool with the sweep purpose, and the handler config field `Sweeps` is nil in the server wiring. (`internal/api/runnerapi/protocol.go:536 (func claimSweep)`, `pkg/dustpan/runners.go:205`)
 - The port runner.SweepClaimer exists, and no adapter implements it. (`pkg/runner/store.go:251 (type SweepClaimer)`)
+- The sweep store port has `AdvanceScan` and no method that ends the durable claim or stores a report blob key. The ports of the blob store, the durable store and the sweep store are separate, so no code of one transaction spans them. (`internal/unmanaged/ports.go:336 (type ScanStore)`, `internal/unmanaged/ports.go:368 (AdvanceScan)`)
+- Both built-in stores expose the sweep store only as the method `UnmanagedScans()`, and pkg/dustpan has no setting for it. (`internal/store/sqlite/unmanaged_scans.go:28 (func Store.UnmanagedScans)`, `internal/store/postgres/unmanaged_scans.go:29 (func Store.UnmanagedScans)`)
+- `AdvanceScan` moves the sweep by `NextScan` (running and uploaded to matching, running and fail to failed) in one transaction with its audit entry, and it does not end the claim. (`internal/store/sqlite/unmanaged_scans.go:406 (func UnmanagedScans.AdvanceScan)`, `internal/unmanaged/scan.go:414 (func CheckAdvance)`)
+- The claim end of a durable operation runs inside the transaction of the domain write in the adapter, as `startScan` starts the operation in the transaction of the sweep. (`internal/store/sqlite/durable.go:693 (func endClaim)`)
 - Pool.Validate accepts the purposes jobs and sweeps, and CheckUpdate refuses a purpose change with ErrImmutable. The pool routes refuse no purpose. (`pkg/runner/runner.go:358 (func Pool.Validate)`, `pkg/runner/runner.go:385 (func CheckUpdate)`)
 
 ## Owner decisions that apply
@@ -96,8 +102,9 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 166, 210, 343.
 - Quote: "The durable operation. The start of a sweep starts one durable operation of the kind `unmanaged.sweep.<pool ID>`, with the start key `<sweep ID>`, in the transaction that stores the sweep."
 - Quote: "A sweep pool runs only sweeps. A runner pool gets a **purpose**: `jobs` or `sweeps`. A sweep target must name a pool of the purpose `sweeps`, and a job must name a pool of the purpose `jobs`."
+- Quote: "The upload ends the claim (`runner.SweepClaimer.Report`)."
 - Quote: "Bounds. A report is at most 1 GiB and 5,000,000 records. A line is at most 64 KiB. A record has at most 50 tags, with a key of at most 128 bytes and a value of at most 256 bytes. A header has at most 1,000 scopes."
-- Effect: The claimer claims the durable sweep operation by purpose. The report keeps all bounds and the header-scope subset rule. The purpose rule is read as changed by ADR 343.
+- Effect: The claimer claims the durable sweep operation by purpose. The upload ends the claim, and `ScanStore.CompleteScan` does it in the same transaction as the sweep advance. The report keeps all bounds and the header-scope subset rule. The purpose rule is read as changed by ADR 343.
 - Conflict: none.
 
 **ADR 343: Runner work: tool imports, sweeps and the runner repository** (owner-tagged (all decisions)).
@@ -136,7 +143,10 @@ Questions considered and answered:
 - Which pools may have the sweep purpose? Owner decision, 23 Nov 2026 (ADR 396, replaces the 13 Nov 2026 answer P14): a pool of the team. The pool routes accept the sweep purpose on a namespace pool with the same rules as any other purpose. No installation pool exists.
 - Does the change need a purpose-change guard? No. ADR 130 decision 3 (owner) says the purpose of a pool never changes, and `runner.CheckUpdate` refuses a change on main.
 - How do converters fit the purpose rule? ADR 343 extends ADR 164 decision 9: converters run on a pool with the sweep purpose. Claim is by operation kind, so no new claim path.
-- Who drops a staged blob after a server crash? Staged report blobs use a staging key. The existing orphan cleanup (ADR 151 decision 22) deletes a blob with no record, so a crash leaves no kept partial blob.
+- Who drops a staged blob after a server crash? The report store deletes its own blob on every failure that it sees. A crash between the blob write and `CompleteScan` leaves one blob that no sweep row names, under the prefix of the sweep. No existing cleanup covers that prefix: ADR 151 decision 22 covers only the blobs of history items. The blob port rule says that a blob that no committed row names is garbage for a reaper. A reaper for the sweep report prefix is not part of this change, and the change does not claim that one exists. The loss is bounded: at most one blob of at most 1 GiB for each crash in that window, encrypted with the data key of the namespace, and the sweep itself ends failed when its claim lapses.
+- How can the report, the claim end and the sweep advance be one transaction? They cannot be one transaction across the blob store. The change does what the blob port rule says: the blob is written first, under a key that is unique for this attempt, and the one transaction of `CompleteScan` names that key in the sweep row, ends the claim and advances the sweep. A reader never sees a sweep in matching without its key. A second attempt cannot overwrite the blob of the first, because each attempt has its own key. This is the transactional outbox practice of AWS and Google: commit the result and its state change together, and never depend on the order across stores.
+- Why a column, and not a fixed key? A fixed key lets a second attempt overwrite the blob of the winner before its own transaction fails. A per-attempt key that the committed row names makes the winner the only named blob.
+- Does the fail path go through the same method? Yes. `CompleteScan` takes the event fail too, so a bad report ends the claim as failed and moves the sweep to failed in one transaction, with no key.
 - What bound applies to the report? ADR 131 decision 14 and ADR 164 decision 11: 1 GiB, 5,000,000 records, 64 KiB a line, 50 tags, 1,000 scopes, and the session caps.
 - Which error codes does the report use? ADR 131 decision 12 gives the table: invalid is 400, and a body above a cap is refused with the protocol error shape. A pool refusal uses runner.invalid.
 - Who moves a sweep to failed after a bad report or a lost claim? The service of the sweep store does it through its advance call under the claim that the session holds. A call under a lost claim changes nothing and answers 409.
