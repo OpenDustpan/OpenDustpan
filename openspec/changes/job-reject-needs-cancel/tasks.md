@@ -30,7 +30,7 @@
   - Check: `make docs-lint`
   - Confirmed by: CI
   - OpenDustpan: `docs/guides/approval-rules.md`
-- [ ] 3.2 Add the e2e step `approvalsRejectNeedsCancel` in `e2e/jobs_api_test.go`, with a person that has `job:approve` only, against a real server. It lists the grants of the unit (`GET /api/dustpan/v1/namespaces/{namespace}/access/grants`) and checks that the person holds `job:approve` and not `job:cancel`. It posts the verdict `reject` to `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` for a job that another person started and checks the answer 403 `access.denied` that names `job:cancel`. This is the call that the docs page of 3.1 shows.
+- [ ] 3.2 Add the e2e step `approvalsRejectNeedsCancel` in `e2e/jobs_api_test.go`, with a person that has `job:approve` only, against a real server. It lists the grants of the unit (`GET /api/dustpan/v1/namespaces/{namespace}/access/grants`) and checks that the person holds `job:approve` and not `job:cancel`. It posts the verdict `reject` to `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` for a job that another person started and checks the answer 403 `access.denied` that names `job:cancel`, the action that this change adds to the route. This is the call that the docs page of 3.1 shows.
   - Check: `make e2e` step `approvalsRejectNeedsCancel`
   - Confirmed by: CI
   - OpenDustpan: `e2e/jobs_api_test.go`
