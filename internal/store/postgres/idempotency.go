@@ -28,18 +28,14 @@ var _ idempotency.Store = (*Idempotency)(nil)
 // record in one transaction: a retry then does its operation again, and no
 // request fails. The wrapper must not be nil.
 type Idempotency struct {
-	store     *Store
-	keys      *codec.IdempotencyKeys
-	retention idempotency.Retention
+	store *Store
+	keys  *codec.IdempotencyKeys
 }
 
 // Idempotency returns the store of replay records on s. wrapper seals the
-// server key of the fingerprints. It keeps a record for the job-start
-// retention.
+// server key of the fingerprints.
 func (s *Store) Idempotency(wrapper secret.Wrapper) *Idempotency {
-	return &Idempotency{
-		store: s, keys: codec.NewIdempotencyKeys(wrapper), retention: idempotency.JobStartRetention(),
-	}
+	return &Idempotency{store: s, keys: codec.NewIdempotencyKeys(wrapper)}
 }
 
 // sharedKeyOps returns the operations of the key row in the transaction of q.
@@ -160,59 +156,19 @@ func (i *Idempotency) Begin(
 }
 
 // startOrFind deletes the record of ref when it expired, then writes a
-// pending record with token, or finds the record that holds the name. A record
-// past the retention of the store counts as absent: it is deleted, and the
-// pending record takes its place.
-func startOrFind(
-	ctx context.Context, q *db.Queries, at codec.IdempotencyAttempt, retention idempotency.Retention,
-) (idempotency.Result, error) {
-	nowMs := codec.IdempotencyOverrideMillis(at.Now)
-	if nowMs == 0 {
-		var err error
-
-		nowMs, err = q.DatabaseNowMs(ctx)
-		if err != nil {
-			return idempotency.Result{}, fmt.Errorf("read the clock of the store: %w", err)
-		}
-	}
-
-	for attempt := 1; ; attempt++ {
-		res, live, err := startAttempt(ctx, q, at, nowMs, retention)
-		if err != nil {
-			return idempotency.Result{}, err
-		}
-
-		if live {
-			return res, nil
-		}
-
-		// The row passed its expiry between the delete and the read: its time
-		// came in that moment, or the clock of the request is ahead of the
-		// clock of the delete. Delete it again and write the pending record.
-		if attempt == codec.IdempotencyReadAttempts {
-			return idempotency.Result{}, codec.ErrIdempotencyRecordExpired
-		}
-	}
-}
-
-// startAttempt deletes the expired record of at, writes its pending record, or
-// reads the record that holds the name. It reports false when the record that
-// it read is past its expiry, so that the caller deletes it and tries again.
-func startAttempt(
-	ctx context.Context, q *db.Queries, at codec.IdempotencyAttempt, nowMs int64,
-	retention idempotency.Retention,
-) (idempotency.Result, bool, error) {
+// pending record with token, or finds the record that holds the name.
+func startOrFind(ctx context.Context, q *db.Queries, at codec.IdempotencyAttempt) (idempotency.Result, error) {
 	ref, fp, token := at.Ref, at.Fingerprint, at.Token
 	override := codec.IdempotencyOverrideMillis(at.Now)
 
 	expired := db.DeleteExpiredIdempotencyRecordParams{
 		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
-		NowOverrideMs: override, RecordTtlMs: retention.Period().Milliseconds(),
+		NowOverrideMs: override, RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
 		PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
 	}
 
 	if err := q.DeleteExpiredIdempotencyRecord(ctx, expired); err != nil {
-		return idempotency.Result{}, false, fmt.Errorf("delete expired idempotency record: %w", err)
+		return idempotency.Result{}, fmt.Errorf("delete expired idempotency record: %w", err)
 	}
 
 	n, err := q.InsertIdempotencyRecord(ctx, db.InsertIdempotencyRecordParams{
@@ -220,17 +176,24 @@ func startAttempt(
 		Fingerprint: fp, Token: token, NowOverrideMs: override,
 	})
 	if err != nil {
-		return idempotency.Result{}, false, fmt.Errorf("insert idempotency record: %w", err)
+		return idempotency.Result{}, fmt.Errorf("insert idempotency record: %w", err)
 	}
 
 	if n == 1 {
 		started := codec.IdempotencyOutcome(idempotency.Started)
 		started.Token = token
 
-		return started, true, nil
+		return started, nil
 	}
 
-	return readIdempotency(ctx, q, at, nowMs, retention)
+	row, err := q.GetIdempotencyRecord(ctx, db.GetIdempotencyRecordParams{
+		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
+	})
+	if err != nil {
+		return idempotency.Result{}, fmt.Errorf("select idempotency record: %w", err)
+	}
+
+	return codec.ClassifyIdempotency(codec.IdempotencyRow(row), fp)
 }
 
 // completeIdempotencyRecord stores a on the pending record that holds token,
@@ -303,34 +266,6 @@ func (i *Idempotency) Abandon(ctx context.Context, ref idempotency.Ref, token st
 	return nil
 }
 
-// readIdempotency returns the stored record of ref with its outcome for fp,
-// and false when the record is past its expiry: such a record counts as
-// absent.
-func readIdempotency(
-	ctx context.Context, q *db.Queries, at codec.IdempotencyAttempt, nowMs int64,
-	retention idempotency.Retention,
-) (idempotency.Result, bool, error) {
-	ref := at.Ref
-	row, err := q.GetIdempotencyRecord(ctx, db.GetIdempotencyRecordParams{
-		Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key),
-	})
-	if err != nil {
-		var none idempotency.Result
-
-		return none, false, fmt.Errorf("select idempotency record: %w", err)
-	}
-
-	if codec.IdempotencyExpired(row.CreatedAtMs, nowMs, retention) {
-		var none idempotency.Result
-
-		return none, false, nil
-	}
-
-	res, err := codec.ClassifyIdempotency(codec.IdempotencyRow(row), at.Fingerprint)
-
-	return res, err == nil, err
-}
-
 // Sweep implements idempotency.Store.
 func (i *Idempotency) Sweep(ctx context.Context, now time.Time) (int, error) {
 	var n int64
@@ -339,9 +274,8 @@ func (i *Idempotency) Sweep(ctx context.Context, now time.Time) (int, error) {
 		var err error
 
 		n, err = q.SweepIdempotencyRecords(ctx, db.SweepIdempotencyRecordsParams{
-			NowOverrideMs: codec.IdempotencyOverrideMillis(now),
-			RecordTtlMs:   i.retention.Period().Milliseconds(),
-			PendingTtlMs:  idempotency.PendingTTL.Milliseconds(),
+			NowOverrideMs: codec.IdempotencyOverrideMillis(now), RecordTtlMs: idempotency.RecordTTL.Milliseconds(),
+			PendingTtlMs: idempotency.PendingTTL.Milliseconds(),
 		})
 
 		return err
@@ -377,7 +311,7 @@ func (i *Idempotency) attempt(
 
 		var txErr error
 
-		res, txErr = startOrFind(ctx, q, at, i.retention)
+		res, txErr = startOrFind(ctx, q, at)
 
 		return txErr
 	})

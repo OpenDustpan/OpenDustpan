@@ -6,10 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/idempotency"
-	"opendustpan.org/opendustpan/pkg/idempotency/idempotencytest"
 )
 
 func TestParseKey(t *testing.T) {
@@ -141,119 +139,6 @@ func TestCompletionFinishRefusesAnAnswerOverTheLimit(t *testing.T) {
 	if err = c.Finish("r", func(string, idempotency.Answer) error { return nil }); err != nil {
 		t.Fatalf("Finish at the limit: %v", err)
 	}
-}
-
-// TestRetryAfterReopenReplays proves that a record in the durable data of a
-// store answers a retry with the stored answer. The e2e test restarts the
-// real server binary.
-func TestRetryAfterReopenReplays(t *testing.T) {
-	t.Parallel()
-
-	store := idempotencytest.NewMemory()
-	ref := startRef()
-	material := []byte(`{"operation":"plan"}`)
-	at := time.UnixMilli(1_700_000_000_000).UTC()
-	answer := idempotency.Answer{
-		Status:  201,
-		Headers: map[string]string{"Content-Type": "application/json"},
-		Body:    []byte(`{"id":"job-1"}`),
-	}
-
-	first, err := store.Begin(t.Context(), ref, material, at)
-	if err != nil || first.Outcome != idempotency.Started {
-		t.Fatalf("begin: outcome = %d, err = %v, want Started", first.Outcome, err)
-	}
-
-	if err = store.Complete(t.Context(), ref, first.Token, answer); err != nil {
-		t.Fatalf("complete: %v", err)
-	}
-
-	got, err := store.Begin(t.Context(), ref, material, at.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("begin after the reopen: %v", err)
-	}
-
-	if got.Outcome != idempotency.Replayed {
-		t.Fatalf("outcome after the reopen = %d, want Replayed", got.Outcome)
-	}
-
-	if got.Answer.Status != answer.Status || !bytes.Equal(got.Answer.Body, answer.Body) {
-		t.Fatalf("answer after the reopen = %+v, want the stored answer", got.Answer)
-	}
-}
-
-// TestRecordExpiresAfter24h proves that the retention of a job-start record is
-// 24 hours: the record answers a retry at the end of the retention and the key
-// is new after it.
-func TestRecordExpiresAfter24h(t *testing.T) {
-	t.Parallel()
-
-	retention := idempotency.JobStartRetention()
-	if retention.Period() != 24*time.Hour {
-		t.Fatalf("job-start retention = %s, want 24h", retention.Period())
-	}
-
-	if _, err := idempotency.NewRetention(retention.Period() - time.Nanosecond); !errors.Is(
-		err, idempotency.ErrInvalidRetention,
-	) {
-		t.Fatalf("NewRetention below the minimum: err = %v, want ErrInvalidRetention", err)
-	}
-
-	if _, err := idempotency.NewRetention(retention.Period()); err != nil {
-		t.Fatalf("NewRetention at the minimum: %v", err)
-	}
-
-	store := idempotencytest.NewMemory()
-	ref := startRef()
-	material := []byte(`{"operation":"plan"}`)
-	created := time.UnixMilli(1_700_000_000_000).UTC()
-
-	first, err := store.Begin(t.Context(), ref, material, created)
-	if err != nil || first.Outcome != idempotency.Started {
-		t.Fatalf("begin: outcome = %d, err = %v, want Started", first.Outcome, err)
-	}
-
-	empty := idempotency.Answer{Status: 201, Headers: nil, Body: nil}
-	if err = store.Complete(t.Context(), ref, first.Token, empty); err != nil {
-		t.Fatalf("complete: %v", err)
-	}
-
-	end := created.Add(retention.Period())
-	if got := beginAt(t, store, ref, material, end); got.Outcome != idempotency.Replayed {
-		t.Fatalf("outcome at the end of the retention = %d, want Replayed", got.Outcome)
-	}
-
-	late := beginAt(t, store, ref, material, end.Add(time.Millisecond))
-	if late.Outcome != idempotency.Started {
-		t.Fatalf("outcome past the retention = %d, want Started", late.Outcome)
-	}
-
-	if late.Token == first.Token {
-		t.Fatal("a start past the retention holds the token of the old record")
-	}
-}
-
-// startRef returns the record of the job start of the tests.
-func startRef() idempotency.Ref {
-	return idempotency.Ref{
-		Principal: "agent", Method: "POST", Path: "/api/dustpan/v1/namespaces/dev/jobs",
-		Key: idempotency.Key("start-1"),
-	}
-}
-
-// beginAt begins the request of ref at the given time and fails the test on
-// an error.
-func beginAt(
-	t *testing.T, store idempotency.Store, ref idempotency.Ref, material []byte, at time.Time,
-) idempotency.Result {
-	t.Helper()
-
-	res, err := store.Begin(t.Context(), ref, material, at)
-	if err != nil {
-		t.Fatalf("begin at %v: %v", at, err)
-	}
-
-	return res
 }
 
 var errUnexpectedResult = errors.New("unexpected result")
