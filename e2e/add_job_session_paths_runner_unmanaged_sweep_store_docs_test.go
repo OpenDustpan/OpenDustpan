@@ -17,7 +17,7 @@ const unmanagedSweepStoreDocsCommand = "go test -count=1 -run TestUnmanagedScanS
 
 // TestE2EUnmanagedSweepStoreDocsPage runs each command of the guide as
 // written, from the root of the repository. The sweep store has no route in
-// this part, so the test calls no route of it.
+// this version, so the test calls no route of it.
 func TestE2EUnmanagedSweepStoreDocsPage(t *testing.T) {
 	t.Parallel()
 

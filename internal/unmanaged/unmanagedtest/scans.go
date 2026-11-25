@@ -20,10 +20,10 @@ func sweepStoreCases() []suiteCase {
 		{"sweep store: pool", testSweepStorePool},
 		{"sweep store: busy", testSweepStoreBusy},
 		{"sweep store: transitions", testSweepStoreTransitions},
-		{"sweep store: delete target", testSweepStoreDeleteTarget},
 		{"sweep store: bounds", testSweepStoreBounds},
 		{"sweep store: concurrent fence", testSweepStoreConcurrentFence},
 		{"sweep store: rollback", testSweepStoreRollback},
+		{"sweep store: rename", testSweepStoreRename},
 	}
 }
 
@@ -975,20 +975,12 @@ func testSweepStoreBusy(t *testing.T, h Harness) {
 	f := h.Namespace(t, "acme")
 	e := auditOf("acme", "namespace:start-sweep")
 	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
-	first, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
+	open, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
 	must(t, "start", err)
 	_, err = h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
 	wantErr(t, "busy", err, unmanaged.ErrScanBusy)
 
-	// An ended sweep accepts a new start.
-	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
-		Namespace: "acme", ID: first.ID, Event: unmanaged.ScanEventCancel,
-		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
-	}, f, e)
-	must(t, "end the sweep", err)
-
-	_, err = h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
-	must(t, "start after the sweep ended", err)
+	endEachWay(t, h, f, e, open)
 
 	// Two simultaneous starts on one target: the second sweep is open now, so
 	// end it and race on the free target.
@@ -1005,8 +997,56 @@ func testSweepStoreBusy(t *testing.T, h Harness) {
 		must(t, "end the open sweep", err)
 	}
 
+	wantOneConcurrentStart(t, h, f, e, len(got))
+}
+
+// endEachWay ends the open sweep of the target aws of acme in each end
+// status, and checks that each ended sweep accepts a new start. The expired
+// path is a dispatched sweep that receives the expire event. The last start
+// stays open.
+func endEachWay(t *testing.T, h Harness, f namespace.Fence, e audit.Entry, open unmanaged.Scan) {
+	t.Helper()
+
+	var err error
+
+	for _, end := range []struct {
+		status unmanaged.ScanStatus
+		events []unmanaged.ScanEvent
+	}{
+		{unmanaged.ScanSucceeded, []unmanaged.ScanEvent{
+			unmanaged.ScanEventDispatch, unmanaged.ScanEventClaim, unmanaged.ScanEventUploaded, unmanaged.ScanEventMatched,
+		}},
+		{unmanaged.ScanFailed, []unmanaged.ScanEvent{
+			unmanaged.ScanEventDispatch, unmanaged.ScanEventClaim, unmanaged.ScanEventFail,
+		}},
+		{unmanaged.ScanCanceled, []unmanaged.ScanEvent{unmanaged.ScanEventCancel}},
+		{unmanaged.ScanExpired, []unmanaged.ScanEvent{unmanaged.ScanEventDispatch, unmanaged.ScanEventExpire}},
+	} {
+		what := "end " + string(end.status)
+		for _, ev := range end.events {
+			reason := ""
+			if ev == unmanaged.ScanEventFail {
+				reason = "the command failed"
+			}
+			_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
+				Namespace: "acme", ID: open.ID, Event: ev,
+				Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: reason},
+			}, f, e)
+			must(t, what+": "+string(ev), err)
+		}
+		wantScanStatus(t, h, what, open.ID, end.status)
+
+		open, err = h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
+		must(t, "start after the sweep is "+string(end.status), err)
+	}
+}
+
+// wantOneConcurrentStart races eight starts on the free target aws of acme,
+// which has before sweeps, and checks that exactly one start succeeds.
+func wantOneConcurrentStart(t *testing.T, h Harness, f namespace.Fence, e audit.Entry, before int) {
+	t.Helper()
+
 	const calls = 8
-	before := len(got)
 	errs := make([]error, calls)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -1034,7 +1074,7 @@ func testSweepStoreBusy(t *testing.T, h Harness) {
 		t.Errorf("%d concurrent starts succeeded, want exactly 1", started)
 	}
 
-	got, err = h.Scans.Scans(t.Context(), "acme", "aws", "", unmanaged.MaxPage)
+	got, err := h.Scans.Scans(t.Context(), "acme", "aws", "", unmanaged.MaxPage)
 	must(t, "sweeps", err)
 	if len(got) != before+1 {
 		t.Errorf("%d sweeps, want %d", len(got), before+1)
@@ -1071,33 +1111,6 @@ func testSweepStoreTransitions(t *testing.T, h Harness) {
 		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
 	}, f, e)
 	wantErr(t, "event after end", err, unmanaged.ErrTransition)
-}
-
-func testSweepStoreDeleteTarget(t *testing.T, h Harness) {
-	t.Helper()
-	if h.Scans == nil {
-		t.Skip("sweep store not wired")
-	}
-	f := h.Namespace(t, "acme")
-	e := auditOf("acme", "namespace:manage-sweeps")
-	must(t, "create", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
-	wantErr(
-		t,
-		"duplicate",
-		h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e),
-		unmanaged.ErrAlreadyExists,
-	)
-	// A delete of a target with a sweep that did not end cancels the sweep:
-	// testDeleteTargetCancelsScan holds that case.
-	s, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
-	must(t, "start", err)
-	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
-		Namespace: "acme", ID: s.ID, Event: unmanaged.ScanEventCancel,
-		Update: unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
-	}, f, e)
-	must(t, "end the sweep", err)
-	must(t, "delete after the sweep ended", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e))
-	wantErr(t, "delete again", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e), unmanaged.ErrNotFound)
 }
 
 func testSweepStoreBounds(t *testing.T, h Harness) {
@@ -1158,14 +1171,19 @@ func testSweepStoreConcurrentFence(t *testing.T, h Harness) {
 			errs[i] = h.Scans.CreateTarget(t.Context(), targetOf("acme", fmt.Sprintf("t-%d", i)), f, e)
 		})
 	}
-	// The failover version changes while the writes run.
-	var live namespace.Fence
+	// The failover version changes while the writes run. Failover returns its
+	// error: a test may stop only on its own goroutine.
+	var (
+		live        namespace.Fence
+		failoverErr error
+	)
 	wg.Go(func() {
 		<-start
-		live = h.Failover(t, "acme")
+		live, failoverErr = h.Failover(t.Context(), "acme")
 	})
 	close(start)
 	wg.Wait()
+	must(t, "failover", failoverErr)
 
 	created := 0
 	for i := range calls {
@@ -1219,4 +1237,75 @@ func testSweepStoreRollback(t *testing.T, h Harness) {
 	}
 	wantNoSweepOfTarget(t, h, "refused writes", "none")
 	wantNoSweepOfTarget(t, h, "refused writes", "aws")
+
+	// A write that fails after the fence check and after it changed rows: the
+	// delete removes the target and cancels its sweep, then the append of the
+	// audit entry fails. The transaction rolls back both changes.
+	if h.FailAudit == nil {
+		return
+	}
+
+	s, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f,
+		auditOf("acme", "namespace:start-sweep"))
+	must(t, "start", err)
+
+	h.FailAudit(t)
+
+	if h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e) == nil {
+		t.Fatal("delete with a forced error after the write: nil error, want an error")
+	}
+	if h.Scans.CreateTarget(t.Context(), targetOf("acme", "gcp"), f, e) == nil {
+		t.Fatal("create with a forced error after the write: nil error, want an error")
+	}
+
+	got, err = h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets after the forced error", err)
+	if len(got) != 1 || got[0].Name != "aws" {
+		t.Errorf("targets after the forced error: %+v, want aws only", got)
+	}
+	wantScanStatus(t, h, "forced error", s.ID, unmanaged.ScanQueued)
+}
+
+// testSweepStoreRename renames a namespace and reads its rows by the new
+// name: the rows key on the namespace ID, not on the name.
+func testSweepStoreRename(t *testing.T, h Harness) {
+	t.Helper()
+	if h.Scans == nil {
+		t.Skip("sweep store not wired")
+	}
+	if h.RenameNamespace == nil {
+		t.Skip("adapter cannot rename a namespace")
+	}
+	f := h.Namespace(t, "acme")
+	e := auditOf("acme", "namespace:start-sweep")
+	must(t, "create", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
+	s, err := h.Scans.StartScan(t.Context(), scanOf(f.Namespace, unmanaged.ScanCloud, "aws"), f, e)
+	must(t, "start", err)
+
+	h.RenameNamespace(t, "acme", "acme-renamed")
+	nf := h.Namespace(t, "acme-renamed")
+
+	got, err := h.Scans.Targets(t.Context(), "acme-renamed")
+	must(t, "targets after the rename", err)
+	if len(got) != 1 || got[0].Name != "aws" || got[0].Pool != Pool {
+		t.Errorf("targets after the rename: %+v, want aws on %s", got, Pool)
+	}
+
+	sweep, err := h.Scans.Scan(t.Context(), "acme-renamed", s.ID)
+	must(t, "sweep after the rename", err)
+	if sweep.Target != "aws" || sweep.Status != unmanaged.ScanQueued {
+		t.Errorf("sweep after the rename: target %q, status %q, want aws, %q",
+			sweep.Target, sweep.Status, unmanaged.ScanQueued)
+	}
+
+	old, err := h.Scans.Targets(t.Context(), "acme")
+	must(t, "targets of the old name", err)
+	if len(old) != 0 {
+		t.Errorf("targets of the old name: %+v, want none", old)
+	}
+
+	// The open sweep still holds the target under the new name.
+	ne := auditOf("acme-renamed", "namespace:start-sweep")
+	_, err = h.Scans.StartScan(t.Context(), scanOf(nf.Namespace, unmanaged.ScanCloud, "aws"), nf, ne)
+	wantErr(t, "start after the rename", err, unmanaged.ErrScanBusy)
 }

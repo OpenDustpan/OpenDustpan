@@ -1177,14 +1177,14 @@ func TestMem(t *testing.T) {
 
 				m.pools[namespace.Name(ns)][name] = purpose
 			},
-			Failover: func(_ *testing.T, name string) namespace.Fence {
+			Failover: func(_ context.Context, name string) (namespace.Fence, error) {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 
 				ns := namespace.Name(name)
 				m.fences[ns]++
 
-				return namespace.Fence{Namespace: ns, FailoverVersion: m.fences[ns]}
+				return namespace.Fence{Namespace: ns, FailoverVersion: m.fences[ns]}, nil
 			},
 			SetPool: func(_ *testing.T, ns, name, purpose string) {
 				m.mu.Lock()
@@ -1198,6 +1198,10 @@ func TestMem(t *testing.T) {
 
 				m.pools[namespace.Name(ns)][name] = purpose
 			},
+			// The memory adapter keys its rows by namespace name and writes no
+			// audit entry, so it has no rename by ID and no audit to fail.
+			RenameNamespace: nil,
+			FailAudit:       nil,
 		}
 	})
 }

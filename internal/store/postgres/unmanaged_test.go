@@ -1,7 +1,9 @@
 package postgres_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -47,14 +49,47 @@ func (d unmanagedDomain) Pool(t *testing.T, ns, name, purpose string) {
 
 // Failover implements unmanagedtest.Harness.Failover: it raises the failover
 // version of each namespace and returns the new fence of the namespace name.
-func (d unmanagedDomain) Failover(t *testing.T, name string) namespace.Fence {
-	t.Helper()
-
-	if _, err := d.s.BumpFailoverVersions(t.Context()); err != nil {
-		t.Fatalf("bump failover versions: %v", err)
+// It runs off the test goroutine, so it returns its error.
+func (d unmanagedDomain) Failover(ctx context.Context, name string) (namespace.Fence, error) {
+	if _, err := d.s.BumpFailoverVersions(ctx); err != nil {
+		return namespace.Fence{}, fmt.Errorf("bump failover versions: %w", err)
 	}
 
-	return ensureNamespace(t, d.s, namespace.Name(name))
+	ns, err := d.s.GetNamespace(ctx, namespace.Name(name))
+	if err != nil {
+		return namespace.Fence{}, fmt.Errorf("read namespace %s: %w", name, err)
+	}
+
+	return ns.Fence(), nil
+}
+
+// RenameNamespace implements unmanagedtest.Harness.RenameNamespace: it changes
+// the name of the namespace row and keeps its ID.
+func (d unmanagedDomain) RenameNamespace(t *testing.T, ns, newName string) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(), `UPDATE namespaces SET name = $1 WHERE name = $2`, newName, ns)
+	if err != nil {
+		t.Fatalf("rename namespace %s: %v", ns, err)
+	}
+}
+
+// FailAudit implements unmanagedtest.Harness.FailAudit: a trigger aborts each
+// later insert of an audit entry, inside the write transaction.
+func (d unmanagedDomain) FailAudit(t *testing.T) {
+	t.Helper()
+
+	err := d.s.ExecForTest(t.Context(), `CREATE FUNCTION unmanaged_forced_error() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced error'; END $$`)
+	if err != nil {
+		t.Fatalf("create the forced error function: %v", err)
+	}
+
+	err = d.s.ExecForTest(t.Context(), `CREATE TRIGGER unmanaged_forced_error BEFORE INSERT ON audit_entries
+FOR EACH ROW EXECUTE FUNCTION unmanaged_forced_error()`)
+	if err != nil {
+		t.Fatalf("create the forced error trigger: %v", err)
+	}
 }
 
 // ensurePool makes the runner pool name in the namespace of fence when it is
@@ -130,15 +165,17 @@ func unmanagedBackend(base string) unmanagedtest.Factory {
 		s := open(t, base)
 
 		return unmanagedtest.Harness{
-			Index:          nil,
-			Links:          nil,
-			Findings:       nil,
-			Scans:          s.UnmanagedScans(),
-			Namespace:      unmanagedDomain{s: s}.Namespace,
-			PurgeNamespace: nil,
-			Pool:           unmanagedDomain{s: s}.Pool,
-			Failover:       unmanagedDomain{s: s}.Failover,
-			SetPool:        nil,
+			Index:           nil,
+			Links:           nil,
+			Findings:        nil,
+			Scans:           s.UnmanagedScans(),
+			Namespace:       unmanagedDomain{s: s}.Namespace,
+			PurgeNamespace:  nil,
+			Pool:            unmanagedDomain{s: s}.Pool,
+			Failover:        unmanagedDomain{s: s}.Failover,
+			SetPool:         nil,
+			RenameNamespace: unmanagedDomain{s: s}.RenameNamespace,
+			FailAudit:       unmanagedDomain{s: s}.FailAudit,
 		}
 	}
 }

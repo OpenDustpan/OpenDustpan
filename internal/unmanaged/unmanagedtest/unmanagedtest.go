@@ -3,6 +3,7 @@
 package unmanagedtest
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
@@ -37,20 +38,28 @@ const (
 //
 // Pool makes a runner pool name in the namespace ns, which exists, with the
 // purpose PurposeSweeps or PurposeJobs. Failover raises the failover
-// version of the namespace name and returns its new fence. SetPool changes the
-// purpose of the pool name of ns, or deletes the pool when purpose is empty; it
-// is nil for an adapter that keeps pools under a foreign key, where no legal
-// path reaches that state.
+// version of the namespace name and returns its new fence; the suite calls it
+// from another goroutine, so it returns its error and never stops the test.
+// SetPool changes the purpose of the pool name of ns, or deletes the pool when
+// purpose is empty; it is nil for an adapter that keeps pools under a foreign
+// key, where no legal path reaches that state.
+//
+// RenameNamespace changes the name of the namespace ns to newName and keeps
+// its ID. FailAudit makes each later append of an audit entry fail inside the
+// write transaction, after the fence check and after the write of the rows.
+// Each is nil for an adapter that cannot do it.
 type Harness struct {
-	Index          unmanaged.Index
-	Links          unmanaged.Links
-	Findings       unmanaged.FindingStore
-	Scans          unmanaged.ScanStore
-	Namespace      func(t *testing.T, name string) namespace.Fence
-	PurgeNamespace func(t *testing.T, name string)
-	Pool           func(t *testing.T, ns, name, purpose string)
-	Failover       func(t *testing.T, name string) namespace.Fence
-	SetPool        func(t *testing.T, ns, name, purpose string)
+	Index           unmanaged.Index
+	Links           unmanaged.Links
+	Findings        unmanaged.FindingStore
+	Scans           unmanaged.ScanStore
+	Namespace       func(t *testing.T, name string) namespace.Fence
+	PurgeNamespace  func(t *testing.T, name string)
+	Pool            func(t *testing.T, ns, name, purpose string)
+	Failover        func(ctx context.Context, name string) (namespace.Fence, error)
+	SetPool         func(t *testing.T, ns, name, purpose string)
+	RenameNamespace func(t *testing.T, ns, newName string)
+	FailAudit       func(t *testing.T)
 }
 
 // Factory returns a fresh harness for one subtest.
