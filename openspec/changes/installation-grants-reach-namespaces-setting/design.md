@@ -50,7 +50,7 @@ Each file is named only when the design needs it.
 - `pkg/dustpan/dustpan.go`: the settings reader is built before the authorizer and given to it (decision 7). `pkg/dustpan/localusers.go` builds `Reach` values (lines 287 and 299) and calls `WithSettings` with the same reader.
 - `internal/cli/settings_api_guard_test.go`: the key goes in `databaseKeys`.
 - `e2e/installation_grants_reach_test.go` (NEW): the e2e scenario of task 3.1.
-- `docs/reference/settings-api.md`, `docs/guides/roles-and-grants.md`, `docs/guides/access-review.md`, `docs/reference/code-rules.md`: the pages of task 3.2.
+- `docs/reference/settings-api.md`, `docs/guides/roles-and-grants.md`, `docs/guides/access-review.md`: the pages of task 3.2.
 
 Files that this change leaves out, and why:
 
