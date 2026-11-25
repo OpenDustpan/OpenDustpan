@@ -8,34 +8,34 @@
 ```go
 // pkg/session/proof.go (NEW)
 
-// Proof is the fresh authentication that a session carries for the job
-// service. The zero Proof is no proof.
-type Proof struct {
-	Kind ProofKind
+// FreshProof is the fresh authentication that a session carries for the job
+// service. The zero FreshProof is no proof.
+type FreshProof struct {
+	Kind FreshProofKind
 	At   time.Time
 }
 
-type ProofKind string
+type FreshProofKind string
 
 const (
-	ProofNone ProofKind = ""
-	ProofMFA  ProofKind = "mfa"
-	ProofSSO  ProofKind = "sso"
+	FreshProofNone FreshProofKind = ""
+	FreshProofMFA  FreshProofKind = "mfa"
+	FreshProofSSO  FreshProofKind = "sso"
 )
 
-// ProofOf maps the claims of an opened access cookie. passkey and mfa give
-// ProofMFA, sso gives ProofSSO, every other kind and a zero FreshAt give the
-// zero Proof. It never reads the clock: the service compares the age.
-func ProofOf(c Claims) Proof
+// FreshProofOf maps the claims of an opened access cookie. passkey and mfa give
+// FreshProofMFA, sso gives FreshProofSSO, every other kind and a zero FreshAt give the
+// zero FreshProof. It never reads the clock: the service compares the age.
+func FreshProofOf(c Claims) FreshProof
 ```
 
-`sessionauth.Caller` gets the field `Proof session.Proof`, set by `Checker.Authenticate` from the opened cookie. The jobs handlers copy it to `job.Actor.ConfirmAuth` and `job.Actor.AuthAt` only for a request that the session cookie signed and for a person. `jobs.Handler` takes no new dependency.
+`sessionauth.Caller` gets the field `FreshProof session.FreshProof`, set by `Checker.Authenticate` from the opened cookie. The jobs handlers copy it to `job.Actor.ConfirmAuth` and `job.Actor.AuthAt` only for a request that the session cookie signed and for a person. `jobs.Handler` takes no new dependency.
 
 ## Layers
 
 | Layer | Check | Hostile case |
 |---|---|---|
-| `session.ProofOf` | allowlist of kinds, zero time gives no proof | unknown kind, `password`, future `FreshAt` |
+| `session.FreshProofOf` | allowlist of kinds, zero time gives no proof | unknown kind, `password`, future `FreshAt` |
 | `sessionauth.Checker` | proof only from a sealed and opened cookie | forged cookie, body field `authAt`, header |
 | Handler | no proof for a token, an agent or a non-person | access token with a cookie-like header |
 | Service | age, kind and subject (existing) | stale, `sso` for a destroy |
