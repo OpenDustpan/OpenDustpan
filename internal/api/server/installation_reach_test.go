@@ -89,7 +89,8 @@ func grantSecond(t *testing.T, f accessFixture, subject, role string, obj identi
 // TestInstallationReach is the hostile case of the reach setting at the HTTP
 // handler layer. With the setting false, a caller whose only grant is on the
 // installation, with a role that holds a namespace action, gets 403 on a
-// namespace route; the body names the action and the namespace, and the
+// namespace route; the body names the action and the kind of the object, not
+// the namespace, and the
 // export of the installation still shows the grant. With the setting true,
 // the same route answers 200.
 func TestInstallationReach(t *testing.T) {
@@ -173,8 +174,8 @@ func TestInstallationReachFailedReadWritesOneAuditEntry(t *testing.T) {
 }
 
 // checkDeniedNamespaceAction checks the refusal of the namespace route and
-// the export that shows the grant. The answer names the action and the
-// namespace: the coded denial names the kind of the object, never its name,
+// the export that shows the grant. The answer names the action and the kind
+// of the object, not the namespace: the coded denial names the kind of the object, never its name,
 // so that an answer to a caller without the action shows no object. The
 // export of the installation still shows the grant of nia on @server, so a
 // person can ask why the action was denied. ann holds server:read-access
@@ -186,6 +187,10 @@ func checkDeniedNamespaceAction(t *testing.T, f accessFixture, body string) {
 		if !strings.Contains(body, part) {
 			t.Fatalf("refusal %q does not name %q", body, part)
 		}
+	}
+
+	if strings.Contains(body, "acme") {
+		t.Fatalf("refusal %q names the namespace, want the kind of the object only", body)
 	}
 
 	var all reviewDoc

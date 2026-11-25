@@ -231,7 +231,7 @@ With `false`:
   it.
 
 A request that needs an action inside a namespace, and that holds only a grant
-on `@server`, gets `403`. The body names the action and the namespace. To find
+on `@server`, gets `403`. The body names the action and the kind of the object, not the namespace. To find
 the grant on `@server`, read the access review of the installation:
 
 ```sh

@@ -12,6 +12,7 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/mfasvc"
@@ -27,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // coverageSignInRoutes returns the sign-in rows of the installation route
@@ -36,19 +38,8 @@ import (
 func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
-	// The route coverage check runs in a cleanup, after the context of the
-	// test ends.
-	st, err := sqlite.Open(context.WithoutCancel(tb.Context()), filepath.Join(tb.TempDir(), "coverage.db"))
-	if err != nil {
-		tb.Fatalf("open store: %v", err)
-	}
-
-	tb.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			tb.Errorf("close store: %v", closeErr)
-		}
-	})
-
+	st := coverageStore(tb)
+	settings := coverageSettings(tb, st)
 	principals, sessions := coverageSignInServices(tb, st)
 	admin := coverageProviderAdmin(tb, st)
 
@@ -60,7 +51,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{
 		ProxyRules: nil, FirstAdministrator: nil,
-		LocalUsers:     coverageLocalUsers(tb, st, principals),
+		LocalUsers:     coverageLocalUsers(tb, st, principals, settings),
 		Preferences:    nil,
 		GitHostLinks:   nil,
 		Settings:       nil,
@@ -84,7 +75,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Journal:        nil,
 		Principals:     principals,
 		Access:         nil,
-		Reach:          coverageReach(),
+		Reach:          coverageReach(settings),
 		Tokens:         nil,
 		Audit:          coverageAuditStore{},
 		OnAuditFailure: nil,
@@ -107,6 +98,40 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	return signInRows(handler)
+}
+
+// coverageStore opens a temporary SQLite store and closes it in a cleanup.
+func coverageStore(tb testing.TB) *sqlite.Store {
+	tb.Helper()
+
+	// The route coverage check runs in a cleanup, after the context of the
+	// test ends.
+	st, err := sqlite.Open(context.WithoutCancel(tb.Context()), filepath.Join(tb.TempDir(), "coverage.db"))
+	if err != nil {
+		tb.Fatalf("open store: %v", err)
+	}
+
+	tb.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			tb.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	return st
+}
+
+// coverageSettings returns the settings reader over st, built as the server
+// builds it: the settings service over the setting store of st, with the
+// declarations of the installation.
+func coverageSettings(tb testing.TB, st *sqlite.Store) *setting.Service {
+	tb.Helper()
+
+	registry, err := setting.NewRegistry(cli.SettingDeclarations())
+	if err != nil {
+		tb.Fatalf("settings registry: %v", err)
+	}
+
+	return setting.NewService(st.SettingStore(), registry, nil, nil, nil)
 }
 
 // coverageSignInServices returns the principal service and the session service
@@ -134,8 +159,11 @@ func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service
 }
 
 // coverageLocalUsers returns the local user service over st, so the route
-// table holds the local user routes and the password sign-in.
-func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.Service) *localusersvc.Service {
+// table holds the local user routes and the password sign-in. Its reach config
+// holds settings, the settings reader over st.
+func coverageLocalUsers(
+	tb testing.TB, st *sqlite.Store, principals *principal.Service, settings *setting.Service,
+) *localusersvc.Service {
 	tb.Helper()
 
 	budget, err := argon2id.NewBudget(localuser.DefaultHashMemoryBudgetKiB)
@@ -162,7 +190,7 @@ func coverageLocalUsers(tb testing.TB, st *sqlite.Store, principals *principal.S
 		SSO:         nil,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
-			Settings: access.FixedSettings(true),
+			Settings: settings,
 		},
 		Subjects: st,
 		Kind:     installation.KindDev,
