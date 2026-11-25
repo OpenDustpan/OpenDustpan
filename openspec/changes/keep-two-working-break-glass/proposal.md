@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 11
 ---
 
 Issue: #623, #627, #633.
@@ -83,6 +83,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1248 (func TestSweepDisablesInactiveTokensAndAccounts)`)
 - A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:85 (func TestExpiredTempAdminStaysDenied)`)
 - Restore error codes exist on main. (`internal/errcode/catalog_restore.go:7 (error code restore.blobs-missing)`)
+- The PostgreSQL restore swap counts the working break-glass accounts of the installation before and after the swap and checks the floor in one transaction. (`internal/store/postgres/restore.go:247 (function swapInWithBreakGlassFloor)`)
 
 ## Owner decisions that apply
 
